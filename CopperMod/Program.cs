@@ -3,9 +3,11 @@ using Terminal.Gui.App;
 
 internal class Program
 {
+	private static readonly string DefaultTunePath = Path.Combine("TestTunes", "Med", "title");
+
 	private static void Main(string[] args)
 	{
-		var initialPath = args.Length > 0 ? args[0] : FindWorkspaceFileOrNull("title");
+		var initialPath = args.Length > 0 ? args[0] : FindWorkspaceFileOrNull(DefaultTunePath);
 		var autoPlay = args.Length > 0;
 
 		using var application = Application.Create().Init();

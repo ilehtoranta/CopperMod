@@ -8,6 +8,8 @@ namespace AmigaTracker.Med.Tests;
 
 public sealed class MmdParserTests
 {
+    private static readonly string TitleFixturePath = Path.Combine("TestTunes", "Med", "title");
+
     [Theory]
     [InlineData(0x4D4D4430u)]
     [InlineData(0x4D4D4431u)]
@@ -27,7 +29,7 @@ public sealed class MmdParserTests
     [Fact]
     public void TitleFixtureParsesMmd0Structures()
     {
-        var data = File.ReadAllBytes(FindWorkspaceFile("title"));
+        var data = File.ReadAllBytes(FindWorkspaceFile(TitleFixturePath));
         using var song = Assert.IsType<MmdSong>(new MmdFormat().Load(data));
         var module = song.Module;
 
@@ -43,7 +45,7 @@ public sealed class MmdParserTests
     [Fact]
     public void TitleFixtureRendersFiniteNonzeroPcmAndAdvances()
     {
-        var data = File.ReadAllBytes(FindWorkspaceFile("title"));
+        var data = File.ReadAllBytes(FindWorkspaceFile(TitleFixturePath));
         using var song = new MmdFormat().Load(data);
         var options = AudioRenderOptions.Default;
         var energy = 0.0;
@@ -69,7 +71,7 @@ public sealed class MmdParserTests
     [Fact]
     public void TitleFixtureActivatesAllFourVoicesInOpeningPattern()
     {
-        var data = File.ReadAllBytes(FindWorkspaceFile("title"));
+        var data = File.ReadAllBytes(FindWorkspaceFile(TitleFixturePath));
         using var song = Assert.IsType<MmdSong>(new MmdFormat().Load(data));
         var options = AudioRenderOptions.Default;
         var heard = new bool[4];
@@ -94,7 +96,7 @@ public sealed class MmdParserTests
     [Fact]
     public void TitleFixturePureSynthStartsFromFirstWaveformSequenceExecution()
     {
-        var data = File.ReadAllBytes(FindWorkspaceFile("title"));
+        var data = File.ReadAllBytes(FindWorkspaceFile(TitleFixturePath));
         using var song = Assert.IsType<MmdSong>(new MmdFormat().Load(data));
         song.Seek(new TrackerPosition(4, 0, 0));
 
@@ -116,7 +118,7 @@ public sealed class MmdParserTests
     [Fact]
     public void TitleFixturePureSynthStartsImmediatelyNearOneMinuteFourteen()
     {
-        var data = File.ReadAllBytes(FindWorkspaceFile("title"));
+        var data = File.ReadAllBytes(FindWorkspaceFile(TitleFixturePath));
         using var song = Assert.IsType<MmdSong>(new MmdFormat().Load(data));
         song.Seek(new TrackerPosition(11, 24, 0));
 

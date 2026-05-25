@@ -21,7 +21,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod\CopperMod.csproj" />
     <ProjectReference Include="..\AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj" />
   </ItemGroup>
 

@@ -1,5 +1,6 @@
 using AmigaTracker.Abstractions;
 using AmigaTracker.Med;
+using AmigaTracker.ProTracker;
 using NAudio.Wave;
 
 namespace CopperMod;
@@ -10,10 +11,12 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	public const int ChannelCount = 2;
 	private static readonly TimeSpan InitialOutputLeadIn = TimeSpan.FromMilliseconds(500);
 
-	private readonly IReadOnlyList<IModuleFormat> _formats = new IModuleFormat[]
+	internal static readonly IReadOnlyList<IModuleFormat> SupportedFormats = new IModuleFormat[]
 	{
-		new MmdFormat()
+		new MmdFormat(),
+		new ProTrackerFormat()
 	};
+	private readonly IReadOnlyList<IModuleFormat> _formats = SupportedFormats;
 	private IModuleSong? _song;
 	private ModuleSampleProvider? _sampleProvider;
 	private AmigaOutputProfile _outputProfile = AmigaOutputProfile.A500;

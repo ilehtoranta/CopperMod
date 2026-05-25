@@ -7,8 +7,17 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\AmigaTracker.Med\AmigaTracker.Med.csproj" />
+    <ProjectReference Include="..\AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj" />
   </ItemGroup>
 
   <ItemGroup>

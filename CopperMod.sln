@@ -13,6 +13,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Med", "AmigaTr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Tests", "CopperMod.Tests\CopperMod.Tests.csproj", "{07BE7D59-7F29-4B0A-BC58-C996DC42527A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.ProTracker", "AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj", "{F39066DE-04F1-4960-994E-31DD8FD500D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.ProTracker.Tests", "AmigaTracker.ProTracker.Tests\AmigaTracker.ProTracker.Tests.csproj", "{D8A96FAB-692F-41FF-AFC5-A505F337DACC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -83,6 +87,30 @@ Global
 		{07BE7D59-7F29-4B0A-BC58-C996DC42527A}.Release|x64.Build.0 = Release|Any CPU
 		{07BE7D59-7F29-4B0A-BC58-C996DC42527A}.Release|x86.ActiveCfg = Release|Any CPU
 		{07BE7D59-7F29-4B0A-BC58-C996DC42527A}.Release|x86.Build.0 = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|x64.Build.0 = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Debug|x86.Build.0 = Debug|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|x64.ActiveCfg = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|x64.Build.0 = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|x86.ActiveCfg = Release|Any CPU
+		{F39066DE-04F1-4960-994E-31DD8FD500D0}.Release|x86.Build.0 = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|x64.Build.0 = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Debug|x86.Build.0 = Debug|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|x64.ActiveCfg = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|x64.Build.0 = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|x86.ActiveCfg = Release|Any CPU
+		{D8A96FAB-692F-41FF-AFC5-A505F337DACC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
