@@ -4,7 +4,7 @@ using AmigaTracker.Abstractions;
 
 namespace AmigaTracker.Med
 {
-internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
+internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider, IModuleChannelWaveformProvider
 {
     private const int DefaultSampleRate = 44100;
     private const int DefaultChannels = 2;
@@ -48,6 +48,7 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
     private TimeSpan _playbackPosition;
     private bool _disposed;
     private int _loopsCompleted;
+    private bool _channelWaveformCaptureEnabled;
 
     public MmdSong(MmdModule module)
     {
@@ -106,6 +107,21 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
 
     internal MmdTickTrace? LastTrace { get; private set; }
 
+    public bool ChannelWaveformCaptureEnabled
+    {
+        get => _channelWaveformCaptureEnabled;
+        set
+        {
+            _channelWaveformCaptureEnabled = value;
+            if (!value)
+            {
+                LastChannelWaveform = null;
+            }
+        }
+    }
+
+    public ModuleChannelWaveform? LastChannelWaveform { get; private set; }
+
     public ModuleMetadata Metadata => _metadata;
 
     public ModulePlaybackCapabilities Capabilities => _capabilities;
@@ -146,6 +162,7 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
         _playbackPosition = TimeSpan.Zero;
         _loopsCompleted = 0;
         LastTrace = null;
+        LastChannelWaveform = null;
 
         for (var i = 0; i < _voices.Length; i++)
         {
@@ -233,6 +250,9 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
         if (_ended)
         {
             destination.Slice(0, frames * channels).Clear();
+            LastChannelWaveform = ChannelWaveformCaptureEnabled
+                ? CreateChannelWaveform(CreateChannelSampleBuffers(_voices.Length, frames), new bool[_voices.Length], frames, sampleRate)
+                : null;
             return new RenderResult(frames, frames * channels, Position, true);
         }
 
@@ -1058,6 +1078,9 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
     private void Mix(Span<float> destination, int frames, int channels, int sampleRate, bool interpolationEnabled)
     {
         destination.Clear();
+        var captureChannels = ChannelWaveformCaptureEnabled;
+        var channelSamples = captureChannels ? CreateChannelSampleBuffers(_voices.Length, frames) : null;
+        var channelActive = captureChannels ? new bool[_voices.Length] : null;
         var master = Clamp(_module.Song.MasterVolume, 0, 64) / 64.0f;
         var volAdj = _module.Song.VolumeAdjust <= 0 ? 1.0f : _module.Song.VolumeAdjust / 100.0f;
         var normalization = _module.UsesMixingMode || _voices.Length > 4 ? 1.0f / Math.Max(1, _voices.Length / 2.0f) : 0.5f;
@@ -1085,6 +1108,11 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
                 continue;
             }
 
+            if (channelActive != null)
+            {
+                channelActive[voiceIndex] = true;
+            }
+
             for (var frame = 0; frame < frames; frame++)
             {
                 if (frame < startDelayFrames)
@@ -1103,10 +1131,15 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
                 var right = voice.RightSamples.Length > 0
                     ? ReadSample(voice.RightSamples, sampleIndex, fraction, interpolationEnabled)
                     : left;
+                if (channelSamples != null)
+                {
+                    channelSamples[voiceIndex][frame] = (left + right) * 0.5f;
+                }
 
+                var mono = ((left + right) * 0.5f) * volume;
                 if (channels == 1)
                 {
-                    destination[frame] += ((left + right) * 0.5f) * volume;
+                    destination[frame] += mono;
                 }
                 else
                 {
@@ -1127,6 +1160,32 @@ internal sealed class MmdSong : IModuleSong, IAmigaHardwareStateProvider
         {
             destination[i] = Clamp(destination[i], -1.0f, 1.0f);
         }
+
+        LastChannelWaveform = channelSamples == null || channelActive == null
+            ? null
+            : CreateChannelWaveform(channelSamples, channelActive, frames, sampleRate);
+    }
+
+    private static float[][] CreateChannelSampleBuffers(int channelCount, int frames)
+    {
+        var samples = new float[channelCount][];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = new float[frames];
+        }
+
+        return samples;
+    }
+
+    private static ModuleChannelWaveform CreateChannelWaveform(float[][] samples, bool[] active, int frames, int sampleRate)
+    {
+        var channels = new ModuleChannelWaveformChannel[samples.Length];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            channels[i] = new ModuleChannelWaveformChannel(i, samples[i], active[i]);
+        }
+
+        return new ModuleChannelWaveform(channels, frames, sampleRate);
     }
 
     private static int ConsumeStartDelayFrames(VoiceState voice, int frames, int sampleRate)

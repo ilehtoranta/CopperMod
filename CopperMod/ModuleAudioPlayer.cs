@@ -1,6 +1,7 @@
 using AmigaTracker.Abstractions;
 using AmigaTracker.Med;
 using AmigaTracker.ProTracker;
+using AmigaTracker.Sid;
 using NAudio.Wave;
 
 namespace CopperMod;
@@ -10,20 +11,28 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	public const int SampleRate = 44100;
 	public const int ChannelCount = 2;
 	private static readonly TimeSpan InitialOutputLeadIn = TimeSpan.FromMilliseconds(500);
+	private const int DesiredOutputLatencyMilliseconds = 60;
+	private const int OutputBufferCount = 3;
 
 	internal static readonly IReadOnlyList<IModuleFormat> SupportedFormats = new IModuleFormat[]
 	{
 		new MmdFormat(),
-		new ProTrackerFormat()
+		new ProTrackerFormat(),
+		new SidFormat()
 	};
 	private readonly IReadOnlyList<IModuleFormat> _formats = SupportedFormats;
 	private IModuleSong? _song;
 	private ModuleSampleProvider? _sampleProvider;
 	private AmigaOutputProfile _outputProfile = AmigaOutputProfile.A500;
+	private C64OutputProfile _c64OutputProfile = C64OutputProfile.C64;
+	private bool _waveformEnabled;
+	private WaveformDisplayMode _waveformDisplayMode = WaveformDisplayMode.MixedOutput;
 	private WaveOutEvent? _output;
 	private bool _disposed;
 
 	public event EventHandler? StateChanged;
+
+	public event EventHandler<WaveformSnapshotEventArgs>? WaveformAvailable;
 
 	public string? FilePath { get; private set; }
 
@@ -34,6 +43,10 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	public IReadOnlyList<ModuleDiagnostic> Diagnostics => _song?.Diagnostics ?? Array.Empty<ModuleDiagnostic>();
 
 	public PlaybackPosition Position => _sampleProvider?.Position ?? PlaybackPosition.FromTime(TimeSpan.Zero);
+
+	public ModuleOutputFamily OutputFamily => (_song as IModuleOutputFamilyProvider)?.OutputFamily ?? ModuleOutputFamily.Amiga;
+
+	public IModuleSubSongSelector? SubSongs => _song as IModuleSubSongSelector;
 
 	public bool IsLoaded => _song != null;
 
@@ -66,6 +79,51 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		}
 	}
 
+	public C64OutputProfile C64OutputProfile
+	{
+		get => _sampleProvider?.C64OutputProfile ?? _c64OutputProfile;
+		set
+		{
+			_c64OutputProfile = value;
+			if (_sampleProvider != null)
+			{
+				_sampleProvider.C64OutputProfile = value;
+			}
+
+			OnStateChanged();
+		}
+	}
+
+	public bool WaveformEnabled
+	{
+		get => _sampleProvider?.WaveformEnabled ?? _waveformEnabled;
+		set
+		{
+			_waveformEnabled = value;
+			if (_sampleProvider != null)
+			{
+				_sampleProvider.WaveformEnabled = value;
+			}
+
+			OnStateChanged();
+		}
+	}
+
+	public WaveformDisplayMode WaveformDisplayMode
+	{
+		get => _sampleProvider?.WaveformDisplayMode ?? _waveformDisplayMode;
+		set
+		{
+			_waveformDisplayMode = value;
+			if (_sampleProvider != null)
+			{
+				_sampleProvider.WaveformDisplayMode = value;
+			}
+
+			OnStateChanged();
+		}
+	}
+
 	public void Load(string path)
 	{
 		ThrowIfDisposed();
@@ -86,12 +144,15 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 		_song = format.Load(data);
 		_song.LoopingEnabled = false;
-		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn);
+		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile);
+		_sampleProvider.WaveformEnabled = _waveformEnabled;
+		_sampleProvider.WaveformDisplayMode = _waveformDisplayMode;
 		_sampleProvider.EndOfSongReached += (_, _) => OnStateChanged();
+		_sampleProvider.WaveformAvailable += (_, args) => WaveformAvailable?.Invoke(this, args);
 		_output = new WaveOutEvent
 		{
-			DesiredLatency = 120,
-			NumberOfBuffers = 3
+			DesiredLatency = DesiredOutputLatencyMilliseconds,
+			NumberOfBuffers = OutputBufferCount
 		};
 		_output.Init(_sampleProvider);
 		_output.PlaybackStopped += (_, _) => OnStateChanged();
@@ -142,6 +203,20 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		ThrowIfDisposed();
 		EnsureLoaded();
 		_sampleProvider!.Seek(position < TimeSpan.Zero ? TimeSpan.Zero : position);
+		OnStateChanged();
+	}
+
+	public void SelectSubSong(int index)
+	{
+		ThrowIfDisposed();
+		EnsureLoaded();
+		if (_song is not IModuleSubSongSelector selector)
+		{
+			throw new NotSupportedException("The loaded module does not expose subtunes.");
+		}
+
+		selector.SelectSubSong(index);
+		_sampleProvider!.Reset();
 		OnStateChanged();
 	}
 

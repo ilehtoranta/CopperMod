@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AmigaTracker.Med\AmigaTracker.Med.csproj" />
     <ProjectReference Include="..\AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj" />
+    <ProjectReference Include="..\AmigaTracker.Sid\AmigaTracker.Sid.csproj" />
   </ItemGroup>
 
   <ItemGroup>

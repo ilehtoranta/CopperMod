@@ -1,4 +1,5 @@
 using AmigaTracker.ProTracker;
+using AmigaTracker.Sid;
 
 namespace CopperMod.Tests;
 
@@ -8,5 +9,11 @@ public sealed class FormatRegistrationTests
 	public void CopperModRegistersProTrackerFormat()
 	{
 		Assert.Contains(ModuleAudioPlayer.SupportedFormats, format => format is ProTrackerFormat);
+	}
+
+	[Fact]
+	public void CopperModRegistersSidFormat()
+	{
+		Assert.Contains(ModuleAudioPlayer.SupportedFormats, format => format is SidFormat);
 	}
 }

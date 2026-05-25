@@ -62,6 +62,107 @@ public sealed class ModuleSampleProviderTests
 		Assert.Equal(1, provider.Read(buffer, 0, buffer.Length));
 	}
 
+	[Fact]
+	public void ReadDoesNotPublishWaveformByDefault()
+	{
+		var song = new FiniteSong(ticksBeforeEnd: 1, framesPerTick: 4);
+		var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None);
+		var buffer = new float[4];
+		WaveformSnapshot? waveform = null;
+		provider.WaveformAvailable += (_, args) => waveform = args.Snapshot;
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.Null(waveform);
+	}
+
+	[Fact]
+	public void ReadPublishesWaveformForRenderedTick()
+	{
+		var song = new FiniteSong(ticksBeforeEnd: 1, framesPerTick: 4);
+		var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None)
+		{
+			WaveformEnabled = true
+		};
+		var buffer = new float[4];
+		WaveformSnapshot? waveform = null;
+		provider.WaveformAvailable += (_, args) => waveform = args.Snapshot;
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.NotNull(waveform);
+		Assert.Equal(4, waveform.SourceFrameCount);
+		Assert.All(waveform.Minimums, sample => Assert.Equal(0.25f, sample));
+		Assert.All(waveform.Maximums, sample => Assert.Equal(0.25f, sample));
+	}
+
+	[Fact]
+	public void ReadPublishesMixedWaveformByDefaultWhenSongProvidesChannelWaveforms()
+	{
+		var song = new ChannelWaveformSong(framesPerTick: 4);
+		var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None)
+		{
+			WaveformEnabled = true
+		};
+		var buffer = new float[4];
+		WaveformSnapshot? waveform = null;
+		provider.WaveformAvailable += (_, args) => waveform = args.Snapshot;
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.False(song.ChannelWaveformCaptureEnabled);
+		Assert.NotNull(waveform);
+		Assert.Equal(1, waveform.ChannelCount);
+		Assert.All(waveform.Minimums, sample => Assert.Equal(0.125f, sample));
+		Assert.All(waveform.Maximums, sample => Assert.Equal(0.125f, sample));
+	}
+
+	[Fact]
+	public void ReadPublishesSeparateChannelWaveformWhenConfigured()
+	{
+		var song = new ChannelWaveformSong(framesPerTick: 4);
+		var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None)
+		{
+			WaveformEnabled = true,
+			WaveformDisplayMode = WaveformDisplayMode.TrackerChannels
+		};
+		var buffer = new float[4];
+		WaveformSnapshot? waveform = null;
+		provider.WaveformAvailable += (_, args) => waveform = args.Snapshot;
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.True(song.ChannelWaveformCaptureEnabled);
+		Assert.NotNull(waveform);
+		Assert.Equal(2, waveform.ChannelCount);
+		Assert.Equal(-1.0f, waveform.Channels[0].Minimums[0]);
+		Assert.Equal(1.0f, waveform.Channels[0].Maximums[^1]);
+		Assert.Equal(-0.5f, waveform.Channels[1].Minimums[0]);
+		Assert.Equal(0.5f, waveform.Channels[1].Maximums[^1]);
+	}
+
+	[Fact]
+	public void ReadBypassesAmigaOutputStageForC64OutputFamily()
+	{
+		var song = new OutputFamilySong(ModuleOutputFamily.Commodore64);
+		var provider = new ModuleSampleProvider(
+			song,
+			sampleRate: 44100,
+			channelCount: 1,
+			AmigaOutputProfile.A500LedFilter,
+			c64OutputProfile: C64OutputProfile.Clean);
+		var buffer = new float[4];
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.All(buffer, sample => Assert.Equal(0.25f, sample));
+	}
+
 	private sealed class FiniteSong : IModuleSong
 	{
 		private readonly int _ticksBeforeEnd;
@@ -133,6 +234,148 @@ public sealed class ModuleSampleProviderTests
 			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
 			_ended = !LoopingEnabled && _ticksRendered >= _ticksBeforeEnd;
 			return new RenderResult(_framesPerTick, samples, Position, _ended);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class ChannelWaveformSong : IModuleSong, IModuleChannelWaveformProvider
+	{
+		private readonly int _framesPerTick;
+		private bool _ended;
+
+		public ChannelWaveformSong(int framesPerTick)
+		{
+			_framesPerTick = framesPerTick;
+		}
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Exact(TimeSpan.FromSeconds(1));
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(TimeSpan.Zero);
+
+		public bool LoopingEnabled { get; set; }
+
+		public bool ChannelWaveformCaptureEnabled { get; set; }
+
+		public ModuleChannelWaveform? LastChannelWaveform { get; private set; }
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return _framesPerTick;
+		}
+
+		public void Reset()
+		{
+			_ended = false;
+			LastChannelWaveform = null;
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(_framesPerTick);
+			destination.Slice(0, samples).Fill(0.125f);
+			LastChannelWaveform = ChannelWaveformCaptureEnabled
+				? new ModuleChannelWaveform(
+					new[]
+					{
+						new ModuleChannelWaveformChannel(0, new[] { -1.0f, -0.5f, 0.5f, 1.0f }, true),
+						new ModuleChannelWaveformChannel(1, new[] { -0.5f, -0.25f, 0.25f, 0.5f }, true)
+					},
+					_framesPerTick,
+					options.SampleRate)
+				: null;
+			_ended = true;
+			return new RenderResult(_framesPerTick, samples, Position, _ended);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class OutputFamilySong : IModuleSong, IModuleOutputFamilyProvider
+	{
+		private readonly ModuleOutputFamily _outputFamily;
+		private TimeSpan _position;
+
+		public OutputFamilySong(ModuleOutputFamily outputFamily)
+		{
+			_outputFamily = outputFamily;
+		}
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(_position);
+
+		public bool LoopingEnabled { get; set; }
+
+		public ModuleOutputFamily OutputFamily => _outputFamily;
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return 4;
+		}
+
+		public void Reset()
+		{
+			_position = TimeSpan.Zero;
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_position = position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(4);
+			destination.Slice(0, samples).Fill(0.25f);
+			_position += TimeSpan.FromSeconds(4 / (double)options.SampleRate);
+			return new RenderResult(4, samples, Position, false);
 		}
 
 		public void Dispose()

@@ -71,6 +71,36 @@ public sealed class ProTrackerAssemblyGuidedTests
     }
 
     [Fact]
+    public void ChannelWaveformCapturesRawSampleDataBeforeVolumeScaling()
+    {
+        var sampleData = Enumerable.Range(0, 64)
+            .Select(i => (byte)((i & 1) == 0 ? 0x80 : 0x7F))
+            .ToArray();
+        using var song = Load(ModFixtureBuilder.CreateProTracker31(
+            sampleData: sampleData,
+            volume: 8,
+            repeatLengthWords: sampleData.Length / 2));
+        song.ChannelWaveformCaptureEnabled = true;
+        var options = new AudioRenderOptions(44100, 1);
+        var rawPeak = 0.0f;
+        var audioPeak = 0.0f;
+
+        for (var i = 0; i < 16 && rawPeak <= 0.9f; i++)
+        {
+            var frames = song.GetCurrentTickFrameCount(options);
+            var buffer = new float[options.GetSampleCount(frames)];
+            song.RenderTick(buffer, options);
+            audioPeak = Math.Max(audioPeak, buffer.Max(sample => Math.Abs(sample)));
+
+            var channel = Assert.Single(song.LastChannelWaveform!.Channels.Where(candidate => candidate.ChannelIndex == 0));
+            rawPeak = Math.Max(rawPeak, channel.Samples.Max(sample => Math.Abs(sample)));
+        }
+
+        Assert.True(rawPeak > 0.9f);
+        Assert.True(audioPeak < 0.05f);
+    }
+
+    [Fact]
     public void E5SetsFinetuneBeforePeriodLookup()
     {
         using var song = Load(ModFixtureBuilder.CreateProTracker31(effect: 0xE, parameter: 0x51));

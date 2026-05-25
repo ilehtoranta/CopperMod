@@ -4,7 +4,7 @@ using AmigaTracker.Abstractions;
 
 namespace AmigaTracker.ProTracker
 {
-internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
+internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider, IModuleChannelWaveformProvider
 {
     private const int MaxRenderFramesPerTick = 1_000_000;
     private const float PaulaVoiceScale = 0.25f;
@@ -34,6 +34,7 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
     private bool _newRowProcessedThisTick;
     private int _traceSongPosition;
     private int _tracePatternPosition;
+    private bool _channelWaveformCaptureEnabled;
 
     public ProTrackerSong(ProTrackerModule module)
     {
@@ -83,6 +84,21 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
 
     internal ProTrackerTickTrace? LastTrace { get; private set; }
 
+    public bool ChannelWaveformCaptureEnabled
+    {
+        get => _channelWaveformCaptureEnabled;
+        set
+        {
+            _channelWaveformCaptureEnabled = value;
+            if (!value)
+            {
+                LastChannelWaveform = null;
+            }
+        }
+    }
+
+    public ModuleChannelWaveform? LastChannelWaveform { get; private set; }
+
     public ModuleMetadata Metadata => _metadata;
 
     public ModulePlaybackCapabilities Capabilities => _capabilities;
@@ -127,6 +143,7 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
         _loopsCompleted = 0;
         _newRowProcessedThisTick = false;
         LastTrace = null;
+        LastChannelWaveform = null;
 
         for (var i = 0; i < _voices.Length; i++)
         {
@@ -203,6 +220,9 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
         if (_ended)
         {
             destination.Slice(0, frames * channels).Clear();
+            LastChannelWaveform = ChannelWaveformCaptureEnabled
+                ? CreateChannelWaveform(CreateChannelSampleBuffers(_voices.Length, frames), new bool[_voices.Length], frames, sampleRate)
+                : null;
             return new RenderResult(frames, frames * channels, Position, true);
         }
 
@@ -952,6 +972,9 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
     private void Mix(Span<float> destination, int frames, int channels, int sampleRate)
     {
         destination.Clear();
+        var captureChannels = ChannelWaveformCaptureEnabled;
+        var channelSamples = captureChannels ? CreateChannelSampleBuffers(_voices.Length, frames) : null;
+        var channelActive = captureChannels ? new bool[_voices.Length] : null;
         for (var voiceIndex = 0; voiceIndex < _voices.Length; voiceIndex++)
         {
             var voice = _voices[voiceIndex];
@@ -963,6 +986,11 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
             var delayFrames = ConsumeStartDelayFrames(voice, frames, sampleRate);
             var volume = Clamp(voice.OutputVolume, 0, 64) / 64.0f * PaulaVoiceScale;
             var step = GetSampleStep(voice.OutputPeriod, sampleRate);
+            if (channelActive != null)
+            {
+                channelActive[voiceIndex] = true;
+            }
+
             for (var frame = 0; frame < frames; frame++)
             {
                 if (frame < delayFrames)
@@ -970,8 +998,14 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
                     continue;
                 }
 
-                var sample = ReadVoiceSampleAndAdvance(voice, step);
-                WritePannedSample(destination, frame, channels, voiceIndex, sample * volume);
+                var rawSample = ReadVoiceSampleAndAdvance(voice, step);
+                if (channelSamples != null)
+                {
+                    channelSamples[voiceIndex][frame] = rawSample;
+                }
+
+                var sample = rawSample * volume;
+                WritePannedSample(destination, frame, channels, voiceIndex, sample);
             }
         }
 
@@ -979,6 +1013,32 @@ internal sealed class ProTrackerSong : IModuleSong, IAmigaHardwareStateProvider
         {
             destination[i] = Math.Clamp(destination[i], -1.0f, 1.0f);
         }
+
+        LastChannelWaveform = channelSamples == null || channelActive == null
+            ? null
+            : CreateChannelWaveform(channelSamples, channelActive, frames, sampleRate);
+    }
+
+    private static float[][] CreateChannelSampleBuffers(int channelCount, int frames)
+    {
+        var samples = new float[channelCount][];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = new float[frames];
+        }
+
+        return samples;
+    }
+
+    private static ModuleChannelWaveform CreateChannelWaveform(float[][] samples, bool[] active, int frames, int sampleRate)
+    {
+        var channels = new ModuleChannelWaveformChannel[samples.Length];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            channels[i] = new ModuleChannelWaveformChannel(i, samples[i], active[i]);
+        }
+
+        return new ModuleChannelWaveform(channels, frames, sampleRate);
     }
 
     private float ReadVoiceSampleAndAdvance(VoiceState voice, double step)
