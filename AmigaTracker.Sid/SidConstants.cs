@@ -16,5 +16,6 @@ namespace AmigaTracker.Sid
         public const int NtscCyclesPerFrame = 17095;
         public const int PalRefreshHz = 50;
         public const int NtscRefreshHz = 60;
+        public const int CiaTimerRefreshHz = 60;
     }
 }

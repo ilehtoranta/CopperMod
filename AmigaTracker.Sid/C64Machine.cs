@@ -57,6 +57,7 @@ namespace AmigaTracker.Sid
             Cpu.Reset(_module.InitAddress);
             Cpu.BeginSubroutine(_module.InitAddress, (byte)subSongIndex);
             RunUntilSubroutineReturn(250_000);
+            Sid.AdvanceTo(Cpu.Cycles);
             if (_module.IsRsid && Cpu.ProgramCounter == 0xFFFF)
             {
                 Cpu.ProgramCounter = IdleLoopAddress;
@@ -114,18 +115,14 @@ namespace AmigaTracker.Sid
             }
         }
 
-        public void RenderFrame(Span<float> destination, AudioRenderOptionsAdapter options)
+        public void RenderFrame(Span<float> destination, AudioRenderOptionsAdapter options, long? cycleCount = null)
         {
-            BeginFrame();
-            if (!_module.IsRsid)
-            {
-                Sid.DiscardAccumulatedOutput();
-            }
-
             var frames = destination.Length / options.ChannelCount;
+            var tickCycles = Math.Max(1, cycleCount ?? _clock.CyclesPerFrame);
             var frameStartCycle = Cpu.Cycles;
-            var frameEndCycle = frameStartCycle + _clock.CyclesPerFrame;
-            var cyclesPerOutputFrame = _clock.CyclesPerFrame / (double)frames;
+            var frameEndCycle = frameStartCycle + tickCycles;
+            var cyclesPerOutputFrame = tickCycles / (double)frames;
+            var psidPlayActive = BeginPsidFrame();
             var outputFrame = 0;
             while (outputFrame < frames)
             {
@@ -134,12 +131,20 @@ namespace AmigaTracker.Sid
                 {
                     RunCycles(Math.Max(0, targetCycle - Cpu.Cycles));
                 }
+                else if (psidPlayActive)
+                {
+                    RunPsidPlayUntil(targetCycle, ref psidPlayActive);
+                    if (Cpu.Cycles < targetCycle)
+                    {
+                        AdvanceSidOnly(targetCycle - Cpu.Cycles);
+                    }
+                }
                 else
                 {
                     AdvanceSidOnly(Math.Max(0, targetCycle - Cpu.Cycles));
                 }
 
-                var sample = Sid.RenderSample(Math.Min(Cpu.Cycles, frameEndCycle));
+                var sample = Sid.RenderSample(targetCycle);
                 var offset = outputFrame * options.ChannelCount;
                 if (options.ChannelCount == 1)
                 {
@@ -164,10 +169,49 @@ namespace AmigaTracker.Sid
                 {
                     RunCycles(frameEndCycle - Cpu.Cycles);
                 }
+                else if (psidPlayActive)
+                {
+                    RunPsidPlayUntil(frameEndCycle, ref psidPlayActive);
+                    if (Cpu.Cycles < frameEndCycle)
+                    {
+                        AdvanceSidOnly(frameEndCycle - Cpu.Cycles);
+                    }
+                }
                 else
                 {
                     AdvanceSidOnly(frameEndCycle - Cpu.Cycles);
                 }
+            }
+        }
+
+        private bool BeginPsidFrame()
+        {
+            if (_module.IsRsid || _module.PlayAddress == 0)
+            {
+                return false;
+            }
+
+            Cpu.BeginSubroutine(_module.PlayAddress, 0);
+            return true;
+        }
+
+        private void RunPsidPlayUntil(long targetCycle, ref bool active)
+        {
+            while (active && Cpu.Cycles < targetCycle && !Cpu.Halted && Cpu.ProgramCounter != 0xFFFF)
+            {
+                var before = Cpu.Cycles;
+                var executed = Cpu.ExecuteInstruction();
+                TickHardware(Math.Max(1, executed));
+                if (Cpu.Cycles == before)
+                {
+                    active = false;
+                    break;
+                }
+            }
+
+            if (Cpu.ProgramCounter == 0xFFFF || Cpu.Halted)
+            {
+                active = false;
             }
         }
 

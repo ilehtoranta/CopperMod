@@ -72,6 +72,211 @@ public sealed class SidChipTests
 		Assert.True(max - min > 0.5, $"Expected Arkanoid pulse register set to toggle over one frame, got {max - min:0.000}.");
 	}
 
+	[Fact]
+	public void ResonantFilteredPulseDoesNotPlateauAtInternalClamp()
+	{
+		var chip = CreateGreenBeretFilteredPulse();
+		var samples = CollectSamples(chip, warmupCycles: 10000, measuredCycles: 12000);
+		var plateauCount = samples.Count(sample =>
+			Math.Abs(sample - 0.37333333333333335) < 0.000001 ||
+			Math.Abs(sample + 0.29333333333333333) < 0.000001);
+
+		Assert.True(plateauCount < samples.Length / 20, $"Expected filter output to avoid hard internal clamp plateaus, got {plateauCount} plateau samples.");
+	}
+
+	[Fact]
+	public void SidWritesAreAppliedOnlyWhenAudioReachesTheirCycle()
+	{
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+
+		Assert.True(sid.TryWrite(0xD418, 0x0F, 100));
+		_ = sid.RenderSample(50);
+
+		Assert.Equal(0x00, sid.Chips[0].Registers[0x18]);
+
+		_ = sid.RenderSample(100);
+
+		Assert.Equal(0x0F, sid.Chips[0].Registers[0x18]);
+	}
+
+	[Fact]
+	public void SidRegisterWritesAreForwardedOnNextSidCycle()
+	{
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+
+		Assert.True(sid.TryWrite(0xD418, 0x0F, 100));
+		sid.AdvanceTo(100);
+
+		Assert.Equal(0x0F, sid.Chips[0].Registers[0x18]);
+		Assert.Equal(0x00, sid.Chips[0].DebugState.ForwardedRegisters[0x18]);
+
+		sid.AdvanceTo(101);
+
+		Assert.Equal(0x0F, sid.Chips[0].DebugState.ForwardedRegisters[0x18]);
+	}
+
+	[Fact]
+	public void MultipleWritesBeforeForwardingKeepLastValue()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+
+		chip.Write(0x18, 0x01);
+		chip.Write(0x18, 0x0F);
+
+		Assert.Equal(0x0F, chip.Registers[0x18]);
+		Assert.Equal(0x00, chip.DebugState.ForwardedRegisters[0x18]);
+
+		chip.Render(1);
+
+		Assert.Equal(0x0F, chip.DebugState.ForwardedRegisters[0x18]);
+	}
+
+	[Fact]
+	public void GateOnStartsAttackOnlyAfterForwarding()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		chip.Write(0x04, 0x21);
+
+		Assert.Equal(0x00, chip.DebugState.Voices[0].Control);
+
+		chip.Render(1);
+
+		Assert.Equal(0x21, chip.DebugState.Voices[0].Control);
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+
+		chip.Render(8);
+
+		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
+	}
+
+	[Fact]
+	public void GateOffDoesNotResetEnvelopeRateCounter()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x05, 0xF0);
+		chip.Write(0x06, 0xFF);
+		chip.Write(0x04, 0x41);
+		chip.Render(10);
+		var before = chip.DebugState.Voices[0].RateCounter;
+
+		chip.Write(0x04, 0x40);
+		chip.Render(1);
+
+		Assert.Equal(before + 1, chip.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
+	public void SustainReleaseWriteDoesNotOverwriteEnvelopeCounter()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		chip.Write(0x04, 0x41);
+		chip.Render(2304);
+		var before = chip.DebugState.Voices[0].EnvelopeCounter;
+
+		chip.Write(0x06, 0x00);
+		chip.Render(1);
+
+		Assert.Equal(0xFF, before);
+		Assert.Equal(before, chip.DebugState.Voices[0].EnvelopeCounter);
+	}
+
+	[Fact]
+	public void OscillatorUsesTwentyFourBitAccumulator()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x00, 0x01);
+
+		chip.Render(1);
+
+		Assert.Equal(1u, chip.DebugState.Voices[0].Accumulator);
+	}
+
+	[Fact]
+	public void TestBitHoldsOscillatorAtZero()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x00, 0xFF);
+		chip.Write(0x01, 0xFF);
+		chip.Write(0x04, 0x20);
+		chip.Render(4);
+
+		Assert.True(chip.DebugState.Voices[0].Accumulator > 0);
+
+		chip.Write(0x04, 0x28);
+		chip.Render(4);
+
+		Assert.Equal(0u, chip.DebugState.Voices[0].Accumulator);
+	}
+
+	[Fact]
+	public void SyncResetsVoicesFromSourceMsbRisingSimultaneously()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x20);
+		WriteVoice(chip, voice: 1, frequency: 0x8000, control: 0x22);
+		WriteVoice(chip, voice: 2, frequency: 0x8000, control: 0x22);
+
+		chip.Render(256);
+
+		Assert.Equal(0x800000u, chip.DebugState.Voices[0].Accumulator);
+		Assert.Equal(0u, chip.DebugState.Voices[1].Accumulator);
+		Assert.Equal(0u, chip.DebugState.Voices[2].Accumulator);
+	}
+
+	[Fact]
+	public void NoiseShiftRegisterClocksOnlyOnOscillatorBit19Rising()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x80);
+
+		chip.Render(15);
+
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Render(1);
+
+		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
+	public void NoiseDacUsesDocumentedOutputBits()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+
+		Assert.Equal(ExpectedNoiseDac(0x7FFFF8), chip.DebugState.Voices[0].NoiseDac);
+	}
+
+	[Fact]
+	public void ReleaseNibbleAStaysAudiblePastHalfSecond()
+	{
+		var chip = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xFA);
+		RenderCycles(chip, 10000);
+		chip.Write(0x04, 0x40);
+		RenderCycles(chip, (int)(SidConstants.PalCpuClock * 0.75));
+
+		var range = MeasureRange(chip, warmupCycles: 0, measuredCycles: 24000);
+
+		Assert.True(range > 0.04, $"Expected release rate A to remain audible while following the SID exponential release counter, got range {range:0.000} after 0.75s.");
+	}
+
+	[Fact]
+	public void ReleaseNibble9SurvivesHardRestartGap()
+	{
+		var chip = CreatePulseVoice(attackDecay: 0x05, sustainRelease: 0xF9);
+		RenderCycles(chip, 10000);
+		chip.Write(0x04, 0x40);
+		RenderCycles(chip, SidConstants.PalCyclesPerFrame * 2);
+
+		var range = MeasureRange(chip, warmupCycles: 0, measuredCycles: 24000);
+
+		Assert.True(range > 0.5, $"Expected release rate 9 to keep a hard-restarted voice alive across two PAL frames, got range {range:0.000}.");
+	}
+
 	private static SidChip CreateSawVoice()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
@@ -98,13 +303,18 @@ public sealed class SidChipTests
 
 	private static SidChip CreatePulseVoice()
 	{
+		return CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0);
+	}
+
+	private static SidChip CreatePulseVoice(byte attackDecay, byte sustainRelease)
+	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		chip.Write(0x00, 0xE8);
 		chip.Write(0x01, 0x05);
 		chip.Write(0x02, 0x32);
 		chip.Write(0x03, 0x08);
-		chip.Write(0x05, 0x00);
-		chip.Write(0x06, 0xF0);
+		chip.Write(0x05, attackDecay);
+		chip.Write(0x06, sustainRelease);
 		chip.Write(0x04, 0x41);
 		chip.Write(0x18, 0x0F);
 		return chip;
@@ -133,12 +343,54 @@ public sealed class SidChipTests
 		return chip;
 	}
 
+	private static void WriteVoice(SidChip chip, int voice, ushort frequency, byte control)
+	{
+		var offset = voice * 7;
+		chip.Write((byte)(offset + 0), (byte)(frequency & 0xFF));
+		chip.Write((byte)(offset + 1), (byte)(frequency >> 8));
+		chip.Write((byte)(offset + 4), control);
+	}
+
+	private static uint NextNoise(uint value)
+	{
+		var feedback = ((value >> 22) ^ (value >> 17)) & 1;
+		return ((value << 1) | feedback) & 0x7FFFFF;
+	}
+
+	private static uint ExpectedNoiseDac(uint value)
+	{
+		var dac = 0u;
+		dac |= ((value >> 20) & 1u) << 11;
+		dac |= ((value >> 18) & 1u) << 10;
+		dac |= ((value >> 14) & 1u) << 9;
+		dac |= ((value >> 11) & 1u) << 8;
+		dac |= ((value >> 9) & 1u) << 7;
+		dac |= ((value >> 5) & 1u) << 6;
+		dac |= ((value >> 2) & 1u) << 5;
+		dac |= (value & 1u) << 4;
+		return dac;
+	}
+
+	private static SidChip CreateGreenBeretFilteredPulse()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x00, 0xB1);
+		chip.Write(0x01, 0x19);
+		chip.Write(0x02, 0x04);
+		chip.Write(0x03, 0x07);
+		chip.Write(0x05, 0x08);
+		chip.Write(0x06, 0xCA);
+		chip.Write(0x04, 0x41);
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, 0x64);
+		chip.Write(0x17, 0x81);
+		chip.Write(0x18, 0x1F);
+		return chip;
+	}
+
 	private static double[] CollectSamples(SidChip chip, int warmupCycles, int measuredCycles)
 	{
-		for (var i = 0; i < warmupCycles; i++)
-		{
-			chip.Render(1);
-		}
+		RenderCycles(chip, warmupCycles);
 
 		var samples = new double[measuredCycles];
 		for (var i = 0; i < samples.Length; i++)
@@ -162,10 +414,7 @@ public sealed class SidChipTests
 
 	private static double MeasureRange(SidChip chip, int warmupCycles, int measuredCycles)
 	{
-		for (var i = 0; i < warmupCycles; i++)
-		{
-			chip.Render(1);
-		}
+		RenderCycles(chip, warmupCycles);
 
 		var min = double.MaxValue;
 		var max = double.MinValue;
@@ -177,5 +426,20 @@ public sealed class SidChipTests
 		}
 
 		return max - min;
+	}
+
+	private static void RenderCycles(SidChip chip, int cycles)
+	{
+		const int chunk = 64;
+		while (cycles >= chunk)
+		{
+			chip.Render(chunk);
+			cycles -= chunk;
+		}
+
+		if (cycles > 0)
+		{
+			chip.Render(cycles);
+		}
 	}
 }

@@ -1,13 +1,24 @@
 using System;
+using System.Numerics;
 
 namespace AmigaTracker.Sid
 {
     internal sealed class SidChip
     {
+        private const double FilterOutputGain = 0.60;
         private readonly SidVoice[] _voices = { new SidVoice(), new SidVoice(), new SidVoice() };
         private readonly byte[] _registers = new byte[32];
-        private double _filterLow;
-        private double _filterBand;
+        private readonly byte[] _forwardedRegisters = new byte[32];
+        private readonly byte[] _pendingRegisters = new byte[32];
+        private uint _pendingRegisterBits;
+        private double _filterIntegrator1;
+        private double _filterIntegrator2;
+        private double _filterG;
+        private double _filterDamping;
+        private double _filterDenominator = 1.0;
+        private int _filterMode;
+        private bool _filterCoefficientsDirty = true;
+        private double _lastOutput;
 
         public SidChip(SidChipModel model, ushort baseAddress)
         {
@@ -21,44 +32,143 @@ namespace AmigaTracker.Sid
 
         public byte[] Registers => _registers;
 
+        public SidChipDebugState DebugState => CreateDebugState();
+
         public void Reset()
         {
             Array.Clear(_registers);
+            Array.Clear(_forwardedRegisters);
+            Array.Clear(_pendingRegisters);
+            _pendingRegisterBits = 0;
             foreach (var voice in _voices)
             {
                 voice.Reset();
             }
 
-            _filterLow = 0;
-            _filterBand = 0;
+            _filterIntegrator1 = 0;
+            _filterIntegrator2 = 0;
+            _filterG = 0;
+            _filterDamping = 0;
+            _filterDenominator = 1.0;
+            _filterMode = 0;
+            _filterCoefficientsDirty = true;
+            _lastOutput = 0;
         }
 
         public void Write(byte register, byte value)
         {
             register = (byte)(register & 0x1F);
             _registers[register] = value;
-            if (register < 7)
+            _pendingRegisters[register] = value;
+            _pendingRegisterBits |= 1u << register;
+        }
+
+        public double Render(double cycles, double[]? voiceOutputs = null, int voiceOffset = 0)
+        {
+            var wholeCycles = Math.Max(0, (int)Math.Round(cycles));
+            var voice1 = 0.0;
+            var voice2 = 0.0;
+            var voice3 = 0.0;
+            for (var i = 0; i < wholeCycles; i++)
             {
-                _voices[0].Write(register, value);
+                _lastOutput = ClockOneCycle(out voice1, out voice2, out voice3);
             }
-            else if (register < 14)
+
+            if (voiceOutputs != null)
             {
-                _voices[1].Write(register - 7, value);
+                voiceOutputs[voiceOffset] = voice1;
+                voiceOutputs[voiceOffset + 1] = voice2;
+                voiceOutputs[voiceOffset + 2] = voice3;
             }
-            else if (register < 21)
+
+            return _lastOutput;
+        }
+
+        public double RenderOneCycle(double[]? voiceOutputs = null, int voiceOffset = 0)
+        {
+            _lastOutput = ClockOneCycle(out var voice1, out var voice2, out var voice3);
+            if (voiceOutputs != null)
             {
-                _voices[2].Write(register - 14, value);
+                voiceOutputs[voiceOffset] = voice1;
+                voiceOutputs[voiceOffset + 1] = voice2;
+                voiceOutputs[voiceOffset + 2] = voice3;
+            }
+
+            return _lastOutput;
+        }
+
+        private double ClockOneCycle(out double voice1, out double voice2, out double voice3)
+        {
+            CommitPendingRegisters();
+
+            for (var i = 0; i < _voices.Length; i++)
+            {
+                _voices[i].ClockEnvelope();
+            }
+
+            var previousPhase1 = _voices[0].Phase;
+            var previousPhase2 = _voices[1].Phase;
+            var previousPhase3 = _voices[2].Phase;
+            for (var i = 0; i < _voices.Length; i++)
+            {
+                _voices[i].ClockOscillator();
+            }
+
+            var advancedPhase1 = _voices[0].Phase;
+            var advancedPhase2 = _voices[1].Phase;
+            var advancedPhase3 = _voices[2].Phase;
+            var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
+            var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
+            var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
+            if (_voices[0].SyncEnabled && voice3MsbRising)
+            {
+                _voices[0].ResetOscillator();
+            }
+
+            if (_voices[1].SyncEnabled && voice1MsbRising)
+            {
+                _voices[1].ResetOscillator();
+            }
+
+            if (_voices[2].SyncEnabled && voice2MsbRising)
+            {
+                _voices[2].ResetOscillator();
+            }
+
+            _voices[0].ClockNoise(SidVoice.NoiseClockRising(previousPhase1, _voices[0].Phase));
+            _voices[1].ClockNoise(SidVoice.NoiseClockRising(previousPhase2, _voices[1].Phase));
+            _voices[2].ClockNoise(SidVoice.NoiseClockRising(previousPhase3, _voices[2].Phase));
+
+            voice1 = _voices[0].RenderOutput(_voices[2], Model);
+            voice2 = _voices[1].RenderOutput(_voices[0], Model);
+            voice3 = _voices[2].RenderOutput(_voices[1], Model);
+            return Mix(voice1, voice2, voice3);
+        }
+
+        private void CommitPendingRegisters()
+        {
+            while (_pendingRegisterBits != 0)
+            {
+                var register = BitOperations.TrailingZeroCount(_pendingRegisterBits);
+                _pendingRegisterBits &= ~(1u << register);
+                var value = _pendingRegisters[register];
+                _forwardedRegisters[register] = value;
+                if (register < 21)
+                {
+                    _voices[register / 7].Write(register % 7, value);
+                }
+                else if (register >= 0x15 && register <= 0x18)
+                {
+                    _filterCoefficientsDirty = true;
+                }
             }
         }
 
-        public double Render(double cycles)
+        private double Mix(double voice1, double voice2, double voice3)
         {
-            var voice1 = _voices[0].Render(cycles, _voices[2], Model);
-            var voice2 = _voices[1].Render(cycles, _voices[0], Model);
-            var voice3 = _voices[2].Render(cycles, _voices[1], Model);
-            var mixer = _registers[0x18];
+            var mixer = _forwardedRegisters[0x18];
             var volume = (mixer & 0x0F) / 15.0;
-            var filterRouting = _registers[0x17] & 0x07;
+            var filterRouting = _forwardedRegisters[0x17] & 0x07;
             var direct = 0.0;
             var filtered = 0.0;
             var voicesInOutput = 0;
@@ -72,7 +182,6 @@ namespace AmigaTracker.Sid
             }
 
             var input = (direct + ApplyFilter(filtered)) / Math.Max(1, voicesInOutput);
-
             var dc = Model == SidChipModel.Mos8580 ? 0.0 : 0.08;
             return (input * Math.Max(0.02, volume)) + ((volume - 0.5) * dc);
         }
@@ -91,40 +200,82 @@ namespace AmigaTracker.Sid
 
         private double ApplyFilter(double input)
         {
-            var cutoff = ((_registers[0x16] << 3) | (_registers[0x15] & 0x07)) / 2047.0;
-            var resonance = (_registers[0x17] >> 4) / 15.0;
-            var mode = _registers[0x18] & 0x70;
-            if (mode == 0)
+            if (_filterCoefficientsDirty)
+            {
+                UpdateFilterCoefficients();
+            }
+
+            if (_filterMode == 0)
             {
                 return input;
             }
 
-            var frequency = Model == SidChipModel.Mos8580
-                ? 0.02 + (cutoff * 0.55)
-                : 0.01 + (cutoff * cutoff * 0.45);
-            var q = 0.05 + (resonance * 0.18);
-            _filterLow += frequency * _filterBand;
-            var high = input - _filterLow - (q * _filterBand);
-            _filterBand += frequency * high;
-            var low = _filterLow;
-            var band = _filterBand;
+            var high = (input - ((_filterDamping + _filterG) * _filterIntegrator1) - _filterIntegrator2) / _filterDenominator;
+            var band = (_filterG * high) + _filterIntegrator1;
+            var low = (_filterG * band) + _filterIntegrator2;
+            _filterIntegrator1 = (_filterG * high) + band;
+            _filterIntegrator2 = (_filterG * band) + low;
+
             var output = 0.0;
-            if ((mode & 0x10) != 0)
+            if ((_filterMode & 0x10) != 0)
             {
                 output += low;
             }
 
-            if ((mode & 0x20) != 0)
+            if ((_filterMode & 0x20) != 0)
             {
                 output += band;
             }
 
-            if ((mode & 0x40) != 0)
+            if ((_filterMode & 0x40) != 0)
             {
                 output += high;
             }
 
-            return output;
+            return output * FilterOutputGain;
+        }
+
+        private void UpdateFilterCoefficients()
+        {
+            var cutoffRegister = (_forwardedRegisters[0x16] << 3) | (_forwardedRegisters[0x15] & 0x07);
+            var resonance = (_forwardedRegisters[0x17] >> 4) / 15.0;
+            _filterMode = _forwardedRegisters[0x18] & 0x70;
+            if (_filterMode == 0)
+            {
+                _filterG = 0;
+                _filterDamping = 0;
+                _filterDenominator = 1.0;
+                _filterCoefficientsDirty = false;
+                return;
+            }
+
+            var cutoffHz = MapCutoff(cutoffRegister);
+            _filterG = Math.Tan(Math.PI * cutoffHz / SidConstants.PalCpuClock);
+            _filterDamping = Model == SidChipModel.Mos8580
+                ? 1.55 - (resonance * 1.05)
+                : 1.75 - (resonance * 1.10);
+            _filterDamping = Math.Clamp(_filterDamping, 0.45, 1.9);
+            _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
+            _filterCoefficientsDirty = false;
+        }
+
+        private double MapCutoff(int cutoffRegister)
+        {
+            var normalized = Math.Clamp(cutoffRegister / 2047.0, 0.0, 1.0);
+            return Model == SidChipModel.Mos8580
+                ? 40.0 + (normalized * normalized * 15000.0)
+                : 30.0 + (Math.Pow(normalized, 1.55) * 9500.0);
+        }
+
+        private SidChipDebugState CreateDebugState()
+        {
+            var voices = new SidVoiceDebugState[_voices.Length];
+            for (var i = 0; i < voices.Length; i++)
+            {
+                voices[i] = _voices[i].GetDebugState();
+            }
+
+            return new SidChipDebugState((byte[])_forwardedRegisters.Clone(), voices);
         }
     }
 }

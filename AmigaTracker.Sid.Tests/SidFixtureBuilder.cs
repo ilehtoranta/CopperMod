@@ -11,6 +11,7 @@ internal static class SidFixtureBuilder
 		ushort playAddress = 0x1004,
 		ushort songs = 2,
 		ushort startSong = 2,
+		uint speed = 0,
 		ushort flags = (1 << 2) | (2 << 4),
 		string title = "Generated SID",
 		string author = "CopperMod",
@@ -25,7 +26,7 @@ internal static class SidFixtureBuilder
 		WriteBigEndian(data, 0x0C, playAddress);
 		WriteBigEndian(data, 0x0E, songs);
 		WriteBigEndian(data, 0x10, startSong);
-		WriteBigEndian(data, 0x12, 0U);
+		WriteBigEndian(data, 0x12, speed);
 		WriteFixed(data, 0x16, title);
 		WriteFixed(data, 0x36, author);
 		WriteFixed(data, 0x56, released);

@@ -2,6 +2,7 @@ using AmigaTracker.Abstractions;
 using AmigaTracker.Med;
 using AmigaTracker.ProTracker;
 using AmigaTracker.Sid;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace CopperMod;
@@ -11,8 +12,8 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	public const int SampleRate = 44100;
 	public const int ChannelCount = 2;
 	private static readonly TimeSpan InitialOutputLeadIn = TimeSpan.FromMilliseconds(500);
-	private const int DesiredOutputLatencyMilliseconds = 60;
-	private const int OutputBufferCount = 3;
+	private const int DesiredOutputLatencyMilliseconds = 250;
+	private const int OutputBufferCount = 4;
 
 	internal static readonly IReadOnlyList<IModuleFormat> SupportedFormats = new IModuleFormat[]
 	{
@@ -27,12 +28,10 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	private C64OutputProfile _c64OutputProfile = C64OutputProfile.C64;
 	private bool _waveformEnabled;
 	private WaveformDisplayMode _waveformDisplayMode = WaveformDisplayMode.MixedOutput;
-	private WaveOutEvent? _output;
+	private IWavePlayer? _output;
 	private bool _disposed;
 
 	public event EventHandler? StateChanged;
-
-	public event EventHandler<WaveformSnapshotEventArgs>? WaveformAvailable;
 
 	public string? FilePath { get; private set; }
 
@@ -44,7 +43,16 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 	public PlaybackPosition Position => _sampleProvider?.Position ?? PlaybackPosition.FromTime(TimeSpan.Zero);
 
+	public PlaybackBufferStatus BufferStatus => _sampleProvider?.BufferStatus ?? new PlaybackBufferStatus(
+		TimeSpan.Zero,
+		TimeSpan.Zero,
+		TimeSpan.Zero,
+		0,
+		producerEnded: false,
+		endOfSong: false);
+
 	public ModuleOutputFamily OutputFamily => (_song as IModuleOutputFamilyProvider)?.OutputFamily ?? ModuleOutputFamily.Amiga;
+
 
 	public IModuleSubSongSelector? SubSongs => _song as IModuleSubSongSelector;
 
@@ -148,13 +156,8 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		_sampleProvider.WaveformEnabled = _waveformEnabled;
 		_sampleProvider.WaveformDisplayMode = _waveformDisplayMode;
 		_sampleProvider.EndOfSongReached += (_, _) => OnStateChanged();
-		_sampleProvider.WaveformAvailable += (_, args) => WaveformAvailable?.Invoke(this, args);
-		_output = new WaveOutEvent
-		{
-			DesiredLatency = DesiredOutputLatencyMilliseconds,
-			NumberOfBuffers = OutputBufferCount
-		};
-		_output.Init(_sampleProvider);
+		_output = CreateOutputDevice();
+		_output.Init(_sampleProvider.ToWaveProvider());
 		_output.PlaybackStopped += (_, _) => OnStateChanged();
 		FilePath = path;
 		OnStateChanged();
@@ -220,6 +223,17 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		OnStateChanged();
 	}
 
+	public bool TryReadWaveformSnapshot(out WaveformSnapshot snapshot)
+	{
+		if (_sampleProvider != null)
+		{
+			return _sampleProvider.TryReadWaveformSnapshot(out snapshot);
+		}
+
+		snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, SampleRate);
+		return false;
+	}
+
 	public void Dispose()
 	{
 		if (_disposed)
@@ -237,9 +251,10 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		_output?.Dispose();
 		_output = null;
 
+		_sampleProvider?.Dispose();
+		_sampleProvider = null;
 		_song?.Dispose();
 		_song = null;
-		_sampleProvider = null;
 		FilePath = null;
 	}
 
@@ -256,6 +271,22 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		if (_disposed)
 		{
 			throw new ObjectDisposedException(nameof(ModuleAudioPlayer));
+		}
+	}
+
+	private static IWavePlayer CreateOutputDevice()
+	{
+		try
+		{
+			return new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, DesiredOutputLatencyMilliseconds);
+		}
+		catch (Exception) when (OperatingSystem.IsWindows())
+		{
+			return new WaveOutEvent
+			{
+				DesiredLatency = DesiredOutputLatencyMilliseconds,
+				NumberOfBuffers = OutputBufferCount
+			};
 		}
 	}
 

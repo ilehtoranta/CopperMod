@@ -8,15 +8,20 @@ namespace AmigaTracker.Sid
         private const int Decay = 1;
         private const int Sustain = 2;
         private const int Release = 3;
-        private static readonly double[] RateSeconds =
+        private const uint PhaseMask = 0x00FFFFFF;
+        private const uint PhaseMsb = 0x00800000;
+        private const uint NoiseClockBit = 0x00080000;
+        private static readonly int[] RatePeriods =
         {
-            0.002, 0.008, 0.016, 0.024, 0.038, 0.056, 0.068, 0.080,
-            0.100, 0.250, 0.500, 0.800, 1.000, 3.000, 5.000, 8.000
+            9, 32, 63, 95, 149, 220, 267, 313,
+            392, 977, 1954, 3126, 3907, 11720, 19532, 31251
         };
 
         private uint _phase;
         private uint _noise = 0x7FFFF8;
-        private double _envelope;
+        private int _envelopeCounter;
+        private int _rateCounter;
+        private int _exponentialCounter;
         private int _envelopeState = Release;
         private bool _previousGate;
         private byte _control;
@@ -29,36 +34,31 @@ namespace AmigaTracker.Sid
 
         public byte SustainRelease { get; private set; }
 
-        public byte Control
-        {
-            get => _control;
-            private set
-            {
-                var gate = (value & 0x01) != 0;
-                if (gate && !_previousGate)
-                {
-                    _envelopeState = Attack;
-                }
-                else if (!gate && _previousGate)
-                {
-                    _envelopeState = Release;
-                }
+        public byte Control => _control;
 
-                if ((value & 0x08) != 0)
-                {
-                    _phase = 0;
-                }
+        public uint Phase => _phase;
 
-                _previousGate = gate;
-                _control = value;
-            }
-        }
+        public uint NoiseShiftRegister => _noise;
+
+        public int EnvelopeCounter => _envelopeCounter;
+
+        public int RateCounter => _rateCounter;
+
+        public int ExponentialCounter => _exponentialCounter;
+
+        public int EnvelopeState => _envelopeState;
+
+        public bool SyncEnabled => (_control & 0x02) != 0;
+
+        public bool TestEnabled => (_control & 0x08) != 0;
 
         public void Reset()
         {
             _phase = 0;
             _noise = 0x7FFFF8;
-            _envelope = 0;
+            _envelopeCounter = 0;
+            _rateCounter = 0;
+            _exponentialCounter = 0;
             _envelopeState = Release;
             _previousGate = false;
             _control = 0;
@@ -85,7 +85,7 @@ namespace AmigaTracker.Sid
                     PulseWidth = (ushort)((PulseWidth & 0x00FF) | ((value & 0x0F) << 8));
                     break;
                 case 4:
-                    Control = value;
+                    WriteControl(value);
                     break;
                 case 5:
                     AttackDecay = value;
@@ -96,58 +96,152 @@ namespace AmigaTracker.Sid
             }
         }
 
-        public double Render(double cycles, SidVoice? syncSource, SidChipModel model)
+        public void ClockEnvelope()
         {
-            AdvanceEnvelope(cycles);
-            if ((Control & 0x08) != 0)
-            {
-                return 0;
-            }
-
-            var oldPhase = _phase;
-            var increment = (Frequency * cycles * 256.0) % 4294967296.0;
-            _phase += (uint)increment;
-            if ((Control & 0x02) != 0 && syncSource != null && syncSource.PhaseWrapped(oldPhase))
-            {
-                _phase = 0;
-            }
-
-            AdvanceNoise(oldPhase, _phase);
-            var waveform = RenderWaveform(syncSource, model);
-            return waveform * _envelope;
-        }
-
-        private bool PhaseWrapped(uint previousPhase)
-        {
-            return _phase < previousPhase;
-        }
-
-        private void AdvanceNoise(uint previousPhase, uint currentPhase)
-        {
-            if (((previousPhase ^ currentPhase) & 0x08000000) == 0)
+            if (_envelopeState == Sustain)
             {
                 return;
             }
 
-            var bit = ((_noise >> 22) ^ (_noise >> 17)) & 1;
-            _noise = ((_noise << 1) | bit) & 0x7FFFFF;
+            _rateCounter++;
+            if (_rateCounter < GetRatePeriod())
+            {
+                return;
+            }
+
+            _rateCounter = 0;
+            switch (_envelopeState)
+            {
+                case Attack:
+                    if (_envelopeCounter < 0xFF)
+                    {
+                        _envelopeCounter++;
+                    }
+
+                    if (_envelopeCounter >= 0xFF)
+                    {
+                        _envelopeCounter = 0xFF;
+                        _exponentialCounter = 0;
+                        _envelopeState = Decay;
+                    }
+
+                    break;
+                case Decay:
+                    var sustain = GetSustainLevel();
+                    if (_envelopeCounter > sustain && ClockExponentialCounter())
+                    {
+                        _envelopeCounter--;
+                    }
+
+                    if (_envelopeCounter <= sustain)
+                    {
+                        _envelopeCounter = sustain;
+                        _exponentialCounter = 0;
+                        _envelopeState = Sustain;
+                    }
+
+                    break;
+                case Release:
+                    if (_envelopeCounter > 0 && ClockExponentialCounter())
+                    {
+                        _envelopeCounter--;
+                    }
+
+                    break;
+            }
+        }
+
+        public void ClockOscillator()
+        {
+            if (TestEnabled)
+            {
+                _phase = 0;
+                return;
+            }
+
+            _phase = (_phase + Frequency) & PhaseMask;
+        }
+
+        public void ResetOscillator()
+        {
+            _phase = 0;
+        }
+
+        public void ClockNoise(bool oscillatorBit19Rising)
+        {
+            if (!oscillatorBit19Rising)
+            {
+                return;
+            }
+
+            var feedback = ((_noise >> 22) ^ (_noise >> 17)) & 1;
+            _noise = ((_noise << 1) | feedback) & 0x7FFFFF;
+        }
+
+        public double RenderOutput(SidVoice? syncSource, SidChipModel model)
+        {
+            var waveform = RenderWaveform(syncSource, model);
+            return waveform * (_envelopeCounter / 255.0);
+        }
+
+        public SidVoiceDebugState GetDebugState()
+        {
+            return new SidVoiceDebugState(
+                _phase,
+                _noise,
+                GetNoiseDac(),
+                _envelopeCounter,
+                _rateCounter,
+                _exponentialCounter,
+                _envelopeState,
+                _control);
+        }
+
+        public static bool MsbRising(uint previousPhase, uint currentPhase)
+        {
+            return (previousPhase & PhaseMsb) == 0 && (currentPhase & PhaseMsb) != 0;
+        }
+
+        public static bool NoiseClockRising(uint previousPhase, uint currentPhase)
+        {
+            return (previousPhase & NoiseClockBit) == 0 && (currentPhase & NoiseClockBit) != 0;
+        }
+
+        private void WriteControl(byte value)
+        {
+            var gate = (value & 0x01) != 0;
+            if (gate && !_previousGate)
+            {
+                _envelopeState = Attack;
+            }
+            else if (!gate && _previousGate)
+            {
+                _envelopeState = Release;
+            }
+
+            _previousGate = gate;
+            _control = value;
+            if (TestEnabled)
+            {
+                _phase = 0;
+            }
         }
 
         private double RenderWaveform(SidVoice? syncSource, SidChipModel model)
         {
-            var waveformMask = Control & 0xF0;
+            var waveformMask = _control & 0xF0;
             if (waveformMask == 0)
             {
                 return 0;
             }
 
             var outputs = 0;
-            var sum = 0.0;
+            uint combinedDac = 0x0FFF;
             if ((waveformMask & 0x10) != 0)
             {
-                var phase = (_phase >> 19) & 0x0FFF;
-                var invert = (_phase & 0x80000000) != 0;
-                if ((Control & 0x04) != 0 && syncSource != null && (syncSource._phase & 0x80000000) != 0)
+                var phase = (_phase >> 11) & 0x0FFF;
+                var invert = (_phase & PhaseMsb) != 0;
+                if ((_control & 0x04) != 0 && syncSource != null && (syncSource._phase & PhaseMsb) != 0)
                 {
                     invert = !invert;
                 }
@@ -157,26 +251,25 @@ namespace AmigaTracker.Sid
                     phase ^= 0x0FFF;
                 }
 
-                sum += NormalizeDac12(phase);
+                combinedDac &= phase;
                 outputs++;
             }
 
             if ((waveformMask & 0x20) != 0)
             {
-                sum += NormalizeDac12((_phase >> 20) & 0x0FFF);
+                combinedDac &= (_phase >> 12) & 0x0FFF;
                 outputs++;
             }
 
             if ((waveformMask & 0x40) != 0)
             {
-                var width = PulseWidth & 0x0FFF;
-                sum += (_phase >> 20) < width ? 1.0 : -1.0;
+                combinedDac &= ((_phase >> 12) & 0x0FFF) < (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
                 outputs++;
             }
 
             if ((waveformMask & 0x80) != 0)
             {
-                sum += (_noise / 4194303.5) - 1.0;
+                combinedDac &= GetNoiseDac();
                 outputs++;
             }
 
@@ -185,13 +278,27 @@ namespace AmigaTracker.Sid
                 return 0;
             }
 
-            var combined = sum / outputs;
+            var combined = NormalizeDac12(combinedDac);
             if (outputs > 1 && model == SidChipModel.Mos6581)
             {
-                combined *= 0.65;
+                combined *= 0.55;
             }
 
             return combined;
+        }
+
+        private uint GetNoiseDac()
+        {
+            var dac = 0u;
+            dac |= ((_noise >> 20) & 1u) << 11;
+            dac |= ((_noise >> 18) & 1u) << 10;
+            dac |= ((_noise >> 14) & 1u) << 9;
+            dac |= ((_noise >> 11) & 1u) << 8;
+            dac |= ((_noise >> 9) & 1u) << 7;
+            dac |= ((_noise >> 5) & 1u) << 6;
+            dac |= ((_noise >> 2) & 1u) << 5;
+            dac |= (_noise & 1u) << 4;
+            return dac;
         }
 
         private static double NormalizeDac12(uint value)
@@ -199,42 +306,45 @@ namespace AmigaTracker.Sid
             return (value / 2047.5) - 1.0;
         }
 
-        private void AdvanceEnvelope(double cycles)
+        private int GetRatePeriod()
         {
-            var seconds = cycles / SidConstants.PalCpuClock;
-            switch (_envelopeState)
+            return _envelopeState switch
             {
-                case Attack:
-                    _envelope += seconds / RateSeconds[(AttackDecay >> 4) & 0x0F];
-                    if (_envelope >= 1.0)
-                    {
-                        _envelope = 1.0;
-                        _envelopeState = Decay;
-                    }
+                Attack => RatePeriods[(AttackDecay >> 4) & 0x0F],
+                Decay => RatePeriods[AttackDecay & 0x0F],
+                Release => RatePeriods[SustainRelease & 0x0F],
+                _ => int.MaxValue
+            };
+        }
 
-                    break;
-                case Decay:
-                    var sustain = ((SustainRelease >> 4) & 0x0F) / 15.0;
-                    _envelope -= seconds / RateSeconds[AttackDecay & 0x0F];
-                    if (_envelope <= sustain)
-                    {
-                        _envelope = sustain;
-                        _envelopeState = Sustain;
-                    }
+        private int GetSustainLevel()
+        {
+            return ((SustainRelease >> 4) & 0x0F) * 0x11;
+        }
 
-                    break;
-                case Sustain:
-                    _envelope = ((SustainRelease >> 4) & 0x0F) / 15.0;
-                    break;
-                case Release:
-                    _envelope -= seconds / RateSeconds[SustainRelease & 0x0F];
-                    if (_envelope < 0)
-                    {
-                        _envelope = 0;
-                    }
-
-                    break;
+        private bool ClockExponentialCounter()
+        {
+            _exponentialCounter++;
+            if (_exponentialCounter < GetExponentialPeriod(_envelopeCounter))
+            {
+                return false;
             }
+
+            _exponentialCounter = 0;
+            return true;
+        }
+
+        private static int GetExponentialPeriod(int envelope)
+        {
+            return envelope switch
+            {
+                <= 0x06 => 30,
+                <= 0x0E => 16,
+                <= 0x1A => 8,
+                <= 0x36 => 4,
+                <= 0x5D => 2,
+                _ => 1
+            };
         }
     }
 }

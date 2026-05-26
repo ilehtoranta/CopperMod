@@ -8,7 +8,7 @@ namespace CopperMod;
 
 internal sealed class PlayerWindow : Window, IDisposable
 {
-	private static readonly bool WaveformUiEnabled = false;
+	private static readonly bool WaveformUiEnabled = true;
 	private static readonly TimeSpan ViewRefreshInterval = TimeSpan.FromMilliseconds(200);
 	private static readonly TimeSpan WaveformRefreshInterval = TimeSpan.FromMilliseconds(16);
 	private const int MaximumPendingWaveforms = 12;
@@ -207,16 +207,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 		if (WaveformUiEnabled)
 		{
 			_player.WaveformEnabled = true;
-			Add(_waveformModeButton);
 		}
 
 		_player.StateChanged += (_, _) => _application.Invoke(RefreshView);
 		if (WaveformUiEnabled)
 		{
-			_player.WaveformAvailable += (_, args) =>
-			{
-				EnqueueWaveform(args.Snapshot);
-			};
 			TryEnableWaveformDisplay();
 		}
 
@@ -464,6 +459,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 
 		var hasNewWaveform = false;
+		if (_player.TryReadWaveformSnapshot(out var polledWaveform))
+		{
+			EnqueueWaveform(polledWaveform);
+		}
+
 		while (TryDequeueWaveform(out var nextWaveform))
 		{
 			_targetWaveform = nextWaveform;
@@ -595,6 +595,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			"Instruments: " + (metadata?.InstrumentCount.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
 			"State: " + _player.PlaybackState.ToString().ToLowerInvariant(),
 			"Position: " + FormatTime(_player.Position.Time) + " / " + (_player.Duration.Time.HasValue ? FormatTime(_player.Duration.Time.Value) : "--:--"),
+			"Buffer: " + FormatBufferStatus(_player.BufferStatus),
 			"Output: " + (_player.OutputFamily == ModuleOutputFamily.Commodore64
 				? FormatC64OutputProfile(_player.C64OutputProfile)
 				: FormatOutputProfile(_player.OutputProfile)),
@@ -638,6 +639,15 @@ internal sealed class PlayerWindow : Window, IDisposable
 		return $"{(int)time.TotalMinutes:D2}:{time.Seconds:D2}";
 	}
 
+	private static string FormatBufferStatus(PlaybackBufferStatus status)
+	{
+		return status.QueuedDuration.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) +
+			"s / " +
+			status.TargetDuration.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) +
+			"s, underruns " +
+			status.UnderrunCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+	}
+
 	private static string FormatOutputProfile(AmigaOutputProfile profile)
 	{
 		return profile switch
@@ -655,11 +665,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private static string FormatWaveformDisplayModeButton(WaveformDisplayMode mode)
 	{
-		return mode == WaveformDisplayMode.TrackerChannels ? "4ch" : "Mix";
+		return mode == WaveformDisplayMode.TrackerChannels ? "Ch" : "Mix";
 	}
 
 	private static string FormatWaveformDisplayMode(WaveformDisplayMode mode)
 	{
-		return mode == WaveformDisplayMode.TrackerChannels ? "4-channel" : "mixed output";
+		return mode == WaveformDisplayMode.TrackerChannels ? "channels" : "mixed output";
 	}
 }

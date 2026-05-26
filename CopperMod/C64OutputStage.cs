@@ -3,7 +3,8 @@ namespace CopperMod;
 internal sealed class C64OutputStage
 {
 	private const double DcBlockCutoffHz = 12.0;
-	private const double OutputLowPassCutoffHz = 14500.0;
+	private const double OutputLowPassCutoffHz = 10500.0;
+	private const float OutputHeadroom = 0.82f;
 	private float[] _lowPassState = Array.Empty<float>();
 	private float[] _dcPreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousOutput = Array.Empty<float>();
@@ -48,7 +49,7 @@ internal sealed class C64OutputStage
 			var sample = samples[i];
 			sample = OnePoleLowPass(sample, channel, lowPassAlpha);
 			sample = DcBlock(sample, channel, highPassAlpha);
-			samples[i] = SoftLimit(sample * 1.35f);
+			samples[i] = Math.Clamp(sample * OutputHeadroom, -1.0f, 1.0f);
 		}
 	}
 
@@ -89,10 +90,5 @@ internal sealed class C64OutputStage
 		var rc = 1.0 / (2.0 * Math.PI * cutoffHz);
 		var dt = 1.0 / sampleRate;
 		return rc / (rc + dt);
-	}
-
-	private static float SoftLimit(float sample)
-	{
-		return Math.Clamp((float)Math.Tanh(sample), -1.0f, 1.0f);
 	}
 }
