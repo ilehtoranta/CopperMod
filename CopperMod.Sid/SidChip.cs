@@ -5,12 +5,12 @@ namespace CopperMod.Sid
 {
     internal sealed class SidChip
     {
-        private const double FilterInputGain = 0.72;
-        private const double FilterOutputGain = 0.92;
         private readonly SidVoice[] _voices = { new SidVoice(), new SidVoice(), new SidVoice() };
         private readonly byte[] _registers = new byte[32];
         private readonly byte[] _forwardedRegisters = new byte[32];
         private readonly byte[] _pendingRegisters = new byte[32];
+        private readonly SidFilterProfileDefinition _filterProfile;
+        private readonly double _cpuClockHz;
         private uint _pendingRegisterBits;
         private double _filterIntegrator1;
         private double _filterIntegrator2;
@@ -18,15 +18,27 @@ namespace CopperMod.Sid
         private double _filterDamping;
         private double _filterDenominator = 1.0;
         private int _filterMode;
+        private int _filterCutoffRegister;
+        private int _filterResonanceNibble;
+        private double _filterCutoffHz;
+        private double _lastLowPass;
+        private double _lastBandPass;
+        private double _lastHighPass;
         private bool _filterCoefficientsDirty = true;
         private double _masterVolume;
         private double _volumeOffset;
         private double _lastOutput;
 
-        public SidChip(SidChipModel model, ushort baseAddress)
+        public SidChip(
+            SidChipModel model,
+            ushort baseAddress,
+            double cpuClockHz = SidConstants.PalCpuClock,
+            SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
             Model = model == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
             BaseAddress = baseAddress;
+            _cpuClockHz = cpuClockHz > 0 ? cpuClockHz : SidConstants.PalCpuClock;
+            _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile);
         }
 
         public SidChipModel Model { get; }
@@ -54,6 +66,12 @@ namespace CopperMod.Sid
             _filterDamping = 0;
             _filterDenominator = 1.0;
             _filterMode = 0;
+            _filterCutoffRegister = 0;
+            _filterResonanceNibble = 0;
+            _filterCutoffHz = 0;
+            _lastLowPass = 0;
+            _lastBandPass = 0;
+            _lastHighPass = 0;
             _filterCoefficientsDirty = true;
             _masterVolume = SidAnalog.ConvertVolume(0, Model);
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
@@ -180,7 +198,7 @@ namespace CopperMod.Sid
         private double Mix(double voice1, double voice2, double voice3)
         {
             var mixer = _forwardedRegisters[0x18];
-            var filterRouting = _forwardedRegisters[0x17] & 0x07;
+            var filterRouting = _forwardedRegisters[0x17] & 0x0F;
             var voice3Muted = (mixer & 0x80) != 0;
             var direct = 0.0;
             var filtered = 0.0;
@@ -195,7 +213,7 @@ namespace CopperMod.Sid
                 RouteVoice(voice3, filtered: false, ref direct, ref filtered);
             }
 
-            var voiceSignal = (direct + ApplyFilter(filtered * FilterInputGain)) *
+            var voiceSignal = (direct + ApplyFilter(filtered * _filterProfile.FilterInputGain)) *
                 SidAnalog.VoiceMixGain(Model) *
                 _masterVolume;
             return SidAnalog.SoftClip(voiceSignal + _volumeOffset);
@@ -222,7 +240,10 @@ namespace CopperMod.Sid
 
             if (_filterMode == 0)
             {
-                return input;
+                _lastLowPass = 0;
+                _lastBandPass = 0;
+                _lastHighPass = 0;
+                return 0;
             }
 
             var high = (input - ((_filterDamping + _filterG) * _filterIntegrator1) - _filterIntegrator2) / _filterDenominator;
@@ -230,67 +251,76 @@ namespace CopperMod.Sid
             var low = (_filterG * band) + _filterIntegrator2;
             _filterIntegrator1 = (_filterG * high) + band;
             _filterIntegrator2 = (_filterG * band) + low;
+            _lastLowPass = low;
+            _lastBandPass = band;
+            _lastHighPass = high;
 
             var output = 0.0;
             if ((_filterMode & 0x10) != 0)
             {
-                output += low;
+                output += low * _filterProfile.LowPassGain;
             }
 
             if ((_filterMode & 0x20) != 0)
             {
-                output += band;
+                output += band * _filterProfile.BandPassGain;
             }
 
             if ((_filterMode & 0x40) != 0)
             {
-                output += high;
+                output += high * _filterProfile.HighPassGain;
             }
 
-            return output * FilterOutputGain;
+            return output * _filterProfile.FilterOutputGain;
         }
 
         private void UpdateFilterCoefficients()
         {
-            var cutoffRegister = (_forwardedRegisters[0x16] << 3) | (_forwardedRegisters[0x15] & 0x07);
-            var resonance = (_forwardedRegisters[0x17] >> 4) / 15.0;
+            _filterCutoffRegister = (_forwardedRegisters[0x16] << 3) | (_forwardedRegisters[0x15] & 0x07);
+            _filterResonanceNibble = _forwardedRegisters[0x17] >> 4;
             _filterMode = _forwardedRegisters[0x18] & 0x70;
             if (_filterMode == 0)
             {
                 _filterG = 0;
                 _filterDamping = 0;
                 _filterDenominator = 1.0;
+                _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
                 _filterCoefficientsDirty = false;
                 return;
             }
 
-            var cutoffHz = MapCutoff(cutoffRegister);
-            _filterG = Math.Tan(Math.PI * cutoffHz / SidConstants.PalCpuClock);
-            _filterDamping = Model == SidChipModel.Mos8580
-                ? 1.62 - (resonance * 1.10)
-                : 1.82 - (resonance * 1.22);
-            _filterDamping = Math.Clamp(_filterDamping, 0.42, 1.95);
+            _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
+            _filterG = Math.Tan(Math.PI * _filterCutoffHz / _cpuClockHz);
+            _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble);
             _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
             _filterCoefficientsDirty = false;
         }
 
-        private double MapCutoff(int cutoffRegister)
-        {
-            var normalized = Math.Clamp(cutoffRegister / 2047.0, 0.0, 1.0);
-            return Model == SidChipModel.Mos8580
-                ? 35.0 + (Math.Pow(normalized, 1.18) * 14500.0)
-                : 25.0 + (Math.Pow(normalized, 1.85) * 11500.0);
-        }
-
         private SidChipDebugState CreateDebugState()
         {
+            if (_filterCoefficientsDirty)
+            {
+                UpdateFilterCoefficients();
+            }
+
             var voices = new SidVoiceDebugState[_voices.Length];
             for (var i = 0; i < voices.Length; i++)
             {
                 voices[i] = _voices[i].GetDebugState();
             }
 
-            return new SidChipDebugState((byte[])_forwardedRegisters.Clone(), voices);
+            return new SidChipDebugState(
+                (byte[])_forwardedRegisters.Clone(),
+                voices,
+                _filterProfile.Id,
+                _filterCutoffRegister,
+                _filterCutoffHz,
+                _filterResonanceNibble,
+                _filterMode,
+                _filterDamping,
+                _lastLowPass,
+                _lastBandPass,
+                _lastHighPass);
         }
     }
 }

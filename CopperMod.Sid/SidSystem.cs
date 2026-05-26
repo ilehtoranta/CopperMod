@@ -20,7 +20,11 @@ namespace CopperMod.Sid
         private int _captureFrameIndex;
         private int _captureSampleRate;
 
-        public SidSystem(IReadOnlyList<SidChipPlacement> placements, SidChipModel model)
+        public SidSystem(
+            IReadOnlyList<SidChipPlacement> placements,
+            SidChipModel model,
+            double cpuClockHz = SidConstants.PalCpuClock,
+            SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
             if (placements is null || placements.Count == 0)
             {
@@ -30,7 +34,7 @@ namespace CopperMod.Sid
             Chips = new SidChip[placements.Count];
             for (var i = 0; i < placements.Count; i++)
             {
-                Chips[i] = new SidChip(model, placements[i].BaseAddress);
+                Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuClockHz, filterProfile);
             }
 
             _channelCount = Chips.Length * 3;

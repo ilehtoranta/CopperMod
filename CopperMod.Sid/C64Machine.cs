@@ -29,12 +29,12 @@ namespace CopperMod.Sid
         private byte _processorPortValue;
         private long _irqHoldoffCycles;
 
-        public C64Machine(SidModule module)
+        public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
             _module = module ?? throw new ArgumentNullException(nameof(module));
             _clock = C64ClockProfile.FromSidClock(module.Clock);
             _vic = new VicII(_clock);
-            Sid = new SidSystem(module.Chips, module.EffectiveChipModel);
+            Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuClockHz, filterProfile);
             Cpu = new Mos6510(this);
             InstallMinimalRoms();
         }
