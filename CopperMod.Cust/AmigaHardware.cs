@@ -480,7 +480,8 @@ namespace CopperMod.Cust
                     channel.Volume = Math.Min(64, value & 0x7F);
                     break;
                 case 0x0A:
-                    channel.CurrentSample = unchecked((sbyte)(value >> 8));
+                    channel.WriteData(value);
+                    SetAudioInterrupt(channel.Index);
                     break;
             }
         }
@@ -548,6 +549,7 @@ namespace CopperMod.Cust
         private sealed class PaulaChannel
         {
             private double _samplePosition;
+            private sbyte? _pendingManualSample;
             private uint _currentAddress;
             private uint _remainingBytes;
 
@@ -576,10 +578,11 @@ namespace CopperMod.Cust
                 Location = 0;
                 LengthWords = 1;
                 Period = 428;
-                Volume = 0;
+                Volume = 64;
                 CurrentSample = 0;
                 DmaEnabled = false;
                 _samplePosition = 0;
+                _pendingManualSample = null;
                 _currentAddress = 0;
                 _remainingBytes = 0;
             }
@@ -587,21 +590,29 @@ namespace CopperMod.Cust
             public void StartDma()
             {
                 DmaEnabled = true;
+                _pendingManualSample = null;
                 _currentAddress = Location;
                 _remainingBytes = (uint)Math.Max(2, LengthWords * 2);
                 _samplePosition = 0;
             }
 
+            public void WriteData(ushort value)
+            {
+                CurrentSample = unchecked((sbyte)(value >> 8));
+                _pendingManualSample = unchecked((sbyte)value);
+                _samplePosition = 0;
+            }
+
             public bool Advance(byte[] memory, long cpuCycles)
             {
-                if (!DmaEnabled || Period <= 0 || Volume <= 0)
+                if (Period <= 0)
                 {
                     return false;
                 }
 
                 var interrupted = false;
                 _samplePosition += cpuCycles / (Period * 2.0);
-                while (_samplePosition >= 1.0)
+                while (DmaEnabled && _samplePosition >= 1.0)
                 {
                     _samplePosition -= 1.0;
                     if (_remainingBytes == 0)
@@ -614,6 +625,14 @@ namespace CopperMod.Cust
                     CurrentSample = _currentAddress < memory.Length ? unchecked((sbyte)memory[_currentAddress]) : (sbyte)0;
                     _currentAddress++;
                     _remainingBytes--;
+                }
+
+                if (!DmaEnabled && _pendingManualSample.HasValue && _samplePosition >= 1.0)
+                {
+                    _samplePosition -= 1.0;
+                    CurrentSample = _pendingManualSample.Value;
+                    _pendingManualSample = null;
+                    interrupted = true;
                 }
 
                 return interrupted;

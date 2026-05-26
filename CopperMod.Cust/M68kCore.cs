@@ -385,6 +385,11 @@ namespace CopperMod.Cust
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
+                if (bitMode == 1 || (bitMode == 7 && bitReg == 4))
+                {
+                    return false;
+                }
+
                 var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();

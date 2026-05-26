@@ -27,17 +27,33 @@ public static class ModuleFormatRegistry
 		}
 
 		var fullPath = Path.GetFullPath(path);
-		return Load(File.ReadAllBytes(fullPath), formats);
+		return Load(new ModuleLoadContext(File.ReadAllBytes(fullPath), fullPath), formats);
 	}
 
 	public static IModuleSong Load(ReadOnlySpan<byte> data, IReadOnlyList<IModuleFormat>? formats = null)
 	{
+		return Load(new ModuleLoadContext(data.ToArray()), formats);
+	}
+
+	public static IModuleSong Load(ModuleLoadContext context, IReadOnlyList<IModuleFormat>? formats = null)
+	{
+		ArgumentNullException.ThrowIfNull(context);
 		formats ??= CreateDefaultFormats();
 		foreach (var format in formats)
 		{
-			if (format.CanLoad(data))
+			if (format is IModuleFormatWithContext contextualFormat)
 			{
-				return format.Load(data);
+				if (contextualFormat.CanLoad(context))
+				{
+					return contextualFormat.Load(context);
+				}
+
+				continue;
+			}
+
+			if (format.CanLoad(context.DataSpan))
+			{
+				return format.Load(context.DataSpan);
 			}
 		}
 

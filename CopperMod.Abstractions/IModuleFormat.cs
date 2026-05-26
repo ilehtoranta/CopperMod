@@ -28,4 +28,26 @@ namespace CopperMod.Abstractions
         /// </exception>
         IModuleSong Load(ReadOnlySpan<byte> data);
     }
+
+    /// <summary>
+    /// Optional extension for formats that need the module source path or sibling files during load.
+    /// </summary>
+    public interface IModuleFormatWithContext : IModuleFormat
+    {
+        /// <summary>
+        /// Returns true when this loader supports the supplied module data and context.
+        /// </summary>
+        bool CanLoad(ModuleLoadContext context);
+
+        /// <summary>
+        /// Loads a module song from bytes and source-file context.
+        /// </summary>
+        /// <exception cref="UnsupportedModuleFormatException">
+        /// Thrown when the data is valid bytes but not a supported format for this loader.
+        /// </exception>
+        /// <exception cref="ModuleLoadException">
+        /// Thrown when the data looks supported but cannot be parsed.
+        /// </exception>
+        IModuleSong Load(ModuleLoadContext context);
+    }
 }

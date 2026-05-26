@@ -134,6 +134,20 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void DynamicBitOperationRejectsAddressRegisterDestination()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x01, 0xC8); // BSET D0,A0 is illegal on MC68000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		var exception = Assert.Throws<UnsupportedM68kOpcodeException>(() => cpu.ExecuteInstruction());
+
+		Assert.Equal(0x01C8, exception.Opcode);
+		Assert.Equal(0x1000u, exception.ProgramCounter);
+	}
+
+	[Fact]
 	public void AmigaBusSchedulesCpuWordCustomWritesAsSingleRegisterEvent()
 	{
 		var bus = new AmigaBus();

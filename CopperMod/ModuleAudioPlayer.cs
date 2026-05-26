@@ -134,16 +134,11 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		}
 
 		path = Path.GetFullPath(path);
-		var data = File.ReadAllBytes(path);
-		var format = _formats.FirstOrDefault(candidate => candidate.CanLoad(data));
-		if (format == null)
-		{
-			throw new InvalidDataException("The input file is not a supported tracker module.");
-		}
+		var song = ModuleFormatRegistry.LoadFile(path, _formats);
 
 		DisposePlaybackObjects();
 
-		_song = format.Load(data);
+		_song = song;
 		_song.LoopingEnabled = false;
 		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile);
 		_sampleProvider.WaveformEnabled = _waveformEnabled;

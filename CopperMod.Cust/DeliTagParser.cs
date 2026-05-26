@@ -28,8 +28,23 @@ namespace CopperMod.Cust
         {
             CustConstants.DtpPlayerVersion,
             CustConstants.DtpInitPlayer,
-            CustConstants.DtpInitSound,
-            CustConstants.DtpInterrupt
+            CustConstants.DtpInitSound
+        };
+
+        private static readonly uint[] SupportedIdentityTags =
+        {
+            CustConstants.DtpCheck,
+            CustConstants.DtpInterrupt,
+            CustConstants.DtpCheck2,
+            CustConstants.DtpSubSongRange,
+            CustConstants.DtpEndPlayer,
+            CustConstants.DtpEndSound,
+            CustConstants.DtpVolume,
+            CustConstants.DtpBalance,
+            CustConstants.DtpVoices,
+            CustConstants.DtpModuleInfo,
+            CustConstants.DtpSampleInfo,
+            CustConstants.DtpFlags
         };
 
         public static bool TryFindTags(HunkFile hunk, out DeliTagTable tags)
@@ -122,7 +137,15 @@ namespace CopperMod.Cust
                 }
             }
 
-            return true;
+            foreach (var supported in SupportedIdentityTags)
+            {
+                if (tags.Values.ContainsKey(supported))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

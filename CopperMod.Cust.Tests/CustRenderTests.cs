@@ -112,6 +112,54 @@ public sealed class CustRenderTests
 		Assert.Contains(machine.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
 	}
 
+	[Fact]
+	public void NoInterruptCustCanRenderLoadedSampleMemoryFallback()
+	{
+		var data = CreateNoInterruptFallbackHunk();
+		var format = new CustFormat();
+		Assert.True(format.CanLoad(data));
+		using var song = (CustSong)format.Load(data);
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+
+		song.RenderTick(buffer, options);
+
+		var peak = buffer.Select(Math.Abs).DefaultIfEmpty().Max();
+		Assert.True(peak > 0.0001f, "No-interrupt CUST fallback stayed silent. Diagnostics: " + string.Join(", ", song.Diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+		Assert.Contains(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_FALLBACK_PCM");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+	}
+
+	[Fact]
+	public void PaulaManualAudioDataWritePlaysBothWordBytesAndRequestsInterrupt()
+	{
+		var bus = new AmigaBus();
+		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+		var buffer = new float[4];
+
+		bus.Paula.RenderSample(0, buffer, 0, 2);
+		bus.Paula.RenderSample(856, buffer, 1, 2);
+
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.Equal(0.0f, buffer[1]);
+		Assert.Equal(0.0f, buffer[3]);
+		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
+	}
+
+	[Fact]
+	public void PaulaManualAudioInterruptDoesNotDependOnVolume()
+	{
+		var bus = new AmigaBus();
+		bus.WriteWord(0x00DFF0A8, 0x0000, 0);
+		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+
+		bus.Paula.AdvanceTo(0);
+
+		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
+	}
+
 	private static string SummarizeWrites(IReadOnlyList<CustomRegisterWrite> writes)
 	{
 		return "count=" + writes.Count + " " + string.Join(", ", writes.TakeLast(Math.Min(24, writes.Count)).Select(write => $"@{write.Cycle}:{write.Address:X3}={write.Value:X4}"));
@@ -134,6 +182,35 @@ public sealed class CustRenderTests
 		bytes[0x2C] = 0x4E;
 		bytes[0x2D] = 0x75;
 
+		return WrapSingleCodeHunk(bytes);
+	}
+
+	private static byte[] CreateNoInterruptFallbackHunk()
+	{
+		var bytes = new byte[0x2400];
+		WriteLong(bytes, 0x00, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x04, 1);
+		WriteLong(bytes, 0x08, CustConstants.DtpFlags);
+		WriteLong(bytes, 0x0C, 1);
+		WriteLong(bytes, 0x10, CustConstants.DtpInitPlayer);
+		WriteLong(bytes, 0x14, CustConstants.DefaultModuleBaseAddress + 0x80);
+		WriteLong(bytes, 0x18, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x1C, CustConstants.DefaultModuleBaseAddress + 0x82);
+		WriteLong(bytes, 0x20, CustConstants.TagDone);
+		bytes[0x80] = 0x4E;
+		bytes[0x81] = 0x75;
+		bytes[0x82] = 0x4E;
+		bytes[0x83] = 0x75;
+		for (var i = 0x1000; i < 0x2000; i++)
+		{
+			bytes[i] = (i & 1) == 0 ? (byte)0x60 : (byte)0xA0;
+		}
+
+		return WrapSingleCodeHunk(bytes);
+	}
+
+	private static byte[] WrapSingleCodeHunk(byte[] bytes)
+	{
 		var words = new List<uint>
 		{
 			HunkParser.HunkHeader,

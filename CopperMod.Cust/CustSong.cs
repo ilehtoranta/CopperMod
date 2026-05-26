@@ -17,11 +17,11 @@ namespace CopperMod.Cust
         private bool _disposed;
         private bool _channelWaveformCaptureEnabled;
 
-        public CustSong(HunkFile hunk, DeliTagTable tags)
+        public CustSong(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext = null)
         {
             _hunk = hunk ?? throw new ArgumentNullException(nameof(hunk));
             _tags = tags ?? throw new ArgumentNullException(nameof(tags));
-            _machine = new CustMachine(hunk, tags);
+            _machine = new CustMachine(hunk, tags, loadContext);
             _subSongs = BuildSubSongs(_machine.SubSongCount);
             _metadata = CreateMetadata(hunk, _machine.SubSongCount);
             _capabilities = new ModulePlaybackCapabilities(
