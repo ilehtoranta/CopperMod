@@ -4,7 +4,7 @@ namespace CopperMod.Sid
 {
     internal interface ICpuBus
     {
-        byte Read(ushort address);
+        byte Read(ushort address, int cycleOffset = 0);
 
         void Write(ushort address, byte value, int cycleOffset);
     }
@@ -86,24 +86,37 @@ namespace CopperMod.Sid
 
         public void RequestIrq()
         {
-            if (GetFlag(InterruptDisable))
-            {
-                return;
-            }
-
-            PushWord(ProgramCounter, 1);
-            Push((byte)(Status & ~Break), 3);
-            SetFlag(InterruptDisable, true);
-            ProgramCounter = ReadWord(0xFFFE);
-            Cycles += 7;
+            _ = TryRequestIrq();
         }
 
         public void RequestNmi()
         {
+            ServiceInterrupt(0xFFFA);
+        }
+
+        public bool TryRequestIrq()
+        {
+            if (GetFlag(InterruptDisable))
+            {
+                return false;
+            }
+
+            ServiceInterrupt(0xFFFE);
+            return true;
+        }
+
+        public bool TryRequestNmi()
+        {
+            ServiceInterrupt(0xFFFA);
+            return true;
+        }
+
+        private void ServiceInterrupt(ushort vectorAddress)
+        {
             PushWord(ProgramCounter, 1);
             Push((byte)(Status & ~Break), 3);
             SetFlag(InterruptDisable, true);
-            ProgramCounter = ReadWord(0xFFFA);
+            ProgramCounter = ReadWord(vectorAddress, cycleOffset: 5);
             Cycles += 7;
         }
 
@@ -393,9 +406,9 @@ namespace CopperMod.Sid
             return (ushort)(low | (high << 8));
         }
 
-        private byte Read(ushort address)
+        private byte Read(ushort address, int cycleOffset = 0)
         {
-            return _bus.Read(address);
+            return _bus.Read(address, cycleOffset);
         }
 
         private void Write(ushort address, byte value, int totalCycles)
@@ -857,7 +870,7 @@ namespace CopperMod.Sid
         {
             _ = cycleOffset;
             StackPointer++;
-            return Read((ushort)(0x0100 | StackPointer));
+            return Read((ushort)(0x0100 | StackPointer), cycleOffset);
         }
 
         private void PushWord(ushort value, int cycleOffset)
@@ -873,12 +886,12 @@ namespace CopperMod.Sid
             return (ushort)(low | (high << 8));
         }
 
-        private ushort ReadWord(ushort address, bool wrapPage = false)
+        private ushort ReadWord(ushort address, bool wrapPage = false, int cycleOffset = 0)
         {
             var highAddress = wrapPage
                 ? (ushort)((address & 0xFF00) | ((address + 1) & 0x00FF))
                 : (ushort)(address + 1);
-            return (ushort)(Read(address) | (Read(highAddress) << 8));
+            return (ushort)(Read(address, cycleOffset) | (Read(highAddress, cycleOffset + 1) << 8));
         }
 
         private ushort ZeroPage()

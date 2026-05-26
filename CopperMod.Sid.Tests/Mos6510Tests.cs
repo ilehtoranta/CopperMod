@@ -90,8 +90,9 @@ public sealed class Mos6510Tests
 
 		public long LastWriteCycle { get; private set; }
 
-		public byte Read(ushort address)
+		public byte Read(ushort address, int cycleOffset = 0)
 		{
+			_ = cycleOffset;
 			return Memory[address];
 		}
 

@@ -38,7 +38,7 @@ internal static class SidFixtureBuilder
 	public static byte[] CreateRsid(byte[] program, ushort loadAddress = 0x1000, ushort initAddress = 0x1000)
 	{
 		var payload = new byte[program.Length + 2];
-		payload[0] = (byte)loadAddress;
+		payload[0] = (byte)(loadAddress & 0xFF);
 		payload[1] = (byte)(loadAddress >> 8);
 		program.CopyTo(payload, 2);
 		var data = new byte[0x7C + payload.Length];
@@ -55,6 +55,48 @@ internal static class SidFixtureBuilder
 		WriteFixed(data, 0x36, "CopperMod");
 		WriteFixed(data, 0x56, "2026");
 		WriteBigEndian(data, 0x76, (ushort)((1 << 2) | (1 << 4)));
+		payload.CopyTo(data, 0x7C);
+		return data;
+	}
+
+	public static byte[] CreateBasicRsid(params (ushort LineNumber, byte[] Tokens)[] lines)
+	{
+		return CreateBasicRsid(lines, Array.Empty<byte>(), 0);
+	}
+
+	public static byte[] CreateBasicRsid((ushort LineNumber, byte[] Tokens)[] lines, byte[] trailingBytes, ushort trailingAddress)
+	{
+		const ushort loadAddress = 0x0801;
+		var program = BuildBasicProgram(lines);
+		var payloadLength = program.Length;
+		if (trailingBytes.Length > 0)
+		{
+			payloadLength = Math.Max(payloadLength, trailingAddress - loadAddress + trailingBytes.Length);
+		}
+
+		var payload = new byte[payloadLength + 2];
+		payload[0] = (byte)(loadAddress & 0xFF);
+		payload[1] = (byte)(loadAddress >> 8);
+		program.CopyTo(payload, 2);
+		if (trailingBytes.Length > 0)
+		{
+			trailingBytes.CopyTo(payload, 2 + trailingAddress - loadAddress);
+		}
+
+		var data = new byte[0x7C + payload.Length];
+		WriteAscii(data, 0, "RSID");
+		WriteBigEndian(data, 4, (ushort)2);
+		WriteBigEndian(data, 6, (ushort)0x7C);
+		WriteBigEndian(data, 8, (ushort)0);
+		WriteBigEndian(data, 0x0A, (ushort)0);
+		WriteBigEndian(data, 0x0C, (ushort)0);
+		WriteBigEndian(data, 0x0E, (ushort)1);
+		WriteBigEndian(data, 0x10, (ushort)1);
+		WriteBigEndian(data, 0x12, 0U);
+		WriteFixed(data, 0x16, "Generated BASIC RSID");
+		WriteFixed(data, 0x36, "CopperMod");
+		WriteFixed(data, 0x56, "2026");
+		WriteBigEndian(data, 0x76, (ushort)((1 << 1) | (1 << 2) | (1 << 4)));
 		payload.CopyTo(data, 0x7C);
 		return data;
 	}
@@ -134,5 +176,28 @@ internal static class SidFixtureBuilder
 		data[offset + 1] = (byte)(value >> 16);
 		data[offset + 2] = (byte)(value >> 8);
 		data[offset + 3] = (byte)value;
+	}
+
+	private static byte[] BuildBasicProgram((ushort LineNumber, byte[] Tokens)[] lines)
+	{
+		const ushort loadAddress = 0x0801;
+		var bytes = new List<byte>();
+		var address = loadAddress;
+		for (var i = 0; i < lines.Length; i++)
+		{
+			var tokens = lines[i].Tokens;
+			var next = (ushort)(address + 4 + tokens.Length + 1);
+			bytes.Add((byte)next);
+			bytes.Add((byte)(next >> 8));
+			bytes.Add((byte)lines[i].LineNumber);
+			bytes.Add((byte)(lines[i].LineNumber >> 8));
+			bytes.AddRange(tokens);
+			bytes.Add(0);
+			address = next;
+		}
+
+		bytes.Add(0);
+		bytes.Add(0);
+		return bytes.ToArray();
 	}
 }

@@ -121,6 +121,15 @@ namespace CopperMod.Sid
             ValidateLoadRange(effectiveLoadAddress, payload.Length);
             ValidateRsidRules(kind, version, loadAddress, effectiveLoadAddress, initAddress, playAddress, speed, flags);
             ValidateRelocation(kind, relocationStartPage, relocationPageLength, effectiveLoadAddress, payload.Length, diagnostics);
+            var isBasicRsid = kind == SidFileKind.Rsid && IsRsidBasicFlagSet(flags);
+            if (isBasicRsid)
+            {
+                diagnostics.Add(new ModuleDiagnostic(
+                    ModuleDiagnosticSeverity.Info,
+                    "RSID BASIC program will be executed by CopperMod's native BASIC runner.",
+                    "SID_RSID_BASIC_NATIVE_RUNNER"));
+            }
+
             var chips = ParseChips(data, version, dataOffset, diagnostics);
             if (chips.Count == 0)
             {
@@ -149,7 +158,7 @@ namespace CopperMod.Sid
                 dataOffset,
                 loadAddress,
                 effectiveLoadAddress,
-                initAddress == 0 ? effectiveLoadAddress : initAddress,
+                isBasicRsid ? initAddress : initAddress == 0 ? effectiveLoadAddress : initAddress,
                 playAddress,
                 songs,
                 defaultIndex,
@@ -279,15 +288,31 @@ namespace CopperMod.Sid
                 throw new UnsupportedModuleFormatException("RSID fields do not satisfy Real C64 SID restrictions.");
             }
 
-            if (effectiveLoadAddress < 0x07E8)
+            var isBasicRsid = IsRsidBasicFlagSet(flags);
+            if (effectiveLoadAddress < (isBasicRsid ? 0x0801 : 0x07E8))
             {
                 throw new UnsupportedModuleFormatException("RSID payload load address must not be below $07E8.");
             }
 
-            if (((flags >> 1) & 1) == 0 && (initAddress < 0x07E8 || IsRomOrIoAddress(initAddress)))
+            if (isBasicRsid)
+            {
+                if (initAddress != 0)
+                {
+                    throw new UnsupportedModuleFormatException("RSID BASIC programs must declare init address $0000.");
+                }
+
+                return;
+            }
+
+            if (initAddress < 0x07E8 || IsRomOrIoAddress(initAddress))
             {
                 throw new UnsupportedModuleFormatException("RSID init address must point to RAM outside ROM/IO areas.");
             }
+        }
+
+        private static bool IsRsidBasicFlagSet(ushort flags)
+        {
+            return ((flags >> 1) & 1) != 0;
         }
 
         private static bool IsRomOrIoAddress(ushort address)

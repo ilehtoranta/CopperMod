@@ -51,6 +51,20 @@ public sealed class SidParserTests
 	}
 
 	[Fact]
+	public void ParseDetectsBasicRsidAndKeepsDeclaredInitAddress()
+	{
+		var data = SidFixtureBuilder.CreateBasicRsid((10, new byte[] { 0x80 }));
+
+		var module = SidParser.Parse(data);
+
+		Assert.True(module.IsBasicRsid);
+		Assert.Equal(0x0801, module.EffectiveLoadAddress);
+		Assert.Equal(0, module.InitAddress);
+		Assert.Equal(0, module.PlayAddress);
+		Assert.Contains(module.Diagnostics, diagnostic => diagnostic.Code == "SID_RSID_BASIC_NATIVE_RUNNER");
+	}
+
+	[Fact]
 	public void ParseRejectsInvalidRsidRestrictions()
 	{
 		var data = SidFixtureBuilder.CreateRsid(SidFixtureBuilder.SimpleToneProgram());

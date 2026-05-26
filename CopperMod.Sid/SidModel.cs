@@ -151,6 +151,8 @@ namespace CopperMod.Sid
 
         public bool IsRsid => Kind == SidFileKind.Rsid;
 
+        public bool IsBasicRsid => IsRsid && ((Flags >> 1) & 1) != 0;
+
         public SidChipModel EffectiveChipModel => ChipModel == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
     }
 }
