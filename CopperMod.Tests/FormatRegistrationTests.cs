@@ -1,5 +1,5 @@
-using AmigaTracker.ProTracker;
-using AmigaTracker.Sid;
+using CopperMod.ProTracker;
+using CopperMod.Sid;
 
 namespace CopperMod.Tests;
 

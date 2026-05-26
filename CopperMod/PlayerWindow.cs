@@ -1,4 +1,4 @@
-using AmigaTracker.Abstractions;
+using CopperMod.Abstractions;
 using NAudio.Wave;
 using Terminal.Gui.App;
 using Terminal.Gui.ViewBase;

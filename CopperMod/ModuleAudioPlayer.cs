@@ -1,7 +1,7 @@
-using AmigaTracker.Abstractions;
-using AmigaTracker.Med;
-using AmigaTracker.ProTracker;
-using AmigaTracker.Sid;
+using CopperMod.Abstractions;
+using CopperMod.Med;
+using CopperMod.ProTracker;
+using CopperMod.Sid;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -213,13 +213,12 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	{
 		ThrowIfDisposed();
 		EnsureLoaded();
-		if (_song is not IModuleSubSongSelector selector)
+		if (_song is not IModuleSubSongSelector)
 		{
 			throw new NotSupportedException("The loaded module does not expose subtunes.");
 		}
 
-		selector.SelectSubSong(index);
-		_sampleProvider!.Reset();
+		_sampleProvider!.SelectSubSong(index);
 		OnStateChanged();
 	}
 

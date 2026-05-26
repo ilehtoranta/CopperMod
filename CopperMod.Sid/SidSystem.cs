@@ -1,0 +1,292 @@
+using System;
+using System.Collections.Generic;
+using CopperMod.Abstractions;
+
+namespace CopperMod.Sid
+{
+    internal sealed class SidSystem
+    {
+        private const int MaxCapturedWrites = 65536;
+        private readonly BoundedSidWriteLog _writes = new BoundedSidWriteLog(MaxCapturedWrites);
+        private readonly List<PendingSidWrite> _pendingWrites = new List<PendingSidWrite>();
+        private readonly int _channelCount;
+        private long _lastCycle;
+        private double _sampleAccumulator;
+        private long _sampleCycles;
+        private int _pendingWriteIndex;
+        private double[]? _channelAccumulator;
+        private double[]? _channelScratch;
+        private float[][]? _captureSamples;
+        private int _captureFrameIndex;
+        private int _captureSampleRate;
+
+        public SidSystem(IReadOnlyList<SidChipPlacement> placements, SidChipModel model)
+        {
+            if (placements is null || placements.Count == 0)
+            {
+                throw new ArgumentException("At least one SID chip placement is required.", nameof(placements));
+            }
+
+            Chips = new SidChip[placements.Count];
+            for (var i = 0; i < placements.Count; i++)
+            {
+                Chips[i] = new SidChip(model, placements[i].BaseAddress);
+            }
+
+            _channelCount = Chips.Length * 3;
+        }
+
+        public SidChip[] Chips { get; }
+
+        public IReadOnlyList<SidRegisterWrite> Writes => _writes;
+
+        public void Reset()
+        {
+            _lastCycle = 0;
+            _sampleAccumulator = 0;
+            _sampleCycles = 0;
+            _pendingWriteIndex = 0;
+            _channelAccumulator = null;
+            _channelScratch = null;
+            _captureSamples = null;
+            _captureFrameIndex = 0;
+            _captureSampleRate = 0;
+            _writes.Clear();
+            _pendingWrites.Clear();
+            foreach (var chip in Chips)
+            {
+                chip.Reset();
+            }
+        }
+
+        public void ResetClock()
+        {
+            _lastCycle = 0;
+            DiscardAccumulatedOutput();
+        }
+
+        public void DiscardAccumulatedOutput()
+        {
+            _sampleAccumulator = 0;
+            _sampleCycles = 0;
+            if (_channelAccumulator != null)
+            {
+                Array.Clear(_channelAccumulator);
+            }
+        }
+
+        public bool TryWrite(ushort address, byte value, long cycle)
+        {
+            for (var i = 0; i < Chips.Length; i++)
+            {
+                var chip = Chips[i];
+                if (address < chip.BaseAddress || address >= chip.BaseAddress + 0x20)
+                {
+                    continue;
+                }
+
+                var register = (byte)(address - chip.BaseAddress);
+                CaptureWrite(new SidRegisterWrite(cycle, i, register, value));
+                if (cycle <= _lastCycle)
+                {
+                    chip.Write(register, value);
+                }
+                else
+                {
+                    _pendingWrites.Add(new PendingSidWrite(cycle, i, register, value));
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private void CaptureWrite(SidRegisterWrite write)
+        {
+            _writes.Add(write);
+        }
+
+        public float RenderSample(long cycle)
+        {
+            AdvanceTo(cycle);
+            if (_sampleCycles == 0)
+            {
+                AccumulateOneCycle();
+            }
+
+            var sample = _sampleAccumulator / _sampleCycles;
+            CaptureChannelSample();
+            DiscardAccumulatedOutput();
+            return (float)Math.Clamp(sample, -1.0, 1.0);
+        }
+
+        public void BeginChannelCapture(int frames, int sampleRate)
+        {
+            if (frames <= 0 || sampleRate <= 0)
+            {
+                _captureSamples = null;
+                _captureFrameIndex = 0;
+                _captureSampleRate = 0;
+                return;
+            }
+
+            _captureSamples = new float[_channelCount][];
+            for (var i = 0; i < _captureSamples.Length; i++)
+            {
+                _captureSamples[i] = new float[frames];
+            }
+
+            _captureFrameIndex = 0;
+            _captureSampleRate = sampleRate;
+            _channelAccumulator ??= new double[_channelCount];
+            _channelScratch ??= new double[_channelCount];
+            Array.Clear(_channelAccumulator);
+            Array.Clear(_channelScratch);
+        }
+
+        public ModuleChannelWaveform? FinishChannelCapture()
+        {
+            if (_captureSamples == null)
+            {
+                return null;
+            }
+
+            var channels = new ModuleChannelWaveformChannel[_captureSamples.Length];
+            for (var i = 0; i < _captureSamples.Length; i++)
+            {
+                channels[i] = new ModuleChannelWaveformChannel(i, _captureSamples[i], IsActive(_captureSamples[i]));
+            }
+
+            var result = new ModuleChannelWaveform(channels, _captureFrameIndex, _captureSampleRate);
+            _captureSamples = null;
+            _captureFrameIndex = 0;
+            _captureSampleRate = 0;
+            return result;
+        }
+
+        public void AdvanceTo(long targetCycle)
+        {
+            if (targetCycle <= _lastCycle)
+            {
+                return;
+            }
+
+            while (_pendingWriteIndex < _pendingWrites.Count && _pendingWrites[_pendingWriteIndex].Cycle <= targetCycle)
+            {
+                var write = _pendingWrites[_pendingWriteIndex++];
+                AccumulateCycles(write.Cycle - _lastCycle);
+                Chips[write.ChipIndex].Write(write.Register, write.Value);
+            }
+
+            AccumulateCycles(targetCycle - _lastCycle);
+            CompactPendingWrites();
+        }
+
+        private void AccumulateCycles(long cycles)
+        {
+            if (cycles <= 0)
+            {
+                return;
+            }
+
+            for (var i = 0; i < cycles; i++)
+            {
+                AccumulateOneCycle();
+            }
+
+            _lastCycle += cycles;
+        }
+
+        private void CompactPendingWrites()
+        {
+            if (_pendingWriteIndex < 64 || _pendingWriteIndex * 2 < _pendingWrites.Count)
+            {
+                return;
+            }
+
+            _pendingWrites.RemoveRange(0, _pendingWriteIndex);
+            _pendingWriteIndex = 0;
+        }
+
+        private void AccumulateOneCycle()
+        {
+            var sample = 0.0;
+            var captureChannels = _captureSamples != null;
+            if (captureChannels)
+            {
+                _channelScratch ??= new double[_channelCount];
+                _channelAccumulator ??= new double[_channelCount];
+            }
+
+            for (var i = 0; i < Chips.Length; i++)
+            {
+                var offset = i * 3;
+                sample += Chips[i].RenderOneCycle(captureChannels ? _channelScratch : null, offset);
+                if (!captureChannels || _channelScratch == null || _channelAccumulator == null)
+                {
+                    continue;
+                }
+
+                _channelAccumulator[offset] += _channelScratch[offset];
+                _channelAccumulator[offset + 1] += _channelScratch[offset + 1];
+                _channelAccumulator[offset + 2] += _channelScratch[offset + 2];
+            }
+
+            _sampleAccumulator += sample / Chips.Length;
+            _sampleCycles++;
+        }
+
+        private void CaptureChannelSample()
+        {
+            if (_captureSamples == null || _channelAccumulator == null || _sampleCycles == 0)
+            {
+                return;
+            }
+
+            if (_captureFrameIndex >= _captureSamples[0].Length)
+            {
+                return;
+            }
+
+            for (var channel = 0; channel < _captureSamples.Length; channel++)
+            {
+                _captureSamples[channel][_captureFrameIndex] = (float)Math.Clamp(_channelAccumulator[channel] / _sampleCycles, -1.0, 1.0);
+            }
+
+            _captureFrameIndex++;
+        }
+
+        private static bool IsActive(ReadOnlySpan<float> samples)
+        {
+            for (var i = 0; i < samples.Length; i++)
+            {
+                if (Math.Abs(samples[i]) > 0.001f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private readonly struct PendingSidWrite
+        {
+            public PendingSidWrite(long cycle, int chipIndex, byte register, byte value)
+            {
+                Cycle = cycle;
+                ChipIndex = chipIndex;
+                Register = register;
+                Value = value;
+            }
+
+            public long Cycle { get; }
+
+            public int ChipIndex { get; }
+
+            public byte Register { get; }
+
+            public byte Value { get; }
+        }
+    }
+}

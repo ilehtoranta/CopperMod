@@ -1,25 +1,25 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.9.34728.123
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod", "CopperMod\CopperMod.csproj", "{C8F58D90-B1B1-4EDC-81C8-F9B982D4BA10}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Abstractions", "AmigaTracker.Abstractions\AmigaTracker.Abstractions.csproj", "{5EE8C88E-D3E4-4EA1-B173-D2321E6434E9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Abstractions", "CopperMod.Abstractions\CopperMod.Abstractions.csproj", "{5EE8C88E-D3E4-4EA1-B173-D2321E6434E9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Med.Tests", "AmigaTracker.Med.Tests\AmigaTracker.Med.Tests.csproj", "{BD70BA49-59FA-4665-91DE-DE2DFD01A9E7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Med.Tests", "CopperMod.Med.Tests\CopperMod.Med.Tests.csproj", "{BD70BA49-59FA-4665-91DE-DE2DFD01A9E7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Med", "AmigaTracker.Med\AmigaTracker.Med.csproj", "{CB4433D4-0169-451F-99C6-347ED9A18C34}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Med", "CopperMod.Med\CopperMod.Med.csproj", "{CB4433D4-0169-451F-99C6-347ED9A18C34}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Tests", "CopperMod.Tests\CopperMod.Tests.csproj", "{07BE7D59-7F29-4B0A-BC58-C996DC42527A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.ProTracker", "AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj", "{F39066DE-04F1-4960-994E-31DD8FD500D0}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.ProTracker", "CopperMod.ProTracker\CopperMod.ProTracker.csproj", "{F39066DE-04F1-4960-994E-31DD8FD500D0}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.ProTracker.Tests", "AmigaTracker.ProTracker.Tests\AmigaTracker.ProTracker.Tests.csproj", "{D8A96FAB-692F-41FF-AFC5-A505F337DACC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.ProTracker.Tests", "CopperMod.ProTracker.Tests\CopperMod.ProTracker.Tests.csproj", "{D8A96FAB-692F-41FF-AFC5-A505F337DACC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Sid", "AmigaTracker.Sid\AmigaTracker.Sid.csproj", "{67F7BE1F-C33A-4AE1-A952-06F0B6CBE7CD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Sid", "CopperMod.Sid\CopperMod.Sid.csproj", "{67F7BE1F-C33A-4AE1-A952-06F0B6CBE7CD}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AmigaTracker.Sid.Tests", "AmigaTracker.Sid.Tests\AmigaTracker.Sid.Tests.csproj", "{F26F5EF9-47D3-4CBE-B9AC-8591C1B97430}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Sid.Tests", "CopperMod.Sid.Tests\CopperMod.Sid.Tests.csproj", "{F26F5EF9-47D3-4CBE-B9AC-8591C1B97430}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>CopperMod.Abstractions</PackageId>
+    <Title>CopperMod.Abstractions</Title>
+    <Authors>CopperMod contributors</Authors>
+    <Description>Reusable contracts for tracker and chip music format detection, loading, seeking, and PCM rendering.</Description>
+    <PackageVersion>0.1.0-alpha.1</PackageVersion>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>tracker;module;music;audio;pcm;player</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

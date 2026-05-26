@@ -21,8 +21,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod\CopperMod.csproj" />
-    <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
     <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
   </ItemGroup>
 

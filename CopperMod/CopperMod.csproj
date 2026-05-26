@@ -1,10 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -16,9 +17,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\AmigaTracker.Med\AmigaTracker.Med.csproj" />
-    <ProjectReference Include="..\AmigaTracker.ProTracker\AmigaTracker.ProTracker.csproj" />
-    <ProjectReference Include="..\AmigaTracker.Sid\AmigaTracker.Sid.csproj" />
+    <ProjectReference Include="..\CopperMod.Med\CopperMod.Med.csproj" />
+    <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
+    <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,4 @@
-using AmigaTracker.Abstractions;
+using CopperMod.Abstractions;
 
 namespace CopperMod;
 

@@ -1,4 +1,4 @@
-using AmigaTracker.Abstractions;
+using CopperMod.Abstractions;
 using NAudio.Wave;
 
 namespace CopperMod;
@@ -256,6 +256,24 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		ClearLatestWaveform();
 	}
 
+	public void SelectSubSong(int index)
+	{
+		lock (_renderSync)
+		{
+			if (_song is not IModuleSubSongSelector selector)
+			{
+				throw new NotSupportedException("The loaded module does not expose subtunes.");
+			}
+
+			selector.SelectSubSong(index);
+			_outputStage.Reset();
+			_c64OutputStage.Reset();
+		}
+
+		ResetBufferedState(TimeSpan.Zero, leadInSamples: 0);
+		ClearLatestWaveform();
+	}
+
 	public int Read(float[] buffer, int offset, int count)
 	{
 		if (buffer is null)
@@ -313,12 +331,43 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 	public bool TryReadWaveformSnapshot(out WaveformSnapshot snapshot)
 	{
+		var hasNoStoredWaveform = false;
+		if (TryCopyLatestWaveform(out snapshot, out hasNoStoredWaveform))
+		{
+			return true;
+		}
+
+		float[]? bufferedWaveform = null;
+		if (hasNoStoredWaveform)
+		{
+			lock (_bufferSync)
+			{
+				if (_waveformEnabled)
+				{
+					bufferedWaveform = GetLatestBufferedSamples();
+				}
+			}
+		}
+
+		if (bufferedWaveform != null)
+		{
+			StoreLatestWaveform(bufferedWaveform);
+			return TryCopyLatestWaveform(out snapshot, out _);
+		}
+
+		snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
+		return false;
+	}
+
+	private bool TryCopyLatestWaveform(out WaveformSnapshot snapshot, out bool hasNoStoredWaveform)
+	{
 		float[] samples;
 		int sampleCount;
 		int channelCount;
 		int sampleRate;
 		lock (_waveformSync)
 		{
+			hasNoStoredWaveform = _latestWaveformSampleCount == 0;
 			if (_latestWaveformVersion == _consumedWaveformVersion || _latestWaveformSampleCount == 0)
 			{
 				snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
