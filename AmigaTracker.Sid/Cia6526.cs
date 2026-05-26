@@ -88,14 +88,12 @@ namespace AmigaTracker.Sid
 
         public bool Tick()
         {
-            var irq = false;
             if ((_controlA & 0x01) != 0)
             {
                 if (_timerA == 0)
                 {
                     _timerA = _timerALatch;
                     _interruptData |= 0x01;
-                    irq |= (_interruptMask & 0x01) != 0;
                     if ((_controlA & 0x08) != 0)
                     {
                         _controlA &= 0xFE;
@@ -113,7 +111,6 @@ namespace AmigaTracker.Sid
                 {
                     _timerB = _timerBLatch;
                     _interruptData |= 0x02;
-                    irq |= (_interruptMask & 0x02) != 0;
                     if ((_controlB & 0x08) != 0)
                     {
                         _controlB &= 0xFE;
@@ -125,19 +122,16 @@ namespace AmigaTracker.Sid
                 }
             }
 
-            if (irq)
-            {
-                _interruptData |= 0x80;
-            }
-
-            return irq;
+            return InterruptLineAsserted;
         }
 
         private byte ReadInterruptData()
         {
-            var value = _interruptData;
+            var value = (byte)(_interruptData | (InterruptLineAsserted ? 0x80 : 0x00));
             _interruptData = 0;
             return value;
         }
+
+        private bool InterruptLineAsserted => (_interruptData & _interruptMask & 0x7F) != 0;
     }
 }

@@ -85,6 +85,86 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void VolumeRegisterProducesMonotonicAudibleDigiSteps()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		var samples = new double[16];
+		for (var volume = 0; volume < samples.Length; volume++)
+		{
+			chip.Write(0x18, (byte)volume);
+			samples[volume] = chip.Render(1);
+		}
+
+		for (var i = 1; i < samples.Length; i++)
+		{
+			Assert.True(samples[i] > samples[i - 1], $"Expected D418 volume step {i} to be greater than {i - 1}.");
+		}
+
+		Assert.True(samples[^1] - samples[0] > 0.12, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
+	}
+
+	[Fact]
+	public void MultipleVoicesSumLouderWithoutActiveChannelNormalization()
+	{
+		var oneVoice = CreateSawVoice();
+		var twoVoices = CreateTwoSawVoices();
+
+		var oneVoiceRange = MeasureRange(oneVoice, warmupCycles: 3000, measuredCycles: 4096);
+		var twoVoiceRange = MeasureRange(twoVoices, warmupCycles: 3000, measuredCycles: 4096);
+		var twoVoicePeak = MeasurePeak(twoVoices, warmupCycles: 0, measuredCycles: 4096);
+
+		Assert.True(twoVoiceRange > oneVoiceRange * 1.25, $"Expected two voices to be louder than one voice, one {oneVoiceRange:0.000}, two {twoVoiceRange:0.000}.");
+		Assert.True(twoVoicePeak < 0.999, $"Expected summed voices to retain output headroom, peak {twoVoicePeak:0.000}.");
+	}
+
+	[Fact]
+	public void VoiceThreeMuteDoesNotMuteVoiceThreeWhenRoutedThroughFilter()
+	{
+		var direct = CreateVoiceThreePulse(filtered: false, muted: false);
+		var muted = CreateVoiceThreePulse(filtered: false, muted: true);
+		var filteredMuted = CreateVoiceThreePulse(filtered: true, muted: true);
+
+		var directRange = MeasureRange(direct, warmupCycles: 10000, measuredCycles: 12000);
+		var mutedRange = MeasureRange(muted, warmupCycles: 10000, measuredCycles: 12000);
+		var filteredMutedRange = MeasureRange(filteredMuted, warmupCycles: 10000, measuredCycles: 12000);
+
+		Assert.True(mutedRange < directRange * 0.25, $"Expected direct voice 3 output to be muted, direct {directRange:0.000}, muted {mutedRange:0.000}.");
+		Assert.True(filteredMutedRange > mutedRange + 0.05, $"Expected filtered voice 3 to remain audible while muted from direct output, filtered {filteredMutedRange:0.000}, muted {mutedRange:0.000}.");
+	}
+
+	[Fact]
+	public void FilterCutoffChangesFilteredPulseResponse()
+	{
+		var lowCutoff = CreateFilteredPulse(cutoffHighByte: 0x08, resonance: 0x00, mode: 0x10, frequency: 0x6000);
+		var highCutoff = CreateFilteredPulse(cutoffHighByte: 0xF0, resonance: 0x00, mode: 0x10, frequency: 0x6000);
+
+		var lowSamples = CollectSamples(lowCutoff, warmupCycles: 12000, measuredCycles: 16000);
+		var highSamples = CollectSamples(highCutoff, warmupCycles: 12000, measuredCycles: 16000);
+		var lowJump = LargestAdjacentJump(lowSamples);
+		var highJump = LargestAdjacentJump(highSamples);
+
+		Assert.True(highJump > lowJump * 1.5, $"Expected high cutoff to preserve sharper pulse edges, low jump {lowJump:0.000}, high jump {highJump:0.000}.");
+		Assert.All(lowSamples.Concat(highSamples), sample => Assert.True(double.IsFinite(sample)));
+	}
+
+	[Fact]
+	public void FilterModesProduceDistinctFiniteResponses()
+	{
+		var lowPass = CreateFilteredPulse(cutoffHighByte: 0x90, resonance: 0x80, mode: 0x10);
+		var bandPass = CreateFilteredPulse(cutoffHighByte: 0x90, resonance: 0x80, mode: 0x20);
+		var highPass = CreateFilteredPulse(cutoffHighByte: 0x90, resonance: 0x80, mode: 0x40);
+
+		var lowRange = MeasureRange(lowPass, warmupCycles: 12000, measuredCycles: 16000);
+		var bandRange = MeasureRange(bandPass, warmupCycles: 12000, measuredCycles: 16000);
+		var highRange = MeasureRange(highPass, warmupCycles: 12000, measuredCycles: 16000);
+
+		Assert.True(Math.Abs(lowRange - bandRange) > 0.01 || Math.Abs(lowRange - highRange) > 0.01 || Math.Abs(bandRange - highRange) > 0.01);
+		Assert.True(double.IsFinite(lowRange));
+		Assert.True(double.IsFinite(bandRange));
+		Assert.True(double.IsFinite(highRange));
+	}
+
+	[Fact]
 	public void SidWritesAreAppliedOnlyWhenAudioReachesTheirCycle()
 	{
 		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
@@ -97,6 +177,22 @@ public sealed class SidChipTests
 		_ = sid.RenderSample(100);
 
 		Assert.Equal(0x0F, sid.Chips[0].Registers[0x18]);
+	}
+
+	[Fact]
+	public void SidWriteCaptureKeepsRecentBoundedHistory()
+	{
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+
+		for (var i = 0; i < 70000; i++)
+		{
+			Assert.True(sid.TryWrite(0xD418, (byte)i, i));
+		}
+
+		Assert.Equal(65536, sid.Writes.Count);
+		Assert.Equal(70000 - 65536, sid.Writes[0].Cycle);
+		Assert.Equal(69999, sid.Writes[^1].Cycle);
+		Assert.Equal(sid.Writes.OrderBy(write => write.Cycle).Select(write => write.Cycle), sid.Writes.Select(write => write.Cycle));
 	}
 
 	[Fact]
@@ -301,6 +397,17 @@ public sealed class SidChipTests
 		return chip;
 	}
 
+	private static SidChip CreateTwoSawVoices()
+	{
+		var chip = CreateSawVoice();
+		chip.Write(7, 0x00);
+		chip.Write(8, 0x80);
+		chip.Write(12, 0x00);
+		chip.Write(13, 0xF0);
+		chip.Write(11, 0x21);
+		return chip;
+	}
+
 	private static SidChip CreatePulseVoice()
 	{
 		return CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0);
@@ -349,6 +456,33 @@ public sealed class SidChipTests
 		chip.Write((byte)(offset + 0), (byte)(frequency & 0xFF));
 		chip.Write((byte)(offset + 1), (byte)(frequency >> 8));
 		chip.Write((byte)(offset + 4), control);
+	}
+
+	private static SidChip CreateVoiceThreePulse(bool filtered, bool muted)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		WriteVoice(chip, voice: 2, frequency: 0x1800, control: 0x41);
+		chip.Write(0x10, 0x00);
+		chip.Write(0x11, 0x08);
+		chip.Write(0x13, 0x00);
+		chip.Write(0x14, 0xF0);
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, 0xE0);
+		chip.Write(0x17, filtered ? (byte)0x04 : (byte)0x00);
+		chip.Write(0x18, (byte)((muted ? 0x80 : 0x00) | (filtered ? 0x10 : 0x00) | 0x0F));
+		return chip;
+	}
+
+	private static SidChip CreateFilteredPulse(byte cutoffHighByte, byte resonance, byte mode, ushort frequency = 0x05E8)
+	{
+		var chip = CreatePulseVoice();
+		chip.Write(0x00, (byte)(frequency & 0xFF));
+		chip.Write(0x01, (byte)(frequency >> 8));
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, cutoffHighByte);
+		chip.Write(0x17, (byte)(resonance | 0x01));
+		chip.Write(0x18, (byte)(mode | 0x0F));
+		return chip;
 	}
 
 	private static uint NextNoise(uint value)
@@ -426,6 +560,19 @@ public sealed class SidChipTests
 		}
 
 		return max - min;
+	}
+
+	private static double MeasurePeak(SidChip chip, int warmupCycles, int measuredCycles)
+	{
+		RenderCycles(chip, warmupCycles);
+
+		var peak = 0.0;
+		for (var i = 0; i < measuredCycles; i++)
+		{
+			peak = Math.Max(peak, Math.Abs(chip.Render(1)));
+		}
+
+		return peak;
 	}
 
 	private static void RenderCycles(SidChip chip, int cycles)

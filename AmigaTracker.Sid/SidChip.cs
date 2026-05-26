@@ -5,7 +5,8 @@ namespace AmigaTracker.Sid
 {
     internal sealed class SidChip
     {
-        private const double FilterOutputGain = 0.60;
+        private const double FilterInputGain = 0.72;
+        private const double FilterOutputGain = 0.92;
         private readonly SidVoice[] _voices = { new SidVoice(), new SidVoice(), new SidVoice() };
         private readonly byte[] _registers = new byte[32];
         private readonly byte[] _forwardedRegisters = new byte[32];
@@ -18,6 +19,8 @@ namespace AmigaTracker.Sid
         private double _filterDenominator = 1.0;
         private int _filterMode;
         private bool _filterCoefficientsDirty = true;
+        private double _masterVolume;
+        private double _volumeOffset;
         private double _lastOutput;
 
         public SidChip(SidChipModel model, ushort baseAddress)
@@ -52,6 +55,8 @@ namespace AmigaTracker.Sid
             _filterDenominator = 1.0;
             _filterMode = 0;
             _filterCoefficientsDirty = true;
+            _masterVolume = SidAnalog.ConvertVolume(0, Model);
+            _volumeOffset = SidAnalog.VolumeOffset(0, Model);
             _lastOutput = 0;
         }
 
@@ -147,10 +152,12 @@ namespace AmigaTracker.Sid
 
         private void CommitPendingRegisters()
         {
-            while (_pendingRegisterBits != 0)
+            var pending = _pendingRegisterBits;
+            _pendingRegisterBits = 0;
+            while (pending != 0)
             {
-                var register = BitOperations.TrailingZeroCount(_pendingRegisterBits);
-                _pendingRegisterBits &= ~(1u << register);
+                var register = BitOperations.TrailingZeroCount(pending);
+                pending &= ~(1u << register);
                 var value = _pendingRegisters[register];
                 _forwardedRegisters[register] = value;
                 if (register < 21)
@@ -160,6 +167,12 @@ namespace AmigaTracker.Sid
                 else if (register >= 0x15 && register <= 0x18)
                 {
                     _filterCoefficientsDirty = true;
+                    if (register == 0x18)
+                    {
+                        var volume = value & 0x0F;
+                        _masterVolume = SidAnalog.ConvertVolume(volume, Model);
+                        _volumeOffset = SidAnalog.VolumeOffset(volume, Model);
+                    }
                 }
             }
         }
@@ -167,23 +180,25 @@ namespace AmigaTracker.Sid
         private double Mix(double voice1, double voice2, double voice3)
         {
             var mixer = _forwardedRegisters[0x18];
-            var volume = (mixer & 0x0F) / 15.0;
             var filterRouting = _forwardedRegisters[0x17] & 0x07;
+            var voice3Muted = (mixer & 0x80) != 0;
             var direct = 0.0;
             var filtered = 0.0;
-            var voicesInOutput = 0;
             RouteVoice(voice1, filtered: (filterRouting & 0x01) != 0, ref direct, ref filtered);
             RouteVoice(voice2, filtered: (filterRouting & 0x02) != 0, ref direct, ref filtered);
-            voicesInOutput += 2;
-            if ((mixer & 0x80) == 0)
+            if ((filterRouting & 0x04) != 0)
             {
-                RouteVoice(voice3, filtered: (filterRouting & 0x04) != 0, ref direct, ref filtered);
-                voicesInOutput++;
+                RouteVoice(voice3, filtered: true, ref direct, ref filtered);
+            }
+            else if (!voice3Muted)
+            {
+                RouteVoice(voice3, filtered: false, ref direct, ref filtered);
             }
 
-            var input = (direct + ApplyFilter(filtered)) / Math.Max(1, voicesInOutput);
-            var dc = Model == SidChipModel.Mos8580 ? 0.0 : 0.08;
-            return (input * Math.Max(0.02, volume)) + ((volume - 0.5) * dc);
+            var voiceSignal = (direct + ApplyFilter(filtered * FilterInputGain)) *
+                SidAnalog.VoiceMixGain(Model) *
+                _masterVolume;
+            return SidAnalog.SoftClip(voiceSignal + _volumeOffset);
         }
 
         private static void RouteVoice(double voice, bool filtered, ref double direct, ref double filterInput)
@@ -252,9 +267,9 @@ namespace AmigaTracker.Sid
             var cutoffHz = MapCutoff(cutoffRegister);
             _filterG = Math.Tan(Math.PI * cutoffHz / SidConstants.PalCpuClock);
             _filterDamping = Model == SidChipModel.Mos8580
-                ? 1.55 - (resonance * 1.05)
-                : 1.75 - (resonance * 1.10);
-            _filterDamping = Math.Clamp(_filterDamping, 0.45, 1.9);
+                ? 1.62 - (resonance * 1.10)
+                : 1.82 - (resonance * 1.22);
+            _filterDamping = Math.Clamp(_filterDamping, 0.42, 1.95);
             _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
             _filterCoefficientsDirty = false;
         }
@@ -263,8 +278,8 @@ namespace AmigaTracker.Sid
         {
             var normalized = Math.Clamp(cutoffRegister / 2047.0, 0.0, 1.0);
             return Model == SidChipModel.Mos8580
-                ? 40.0 + (normalized * normalized * 15000.0)
-                : 30.0 + (Math.Pow(normalized, 1.55) * 9500.0);
+                ? 35.0 + (Math.Pow(normalized, 1.18) * 14500.0)
+                : 25.0 + (Math.Pow(normalized, 1.85) * 11500.0);
         }
 
         private SidChipDebugState CreateDebugState()

@@ -27,4 +27,16 @@ public sealed class C64OutputStageTests
 		var largestJump = samples.Zip(samples.Skip(1), (previous, current) => Math.Abs(current - previous)).Max();
 		Assert.True(largestJump < 1.5f, $"Expected C64 output profile to smooth hard SID edges, got jump {largestJump:0.000}.");
 	}
+
+	[Fact]
+	public void CleanProfileBypassesC64PostOutputShaping()
+	{
+		var stage = new C64OutputStage(C64OutputProfile.Clean);
+		var samples = new[] { -0.75f, 0.25f, 0.5f, 0.9f };
+		var original = samples.ToArray();
+
+		stage.Process(samples, channels: 1, sampleRate: 44100);
+
+		Assert.Equal(original, samples);
+	}
 }

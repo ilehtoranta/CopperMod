@@ -220,6 +220,33 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void RealGreenBeretSubtuneOneIntroRemainsFiniteAndNonSilentWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Green_Beret.sid");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var peakRms = 0.0;
+		for (var frame = 0; frame < 96; frame++)
+		{
+			song.RenderTick(buffer, options);
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			Assert.All(buffer, sample => Assert.InRange(sample, -0.999f, 0.999f));
+			if (frame >= 8)
+			{
+				peakRms = Math.Max(peakRms, Rms(buffer));
+			}
+		}
+
+		Assert.True(peakRms > 0.015, $"Expected Green Beret subtune 1 intro to remain audible, peak RMS was {peakRms:0.000}.");
+	}
+
+	[Fact]
 	public void RealGreenBeretSubtuneTenHardRestartSectionHasNoSilentFrameGapsWhenPresent()
 	{
 		var path = FindWorkspaceFile("TestTunes", "SID", "Green_Beret.sid");
@@ -315,6 +342,31 @@ public sealed class SidRenderTests
 			$"Expected G_I_Hero.sid to render at least realtime; rendered {renderedSeconds:0.00}s in {stopwatch.Elapsed.TotalSeconds:0.00}s ({realtimeFactor:0.00}x).");
 	}
 
+	[Fact]
+	public void RealTetrisRsidFixtureKeepsRasterInterruptPlaybackAliveWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Wally Beben", "Tetris.sid");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var peakRange = 0.0f;
+		for (var frame = 0; frame < 200; frame++)
+		{
+			song.RenderTick(buffer, options);
+			Assert.False(GetCpuHalted(song));
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			peakRange = Math.Max(peakRange, buffer.Max() - buffer.Min());
+		}
+
+		Assert.True(song.SidWrites.Count > 500, $"Expected Tetris RSID raster IRQ playback to keep writing SID registers, got {song.SidWrites.Count} writes.");
+		Assert.True(peakRange > 0.05f, $"Expected Tetris RSID output to remain audible, peak range was {peakRange:0.000}.");
+	}
+
 	private static int GetCpuProgramCounter(SidSong song)
 	{
 		var machine = typeof(SidSong)
@@ -331,6 +383,15 @@ public sealed class SidRenderTests
 			.GetValue(song)!;
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (long)cpu.GetType().GetProperty("Cycles")!.GetValue(cpu)!;
+	}
+
+	private static bool GetCpuHalted(SidSong song)
+	{
+		var machine = typeof(SidSong)
+			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+			.GetValue(song)!;
+		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
+		return (bool)cpu.GetType().GetProperty("Halted")!.GetValue(cpu)!;
 	}
 
 	private static string FindWorkspaceFile(params string[] parts)

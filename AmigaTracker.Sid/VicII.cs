@@ -29,7 +29,7 @@ namespace AmigaTracker.Sid
             {
                 0x11 => (byte)((_rasterLine & 0x100) >> 1),
                 0x12 => (byte)_rasterLine,
-                0x19 => _irqFlags,
+                0x19 => ReadIrqFlags(),
                 0x1A => _irqMask,
                 _ => 0
             };
@@ -73,14 +73,16 @@ namespace AmigaTracker.Sid
             if (_rasterLine == _rasterCompare)
             {
                 _irqFlags |= 0x01;
-                if ((_irqMask & 0x01) != 0)
-                {
-                    _irqFlags |= 0x80;
-                    return true;
-                }
             }
 
-            return false;
+            return InterruptLineAsserted;
         }
+
+        private byte ReadIrqFlags()
+        {
+            return (byte)(_irqFlags | (InterruptLineAsserted ? 0x80 : 0x00));
+        }
+
+        private bool InterruptLineAsserted => (_irqFlags & _irqMask & 0x0F) != 0;
     }
 }

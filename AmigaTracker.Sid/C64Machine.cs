@@ -6,17 +6,25 @@ namespace AmigaTracker.Sid
     internal sealed class C64Machine : ICpuBus
     {
         private readonly byte[] _ram = new byte[65536];
+        private readonly byte[] _kernalRom = new byte[0x2000];
+        private readonly byte[] _basicRom = new byte[0x2000];
         private readonly SidModule _module;
         private readonly C64ClockProfile _clock;
         private readonly Cia6526 _cia1 = new Cia6526();
         private readonly Cia6526 _cia2 = new Cia6526();
         private readonly VicII _vic;
+        private const ushort KernalRomStart = 0xE000;
+        private const ushort BasicRomStart = 0xA000;
         private const ushort RamIrqVector = 0x0314;
         private const ushort RamNmiVector = 0x0318;
-        private const ushort IrqTrampolineAddress = 0xFF80;
-        private const ushort NmiTrampolineAddress = 0xFF83;
-        private const ushort RtiStubAddress = 0xFF86;
-        private const ushort IdleLoopAddress = 0xFF90;
+        private const ushort KernalIrqEntryAddress = 0xFF80;
+        private const ushort KernalNmiEntryAddress = 0xFF88;
+        private const ushort RtiStubAddress = 0xFF92;
+        private const ushort IdleLoopAddress = 0xFF94;
+        private const ushort KernalIrqHandlerAddress = 0xEA31;
+        private const ushort KernalIrqExitAddress = 0xEA81;
+        private const ushort KernalIrqVectorAddress = 0xFF48;
+        private const ushort KernalIrqUserVectorJumpAddress = 0xFF58;
         private byte _processorPortDirection;
         private byte _processorPortValue;
         private long _irqHoldoffCycles;
@@ -28,6 +36,7 @@ namespace AmigaTracker.Sid
             _vic = new VicII(_clock);
             Sid = new SidSystem(module.Chips, module.EffectiveChipModel);
             Cpu = new Mos6510(this);
+            InstallMinimalRoms();
         }
 
         public Mos6510 Cpu { get; }
@@ -244,6 +253,16 @@ namespace AmigaTracker.Sid
                 return ReadIo(address);
             }
 
+            if (_module.IsRsid && IsBasicVisible() && address >= 0xA000 && address <= 0xBFFF)
+            {
+                return _basicRom[address - BasicRomStart];
+            }
+
+            if (_module.IsRsid && IsKernalVisible() && address >= 0xE000)
+            {
+                return _kernalRom[address - KernalRomStart];
+            }
+
             return _ram[address];
         }
 
@@ -290,22 +309,64 @@ namespace AmigaTracker.Sid
 
             WriteWord(RamIrqVector, RtiStubAddress);
             WriteWord(RamNmiVector, RtiStubAddress);
-            WriteWord(0xFFFE, IrqTrampolineAddress);
-            WriteWord(0xFFFA, NmiTrampolineAddress);
+            WriteWord(0xFFFE, KernalIrqEntryAddress);
+            WriteWord(0xFFFA, KernalNmiEntryAddress);
 
-            _ram[IrqTrampolineAddress + 0] = 0x6C; // JMP ($0314)
-            _ram[IrqTrampolineAddress + 1] = (byte)(RamIrqVector & 0xFF);
-            _ram[IrqTrampolineAddress + 2] = (byte)(RamIrqVector >> 8);
-            _ram[NmiTrampolineAddress + 0] = 0x6C; // JMP ($0318)
-            _ram[NmiTrampolineAddress + 1] = (byte)(RamNmiVector & 0xFF);
-            _ram[NmiTrampolineAddress + 2] = (byte)(RamNmiVector >> 8);
-            _ram[RtiStubAddress] = 0x40; // RTI
+            WriteRamStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
+            WriteRamStub(KernalNmiEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x18, 0x03);
+            WriteRamStub(RtiStubAddress, 0x40); // RTI
 
             _ram[IdleLoopAddress + 0] = 0xEA; // NOP
             _ram[IdleLoopAddress + 1] = 0xEA; // NOP
-            _ram[IdleLoopAddress + 2] = 0x4C; // JMP $FF90
+            _ram[IdleLoopAddress + 2] = 0x4C; // JMP idle loop
             _ram[IdleLoopAddress + 3] = (byte)(IdleLoopAddress & 0xFF);
             _ram[IdleLoopAddress + 4] = (byte)(IdleLoopAddress >> 8);
+        }
+
+        private void InstallMinimalRoms()
+        {
+            Array.Fill(_basicRom, (byte)0x60); // RTS for unimplemented BASIC calls.
+            Array.Fill(_kernalRom, (byte)0x60); // RTS for unimplemented KERNAL calls.
+
+            WriteKernalStub(KernalIrqHandlerAddress, 0x4C, 0x81, 0xEA); // JMP $EA81
+            WriteKernalStub(KernalIrqExitAddress, 0x68, 0xA8, 0x68, 0xAA, 0x68, 0x40); // PLA/TAY, PLA/TAX, PLA, RTI
+            WriteKernalStub(KernalIrqVectorAddress, 0x4C, 0x80, 0xFF); // JMP $FF80
+            WriteKernalStub(KernalIrqUserVectorJumpAddress, 0x6C, 0x14, 0x03); // JMP ($0314)
+            WriteKernalStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
+            WriteKernalStub(KernalNmiEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x18, 0x03);
+            WriteKernalStub(RtiStubAddress, 0x40);
+            WriteKernalStub(
+                IdleLoopAddress,
+                0xEA,
+                0xEA,
+                0x4C,
+                (byte)(IdleLoopAddress & 0xFF),
+                (byte)(IdleLoopAddress >> 8));
+            WriteKernalStub(
+                0xFFFA,
+                (byte)(KernalNmiEntryAddress & 0xFF),
+                (byte)(KernalNmiEntryAddress >> 8),
+                (byte)(IdleLoopAddress & 0xFF),
+                (byte)(IdleLoopAddress >> 8),
+                (byte)(KernalIrqEntryAddress & 0xFF),
+                (byte)(KernalIrqEntryAddress >> 8));
+        }
+
+        private void WriteRamStub(ushort address, params byte[] bytes)
+        {
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                _ram[address + i] = bytes[i];
+            }
+        }
+
+        private void WriteKernalStub(ushort address, params byte[] bytes)
+        {
+            var offset = address - KernalRomStart;
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                _kernalRom[offset + i] = bytes[i];
+            }
         }
 
         private void WriteWord(ushort address, ushort value)
@@ -336,7 +397,22 @@ namespace AmigaTracker.Sid
 
         private bool IsIoVisible()
         {
-            return (_processorPortValue & 0x04) != 0;
+            if (!_module.IsRsid)
+            {
+                return (_processorPortValue & 0x04) != 0;
+            }
+
+            return (_processorPortValue & 0x04) != 0 && (_processorPortValue & 0x03) != 0;
+        }
+
+        private bool IsKernalVisible()
+        {
+            return (_processorPortValue & 0x02) != 0;
+        }
+
+        private bool IsBasicVisible()
+        {
+            return (_processorPortValue & 0x03) == 0x03;
         }
 
         private byte ReadIo(ushort address)

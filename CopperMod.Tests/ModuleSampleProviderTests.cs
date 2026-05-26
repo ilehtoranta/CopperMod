@@ -63,12 +63,63 @@ public sealed class ModuleSampleProviderTests
 	}
 
 	[Fact]
+	public void SelectSubSongClearsBufferedAudioAndRestartsPosition()
+	{
+		var song = new SelectableSubSongSong(framesPerTick: 2);
+		using var provider = new ModuleSampleProvider(song, sampleRate: 10, channelCount: 1, AmigaOutputProfile.None);
+		var buffer = new float[2];
+
+		Assert.Equal(2, provider.Read(buffer, 0, buffer.Length));
+		Assert.All(buffer, sample => Assert.Equal(0.125f, sample));
+
+		provider.SelectSubSong(1);
+
+		Assert.Equal(TimeSpan.Zero, provider.Position.Time);
+		Assert.Equal(2, provider.Read(buffer, 0, buffer.Length));
+		Assert.All(buffer, sample => Assert.Equal(0.5f, sample));
+		Assert.Equal(1, song.CurrentSubSongIndex);
+	}
+
+	[Fact]
+	public async Task SelectSubSongWaitsForActiveRender()
+	{
+		using var releaseRender = new ManualResetEventSlim(false);
+		var song = new BlockingSubSong(releaseRender);
+		using var provider = new ModuleSampleProvider(song, sampleRate: 10, channelCount: 1, AmigaOutputProfile.None);
+
+		Assert.True(song.RenderStarted.Wait(TimeSpan.FromSeconds(1)));
+		var selectTask = Task.Run(() => provider.SelectSubSong(1));
+		try
+		{
+			var completedEarly = await Task.WhenAny(selectTask, Task.Delay(TimeSpan.FromMilliseconds(100))) == selectTask;
+			Assert.False(completedEarly);
+			Assert.Equal(0, song.SelectCalls);
+			Assert.False(song.SelectedDuringRender);
+
+			releaseRender.Set();
+
+			var completed = await Task.WhenAny(selectTask, Task.Delay(TimeSpan.FromSeconds(1))) == selectTask;
+			Assert.True(completed);
+			await selectTask;
+			Assert.Equal(1, song.SelectCalls);
+			Assert.Equal(1, song.CurrentSubSongIndex);
+			Assert.False(song.SelectedDuringRender);
+		}
+		finally
+		{
+			releaseRender.Set();
+			await Task.WhenAny(selectTask, Task.Delay(TimeSpan.FromSeconds(1)));
+		}
+	}
+
+	[Fact]
 	public void ReadDoesNotPublishWaveformByDefault()
 	{
 		var song = new FiniteSong(ticksBeforeEnd: 1, framesPerTick: 4);
 		using var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None);
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
@@ -85,6 +136,7 @@ public sealed class ModuleSampleProviderTests
 		};
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
@@ -104,6 +156,7 @@ public sealed class ModuleSampleProviderTests
 		};
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
@@ -125,6 +178,7 @@ public sealed class ModuleSampleProviderTests
 		};
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
@@ -145,6 +199,7 @@ public sealed class ModuleSampleProviderTests
 		};
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		_ = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.True(provider.TryReadWaveformSnapshot(out _));
@@ -163,10 +218,12 @@ public sealed class ModuleSampleProviderTests
 			c64OutputProfile: C64OutputProfile.Clean);
 		var buffer = new float[4];
 
+		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
 		Assert.All(buffer, sample => Assert.Equal(0.25f, sample));
+		Assert.Equal(0, provider.BufferStatus.UnderrunCount);
 	}
 
 	[Fact]
@@ -186,6 +243,18 @@ public sealed class ModuleSampleProviderTests
 		Assert.Equal(buffer.Length, samplesRead);
 		Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(250), $"Read took {stopwatch.Elapsed.TotalMilliseconds:0} ms.");
 		Assert.All(buffer, sample => Assert.Equal(0.0f, sample));
+	}
+
+	private static void WaitForBufferedAudio(ModuleSampleProvider provider)
+	{
+		Assert.True(
+			SpinWait.SpinUntil(
+				() =>
+				{
+					var status = provider.BufferStatus;
+					return status.QueuedDuration > TimeSpan.Zero || status.ProducerEnded || status.EndOfSong;
+				},
+				TimeSpan.FromSeconds(2)));
 	}
 
 	private sealed class FiniteSong : IModuleSong
@@ -405,6 +474,184 @@ public sealed class ModuleSampleProviderTests
 
 		public void Dispose()
 		{
+		}
+	}
+
+	private sealed class SelectableSubSongSong : IModuleSong, IModuleSubSongSelector
+	{
+		private readonly int _framesPerTick;
+		private TimeSpan _position;
+
+		public SelectableSubSongSong(int framesPerTick)
+		{
+			_framesPerTick = framesPerTick;
+		}
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(_position);
+
+		public bool LoopingEnabled { get; set; }
+
+		public int SubSongCount => 2;
+
+		public int DefaultSubSongIndex => 0;
+
+		public int CurrentSubSongIndex { get; private set; }
+
+		public IReadOnlyList<ModuleSubSongMetadata> SubSongs { get; } =
+			new[] { new ModuleSubSongMetadata(0), new ModuleSubSongMetadata(1) };
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return _framesPerTick;
+		}
+
+		public void Reset()
+		{
+			_position = TimeSpan.Zero;
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_position = position < TimeSpan.Zero ? TimeSpan.Zero : position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public void SelectSubSong(int index)
+		{
+			if (index < 0 || index >= SubSongCount)
+			{
+				throw new ArgumentOutOfRangeException(nameof(index));
+			}
+
+			CurrentSubSongIndex = index;
+			Reset();
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(_framesPerTick);
+			destination.Slice(0, samples).Fill(CurrentSubSongIndex == 0 ? 0.125f : 0.5f);
+			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
+			return new RenderResult(_framesPerTick, samples, Position);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class BlockingSubSong : IModuleSong, IModuleSubSongSelector
+	{
+		private readonly ManualResetEventSlim _releaseRender;
+		private int _activeRenderCount;
+
+		public BlockingSubSong(ManualResetEventSlim releaseRender)
+		{
+			_releaseRender = releaseRender;
+		}
+
+		public ManualResetEventSlim RenderStarted { get; } = new();
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(TimeSpan.Zero);
+
+		public bool LoopingEnabled { get; set; }
+
+		public int SubSongCount => 2;
+
+		public int DefaultSubSongIndex => 0;
+
+		public int CurrentSubSongIndex { get; private set; }
+
+		public int SelectCalls { get; private set; }
+
+		public bool SelectedDuringRender { get; private set; }
+
+		public IReadOnlyList<ModuleSubSongMetadata> SubSongs { get; } =
+			new[] { new ModuleSubSongMetadata(0), new ModuleSubSongMetadata(1) };
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return 4;
+		}
+
+		public void Reset()
+		{
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_ = position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+		}
+
+		public void SelectSubSong(int index)
+		{
+			if (Volatile.Read(ref _activeRenderCount) > 0)
+			{
+				SelectedDuringRender = true;
+			}
+
+			SelectCalls++;
+			CurrentSubSongIndex = index;
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			Interlocked.Increment(ref _activeRenderCount);
+			try
+			{
+				RenderStarted.Set();
+				_releaseRender.Wait();
+				var samples = options.GetSampleCount(4);
+				destination.Slice(0, samples).Fill(0.25f);
+				return new RenderResult(4, samples, Position);
+			}
+			finally
+			{
+				Interlocked.Decrement(ref _activeRenderCount);
+			}
+		}
+
+		public void Dispose()
+		{
+			RenderStarted.Dispose();
 		}
 	}
 

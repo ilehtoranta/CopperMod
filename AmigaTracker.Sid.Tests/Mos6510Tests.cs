@@ -60,9 +60,29 @@ public sealed class Mos6510Tests
 		Assert.Equal(0x81, cpu.A);
 	}
 
+	[Fact]
+	public void ReadModifyWriteInstructionsPerformDummyWriteBeforeFinalWrite()
+	{
+		var bus = new TestBus();
+		bus.Memory[0x1000] = 0x0E; // ASL $D019
+		bus.Memory[0x1001] = 0x19;
+		bus.Memory[0x1002] = 0xD0;
+		bus.Memory[0xD019] = 0x81;
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(2, bus.Writes.Count);
+		Assert.Equal((0xD019, (byte)0x81, 4), bus.Writes[0]);
+		Assert.Equal((0xD019, (byte)0x02, 5), bus.Writes[1]);
+	}
+
 	private sealed class TestBus : ICpuBus
 	{
 		public byte[] Memory { get; } = new byte[65536];
+
+		public List<(ushort Address, byte Value, int CycleOffset)> Writes { get; } = new();
 
 		public ushort LastWriteAddress { get; private set; }
 
@@ -78,6 +98,7 @@ public sealed class Mos6510Tests
 		public void Write(ushort address, byte value, int cycleOffset)
 		{
 			Memory[address] = value;
+			Writes.Add((address, value, cycleOffset));
 			LastWriteAddress = address;
 			LastWriteValue = value;
 			LastWriteCycle = cycleOffset;

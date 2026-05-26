@@ -404,6 +404,13 @@ namespace AmigaTracker.Sid
             AddCycles(totalCycles);
         }
 
+        private void WriteReadModifyWrite(ushort address, byte original, byte value, int totalCycles)
+        {
+            _bus.Write(address, original, Math.Max(0, totalCycles - 2));
+            _bus.Write(address, value, Math.Max(0, totalCycles - 1));
+            AddCycles(totalCycles);
+        }
+
         private void AddCycles(int cycles)
         {
             Cycles += cycles;
@@ -606,36 +613,42 @@ namespace AmigaTracker.Sid
 
         private void AslMemory(ushort address, int cycles)
         {
-            Write(address, Asl(Read(address)), cycles);
+            var original = Read(address);
+            WriteReadModifyWrite(address, original, Asl(original), cycles);
         }
 
         private void LsrMemory(ushort address, int cycles)
         {
-            Write(address, Lsr(Read(address)), cycles);
+            var original = Read(address);
+            WriteReadModifyWrite(address, original, Lsr(original), cycles);
         }
 
         private void RolMemory(ushort address, int cycles)
         {
-            Write(address, Rol(Read(address)), cycles);
+            var original = Read(address);
+            WriteReadModifyWrite(address, original, Rol(original), cycles);
         }
 
         private void RorMemory(ushort address, int cycles)
         {
-            Write(address, Ror(Read(address)), cycles);
+            var original = Read(address);
+            WriteReadModifyWrite(address, original, Ror(original), cycles);
         }
 
         private void IncMemory(ushort address, int cycles)
         {
-            var value = (byte)(Read(address) + 1);
+            var original = Read(address);
+            var value = (byte)(original + 1);
             SetZn(value);
-            Write(address, value, cycles);
+            WriteReadModifyWrite(address, original, value, cycles);
         }
 
         private void DecMemory(ushort address, int cycles)
         {
-            var value = (byte)(Read(address) - 1);
+            var original = Read(address);
+            var value = (byte)(original - 1);
             SetZn(value);
-            Write(address, value, cycles);
+            WriteReadModifyWrite(address, original, value, cycles);
         }
 
         private void Bit(byte value, int cycles)
@@ -707,32 +720,36 @@ namespace AmigaTracker.Sid
 
         private void Slo(ushort address, int cycles)
         {
-            var value = Asl(Read(address));
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = Asl(original);
+            WriteReadModifyWrite(address, original, value, cycles);
             A |= value;
             SetZn(A);
         }
 
         private void Rla(ushort address, int cycles)
         {
-            var value = Rol(Read(address));
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = Rol(original);
+            WriteReadModifyWrite(address, original, value, cycles);
             A &= value;
             SetZn(A);
         }
 
         private void Sre(ushort address, int cycles)
         {
-            var value = Lsr(Read(address));
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = Lsr(original);
+            WriteReadModifyWrite(address, original, value, cycles);
             A ^= value;
             SetZn(A);
         }
 
         private void Rra(ushort address, int cycles)
         {
-            var value = Ror(Read(address));
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = Ror(original);
+            WriteReadModifyWrite(address, original, value, cycles);
             if (GetFlag(Decimal))
             {
                 DecimalAdc(value);
@@ -745,15 +762,17 @@ namespace AmigaTracker.Sid
 
         private void Dcp(ushort address, int cycles)
         {
-            var value = (byte)(Read(address) - 1);
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = (byte)(original - 1);
+            WriteReadModifyWrite(address, original, value, cycles);
             Compare(A, value, 0);
         }
 
         private void Isc(ushort address, int cycles)
         {
-            var value = (byte)(Read(address) + 1);
-            Write(address, value, cycles);
+            var original = Read(address);
+            var value = (byte)(original + 1);
+            WriteReadModifyWrite(address, original, value, cycles);
             if (GetFlag(Decimal))
             {
                 DecimalSbc(value);

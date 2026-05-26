@@ -6,7 +6,8 @@ namespace AmigaTracker.Sid
 {
     internal sealed class SidSystem
     {
-        private readonly List<SidRegisterWrite> _writes = new List<SidRegisterWrite>();
+        private const int MaxCapturedWrites = 65536;
+        private readonly BoundedSidWriteLog _writes = new BoundedSidWriteLog(MaxCapturedWrites);
         private readonly List<PendingSidWrite> _pendingWrites = new List<PendingSidWrite>();
         private readonly int _channelCount;
         private long _lastCycle;
@@ -85,7 +86,7 @@ namespace AmigaTracker.Sid
                 }
 
                 var register = (byte)(address - chip.BaseAddress);
-                _writes.Add(new SidRegisterWrite(cycle, i, register, value));
+                CaptureWrite(new SidRegisterWrite(cycle, i, register, value));
                 if (cycle <= _lastCycle)
                 {
                     chip.Write(register, value);
@@ -99,6 +100,11 @@ namespace AmigaTracker.Sid
             }
 
             return false;
+        }
+
+        private void CaptureWrite(SidRegisterWrite write)
+        {
+            _writes.Add(write);
         }
 
         public float RenderSample(long cycle)

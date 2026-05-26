@@ -181,7 +181,7 @@ namespace AmigaTracker.Sid
         public double RenderOutput(SidVoice? syncSource, SidChipModel model)
         {
             var waveform = RenderWaveform(syncSource, model);
-            return waveform * (_envelopeCounter / 255.0);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
         public SidVoiceDebugState GetDebugState()
@@ -278,13 +278,7 @@ namespace AmigaTracker.Sid
                 return 0;
             }
 
-            var combined = NormalizeDac12(combinedDac);
-            if (outputs > 1 && model == SidChipModel.Mos6581)
-            {
-                combined *= 0.55;
-            }
-
-            return combined;
+            return SidAnalog.ConvertWaveformDac12(combinedDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
         private uint GetNoiseDac()
@@ -299,11 +293,6 @@ namespace AmigaTracker.Sid
             dac |= ((_noise >> 2) & 1u) << 5;
             dac |= (_noise & 1u) << 4;
             return dac;
-        }
-
-        private static double NormalizeDac12(uint value)
-        {
-            return (value / 2047.5) - 1.0;
         }
 
         private int GetRatePeriod()
