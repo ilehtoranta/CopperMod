@@ -50,10 +50,25 @@ dotnet run --project .\CopperMod -- "path\to\tune.sid"
 If no file is provided, CopperMod tries to open the default MED test tune when it
 is available in the workspace.
 
+## Export
+
+`CopperMod.Tools` renders supported modules to files without opening the player:
+
+```powershell
+dotnet run --project .\CopperMod.Tools -- render "path\to\tune.mod" --out tune.wav --seconds 30
+dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.pcm --seconds 30
+dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
+```
+
+WAV output is 32-bit float. PCM output is raw interleaved little-endian Float32.
+MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
+
 ## Projects
 
 - `CopperMod` - terminal player application.
 - `CopperMod.Abstractions` - shared playback interfaces.
+- `CopperMod.Rendering` - shared format registration and offline rendering helpers.
+- `CopperMod.Tools` - offline render/export utility.
 - `CopperMod.Med` - MED / OctaMED backend.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.

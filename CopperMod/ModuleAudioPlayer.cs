@@ -1,7 +1,5 @@
 using CopperMod.Abstractions;
-using CopperMod.Med;
-using CopperMod.ProTracker;
-using CopperMod.Sid;
+using CopperMod.Rendering;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -15,12 +13,7 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	private const int DesiredOutputLatencyMilliseconds = 250;
 	private const int OutputBufferCount = 4;
 
-	internal static readonly IReadOnlyList<IModuleFormat> SupportedFormats = new IModuleFormat[]
-	{
-		new MmdFormat(),
-		new ProTrackerFormat(),
-		new SidFormat()
-	};
+	internal static readonly IReadOnlyList<IModuleFormat> SupportedFormats = ModuleFormatRegistry.CreateDefaultFormats();
 	private readonly IReadOnlyList<IModuleFormat> _formats = SupportedFormats;
 	private IModuleSong? _song;
 	private ModuleSampleProvider? _sampleProvider;

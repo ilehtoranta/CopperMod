@@ -9,6 +9,14 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
@@ -21,11 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod\CopperMod.csproj" />
     <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />
-    <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
-    <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
-    <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
   </ItemGroup>
 
 </Project>

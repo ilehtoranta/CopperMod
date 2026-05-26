@@ -4,16 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.ProTracker</PackageId>
-    <Title>CopperMod.ProTracker</Title>
+    <PackageId>CopperMod.Cust</PackageId>
+    <Title>CopperMod.Cust</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>ProTracker MOD parser and tick renderer for Amiga tracker modules.</Description>
+    <Description>Native Amiga CUST Hunk loader with an A500 PAL MC68000/Paula playback sandbox.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>tracker;module;music;audio;amiga;protracker;mod</PackageTags>
+    <PackageTags>tracker;module;music;audio;amiga;cust;paula;m68000</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>

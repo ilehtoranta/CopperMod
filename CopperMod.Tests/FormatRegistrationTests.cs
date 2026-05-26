@@ -1,3 +1,4 @@
+using CopperMod.Cust;
 using CopperMod.ProTracker;
 using CopperMod.Sid;
 
@@ -15,5 +16,11 @@ public sealed class FormatRegistrationTests
 	public void CopperModRegistersSidFormat()
 	{
 		Assert.Contains(ModuleAudioPlayer.SupportedFormats, format => format is SidFormat);
+	}
+
+	[Fact]
+	public void CopperModRegistersCustFormat()
+	{
+		Assert.Contains(ModuleAudioPlayer.SupportedFormats, format => format is CustFormat);
 	}
 }

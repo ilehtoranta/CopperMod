@@ -4,6 +4,8 @@ using Terminal.Gui.App;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
+using CopperMod.Rendering;
+
 namespace CopperMod;
 
 internal sealed class PlayerWindow : Window, IDisposable

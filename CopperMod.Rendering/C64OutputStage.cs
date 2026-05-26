@@ -1,6 +1,6 @@
-namespace CopperMod;
+namespace CopperMod.Rendering;
 
-internal sealed class C64OutputStage
+public sealed class C64OutputStage
 {
 	private const double DcBlockCutoffHz = 12.0;
 	private const double OutputLowPassCutoffHz = 10500.0;

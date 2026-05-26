@@ -12,6 +12,7 @@ internal static class WaveformImageRenderer
 	public const int MaximumHeight = 256;
 	private const int MaximumRenderedChannels = 4;
 	private const int LaneVerticalPadding = 1;
+	private const float MinimumNormalizedPeak = 0.01f;
 	private static readonly TgColor Background = new(8, 10, 14, 255);
 	private static readonly TgColor Grid = new(26, 30, 36, 255);
 	private static readonly TgColor CenterLine = new(58, 64, 72, 255);
@@ -63,11 +64,26 @@ internal static class WaveformImageRenderer
 
 			DrawHorizontalLine(image, drawTop + ((drawBottom - drawTop) / 2), CenterLine);
 			var color = channel.IsActive ? ChannelColors[channel.ChannelIndex % ChannelColors.Length] : Grid;
+			var displayScale = GetDisplayScale(channel);
 			int? previousY = null;
 			for (var x = 0; x < width; x++)
 			{
 				var bin = Math.Min(channel.BinCount - 1, (int)((long)x * channel.BinCount / width));
-				var value = channel.Values[bin];
+				var minimum = ScaleForDisplay(channel.Minimums[bin], displayScale);
+				var maximum = ScaleForDisplay(channel.Maximums[bin], displayScale);
+				if (minimum > maximum)
+				{
+					(minimum, maximum) = (maximum, minimum);
+				}
+
+				DrawVerticalSegment(
+					image,
+					x,
+					SampleToY(maximum, drawTop, drawBottom),
+					SampleToY(minimum, drawTop, drawBottom),
+					color);
+
+				var value = ScaleForDisplay(channel.Values[bin], displayScale);
 				var y = SampleToY(value, drawTop, drawBottom);
 				if (previousY.HasValue)
 				{
@@ -118,6 +134,29 @@ internal static class WaveformImageRenderer
 		var clamped = Math.Clamp(sample, -1.0f, 1.0f);
 		var normalized = (clamped + 1.0f) * 0.5f;
 		return Math.Clamp((int)MathF.Round(top + ((1.0f - normalized) * (bottom - top))), top, bottom);
+	}
+
+	private static float GetDisplayScale(WaveformChannelSnapshot channel)
+	{
+		var peak = 0.0f;
+		for (var i = 0; i < channel.BinCount; i++)
+		{
+			peak = Math.Max(peak, Math.Abs(FiniteOrZero(channel.Minimums[i])));
+			peak = Math.Max(peak, Math.Abs(FiniteOrZero(channel.Maximums[i])));
+			peak = Math.Max(peak, Math.Abs(FiniteOrZero(channel.Values[i])));
+		}
+
+		return peak >= MinimumNormalizedPeak && peak < 1.0f ? 1.0f / peak : 1.0f;
+	}
+
+	private static float ScaleForDisplay(float sample, float displayScale)
+	{
+		return Math.Clamp(FiniteOrZero(sample) * displayScale, -1.0f, 1.0f);
+	}
+
+	private static float FiniteOrZero(float value)
+	{
+		return float.IsFinite(value) ? value : 0.0f;
 	}
 
 	private static void DrawVerticalSegment(TgColor[,] image, int x, int y0, int y1, TgColor color)

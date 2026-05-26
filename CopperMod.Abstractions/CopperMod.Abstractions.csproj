@@ -8,7 +8,7 @@
     <Title>CopperMod.Abstractions</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Reusable contracts for tracker and chip music format detection, loading, seeking, and PCM rendering.</Description>
-    <PackageVersion>0.1.0-alpha.1</PackageVersion>
+    <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

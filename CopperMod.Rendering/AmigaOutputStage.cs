@@ -1,6 +1,6 @@
-namespace CopperMod;
+namespace CopperMod.Rendering;
 
-internal sealed class AmigaOutputStage
+public sealed class AmigaOutputStage
 {
 	private const double DcBlockCutoffHz = 18.0;
 	private const double A500LowPassCutoffHz = 6200.0;

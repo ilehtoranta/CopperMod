@@ -1,3 +1,5 @@
+using CopperMod.Rendering;
+
 namespace CopperMod.Tests;
 
 public sealed class AmigaOutputStageTests

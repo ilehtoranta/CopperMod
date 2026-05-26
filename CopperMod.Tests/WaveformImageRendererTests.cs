@@ -75,6 +75,40 @@ public sealed class WaveformImageRendererTests
 		Assert.False(ContainsColor(image, Peak));
 	}
 
+	[Fact]
+	public void RenderExpandsLowAmplitudeWaveformsForVisibility()
+	{
+		var snapshot = new WaveformSnapshot(
+			new[] { CreateActiveChannel(0, new[] { -0.05f, 0.05f, -0.05f, 0.05f }) },
+			sourceFrameCount: 4,
+			sampleRate: 44100);
+
+		var image = WaveformImageRenderer.Render(snapshot, width: 24, height: 24);
+
+		Assert.True(GetColorVerticalSpan(image, ChannelColors[0]) >= 16);
+	}
+
+	[Fact]
+	public void RenderUsesPeakEnvelopeWhenBinValueIsNearCenter()
+	{
+		var snapshot = new WaveformSnapshot(
+			new[]
+			{
+				new WaveformChannelSnapshot(
+					0,
+					new[] { -0.08f, -0.08f, -0.08f, -0.08f },
+					new[] { 0.08f, 0.08f, 0.08f, 0.08f },
+					new[] { 0.0f, 0.0f, 0.0f, 0.0f },
+					true)
+			},
+			sourceFrameCount: 4,
+			sampleRate: 44100);
+
+		var image = WaveformImageRenderer.Render(snapshot, width: 24, height: 24);
+
+		Assert.True(GetColorVerticalSpan(image, ChannelColors[0]) >= 16);
+	}
+
 	private static WaveformChannelSnapshot CreateActiveChannel(int channelIndex, float[] values)
 	{
 		var minimums = values.Select(value => Math.Min(0.0f, value)).ToArray();
@@ -104,6 +138,27 @@ public sealed class WaveformImageRendererTests
 		}
 
 		return false;
+	}
+
+	private static int GetColorVerticalSpan(Terminal.Gui.Drawing.Color[,] image, Terminal.Gui.Drawing.Color color)
+	{
+		var minimumY = int.MaxValue;
+		var maximumY = int.MinValue;
+		for (var y = 0; y < image.GetLength(1); y++)
+		{
+			for (var x = 0; x < image.GetLength(0); x++)
+			{
+				if (!image[x, y].Equals(color))
+				{
+					continue;
+				}
+
+				minimumY = Math.Min(minimumY, y);
+				maximumY = Math.Max(maximumY, y);
+			}
+		}
+
+		return maximumY >= minimumY ? maximumY - minimumY + 1 : 0;
 	}
 
 	private static int CountDistinctColors<T>(T[,] image)

@@ -17,9 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod.Med\CopperMod.Med.csproj" />
-    <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
-    <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
+    <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
   </ItemGroup>
 
   <ItemGroup>

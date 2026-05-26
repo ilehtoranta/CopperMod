@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.Rendering;
 
 namespace CopperMod.Tests;
 
