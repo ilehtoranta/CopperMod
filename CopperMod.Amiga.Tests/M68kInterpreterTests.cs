@@ -148,6 +148,63 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AddqSubqAddressRegistersUseLongArithmeticAndDoNotChangeFlags()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x55, 0x48); // SUBQ.W #2,A0, size ignored for address registers
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x0007_B3E6;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Zero | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0007_B3E4u, cpu.State.A[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void MoveImmediateToCcrPreservesSystemBits()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x44, 0xFC, 0x00, 0x15); // MOVE #$15,CCR
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.StatusRegister = 0xA5E0;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xA5F5, cpu.State.StatusRegister);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void RoxrUsesExtendAsIncomingBitAndUpdatesCarryExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x44, 0xFC, 0x00, 0x10); // MOVE #$10,CCR
+		Write(bus.Memory, 0x1004, 0xE2, 0x90); // ROXR.L #1,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x0000_0001;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x8000_0000u, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+	}
+
+	[Fact]
 	public void AmigaBusSchedulesCpuWordCustomWritesAsSingleRegisterEvent()
 	{
 		var bus = new AmigaBus();

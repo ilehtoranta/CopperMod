@@ -1,0 +1,106 @@
+namespace CopperScreen;
+
+internal static class InsertDiskScreenRenderer
+{
+	private const int Blue = unchecked((int)0xFF1B4AA8);
+	private const int White = unchecked((int)0xFFE8ECFF);
+	private const int Black = unchecked((int)0xFF05070E);
+	private const int Grey = unchecked((int)0xFF8A96B8);
+
+	public static void Render(int[] framebuffer, int width, int height)
+	{
+		Array.Fill(framebuffer, Blue);
+		var diskWidth = width / 3;
+		var diskHeight = height / 5;
+		var x = (width - diskWidth) / 2;
+		var y = height / 3;
+		Fill(framebuffer, width, x, y, diskWidth, diskHeight, White);
+		Fill(framebuffer, width, x + (diskWidth / 10), y + (diskHeight / 5), diskWidth * 8 / 10, diskHeight / 8, Black);
+		Fill(framebuffer, width, x + (diskWidth * 7 / 10), y + (diskHeight * 3 / 5), diskWidth / 6, diskHeight / 4, Grey);
+		DrawText(framebuffer, width, height, "INSERT DISK IMAGE", width / 2, y + diskHeight + 28, 3, White);
+	}
+
+	public static void RenderStatus(int[] framebuffer, int width, int height, string status)
+	{
+		Array.Fill(framebuffer, Blue);
+		DrawText(framebuffer, width, height, status.ToUpperInvariant(), width / 2, height / 2, 2, White);
+	}
+
+	private static void Fill(int[] framebuffer, int width, int x, int y, int w, int h, int color)
+	{
+		for (var row = Math.Max(0, y); row < y + h && row < framebuffer.Length / width; row++)
+		{
+			for (var column = Math.Max(0, x); column < x + w && column < width; column++)
+			{
+				framebuffer[(row * width) + column] = color;
+			}
+		}
+	}
+
+	private static void DrawText(int[] framebuffer, int width, int height, string text, int centerX, int y, int scale, int color)
+	{
+		var textWidth = text.Length * 6 * scale;
+		var x = centerX - (textWidth / 2);
+		foreach (var ch in text)
+		{
+			DrawChar(framebuffer, width, height, ch, x, y, scale, color);
+			x += 6 * scale;
+		}
+	}
+
+	private static void DrawChar(int[] framebuffer, int width, int height, char ch, int x, int y, int scale, int color)
+	{
+		var rows = Glyph(ch);
+		for (var row = 0; row < rows.Length; row++)
+		{
+			for (var bit = 0; bit < 5; bit++)
+			{
+				if (((rows[row] >> (4 - bit)) & 1) == 0)
+				{
+					continue;
+				}
+
+				Fill(framebuffer, width, x + (bit * scale), y + (row * scale), scale, scale, color);
+			}
+		}
+	}
+
+	private static byte[] Glyph(char ch)
+	{
+		return ch switch
+		{
+			'A' => new byte[] { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
+			'B' => new byte[] { 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E },
+			'C' => new byte[] { 0x0F, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0F },
+			'D' => new byte[] { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E },
+			'E' => new byte[] { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F },
+			'G' => new byte[] { 0x0F, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0F },
+			'I' => new byte[] { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F },
+			'K' => new byte[] { 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11 },
+			'L' => new byte[] { 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F },
+			'M' => new byte[] { 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11 },
+			'N' => new byte[] { 0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11 },
+			'O' => new byte[] { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+			'P' => new byte[] { 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 },
+			'R' => new byte[] { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 },
+			'S' => new byte[] { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },
+			'T' => new byte[] { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },
+			'U' => new byte[] { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+			'X' => new byte[] { 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11 },
+			'0' => new byte[] { 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E },
+			'1' => new byte[] { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E },
+			'2' => new byte[] { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F },
+			'3' => new byte[] { 0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E },
+			'4' => new byte[] { 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 },
+			'5' => new byte[] { 0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E },
+			'6' => new byte[] { 0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E },
+			'7' => new byte[] { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
+			'8' => new byte[] { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E },
+			'9' => new byte[] { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E },
+			':' => new byte[] { 0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00 },
+			'$' => new byte[] { 0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04 },
+			' ' => new byte[] { 0, 0, 0, 0, 0, 0, 0 },
+			_ => new byte[] { 0x1F, 0x01, 0x02, 0x04, 0x00, 0x04, 0x04 }
+		};
+	}
+}

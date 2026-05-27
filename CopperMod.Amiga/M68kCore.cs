@@ -466,6 +466,14 @@ namespace CopperMod.Amiga
         {
             switch (opcode)
             {
+                case 0x44FC:
+                    SetCcr((ushort)(FetchWord() & 0x001F));
+                    AddCycles(12);
+                    return true;
+                case 0x46FC:
+                    State.StatusRegister = FetchWord();
+                    AddCycles(12);
+                    return true;
                 case 0x4E71:
                     AddCycles(4);
                     return true;
@@ -706,11 +714,21 @@ namespace CopperMod.Amiga
 
             var subtract = (opcode & 0x0100) != 0;
             var mode = (opcode >> 3) & 7;
-            var ea = ResolveEa(mode, opcode & 7, mode == 1 && size == M68kOperandSize.Byte ? M68kOperandSize.Word : size, write: true);
+            if (mode == 1)
+            {
+                var reg = opcode & 7;
+                State.A[reg] = subtract
+                    ? unchecked(State.A[reg] - (uint)count)
+                    : unchecked(State.A[reg] + (uint)count);
+                AddCycles(8);
+                return true;
+            }
+
+            var ea = ResolveEa(mode, opcode & 7, size, write: true);
             var old = ea.Read();
             var result = subtract
-                ? Subtract(old, (uint)count, size, setExtend: mode != 1)
-                : Add(old, (uint)count, size, setExtend: mode != 1);
+                ? Subtract(old, (uint)count, size, setExtend: true)
+                : Add(old, (uint)count, size, setExtend: true);
             ea.Write(result);
             AddCycles(size == M68kOperandSize.Long ? 8 : 4);
             return true;
@@ -1198,12 +1216,18 @@ namespace CopperMod.Amiga
             var bits = size == M68kOperandSize.Long ? 32 : size == M68kOperandSize.Word ? 16 : 8;
             var mask = M68kCpuState.Mask(size);
             var carry = false;
+            var extend = State.GetFlag(M68kCpuState.Extend);
             for (var i = 0; i < count; i++)
             {
                 if (left)
                 {
                     carry = (value & (1u << (bits - 1))) != 0;
-                    value = ((value << 1) & mask) | (type == 3 && carry ? 1u : 0u);
+                    value = type switch
+                    {
+                        2 => ((value << 1) & mask) | (extend ? 1u : 0u),
+                        3 => ((value << 1) & mask) | (carry ? 1u : 0u),
+                        _ => (value << 1) & mask
+                    };
                 }
                 else
                 {
@@ -1212,6 +1236,10 @@ namespace CopperMod.Amiga
                     {
                         var sign = value & (1u << (bits - 1));
                         value = (value >> 1) | sign;
+                    }
+                    else if (type == 2)
+                    {
+                        value = (value >> 1) | (extend ? 1u << (bits - 1) : 0u);
                     }
                     else if (type == 3)
                     {
@@ -1222,13 +1250,27 @@ namespace CopperMod.Amiga
                         value >>= 1;
                     }
                 }
+
+                if (type == 2)
+                {
+                    extend = carry;
+                }
             }
 
             State.SetNegativeZero(value, size);
             State.SetFlag(M68kCpuState.Carry, carry);
-            State.SetFlag(M68kCpuState.Extend, carry);
+            if (type != 3)
+            {
+                State.SetFlag(M68kCpuState.Extend, carry);
+            }
+
             State.SetFlag(M68kCpuState.Overflow, false);
             return value & mask;
+        }
+
+        private void SetCcr(ushort value)
+        {
+            State.StatusRegister = (ushort)((State.StatusRegister & 0xFFE0) | (value & 0x001F));
         }
 
         private void SetLogicFlags(uint value, M68kOperandSize size)

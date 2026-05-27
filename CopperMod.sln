@@ -35,6 +35,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Amiga", "CopperMo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Amiga.Tests", "CopperMod.Amiga.Tests\CopperMod.Amiga.Tests.csproj", "{9A1DC2FC-CAF5-4208-B64A-10DA4EA8C4A7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperScreen", "CopperScreen\CopperScreen.csproj", "{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperScreen.Tests", "CopperScreen.Tests\CopperScreen.Tests.csproj", "{C892CE63-A409-4191-9D7D-BB8F774F637D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -237,6 +241,30 @@ Global
 		{9A1DC2FC-CAF5-4208-B64A-10DA4EA8C4A7}.Release|x64.Build.0 = Release|Any CPU
 		{9A1DC2FC-CAF5-4208-B64A-10DA4EA8C4A7}.Release|x86.ActiveCfg = Release|Any CPU
 		{9A1DC2FC-CAF5-4208-B64A-10DA4EA8C4A7}.Release|x86.Build.0 = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|x64.Build.0 = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Debug|x86.Build.0 = Debug|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|x64.ActiveCfg = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|x64.Build.0 = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|x86.ActiveCfg = Release|Any CPU
+		{2B7D9B77-4B76-472D-87B3-B2097AE2BDC0}.Release|x86.Build.0 = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|x64.Build.0 = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Debug|x86.Build.0 = Debug|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|x64.ActiveCfg = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|x64.Build.0 = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|x86.ActiveCfg = Release|Any CPU
+		{C892CE63-A409-4191-9D7D-BB8F774F637D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

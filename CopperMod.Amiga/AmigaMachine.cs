@@ -5,7 +5,8 @@ namespace CopperMod.Amiga
     internal enum AmigaMachineProfile
     {
         A500PalCustPlayback,
-        A500PalFullEmulationSkeleton
+        A500PalFullEmulationSkeleton,
+        A500Pal512KBoot
     }
 
     internal sealed class AmigaMachineOptions
@@ -29,7 +30,13 @@ namespace CopperMod.Amiga
 
         public static AmigaMachineOptions ForProfile(AmigaMachineProfile profile)
         {
-            return new AmigaMachineOptions(profile);
+            var options = new AmigaMachineOptions(profile);
+            if (profile == AmigaMachineProfile.A500Pal512KBoot)
+            {
+                options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
+            }
+
+            return options;
         }
 
         public AmigaMachineOptions WithCpu(IM68kCoreFactory factory, M68kBackendKind backend)

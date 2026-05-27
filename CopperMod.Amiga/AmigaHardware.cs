@@ -29,6 +29,9 @@ namespace CopperMod.Amiga
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
         private readonly bool[] _pendingCustomByteWritten = new bool[0x200];
+        private readonly long _palFrameCycles;
+        private readonly double _palLineCycles;
+        private long _nextVerticalBlankCycle;
 
         public AmigaBus(int chipRamSize = AmigaConstants.DefaultChipRamSize, IAmigaBusArbiter? arbiter = null)
         {
@@ -40,13 +43,25 @@ namespace CopperMod.Amiga
             _chipRam = new byte[chipRamSize];
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
             Paula = new Paula(this);
+            Disk = new AmigaDiskController(this);
+            Display = new OcsDisplay(this);
+            Blitter = new AmigaBlitter(this);
             CiaA = new AmigaCia(AmigaCiaId.A);
             CiaB = new AmigaCia(AmigaCiaId.B);
+            _palFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
+            _palLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
+            _nextVerticalBlankCycle = _palFrameCycles;
             CiaA.Reset(0x02);
             CiaB.Reset();
         }
 
         public Paula Paula { get; }
+
+        public AmigaDiskController Disk { get; }
+
+        public OcsDisplay Display { get; }
+
+        public AmigaBlitter Blitter { get; }
 
         public IAmigaBusArbiter Arbiter { get; }
 
@@ -77,6 +92,10 @@ namespace CopperMod.Amiga
             CiaB.Reset();
             AudioFilterEnabled = false;
             Paula.Reset();
+            Disk.Reset();
+            Display.Reset();
+            Blitter.Reset();
+            _nextVerticalBlankCycle = _palFrameCycles;
         }
 
         public void RegisterHostCallback(uint address, Action<M68kCpuState> callback)
@@ -236,6 +255,57 @@ namespace CopperMod.Amiga
             return new PaulaDmaReadResult(ReadRawWord(address), access);
         }
 
+        public ushort ReadChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, long requestedCycle)
+        {
+            address = NormalizeAddress(address);
+            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: false);
+            return ReadRawWord(address);
+        }
+
+        public void WriteChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
+        {
+            address = NormalizeAddress(address);
+            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
+            WriteRawByte(address, (byte)(value >> 8), access.GrantedCycle);
+            WriteRawByte(address + 1, (byte)value, access.GrantedCycle);
+        }
+
+        public void WriteDeviceWord(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
+        {
+            address = NormalizeAddress(address);
+            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
+            WriteRawWord(address, value, access.GrantedCycle);
+        }
+
+        public void AdvanceRasterTo(long targetCycle)
+        {
+            UpdateBeamPosition(targetCycle);
+            if (targetCycle < _nextVerticalBlankCycle)
+            {
+                return;
+            }
+
+            while (_nextVerticalBlankCycle <= targetCycle)
+            {
+                WriteDeviceWord(
+                    AmigaBusRequester.Bitplane,
+                    AmigaBusAccessKind.CustomRegister,
+                    0x00DFF09C,
+                    (ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank),
+                    _nextVerticalBlankCycle);
+                _nextVerticalBlankCycle += _palFrameCycles;
+            }
+        }
+
+        private void UpdateBeamPosition(long targetCycle)
+        {
+            var cycleInFrame = Math.Max(0, targetCycle) % _palFrameCycles;
+            var line = Math.Clamp((int)(cycleInFrame / _palLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
+            var lineCycle = cycleInFrame - (long)(line * _palLineCycles);
+            var horizontal = Math.Clamp((int)(lineCycle * 0xE2 / _palLineCycles), 0, 0xE2);
+            Paula.SetBeamPosition(line, horizontal);
+        }
+
         public void AdvanceCiasTo(long targetCycle)
         {
             CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
@@ -358,7 +428,9 @@ namespace CopperMod.Amiga
 
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
-                return Paula.ReadByte((ushort)(address - 0x00DFF000));
+                var offset = (ushort)(address - 0x00DFF000);
+                var diskValue = Disk.ReadByte(offset);
+                return diskValue != 0 ? diskValue : Paula.ReadByte(offset);
             }
 
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
@@ -409,6 +481,11 @@ namespace CopperMod.Amiga
                 {
                     AudioFilterEnabled = (value & 0x02) == 0;
                 }
+
+                if (cia == CiaB)
+                {
+                    Disk.WriteCiaBRegister(ciaRegister, value);
+                }
             }
         }
 
@@ -418,6 +495,9 @@ namespace CopperMod.Amiga
             if (address >= 0x00DFF000 && address + 1 < 0x00DFF200)
             {
                 Paula.ScheduleWrite(grantedCycle, (ushort)(address - 0x00DFF000), value);
+                Display.ScheduleWrite(grantedCycle, (ushort)(address - 0x00DFF000), value);
+                Blitter.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
+                Disk.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
                 return;
             }
 
@@ -445,7 +525,11 @@ namespace CopperMod.Amiga
             var low = _pendingCustomByteWritten[lowIndex]
                 ? _pendingCustomBytes[lowIndex]
                 : Paula.ReadByte((ushort)lowIndex);
-            Paula.ScheduleWrite(cycle, wordOffset, (ushort)((high << 8) | low));
+            var wordValue = (ushort)((high << 8) | low);
+            Paula.ScheduleWrite(cycle, wordOffset, wordValue);
+            Display.ScheduleWrite(cycle, wordOffset, wordValue);
+            Blitter.WriteRegister(wordOffset, wordValue, cycle);
+            Disk.WriteRegister(wordOffset, wordValue, cycle);
 
             _pendingCustomByteWritten[highIndex] = false;
             _pendingCustomByteWritten[lowIndex] = false;
@@ -528,6 +612,7 @@ namespace CopperMod.Amiga
         private ushort _dmacon;
         private ushort _intena;
         private ushort _intreq;
+        private ushort _vposr;
         private ushort _vhposr;
         private ushort _lastAudioDmaMask;
         private long _lastCycle;
@@ -557,6 +642,7 @@ namespace CopperMod.Amiga
             _dmacon = 0;
             _intena = 0;
             _intreq = 0;
+            _vposr = 0;
             _vhposr = 0;
             _lastAudioDmaMask = 0;
             _lastCycle = 0;
@@ -571,6 +657,16 @@ namespace CopperMod.Amiga
 
         public byte ReadByte(ushort offset)
         {
+            if (offset == 0x004)
+            {
+                return (byte)(_vposr >> 8);
+            }
+
+            if (offset == 0x005)
+            {
+                return (byte)_vposr;
+            }
+
             if (offset == 0x010)
             {
                 return (byte)(_adkcon >> 8);
@@ -593,7 +689,6 @@ namespace CopperMod.Amiga
 
             if (offset == 0x006)
             {
-                _vhposr += 0x0100;
                 return (byte)(_vhposr >> 8);
             }
 
@@ -623,6 +718,14 @@ namespace CopperMod.Amiga
             }
 
             return offset < _registerBytes.Length ? _registerBytes[offset] : (byte)0;
+        }
+
+        public void SetBeamPosition(int verticalLine, int horizontalPosition)
+        {
+            verticalLine = Math.Clamp(verticalLine, 0, 0x1FF);
+            horizontalPosition = Math.Clamp(horizontalPosition, 0, 0xFF);
+            _vposr = (ushort)((verticalLine >> 8) & 0x0001);
+            _vhposr = (ushort)(((verticalLine & 0x00FF) << 8) | horizontalPosition);
         }
 
         public void ScheduleWrite(long cycle, ushort offset, ushort value)

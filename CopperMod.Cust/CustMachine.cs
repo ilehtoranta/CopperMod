@@ -150,7 +150,7 @@ namespace CopperMod.Cust
                     state.D[1] = 64;
                 });
 
-            Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+            AdvanceTimedHardwareTo(Cpu.State.Cycles);
         }
 
         public void SelectSubSong(int index)
@@ -197,6 +197,7 @@ namespace CopperMod.Cust
             for (var frame = 0; frame < frames; frame++)
             {
                 var targetCycle = startCycle + (long)Math.Round((frame + 1) * cyclesPerOutputFrame);
+                Bus.AdvanceRasterTo(targetCycle);
                 Bus.Paula.RenderSample(targetCycle, destination, frame, channels);
                 DispatchPendingPaulaInterrupts(targetCycle);
                 var sampleOffset = frame * channels;
@@ -206,7 +207,7 @@ namespace CopperMod.Cust
                 }
             }
 
-            Bus.Paula.AdvanceTo(endCycle);
+            AdvanceTimedHardwareTo(endCycle);
             DispatchPendingPaulaInterrupts(endCycle);
             if (Cpu.State.Cycles < endCycle)
             {
@@ -913,7 +914,7 @@ namespace CopperMod.Cust
                     stopwatch.ElapsedMilliseconds < CustConstants.SubroutineWallClockBudgetMilliseconds)
                 {
                     Cpu.ExecuteInstruction();
-                    Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+                    AdvanceTimedHardwareTo(Cpu.State.Cycles);
                     if (!_insideHostInterrupt)
                     {
                         DispatchCiaInterruptsUpTo(Cpu.State.Cycles);
@@ -954,13 +955,19 @@ namespace CopperMod.Cust
 
             if (advancePaulaAtEnd)
             {
-                Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+                AdvanceTimedHardwareTo(Cpu.State.Cycles);
             }
             var timer = Bus.ReadWord(CustConstants.HostBlockAddress + CustConstants.DtgTimerOffset);
             if (timer != 0)
             {
                 QuantumCycleCount = Math.Max(1, (long)Math.Round((timer + 1) * 10.0));
             }
+        }
+
+        private void AdvanceTimedHardwareTo(long targetCycle)
+        {
+            Bus.AdvanceRasterTo(targetCycle);
+            Bus.Paula.AdvanceTo(targetCycle);
         }
 
         private bool TryRecoverHostInterruptWait()
@@ -981,7 +988,7 @@ namespace CopperMod.Cust
                     instructions < 4_000)
                 {
                     Cpu.ExecuteInstruction();
-                    Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+                    AdvanceTimedHardwareTo(Cpu.State.Cycles);
                     DispatchCiaInterruptsUpTo(Cpu.State.Cycles);
                     DispatchPendingPaulaInterrupts(Cpu.State.Cycles);
                     instructions++;

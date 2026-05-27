@@ -8,6 +8,7 @@ namespace CopperMod.Amiga
     {
         Cpu,
         Paula,
+        Disk,
         Copper,
         Blitter,
         Bitplane,
@@ -24,6 +25,7 @@ namespace CopperMod.Amiga
         Rom,
         HostTrap,
         PaulaDma,
+        DiskDma,
         Copper,
         Blitter,
         Bitplane
