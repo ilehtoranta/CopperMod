@@ -114,7 +114,8 @@ public sealed class SidChipTests
 			Assert.True(samples[i] > samples[i - 1], $"Expected D418 volume step {i} to be greater than {i - 1}.");
 		}
 
-		Assert.True(samples[^1] - samples[0] > 0.12, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
+		Assert.True(samples[^1] - samples[0] > 0.30, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
+		Assert.True(samples[^1] - samples[4] > 0.24, $"Expected offset-biased 4-bit digi playback to stay prominent, got {samples[^1] - samples[4]:0.000}.");
 	}
 
 	[Fact]

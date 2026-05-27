@@ -162,7 +162,7 @@ namespace CopperMod.Sid
                 var normalized = value / 15.0;
                 table[value] = model == SidChipModel.Mos8580
                     ? (normalized - 0.5) * 0.018
-                    : ((Math.Pow(normalized, 1.35) - 0.5) * 0.17) - 0.015;
+                    : ((Math.Pow(normalized, 1.25) - 0.5) * 0.38) - 0.02;
             }
 
             return table;

@@ -33,4 +33,19 @@ public sealed class SidAnalogTests
 		Assert.True(mos6581Midpoint < linearMidpoint);
 		Assert.InRange(mos6581Midpoint, 0.45, 0.52);
 	}
+
+	[Fact]
+	public void Mos6581VolumeOffsetKeepsDigiPlaybackProminent()
+	{
+		var mos6581Range = SidAnalog.VolumeOffset(15, SidChipModel.Mos6581) -
+			SidAnalog.VolumeOffset(0, SidChipModel.Mos6581);
+		var mos8580Range = SidAnalog.VolumeOffset(15, SidChipModel.Mos8580) -
+			SidAnalog.VolumeOffset(0, SidChipModel.Mos8580);
+		var nightdawnStyleRange = SidAnalog.VolumeOffset(15, SidChipModel.Mos6581) -
+			SidAnalog.VolumeOffset(4, SidChipModel.Mos6581);
+
+		Assert.True(mos6581Range > 0.32, $"Expected strong 6581 D418 digi range, got {mos6581Range:0.000}.");
+		Assert.True(nightdawnStyleRange > 0.26, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
+		Assert.True(mos8580Range < mos6581Range * 0.10, $"Expected 8580 volume digis to remain much weaker, 8580 {mos8580Range:0.000}, 6581 {mos6581Range:0.000}.");
+	}
 }
