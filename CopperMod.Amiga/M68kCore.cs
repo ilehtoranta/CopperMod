@@ -1,7 +1,6 @@
 using System;
-using CopperMod.Abstractions;
 
-namespace CopperMod.Cust
+namespace CopperMod.Amiga
 {
     internal enum M68kOperandSize
     {
@@ -12,11 +11,17 @@ namespace CopperMod.Cust
 
     internal interface IM68kBus
     {
-        byte ReadByte(uint address);
+        byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind);
 
-        void WriteByte(uint address, byte value, long cycle);
+        ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind);
 
-        void WriteWord(uint address, ushort value, long cycle);
+        uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind);
+
+        void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind);
+
+        void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind);
+
+        void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind);
 
         bool TryInvokeHost(uint address, M68kCpuState state);
     }
@@ -58,7 +63,7 @@ namespace CopperMod.Cust
                 return new M68kInterpreter(bus);
             }
 
-            throw new UnsupportedModuleFormatException($"The requested MC68000 backend is not implemented: {backend}.");
+            throw new AmigaEmulationException($"The requested MC68000 backend is not implemented: {backend}.");
         }
     }
 
@@ -140,7 +145,7 @@ namespace CopperMod.Cust
         }
     }
 
-    internal sealed class UnsupportedM68kOpcodeException : ModuleLoadException
+    internal sealed class UnsupportedM68kOpcodeException : AmigaEmulationException
     {
         public UnsupportedM68kOpcodeException(ushort opcode, uint programCounter)
             : base($"Unsupported MC68000 opcode 0x{opcode:X4} at 0x{programCounter:X8}.")
@@ -1284,7 +1289,7 @@ namespace CopperMod.Cust
 
         private ushort FetchWord()
         {
-            var value = ReadWord(State.ProgramCounter);
+            var value = ReadWord(State.ProgramCounter, AmigaBusAccessKind.CpuInstructionFetch);
             State.ProgramCounter += 2;
             return value;
         }
@@ -1296,45 +1301,69 @@ namespace CopperMod.Cust
             return ((uint)high << 16) | low;
         }
 
-        private byte ReadByte(uint address)
+        private byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
         {
-            return _bus.ReadByte(address);
+            var cycle = State.Cycles;
+            var value = _bus.ReadByte(address, ref cycle, accessKind);
+            State.Cycles = cycle;
+            return value;
         }
 
-        private ushort ReadWord(uint address)
+        private ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
         {
             if ((address & 1) != 0)
             {
-                throw new ModuleLoadException($"Odd MC68000 word read at 0x{address:X8}.");
+                throw new AmigaEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
             }
 
-            return (ushort)((_bus.ReadByte(address) << 8) | _bus.ReadByte(address + 1));
+            var cycle = State.Cycles;
+            var value = _bus.ReadWord(address, ref cycle, accessKind);
+            State.Cycles = cycle;
+            return value;
         }
 
         private uint ReadLong(uint address)
         {
-            return ((uint)ReadWord(address) << 16) | ReadWord(address + 2);
+            if ((address & 1) != 0)
+            {
+                throw new AmigaEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
+            }
+
+            var cycle = State.Cycles;
+            var value = _bus.ReadLong(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            State.Cycles = cycle;
+            return value;
         }
 
         private void WriteByte(uint address, byte value)
         {
-            _bus.WriteByte(address, value, State.Cycles);
+            var cycle = State.Cycles;
+            _bus.WriteByte(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            State.Cycles = cycle;
         }
 
         private void WriteWord(uint address, ushort value)
         {
             if ((address & 1) != 0)
             {
-                throw new ModuleLoadException($"Odd MC68000 word write at 0x{address:X8}.");
+                throw new AmigaEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
             }
 
-            _bus.WriteWord(address, value, State.Cycles);
+            var cycle = State.Cycles;
+            _bus.WriteWord(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            State.Cycles = cycle;
         }
 
         private void WriteLong(uint address, uint value)
         {
-            WriteWord(address, (ushort)(value >> 16));
-            WriteWord(address + 2, (ushort)value);
+            if ((address & 1) != 0)
+            {
+                throw new AmigaEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
+            }
+
+            var cycle = State.Cycles;
+            _bus.WriteLong(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            State.Cycles = cycle;
         }
 
         private void PushWord(ushort value)
@@ -1485,7 +1514,7 @@ namespace CopperMod.Cust
 
                         break;
                     default:
-                        throw new ModuleLoadException("Cannot write to an immediate MC68000 operand.");
+                        throw new AmigaEmulationException("Cannot write to an immediate MC68000 operand.");
                 }
             }
         }

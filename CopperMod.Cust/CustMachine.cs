@@ -2,21 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using CopperMod.Abstractions;
+using CopperMod.Amiga;
 
 namespace CopperMod.Cust
 {
     internal sealed class CustMachine
     {
-        private const uint ExecLibraryBase = 0x00F1_0000;
-        private const uint DosLibraryBase = 0x00F2_0000;
-        private const uint CiaBResourceBase = 0x00F3_0000;
-        private const uint ReqLibraryBase = 0x00F4_0000;
-        private const uint DummyLibraryBase = 0x00F5_0000;
-        private const uint ExecStructAddress = 0x0000_2000;
-        private const uint HostPathBufferAddress = 0x0000_3000;
-        private const int HostPathBufferLength = 512;
         private const long HostInterruptIntervalCycles = 1_420;
         private const long HostInterruptCycleBudget = 12_000;
+        private const long MaxHostInterruptCycleBudget = 120_000;
+        private const int MaxCiaInterruptsPerDispatch = 512;
+        private const int MaxPaulaInterruptsPerDispatch = 512;
         private readonly HunkFile _hunk;
         private readonly DeliTagTable _rawTags;
         private readonly ModuleLoadContext? _loadContext;
@@ -30,6 +26,8 @@ namespace CopperMod.Cust
         private readonly uint _hostSongEndAddress = CustConstants.HostCallbackBaseAddress + 0x20;
         private readonly uint _hostResetPathAddress = CustConstants.HostCallbackBaseAddress + 0x30;
         private readonly uint _hostAppendPathOrOkAddress = CustConstants.HostCallbackBaseAddress + 0x40;
+        private readonly uint _hostAudioAllocAddress = CustConstants.HostCallbackBaseAddress + 0x50;
+        private readonly uint _hostAudioFreeAddress = CustConstants.HostCallbackBaseAddress + 0x60;
         private IReadOnlyDictionary<uint, uint> _tags = new Dictionary<uint, uint>();
         private uint _nextExternalAllocationAddress = 0x0010_0000;
         private uint _nextFileHandle = 0x100;
@@ -46,6 +44,7 @@ namespace CopperMod.Cust
         private uint _fallbackPcmAddress;
         private int _fallbackPcmLength;
         private double _fallbackPcmPosition;
+        private int _renderedQuanta;
 
         public CustMachine(HunkFile hunk, DeliTagTable tags)
             : this(hunk, tags, null, M68kCoreFactory.Default, M68kBackendKind.AccurateM68000)
@@ -63,16 +62,34 @@ namespace CopperMod.Cust
         }
 
         public CustMachine(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext, IM68kCoreFactory cpuFactory, M68kBackendKind cpuBackend)
+            : this(hunk, tags, loadContext, cpuFactory, cpuBackend, AmigaKickstartConfiguration.HostShim13)
+        {
+        }
+
+        public CustMachine(
+            HunkFile hunk,
+            DeliTagTable tags,
+            ModuleLoadContext? loadContext,
+            IM68kCoreFactory cpuFactory,
+            M68kBackendKind cpuBackend,
+            AmigaKickstartConfiguration kickstartConfiguration)
         {
             _hunk = hunk ?? throw new ArgumentNullException(nameof(hunk));
             _rawTags = tags ?? throw new ArgumentNullException(nameof(tags));
             _loadContext = loadContext;
             _segmentBases = new uint[hunk.Segments.Count];
             _listDataSegmentIndex = ResolveListDataSegmentIndex(hunk, tags);
-            Bus = new AmigaBus();
-            Cpu = (cpuFactory ?? throw new ArgumentNullException(nameof(cpuFactory))).Create(cpuBackend, Bus);
+            Machine = new AmigaMachine(
+                AmigaMachineOptions
+                    .ForProfile(AmigaMachineProfile.A500PalCustPlayback)
+                    .WithCpu(cpuFactory ?? throw new ArgumentNullException(nameof(cpuFactory)), cpuBackend)
+                    .WithKickstart(kickstartConfiguration));
+            Bus = Machine.Bus;
+            Cpu = Machine.Cpu;
             Reset(0);
         }
+
+        public AmigaMachine Machine { get; }
 
         public AmigaBus Bus { get; }
 
@@ -89,6 +106,8 @@ namespace CopperMod.Cust
         public bool SongEnded => _songEnded;
 
         public bool AudioFilterEnabled => Bus.AudioFilterEnabled;
+
+        public string KickstartDescription => Machine.Kickstart.Configuration.Description;
 
         public ModuleChannelWaveform? LastChannelWaveform { get; private set; }
 
@@ -111,7 +130,8 @@ namespace CopperMod.Cust
             _fallbackPcmAddress = 0;
             _fallbackPcmLength = 0;
             _fallbackPcmPosition = 0;
-            Bus.Reset();
+            _renderedQuanta = 0;
+            Machine.ResetHardware();
             AllocateSegments();
             LoadSegments();
             ApplyRelocations();
@@ -122,6 +142,13 @@ namespace CopperMod.Cust
             UpdateSubSongRange();
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
             CallIfPresent(CustConstants.DtpInitSound);
+            CallIfPresent(
+                CustConstants.DtpVolume,
+                prepare: state =>
+                {
+                    state.D[0] = 64;
+                    state.D[1] = 64;
+                });
 
             Bus.Paula.AdvanceTo(Cpu.State.Cycles);
         }
@@ -171,6 +198,7 @@ namespace CopperMod.Cust
             {
                 var targetCycle = startCycle + (long)Math.Round((frame + 1) * cyclesPerOutputFrame);
                 Bus.Paula.RenderSample(targetCycle, destination, frame, channels);
+                DispatchPendingPaulaInterrupts(targetCycle);
                 var sampleOffset = frame * channels;
                 for (var channel = 0; channel < channels; channel++)
                 {
@@ -179,17 +207,19 @@ namespace CopperMod.Cust
             }
 
             Bus.Paula.AdvanceTo(endCycle);
+            DispatchPendingPaulaInterrupts(endCycle);
             if (Cpu.State.Cycles < endCycle)
             {
                 Cpu.State.Cycles = endCycle;
             }
 
-            if (peak <= 0.0001f && !_tags.ContainsKey(CustConstants.DtpInterrupt))
+            if (peak <= 0.0001f && ShouldRenderFallbackPcm())
             {
                 RenderFallbackPcm(destination, frames, channels, sampleRate);
             }
 
-            LastChannelWaveform = captureChannels ? Bus.Paula.FinishChannelCapture() : null;
+            LastChannelWaveform = captureChannels ? ConvertWaveform(Bus.Paula.FinishChannelCapture()) : null;
+            _renderedQuanta++;
         }
 
         private void AllocateSegments()
@@ -259,86 +289,55 @@ namespace CopperMod.Cust
 
         private void InstallHostEnvironment()
         {
-            Bus.RegisterHostCallback(0, HostNullCallback);
             Bus.RegisterHostCallback(_hostGetListDataAddress, HostGetListData);
             Bus.RegisterHostCallback(_hostOkAddress, HostOk);
             Bus.RegisterHostCallback(_hostSongEndAddress, HostSongEnd);
             Bus.RegisterHostCallback(_hostResetPathAddress, HostResetPath);
             Bus.RegisterHostCallback(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
-            RegisterLibraryCallbacks();
+            Bus.RegisterHostCallback(_hostAudioAllocAddress, HostAudioAlloc);
+            Bus.RegisterHostCallback(_hostAudioFreeAddress, HostAudioFree);
+            Machine.Kickstart.Install(
+                Bus,
+                new AmigaKickstartTrapTable(
+                    _hostOkAddress,
+                    HostNullCallback,
+                    HostOk,
+                    HostOpenLibrary,
+                    HostAllocMem,
+                    HostAllocAndStore,
+                    HostFreeMem,
+                    HostCauseInterrupt,
+                    HostAddInterrupt,
+                    HostRemoveInterrupt,
+                    HostAbleIcr,
+                    HostSetIcr,
+                    HostDosOpen,
+                    HostDosClose,
+                    HostDosRead,
+                    HostDosSeek));
 
-            Bus.WriteLong(0, ExecStructAddress);
-            Bus.WriteLong(4, ExecLibraryBase);
-            Bus.WriteLong(ExecStructAddress + 0x68, _hostOkAddress);
-            WriteNullTerminatedString(HostPathBufferAddress, string.Empty, HostPathBufferLength);
+            WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, string.Empty, AmigaKickstartHost.HostPathBufferLength);
 
-            WriteHostLong(CustConstants.DtgDosBaseOffset, DosLibraryBase);
-            WriteHostLong(CustConstants.DtgExecBaseOffset, ExecLibraryBase);
-            WriteHostLong(CustConstants.DtgPathBufferOffset, HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgDosBaseOffset, AmigaKickstartHost.DosLibraryBase);
+            WriteHostLong(CustConstants.DtgExecBaseOffset, AmigaKickstartHost.ExecLibraryBase);
+            WriteHostLong(CustConstants.DtgPathBufferOffset, AmigaKickstartHost.HostPathBufferAddress);
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
             WriteHostWord(CustConstants.DtgSoundVolumeOffset, 64);
             WriteHostWord(CustConstants.DtgSoundLeftBalanceOffset, 64);
             WriteHostWord(CustConstants.DtgSoundRightBalanceOffset, 64);
             WriteHostLong(CustConstants.DtgResetPathOffset, _hostResetPathAddress);
-            WriteHostLong(CustConstants.DtgAudioAllocOffset, _hostAppendPathOrOkAddress);
+            WriteHostLong(CustConstants.DtgAudioAllocOffset, _hostAudioAllocAddress);
             WriteHostLong(CustConstants.DtgGetListDataOffset, _hostGetListDataAddress);
-            WriteHostLong(CustConstants.DtgAudioFreeOffset, _hostOkAddress);
+            WriteHostLong(CustConstants.DtgAudioFreeOffset, _hostAudioFreeAddress);
             WriteHostLong(CustConstants.DtgSongEndOffset, _hostSongEndAddress);
             WriteHostWord(CustConstants.DtgTimerOffset, 0);
         }
 
-        private void RegisterLibraryCallbacks()
-        {
-            RegisterLibraryCallback(ExecLibraryBase, -408, HostOpenLibrary);
-            RegisterLibraryCallback(ExecLibraryBase, -498, HostOpenLibrary);
-            RegisterLibraryCallback(ExecLibraryBase, -414, HostOk);
-            RegisterLibraryCallback(ExecLibraryBase, -396, HostOk);
-            RegisterLibraryCallback(ExecLibraryBase, -198, HostAllocMem);
-            RegisterLibraryCallback(ExecLibraryBase, -210, HostFreeMem);
-            RegisterLibraryCallback(ExecLibraryBase, -180, HostCauseInterrupt);
-            RegisterLibraryCallback(ExecLibraryBase, -174, HostRemoveInterrupt);
-            RegisterLibraryCallback(ExecLibraryBase, -168, HostAddInterrupt);
-            RegisterLibraryCallback(ExecLibraryBase, -162, HostAddInterrupt);
-            RegisterLibraryCallback(ExecLibraryBase, -396, HostAllocAndStore);
-
-            RegisterLibraryCallback(DosLibraryBase, -30, HostDosOpen);
-            RegisterLibraryCallback(DosLibraryBase, -36, HostDosClose);
-            RegisterLibraryCallback(DosLibraryBase, -42, HostDosRead);
-            RegisterLibraryCallback(DosLibraryBase, -66, HostDosSeek);
-            RegisterLibraryCallback(DosLibraryBase, -174, HostOk);
-            RegisterLibraryCallback(DosLibraryBase, -180, HostOk);
-            RegisterLibraryCallback(DosLibraryBase, -396, HostOk);
-            RegisterLibraryCallback(DosLibraryBase, -408, HostOpenLibrary);
-
-            RegisterLibraryCallback(CiaBResourceBase, -6, HostAddInterrupt);
-            RegisterLibraryCallback(CiaBResourceBase, -12, HostRemoveInterrupt);
-            RegisterLibraryCallback(CiaBResourceBase, -18, HostOk);
-            RegisterLibraryCallback(CiaBResourceBase, -24, HostOk);
-
-            RegisterLibraryCallback(ReqLibraryBase, -6, HostOk);
-            RegisterLibraryCallback(ReqLibraryBase, -12, HostOk);
-            RegisterLibraryCallback(ReqLibraryBase, -174, HostOk);
-            RegisterLibraryCallback(ReqLibraryBase, -180, HostOk);
-            RegisterLibraryCallback(ReqLibraryBase, -396, HostOk);
-            RegisterLibraryCallback(ReqLibraryBase, -408, HostOpenLibrary);
-
-            RegisterLibraryCallback(DummyLibraryBase, -6, HostOk);
-            RegisterLibraryCallback(DummyLibraryBase, -12, HostOk);
-            RegisterLibraryCallback(DummyLibraryBase, -174, HostOk);
-            RegisterLibraryCallback(DummyLibraryBase, -180, HostOk);
-            RegisterLibraryCallback(DummyLibraryBase, -396, HostOk);
-            RegisterLibraryCallback(DummyLibraryBase, -408, HostOpenLibrary);
-        }
-
-        private void RegisterLibraryCallback(uint libraryBase, int displacement, Action<M68kCpuState> callback)
-        {
-            Bus.RegisterHostCallback(unchecked((uint)((int)libraryBase + displacement)), callback);
-        }
-
         private void HostGetListData(M68kCpuState state)
         {
-            state.A[0] = _segmentBases[_listDataSegmentIndex];
-            state.D[0] = 0;
+            var address = _segmentBases[_listDataSegmentIndex];
+            state.A[0] = address;
+            state.D[0] = address;
         }
 
         private void HostOk(M68kCpuState state)
@@ -366,19 +365,27 @@ namespace CopperMod.Cust
             var name = ReadNullTerminatedString(state.A[1], 96);
             if (name.IndexOf("dos", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                state.D[0] = DosLibraryBase;
+                state.D[0] = AmigaKickstartHost.DosLibraryBase;
+            }
+            else if (name.IndexOf("ciaa", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                state.D[0] = AmigaKickstartHost.CiaAResourceBase;
+            }
+            else if (name.IndexOf("ciab", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                state.D[0] = AmigaKickstartHost.CiaBResourceBase;
             }
             else if (name.IndexOf("cia", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                state.D[0] = CiaBResourceBase;
+                state.D[0] = AmigaKickstartHost.CiaBResourceBase;
             }
             else if (name.IndexOf("req", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                state.D[0] = ReqLibraryBase;
+                state.D[0] = AmigaKickstartHost.ReqLibraryBase;
             }
             else
             {
-                state.D[0] = DummyLibraryBase;
+                state.D[0] = AmigaKickstartHost.DummyLibraryBase;
             }
         }
 
@@ -407,18 +414,59 @@ namespace CopperMod.Cust
 
         private void HostAddInterrupt(M68kCpuState state)
         {
-            CaptureInterruptServer(state.A[1]);
+            if (TryGetCiaResource(state.A[6], out var cia))
+            {
+                var mask = DecodeCiaIcrVectorMask(state.D[0]);
+                CaptureInterruptServer(state.A[1], cia, mask);
+                Bus.AbleCiaInterrupts(cia, (byte)(0x80 | mask), state.Cycles);
+            }
+            else
+            {
+                CaptureInterruptServer(state.A[1], paulaMask: DecodePaulaInterruptMask(state.D[0]));
+            }
+
             state.D[0] = 0;
         }
 
         private void HostRemoveInterrupt(M68kCpuState state)
         {
-            RemoveInterruptServer(state.A[1]);
+            if (TryGetCiaResource(state.A[6], out var cia))
+            {
+                RemoveInterruptServer(state.A[1], cia, DecodeCiaIcrVectorMask(state.D[0]));
+            }
+            else
+            {
+                RemoveInterruptServer(state.A[1], paulaMask: DecodePaulaInterruptMask(state.D[0]));
+            }
+
+            state.D[0] = 0;
+        }
+
+        private void HostAbleIcr(M68kCpuState state)
+        {
+            if (!TryGetCiaResource(state.A[6], out var cia))
+            {
+                state.D[0] = 0;
+                return;
+            }
+
+            state.D[0] = Bus.AbleCiaInterrupts(cia, (byte)state.D[0], state.Cycles);
+        }
+
+        private void HostSetIcr(M68kCpuState state)
+        {
+            if (!TryGetCiaResource(state.A[6], out var cia))
+            {
+                state.D[0] = 0;
+                return;
+            }
+
+            state.D[0] = Bus.SetCiaInterrupts(cia, (byte)state.D[0], state.Cycles);
         }
 
         private void HostCauseInterrupt(M68kCpuState state)
         {
-            CaptureInterruptServer(state.A[1]);
+            CaptureInterruptServer(state.A[1], paulaMask: DecodePaulaInterruptMask(state.D[0]));
             if (_insideHostInterrupt)
             {
                 state.D[0] = 0;
@@ -436,7 +484,7 @@ namespace CopperMod.Cust
             state.D[0] = 0;
         }
 
-        private void CaptureInterruptServer(uint interruptAddress)
+        private void CaptureInterruptServer(uint interruptAddress, AmigaCiaId? cia = null, byte icrMask = 0, ushort paulaMask = 0)
         {
             if (interruptAddress == 0)
             {
@@ -454,27 +502,37 @@ namespace CopperMod.Cust
             _installedInterruptAddress = code;
             foreach (var existing in _installedInterrupts)
             {
-                if (existing.Code == code && existing.Data == data)
+                if (existing.Code == code &&
+                    existing.Data == data &&
+                    existing.Cia == cia &&
+                    existing.IcrMask == icrMask &&
+                    existing.PaulaMask == paulaMask)
                 {
                     return;
                 }
             }
 
-            _installedInterrupts.Add(new InterruptServer(code, data));
+            _installedInterrupts.Add(new InterruptServer(code, data, cia, icrMask, paulaMask));
         }
 
-        private void RemoveInterruptServer(uint interruptAddress)
+        private void RemoveInterruptServer(uint interruptAddress, AmigaCiaId? cia = null, byte icrMask = 0, ushort paulaMask = 0)
         {
             if (interruptAddress == 0)
             {
-                _installedInterrupts.Clear();
+                _installedInterrupts.RemoveAll(server =>
+                    (!cia.HasValue || server.Cia == cia) &&
+                    (paulaMask == 0 || (server.PaulaMask & paulaMask) != 0));
                 _installedInterruptAddress = 0;
                 _installedInterruptData = 0;
                 return;
             }
 
             var code = Bus.ReadLong(interruptAddress + 18);
-            _installedInterrupts.RemoveAll(server => server.Code == code);
+            _installedInterrupts.RemoveAll(server =>
+                server.Code == code &&
+                (!cia.HasValue || server.Cia == cia) &&
+                (icrMask == 0 || (server.IcrMask & icrMask) != 0) &&
+                (paulaMask == 0 || (server.PaulaMask & paulaMask) != 0));
             if (_installedInterruptAddress == code)
             {
                 _installedInterruptAddress = 0;
@@ -486,7 +544,7 @@ namespace CopperMod.Cust
         {
             _ = state;
             _hostPath = string.Empty;
-            WriteNullTerminatedString(HostPathBufferAddress, _hostPath, HostPathBufferLength);
+            WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, _hostPath, AmigaKickstartHost.HostPathBufferLength);
         }
 
         private void HostAppendPathOrOk(M68kCpuState state)
@@ -495,15 +553,25 @@ namespace CopperMod.Cust
             if (LooksLikePathFragment(value))
             {
                 _hostPath += value.Replace('\\', '/');
-                WriteNullTerminatedString(HostPathBufferAddress, _hostPath, HostPathBufferLength);
+                WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, _hostPath, AmigaKickstartHost.HostPathBufferLength);
             }
 
             state.D[0] = 0;
         }
 
+        private void HostAudioAlloc(M68kCpuState state)
+        {
+            state.D[0] = 1;
+        }
+
+        private void HostAudioFree(M68kCpuState state)
+        {
+            state.D[0] = 0;
+        }
+
         private void HostDosOpen(M68kCpuState state)
         {
-            var path = NormalizeAmigaPath(ReadNullTerminatedString(state.D[1], HostPathBufferLength));
+            var path = NormalizeAmigaPath(ReadNullTerminatedString(state.D[1], AmigaKickstartHost.HostPathBufferLength));
             if (string.IsNullOrWhiteSpace(path))
             {
                 path = NormalizeAmigaPath(_hostPath);
@@ -628,26 +696,200 @@ namespace CopperMod.Cust
 
         private void DispatchInstalledInterruptsForQuantum(long startCycle, long endCycle)
         {
-            if (_installedInterrupts.Count == 0)
+            var savedCycle = Cpu.State.Cycles;
+            DispatchCiaInterruptsUpTo(endCycle);
+            Cpu.State.Cycles = Math.Max(savedCycle, Cpu.State.Cycles);
+        }
+
+        private void DispatchCiaInterruptsUpTo(long targetCycle)
+        {
+            if (_tags.ContainsKey(CustConstants.DtpInterrupt))
+            {
+                Bus.AdvanceCiasTo(targetCycle);
+                Bus.DrainCiaInterrupts();
+                return;
+            }
+
+            var dispatched = 0;
+            while (dispatched < MaxCiaInterruptsPerDispatch)
+            {
+                DispatchPendingCiaInterrupts(targetCycle, ref dispatched);
+                var nextCycle = Bus.GetNextCiaInterruptCycle(targetCycle);
+                if (!nextCycle.HasValue)
+                {
+                    break;
+                }
+
+                Bus.AdvanceCiasTo(nextCycle.Value);
+            }
+
+            Bus.AdvanceCiasTo(targetCycle);
+            DispatchPendingCiaInterrupts(targetCycle, ref dispatched);
+            if (dispatched >= MaxCiaInterruptsPerDispatch)
+            {
+                AddDiagnostic(
+                    ModuleDiagnosticSeverity.Warning,
+                    "CUST CIA interrupt dispatch exceeded its per-quantum guard.",
+                    "CUST_CPU_OVERRUN");
+            }
+        }
+
+        private void DispatchPendingCiaInterrupts(long targetCycle, ref int dispatched)
+        {
+            var events = Bus.DrainCiaInterrupts();
+            foreach (var interruptEvent in events)
+            {
+                if (interruptEvent.Cycle > targetCycle)
+                {
+                    continue;
+                }
+
+                Cpu.State.Cycles = Math.Max(Cpu.State.Cycles, interruptEvent.Cycle);
+                CallInstalledInterrupt(interruptEvent);
+                dispatched++;
+                if (dispatched >= MaxCiaInterruptsPerDispatch)
+                {
+                    return;
+                }
+            }
+        }
+
+        private void CallInstalledInterrupt(AmigaCiaInterruptEvent interruptEvent)
+        {
+            var servers = new List<InterruptServer>();
+            foreach (var server in _installedInterrupts)
+            {
+                if (server.Cia == interruptEvent.Cia &&
+                    server.IcrMask != 0 &&
+                    (interruptEvent.IcrBits & server.IcrMask) != 0)
+                {
+                    servers.Add(server);
+                }
+            }
+
+            if (servers.Count == 0)
             {
                 return;
             }
 
-            var savedCycle = Cpu.State.Cycles;
-            for (var cycle = startCycle + HostInterruptIntervalCycles; cycle <= endCycle; cycle += HostInterruptIntervalCycles)
+            var budget = GetHostInterruptCycleBudget(GetRecoveryIntervalCycles()) * servers.Count;
+            var perServerBudget = Math.Max(1, budget / servers.Count);
+            foreach (var server in servers)
             {
-                Cpu.State.Cycles = Math.Max(Cpu.State.Cycles, cycle);
-                CallInstalledInterrupt(HostInterruptCycleBudget * _installedInterrupts.Count);
+                RunIsolatedSubroutine(
+                    server.Code,
+                    perServerBudget,
+                    prepare: state => PrepareInterruptServerState(state, server.Data));
+            }
+        }
+
+        private void DispatchPendingPaulaInterrupts(long targetCycle)
+        {
+            if (_insideHostInterrupt)
+            {
+                Bus.Paula.DrainInterrupts();
+                return;
             }
 
-            Cpu.State.Cycles = Math.Max(savedCycle, Cpu.State.Cycles);
+            var dispatched = 0;
+            foreach (var interruptEvent in Bus.Paula.DrainInterrupts())
+            {
+                if (interruptEvent.Cycle > targetCycle)
+                {
+                    continue;
+                }
+
+                Cpu.State.Cycles = Math.Max(Cpu.State.Cycles, interruptEvent.Cycle);
+                CallInstalledInterrupt(interruptEvent);
+                dispatched++;
+                if (dispatched >= MaxPaulaInterruptsPerDispatch)
+                {
+                    AddDiagnostic(
+                        ModuleDiagnosticSeverity.Warning,
+                        "CUST Paula interrupt dispatch exceeded its per-quantum guard.",
+                        "CUST_CPU_OVERRUN");
+                    return;
+                }
+            }
+        }
+
+        private void CallInstalledInterrupt(PaulaInterruptEvent interruptEvent)
+        {
+            var servers = new List<InterruptServer>();
+            foreach (var server in _installedInterrupts)
+            {
+                if (server.PaulaMask != 0 && (server.PaulaMask & interruptEvent.IntreqBit) != 0)
+                {
+                    servers.Add(server);
+                }
+            }
+
+            if (servers.Count == 0)
+            {
+                return;
+            }
+
+            var perServerBudget = Math.Max(1, HostInterruptCycleBudget / servers.Count);
+            foreach (var server in servers)
+            {
+                RunIsolatedSubroutine(
+                    server.Code,
+                    perServerBudget,
+                    prepare: state => PrepareInterruptServerState(state, server.Data));
+            }
         }
 
         private static void PrepareInterruptServerState(M68kCpuState state, uint data)
         {
             state.A[0] = data;
             state.A[1] = data;
-            state.A[6] = ExecLibraryBase;
+            state.A[6] = AmigaKickstartHost.ExecLibraryBase;
+        }
+
+        private static bool TryGetCiaResource(uint resourceBase, out AmigaCiaId cia)
+        {
+            if (resourceBase == AmigaKickstartHost.CiaAResourceBase)
+            {
+                cia = AmigaCiaId.A;
+                return true;
+            }
+
+            if (resourceBase == AmigaKickstartHost.CiaBResourceBase)
+            {
+                cia = AmigaCiaId.B;
+                return true;
+            }
+
+            cia = default;
+            return false;
+        }
+
+        private static byte DecodeCiaIcrVectorMask(uint value)
+        {
+            var lowBits = (byte)(value & 0x1F);
+            if (lowBits == 0)
+            {
+                return AmigaCia.TimerAInterruptMask;
+            }
+
+            if (lowBits < 5)
+            {
+                return (byte)(lowBits | (1 << lowBits));
+            }
+
+            return lowBits;
+        }
+
+        private static ushort DecodePaulaInterruptMask(uint value)
+        {
+            var explicitMask = (ushort)(value & 0x0780);
+            if (explicitMask != 0)
+            {
+                return explicitMask;
+            }
+
+            var bitNumber = (int)(value & 0x1F);
+            return bitNumber is >= 7 and <= 10 ? (ushort)(1 << bitNumber) : (ushort)0;
         }
 
         private void RunSubroutine(
@@ -671,6 +913,13 @@ namespace CopperMod.Cust
                     stopwatch.ElapsedMilliseconds < CustConstants.SubroutineWallClockBudgetMilliseconds)
                 {
                     Cpu.ExecuteInstruction();
+                    Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+                    if (!_insideHostInterrupt)
+                    {
+                        DispatchCiaInterruptsUpTo(Cpu.State.Cycles);
+                        DispatchPendingPaulaInterrupts(Cpu.State.Cycles);
+                    }
+
                     instructions++;
                 }
 
@@ -694,7 +943,7 @@ namespace CopperMod.Cust
                 AddDiagnostic(ModuleDiagnosticSeverity.Warning, ex.Message, "CUST_UNSUPPORTED_OPCODE");
                 Cpu.State.Halted = true;
             }
-            catch (ModuleLoadException ex)
+            catch (AmigaEmulationException ex)
             {
                 AddDiagnostic(
                     ModuleDiagnosticSeverity.Warning,
@@ -723,15 +972,18 @@ namespace CopperMod.Cust
 
             for (var attempt = 0; attempt < 64; attempt++)
             {
-                CallInstalledInterrupt(HostInterruptCycleBudget * _installedInterrupts.Count);
+                DispatchCiaInterruptsUpTo(Cpu.State.Cycles + GetRecoveryIntervalCycles());
                 var startCycles = Cpu.State.Cycles;
                 var instructions = 0;
                 while (!Cpu.State.Halted &&
                     Cpu.State.ProgramCounter != 0xFFFF_FFFC &&
-                    Cpu.State.Cycles - startCycles < HostInterruptIntervalCycles * 4 &&
+                    Cpu.State.Cycles - startCycles < GetRecoveryIntervalCycles() * 4 &&
                     instructions < 4_000)
                 {
                     Cpu.ExecuteInstruction();
+                    Bus.Paula.AdvanceTo(Cpu.State.Cycles);
+                    DispatchCiaInterruptsUpTo(Cpu.State.Cycles);
+                    DispatchPendingPaulaInterrupts(Cpu.State.Cycles);
                     instructions++;
                 }
 
@@ -742,6 +994,22 @@ namespace CopperMod.Cust
             }
 
             return false;
+        }
+
+        private long GetRecoveryIntervalCycles()
+        {
+            var nextCycle = Bus.GetNextCiaInterruptCycle(Cpu.State.Cycles + MaxHostInterruptCycleBudget);
+            if (nextCycle.HasValue && nextCycle.Value > Cpu.State.Cycles)
+            {
+                return nextCycle.Value - Cpu.State.Cycles;
+            }
+
+            return Bus.CiaBTimerAIntervalCycles > 0 ? Bus.CiaBTimerAIntervalCycles : HostInterruptIntervalCycles;
+        }
+
+        private static long GetHostInterruptCycleBudget(long interval)
+        {
+            return Math.Clamp(interval, HostInterruptCycleBudget, MaxHostInterruptCycleBudget);
         }
 
         private void RunIsolatedSubroutine(
@@ -796,6 +1064,23 @@ namespace CopperMod.Cust
             _diagnostics.Add(new ModuleDiagnostic(severity, message, code));
         }
 
+        private static ModuleChannelWaveform? ConvertWaveform(AmigaChannelWaveform? waveform)
+        {
+            if (waveform == null)
+            {
+                return null;
+            }
+
+            var channels = new ModuleChannelWaveformChannel[waveform.Channels.Count];
+            for (var i = 0; i < channels.Length; i++)
+            {
+                var channel = waveform.Channels[i];
+                channels[i] = new ModuleChannelWaveformChannel(channel.Index, channel.Samples, channel.IsActive);
+            }
+
+            return new ModuleChannelWaveform(channels, waveform.FrameCount, waveform.SampleRate);
+        }
+
         private void RenderFallbackPcm(Span<float> destination, int frames, int channels, int sampleRate)
         {
             if (!EnsureFallbackPcmSource())
@@ -838,6 +1123,53 @@ namespace CopperMod.Cust
                     _fallbackPcmPosition -= _fallbackPcmLength;
                 }
             }
+        }
+
+        private bool ShouldRenderFallbackPcm()
+        {
+            if (_tags.ContainsKey(CustConstants.DtpInterrupt))
+            {
+                return false;
+            }
+
+            if (_installedInterrupts.Count == 0)
+            {
+                return true;
+            }
+
+            if (HasInstalledCiaInterruptServer() &&
+                Bus.GetNextCiaInterruptCycle(Cpu.State.Cycles + Math.Max(MaxHostInterruptCycleBudget, QuantumCycleCount * 8)) != null)
+            {
+                return false;
+            }
+
+            return _renderedQuanta >= 2 && !HasAudioChannelRegisterWrites();
+        }
+
+        private bool HasInstalledCiaInterruptServer()
+        {
+            foreach (var server in _installedInterrupts)
+            {
+                if (server.Cia.HasValue)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool HasAudioChannelRegisterWrites()
+        {
+            foreach (var write in CustomRegisterWrites)
+            {
+                if (write.Address >= 0x0A0 && write.Address <= 0x0DA)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool EnsureFallbackPcmSource()
@@ -1031,15 +1363,24 @@ namespace CopperMod.Cust
 
         private readonly struct InterruptServer
         {
-            public InterruptServer(uint code, uint data)
+            public InterruptServer(uint code, uint data, AmigaCiaId? cia, byte icrMask, ushort paulaMask)
             {
                 Code = code;
                 Data = data;
+                Cia = cia;
+                IcrMask = icrMask;
+                PaulaMask = paulaMask;
             }
 
             public uint Code { get; }
 
             public uint Data { get; }
+
+            public AmigaCiaId? Cia { get; }
+
+            public byte IcrMask { get; }
+
+            public ushort PaulaMask { get; }
         }
     }
 }

@@ -102,6 +102,24 @@ public sealed class AmigaOutputStageTests
 		Assert.True(samples[1] > -0.5f);
 	}
 
+	[Fact]
+	public void ResetClearsFilterStateForDeterministicOutput()
+	{
+		var stage = new AmigaOutputStage(AmigaOutputProfile.A500);
+		var source = Enumerable.Range(0, 128)
+			.Select(index => (index & 1) == 0 ? 0.75f : -0.75f)
+			.ToArray();
+
+		var first = source.ToArray();
+		stage.Process(first, channels: 1, sampleRate: 44100, audioFilterEnabled: true);
+		stage.Process(source.ToArray(), channels: 1, sampleRate: 44100, audioFilterEnabled: true);
+		stage.Reset();
+		var afterReset = source.ToArray();
+		stage.Process(afterReset, channels: 1, sampleRate: 44100, audioFilterEnabled: true);
+
+		Assert.Equal(first, afterReset);
+	}
+
 	private static double AverageAbsolute(float[] samples)
 	{
 		var sum = 0.0;

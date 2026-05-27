@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using CopperMod.Abstractions;
+using CopperMod.Amiga;
 using CopperMod.Cust;
 using Xunit.Abstractions;
 

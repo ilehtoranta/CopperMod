@@ -30,7 +30,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
-    <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />
   </ItemGroup>
 
 </Project>

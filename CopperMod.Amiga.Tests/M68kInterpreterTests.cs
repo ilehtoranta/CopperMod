@@ -1,6 +1,6 @@
-using CopperMod.Cust;
+using CopperMod.Amiga;
 
-namespace CopperMod.Cust.Tests;
+namespace CopperMod.Amiga.Tests;
 
 public sealed class M68kInterpreterTests
 {
@@ -162,6 +162,34 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x800F, write.Value);
 	}
 
+	[Fact]
+	public void CpuInstructionFetchAndLongWriteUseCycleAwareBusAccesses()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x20, 0x80); // MOVE.L D0,(A0)
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_5678;
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Contains(
+			bus.Accesses,
+			access =>
+				access.Address == 0x1000 &&
+				access.Kind == AmigaBusAccessKind.CpuInstructionFetch &&
+				access.Size == AmigaBusAccessSize.Word &&
+				!access.IsWrite);
+		var write = Assert.Single(bus.Accesses, access => access.Kind == AmigaBusAccessKind.CpuDataWrite && access.IsWrite);
+		Assert.Equal(0x2000u, write.Address);
+		Assert.Equal(AmigaBusAccessSize.Long, write.Size);
+		Assert.Equal(0x12, bus.Memory[0x2000]);
+		Assert.Equal(0x34, bus.Memory[0x2001]);
+		Assert.Equal(0x56, bus.Memory[0x2002]);
+		Assert.Equal(0x78, bus.Memory[0x2003]);
+	}
+
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
@@ -173,21 +201,56 @@ public sealed class M68kInterpreterTests
 
 		public List<(uint Address, byte Value, long Cycle)> Writes { get; } = new();
 
-		public byte ReadByte(uint address)
+		public List<(uint Address, AmigaBusAccessKind Kind, AmigaBusAccessSize Size, bool IsWrite, long Cycle)> Accesses { get; } = new();
+
+		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
 		{
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, false, cycle));
 			return Memory[address];
 		}
 
-		public void WriteByte(uint address, byte value, long cycle)
+		public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
 		{
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, false, cycle));
+			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
+		}
+
+		public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, false, cycle));
+			return ((uint)Memory[address] << 24) |
+				((uint)Memory[address + 1] << 16) |
+				((uint)Memory[address + 2] << 8) |
+				Memory[address + 3];
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, true, cycle));
 			Memory[address] = value;
 			Writes.Add((address, value, cycle));
 		}
 
-		public void WriteWord(uint address, ushort value, long cycle)
+		public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
 		{
-			WriteByte(address, (byte)(value >> 8), cycle);
-			WriteByte(address + 1, (byte)value, cycle);
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, true, cycle));
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
+			Writes.Add((address, (byte)(value >> 8), cycle));
+			Writes.Add((address + 1, (byte)value, cycle));
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, true, cycle));
+			Memory[address] = (byte)(value >> 24);
+			Memory[address + 1] = (byte)(value >> 16);
+			Memory[address + 2] = (byte)(value >> 8);
+			Memory[address + 3] = (byte)value;
+			Writes.Add((address, (byte)(value >> 24), cycle));
+			Writes.Add((address + 1, (byte)(value >> 16), cycle));
+			Writes.Add((address + 2, (byte)(value >> 8), cycle));
+			Writes.Add((address + 3, (byte)value, cycle));
 		}
 
 		public bool TryInvokeHost(uint address, M68kCpuState state)

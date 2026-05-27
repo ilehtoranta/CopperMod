@@ -4,16 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Cust</PackageId>
-    <Title>CopperMod.Cust</Title>
+    <PackageId>CopperMod.Amiga</PackageId>
+    <Title>CopperMod.Amiga</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Native Amiga CUST Hunk loader with an A500 PAL MC68000/Paula playback sandbox.</Description>
+    <Description>Internal Amiga hardware emulation core shared by CUST playback and future emulator hosts.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>tracker;module;music;audio;amiga;cust;paula;m68000</PackageTags>
+    <PackageTags>amiga;emulation;m68000;paula;cia</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
@@ -22,8 +22,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
-    <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
     <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 

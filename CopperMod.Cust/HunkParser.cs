@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CopperMod.Abstractions;
+using CopperMod.Amiga;
 
 namespace CopperMod.Cust
 {

@@ -480,3 +480,11 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+TestTunes
+CopperMod.Med/References
+CopperMod.ProTracker/References
+CopperMod.Sid/ReferenceTunes
+CopperMod.Sid/ReferenceLinks
+CopperMod.Sid/References
+*.ps1
+CopperScreen/TestImages

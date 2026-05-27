@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using CopperMod.Abstractions;
+using CopperMod.Amiga;
 
 namespace CopperMod.Cust
 {
@@ -23,7 +24,7 @@ namespace CopperMod.Cust
             _tags = tags ?? throw new ArgumentNullException(nameof(tags));
             _machine = new CustMachine(hunk, tags, loadContext);
             _subSongs = BuildSubSongs(_machine.SubSongCount);
-            _metadata = CreateMetadata(hunk, _machine.SubSongCount);
+            _metadata = CreateMetadata(hunk, _machine.SubSongCount, _machine.KickstartDescription);
             _capabilities = new ModulePlaybackCapabilities(
                 canSeekByTime: true,
                 canSeekByTrackerPosition: false,
@@ -203,12 +204,13 @@ namespace CopperMod.Cust
             _disposed = true;
         }
 
-        private static ModuleMetadata CreateMetadata(HunkFile hunk, int subSongCount)
+        private static ModuleMetadata CreateMetadata(HunkFile hunk, int subSongCount, string kickstartDescription)
         {
             var tags = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Machine"] = "Amiga 500 PAL",
                 ["Cpu"] = "MC68000",
+                ["Kickstart"] = kickstartDescription,
                 ["SubSongs"] = subSongCount.ToString(CultureInfo.InvariantCulture),
                 ["CpuClockHz"] = CustConstants.A500PalCpuClockHz.ToString(CultureInfo.InvariantCulture),
                 ["PaulaClockHz"] = CustConstants.A500PalPaulaClockHz.ToString(CultureInfo.InvariantCulture)

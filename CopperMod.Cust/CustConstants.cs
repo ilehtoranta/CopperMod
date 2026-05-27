@@ -1,13 +1,15 @@
+using CopperMod.Amiga;
+
 namespace CopperMod.Cust
 {
     internal static class CustConstants
     {
-        public const double A500PalCpuClockHz = 7_093_789.2;
-        public const double A500PalCiaClockHz = 709_378.92;
-        public const double A500PalPaulaClockHz = 3_546_895.0;
-        public const double A500PalVBlankHz = 50.0;
-        public const int PaulaChannelCount = 4;
-        public const int DefaultChipRamSize = 2 * 1024 * 1024;
+        public const double A500PalCpuClockHz = AmigaConstants.A500PalCpuClockHz;
+        public const double A500PalCiaClockHz = AmigaConstants.A500PalCiaClockHz;
+        public const double A500PalPaulaClockHz = AmigaConstants.A500PalPaulaClockHz;
+        public const double A500PalVBlankHz = AmigaConstants.A500PalVBlankHz;
+        public const int PaulaChannelCount = AmigaConstants.PaulaChannelCount;
+        public const int DefaultChipRamSize = AmigaConstants.DefaultChipRamSize;
         public const uint DefaultModuleBaseAddress = 0x0004_0000;
         public const uint HostBlockAddress = 0x0000_1000;
         public const uint StackTopAddress = 0x001F_F000;

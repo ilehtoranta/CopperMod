@@ -1,6 +1,6 @@
 using System;
 
-namespace CopperMod.Cust
+namespace CopperMod.Amiga
 {
     internal static class BigEndian
     {

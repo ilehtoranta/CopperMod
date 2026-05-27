@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.Amiga;
 using CopperMod.Cust;
 
 namespace CopperMod.Cust.Tests;
@@ -17,6 +18,20 @@ public sealed class CustRenderTests
 		Assert.Equal("Amiga CUST", song.Metadata.FormatName);
 		Assert.Equal(4, song.Metadata.ChannelCount);
 		Assert.Contains("AlteredBeast", song.Metadata.Title);
+	}
+
+	[Fact]
+	public void CustMachineUsesAmigaPlaybackProfile()
+	{
+		var data = File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "AlteredBeast.CUST"));
+		var hunk = HunkParser.Parse(data);
+		Assert.True(DeliTagParser.TryFindTags(hunk, out var tags));
+
+		var machine = new CustMachine(hunk, tags);
+
+		Assert.Equal(AmigaMachineProfile.A500PalCustPlayback, machine.Machine.Profile);
+		Assert.Same(machine.Bus, machine.Machine.Bus);
+		Assert.Same(machine.Cpu, machine.Machine.Cpu);
 	}
 
 	[Fact]
@@ -99,6 +114,91 @@ public sealed class CustRenderTests
 	}
 
 	[Fact]
+	public void ImploderFixtureUsesCiaTimerInterruptsWithoutFallbackNoise()
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "CUST.Imploder4")));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var peak = 0.0f;
+		var stereoFrames = 0;
+		for (var i = 0; i < 12; i++)
+		{
+			var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+			song.RenderTick(buffer, options);
+			for (var frame = 0; frame < buffer.Length / 2; frame++)
+			{
+				peak = Math.Max(peak, Math.Max(Math.Abs(buffer[frame * 2]), Math.Abs(buffer[(frame * 2) + 1])));
+				if (Math.Abs(buffer[frame * 2] - buffer[(frame * 2) + 1]) > 0.000001f)
+				{
+					stereoFrames++;
+				}
+			}
+		}
+
+		Assert.True(peak > 0.01f, "Imploder4 stayed silent. Diagnostics: " + string.Join(", ", song.Diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+		Assert.True(stereoFrames > 0, "Imploder4 did not produce distinct stereo Paula output.");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_FALLBACK_PCM");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+	}
+
+	[Fact]
+	public void WingsFixtureUsesTwentyFourBitPaulaAddressAliases()
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "Bad", "CUST.Wings")));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var peak = 0.0f;
+		var stereoFrames = 0;
+		for (var i = 0; i < 80; i++)
+		{
+			var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+			song.RenderTick(buffer, options);
+			for (var frame = 0; frame < buffer.Length / 2; frame++)
+			{
+				peak = Math.Max(peak, Math.Max(Math.Abs(buffer[frame * 2]), Math.Abs(buffer[(frame * 2) + 1])));
+				if (Math.Abs(buffer[frame * 2] - buffer[(frame * 2) + 1]) > 0.000001f)
+				{
+					stereoFrames++;
+				}
+			}
+		}
+
+		Assert.True(peak > 0.01f, "Wings stayed silent. Diagnostics: " + string.Join(", ", song.Diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+		Assert.True(stereoFrames > 0, "Wings did not produce distinct stereo Paula output.");
+		Assert.Contains(song.CustomRegisterWrites, write => write.Address is >= 0x0A0 and <= 0x0DA);
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_FALLBACK_PCM");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+	}
+
+	[Theory]
+	[InlineData("CUST.Endless_Piracy")]
+	[InlineData("CUST.Populous")]
+	public void BadFolderSuspectFixturesRenderFiniteNonSilentAudio(string fileName)
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "Bad", fileName)));
+		var result = RenderForTicks(song, 120);
+
+		Assert.True(result.Finite, $"{fileName} produced non-finite PCM. Diagnostics: " + FormatDiagnostics(song.Diagnostics));
+		Assert.True(result.Peak > 0.0001f, $"{fileName} stayed silent. Diagnostics: " + FormatDiagnostics(song.Diagnostics) + " writes=" + SummarizeWrites(song.CustomRegisterWrites));
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+	}
+
+	[Fact]
+	public void CiaTimerPlaybackIsDeterministicAcrossReset()
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "CUST.Imploder4")));
+
+		var first = RenderPeakSequence(song, 8);
+		song.Reset();
+		var second = RenderPeakSequence(song, 8);
+
+		Assert.Equal(first, second);
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+	}
+
+	[Fact]
 	public void LongInitPlayerIsAbortedByWatchdog()
 	{
 		var data = CreateLoopingInitPlayerHunk();
@@ -131,39 +231,52 @@ public sealed class CustRenderTests
 		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
 	}
 
-	[Fact]
-	public void PaulaManualAudioDataWritePlaysBothWordBytesAndRequestsInterrupt()
-	{
-		var bus = new AmigaBus();
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
-		var buffer = new float[4];
-
-		bus.Paula.RenderSample(0, buffer, 0, 2);
-		bus.Paula.RenderSample(856, buffer, 1, 2);
-
-		Assert.True(buffer[0] > 0.20f);
-		Assert.True(buffer[2] < -0.20f);
-		Assert.Equal(0.0f, buffer[1]);
-		Assert.Equal(0.0f, buffer[3]);
-		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
-	}
-
-	[Fact]
-	public void PaulaManualAudioInterruptDoesNotDependOnVolume()
-	{
-		var bus = new AmigaBus();
-		bus.WriteWord(0x00DFF0A8, 0x0000, 0);
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
-
-		bus.Paula.AdvanceTo(0);
-
-		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
-	}
-
 	private static string SummarizeWrites(IReadOnlyList<CustomRegisterWrite> writes)
 	{
 		return "count=" + writes.Count + " " + string.Join(", ", writes.TakeLast(Math.Min(24, writes.Count)).Select(write => $"@{write.Cycle}:{write.Address:X3}={write.Value:X4}"));
 	}
+
+	private static string FormatDiagnostics(IReadOnlyList<ModuleDiagnostic> diagnostics)
+	{
+		return diagnostics.Count == 0
+			? "(none)"
+			: string.Join(", ", diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message));
+	}
+
+	private static RenderSummary RenderForTicks(CustSong song, int ticks)
+	{
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var peak = 0.0f;
+		var finite = true;
+		for (var i = 0; i < ticks; i++)
+		{
+			var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+			song.RenderTick(buffer, options);
+			foreach (var sample in buffer)
+			{
+				finite &= float.IsFinite(sample);
+				peak = Math.Max(peak, Math.Abs(sample));
+			}
+		}
+
+		return new RenderSummary(peak, finite);
+	}
+
+	private static float[] RenderPeakSequence(CustSong song, int ticks)
+	{
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var peaks = new float[ticks];
+		for (var i = 0; i < ticks; i++)
+		{
+			var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+			song.RenderTick(buffer, options);
+			peaks[i] = buffer.Select(Math.Abs).DefaultIfEmpty().Max();
+		}
+
+		return peaks;
+	}
+
+	private readonly record struct RenderSummary(float Peak, bool Finite);
 
 	private static byte[] CreateLoopingInitPlayerHunk()
 	{
