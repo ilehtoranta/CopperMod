@@ -58,6 +58,11 @@ namespace CopperMod.Sid
             return Math.Clamp(shaped, -0.999, 0.999);
         }
 
+        public static double OutputLowPassCutoffHz(SidChipModel model)
+        {
+            return model == SidChipModel.Mos8580 ? 14_000.0 : 9_500.0;
+        }
+
         private static double[] GetWaveformDac(SidChipModel model)
         {
             return model == SidChipModel.Mos8580 ? Mos8580WaveformDac : Mos6581WaveformDac;

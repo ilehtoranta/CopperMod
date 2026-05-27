@@ -33,6 +33,18 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void PulseComparatorUsesSidPolarity()
+	{
+		var zeroWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0x000);
+		var maxWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0xFFF);
+
+		var zeroSamples = CollectSamples(zeroWidth, warmupCycles: 4000, measuredCycles: 2048);
+		var maxSamples = CollectSamples(maxWidth, warmupCycles: 4000, measuredCycles: 2048);
+
+		Assert.True(zeroSamples.Average() > maxSamples.Average() + 0.1);
+	}
+
+	[Fact]
 	public void TriangleWaveformDoesNotJumpAtHalfCycle()
 	{
 		var samples = CollectSamples(CreateTriangleVoice(), warmupCycles: 3000, measuredCycles: 2048);
@@ -49,7 +61,7 @@ public sealed class SidChipTests
 			.Where(delta => delta > 0)
 			.ToArray();
 		var negativeWraps = samples.Zip(samples.Skip(1), (previous, current) => current - previous)
-			.Count(delta => delta < -0.25);
+			.Count(delta => delta < -0.03);
 
 		Assert.True(positiveJumps.Length > 0, "Expected sawtooth to rise between wraps.");
 		Assert.True(positiveJumps.Max() < 0.05, $"Expected sawtooth rise to be smooth between wraps, got jump {positiveJumps.Max():0.000}.");
@@ -91,7 +103,9 @@ public sealed class SidChipTests
 		var samples = new double[16];
 		for (var volume = 0; volume < samples.Length; volume++)
 		{
+			chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 			chip.Write(0x18, (byte)volume);
+			RenderCycles(chip, 256);
 			samples[volume] = chip.Render(1);
 		}
 
@@ -193,6 +207,19 @@ public sealed class SidChipTests
 		Assert.Equal(70000 - 65536, sid.Writes[0].Cycle);
 		Assert.Equal(69999, sid.Writes[^1].Cycle);
 		Assert.Equal(sid.Writes.OrderBy(write => write.Cycle).Select(write => write.Cycle), sid.Writes.Select(write => write.Cycle));
+	}
+
+	[Fact]
+	public void BuiltInSidRegisterMirrorsMapThroughD400ToD7ff()
+	{
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+
+		Assert.True(sid.TryWrite(0xD424, 0x41, 0));
+
+		Assert.Equal(0x41, sid.Chips[0].Registers[0x04]);
+		Assert.Equal(0x04, sid.Writes[0].Register);
+		Assert.True(sid.TryRead(0xD424, out var mirroredValue));
+		Assert.Equal(0x41, mirroredValue);
 	}
 
 	[Fact]
@@ -413,13 +440,13 @@ public sealed class SidChipTests
 		return CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0);
 	}
 
-	private static SidChip CreatePulseVoice(byte attackDecay, byte sustainRelease)
+	private static SidChip CreatePulseVoice(byte attackDecay, byte sustainRelease, ushort pulseWidth = 0x0832)
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		chip.Write(0x00, 0xE8);
 		chip.Write(0x01, 0x05);
-		chip.Write(0x02, 0x32);
-		chip.Write(0x03, 0x08);
+		chip.Write(0x02, (byte)(pulseWidth & 0xFF));
+		chip.Write(0x03, (byte)(pulseWidth >> 8));
 		chip.Write(0x05, attackDecay);
 		chip.Write(0x06, sustainRelease);
 		chip.Write(0x04, 0x41);

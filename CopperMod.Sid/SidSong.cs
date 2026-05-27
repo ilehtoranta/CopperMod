@@ -226,7 +226,7 @@ namespace CopperMod.Sid
         private long GetCurrentTickCycleCount(C64ClockProfile clock)
         {
             return UsesCiaTiming(_module, _currentSubSongIndex)
-                ? Math.Max(1, (long)Math.Round(clock.CpuClockHz / SidConstants.CiaTimerRefreshHz))
+                ? Math.Max(1, _machine.PsidCiaTimerAIntervalCycles)
                 : clock.CyclesPerFrame;
         }
 

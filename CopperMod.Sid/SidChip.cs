@@ -11,6 +11,7 @@ namespace CopperMod.Sid
         private readonly byte[] _pendingRegisters = new byte[32];
         private readonly SidFilterProfileDefinition _filterProfile;
         private readonly double _cpuClockHz;
+        private readonly double _outputLowPassAlpha;
         private uint _pendingRegisterBits;
         private double _filterIntegrator1;
         private double _filterIntegrator2;
@@ -27,6 +28,7 @@ namespace CopperMod.Sid
         private bool _filterCoefficientsDirty = true;
         private double _masterVolume;
         private double _volumeOffset;
+        private double _outputLowPassState;
         private double _lastOutput;
 
         public SidChip(
@@ -39,6 +41,7 @@ namespace CopperMod.Sid
             BaseAddress = baseAddress;
             _cpuClockHz = cpuClockHz > 0 ? cpuClockHz : SidConstants.PalCpuClock;
             _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile);
+            _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model) / _cpuClockHz);
         }
 
         public SidChipModel Model { get; }
@@ -75,6 +78,7 @@ namespace CopperMod.Sid
             _filterCoefficientsDirty = true;
             _masterVolume = SidAnalog.ConvertVolume(0, Model);
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
+            _outputLowPassState = 0;
             _lastOutput = 0;
         }
 
@@ -216,7 +220,9 @@ namespace CopperMod.Sid
             var voiceSignal = (direct + ApplyFilter(filtered * _filterProfile.FilterInputGain)) *
                 SidAnalog.VoiceMixGain(Model) *
                 _masterVolume;
-            return SidAnalog.SoftClip(voiceSignal + _volumeOffset);
+            var output = SidAnalog.SoftClip(voiceSignal + _volumeOffset);
+            _outputLowPassState += (output - _outputLowPassState) * _outputLowPassAlpha;
+            return _outputLowPassState;
         }
 
         private static void RouteVoice(double voice, bool filtered, ref double direct, ref double filterInput)

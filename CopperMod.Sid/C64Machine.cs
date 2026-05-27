@@ -35,6 +35,8 @@ namespace CopperMod.Sid
         private bool _nmiPending;
         private C64InterruptSource _lastInterruptSource;
         private BasicRsidRunner? _basicRunner;
+        private long _psidCiaTimerAIntervalCycles;
+        private bool _psidCiaTimerATouched;
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
@@ -57,6 +59,8 @@ namespace CopperMod.Sid
         public byte[] Ram => _ram;
 
         public IReadOnlyList<SidRegisterWrite> SidWrites => Sid.Writes;
+
+        public long PsidCiaTimerAIntervalCycles => _psidCiaTimerAIntervalCycles;
 
         public C64MachineDebugState DebugState => new C64MachineDebugState(
             _hardwareCycle,
@@ -81,6 +85,8 @@ namespace CopperMod.Sid
             _nmiPending = false;
             _lastInterruptSource = C64InterruptSource.None;
             _basicRunner = null;
+            _psidCiaTimerAIntervalCycles = GetDefaultPsidCiaTimerAIntervalCycles();
+            _psidCiaTimerATouched = false;
             _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuClockHz);
             _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuClockHz);
             _vic.Reset();
@@ -130,6 +136,7 @@ namespace CopperMod.Sid
             {
                 Cpu.BeginSubroutine(_module.PlayAddress, 0);
                 RunUntilSubroutineReturn(250_000);
+                FinishPsidPlayRoutine();
             }
         }
 
@@ -187,6 +194,7 @@ namespace CopperMod.Sid
             var frameEndCycle = frameStartCycle + tickCycles;
             var cyclesPerOutputFrame = tickCycles / (double)frames;
             var psidPlayActive = BeginPsidFrame();
+            var psidPlayStarted = psidPlayActive;
             var outputFrame = 0;
             while (outputFrame < frames)
             {
@@ -246,6 +254,11 @@ namespace CopperMod.Sid
                     AdvanceSidOnly(frameEndCycle - Cpu.Cycles);
                 }
             }
+
+            if (psidPlayStarted && !psidPlayActive)
+            {
+                FinishPsidPlayRoutine();
+            }
         }
 
         private void RenderBasicFrame(Span<float> destination, AudioRenderOptionsAdapter options, int frames, long tickCycles)
@@ -284,8 +297,20 @@ namespace CopperMod.Sid
                 return false;
             }
 
+            _psidCiaTimerATouched = false;
             Cpu.BeginSubroutine(_module.PlayAddress, 0);
             return true;
+        }
+
+        private void FinishPsidPlayRoutine()
+        {
+            if (_module.IsRsid || !_psidCiaTimerATouched)
+            {
+                return;
+            }
+
+            _psidCiaTimerAIntervalCycles = Math.Max(1L, _cia1.DebugState.TimerALatch);
+            _psidCiaTimerATouched = false;
         }
 
         private void RunPsidPlayUntil(long targetCycle, ref bool active)
@@ -634,12 +659,9 @@ namespace CopperMod.Sid
                 return _vic.Read((byte)address);
             }
 
-            foreach (var chip in Sid.Chips)
+            if (Sid.TryRead(address, out var sidValue))
             {
-                if (address >= chip.BaseAddress && address < chip.BaseAddress + 0x20)
-                {
-                    return chip.Registers[(address - chip.BaseAddress) & 0x1F];
-                }
+                return sidValue;
             }
 
             if (address >= 0xDC00 && address <= 0xDCFF)
@@ -670,6 +692,12 @@ namespace CopperMod.Sid
 
             if (address >= 0xDC00 && address <= 0xDCFF)
             {
+                var register = address & 0x0F;
+                if (!_module.IsRsid && (register == 0x04 || register == 0x05))
+                {
+                    _psidCiaTimerATouched = true;
+                }
+
                 _cia1.Write((byte)address, value);
                 return;
             }
@@ -678,6 +706,11 @@ namespace CopperMod.Sid
             {
                 _cia2.Write((byte)address, value);
             }
+        }
+
+        private long GetDefaultPsidCiaTimerAIntervalCycles()
+        {
+            return Math.Max(1, (long)Math.Round(_clock.CpuClockHz / SidConstants.CiaTimerRefreshHz));
         }
     }
 

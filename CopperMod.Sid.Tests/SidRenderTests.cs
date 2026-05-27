@@ -101,6 +101,35 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void PsidCiaTimedPlayRoutineCanSetNextTickCadence()
+	{
+		var payload = new byte[]
+		{
+			0x60,             // init RTS
+			0xA9, 0x0B,       // LDA #$0B
+			0x8D, 0x05, 0xDC, // STA $DC05
+			0xA9, 0xCB,       // LDA #$CB
+			0x8D, 0x04, 0xDC, // STA $DC04
+			0x60              // play RTS
+		};
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			payload,
+			playAddress: 0x1001,
+			songs: 1,
+			startSong: 1,
+			speed: 1));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var firstFrames = song.GetCurrentTickFrameCount(options);
+		var buffer = new float[options.GetSampleCount(firstFrames)];
+
+		song.RenderTick(buffer, options);
+
+		var expectedFrames = (int)Math.Round(0x0BCB / SidConstants.PalCpuClock * options.SampleRate);
+		Assert.Equal(735, firstFrames);
+		Assert.Equal(expectedFrames, song.GetCurrentTickFrameCount(options));
+	}
+
+	[Fact]
 	public void SidSongCapturesSeparateVoiceWaveforms()
 	{
 		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(
@@ -313,6 +342,38 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void RealWizballDefaultTuneExercisesFilteredPulseWidthModulationWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Wizball.sid");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
+		var selector = (IModuleSubSongSelector)song;
+		Assert.Equal(3, selector.CurrentSubSongIndex);
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var peakRms = 0.0;
+		for (var frame = 0; frame < 1200; frame++)
+		{
+			song.RenderTick(buffer, options);
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			Assert.All(buffer, sample => Assert.InRange(sample, -0.999f, 0.999f));
+			if (frame >= 16)
+			{
+				peakRms = Math.Max(peakRms, Rms(buffer));
+			}
+		}
+
+		Assert.Contains(song.SidWrites, write => write.Register == 0x17 && write.Value == 0xF1);
+		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x7F);
+		Assert.True(song.SidWrites.Count(write => write.Register == 0x02 || write.Register == 0x03) > 1500);
+		Assert.True(peakRms > 0.03, $"Expected Wizball filtered PWM title voice to remain audible, peak RMS was {peakRms:0.000}.");
+	}
+
+	[Fact]
 	public void RealGIHeroFixtureRendersFasterThanRealtimeWhenPresent()
 	{
 		var path = FindWorkspaceFile("TestTunes", "SID", "Jeroen Tel", "G_I_Hero.sid");
@@ -365,6 +426,46 @@ public sealed class SidRenderTests
 
 		Assert.True(song.SidWrites.Count > 500, $"Expected Tetris RSID raster IRQ playback to keep writing SID registers, got {song.SidWrites.Count} writes.");
 		Assert.True(peakRange > 0.05f, $"Expected Tetris RSID output to remain audible, peak range was {peakRange:0.000}.");
+	}
+
+	[Fact]
+	public void RealGameOverDigiSectionStaysFiniteAndAvoidsSharpAliasedJumpsWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Game_Over.sid");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var frameIndex = 0L;
+		var largestDigiSectionJump = 0.0f;
+		var previous = 0.0f;
+		var hasPrevious = false;
+		for (var tick = 0; tick < 1100; tick++)
+		{
+			song.RenderTick(buffer, options);
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			for (var i = 0; i < buffer.Length; i += options.ChannelCount)
+			{
+				var sample = buffer[i];
+				var seconds = frameIndex / (double)options.SampleRate;
+				if (hasPrevious && seconds >= 18.0 && seconds <= 21.0)
+				{
+					largestDigiSectionJump = Math.Max(largestDigiSectionJump, Math.Abs(sample - previous));
+				}
+
+				previous = sample;
+				hasPrevious = true;
+				frameIndex++;
+			}
+		}
+
+		var d418Writes = song.SidWrites.Count(write => write.Register == 0x18);
+		Assert.True(d418Writes > 1000, $"Expected Game Over to exercise high-rate D418 digi playback, got {d418Writes} D418 writes.");
+		Assert.True(largestDigiSectionJump < 0.75f, $"Expected SID-cycle output smoothing to keep Game Over digi/pulse section clean, largest jump was {largestDigiSectionJump:0.000}.");
 	}
 
 	private static int GetCpuProgramCounter(SidSong song)

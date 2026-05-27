@@ -263,7 +263,7 @@ namespace CopperMod.Sid
 
             if ((waveformMask & 0x40) != 0)
             {
-                combinedDac &= ((_phase >> 12) & 0x0FFF) < (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
+                combinedDac &= ((_phase >> 12) & 0x0FFF) >= (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
                 outputs++;
             }
 

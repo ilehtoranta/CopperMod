@@ -81,29 +81,65 @@ namespace CopperMod.Sid
 
         public bool TryWrite(ushort address, byte value, long cycle)
         {
+            var chipIndex = TryMapRegister(address, out var register);
+            if (chipIndex < 0)
+            {
+                return false;
+            }
+
+            CaptureWrite(new SidRegisterWrite(cycle, chipIndex, register, value));
+            if (cycle <= _lastCycle)
+            {
+                Chips[chipIndex].Write(register, value);
+            }
+            else
+            {
+                _pendingWrites.Add(new PendingSidWrite(cycle, chipIndex, register, value));
+            }
+
+            return true;
+        }
+
+        public bool TryRead(ushort address, out byte value)
+        {
+            var chipIndex = TryMapRegister(address, out var register);
+            if (chipIndex < 0)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = Chips[chipIndex].Registers[register];
+            return true;
+        }
+
+        private int TryMapRegister(ushort address, out byte register)
+        {
             for (var i = 0; i < Chips.Length; i++)
             {
                 var chip = Chips[i];
-                if (address < chip.BaseAddress || address >= chip.BaseAddress + 0x20)
+                if (address >= chip.BaseAddress && address < chip.BaseAddress + 0x20)
                 {
-                    continue;
+                    register = (byte)(address - chip.BaseAddress);
+                    return i;
                 }
-
-                var register = (byte)(address - chip.BaseAddress);
-                CaptureWrite(new SidRegisterWrite(cycle, i, register, value));
-                if (cycle <= _lastCycle)
-                {
-                    chip.Write(register, value);
-                }
-                else
-                {
-                    _pendingWrites.Add(new PendingSidWrite(cycle, i, register, value));
-                }
-
-                return true;
             }
 
-            return false;
+            if (address >= 0xD400 && address <= 0xD7FF)
+            {
+                for (var i = 0; i < Chips.Length; i++)
+                {
+                    var chip = Chips[i];
+                    if (chip.BaseAddress == SidConstants.DefaultSidBaseAddress)
+                    {
+                        register = (byte)((address - chip.BaseAddress) & 0x1F);
+                        return i;
+                    }
+                }
+            }
+
+            register = 0;
+            return -1;
         }
 
         private void CaptureWrite(SidRegisterWrite write)
