@@ -25,6 +25,7 @@ namespace CopperMod.Sid
         private const ushort KernalIrqHandlerAddress = 0xEA31;
         private const ushort KernalIrqExitAddress = 0xEA81;
         private const ushort KernalNmiHandlerAddress = 0xFE47;
+        private const ushort KernalUpdateClockAddress = 0xFFEA;
         private const ushort KernalIrqVectorAddress = 0xFF48;
         private const ushort KernalIrqUserVectorJumpAddress = 0xFF58;
         private byte _processorPortDirection;
@@ -510,7 +511,7 @@ namespace CopperMod.Sid
                 _characterRom[i] = (byte)(0x80 | (i & 0x7F));
             }
 
-            WriteKernalStub(KernalIrqHandlerAddress, 0xAD, 0x0D, 0xDC, 0xAD, 0x19, 0xD0, 0x8D, 0x19, 0xD0, 0x4C, 0x81, 0xEA);
+            WriteKernalStub(KernalIrqHandlerAddress, 0x20, 0xEA, 0xFF, 0xAD, 0x0D, 0xDC, 0xAD, 0x19, 0xD0, 0x8D, 0x19, 0xD0, 0x4C, 0x81, 0xEA);
             WriteKernalStub(0xEA7E, 0xAD, 0x0D, 0xDC, 0x4C, 0x81, 0xEA); // LDA $DC0D; JMP IRQ exit
             WriteKernalStub(KernalIrqExitAddress, 0x68, 0xA8, 0x68, 0xAA, 0x68, 0x40); // PLA/TAY, PLA/TAX, PLA, RTI
             WriteKernalStub(KernalNmiHandlerAddress, 0xAD, 0x0D, 0xDD, 0x40);
@@ -519,6 +520,7 @@ namespace CopperMod.Sid
             WriteKernalStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
             WriteKernalStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
             WriteKernalStub(RtiStubAddress, 0x40);
+            WriteKernalStub(KernalUpdateClockAddress, 0xEE, 0xA2, 0x00, 0xD0, 0x08, 0xEE, 0xA1, 0x00, 0xD0, 0x03, 0xEE, 0xA0, 0x00, 0x60);
             WriteKernalStub(
                 IdleLoopAddress,
                 0xEA,

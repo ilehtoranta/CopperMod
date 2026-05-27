@@ -244,6 +244,44 @@ public sealed class C64MachineTests
 		Assert.Contains(machine.SidWrites, write => write.Register == 0x18 && write.Value == 0x0F);
 	}
 
+	[Fact]
+	public void RsidIrqCanReturnThroughKernalCiaAcknowledgeExit()
+	{
+		var machine = CreateRsidMachine(IrqTimerProgramReturningThroughEa7e());
+
+		machine.Cpu.Status &= 0xFB;
+		machine.RunCycles(500);
+
+		Assert.False(machine.Cpu.Halted);
+		Assert.Equal(C64InterruptSource.Cia1, machine.DebugState.LastInterruptSource);
+		Assert.Contains(machine.SidWrites, write => write.Register == 0x18 && write.Value == 0x0D);
+		Assert.True(
+			(machine.Cpu.ProgramCounter >= 0xFF94 && machine.Cpu.ProgramCounter <= 0xFF98) ||
+			(machine.Cpu.ProgramCounter >= 0xFF80 && machine.Cpu.ProgramCounter <= 0xFF88) ||
+			(machine.Cpu.ProgramCounter >= 0xEA7E && machine.Cpu.ProgramCounter <= 0xEA86),
+			$"Expected CPU to return through KERNAL IRQ exit, got ${machine.Cpu.ProgramCounter:X4}.");
+	}
+
+	[Fact]
+	public void RsidIrqCanRunKernalClockServiceWhenReturningThroughEa31()
+	{
+		var machine = CreateRsidMachine(IrqTimerProgramReturningThroughEa31());
+
+		machine.Cpu.Status &= 0xFB;
+		machine.RunCycles(500);
+
+		Assert.False(machine.Cpu.Halted);
+		Assert.Equal(C64InterruptSource.Cia1, machine.DebugState.LastInterruptSource);
+		Assert.Contains(machine.SidWrites, write => write.Register == 0x18 && write.Value == 0x0C);
+		Assert.True(machine.Read(0x00A2) > 0, "Expected the minimal KERNAL IRQ service at $EA31 to update the jiffy clock.");
+		Assert.True(
+			(machine.Cpu.ProgramCounter >= 0xFF94 && machine.Cpu.ProgramCounter <= 0xFF98) ||
+			(machine.Cpu.ProgramCounter >= 0xFF80 && machine.Cpu.ProgramCounter <= 0xFF88) ||
+			(machine.Cpu.ProgramCounter >= 0xEA31 && machine.Cpu.ProgramCounter <= 0xEA86) ||
+			(machine.Cpu.ProgramCounter >= 0xFFEA && machine.Cpu.ProgramCounter <= 0xFFF7),
+			$"Expected CPU to return through KERNAL IRQ service, got ${machine.Cpu.ProgramCounter:X4}.");
+	}
+
 	private static C64Machine CreateRsidMachine(byte[] program)
 	{
 		var module = SidParser.Parse(SidFixtureBuilder.CreateRsid(program));
@@ -274,6 +312,54 @@ public sealed class C64MachineTests
 			0xA9, 0x0F,       // LDA #$0F
 			0x8D, 0x18, 0xD4, // STA $D418
 			0x4C, 0x81, 0xEA  // JMP $EA81
+		};
+	}
+
+	private static byte[] IrqTimerProgramReturningThroughEa7e()
+	{
+		return new byte[]
+		{
+			0x78,             // SEI
+			0xA9, 0x20,       // LDA #<irq
+			0x8D, 0x14, 0x03, // STA $0314
+			0xA9, 0x10,       // LDA #>irq
+			0x8D, 0x15, 0x03, // STA $0315
+			0xA9, 0x02,       // LDA #$02
+			0x8D, 0x04, 0xDC, // STA $DC04
+			0xA9, 0x00,       // LDA #$00
+			0x8D, 0x05, 0xDC, // STA $DC05
+			0xA9, 0x81,       // LDA #$81
+			0x8D, 0x0D, 0xDC, // STA $DC0D
+			0xA9, 0x11,       // LDA #$11
+			0x8D, 0x0E, 0xDC, // STA $DC0E
+			0x60,             // RTS
+			0xA9, 0x0D,       // irq: LDA #$0D
+			0x8D, 0x18, 0xD4, // STA $D418
+			0x4C, 0x7E, 0xEA  // JMP $EA7E; KERNAL reads $DC0D and exits interrupt
+		};
+	}
+
+	private static byte[] IrqTimerProgramReturningThroughEa31()
+	{
+		return new byte[]
+		{
+			0x78,             // SEI
+			0xA9, 0x20,       // LDA #<irq
+			0x8D, 0x14, 0x03, // STA $0314
+			0xA9, 0x10,       // LDA #>irq
+			0x8D, 0x15, 0x03, // STA $0315
+			0xA9, 0x02,       // LDA #$02
+			0x8D, 0x04, 0xDC, // STA $DC04
+			0xA9, 0x00,       // LDA #$00
+			0x8D, 0x05, 0xDC, // STA $DC05
+			0xA9, 0x81,       // LDA #$81
+			0x8D, 0x0D, 0xDC, // STA $DC0D
+			0xA9, 0x11,       // LDA #$11
+			0x8D, 0x0E, 0xDC, // STA $DC0E
+			0x60,             // RTS
+			0xA9, 0x0C,       // irq: LDA #$0C
+			0x8D, 0x18, 0xD4, // STA $D418
+			0x4C, 0x31, 0xEA  // JMP $EA31; KERNAL updates time, acknowledges CIA/VIC, and exits
 		};
 	}
 
