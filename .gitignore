@@ -488,3 +488,5 @@ CopperMod.Sid/ReferenceLinks
 CopperMod.Sid/References
 *.ps1
 CopperScreen/TestImages
+CopperMod.Amiga/References
+*.csx

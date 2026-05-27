@@ -6,10 +6,15 @@ internal static class InsertDiskScreenRenderer
 	private const int White = unchecked((int)0xFFE8ECFF);
 	private const int Black = unchecked((int)0xFF05070E);
 	private const int Grey = unchecked((int)0xFF8A96B8);
+	private const int CopperStartTextX = 2;
+	private const int CopperStartTextY = 2;
+	private const int CopperStartCharacterWidth = 8;
+	private const int CopperStartLineHeight = 8;
 
 	public static void Render(int[] framebuffer, int width, int height)
 	{
 		Array.Fill(framebuffer, Blue);
+		DrawCopperStartVersion(framebuffer, width, height);
 		var diskWidth = width / 3;
 		var diskHeight = height / 5;
 		var x = (width - diskWidth) / 2;
@@ -17,12 +22,13 @@ internal static class InsertDiskScreenRenderer
 		Fill(framebuffer, width, x, y, diskWidth, diskHeight, White);
 		Fill(framebuffer, width, x + (diskWidth / 10), y + (diskHeight / 5), diskWidth * 8 / 10, diskHeight / 8, Black);
 		Fill(framebuffer, width, x + (diskWidth * 7 / 10), y + (diskHeight * 3 / 5), diskWidth / 6, diskHeight / 4, Grey);
-		DrawText(framebuffer, width, height, "INSERT DISK IMAGE", width / 2, y + diskHeight + 28, 3, White);
+		DrawText(framebuffer, width, height, "INSERT DISK", width / 2, y + diskHeight + 28, 3, White);
 	}
 
 	public static void RenderStatus(int[] framebuffer, int width, int height, string status)
 	{
 		Array.Fill(framebuffer, Blue);
+		DrawCopperStartVersion(framebuffer, width, height);
 		DrawText(framebuffer, width, height, status.ToUpperInvariant(), width / 2, height / 2, 2, White);
 	}
 
@@ -45,6 +51,48 @@ internal static class InsertDiskScreenRenderer
 		{
 			DrawChar(framebuffer, width, height, ch, x, y, scale, color);
 			x += 6 * scale;
+		}
+	}
+
+	private static void DrawCopperStartVersion(int[] framebuffer, int width, int height)
+	{
+		DrawFixedWidthText(
+			framebuffer,
+			width,
+			height,
+			CopperStartMetadata.DisplayVersion,
+			CopperStartTextX,
+			CopperStartTextY,
+			1,
+			CopperStartCharacterWidth,
+			White);
+		DrawFixedWidthText(
+			framebuffer,
+			width,
+			height,
+			CopperStartMetadata.GitSha,
+			CopperStartTextX,
+			CopperStartTextY + CopperStartLineHeight,
+			1,
+			CopperStartCharacterWidth,
+			White);
+	}
+
+	private static void DrawFixedWidthText(
+		int[] framebuffer,
+		int width,
+		int height,
+		string text,
+		int x,
+		int y,
+		int scale,
+		int characterWidth,
+		int color)
+	{
+		foreach (var ch in text)
+		{
+			DrawChar(framebuffer, width, height, ch, x, y, scale, color);
+			x += characterWidth;
 		}
 	}
 
@@ -97,7 +145,22 @@ internal static class InsertDiskScreenRenderer
 			'7' => new byte[] { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
 			'8' => new byte[] { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E },
 			'9' => new byte[] { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E },
+			'a' => new byte[] { 0x00, 0x00, 0x0E, 0x01, 0x0F, 0x11, 0x0F },
+			'b' => new byte[] { 0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x1E },
+			'c' => new byte[] { 0x00, 0x00, 0x0F, 0x10, 0x10, 0x10, 0x0F },
+			'd' => new byte[] { 0x01, 0x01, 0x0F, 0x11, 0x11, 0x11, 0x0F },
+			'e' => new byte[] { 0x00, 0x00, 0x0E, 0x11, 0x1F, 0x10, 0x0E },
+			'f' => new byte[] { 0x06, 0x08, 0x1E, 0x08, 0x08, 0x08, 0x08 },
+			'k' => new byte[] { 0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12 },
+			'n' => new byte[] { 0x00, 0x00, 0x1E, 0x11, 0x11, 0x11, 0x11 },
+			'o' => new byte[] { 0x00, 0x00, 0x0E, 0x11, 0x11, 0x11, 0x0E },
+			'p' => new byte[] { 0x00, 0x00, 0x1E, 0x11, 0x11, 0x1E, 0x10 },
+			'r' => new byte[] { 0x00, 0x00, 0x16, 0x18, 0x10, 0x10, 0x10 },
+			't' => new byte[] { 0x08, 0x08, 0x1E, 0x08, 0x08, 0x08, 0x06 },
+			'u' => new byte[] { 0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0D },
+			'w' => new byte[] { 0x00, 0x00, 0x11, 0x11, 0x15, 0x15, 0x0A },
 			':' => new byte[] { 0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00 },
+			'.' => new byte[] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C },
 			'$' => new byte[] { 0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04 },
 			' ' => new byte[] { 0, 0, 0, 0, 0, 0, 0 },
 			_ => new byte[] { 0x1F, 0x01, 0x02, 0x04, 0x00, 0x04, 0x04 }

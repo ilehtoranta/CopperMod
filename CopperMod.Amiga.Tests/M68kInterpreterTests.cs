@@ -205,6 +205,48 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AddxDataRegisterUsesExtendAndPreservesUpperBits()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xD1, 0x01); // ADDX.B D1,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_56FF;
+		cpu.State.D[1] = 0x0000_0001;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5601u, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void SubxPredecrementUsesMemoryOperandsAndExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x91, 0x49); // SUBX.W -(A1),-(A0)
+		Write(bus.Memory, 0x2000, 0x00, 0x01);
+		Write(bus.Memory, 0x3000, 0x00, 0x00);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.State.A[0] = 0x3002;
+		cpu.State.A[1] = 0x2002;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x3000u, cpu.State.A[0]);
+		Assert.Equal(0x2000u, cpu.State.A[1]);
+		Assert.Equal(0xFFFE, (bus.Memory[0x3000] << 8) | bus.Memory[0x3001]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
 	public void AmigaBusSchedulesCpuWordCustomWritesAsSingleRegisterEvent()
 	{
 		var bus = new AmigaBus();

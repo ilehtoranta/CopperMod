@@ -128,16 +128,18 @@ namespace CopperMod.Amiga
 
         public bool Selected { get; private set; }
 
-        public void Insert(AmigaDiskImage disk)
+        public bool DiskChanged { get; private set; }
+
+        public void Insert(AmigaDiskImage disk, bool markChanged = false)
         {
             Disk = disk ?? throw new ArgumentNullException(nameof(disk));
-            ResetPosition();
+            DiskChanged = markChanged;
         }
 
         public void Eject()
         {
             Disk = null;
-            ResetPosition();
+            DiskChanged = true;
         }
 
         public void ResetPosition()
@@ -166,6 +168,10 @@ namespace CopperMod.Amiga
         public void Step(int delta)
         {
             Cylinder = Math.Clamp(Cylinder + delta, MinCylinder, MaxCylinder);
+            if (Disk != null)
+            {
+                DiskChanged = false;
+            }
         }
 
         public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
@@ -206,6 +212,7 @@ namespace CopperMod.Amiga
         private int _lastTransferWords;
         private int _lastTransferCylinder;
         private int _lastTransferHead;
+        private uint _lastTransferAddress;
 
         public AmigaDiskController(AmigaBus bus)
         {
@@ -232,7 +239,8 @@ namespace CopperMod.Amiga
                 _transferCount,
                 _lastTransferWords,
                 _lastTransferCylinder,
-                _lastTransferHead);
+                _lastTransferHead,
+                _lastTransferAddress);
         }
 
         public void Reset()
@@ -246,7 +254,18 @@ namespace CopperMod.Amiga
             _lastTransferWords = 0;
             _lastTransferCylinder = 0;
             _lastTransferHead = 0;
+            _lastTransferAddress = 0;
             Drive0.ResetPosition();
+        }
+
+        public byte ReadCiaAPortA(byte latchedPortA)
+        {
+            var value = (byte)(latchedPortA | 0xFC);
+            value = SetActiveLow(value, 2, Drive0.DiskChanged || Drive0.Disk == null);
+            value = SetActiveLow(value, 3, false);
+            value = SetActiveLow(value, 4, Drive0.Disk != null && Drive0.Cylinder == 0);
+            value = SetActiveLow(value, 5, Drive0.Disk != null && Drive0.Selected && Drive0.MotorOn);
+            return value;
         }
 
         public byte ReadByte(ushort offset)
@@ -316,6 +335,12 @@ namespace CopperMod.Amiga
             }
         }
 
+        private static byte SetActiveLow(byte value, int bit, bool asserted)
+        {
+            var mask = (byte)(1 << bit);
+            return asserted ? (byte)(value & ~mask) : (byte)(value | mask);
+        }
+
         private void StartReadDma(ushort requestedWords, long cycle)
         {
             if (requestedWords == 0 || Drive0.Disk == null)
@@ -342,6 +367,7 @@ namespace CopperMod.Amiga
             _lastTransferWords = requestedWords;
             _lastTransferCylinder = Drive0.Cylinder;
             _lastTransferHead = Drive0.Head;
+            _lastTransferAddress = targetAddress;
             _dskbytr = 0x9000;
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
@@ -379,7 +405,8 @@ namespace CopperMod.Amiga
             int transferCount,
             int lastTransferWords,
             int lastTransferCylinder,
-            int lastTransferHead)
+            int lastTransferHead,
+            uint lastTransferAddress)
         {
             DiskPointer = diskPointer;
             Dsklen = dsklen;
@@ -393,6 +420,7 @@ namespace CopperMod.Amiga
             LastTransferWords = lastTransferWords;
             LastTransferCylinder = lastTransferCylinder;
             LastTransferHead = lastTransferHead;
+            LastTransferAddress = lastTransferAddress;
         }
 
         public uint DiskPointer { get; }
@@ -418,6 +446,8 @@ namespace CopperMod.Amiga
         public int LastTransferCylinder { get; }
 
         public int LastTransferHead { get; }
+
+        public uint LastTransferAddress { get; }
     }
 
     internal static class AmigaDosTrackEncoder

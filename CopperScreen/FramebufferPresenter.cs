@@ -18,6 +18,7 @@ internal sealed class FramebufferPresenter : Image
 		_width = width;
 		_height = height;
 		Stretch = Stretch.Uniform;
+		RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.None);
 		_bitmap = new WriteableBitmap(
 			new PixelSize(width, height),
 			new Vector(96, 96),

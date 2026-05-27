@@ -71,6 +71,10 @@ namespace CopperMod.Amiga
 
         public bool AudioFilterEnabled { get; private set; }
 
+        public bool GamePort0FirePressed { get; set; }
+
+        public bool GamePort1FirePressed { get; set; }
+
         public byte[] ChipRam => _chipRam;
 
         public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => Paula.Writes;
@@ -91,6 +95,8 @@ namespace CopperMod.Amiga
             CiaA.Reset(0x02);
             CiaB.Reset();
             AudioFilterEnabled = false;
+            GamePort0FirePressed = false;
+            GamePort1FirePressed = false;
             Paula.Reset();
             Disk.Reset();
             Display.Reset();
@@ -303,7 +309,8 @@ namespace CopperMod.Amiga
             var line = Math.Clamp((int)(cycleInFrame / _palLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
             var lineCycle = cycleInFrame - (long)(line * _palLineCycles);
             var horizontal = Math.Clamp((int)(lineCycle * 0xE2 / _palLineCycles), 0, 0xE2);
-            Paula.SetBeamPosition(line, horizontal);
+            var frame = Math.Max(0, targetCycle) / _palFrameCycles;
+            Paula.SetBeamPosition(line, horizontal, (frame & 1) != 0);
         }
 
         public void AdvanceCiasTo(long targetCycle)
@@ -435,7 +442,14 @@ namespace CopperMod.Amiga
 
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
-                return cia.ReadRegister(ciaRegister);
+                var value = cia.ReadRegister(ciaRegister);
+                if (cia == CiaA && ciaRegister == 0)
+                {
+                    value = Disk.ReadCiaAPortA(value);
+                    value = ApplyGamePortFireBits(value);
+                }
+
+                return value;
             }
 
             for (var i = _readOnlyRegions.Count - 1; i >= 0; i--)
@@ -540,6 +554,29 @@ namespace CopperMod.Amiga
             return address & 0x00FF_FFFF;
         }
 
+        private byte ApplyGamePortFireBits(byte value)
+        {
+            if (GamePort0FirePressed)
+            {
+                value = (byte)(value & ~0x40);
+            }
+            else
+            {
+                value = (byte)(value | 0x40);
+            }
+
+            if (GamePort1FirePressed)
+            {
+                value = (byte)(value & ~0x80);
+            }
+            else
+            {
+                value = (byte)(value | 0x80);
+            }
+
+            return value;
+        }
+
         private bool TryGetCiaRegister(uint address, out AmigaCia cia, out int register)
         {
             if (address >= 0x00BFE001 && address <= 0x00BFEF01 && (address & 0xFF) == 0x01)
@@ -631,6 +668,19 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<CustomRegisterWrite> Writes => _writes;
 
+        public ushort ActiveInterruptBits
+        {
+            get
+            {
+                if ((_intena & IntenaMasterEnable) == 0)
+                {
+                    return 0;
+                }
+
+                return (ushort)(_intreq & _intena & 0x3FFF);
+            }
+        }
+
         public void Reset()
         {
             Array.Clear(_registerBytes);
@@ -720,11 +770,11 @@ namespace CopperMod.Amiga
             return offset < _registerBytes.Length ? _registerBytes[offset] : (byte)0;
         }
 
-        public void SetBeamPosition(int verticalLine, int horizontalPosition)
+        public void SetBeamPosition(int verticalLine, int horizontalPosition, bool longFrame)
         {
             verticalLine = Math.Clamp(verticalLine, 0, 0x1FF);
             horizontalPosition = Math.Clamp(horizontalPosition, 0, 0xFF);
-            _vposr = (ushort)((verticalLine >> 8) & 0x0001);
+            _vposr = (ushort)(((longFrame ? 1 : 0) << 15) | ((verticalLine >> 8) & 0x0001));
             _vhposr = (ushort)(((verticalLine & 0x00FF) << 8) | horizontalPosition);
         }
 
@@ -752,6 +802,37 @@ namespace CopperMod.Amiga
                 });
             _pendingInterrupts.Clear();
             return result;
+        }
+
+        public int GetHighestPendingInterruptLevel()
+        {
+            var active = ActiveInterruptBits;
+            if ((active & 0x2000) != 0)
+            {
+                return 6;
+            }
+
+            if ((active & 0x1800) != 0)
+            {
+                return 5;
+            }
+
+            if ((active & 0x0780) != 0)
+            {
+                return 4;
+            }
+
+            if ((active & 0x0070) != 0)
+            {
+                return 3;
+            }
+
+            if ((active & 0x0008) != 0)
+            {
+                return 2;
+            }
+
+            return (active & 0x0007) != 0 ? 1 : 0;
         }
 
         public PaulaChannelSnapshot GetChannelSnapshot(int channel)

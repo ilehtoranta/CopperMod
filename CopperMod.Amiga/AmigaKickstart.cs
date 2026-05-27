@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga
 {
@@ -171,6 +172,7 @@ namespace CopperMod.Amiga
 
         private void InstallHostShim(AmigaBus bus, AmigaKickstartTrapTable traps)
         {
+            bus.MapReadOnlyMemory(AmigaKickstartRomFont.BaseAddress, AmigaKickstartRomFont.CreateTopazCompatibleFont());
             bus.RegisterHostCallback(0, traps.NullCallback);
             bus.WriteLong(0, ExecStructAddress);
             bus.WriteLong(4, ExecLibraryBase);
@@ -269,6 +271,98 @@ namespace CopperMod.Amiga
             Action<M68kCpuState> callback)
         {
             bus.RegisterHostCallback(unchecked((uint)((int)libraryBase + displacement)), callback);
+        }
+    }
+
+    internal static class AmigaKickstartRomFont
+    {
+        public const uint BaseAddress = 0x00FC_0000;
+        public const uint FontMarkerAddress = BaseAddress + 0x20;
+        public const uint FontBaseAddress = FontMarkerAddress - 0x20;
+        private static readonly int[] RowOffsets = { 0x000, 0x180, 0x240, 0x300, 0x480 };
+
+        public static byte[] CreateTopazCompatibleFont()
+        {
+            var data = new byte[0x520];
+            foreach (var (character, rows) in Glyphs)
+            {
+                var index = (byte)character;
+                for (var row = 0; row < RowOffsets.Length; row++)
+                {
+                    data[RowOffsets[row] + index] = rows[row];
+                }
+            }
+
+            return data;
+        }
+
+        private static readonly IReadOnlyDictionary<char, byte[]> Glyphs = new Dictionary<char, byte[]>
+        {
+            [' '] = Glyph("        "),
+            ['!'] = Glyph("   ## ", "   ## ", "   ## ", "      ", "   ## "),
+            ['"'] = Glyph(" ## ##", " ## ##", "      ", "      ", "      "),
+            ['#'] = Glyph(" ## ##", "######", " ## ##", "######", " ## ##"),
+            ['.'] = Glyph("      ", "      ", "      ", "      ", "  ##  "),
+            [','] = Glyph("      ", "      ", "      ", "  ##  ", " ##   "),
+            [':'] = Glyph("      ", "  ##  ", "      ", "  ##  ", "      "),
+            ['-'] = Glyph("      ", "      ", " #### ", "      ", "      "),
+            ['0'] = Glyph(" #### ", "##  ##", "##  ##", "##  ##", " #### "),
+            ['1'] = Glyph("  ##  ", " ###  ", "  ##  ", "  ##  ", " #### "),
+            ['2'] = Glyph(" #### ", "##  ##", "   ## ", "  ##  ", "######"),
+            ['3'] = Glyph(" #### ", "    ##", "  ### ", "    ##", " #### "),
+            ['4'] = Glyph("##  ##", "##  ##", "######", "    ##", "    ##"),
+            ['5'] = Glyph("######", "##    ", "##### ", "    ##", "##### "),
+            ['6'] = Glyph(" #### ", "##    ", "##### ", "##  ##", " #### "),
+            ['7'] = Glyph("######", "    ##", "   ## ", "  ##  ", "  ##  "),
+            ['8'] = Glyph(" #### ", "##  ##", " #### ", "##  ##", " #### "),
+            ['9'] = Glyph(" #### ", "##  ##", " #####", "    ##", " #### "),
+            ['A'] = Glyph(" #### ", "##  ##", "######", "##  ##", "##  ##"),
+            ['B'] = Glyph("##### ", "##  ##", "##### ", "##  ##", "##### "),
+            ['C'] = Glyph(" #### ", "##  ##", "##    ", "##  ##", " #### "),
+            ['D'] = Glyph("##### ", "##  ##", "##  ##", "##  ##", "##### "),
+            ['E'] = Glyph("######", "##    ", "##### ", "##    ", "######"),
+            ['F'] = Glyph("######", "##    ", "##### ", "##    ", "##    "),
+            ['G'] = Glyph(" #### ", "##    ", "## ###", "##  ##", " #### "),
+            ['H'] = Glyph("##  ##", "##  ##", "######", "##  ##", "##  ##"),
+            ['I'] = Glyph("######", "  ##  ", "  ##  ", "  ##  ", "######"),
+            ['J'] = Glyph("  ####", "    ##", "    ##", "##  ##", " #### "),
+            ['K'] = Glyph("##  ##", "## ## ", "####  ", "## ## ", "##  ##"),
+            ['L'] = Glyph("##    ", "##    ", "##    ", "##    ", "######"),
+            ['M'] = Glyph("##  ##", "######", "######", "##  ##", "##  ##"),
+            ['N'] = Glyph("##  ##", "### ##", "######", "## ###", "##  ##"),
+            ['O'] = Glyph(" #### ", "##  ##", "##  ##", "##  ##", " #### "),
+            ['P'] = Glyph("##### ", "##  ##", "##### ", "##    ", "##    "),
+            ['Q'] = Glyph(" #### ", "##  ##", "##  ##", "## ###", " #####"),
+            ['R'] = Glyph("##### ", "##  ##", "##### ", "## ## ", "##  ##"),
+            ['S'] = Glyph(" #####", "##    ", " #### ", "    ##", "##### "),
+            ['T'] = Glyph("######", "  ##  ", "  ##  ", "  ##  ", "  ##  "),
+            ['U'] = Glyph("##  ##", "##  ##", "##  ##", "##  ##", " #### "),
+            ['V'] = Glyph("##  ##", "##  ##", "##  ##", " #### ", "  ##  "),
+            ['W'] = Glyph("##  ##", "##  ##", "######", "######", "##  ##"),
+            ['X'] = Glyph("##  ##", " #### ", "  ##  ", " #### ", "##  ##"),
+            ['Y'] = Glyph("##  ##", " #### ", "  ##  ", "  ##  ", "  ##  "),
+            ['Z'] = Glyph("######", "   ## ", "  ##  ", " ##   ", "######")
+        };
+
+        private static byte[] Glyph(params string[] rows)
+        {
+            var result = new byte[5];
+            for (var row = 0; row < result.Length; row++)
+            {
+                var pattern = row < rows.Length ? rows[row] : string.Empty;
+                var value = 0;
+                for (var column = 0; column < Math.Min(8, pattern.Length); column++)
+                {
+                    if (pattern[column] != ' ')
+                    {
+                        value |= 0x80 >> column;
+                    }
+                }
+
+                result[row] = (byte)value;
+            }
+
+            return result;
         }
     }
 }

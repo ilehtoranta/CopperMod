@@ -11,6 +11,14 @@
     <Description>Slim Amiga 500 PAL emulator front-end backed by CopperMod.Amiga.</Description>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
@@ -19,5 +27,17 @@
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
   </ItemGroup>
+
+  <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="CopperStartGitSha" />
+    </Exec>
+    <PropertyGroup>
+      <CopperStartGitSha Condition="'$(CopperStartGitSha)' == ''">unknown</CopperStartGitSha>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyMetadata Include="CopperStartSha" Value="$(CopperStartGitSha)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

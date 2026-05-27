@@ -84,5 +84,22 @@ namespace CopperMod.Amiga
             Bus.Reset();
             Cpu.Reset(0, 0);
         }
+
+        public bool DispatchPendingHardwareInterrupt()
+        {
+            var level = Bus.Paula.GetHighestPendingInterruptLevel();
+            if (level <= 0)
+            {
+                return false;
+            }
+
+            Cpu.RequestInterrupt(level, GetAutovectorAddress(level));
+            return true;
+        }
+
+        private static uint GetAutovectorAddress(int level)
+        {
+            return (uint)((24 + level) * 4);
+        }
     }
 }

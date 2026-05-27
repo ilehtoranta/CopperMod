@@ -747,6 +747,12 @@ namespace CopperMod.Amiga
             var mode = (opcode >> 3) & 7;
             var eaReg = opcode & 7;
 
+            if ((line == 0x9 || line == 0xD) && opmode is 4 or 5 or 6 && mode is 0 or 1)
+            {
+                DecodeAddSubX(line == 0xD, opmode, mode, reg, eaReg);
+                return true;
+            }
+
             if (line == 0xC && opmode == 3)
             {
                 var source = ResolveEa(mode, eaReg, M68kOperandSize.Word).Read();
@@ -926,6 +932,65 @@ namespace CopperMod.Amiga
 
             AddCycles(operandSize == M68kOperandSize.Long ? 12 : 8);
             return true;
+        }
+
+        private void DecodeAddSubX(bool add, int opmode, int mode, int destinationRegister, int sourceRegister)
+        {
+            var size = opmode switch
+            {
+                4 => M68kOperandSize.Byte,
+                5 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            uint source;
+            uint destination;
+            uint destinationAddress = 0;
+            if (mode == 0)
+            {
+                source = State.D[sourceRegister];
+                destination = State.D[destinationRegister];
+            }
+            else
+            {
+                var increment = AddressIncrement(sourceRegister, size);
+                State.A[sourceRegister] -= increment;
+                State.A[destinationRegister] -= AddressIncrement(destinationRegister, size);
+                source = size switch
+                {
+                    M68kOperandSize.Byte => ReadByte(State.A[sourceRegister]),
+                    M68kOperandSize.Word => ReadWord(State.A[sourceRegister]),
+                    _ => ReadLong(State.A[sourceRegister])
+                };
+                destinationAddress = State.A[destinationRegister];
+                destination = size switch
+                {
+                    M68kOperandSize.Byte => ReadByte(destinationAddress),
+                    M68kOperandSize.Word => ReadWord(destinationAddress),
+                    _ => ReadLong(destinationAddress)
+                };
+            }
+
+            var result = add
+                ? AddWithExtend(destination, source, size)
+                : SubtractWithExtend(destination, source, size);
+            if (mode == 0)
+            {
+                WriteDataRegister(destinationRegister, result, size);
+            }
+            else if (size == M68kOperandSize.Byte)
+            {
+                WriteByte(destinationAddress, (byte)result);
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                WriteWord(destinationAddress, (ushort)result);
+            }
+            else
+            {
+                WriteLong(destinationAddress, result);
+            }
+
+            AddCycles(mode == 0 ? 4 : size == M68kOperandSize.Long ? 30 : 18);
         }
 
         private bool DecodeShiftRotate(ushort opcode)
@@ -1181,6 +1246,29 @@ namespace CopperMod.Amiga
             return result;
         }
 
+        private uint AddWithExtend(uint destination, uint source, M68kOperandSize size)
+        {
+            var mask = M68kCpuState.Mask(size);
+            var sign = M68kCpuState.SignBit(size);
+            destination &= mask;
+            source &= mask;
+            var extend = State.GetFlag(M68kCpuState.Extend) ? 1u : 0u;
+            var full = (ulong)destination + source + extend;
+            var result = (uint)full & mask;
+            var carry = full > mask;
+            var overflow = (~(destination ^ source) & (destination ^ result) & sign) != 0;
+            if (result != 0)
+            {
+                State.SetFlag(M68kCpuState.Zero, false);
+            }
+
+            State.SetFlag(M68kCpuState.Negative, (result & sign) != 0);
+            State.SetFlag(M68kCpuState.Overflow, overflow);
+            State.SetFlag(M68kCpuState.Carry, carry);
+            State.SetFlag(M68kCpuState.Extend, carry);
+            return result;
+        }
+
         private uint Subtract(uint destination, uint source, M68kOperandSize size, bool setExtend, bool storeResult = true)
         {
             var mask = M68kCpuState.Mask(size);
@@ -1199,6 +1287,29 @@ namespace CopperMod.Amiga
             }
 
             _ = storeResult;
+            return result;
+        }
+
+        private uint SubtractWithExtend(uint destination, uint source, M68kOperandSize size)
+        {
+            var mask = M68kCpuState.Mask(size);
+            var sign = M68kCpuState.SignBit(size);
+            destination &= mask;
+            source &= mask;
+            var extend = State.GetFlag(M68kCpuState.Extend) ? 1u : 0u;
+            var subtrahend = source + extend;
+            var result = (destination - subtrahend) & mask;
+            var borrow = subtrahend > destination;
+            var overflow = ((destination ^ source) & (destination ^ result) & sign) != 0;
+            if (result != 0)
+            {
+                State.SetFlag(M68kCpuState.Zero, false);
+            }
+
+            State.SetFlag(M68kCpuState.Negative, (result & sign) != 0);
+            State.SetFlag(M68kCpuState.Overflow, overflow);
+            State.SetFlag(M68kCpuState.Carry, borrow);
+            State.SetFlag(M68kCpuState.Extend, borrow);
             return result;
         }
 

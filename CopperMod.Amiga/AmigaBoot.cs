@@ -38,6 +38,12 @@ namespace CopperMod.Amiga
             int maxInstructions = 20_000,
             AmigaBootRunMode runMode = AmigaBootRunMode.StopAfterBootDiskRead)
         {
+            StartBootFromDisk(disk);
+            return ExecuteBootBlock(maxInstructions, runMode);
+        }
+
+        public void StartBootFromDisk(AmigaDiskImage disk)
+        {
             ArgumentNullException.ThrowIfNull(disk);
             _diagnostics.Clear();
             _bootDiskReadCompleted = false;
@@ -50,13 +56,21 @@ namespace CopperMod.Amiga
             _machine.Cpu.Reset(BootEntryAddress, StackTopAddress);
             _machine.Cpu.State.A[1] = BootIoRequestAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
-            var result = ExecuteBootBlock(maxInstructions, runMode);
-            return result;
         }
 
         public AmigaBootResult ContinueExecution(int maxInstructions = 20_000)
         {
             return ExecuteBootBlock(maxInstructions, AmigaBootRunMode.ContinueAfterBootDiskRead);
+        }
+
+        public AmigaBootResult ContinueExecutionUntilCycle(long targetCycle, int maxInstructions = 100_000, Action<long, long>? beforeDeviceAdvance = null)
+        {
+            return ExecuteBootBlock(
+                maxInstructions,
+                AmigaBootRunMode.ContinueAfterBootDiskRead,
+                targetCycle,
+                reportOverrun: false,
+                beforeDeviceAdvance);
         }
 
         public static bool HasBootableShape(ReadOnlySpan<byte> bootBlock)
@@ -126,13 +140,20 @@ namespace CopperMod.Amiga
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -414), HostOk);
         }
 
-        private AmigaBootResult ExecuteBootBlock(int maxInstructions, AmigaBootRunMode runMode)
+        private AmigaBootResult ExecuteBootBlock(
+            int maxInstructions,
+            AmigaBootRunMode runMode,
+            long? targetCycle = null,
+            bool reportOverrun = true,
+            Action<long, long>? beforeDeviceAdvance = null)
         {
             var instructions = 0;
             var completed = false;
             try
             {
-                while (!_machine.Cpu.State.Halted && instructions < maxInstructions)
+                while (!_machine.Cpu.State.Halted &&
+                    instructions < maxInstructions &&
+                    (!targetCycle.HasValue || _machine.Cpu.State.Cycles < targetCycle.Value))
                 {
                     if (_machine.Cpu.State.ProgramCounter == 0x0000_0400 && instructions > 0)
                     {
@@ -140,9 +161,12 @@ namespace CopperMod.Amiga
                         break;
                     }
 
+                    var previousCycle = _machine.Cpu.State.Cycles;
                     _machine.Cpu.ExecuteInstruction();
+                    beforeDeviceAdvance?.Invoke(previousCycle, _machine.Cpu.State.Cycles);
                     _machine.Bus.AdvanceRasterTo(_machine.Cpu.State.Cycles);
                     _machine.Bus.Paula.AdvanceTo(_machine.Cpu.State.Cycles);
+                    _machine.DispatchPendingHardwareInterrupt();
                     instructions++;
                     if (_bootDiskReadCompleted && runMode == AmigaBootRunMode.StopAfterBootDiskRead)
                     {
@@ -151,7 +175,7 @@ namespace CopperMod.Amiga
                     }
                 }
 
-                if (instructions >= maxInstructions)
+                if (reportOverrun && instructions >= maxInstructions)
                 {
                     _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_OVERRUN", "Boot block execution exceeded the instruction budget."));
                 }
