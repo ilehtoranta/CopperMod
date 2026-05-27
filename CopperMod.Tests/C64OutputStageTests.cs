@@ -12,7 +12,7 @@ public sealed class C64OutputStageTests
 
 		stage.Process(samples, channels: 1, sampleRate: 44100);
 
-		Assert.InRange(samples[0], 0.5f, 0.75f);
+		Assert.InRange(samples[0], 0.7f, 0.9f);
 		Assert.All(samples, sample => Assert.InRange(sample, -1.0f, 1.0f));
 	}
 

@@ -3,8 +3,8 @@ namespace CopperMod.Rendering;
 public sealed class C64OutputStage
 {
 	private const double DcBlockCutoffHz = 12.0;
-	private const double OutputLowPassCutoffHz = 10500.0;
-	private const float OutputHeadroom = 0.82f;
+	private const double OutputLowPassCutoffHz = 14000.0;
+	private const float OutputHeadroom = 0.90f;
 	private float[] _lowPassState = Array.Empty<float>();
 	private float[] _dcPreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousOutput = Array.Empty<float>();
