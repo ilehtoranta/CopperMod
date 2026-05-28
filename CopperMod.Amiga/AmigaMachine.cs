@@ -68,6 +68,17 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithChipRam(int size)
+        {
+            if (size <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size must be positive.");
+            }
+
+            ChipRamSize = size;
+            return this;
+        }
+
         public AmigaMachineOptions WithExpansionRam(int size, uint baseAddress = AmigaConstants.A500BootPseudoFastRamBase)
         {
             if (size < 0)

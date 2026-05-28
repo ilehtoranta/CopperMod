@@ -44,6 +44,29 @@ public sealed class AmigaCiaTests
 	}
 
 	[Fact]
+	public void OneShotTimerHighByteWriteStartsTimerEvenWhenStartBitIsClear()
+	{
+		var bus = new AmigaBus();
+
+		bus.WriteByte(0x00BFEF01, 0x08, 0);
+		bus.WriteByte(0x00BFED01, 0x82, 0);
+		bus.WriteByte(0x00BFE601, 0x03, 0);
+		bus.WriteByte(0x00BFE701, 0x00, 0);
+
+		Assert.Equal(30, bus.GetNextCiaInterruptCycle(100));
+
+		bus.AdvanceCiasTo(29);
+		Assert.Empty(bus.DrainCiaInterrupts());
+
+		bus.AdvanceCiasTo(30);
+		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(AmigaCiaId.A, interruptEvent.Cia);
+		Assert.Equal(AmigaCia.TimerBInterruptMask, interruptEvent.IcrBits);
+		Assert.Equal(30, interruptEvent.Cycle);
+		Assert.Equal(0x08, bus.CiaA.ReadRegister(0x0F));
+	}
+
+	[Fact]
 	public void InterruptControlRegisterReportsAndClearsPendingBits()
 	{
 		var bus = new AmigaBus();
@@ -82,5 +105,143 @@ public sealed class AmigaCiaTests
 		Assert.True(bus.AudioFilterEnabled);
 		bus.WriteByte(0x00BFE001, 0x02, 0);
 		Assert.False(bus.AudioFilterEnabled);
+	}
+
+	[Fact]
+	public void CiaPortsReadInputPinsWhenDataDirectionBitsAreInputs()
+	{
+		var cia = new AmigaCia(AmigaCiaId.B);
+		cia.Reset();
+
+		Assert.Equal(0xFF, cia.ReadRegister(1));
+
+		cia.WriteRegister(1, 0x00, 0, new List<AmigaCiaInterruptEvent>());
+		Assert.Equal(0xFF, cia.ReadRegister(1));
+
+		cia.WriteRegister(3, 0x0F, 0, new List<AmigaCiaInterruptEvent>());
+		Assert.Equal(0xF0, cia.ReadRegister(1));
+	}
+
+	[Fact]
+	public void CiaBDataDirectionUpdateRefreshesDiskControlPins()
+	{
+		var bus = new AmigaBus();
+
+		bus.WriteByte(0x00BFD100, 0x77, 0);
+		Assert.False(bus.Disk.CaptureSnapshot().Selected);
+
+		bus.WriteByte(0x00BFD300, 0xFF, 0);
+		Assert.True(bus.Disk.CaptureSnapshot().Selected);
+	}
+
+	[Fact]
+	public void CiaATodLowTicksOnPalVerticalBlank()
+	{
+		var bus = new AmigaBus();
+		var frameCycles = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+
+		Assert.Equal(0x00, bus.ReadByte(0x00BFE801));
+
+		bus.AdvanceRasterTo(frameCycles);
+
+		Assert.Equal(0x01, bus.ReadByte(0x00BFE801));
+	}
+
+	[Fact]
+	public void CiaBTodLowTicksOnPalHorizontalSync()
+	{
+		var bus = new AmigaBus();
+		var lineCycles = (long)Math.Round(
+			AmigaConstants.A500PalCpuClockHz /
+			AmigaConstants.A500PalVBlankHz /
+			AmigaConstants.A500PalRasterLines);
+
+		Assert.Equal(0x00, bus.ReadByte(0x00BFD800));
+
+		bus.AdvanceRasterTo(lineCycles - 1);
+		Assert.Equal(0x00, bus.ReadByte(0x00BFD800));
+
+		bus.AdvanceRasterTo(lineCycles);
+		Assert.Equal(0x01, bus.ReadByte(0x00BFD800));
+	}
+
+	[Fact]
+	public void CiaTodCounterCarriesAcrossBinaryBytes()
+	{
+		var cia = new AmigaCia(AmigaCiaId.A);
+		cia.Reset();
+		var events = new List<AmigaCiaInterruptEvent>();
+
+		cia.WriteRegister(0x08, 0xFF, 0, events);
+		cia.WriteRegister(0x09, 0x00, 0, events);
+		cia.WriteRegister(0x0A, 0x00, 0, events);
+		cia.IncrementTod(100, events);
+
+		Assert.Equal(0x00, cia.ReadRegister(0x08));
+		Assert.Equal(0x01, cia.ReadRegister(0x09));
+		Assert.Equal(0x00, cia.ReadRegister(0x0A));
+	}
+
+	[Fact]
+	public void KeyboardKeyDownQueuesCiaASerialDataInterrupt()
+	{
+		var bus = new AmigaBus();
+		bus.AbleCiaInterrupts(AmigaCiaId.A, 0x80 | AmigaCia.SerialInterruptMask, 0);
+
+		bus.Keyboard.KeyDown(AmigaRawKey.Return, 100);
+
+		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(AmigaCiaId.A, interruptEvent.Cia);
+		Assert.Equal(AmigaCia.SerialInterruptMask, interruptEvent.IcrBits);
+		Assert.Equal(100, interruptEvent.Cycle);
+		var serialData = bus.ReadByte(0x00BFEC01);
+		Assert.Equal(AmigaKeyboard.EncodeSerialData((byte)AmigaRawKey.Return), serialData);
+		Assert.Equal((byte)AmigaRawKey.Return, AmigaKeyboard.DecodeSerialData(serialData));
+	}
+
+	[Fact]
+	public void CiaFlagPulseQueuesInterruptWhenEnabled()
+	{
+		var cia = new AmigaCia(AmigaCiaId.B);
+		cia.Reset();
+		var events = new List<AmigaCiaInterruptEvent>();
+		cia.AbleInterrupts(0x80 | AmigaCia.FlagInterruptMask, 0, events);
+
+		cia.PulseFlag(200, events);
+
+		var interruptEvent = Assert.Single(events);
+		Assert.Equal(AmigaCiaId.B, interruptEvent.Cia);
+		Assert.Equal(AmigaCia.FlagInterruptMask, interruptEvent.IcrBits);
+		Assert.Equal(200, interruptEvent.Cycle);
+	}
+
+	[Fact]
+	public void KeyboardReleaseUsesHighBitAndWaitsForSerialReadAcknowledge()
+	{
+		var bus = new AmigaBus();
+		bus.AbleCiaInterrupts(AmigaCiaId.A, 0x80 | AmigaCia.SerialInterruptMask, 0);
+
+		bus.Keyboard.KeyDown(AmigaRawKey.Space, 10);
+		bus.Keyboard.KeyUp(AmigaRawKey.Space, 20);
+		Assert.Single(bus.DrainCiaInterrupts());
+
+		Assert.Equal((byte)AmigaRawKey.Space, AmigaKeyboard.DecodeSerialData(bus.ReadByte(0x00BFEC01)));
+		var releaseEvent = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(AmigaCia.SerialInterruptMask, releaseEvent.IcrBits);
+		Assert.Equal((byte)((byte)AmigaRawKey.Space | 0x80), AmigaKeyboard.DecodeSerialData(bus.ReadByte(0x00BFEC01)));
+	}
+
+	[Fact]
+	public void KeyboardDoesNotRepeatHeldKeyDown()
+	{
+		var bus = new AmigaBus();
+		bus.AbleCiaInterrupts(AmigaCiaId.A, 0x80 | AmigaCia.SerialInterruptMask, 0);
+
+		bus.Keyboard.KeyDown(AmigaRawKey.A, 1);
+		bus.Keyboard.KeyDown(AmigaRawKey.A, 2);
+
+		Assert.Equal((byte)AmigaRawKey.A, AmigaKeyboard.DecodeSerialData(bus.ReadByte(0x00BFEC01)));
+		Assert.Equal(0, bus.Keyboard.QueuedRawKeys);
+		Assert.Single(bus.DrainCiaInterrupts());
 	}
 }

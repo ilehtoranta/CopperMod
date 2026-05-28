@@ -80,6 +80,139 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void MoveUspUsesCorrectSupervisorDirection()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x60); // MOVE A0,USP
+		Write(bus.Memory, 0x1002, 0x4E, 0x69); // MOVE USP,A1
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.UserStackPointer);
+		Assert.Equal(0x1234_5678u, cpu.State.A[1]);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+	}
+
+	[Fact]
+	public void ExgAddressRegistersSwapsFullLongValues()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xC5, 0x4E); // EXG A2,A6
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[2] = 0x0000_0040;
+		cpu.State.A[6] = 0x00C0_0276;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x00C0_0276u, cpu.State.A[2]);
+		Assert.Equal(0x0000_0040u, cpu.State.A[6]);
+	}
+
+	[Fact]
+	public void MovecRaisesIllegalInstructionExceptionOnM68000()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x7B); // MOVEC on a 68000 raises illegal instruction
+		bus.WriteLong(0x0010, 0x2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.Supervisor, (ushort)(BigEndian.ReadUInt16(bus.Memory, 0x2FFA, "saved status register") & M68kCpuState.Supervisor));
+		Assert.Equal(0x1000u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+	}
+
+	[Fact]
+	public void LineAAndLineFOpcodesVectorThroughEmulatorExceptions()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xA0, 0x00); // Line-A emulator exception
+		Write(bus.Memory, 0x2000, 0xF0, 0x00); // Line-F emulator exception
+		bus.WriteLong(10 * 4, 0x3000);
+		bus.WriteLong(11 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x3000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, BigEndian.ReadUInt32(bus.Memory, 0x4FFC, "line-A stacked program counter"));
+
+		cpu.State.ProgramCounter = 0x2000;
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF4u, cpu.State.A[7]);
+		Assert.Equal(0x2000u, BigEndian.ReadUInt32(bus.Memory, 0x4FF6, "line-F stacked program counter"));
+	}
+
+	[Fact]
+	public void ResetInstructionSignalsExternalDevices()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x70); // RESET
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(1, bus.ExternalResetCount);
+		Assert.Equal(0x1002u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void StopInstructionWaitsUntilAcceptedInterrupt()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x72, 0x20, 0x00); // STOP #$2000
+		bus.WriteLong(0x0070, 0x2000); // level 4 autovector
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		var stoppedCycle = cpu.State.Cycles;
+		cpu.ExecuteInstruction();
+
+		Assert.True(cpu.State.Stopped);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(stoppedCycle + 1, cpu.State.Cycles);
+
+		cpu.RequestInterrupt(4, 0x70);
+
+		Assert.False(cpu.State.Stopped);
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1004u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+	}
+
+	[Fact]
+	public void StopInstructionRaisesPrivilegeViolationInUserMode()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x72, 0x20, 0x00); // STOP #$2000
+		bus.WriteLong(0x0020, 0x2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.ResetStackPointers(supervisorStackPointer: 0x3000, userStackPointer: 0x4000, supervisorMode: false);
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(cpu.State.Stopped);
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+	}
+
+	[Fact]
 	public void TimedWritesReachBusInProgramOrder()
 	{
 		var bus = new TestBus();
@@ -260,6 +393,31 @@ public sealed class M68kInterpreterTests
 
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+	}
+
+	[Fact]
+	public void CmpmByteComparesPostincrementMemoryAndPreservesExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xB9, 0x0B); // CMPM.B (A3)+,(A4)+
+		bus.Memory[0x2000] = (byte)'m';
+		bus.Memory[0x3000] = (byte)'m';
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.State.A[3] = 0x2000;
+		cpu.State.A[4] = 0x3000;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2001u, cpu.State.A[3]);
+		Assert.Equal(0x3001u, cpu.State.A[4]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.Equal(12, cycles);
 	}
 
 	[Fact]
@@ -464,6 +622,8 @@ public sealed class M68kInterpreterTests
 
 		public List<(uint Address, AmigaBusAccessKind Kind, AmigaBusAccessSize Size, bool IsWrite, long Cycle)> Accesses { get; } = new();
 
+		public int ExternalResetCount { get; private set; }
+
 		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, false, cycle));
@@ -519,6 +679,12 @@ public sealed class M68kInterpreterTests
 			_ = address;
 			_ = state;
 			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
+			ExternalResetCount++;
 		}
 
 		public void WriteLong(uint address, uint value)

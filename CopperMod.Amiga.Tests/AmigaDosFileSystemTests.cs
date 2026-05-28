@@ -51,6 +51,22 @@ public sealed class AmigaDosFileSystemTests
 	}
 
 	[Fact]
+	public void DirectoryListingSupportsLogicalHeaderKeysAndByteStyleFileType()
+	{
+		var fileSystem = new AmigaDosFileSystem(CreateLogicalKeyDisk());
+
+		var root = fileSystem.ListDirectory("");
+		var cDrawer = Assert.Single(root.Where(entry => entry.Name == "C"));
+		var tools = fileSystem.ListDirectory("C");
+
+		Assert.True(cDrawer.IsDirectory);
+		var tool = Assert.Single(tools.Where(entry => entry.Name == "Tool"));
+		Assert.True(tool.IsFile);
+		Assert.True(fileSystem.TryReadFile("DF0:C/Tool", out var data));
+		Assert.Equal(new byte[] { 0x4E, 0x75 }, data);
+	}
+
+	[Fact]
 	public void BootControllerLaunchProgramSetsStartupRegisters()
 	{
 		var disk = CreateWorkbenchDisk();
@@ -93,6 +109,28 @@ public sealed class AmigaDosFileSystemTests
 		return AmigaDiskImage.FromAdfBytes(data, "workbench.adf");
 	}
 
+	private static AmigaDiskImage CreateLogicalKeyDisk()
+	{
+		var data = new byte[AmigaDiskImage.StandardAdfSize];
+		data[0] = (byte)'D';
+		data[1] = (byte)'O';
+		data[2] = (byte)'S';
+		WriteDirectoryHeader(data, 880, 0, "Logical Keys", 1);
+		BigEndian.WriteUInt32(data, (880 * AmigaDiskImage.SectorSize) + 24, 100);
+		WriteDirectoryHeader(data, 20, 77, "C", 2, headerKey: 100);
+		WriteDirectoryHeader(data, 21, 100, "Tool", -3, headerKey: 101, rawSecondaryType: 0x000000FD);
+		var fileHeaderOffset = 21 * AmigaDiskImage.SectorSize;
+		BigEndian.WriteUInt32(data, fileHeaderOffset + 0x10, 30);
+		BigEndian.WriteUInt32(data, fileHeaderOffset + 0x144, 2);
+		var dataOffset = 30 * AmigaDiskImage.SectorSize;
+		BigEndian.WriteUInt32(data, dataOffset, 8);
+		BigEndian.WriteUInt32(data, dataOffset + 12, 2);
+		BigEndian.WriteUInt32(data, dataOffset + 16, 0);
+		data[dataOffset + 24] = 0x4E;
+		data[dataOffset + 25] = 0x75;
+		return AmigaDiskImage.FromAdfBytes(data, "logical-keys.adf");
+	}
+
 	private static byte[] CreateRtsHunk()
 	{
 		var data = new List<byte>();
@@ -124,13 +162,25 @@ public sealed class AmigaDosFileSystemTests
 		return data.ToArray();
 	}
 
-	private static void WriteDirectoryHeader(byte[] data, int block, int parentBlock, string name, int secondaryType)
+	private static void WriteDirectoryHeader(
+		byte[] data,
+		int block,
+		int parentBlock,
+		string name,
+		int secondaryType,
+		int headerKey = 0,
+		uint? rawSecondaryType = null)
 	{
 		var offset = block * AmigaDiskImage.SectorSize;
 		BigEndian.WriteUInt32(data, offset, 2);
+		if (headerKey != 0)
+		{
+			BigEndian.WriteUInt32(data, offset + 4, (uint)headerKey);
+		}
+
 		WriteName(data, offset + 432, name);
 		BigEndian.WriteUInt32(data, offset + 0x1F4, (uint)parentBlock);
-		BigEndian.WriteUInt32(data, offset + 0x1FC, unchecked((uint)secondaryType));
+		BigEndian.WriteUInt32(data, offset + 0x1FC, rawSecondaryType ?? unchecked((uint)secondaryType));
 	}
 
 	private static void WriteFile(byte[] data, int block, int parentBlock, string name, byte[] content, int dataBlock)

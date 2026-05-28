@@ -1,3 +1,4 @@
+using System.Text;
 using CopperMod.Amiga;
 
 namespace CopperScreen;
@@ -35,7 +36,37 @@ internal sealed class CopperBenchViewModel
 
 	public string StatusMessage { get; private set; }
 
-	public string SelectedDetails => SelectedEntry?.Details ?? StatusMessage;
+	public string SelectedDetails
+	{
+		get
+		{
+			var selected = SelectedEntry;
+			if (selected == null)
+			{
+				return StatusMessage;
+			}
+
+			var builder = new StringBuilder();
+			builder.AppendLine(selected.Name);
+			builder.AppendLine(selected.Kind.ToString());
+			builder.Append("Path: DF0:");
+			builder.AppendLine(selected.Path);
+			if (selected.Size > 0)
+			{
+				builder.Append("Size: ");
+				builder.Append(selected.Size);
+				builder.AppendLine(" bytes");
+			}
+
+			if (!string.IsNullOrWhiteSpace(selected.Details))
+			{
+				builder.AppendLine();
+				builder.Append(selected.Details);
+			}
+
+			return builder.ToString();
+		}
+	}
 
 	public void ToggleOverlay()
 	{
@@ -44,6 +75,12 @@ internal sealed class CopperBenchViewModel
 		{
 			Refresh();
 		}
+	}
+
+	public void ShowOverlay()
+	{
+		IsOverlayVisible = true;
+		Refresh();
 	}
 
 	public void HideOverlay()
@@ -93,6 +130,21 @@ internal sealed class CopperBenchViewModel
 	public void InsertNextDisk()
 	{
 		if (_emulator.InsertNextDisk())
+		{
+			CurrentPath = string.Empty;
+			Refresh();
+			StatusMessage = "Inserted " + _emulator.DiskName;
+		}
+		else
+		{
+			Refresh();
+			StatusMessage = _emulator.StatusText;
+		}
+	}
+
+	public void InsertPreviousDisk()
+	{
+		if (_emulator.InsertPreviousDisk())
 		{
 			CurrentPath = string.Empty;
 			Refresh();

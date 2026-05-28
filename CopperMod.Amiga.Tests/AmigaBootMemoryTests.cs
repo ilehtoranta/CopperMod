@@ -314,6 +314,27 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(0xBEEFu, machine.Bus.ReadWord(0x500));
 	}
 
+	[Fact]
+	public void RethinkDisplayPublishesCurrentViewCopperList()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		WriteCopperColorList(bus, 0x2400, 0x0F00);
+		WriteCopperColorList(bus, 0x2600, 0x00F0);
+		bus.WriteLong(0x2304, 0x2400);
+		bus.WriteLong(0x220C, 0x2300);
+		var state = new M68kCpuState();
+		state.A[1] = 0x2200;
+
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		bus.WriteLong(0x2304, 0x2600);
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.IntuitionLibraryBase, -0x186), state));
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(frame);
+
+		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+	}
+
 	private static AmigaMachine StartBootShim(AmigaMachineProfile profile)
 	{
 		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(profile));
@@ -525,5 +546,18 @@ public sealed class AmigaBootMemoryTests
 	private static uint Lvo(uint libraryBase, int displacement)
 	{
 		return unchecked((uint)((int)libraryBase + displacement));
+	}
+
+	private static void WriteCopperColorList(AmigaBus bus, uint address, ushort color)
+	{
+		bus.WriteWord(address, 0x0180);
+		bus.WriteWord(address + 2, color);
+		bus.WriteWord(address + 4, 0xFFFF);
+		bus.WriteWord(address + 6, 0xFFFE);
+	}
+
+	private static uint Pixel(uint[] frame, int x, int y)
+	{
+		return frame[(y * AmigaConstants.PalLowResWidth) + x];
 	}
 }

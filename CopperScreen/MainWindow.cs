@@ -1,10 +1,12 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using CopperMod.Amiga;
 
 namespace CopperScreen;
 
@@ -26,11 +28,14 @@ internal sealed class MainWindow : Window
 	private readonly TextBlock _benchDetails;
 	private readonly Button _benchToggleButton;
 	private readonly Button _pauseButton;
-	private readonly ListBox _entryList;
+	private readonly Button _numpadModeButton;
+	private readonly StackPanel _entryList;
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
 	private readonly float[] _audioBuffer;
+	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
+	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
@@ -55,7 +60,8 @@ internal sealed class MainWindow : Window
 		_benchDetails = new TextBlock();
 		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench);
 		_pauseButton = CreateToolbarButton("Pause", TogglePause);
-		_entryList = new ListBox();
+		_numpadModeButton = CreateToolbarButton("Numpad: Joy", ToggleNumpadMode);
+		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
 		_root = new Grid();
 		_benchPanel = CreateCopperBenchPanel();
 		_toolbar = CreateToolbar();
@@ -112,8 +118,14 @@ internal sealed class MainWindow : Window
 		}
 
 		_presenter.Update(_emulator.Framebuffer);
+		if (_emulator.ConsumeCopperBenchRequest())
+		{
+			_bench.ShowOverlay();
+			RefreshCopperBenchUi();
+		}
+
 		UpdateToolbarStatus();
-		Title = "CopperScreen - " + _emulator.StatusText + " - F10 CopperBench, F12 next disk";
+		Title = "CopperScreen - " + _emulator.ProfileName + " - " + _emulator.StatusText + " - F11 toolbar, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)
@@ -144,17 +156,44 @@ internal sealed class MainWindow : Window
 
 	private void OnKeyDown(object? sender, KeyEventArgs args)
 	{
-		if (args.Key == Key.F10)
+		if (args.Key == Key.F11 || args.PhysicalKey == PhysicalKey.F11)
 		{
-			ToggleCopperBench();
+			_bench.ToggleToolbar();
+			RefreshCopperBenchUi();
 			args.Handled = true;
 			return;
 		}
 
-		if (args.Key == Key.F9)
+		if (args.Key == Key.F12 || args.PhysicalKey == PhysicalKey.F12)
 		{
-			_bench.ToggleToolbar();
+			if ((args.KeyModifiers & KeyModifiers.Shift) != 0)
+			{
+				_bench.InsertPreviousDisk();
+			}
+			else
+			{
+				_bench.InsertNextDisk();
+			}
+
 			RefreshCopperBenchUi();
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
+			return;
+		}
+
+		if (args.Key == Key.NumLock || args.PhysicalKey == PhysicalKey.NumLock)
+		{
+			ToggleNumpadMode();
+			args.Handled = true;
+			return;
+		}
+
+		if ((args.Key == Key.Enter || args.Key == Key.Return || args.PhysicalKey == PhysicalKey.Enter || args.PhysicalKey == PhysicalKey.NumPadEnter) &&
+			_bench.IsOverlayVisible)
+		{
+			_bench.ActivateSelected();
+			RefreshCopperBenchUi();
+			PresentFrame(catchUpAudio: false);
 			args.Handled = true;
 			return;
 		}
@@ -167,52 +206,54 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		if (args.Key == Key.Enter && _bench.IsOverlayVisible)
+		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickKey(args, out var joystickKey))
 		{
-			_bench.ActivateSelected();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
-			args.Handled = true;
-			return;
-		}
-
-		if (args.Key == Key.F12)
-		{
-			_bench.InsertNextDisk();
-			RefreshCopperBenchUi();
-			args.Handled = true;
-			PresentFrame(catchUpAudio: false);
-			return;
-		}
-
-		if (args.Key is Key.Space or Key.Enter)
-		{
-			_emulator.PulsePrimaryFire();
-			args.Handled = true;
-			PresentFrame(catchUpAudio: false);
-			return;
-		}
-
-		if (IsJoystickKey(args.Key))
-		{
-			_pressedJoystickKeys |= GetJoystickKey(args.Key);
+			_pressedJoystickKeys |= joystickKey;
 			UpdateJoystickPort();
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
+			return;
+		}
+
+		if (AmigaHostKeyMapper.TryMap(args.Key, args.PhysicalKey, _numpadMode, out var rawKey))
+		{
+			if (_pressedAmigaKeys.Add(rawKey))
+			{
+				_emulator.KeyDown(rawKey);
+				PresentFrame(catchUpAudio: false);
+			}
+
+			args.Handled = true;
 		}
 	}
 
 	private void OnKeyUp(object? sender, KeyEventArgs args)
 	{
-		if (!IsJoystickKey(args.Key))
+		if (args.Key == Key.NumLock || args.PhysicalKey == PhysicalKey.NumLock)
 		{
+			args.Handled = true;
 			return;
 		}
 
-		_pressedJoystickKeys &= ~GetJoystickKey(args.Key);
-		UpdateJoystickPort();
-		args.Handled = true;
-		PresentFrame(catchUpAudio: false);
+		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickKey(args, out var joystickKey))
+		{
+			_pressedJoystickKeys &= ~joystickKey;
+			UpdateJoystickPort();
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
+			return;
+		}
+
+		if (AmigaHostKeyMapper.TryMap(args.Key, args.PhysicalKey, _numpadMode, out var rawKey))
+		{
+			if (_pressedAmigaKeys.Remove(rawKey))
+			{
+				_emulator.KeyUp(rawKey);
+				PresentFrame(catchUpAudio: false);
+			}
+
+			args.Handled = true;
+		}
 	}
 
 	private void UpdateJoystickPort()
@@ -231,13 +272,36 @@ internal sealed class MainWindow : Window
 		return (_pressedJoystickKeys & keys) != 0;
 	}
 
-	private static bool IsJoystickKey(Key key)
+	private static bool TryGetJoystickKey(KeyEventArgs args, out JoystickKeys joystickKey)
 	{
-		return key is Key.NumPad1 or Key.NumPad2 or Key.NumPad3 or Key.NumPad4 or Key.NumPad5 or
-			Key.NumPad6 or Key.NumPad7 or Key.NumPad8 or Key.NumPad9 or Key.Decimal or Key.Delete;
+		joystickKey = GetJoystickKey(args.Key, args.PhysicalKey);
+		return joystickKey != JoystickKeys.None;
 	}
 
-	private static JoystickKeys GetJoystickKey(Key key)
+	internal static JoystickKeys GetJoystickKey(Key key, PhysicalKey physicalKey)
+	{
+		if (physicalKey != PhysicalKey.None)
+		{
+			return physicalKey switch
+			{
+				PhysicalKey.NumPad1 => JoystickKeys.NumPad1,
+				PhysicalKey.NumPad2 => JoystickKeys.NumPad2,
+				PhysicalKey.NumPad3 => JoystickKeys.NumPad3,
+				PhysicalKey.NumPad4 => JoystickKeys.NumPad4,
+				PhysicalKey.NumPad5 or PhysicalKey.NumPadClear => JoystickKeys.NumPad5,
+				PhysicalKey.NumPad6 => JoystickKeys.NumPad6,
+				PhysicalKey.NumPad7 => JoystickKeys.NumPad7,
+				PhysicalKey.NumPad8 => JoystickKeys.NumPad8,
+				PhysicalKey.NumPad9 => JoystickKeys.NumPad9,
+				PhysicalKey.NumPadDecimal => JoystickKeys.Decimal,
+				_ => JoystickKeys.None
+			};
+		}
+
+		return GetJoystickKeyFromLogicalKey(key);
+	}
+
+	private static JoystickKeys GetJoystickKeyFromLogicalKey(Key key)
 	{
 		return key switch
 		{
@@ -258,6 +322,12 @@ internal sealed class MainWindow : Window
 
 	private void ReleaseInteractiveInput()
 	{
+		foreach (var rawKey in _pressedAmigaKeys)
+		{
+			_emulator.KeyUp(rawKey);
+		}
+
+		_pressedAmigaKeys.Clear();
 		_pressedJoystickKeys = JoystickKeys.None;
 		_lastMouseX = null;
 		_lastMouseY = null;
@@ -293,7 +363,14 @@ internal sealed class MainWindow : Window
 			RefreshCopperBenchUi();
 			PresentFrame(catchUpAudio: false);
 		}));
+		bar.Children.Add(_numpadModeButton);
 		bar.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
+		bar.Children.Add(CreateToolbarButton("Prev", () =>
+		{
+			_bench.InsertPreviousDisk();
+			RefreshCopperBenchUi();
+			PresentFrame(catchUpAudio: false);
+		}));
 		bar.Children.Add(CreateToolbarButton("Next", () =>
 		{
 			_bench.InsertNextDisk();
@@ -326,7 +403,6 @@ internal sealed class MainWindow : Window
 				new RowDefinition(GridLength.Auto),
 				new RowDefinition(GridLength.Auto),
 				new RowDefinition(new GridLength(1, GridUnitType.Star)),
-				new RowDefinition(GridLength.Auto),
 				new RowDefinition(GridLength.Auto)
 			}
 		};
@@ -364,27 +440,50 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(navigation, 1);
 		panel.Children.Add(navigation);
 
-		_entryList.Background = new SolidColorBrush(Color.FromArgb(230, 8, 10, 14));
-		_entryList.Foreground = Brushes.White;
-		_entryList.SelectionChanged += (_, _) =>
+		var browserAndPreview = new Grid
 		{
-			_bench.SelectIndex(_entryList.SelectedIndex);
-			RefreshCopperBenchDetails();
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(350)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			}
 		};
-		_entryList.DoubleTapped += (_, _) =>
+
+		var entryScroller = new Border
 		{
-			_bench.ActivateSelected();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			Background = new SolidColorBrush(Color.FromArgb(230, 8, 10, 14)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(48, 58, 72)),
+			BorderThickness = new Thickness(1),
+			Margin = new Thickness(0, 0, 10, 0),
+			Child = new ScrollViewer
+			{
+				VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+				HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+				Content = _entryList
+			}
 		};
-		Grid.SetRow(_entryList, 2);
-		panel.Children.Add(_entryList);
+		Grid.SetColumn(entryScroller, 0);
+		browserAndPreview.Children.Add(entryScroller);
 
 		_benchDetails.Foreground = new SolidColorBrush(Color.FromRgb(220, 226, 235));
 		_benchDetails.TextWrapping = TextWrapping.Wrap;
-		_benchDetails.Margin = new Thickness(0, 8, 0, 8);
-		Grid.SetRow(_benchDetails, 3);
-		panel.Children.Add(_benchDetails);
+		_benchDetails.Margin = new Thickness(10);
+		var previewPane = new Border
+		{
+			Background = new SolidColorBrush(Color.FromArgb(215, 13, 18, 26)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(48, 58, 72)),
+			BorderThickness = new Thickness(1),
+			Child = new ScrollViewer
+			{
+				VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+				HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+				Content = _benchDetails
+			}
+		};
+		Grid.SetColumn(previewPane, 1);
+		browserAndPreview.Children.Add(previewPane);
+		Grid.SetRow(browserAndPreview, 2);
+		panel.Children.Add(browserAndPreview);
 
 		var commands = new StackPanel
 		{
@@ -402,12 +501,12 @@ internal sealed class MainWindow : Window
 			_bench.HideOverlay();
 			RefreshCopperBenchUi();
 		}));
-		Grid.SetRow(commands, 4);
+		Grid.SetRow(commands, 3);
 		panel.Children.Add(commands);
 
 		return new Border
 		{
-			Width = 460,
+			Width = 820,
 			Margin = new Thickness(12, 48, 0, 12),
 			Padding = new Thickness(12),
 			CornerRadius = new CornerRadius(6),
@@ -425,6 +524,9 @@ internal sealed class MainWindow : Window
 		var button = new Button
 		{
 			Content = text,
+			Foreground = Brushes.White,
+			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
 			Padding = new Thickness(8, 3),
 			MinWidth = 54
 		};
@@ -437,6 +539,9 @@ internal sealed class MainWindow : Window
 		var button = new Button
 		{
 			Content = text,
+			Foreground = Brushes.White,
+			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
 			Padding = new Thickness(10, 4)
 		};
 		button.Click += (_, _) => action();
@@ -452,6 +557,16 @@ internal sealed class MainWindow : Window
 	private void TogglePause()
 	{
 		_bench.TogglePause();
+		RefreshCopperBenchUi();
+		PresentFrame(catchUpAudio: false);
+	}
+
+	private void ToggleNumpadMode()
+	{
+		ReleaseInteractiveInput();
+		_numpadMode = _numpadMode == NumpadInputMode.Joystick
+			? NumpadInputMode.AmigaKeys
+			: NumpadInputMode.Joystick;
 		RefreshCopperBenchUi();
 		PresentFrame(catchUpAudio: false);
 	}
@@ -493,12 +608,54 @@ internal sealed class MainWindow : Window
 		_benchPanel.IsVisible = _bench.IsOverlayVisible;
 		_benchToggleButton.Content = _bench.IsOverlayVisible ? "Hide" : "Bench";
 		_pauseButton.Content = _bench.IsPaused ? "Run" : "Pause";
+		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "Numpad: Joy" : "Numpad: Keys";
 		_benchPath.Text = _bench.DisplayPath;
-		_entryList.ItemsSource = null;
-		_entryList.ItemsSource = _bench.Entries;
-		_entryList.SelectedIndex = _bench.SelectedIndex;
+		RefreshEntryList();
 		RefreshCopperBenchDetails();
 		UpdateToolbarStatus();
+	}
+
+	private void RefreshEntryList()
+	{
+		_entryList.Children.Clear();
+		for (var i = 0; i < _bench.Entries.Count; i++)
+		{
+			var entry = _bench.Entries[i];
+			var index = i;
+			var selected = index == _bench.SelectedIndex;
+			var button = new Button
+			{
+				HorizontalAlignment = HorizontalAlignment.Stretch,
+				HorizontalContentAlignment = HorizontalAlignment.Stretch,
+				Background = selected
+					? new SolidColorBrush(Color.FromRgb(54, 75, 105))
+					: new SolidColorBrush(Color.FromRgb(18, 24, 33)),
+				BorderBrush = selected
+					? new SolidColorBrush(Color.FromRgb(110, 150, 205))
+					: new SolidColorBrush(Color.FromRgb(42, 52, 66)),
+				BorderThickness = new Thickness(1),
+				Padding = new Thickness(8, 5),
+				Content = new TextBlock
+				{
+					Text = entry.ToString(),
+					Foreground = Brushes.White,
+					TextTrimming = TextTrimming.CharacterEllipsis
+				}
+			};
+			button.Click += (_, _) =>
+			{
+				_bench.SelectIndex(index);
+				RefreshCopperBenchUi();
+			};
+			button.DoubleTapped += (_, _) =>
+			{
+				_bench.SelectIndex(index);
+				_bench.ActivateSelected();
+				RefreshCopperBenchUi();
+				PresentFrame(catchUpAudio: false);
+			};
+			_entryList.Children.Add(button);
+		}
 	}
 
 	private void RefreshCopperBenchDetails()
@@ -508,11 +665,12 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus()
 	{
-		_toolbarStatus.Text = $"{_emulator.DiskName} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
+		var numpad = _numpadMode == NumpadInputMode.Joystick ? "numpad joystick" : "numpad keys";
+		_toolbarStatus.Text = $"{_emulator.ProfileName} | {_emulator.DiskName} | {numpad} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
 	}
 
 	[Flags]
-	private enum JoystickKeys
+	internal enum JoystickKeys
 	{
 		None = 0,
 		NumPad1 = 1 << 0,

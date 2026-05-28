@@ -86,6 +86,29 @@ public sealed class AmigaKickstartTests
 	}
 
 	[Fact]
+	public void RomOverlayMapsKickstartAtLowMemoryUntilCiaAOverlayBitClearsIt()
+	{
+		var bus = new AmigaBus();
+		var rom = Enumerable.Range(0, 256).Select(value => (byte)(0x80 | value)).ToArray();
+		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
+		host.Install(bus, CreateTrapTable());
+
+		bus.WriteByte(0x0000_0000, 0x42, 0);
+
+		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
+
+		bus.WriteByte(0x00BFE001, 0x00, 0);
+		Assert.Equal(0x42, bus.ReadByte(0x0000_0000));
+
+		bus.WriteByte(0x00BFE001, 0x01, 0);
+		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
+
+		bus.WriteByte(0x00BFE001, 0x00, 0);
+		bus.ResetExternalDevices(0);
+		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
+	}
+
+	[Fact]
 	public void HostShim13InstallsCiaAAndCiaBResourceTraps()
 	{
 		var bus = new AmigaBus();

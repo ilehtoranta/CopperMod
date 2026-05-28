@@ -1,0 +1,15 @@
+{
+  "id": "expanded-copperstart",
+  "displayName": "Expanded A500 + CopperStart",
+  "description": "A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, CopperStart Kickstart 1.3 shim.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000"
+  },
+  "kickstart": {
+    "source": "CopperStart",
+    "version": "1.3"
+  }
+}

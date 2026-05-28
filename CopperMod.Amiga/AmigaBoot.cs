@@ -16,6 +16,7 @@ namespace CopperMod.Amiga
         public const uint BootEntryAddress = BootBlockAddress + 0x0C;
         public const uint BootIoRequestAddress = 0x0000_0800;
         public const int CmdRead = 2;
+        private const int TdMotor = 9;
         private const int IoCommandOffset = 0x1C;
         private const int IoErrorOffset = 0x1F;
         private const int IoActualOffset = 0x20;
@@ -74,6 +75,25 @@ namespace CopperMod.Amiga
         private const uint BootChipOnlyMemHeaderOffset = 0x0000_0100;
         private const uint BootChipOnlyMemNameOffset = 0x0000_0180;
         private const ushort Kickstart13SoftVer = 34;
+        private const int ViewViewPortOffset = 0x08;
+        private const int ViewLofCprListOffset = 0x0C;
+        private const int ViewShfCprListOffset = 0x10;
+        private const int CprListStartOffset = 0x04;
+        private const int ScreenFirstWindowOffset = 0x04;
+        private const int ScreenViewPortOffset = 0x2C;
+        private const int ViewPortDspInsOffset = 0x08;
+        private const int ViewPortDWidthOffset = 0x18;
+        private const int ViewPortDHeightOffset = 0x1A;
+        private const int ViewPortDxOffsetOffset = 0x1C;
+        private const int ViewPortDyOffsetOffset = 0x1E;
+        private const int ViewPortModesOffset = 0x20;
+        private const int ViewPortRasInfoOffset = 0x24;
+        private const int RasInfoBitMapOffset = 0x04;
+        private const int BitMapBytesPerRowOffset = 0x00;
+        private const int BitMapRowsOffset = 0x02;
+        private const int BitMapDepthOffset = 0x05;
+        private const int BitMapPlanesOffset = 0x08;
+        private const ushort ViewModeInterlace = 0x0004;
 
         private readonly AmigaMachine _machine;
         private readonly IAmigaDiskDmaEngine _diskDma;
@@ -106,6 +126,8 @@ namespace CopperMod.Amiga
         private uint _syntheticWindowAddress;
         private uint _syntheticMessageAddress;
         private uint _syntheticHostObjectAddress;
+        private uint _syntheticViewAddress;
+        private uint _currentViewAddress;
         private int _pendingSyntheticMessages;
         private uint _nextDosHandle;
         private uint _nextDosLock;
@@ -132,6 +154,10 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 
+        public bool AutoStartWorkbenchDefaultTool { get; set; } = true;
+
+        public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
+
         public AmigaBootResult BootFromDisk(
             AmigaDiskImage disk,
             int maxInstructions = 20_000,
@@ -154,6 +180,35 @@ namespace CopperMod.Amiga
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
         }
 
+        public AmigaBootResult BootFromKickstartRom(
+            AmigaDiskImage disk,
+            int maxInstructions = 20_000,
+            AmigaBootRunMode runMode = AmigaBootRunMode.ContinueAfterBootDiskRead)
+        {
+            StartKickstartRomBoot(disk);
+            return ExecuteBootBlock(maxInstructions, runMode);
+        }
+
+        public void StartKickstartRomBoot(AmigaDiskImage disk)
+        {
+            if (_machine.Kickstart.Configuration.Backend != AmigaKickstartBackendKind.RomImage)
+            {
+                throw new InvalidOperationException("Kickstart ROM boot requires a ROM-backed Kickstart configuration.");
+            }
+
+            ResetBootState(disk, installHostShim: false);
+            _machine.Kickstart.Install(_machine.Bus, CreateHostTrapTable());
+            var rom = _machine.Kickstart.Configuration.RomImage.Span;
+            if (rom.Length < 8)
+            {
+                throw new AmigaEmulationException("The Kickstart ROM image is too small to contain reset vectors.");
+            }
+
+            var supervisorStack = BigEndian.ReadUInt32(rom, 0, "Kickstart reset stack pointer");
+            var resetProgramCounter = BigEndian.ReadUInt32(rom, 4, "Kickstart reset program counter");
+            _machine.Cpu.Reset(resetProgramCounter, supervisorStack);
+        }
+
         public void StartWorkbenchSession(AmigaDiskImage disk)
         {
             ResetBootState(disk);
@@ -164,6 +219,11 @@ namespace CopperMod.Amiga
         }
 
         private void ResetBootState(AmigaDiskImage disk)
+        {
+            ResetBootState(disk, installHostShim: true);
+        }
+
+        private void ResetBootState(AmigaDiskImage disk, bool installHostShim)
         {
             ArgumentNullException.ThrowIfNull(disk);
             _diagnostics.Clear();
@@ -195,6 +255,8 @@ namespace CopperMod.Amiga
             _syntheticWindowAddress = 0;
             _syntheticMessageAddress = 0;
             _syntheticHostObjectAddress = 0;
+            _syntheticViewAddress = 0;
+            _currentViewAddress = 0;
             _pendingSyntheticMessages = 0;
             _nextDosHandle = 0x0000_5000;
             _nextDosLock = 0x0000_7000;
@@ -210,9 +272,13 @@ namespace CopperMod.Amiga
             _fastMemUpper = 0;
             _memoryListInstalled = false;
             _dosFileSystem = null;
+            PendingWorkbenchLaunchRequest = null;
             Drive0.Insert(disk);
             _machine.ResetHardware();
-            InstallBootHostTraps();
+            if (installHostShim)
+            {
+                InstallBootHostTraps();
+            }
         }
 
         public AmigaBootResult ContinueExecution(int maxInstructions = 20_000)
@@ -272,25 +338,7 @@ namespace CopperMod.Amiga
         private void InstallBootHostTraps()
         {
             var bus = _machine.Bus;
-            _machine.Kickstart.Install(
-                bus,
-                new AmigaKickstartTrapTable(
-                    0,
-                    HostNullCallback,
-                    HostOk,
-                    HostOpenLibrary,
-                    HostAllocMem,
-                    HostAllocMemAndStore,
-                    HostFreeMem,
-                    HostOk,
-                    HostOk,
-                    HostOk,
-                    HostAbleIcr,
-                    HostSetIcr,
-                    HostDosOpen,
-                    HostDosClose,
-                    HostDosRead,
-                    HostDosSeek));
+            _machine.Kickstart.Install(bus, CreateHostTrapTable());
             for (var displacement = -6; displacement >= -600; displacement -= 6)
             {
                 var captured = displacement;
@@ -340,6 +388,27 @@ namespace CopperMod.Amiga
             InstallKickstartMemoryList();
         }
 
+        private AmigaKickstartTrapTable CreateHostTrapTable()
+        {
+            return new AmigaKickstartTrapTable(
+                0,
+                HostNullCallback,
+                HostOk,
+                HostOpenLibrary,
+                HostAllocMem,
+                HostAllocMemAndStore,
+                HostFreeMem,
+                HostOk,
+                HostOk,
+                HostOk,
+                HostAbleIcr,
+                HostSetIcr,
+                HostDosOpen,
+                HostDosClose,
+                HostDosRead,
+                HostDosSeek);
+        }
+
         private void InstallTaskTrapDispatchers()
         {
             var bus = _machine.Bus;
@@ -385,6 +454,7 @@ namespace CopperMod.Amiga
                         break;
                     }
 
+                    SkipDosBootBlockHeaderIfNeeded();
                     ApplyWorkbenchLanguageSelectionIfNeeded();
                     var previousCycle = _machine.Cpu.State.Cycles;
                     _machine.Cpu.ExecuteInstruction();
@@ -429,6 +499,57 @@ namespace CopperMod.Amiga
                 _diagnostics.ToArray());
         }
 
+        private void SkipDosBootBlockHeaderIfNeeded()
+        {
+            var pc = _machine.Cpu.State.ProgramCounter;
+            if (TrySkipDosBootBlockHeader(pc, pc))
+            {
+                return;
+            }
+
+            if (pc >= 4)
+            {
+                _ = TrySkipDosBootBlockHeader(pc - 4, pc);
+            }
+        }
+
+        private bool TrySkipDosBootBlockHeader(uint headerAddress, uint currentProgramCounter)
+        {
+            if (!_machine.Bus.IsMappedMemoryRange(headerAddress, 1024) ||
+                _machine.Bus.ReadLong(headerAddress) != 0x444F_5300)
+            {
+                return false;
+            }
+
+            var rootBlock = _machine.Bus.ReadLong(headerAddress + 8);
+            if (rootBlock is >= 880 and <= 1760)
+            {
+                _machine.Cpu.State.ProgramCounter = headerAddress + 12;
+                return true;
+            }
+
+            var sum = 0u;
+            for (var offset = 0u; offset < 1024; offset += 4)
+            {
+                var value = _machine.Bus.ReadLong(headerAddress + offset);
+                var previous = sum;
+                sum += value;
+                if (sum < previous)
+                {
+                    sum++;
+                }
+            }
+
+            if (sum != 0xFFFF_FFFF)
+            {
+                return false;
+            }
+
+            _ = currentProgramCounter;
+            _machine.Cpu.State.ProgramCounter = headerAddress + 12;
+            return true;
+        }
+
         private void HostDoIo(M68kCpuState state)
         {
             var io = state.A[1];
@@ -436,6 +557,26 @@ namespace CopperMod.Amiga
             var length = _machine.Bus.ReadLong(io + IoLengthOffset);
             var destination = _machine.Bus.ReadLong(io + IoDataOffset);
             var offset = _machine.Bus.ReadLong(io + IoOffsetOffset);
+            if (command == TdMotor)
+            {
+                var previousMotorOn = Drive0.MotorOn ? 1u : 0u;
+                if (length != 0)
+                {
+                    _machine.Bus.WriteByte(0x00BFD100, 0x77, state.Cycles);
+                    _machine.Bus.WriteByte(0x00BFD300, 0xFF, state.Cycles);
+                }
+                else
+                {
+                    _machine.Bus.WriteByte(0x00BFD100, 0xFF, state.Cycles);
+                    _machine.Bus.WriteByte(0x00BFD300, 0xFF, state.Cycles);
+                }
+
+                _machine.Bus.WriteByte(io + IoErrorOffset, 0, state.Cycles);
+                _machine.Bus.WriteLong(io + IoActualOffset, previousMotorOn, state.Cycles);
+                state.D[0] = 0;
+                return;
+            }
+
             if (command != CmdRead)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic(
@@ -448,11 +589,29 @@ namespace CopperMod.Amiga
             }
 
             ReadBootDiskBytesToChipRam(checked((int)offset), checked((int)length), destination, state.Cycles);
+            if (ShouldLeaveDf0SelectedAfterBootRead())
+            {
+                LeaveDf0SelectedAfterBootRead(state.Cycles);
+            }
+
             _machine.Bus.WriteByte(io + IoErrorOffset, 0, state.Cycles);
             _machine.Bus.WriteLong(io + IoActualOffset, length, state.Cycles);
             _bootDiskReadCompleted = true;
             TryInstallKnownBootLoaderTraps();
             state.D[0] = 0;
+        }
+
+        private bool ShouldLeaveDf0SelectedAfterBootRead()
+        {
+            return Drive0.Disk != null &&
+                (IsFullContactDiskOneBootBlock(Drive0.Disk.BootBlock) ||
+                    Drive0.Disk.Name.IndexOf("Full Contact", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private void LeaveDf0SelectedAfterBootRead(long cycle)
+        {
+            _machine.Bus.WriteByte(0x00BFD100, 0x77, cycle);
+            _machine.Bus.WriteByte(0x00BFD300, 0xFF, cycle);
         }
 
         private void ReadBootDiskBytesToChipRam(int diskByteOffset, int byteCount, uint destination, long cycle)
@@ -843,18 +1002,58 @@ namespace CopperMod.Amiga
         private void HostGraphicsGeneric(M68kCpuState state, int displacement)
         {
             LogUiCall("graphics.library", displacement);
-            state.D[0] = EnsureSyntheticHostObject();
+            switch (displacement)
+            {
+                case -0xD2: // MrgCop
+                    state.D[0] = HostGraphicsMrgCop(state);
+                    return;
+                case -0xD8: // MakeVPort
+                    state.D[0] = HostGraphicsMakeVPort(state);
+                    return;
+                case -0xDE: // LoadView
+                    HostGraphicsLoadView(state);
+                    state.D[0] = 0;
+                    return;
+                case -0x168: // InitView
+                    HostGraphicsInitView(state);
+                    state.D[0] = 0;
+                    return;
+                case -0xCC: // InitVPort
+                    HostGraphicsInitVPort(state);
+                    state.D[0] = 0;
+                    return;
+                default:
+                    state.D[0] = EnsureSyntheticHostObject();
+                    return;
+            }
         }
 
         private void HostIntuitionGeneric(M68kCpuState state, int displacement)
         {
             LogUiCall("intuition.library", displacement);
-            state.D[0] = displacement switch
+            switch (displacement)
             {
-                -198 => EnsureSyntheticScreen(),
-                -204 => EnsureSyntheticWindow(),
-                _ => EnsureSyntheticHostObject()
-            };
+                case -198:
+                    state.D[0] = EnsureSyntheticScreen();
+                    return;
+                case -204:
+                    state.D[0] = EnsureSyntheticWindow();
+                    return;
+                case -378: // MakeScreen
+                case -384: // RemakeDisplay
+                case -390: // RethinkDisplay
+                    state.D[0] = HostRethinkDisplay(state.Cycles);
+                    return;
+                case -294: // ViewAddress
+                    state.D[0] = _currentViewAddress != 0 ? _currentViewAddress : EnsureSyntheticView();
+                    return;
+                case -300: // ViewPortAddress(Window)
+                    state.D[0] = GetSyntheticScreenViewPortAddress();
+                    return;
+                default:
+                    state.D[0] = EnsureSyntheticHostObject();
+                    return;
+            }
         }
 
         private void HostExpansionGeneric(M68kCpuState state, int displacement)
@@ -896,6 +1095,342 @@ namespace CopperMod.Amiga
             _iconDiagnosticCount++;
         }
 
+        private void HostGraphicsLoadView(M68kCpuState state)
+        {
+            _currentViewAddress = state.A[1];
+            if (_currentViewAddress == 0)
+            {
+                return;
+            }
+
+            _ = TryPublishCopperListFromView(_currentViewAddress, state.Cycles);
+        }
+
+        private uint HostGraphicsMakeVPort(M68kCpuState state)
+        {
+            var view = state.A[0];
+            var viewPort = state.A[1];
+            if (view == 0 || viewPort == 0 || !TryBuildViewPortCopperList(view, viewPort, out _))
+            {
+                return 0;
+            }
+
+            return 0;
+        }
+
+        private uint HostGraphicsMrgCop(M68kCpuState state)
+        {
+            var view = state.A[1];
+            if (view == 0)
+            {
+                return 0;
+            }
+
+            var viewPort = TryReadLong(view + ViewViewPortOffset, out var pointer)
+                ? pointer
+                : 0;
+            if (viewPort != 0)
+            {
+                _ = TryBuildViewPortCopperList(view, viewPort, out _);
+            }
+
+            return 0;
+        }
+
+        private void HostGraphicsInitView(M68kCpuState state)
+        {
+            var view = state.A[1];
+            if (view == 0 || !_machine.Bus.IsMappedMemoryRange(view, 0x16))
+            {
+                return;
+            }
+
+            _machine.Bus.ClearMemory(view, 0x16);
+        }
+
+        private void HostGraphicsInitVPort(M68kCpuState state)
+        {
+            var viewPort = state.A[0];
+            if (viewPort == 0 || !_machine.Bus.IsMappedMemoryRange(viewPort, 0x28))
+            {
+                return;
+            }
+
+            _machine.Bus.ClearMemory(viewPort, 0x28);
+            InitializeSyntheticViewPort(viewPort);
+        }
+
+        private uint HostRethinkDisplay(long cycle)
+        {
+            if (_currentViewAddress == 0)
+            {
+                return 0;
+            }
+
+            var view = _currentViewAddress;
+            if (TryReadLong(view + ViewViewPortOffset, out var viewPort) && viewPort != 0)
+            {
+                _ = TryBuildViewPortCopperList(view, viewPort, out _);
+            }
+
+            _ = TryPublishCopperListFromView(view, cycle);
+            return 0;
+        }
+
+        private bool TryBuildViewPortCopperList(uint view, uint viewPort, out uint copperList)
+        {
+            copperList = 0;
+            if (!TryCreateCopperListFromViewPort(viewPort, out var rawCopperList))
+            {
+                return false;
+            }
+
+            var cprList = AllocateProgramMemory(0x10);
+            _machine.Bus.ClearMemory(cprList, 0x10);
+            _machine.Bus.WriteLong(cprList + CprListStartOffset, rawCopperList);
+            _machine.Bus.WriteWord(cprList + 0x08, 64);
+            _machine.Bus.WriteLong(view + ViewViewPortOffset, viewPort);
+            _machine.Bus.WriteLong(view + ViewLofCprListOffset, cprList);
+            _machine.Bus.WriteLong(view + ViewShfCprListOffset, cprList);
+            _machine.Bus.WriteLong(viewPort + ViewPortDspInsOffset, rawCopperList);
+            copperList = rawCopperList;
+            return true;
+        }
+
+        private bool TryCreateCopperListFromViewPort(uint viewPort, out uint copperList)
+        {
+            copperList = 0;
+            if (!_machine.Bus.IsMappedMemoryRange(viewPort, 0x28))
+            {
+                return false;
+            }
+
+            var width = ReadPositiveWordOrDefault(viewPort + ViewPortDWidthOffset, 320);
+            var height = ReadPositiveWordOrDefault(viewPort + ViewPortDHeightOffset, 256);
+            var dx = TryReadWord(viewPort + ViewPortDxOffsetOffset, out var dxWord) ? unchecked((short)dxWord) : 0;
+            var dy = TryReadWord(viewPort + ViewPortDyOffsetOffset, out var dyWord) ? unchecked((short)dyWord) : 0;
+            var modes = TryReadWord(viewPort + ViewPortModesOffset, out var modesWord) ? modesWord : (ushort)0;
+            var depth = 1;
+            var bytesPerRow = Math.Max(2, ((width + 15) / 16) * 2);
+            var planes = new uint[6];
+            var bitMap = 0u;
+            var hasBitmap = TryReadLong(viewPort + ViewPortRasInfoOffset, out var rasInfo) &&
+                rasInfo != 0 &&
+                TryReadLong(rasInfo + RasInfoBitMapOffset, out bitMap) &&
+                bitMap != 0 &&
+                _machine.Bus.IsMappedMemoryRange(bitMap, BitMapPlanesOffset + (planes.Length * 4));
+            if (hasBitmap)
+            {
+                bytesPerRow = Math.Max(2, ReadPositiveWordOrDefault(bitMap + BitMapBytesPerRowOffset, bytesPerRow));
+                var bitmapRows = ReadPositiveWordOrDefault(bitMap + BitMapRowsOffset, height);
+                height = Math.Max(1, Math.Min(height, bitmapRows));
+                depth = Math.Clamp(_machine.Bus.ReadByte(bitMap + BitMapDepthOffset), 1, planes.Length);
+                for (var plane = 0; plane < depth; plane++)
+                {
+                    planes[plane] = _machine.Bus.ReadLong(bitMap + BitMapPlanesOffset + (uint)(plane * 4));
+                }
+            }
+
+            var hasPlane = false;
+            for (var plane = 0; plane < depth; plane++)
+            {
+                hasPlane |= planes[plane] != 0;
+            }
+
+            if (!hasBitmap || !hasPlane)
+            {
+                return false;
+            }
+
+            copperList = AllocateProgramMemory(0x100);
+            var offset = copperList;
+            WriteCopperMove(ref offset, 0x08E, EncodeDiwStart(dx, dy));
+            WriteCopperMove(ref offset, 0x090, EncodeDiwStop(dx, dy, width, height));
+            var fetchWords = Math.Clamp((width + 15) / 16, 1, 64);
+            WriteCopperMove(ref offset, 0x092, 0x0038);
+            WriteCopperMove(ref offset, 0x094, (ushort)(0x0038 + ((fetchWords - 1) * 8)));
+            var modulo = (short)(bytesPerRow - (fetchWords * 2));
+            WriteCopperMove(ref offset, 0x108, unchecked((ushort)modulo));
+            WriteCopperMove(ref offset, 0x10A, unchecked((ushort)modulo));
+            WriteCopperMove(ref offset, 0x100, (ushort)((depth << 12) | (modes & ViewModeInterlace)));
+            for (var plane = 0; plane < depth; plane++)
+            {
+                var register = (ushort)(0x0E0 + (plane * 4));
+                WriteCopperMove(ref offset, register, (ushort)(planes[plane] >> 16));
+                WriteCopperMove(ref offset, (ushort)(register + 2), (ushort)planes[plane]);
+            }
+
+            WriteCopperMove(ref offset, 0x180, 0x0000);
+            WriteCopperMove(ref offset, 0x182, 0x0FFF);
+            _machine.Bus.WriteWord(offset, 0xFFFF);
+            _machine.Bus.WriteWord(offset + 2, 0xFFFE);
+            return true;
+        }
+
+        private bool TryPublishCopperListFromView(uint view, long cycle)
+        {
+            if (view == 0)
+            {
+                return false;
+            }
+
+            if (TryResolveCopperListStartFromView(view, out var copperList))
+            {
+                LoadCopperList(copperList, cycle);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryResolveCopperListStartFromView(uint view, out uint copperList)
+        {
+            copperList = 0;
+            if (!_machine.Bus.IsMappedMemoryRange(view, ViewShfCprListOffset + 4))
+            {
+                return false;
+            }
+
+            if (TryResolveCopperListStart(_machine.Bus.ReadLong(view + ViewLofCprListOffset), out copperList) ||
+                TryResolveCopperListStart(_machine.Bus.ReadLong(view + ViewShfCprListOffset), out copperList))
+            {
+                return true;
+            }
+
+            var viewPort = _machine.Bus.ReadLong(view + ViewViewPortOffset);
+            if (viewPort != 0 &&
+                _machine.Bus.IsMappedMemoryRange(viewPort, ViewPortDspInsOffset + 4) &&
+                TryResolveCopperListStart(_machine.Bus.ReadLong(viewPort + ViewPortDspInsOffset), out copperList))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryResolveCopperListStart(uint candidate, out uint copperList)
+        {
+            copperList = 0;
+            if (candidate == 0)
+            {
+                return false;
+            }
+
+            if (_machine.Bus.IsMappedMemoryRange(candidate + CprListStartOffset, 4))
+            {
+                var wrappedStart = _machine.Bus.ReadLong(candidate + CprListStartOffset);
+                if (LooksLikeCopperList(wrappedStart))
+                {
+                    copperList = wrappedStart;
+                    return true;
+                }
+            }
+
+            if (LooksLikeCopperList(candidate))
+            {
+                copperList = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool LooksLikeCopperList(uint address)
+        {
+            if (address == 0 || !_machine.Bus.IsMappedMemoryRange(address, 4))
+            {
+                return false;
+            }
+
+            var sawInstruction = false;
+            for (var offset = 0u; offset < 0x100; offset += 4)
+            {
+                if (!_machine.Bus.IsMappedMemoryRange(address + offset, 4))
+                {
+                    return false;
+                }
+
+                var first = _machine.Bus.ReadWord(address + offset);
+                var second = _machine.Bus.ReadWord(address + offset + 2);
+                if (first == 0xFFFF && second == 0xFFFE)
+                {
+                    return sawInstruction;
+                }
+
+                if (first == 0 && second == 0)
+                {
+                    return false;
+                }
+
+                sawInstruction = true;
+                if ((first & 1) == 0 && first > 0x01FE)
+                {
+                    return false;
+                }
+            }
+
+            return sawInstruction;
+        }
+
+        private void LoadCopperList(uint copperList, long cycle)
+        {
+            _machine.Bus.WriteWord(0x00DFF080, (ushort)(copperList >> 16), cycle);
+            _machine.Bus.WriteWord(0x00DFF082, (ushort)copperList, cycle);
+            _machine.Bus.WriteWord(0x00DFF088, 0, cycle);
+        }
+
+        private void WriteCopperMove(ref uint offset, ushort register, ushort value)
+        {
+            _machine.Bus.WriteWord(offset, (ushort)(register & 0x01FE));
+            _machine.Bus.WriteWord(offset + 2, value);
+            offset += 4;
+        }
+
+        private int ReadPositiveWordOrDefault(uint address, int defaultValue)
+        {
+            return TryReadWord(address, out var value) && value != 0 ? value : defaultValue;
+        }
+
+        private bool TryReadLong(uint address, out uint value)
+        {
+            if (!_machine.Bus.IsMappedMemoryRange(address, 4))
+            {
+                value = 0;
+                return false;
+            }
+
+            value = _machine.Bus.ReadLong(address);
+            return true;
+        }
+
+        private bool TryReadWord(uint address, out ushort value)
+        {
+            if (!_machine.Bus.IsMappedMemoryRange(address, 2))
+            {
+                value = 0;
+                return false;
+            }
+
+            value = _machine.Bus.ReadWord(address);
+            return true;
+        }
+
+        private static ushort EncodeDiwStart(int dx, int dy)
+        {
+            var hStart = Math.Clamp(0x81 + dx, 0, 0xFF);
+            var vStart = Math.Clamp(0x2C + dy, 0, 0xFF);
+            return (ushort)((vStart << 8) | hStart);
+        }
+
+        private static ushort EncodeDiwStop(int dx, int dy, int width, int height)
+        {
+            var hStart = Math.Clamp(0x81 + dx, 0, 0xFF);
+            var vStart = Math.Clamp(0x2C + dy, 0, 0xFF);
+            var hStop = Math.Clamp(hStart + Math.Max(16, width), 0x100, 0x1FF);
+            var vStop = vStart + Math.Max(1, height);
+            return (ushort)(((vStop & 0xFF) << 8) | (hStop & 0xFF));
+        }
+
         private uint EnsureWorkbenchDiskObject()
         {
             if (_workbenchDiskObjectAddress != 0)
@@ -935,8 +1470,42 @@ namespace CopperMod.Amiga
                 return EnsureSyntheticHostObject();
             }
 
-            _machine.Bus.WriteLong(_syntheticScreenAddress + 0x2C, EnsureSyntheticWindow());
+            _machine.Bus.WriteLong(_syntheticScreenAddress + ScreenFirstWindowOffset, EnsureSyntheticWindow());
+            InitializeSyntheticViewPort(GetSyntheticScreenViewPortAddress());
+            EnsureSyntheticView();
             return _syntheticScreenAddress;
+        }
+
+        private uint GetSyntheticScreenViewPortAddress()
+        {
+            return EnsureSyntheticScreen() + ScreenViewPortOffset;
+        }
+
+        private uint EnsureSyntheticView()
+        {
+            if (_syntheticViewAddress != 0)
+            {
+                return _syntheticViewAddress;
+            }
+
+            _syntheticViewAddress = AllocateProgramMemory(0x20);
+            if (_syntheticViewAddress == 0)
+            {
+                return EnsureSyntheticHostObject();
+            }
+
+            _machine.Bus.WriteLong(_syntheticViewAddress + ViewViewPortOffset, GetSyntheticScreenViewPortAddress());
+            _currentViewAddress = _syntheticViewAddress;
+            return _syntheticViewAddress;
+        }
+
+        private void InitializeSyntheticViewPort(uint viewPort)
+        {
+            _machine.Bus.WriteWord(viewPort + ViewPortDWidthOffset, (ushort)AmigaConstants.PalLowResWidth);
+            _machine.Bus.WriteWord(viewPort + ViewPortDHeightOffset, 256);
+            _machine.Bus.WriteWord(viewPort + ViewPortDxOffsetOffset, 0);
+            _machine.Bus.WriteWord(viewPort + ViewPortDyOffsetOffset, 0);
+            _machine.Bus.WriteWord(viewPort + ViewPortModesOffset, 0);
         }
 
         private uint EnsureSyntheticWindow()
@@ -1231,6 +1800,12 @@ namespace CopperMod.Amiga
         private void HostFindResident(M68kCpuState state)
         {
             var name = ReadNullTerminatedString(state.A[1], 96);
+            if (_execDiagnosticCount < 16)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_FIND_RESIDENT", $"FindResident requested '{name}'."));
+                _execDiagnosticCount++;
+            }
+
             if (name.IndexOf("dos", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 EnsureDosResident();
@@ -1310,19 +1885,37 @@ namespace CopperMod.Amiga
 
             _dosBootContinuationStarted = true;
             var fileSystem = EnsureDosFileSystem();
-            if (!fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out var toolTypes) ||
-                !fileSystem.TryReadFile(toolPath, out _))
+            AmigaProgramLaunchRequest request;
+            string autostartDescription;
+            if (fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out var toolTypes) &&
+                fileSystem.TryReadFile(toolPath, out _))
+            {
+                request = new AmigaProgramLaunchRequest(
+                    toolPath,
+                    projectPath,
+                    AmigaDosFileSystem.GetDirectoryName(projectPath),
+                    toolTypes,
+                    4096,
+                    cliArguments: null);
+                autostartDescription = $"Workbench default tool {toolPath}";
+            }
+            else if (TryCreateStartupSequenceLaunchRequest(fileSystem, out request, out autostartDescription))
+            {
+            }
+            else
             {
                 return false;
             }
 
-            var request = new AmigaProgramLaunchRequest(
-                toolPath,
-                projectPath,
-                AmigaDosFileSystem.GetDirectoryName(projectPath),
-                toolTypes,
-                4096,
-                cliArguments: null);
+            PendingWorkbenchLaunchRequest = request;
+            if (!AutoStartWorkbenchDefaultTool)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_WORKBENCH_HANDOFF",
+                    $"{autostartDescription} is ready to launch."));
+                return false;
+            }
+
             if (!TryLaunchProgram(request, out _, out _))
             {
                 return false;
@@ -1330,8 +1923,61 @@ namespace CopperMod.Amiga
 
             _diagnostics.Add(new AmigaBootDiagnostic(
                 "AMIGA_BOOT_DOS_AUTOSTART",
-                $"Started Workbench default tool {toolPath}."));
+                $"Started {autostartDescription}."));
             return true;
+        }
+
+        private bool TryCreateStartupSequenceLaunchRequest(
+            AmigaDosFileSystem fileSystem,
+            out AmigaProgramLaunchRequest request,
+            out string description)
+        {
+            request = default;
+            description = string.Empty;
+            if (!TryReadStartupSequence(fileSystem, out var startupSequence))
+            {
+                return false;
+            }
+
+            foreach (var rawLine in startupSequence.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0 || line[0] == ';')
+                {
+                    continue;
+                }
+
+                var executablePath = ExtractStartupCommandPath(line);
+                if (executablePath.Length == 0 ||
+                    !fileSystem.TryCreateLaunchRequest(executablePath, out request, out _))
+                {
+                    continue;
+                }
+
+                description = $"startup-sequence command {executablePath}";
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryReadStartupSequence(AmigaDosFileSystem fileSystem, out string startupSequence)
+        {
+            if (fileSystem.TryReadFile("s/startup-sequence", out var data) ||
+                fileSystem.TryReadFile("startup-sequence", out data))
+            {
+                startupSequence = Encoding.ASCII.GetString(data);
+                return true;
+            }
+
+            startupSequence = string.Empty;
+            return false;
+        }
+
+        private static string ExtractStartupCommandPath(string line)
+        {
+            var end = line.IndexOfAny(new[] { ' ', '\t' });
+            return end < 0 ? line : line[..end];
         }
 
         public bool TryLaunchProgram(
@@ -1780,6 +2426,7 @@ namespace CopperMod.Amiga
                 ? AlignDown(_machine.Bus.ExpansionRamBase + (uint)_machine.Bus.ExpansionRam.Length, 4)
                 : 0;
 
+            BigEndian.WriteUInt32(execImage, 0x00, AmigaKickstartHost.ExecLibraryBase);
             BigEndian.WriteUInt16(execImage, ExecSoftVerOffset, Kickstart13SoftVer);
             BigEndian.WriteUInt16(execImage, ExecLowMemChkSumOffset, CalculateLowMemoryVectorChecksum());
             BigEndian.WriteUInt32(execImage, ExecChkBaseOffset, ~AmigaKickstartHost.ExecLibraryBase);

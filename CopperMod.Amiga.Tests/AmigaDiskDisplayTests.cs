@@ -407,6 +407,85 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void DisplayDualPlayfieldUsesSeparatedColorGroupsAndPriority()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF192, 0x00F0);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x0038);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF0E4, 0x0000);
+        bus.WriteWord(0x00DFF0E6, 0x1100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xC000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1100, 0x8000);
+        bus.WriteWord(0x00DFF100, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 1, StandardY));
+
+        bus.WriteWord(0x00DFF104, 0x0040);
+        Array.Clear(frame);
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 1, StandardY));
+    }
+
+    [Fact]
+    public void CopperCanSwitchFromDualPlayfieldToNormalStatusBand()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1100, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1200, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x0182);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0x0F00);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0192);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0x0092);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0x0038);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0x0094);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0x0038);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2410, 0x00E0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2412, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2414, 0x00E2);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2416, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2418, 0x00E4);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241A, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241C, 0x00E6);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241E, 0x1100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2420, 0x0100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2422, 0x2400);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2424, 0x2D01);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2426, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2428, 0x0182);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x242A, 0x000F);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x242C, 0x00E0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x242E, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2430, 0x00E2);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2432, 0x1200);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2434, 0x0100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2436, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2438, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x243A, 0xFFFE);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX, StandardY + 1));
+    }
+
+    [Fact]
     public void CopperBitplaneCountIncreaseStartsNewPlaneAtCurrentRasterRow()
     {
         var bus = new AmigaBus();
@@ -603,6 +682,54 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void CopperSkipSkipsFollowingMoveWhenBeamAlreadyReachedPosition()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x0001);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0x00FF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x0F00);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0x000F);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0xFFFE);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 0, 0));
+    }
+
+    [Fact]
+    public void CopperJumpTwoContinuesRenderingFromSecondCopperList()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x0084);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0086);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x2600);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0x008A);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0x0F00);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2410, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2412, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2600, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2602, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2604, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2606, 0xFFFE);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+    }
+
+    [Fact]
     public void CpuCop1LcWriteDuringFrameWinsOverCopperSelfChainForNextFrame()
     {
         var bus = new AmigaBus();
@@ -691,13 +818,110 @@ public sealed class AmigaDiskDisplayTests
         var bus = new AmigaBus();
         bus.WriteWord(0x00DFF180, 0x0000);
         bus.WriteWord(0x00DFF1A2, 0x000F);
-        bus.WriteWord(0x00DFF140, 0x0A0A);
+        var (pos, ctl) = EncodeSpritePosition(10, 10, 1);
+        bus.WriteWord(0x00DFF140, pos);
+        bus.WriteWord(0x00DFF142, ctl);
         bus.WriteWord(0x00DFF144, 0x8000);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
         bus.Display.RenderFrame(frame);
 
         Assert.Equal(0xFF0000FFu, Pixel(frame, 10, 10));
+    }
+
+    [Fact]
+    public void HardwareSpriteDmaListRendersMultipleRowsFromPointer()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF096, 0x8220);
+        bus.Paula.AdvanceTo(0);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        bus.WriteWord(0x00DFF1A4, 0x00F0);
+        var (pos, ctl) = EncodeSpritePosition(24, 30, 2);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, pos);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3002, ctl);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3004, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3006, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3008, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x300A, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x300C, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x300E, 0x0000);
+        bus.WriteWord(0x00DFF120, 0x0000);
+        bus.WriteWord(0x00DFF122, 0x3000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 30));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 24, 31));
+    }
+
+    [Fact]
+    public void HardwareSpriteDmaListIsIgnoredWhenSpriteDmaIsDisabled()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        var (pos, ctl) = EncodeSpritePosition(24, 30, 1);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, pos);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3002, ctl);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3004, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3006, 0x0000);
+        bus.WriteWord(0x00DFF120, 0x0000);
+        bus.WriteWord(0x00DFF122, 0x3000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, 24, 30));
+    }
+
+    [Fact]
+    public void OddHardwareSpriteUsesSamePaletteGroupAsPreviousEvenSprite()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        bus.WriteWord(0x00DFF1A6, 0x00F0);
+        var (pos, ctl) = EncodeSpritePosition(12, 12, 1);
+        bus.WriteWord(0x00DFF148, pos);
+        bus.WriteWord(0x00DFF14A, ctl);
+        bus.WriteWord(0x00DFF14C, 0x8000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 12, 12));
+    }
+
+    [Fact]
+    public void AttachedHardwareSpritePairUsesCombinedFourBitPalette()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF096, 0x8220);
+        bus.Paula.AdvanceTo(0);
+        bus.WriteWord(0x00DFF1AA, 0x00F0);
+        var (evenPos, evenCtl) = EncodeSpritePosition(32, 40, 1);
+        var (oddPos, oddCtl) = EncodeSpritePosition(32, 40, 1, attached: true);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, evenPos);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3002, evenCtl);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3004, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3006, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3100, oddPos);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3102, oddCtl);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3104, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3106, 0x0000);
+        bus.WriteWord(0x00DFF120, 0x0000);
+        bus.WriteWord(0x00DFF122, 0x3000);
+        bus.WriteWord(0x00DFF124, 0x0000);
+        bus.WriteWord(0x00DFF126, 0x3100);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 32, 40));
     }
 
     [Fact]
@@ -734,6 +958,27 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF058, 0x0041);
 
         Assert.Equal(0xFF00, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "blitter destination"));
+    }
+
+    [Fact]
+    public void BlitterLineModeDrawsBoundedPixel()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x4000, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x4002, 0x5678);
+
+        bus.WriteWord(0x00DFF040, 0x0BCA);
+        bus.WriteWord(0x00DFF042, 0x0001);
+        bus.WriteWord(0x00DFF048, 0x0000);
+        bus.WriteWord(0x00DFF04A, 0x4000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        bus.WriteWord(0x00DFF072, 0xFFFF);
+        bus.WriteWord(0x00DFF074, 0x8000);
+        bus.WriteWord(0x00DFF058, 0x0042);
+
+        Assert.Equal(0x8000, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "line-mode destination"));
+        Assert.Equal(0x5678, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "line-mode overflow sentinel"));
     }
 
     [Fact]
@@ -837,6 +1082,7 @@ public sealed class AmigaDiskDisplayTests
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
 
         bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x71, 0);
         bus.WriteByte(0x00BFD100, 0x70, 0);
         bus.WriteByte(0x00BFD100, 0x71, 0);
@@ -857,6 +1103,7 @@ public sealed class AmigaDiskDisplayTests
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
 
         bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0xFE, 0);
         bus.WriteByte(0x00BFD100, 0xFF, 0);
 
@@ -870,6 +1117,26 @@ public sealed class AmigaDiskDisplayTests
         snapshot = bus.Disk.CaptureSnapshot();
         Assert.Equal(1, snapshot.Cylinder);
         Assert.True(snapshot.Selected);
+    }
+
+    [Fact]
+    public void CiaBPortBDoesNotTreatOtherDriveSelectBitsAsDf0()
+    {
+        var bus = new AmigaBus();
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
+
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
+        bus.WriteByte(0x00BFD100, 0x7F, 0);
+        bus.WriteByte(0x00BFD100, 0xEF, 0);
+        bus.WriteByte(0x00BFD100, 0xEE, 0);
+
+        var snapshot = bus.Disk.CaptureSnapshot();
+        Assert.False(snapshot.Selected);
+        Assert.False(snapshot.MotorOn);
+        Assert.Equal(0, snapshot.Cylinder);
+        Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
     }
 
     [Fact]
@@ -893,6 +1160,28 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(1, snapshot.TransferCount);
         Assert.Equal(2, snapshot.LastTransferWords);
         Assert.Equal(0x4000u, snapshot.LastTransferAddress);
+    }
+
+    [Fact]
+    public void FloppyIndexPulseSetsCiaBFlagInterrupt()
+    {
+        var bus = new AmigaBus();
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
+        bus.AbleCiaInterrupts(AmigaCiaId.B, 0x80 | AmigaCia.FlagInterruptMask, 0);
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
+        bus.WriteByte(0x00BFD100, 0x77, 0);
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        var indexCycle = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 5);
+
+        bus.AdvanceCiasTo(indexCycle - 1);
+        Assert.Empty(bus.DrainCiaInterrupts());
+
+        bus.AdvanceCiasTo(indexCycle);
+
+        var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
+        Assert.Equal(AmigaCiaId.B, interruptEvent.Cia);
+        Assert.Equal(AmigaCia.FlagInterruptMask, interruptEvent.IcrBits);
     }
 
     [Fact]
@@ -957,6 +1246,21 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void WordSyncedDiskDmaDoesNotAdvanceRawTrackBeforeMotorStarts()
+    {
+        var bus = new AmigaBus();
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
+        bus.WriteWord(0x00DFF09E, 0x8400);
+        bus.Paula.AdvanceTo(0);
+
+        StartDiskDma(bus, 0x4000, 0x0020, 1_000_000);
+
+        Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "synced DMA word"));
+        Assert.Equal(0xFF00_090Bu, DecodeOddEvenLong(bus.ChipRam, 0x4002, 0x4006));
+    }
+
+    [Fact]
     public void WordSyncedDiskDmaNormalizesConsecutiveSyncPairWhenCurrentPositionIsSecondSync()
     {
         var bus = new AmigaBus();
@@ -1015,9 +1319,10 @@ public sealed class AmigaDiskDisplayTests
         var inserted = bus.ReadByte(0x00BFE001);
         Assert.NotEqual(0, inserted & 0x04);
         Assert.Equal(0, inserted & 0x10);
-        Assert.NotEqual(0, inserted & 0x20);
+        Assert.Equal(0, inserted & 0x20);
 
         bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x77, 0);
         var ready = bus.ReadByte(0x00BFE001);
         Assert.Equal(0, ready & 0x20);
@@ -1028,6 +1333,27 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteByte(0x00BFD100, 0x71, 0);
         bus.WriteByte(0x00BFD100, 0x70, 0);
         Assert.NotEqual(0, bus.ReadByte(0x00BFE001) & 0x04);
+    }
+
+    [Fact]
+    public void CiaAPortAReportsReadyForInsertedDf0()
+    {
+        var bus = new AmigaBus();
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
+
+        Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
+
+        bus.WriteByte(0x00BFD100, 0xF7, 0);
+        Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
+
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD100, 0x77, 0);
+        Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
+
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
     }
 
     [Fact]
@@ -1055,6 +1381,22 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFE03, bus.ReadWord(0x00DFF00A));
         Assert.Equal(0x0103, bus.ReadWord(0x00DFF00C));
+    }
+
+    [Theory]
+    [InlineData(true, false, false, false, 0x0100)]
+    [InlineData(false, true, false, false, 0x0001)]
+    [InlineData(false, false, true, false, 0x0300)]
+    [InlineData(false, false, false, true, 0x0003)]
+    [InlineData(true, false, true, false, 0x0200)]
+    [InlineData(false, true, false, true, 0x0002)]
+    public void JoyDatReportsJoystickQuadratureDirections(bool up, bool down, bool left, bool right, ushort expected)
+    {
+        var bus = new AmigaBus();
+
+        bus.SetGamePortJoystick(1, up, down, left, right);
+
+        Assert.Equal(expected, bus.ReadWord(0x00DFF00C));
     }
 
     [Fact]
@@ -1143,13 +1485,27 @@ public sealed class AmigaDiskDisplayTests
         return frame[(y * AmigaConstants.PalLowResWidth) + x];
     }
 
-    private static void StartDiskDma(AmigaBus bus, uint targetAddress, ushort words)
+    private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height, bool attached = false)
     {
-        bus.WriteWord(0x00DFF020, (ushort)(targetAddress >> 16));
-        bus.WriteWord(0x00DFF022, (ushort)targetAddress);
+        var hStart = x + (0x81 - AmigaConstants.PalLowResOverscanBorderX);
+        var vStart = y + (0x2C - AmigaConstants.PalLowResOverscanBorderY);
+        var vStop = vStart + height;
+        var pos = (ushort)(((vStart & 0xFF) << 8) | ((hStart >> 1) & 0xFF));
+        var ctl = (ushort)(((vStop & 0xFF) << 8) |
+            (hStart & 0x0001) |
+            ((vStop & 0x100) != 0 ? 0x0002 : 0) |
+            ((vStart & 0x100) != 0 ? 0x0004 : 0) |
+            (attached ? 0x0080 : 0));
+        return (pos, ctl);
+    }
+
+    private static void StartDiskDma(AmigaBus bus, uint targetAddress, ushort words, long cycle = 0)
+    {
+        bus.WriteWord(0x00DFF020, (ushort)(targetAddress >> 16), cycle);
+        bus.WriteWord(0x00DFF022, (ushort)targetAddress, cycle);
         var dsklen = (ushort)(0x8000 | words);
-        bus.WriteWord(0x00DFF024, dsklen);
-        bus.WriteWord(0x00DFF024, dsklen);
+        bus.WriteWord(0x00DFF024, dsklen, cycle);
+        bus.WriteWord(0x00DFF024, dsklen, cycle);
     }
 
     private static uint DecodeOddEvenLong(ReadOnlySpan<byte> data, int oddOffset, int evenOffset)

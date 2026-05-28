@@ -24,6 +24,8 @@ namespace CopperMod.Amiga
         void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind);
 
         bool TryInvokeHost(uint address, M68kCpuState state);
+
+        void ResetExternalDevices(long cycle);
     }
 
     internal interface IM68kCore
@@ -98,6 +100,8 @@ namespace CopperMod.Amiga
 
         public bool Halted { get; set; }
 
+        public bool Stopped { get; set; }
+
         public ushort LastOpcode { get; set; }
 
         public uint LastInstructionProgramCounter { get; set; }
@@ -132,6 +136,15 @@ namespace CopperMod.Amiga
             else
             {
                 UserStackPointer = stackPointer;
+            }
+        }
+
+        public void SetUserStackPointer(uint stackPointer)
+        {
+            UserStackPointer = stackPointer;
+            if (!GetFlag(Supervisor))
+            {
+                A[7] = stackPointer;
             }
         }
 
@@ -258,6 +271,12 @@ namespace CopperMod.Amiga
                 return 1;
             }
 
+            if (State.Stopped)
+            {
+                State.Cycles++;
+                return 1;
+            }
+
             var startCycles = State.Cycles;
             var directHostAddress = State.ProgramCounter;
             if (_bus.TryInvokeHost(directHostAddress, State))
@@ -282,7 +301,7 @@ namespace CopperMod.Amiga
                 return (int)(State.Cycles - startCycles);
             }
 
-            if (DecodeLine0(opcode) ||
+            if (DecodeLine0(opcode, instructionPc) ||
                 DecodeLine4(opcode, instructionPc) ||
                 DecodeLine5(opcode) ||
                 DecodeBranch(opcode, instructionPc) ||
@@ -290,6 +309,18 @@ namespace CopperMod.Amiga
                 DecodeArithmetic(opcode) ||
                 DecodeShiftRotate(opcode))
             {
+                return (int)(State.Cycles - startCycles);
+            }
+
+            if ((opcode & 0xF000) == 0xA000)
+            {
+                RaiseException(10, instructionPc, 34);
+                return (int)(State.Cycles - startCycles);
+            }
+
+            if ((opcode & 0xF000) == 0xF000)
+            {
+                RaiseException(11, instructionPc, 34);
                 return (int)(State.Cycles - startCycles);
             }
 
@@ -304,6 +335,7 @@ namespace CopperMod.Amiga
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
             State.Cycles = 0;
             State.Halted = false;
+            State.Stopped = false;
             State.LastOpcode = 0;
         }
 
@@ -313,6 +345,7 @@ namespace CopperMod.Amiga
             PushLong(returnAddress);
             State.ProgramCounter = address;
             State.Halted = false;
+            State.Stopped = false;
         }
 
         public void RequestInterrupt(int level, uint vectorAddress)
@@ -328,6 +361,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            State.Stopped = false;
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((State.StatusRegister & 0xF8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
             PushLong(State.ProgramCounter);
@@ -426,8 +460,13 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private bool DecodeLine0(ushort opcode)
+        private bool DecodeLine0(ushort opcode, uint instructionPc)
         {
+            if (DecodeImmediateToStatusRegister(opcode, instructionPc))
+            {
+                return true;
+            }
+
             if ((opcode & 0xFF00) is 0x0800 or 0x0840 or 0x0880 or 0x08C0)
             {
                 var bit = FetchWord() & 31;
@@ -537,6 +576,42 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        private bool DecodeImmediateToStatusRegister(ushort opcode, uint instructionPc)
+        {
+            if (opcode is not (0x003C or 0x007C or 0x023C or 0x027C or 0x0A3C or 0x0A7C))
+            {
+                return false;
+            }
+
+            var immediate = FetchWord();
+            var operation = opcode & 0x0F00;
+            var status = State.StatusRegister;
+            var result = operation switch
+            {
+                0x0000 => status | immediate,
+                0x0200 => status & immediate,
+                0x0A00 => status ^ immediate,
+                _ => status
+            };
+
+            if ((opcode & 0x0040) == 0)
+            {
+                SetCcr((ushort)result);
+                AddCycles(8);
+                return true;
+            }
+
+            if (!State.GetFlag(M68kCpuState.Supervisor))
+            {
+                RaiseException(8, instructionPc, 34);
+                return true;
+            }
+
+            State.StatusRegister = (ushort)result;
+            AddCycles(20);
+            return true;
+        }
+
         private bool DecodeLine4(ushort opcode, uint instructionPc)
         {
             switch (opcode)
@@ -549,12 +624,23 @@ namespace CopperMod.Amiga
                     State.StatusRegister = FetchWord();
                     AddCycles(12);
                     return true;
+                case 0x4E70:
+                    _bus.ResetExternalDevices(State.Cycles);
+                    AddCycles(132);
+                    return true;
                 case 0x4E71:
                     AddCycles(4);
                     return true;
                 case 0x4E72:
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseException(8, instructionPc, 34);
+                        return true;
+                    }
+
                     State.StatusRegister = FetchWord();
-                    AddCycles(20);
+                    State.Stopped = true;
+                    AddCycles(4);
                     return true;
                 case 0x4E73:
                 {
@@ -577,6 +663,64 @@ namespace CopperMod.Amiga
                     State.StatusRegister = PullWord();
                     AddCycles(12);
                     return true;
+            }
+
+            if (opcode is 0x4E7A or 0x4E7B)
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
+            if ((opcode & 0xFFF0) == 0x4E60)
+            {
+                if (!State.GetFlag(M68kCpuState.Supervisor))
+                {
+                    RaiseException(8, instructionPc, 34);
+                    return true;
+                }
+
+                var reg = opcode & 7;
+                if ((opcode & 0x0008) == 0)
+                {
+                    State.SetUserStackPointer(State.A[reg]);
+                }
+                else
+                {
+                    SetAddressRegister(reg, State.UserStackPointer);
+                }
+
+                AddCycles(4);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x40C0)
+            {
+                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word, write: true);
+                ea.Write(State.StatusRegister);
+                AddCycles(12);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x44C0)
+            {
+                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
+                SetCcr((ushort)ea.Read());
+                AddCycles(12);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x46C0)
+            {
+                if (!State.GetFlag(M68kCpuState.Supervisor))
+                {
+                    RaiseException(8, instructionPc, 34);
+                    return true;
+                }
+
+                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
+                State.StatusRegister = (ushort)ea.Read();
+                AddCycles(12);
+                return true;
             }
 
             if ((opcode & 0xFFF8) == 0x4E50)
@@ -840,9 +984,19 @@ namespace CopperMod.Amiga
             var mode = (opcode >> 3) & 7;
             var eaReg = opcode & 7;
 
+            if (line == 0xC && DecodeExchange(opcode))
+            {
+                return true;
+            }
+
             if ((line == 0x9 || line == 0xD) && opmode is 4 or 5 or 6 && mode is 0 or 1)
             {
                 DecodeAddSubX(line == 0xD, opmode, mode, reg, eaReg);
+                return true;
+            }
+
+            if (line == 0xB && DecodeCmpm(opcode))
+            {
                 return true;
             }
 
@@ -1040,6 +1194,82 @@ namespace CopperMod.Amiga
 
             AddCycles(operandSize == M68kOperandSize.Long ? 12 : 8);
             return true;
+        }
+
+        private bool DecodeCmpm(ushort opcode)
+        {
+            if ((opcode & 0xF138) != 0xB108)
+            {
+                return false;
+            }
+
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                2 => M68kOperandSize.Long,
+                _ => (M68kOperandSize)0
+            };
+            if (size == 0)
+            {
+                return false;
+            }
+
+            var destinationRegister = (opcode >> 9) & 7;
+            var sourceRegister = opcode & 7;
+            var sourceAddress = State.A[sourceRegister];
+            var source = size switch
+            {
+                M68kOperandSize.Byte => ReadByte(sourceAddress),
+                M68kOperandSize.Word => ReadWord(sourceAddress),
+                _ => ReadLong(sourceAddress)
+            };
+            SetAddressRegister(sourceRegister, sourceAddress + AddressIncrement(sourceRegister, size));
+
+            var destinationAddress = State.A[destinationRegister];
+            var destination = size switch
+            {
+                M68kOperandSize.Byte => ReadByte(destinationAddress),
+                M68kOperandSize.Word => ReadWord(destinationAddress),
+                _ => ReadLong(destinationAddress)
+            };
+            SetAddressRegister(destinationRegister, destinationAddress + AddressIncrement(destinationRegister, size));
+
+            _ = Subtract(destination, source, size, setExtend: false, storeResult: false);
+            AddCycles(size == M68kOperandSize.Long ? 20 : 12);
+            return true;
+        }
+
+        private bool DecodeExchange(ushort opcode)
+        {
+            var left = (opcode >> 9) & 7;
+            var right = opcode & 7;
+            if ((opcode & 0xF1F8) == 0xC140)
+            {
+                (State.D[left], State.D[right]) = (State.D[right], State.D[left]);
+                AddCycles(6);
+                return true;
+            }
+
+            if ((opcode & 0xF1F8) == 0xC148)
+            {
+                var value = State.A[left];
+                SetAddressRegister(left, State.A[right]);
+                SetAddressRegister(right, value);
+                AddCycles(6);
+                return true;
+            }
+
+            if ((opcode & 0xF1F8) == 0xC188)
+            {
+                var value = State.D[left];
+                State.D[left] = State.A[right];
+                SetAddressRegister(right, value);
+                AddCycles(6);
+                return true;
+            }
+
+            return false;
         }
 
         private void DecodeAddSubX(bool add, int opmode, int mode, int destinationRegister, int sourceRegister)
@@ -1667,6 +1897,16 @@ namespace CopperMod.Amiga
         private void AddCycles(int cycles)
         {
             State.Cycles += Math.Max(1, cycles);
+        }
+
+        private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
+        {
+            var savedStatusRegister = State.StatusRegister;
+            State.StatusRegister |= M68kCpuState.Supervisor;
+            PushLong(stackedProgramCounter);
+            PushWord(savedStatusRegister);
+            State.ProgramCounter = ReadLong((uint)(vector * 4));
+            AddCycles(cycles);
         }
 
         private static uint AddressIncrement(int reg, M68kOperandSize size)

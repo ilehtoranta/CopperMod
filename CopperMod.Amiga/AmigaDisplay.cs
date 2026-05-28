@@ -13,6 +13,8 @@ namespace CopperMod.Amiga
         private const ushort DefaultDdfStart = 0x0038;
         private const ushort DefaultDdfStop = 0x00D0;
         private const ushort DefaultHighResDdfStart = 0x003C;
+        private const ushort DmaconMasterEnable = 0x0200;
+        private const ushort DmaconSpriteEnable = 0x0020;
         private const int MaxBitplaneFetchWords = 64;
         private static readonly double PalLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
         private readonly AmigaBus _bus;
@@ -26,12 +28,15 @@ namespace CopperMod.Amiga
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private int _pendingIndex;
         private uint _copperListPointer;
+        private uint _copperListPointer2;
         private ushort _diwStart;
         private ushort _diwStop;
         private ushort _ddfStart;
         private ushort _ddfStop;
         private ushort _bplcon0;
         private ushort _bplcon1;
+        private ushort _bplcon2;
+        private ushort _dmacon;
         private short _bpl1mod;
         private short _bpl2mod;
         private int _lastBitplaneNonZeroPixels;
@@ -95,12 +100,15 @@ namespace CopperMod.Amiga
             Array.Clear(_bitplanePointers);
             Array.Clear(_bitplaneBaseRows);
             _copperListPointer = 0;
+            _copperListPointer2 = 0;
             _diwStart = DefaultDiwStart;
             _diwStop = DefaultDiwStop;
             _ddfStart = DefaultDdfStart;
             _ddfStop = DefaultDdfStop;
             _bplcon0 = 0;
             _bplcon1 = 0;
+            _bplcon2 = 0;
+            _dmacon = 0;
             _bpl1mod = 0;
             _bpl2mod = 0;
             _currentRenderRow = -1;
@@ -196,6 +204,15 @@ namespace CopperMod.Amiga
                         var register = (ushort)(first & 0x01FE);
                         ApplyCopperMove(register, second, GetCopperMoveCycle(frameStartCycle, currentRow, useTimedWrites));
                         currentBeamHorizontal = AdvanceCopperBeamHorizontal(currentBeamHorizontal);
+                        if (register == 0x088)
+                        {
+                            pc = _copperListPointer;
+                        }
+                        else if (register == 0x08A)
+                        {
+                            pc = _copperListPointer2;
+                        }
+
                         continue;
                     }
 
@@ -211,6 +228,11 @@ namespace CopperMod.Amiga
                         RenderCopperWaitSpan(bgra, frameStartCycle, useTimedWrites, ref currentRow, ref currentBeamHorizontal, wait);
                         currentBeamHorizontal = wait.Horizontal;
                         continue;
+                    }
+
+                    if (ShouldCopperSkipNextInstruction(first, second, currentRow, currentBeamHorizontal))
+                    {
+                        pc += 4;
                     }
                 }
 
@@ -320,6 +342,20 @@ namespace CopperMod.Amiga
             return new CopperWaitPosition(waitRow, waitHorizontal);
         }
 
+        private static bool ShouldCopperSkipNextInstruction(ushort first, ushort second, int currentRow, int currentHorizontal)
+        {
+            var verticalMask = (second >> 8) & 0xFF;
+            var horizontalMask = second & 0xFE;
+            var waitRow = verticalMask == 0
+                ? currentRow
+                : GetCopperWaitOutputRow(first, second);
+            var waitHorizontal = first & 0xFE;
+            var maskedWaitHorizontal = horizontalMask == 0 ? 0 : waitHorizontal & horizontalMask;
+            var maskedCurrentHorizontal = horizontalMask == 0 ? 0 : currentHorizontal & horizontalMask;
+            return waitRow < currentRow ||
+                (waitRow == currentRow && maskedWaitHorizontal <= maskedCurrentHorizontal);
+        }
+
         private void RenderRows(Span<uint> bgra, int rowStart, int rowStop, long frameStartCycle, bool useTimedWrites, int xStart = 0, int xStop = -1)
         {
             if (xStop < 0)
@@ -419,8 +455,27 @@ namespace CopperMod.Amiga
             return offset is 0x080 or 0x082 or 0x084 or 0x086;
         }
 
+        private static void ApplySetClear(ref ushort register, ushort value)
+        {
+            var mask = (ushort)(value & 0x7FFF);
+            if ((value & 0x8000) != 0)
+            {
+                register |= mask;
+            }
+            else
+            {
+                register &= (ushort)~mask;
+            }
+        }
+
         private void ApplyWrite(ushort offset, ushort value)
         {
+            if (offset == 0x096)
+            {
+                ApplySetClear(ref _dmacon, value);
+                return;
+            }
+
             if (offset == 0x100)
             {
                 var oldPlaneCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
@@ -441,6 +496,12 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (offset == 0x104)
+            {
+                _bplcon2 = value;
+                return;
+            }
+
             if (offset == 0x080)
             {
                 _copperListPointer = (_copperListPointer & 0x0000_FFFF) | ((uint)value << 16);
@@ -453,7 +514,19 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (offset == 0x088)
+            if (offset == 0x084)
+            {
+                _copperListPointer2 = (_copperListPointer2 & 0x0000_FFFF) | ((uint)value << 16);
+                return;
+            }
+
+            if (offset == 0x086)
+            {
+                _copperListPointer2 = (_copperListPointer2 & 0xFFFF_0000) | value;
+                return;
+            }
+
+            if (offset is 0x088 or 0x08A)
             {
                 return;
             }
@@ -795,7 +868,9 @@ namespace CopperMod.Amiga
                         continue;
                     }
 
-                    var colorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
+                    var colorIndex = IsDualPlayfieldEnabled()
+                        ? GetDualPlayfieldColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels)
+                        : GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
                     if (colorIndex != 0)
                     {
                         _lastBitplaneNonZeroPixels++;
@@ -844,6 +919,55 @@ namespace CopperMod.Amiga
             }
 
             return colorIndex;
+        }
+
+        private int GetDualPlayfieldColorIndex(ushort[,] planeWords, bool[] planeHasRow, int planeCount, int x, int originX, int fetchPixels)
+        {
+            var playfield1 = 0;
+            var playfield2 = 0;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if (!planeHasRow[plane])
+                {
+                    continue;
+                }
+
+                var relativeX = x - originX - GetPlaneHorizontalScroll(plane);
+                if (relativeX < 0 || relativeX >= fetchPixels)
+                {
+                    continue;
+                }
+
+                var word = relativeX >> 4;
+                if (word < 0 || word >= MaxBitplaneFetchWords)
+                {
+                    continue;
+                }
+
+                var bit = 15 - (relativeX & 0x0F);
+                var pixelBit = (planeWords[plane, word] >> bit) & 1;
+                if ((plane & 1) == 0)
+                {
+                    playfield1 |= pixelBit << (plane / 2);
+                }
+                else
+                {
+                    playfield2 |= pixelBit << (plane / 2);
+                }
+            }
+
+            if (playfield1 == 0 && playfield2 == 0)
+            {
+                return 0;
+            }
+
+            var playfield2Color = playfield2 == 0 ? 0 : playfield2 + 8;
+            if ((_bplcon2 & 0x0040) != 0)
+            {
+                return playfield2Color != 0 ? playfield2Color : playfield1;
+            }
+
+            return playfield1 != 0 ? playfield1 : playfield2Color;
         }
 
         private int GetDataFetchStartX()
@@ -904,6 +1028,11 @@ namespace CopperMod.Amiga
             return (_bplcon0 & 0x8000) != 0;
         }
 
+        private bool IsDualPlayfieldEnabled()
+        {
+            return (_bplcon0 & 0x0400) != 0;
+        }
+
         private int GetDataFetchStartValue()
         {
             return _ddfStart & (IsHighResolutionEnabled() ? 0x00FC : 0x00F8);
@@ -918,32 +1047,203 @@ namespace CopperMod.Amiga
         {
             for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
             {
-                var sprite = _sprites[spriteIndex];
-                var y = (sprite.Pos >> 8) & 0xFF;
-                var x = sprite.Pos & 0xFF;
-                if (y < 0 || y >= Height || x >= Width)
+                if ((spriteIndex & 1) == 0 &&
+                    spriteIndex + 1 < _sprites.Length &&
+                    TryGetSpriteDescriptor(spriteIndex, out var evenSprite) &&
+                    TryGetSpriteDescriptor(spriteIndex + 1, out var oddSprite) &&
+                    oddSprite.Attached)
+                {
+                    RenderAttachedSpritePair(bgra, evenSprite, oddSprite);
+                    spriteIndex++;
+                    continue;
+                }
+
+                if (TryGetSpriteDescriptor(spriteIndex, out var sprite))
+                {
+                    if ((spriteIndex & 1) != 0 && sprite.Attached)
+                    {
+                        continue;
+                    }
+
+                    RenderSprite(bgra, spriteIndex, sprite);
+                }
+            }
+        }
+
+        private bool TryGetSpriteDescriptor(int spriteIndex, out SpriteDescriptor descriptor)
+        {
+            var sprite = _sprites[spriteIndex];
+            if (IsSpriteDmaEnabled() && sprite.Pointer != 0 && _bus.IsMappedMemoryRange(sprite.Pointer, 4))
+            {
+                var pos = _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, sprite.Pointer, 0);
+                var ctl = _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, sprite.Pointer + 2, 0);
+                if ((pos | ctl) == 0)
+                {
+                    descriptor = default;
+                    return false;
+                }
+
+                descriptor = CreateSpriteDescriptor(pos, ctl, sprite.Pointer + 4, isDma: true, sprite.DataA, sprite.DataB);
+                return descriptor.YStop > descriptor.YStart;
+            }
+
+            if ((sprite.Pos | sprite.Ctl | sprite.DataA | sprite.DataB) == 0)
+            {
+                descriptor = default;
+                return false;
+            }
+
+            descriptor = CreateSpriteDescriptor(sprite.Pos, sprite.Ctl, 0, isDma: false, sprite.DataA, sprite.DataB);
+            return true;
+        }
+
+        private bool IsSpriteDmaEnabled()
+        {
+            return (_dmacon & (DmaconMasterEnable | DmaconSpriteEnable)) == (DmaconMasterEnable | DmaconSpriteEnable);
+        }
+
+        private static SpriteDescriptor CreateSpriteDescriptor(
+            ushort pos,
+            ushort ctl,
+            uint dataAddress,
+            bool isDma,
+            ushort manualDataA,
+            ushort manualDataB)
+        {
+            var hStart = ((pos & 0x00FF) << 1) | (ctl & 0x0001);
+            var vStart = ((pos >> 8) & 0x00FF) | ((ctl & 0x0004) != 0 ? 0x100 : 0);
+            var vStop = ((ctl >> 8) & 0x00FF) | ((ctl & 0x0002) != 0 ? 0x100 : 0);
+            return new SpriteDescriptor(
+                hStart - StandardHStart,
+                vStart - StandardVStart,
+                vStop - StandardVStart,
+                (ctl & 0x0080) != 0,
+                dataAddress,
+                isDma,
+                manualDataA,
+                manualDataB);
+        }
+
+        private void RenderSprite(Span<uint> bgra, int spriteIndex, SpriteDescriptor sprite)
+        {
+            if (!sprite.IsDma)
+            {
+                RenderSpriteLine(bgra, sprite.X, sprite.YStart, sprite.ManualDataA, sprite.ManualDataB, pixel => GetSpriteColorIndex(spriteIndex, pixel));
+                return;
+            }
+
+            var address = sprite.DataAddress;
+            for (var y = sprite.YStart; y < sprite.YStop; y++)
+            {
+                if (!_bus.IsMappedMemoryRange(address, 4))
+                {
+                    return;
+                }
+
+                var dataA = _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, address, 0);
+                var dataB = _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, address + 2, 0);
+                RenderSpriteLine(bgra, sprite.X, y, dataA, dataB, pixel => GetSpriteColorIndex(spriteIndex, pixel));
+                address += 4;
+            }
+        }
+
+        private void RenderAttachedSpritePair(Span<uint> bgra, SpriteDescriptor evenSprite, SpriteDescriptor oddSprite)
+        {
+            var yStart = Math.Min(evenSprite.YStart, oddSprite.YStart);
+            var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
+            for (var y = yStart; y < yStop; y++)
+            {
+                var evenData = ReadSpriteLine(evenSprite, y);
+                var oddData = ReadSpriteLine(oddSprite, y);
+                RenderAttachedSpriteLine(bgra, evenSprite.X, y, evenData.DataA, evenData.DataB, oddData.DataA, oddData.DataB);
+            }
+        }
+
+        private (ushort DataA, ushort DataB) ReadSpriteLine(SpriteDescriptor sprite, int y)
+        {
+            if (y < sprite.YStart || y >= sprite.YStop)
+            {
+                return ((ushort)0, (ushort)0);
+            }
+
+            if (!sprite.IsDma)
+            {
+                return y == sprite.YStart ? (sprite.ManualDataA, sprite.ManualDataB) : ((ushort)0, (ushort)0);
+            }
+
+            var address = sprite.DataAddress + (uint)((y - sprite.YStart) * 4);
+            if (!_bus.IsMappedMemoryRange(address, 4))
+            {
+                return ((ushort)0, (ushort)0);
+            }
+
+            return (
+                _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, address, 0),
+                _bus.ReadChipWordForDevice(AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane, address + 2, 0));
+        }
+
+        private void RenderSpriteLine(Span<uint> bgra, int x, int y, ushort dataA, ushort dataB, Func<int, int> mapColor)
+        {
+            if (y < 0 || y >= Height)
+            {
+                return;
+            }
+
+            for (var bit = 15; bit >= 0; bit--)
+            {
+                var pixel = (((dataB >> bit) & 1) << 1) | ((dataA >> bit) & 1);
+                if (pixel == 0)
                 {
                     continue;
                 }
 
-                for (var bit = 15; bit >= 0; bit--)
+                var px = x + (15 - bit);
+                if (px < 0 || px >= Width)
                 {
-                    var pixel = (((sprite.DataB >> bit) & 1) << 1) | ((sprite.DataA >> bit) & 1);
-                    if (pixel == 0)
-                    {
-                        continue;
-                    }
-
-                    var px = x + (15 - bit);
-                    if (px >= Width)
-                    {
-                        continue;
-                    }
-
-                    var color = Math.Min(31, 16 + (spriteIndex * 2) + pixel);
-                    bgra[(y * Width) + px] = ConvertColor(_colors[color]);
+                    continue;
                 }
+
+                bgra[(y * Width) + px] = ConvertColor(_colors[mapColor(pixel)]);
             }
+        }
+
+        private void RenderAttachedSpriteLine(
+            Span<uint> bgra,
+            int x,
+            int y,
+            ushort evenDataA,
+            ushort evenDataB,
+            ushort oddDataA,
+            ushort oddDataB)
+        {
+            if (y < 0 || y >= Height)
+            {
+                return;
+            }
+
+            for (var bit = 15; bit >= 0; bit--)
+            {
+                var evenPixel = (((evenDataB >> bit) & 1) << 1) | ((evenDataA >> bit) & 1);
+                var oddPixel = (((oddDataB >> bit) & 1) << 1) | ((oddDataA >> bit) & 1);
+                var pixel = (oddPixel << 2) | evenPixel;
+                if (pixel == 0)
+                {
+                    continue;
+                }
+
+                var px = x + (15 - bit);
+                if (px < 0 || px >= Width)
+                {
+                    continue;
+                }
+
+                bgra[(y * Width) + px] = ConvertColor(_colors[16 + pixel]);
+            }
+        }
+
+        private static int GetSpriteColorIndex(int spriteIndex, int pixel)
+        {
+            return 16 + ((spriteIndex / 2) * 4) + pixel;
         }
 
         private static uint ConvertColor(ushort amigaColor)
@@ -1049,6 +1349,45 @@ namespace CopperMod.Amiga
             public ushort Offset { get; }
 
             public ushort Value { get; }
+        }
+
+        private readonly struct SpriteDescriptor
+        {
+            public SpriteDescriptor(
+                int x,
+                int yStart,
+                int yStop,
+                bool attached,
+                uint dataAddress,
+                bool isDma,
+                ushort manualDataA,
+                ushort manualDataB)
+            {
+                X = x;
+                YStart = yStart;
+                YStop = yStop;
+                Attached = attached;
+                DataAddress = dataAddress;
+                IsDma = isDma;
+                ManualDataA = manualDataA;
+                ManualDataB = manualDataB;
+            }
+
+            public int X { get; }
+
+            public int YStart { get; }
+
+            public int YStop { get; }
+
+            public bool Attached { get; }
+
+            public uint DataAddress { get; }
+
+            public bool IsDma { get; }
+
+            public ushort ManualDataA { get; }
+
+            public ushort ManualDataB { get; }
         }
 
         private sealed class SpriteState
@@ -1292,6 +1631,13 @@ namespace CopperMod.Amiga
             var minterm = (byte)(_bltcon0 & 0x00FF);
             var shiftA = (_bltcon0 >> 12) & 0x0F;
             var shiftB = (_bltcon1 >> 12) & 0x0F;
+            var lineMode = (_bltcon1 & 0x0001) != 0;
+            if (lineMode)
+            {
+                RunLine(bltsize, minterm, shiftA, shiftB, cycle);
+                return;
+            }
+
             var descending = (_bltcon1 & 0x0002) != 0;
             var step = descending ? -2 : 2;
             var sourceA = GetEffectiveBlitterAddress(_sourceA);
@@ -1372,6 +1718,128 @@ namespace CopperMod.Amiga
             {
                 _destinationD = destinationD;
             }
+        }
+
+        private void RunLine(ushort bltsize, byte minterm, int shiftA, int shiftB, long cycle)
+        {
+            var length = (bltsize >> 6) & 0x03FF;
+            if (length == 0)
+            {
+                length = 1024;
+            }
+
+            var majorX = (_bltcon1 & 0x0010) != 0;
+            var xDirection = majorX
+                ? ((_bltcon1 & 0x0004) != 0 ? -1 : 1)
+                : ((_bltcon1 & 0x0008) != 0 ? -1 : 1);
+            var yDirection = majorX
+                ? ((_bltcon1 & 0x0008) != 0 ? -1 : 1)
+                : ((_bltcon1 & 0x0004) != 0 ? -1 : 1);
+            var singleDot = (_bltcon1 & 0x0002) != 0;
+            var sourceAddress = GetEffectiveBlitterAddress(_sourceC);
+            var destinationAddress = GetEffectiveBlitterAddress(_destinationD);
+            var sourceRowStride = _sourceCModulo & ~1;
+            var rowStride = _destinationDModulo & ~1;
+            var bit = shiftA & 0x0F;
+            var y = 0;
+            var lastDrawnY = int.MinValue;
+            var error = unchecked((short)_sourceA);
+            var errorIncrement = _sourceBModulo;
+            var errorDecrement = _sourceAModulo;
+
+            for (var i = 0; i < length; i++)
+            {
+                if (!singleDot || y != lastDrawnY)
+                {
+                    DrawLinePixel(sourceAddress, destinationAddress, bit, minterm, shiftB, i, cycle);
+                    lastDrawnY = y;
+                }
+
+                var stepMinor = error >= 0;
+                if (stepMinor)
+                {
+                    error += errorDecrement;
+                }
+                else
+                {
+                    error += errorIncrement;
+                }
+
+                if (majorX)
+                {
+                    MoveLineX(ref sourceAddress, ref destinationAddress, ref bit, xDirection);
+                    if (stepMinor)
+                    {
+                        MoveLineY(ref sourceAddress, sourceRowStride, yDirection);
+                        MoveLineY(ref destinationAddress, rowStride, yDirection);
+                        y += yDirection;
+                    }
+                }
+                else
+                {
+                    MoveLineY(ref sourceAddress, sourceRowStride, yDirection);
+                    MoveLineY(ref destinationAddress, rowStride, yDirection);
+                    y += yDirection;
+                    if (stepMinor)
+                    {
+                        MoveLineX(ref sourceAddress, ref destinationAddress, ref bit, xDirection);
+                    }
+                }
+            }
+
+            _destinationD = destinationAddress;
+            _sourceC = sourceAddress;
+            _sourceA = (uint)(ushort)error;
+        }
+
+        private void DrawLinePixel(uint sourceAddress, uint destinationAddress, int bit, byte minterm, int shiftB, int textureStep, long cycle)
+        {
+            var current = _bus.ReadChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, sourceAddress, cycle);
+            var lineMask = RotateRight(_dataA, bit);
+            var textureBit = (_dataB & (0x8000 >> ((shiftB + textureStep) & 0x0F))) != 0;
+            var texture = textureBit ? (ushort)0xFFFF : (ushort)0;
+            var output = ApplyMinterm(minterm, lineMask, texture, current);
+            _bus.WriteChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, destinationAddress, output, cycle);
+        }
+
+        private static void MoveLineX(ref uint sourceAddress, ref uint destinationAddress, ref int bit, int direction)
+        {
+            if (direction >= 0)
+            {
+                bit++;
+                if (bit <= 15)
+                {
+                    return;
+                }
+
+                bit = 0;
+                sourceAddress += 2;
+                destinationAddress += 2;
+                return;
+            }
+
+            bit--;
+            if (bit >= 0)
+            {
+                return;
+            }
+
+            bit = 15;
+            sourceAddress -= 2;
+            destinationAddress -= 2;
+        }
+
+        private static void MoveLineY(ref uint address, int rowStride, int direction)
+        {
+            address = unchecked((uint)((int)address + (direction >= 0 ? rowStride : -rowStride)));
+        }
+
+        private static ushort RotateRight(ushort value, int bits)
+        {
+            bits &= 0x0F;
+            return bits == 0
+                ? value
+                : (ushort)((value >> bits) | (value << (16 - bits)));
         }
 
         private ushort ReadAndStep(ref uint pointer, int step, long cycle)

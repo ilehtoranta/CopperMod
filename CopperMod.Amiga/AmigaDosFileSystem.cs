@@ -15,6 +15,8 @@ namespace CopperMod.Amiga
         private const int FileSizeOffset = 0x144;
         private const int DataBlockPayloadOffset = 24;
         private const int DataBlockPayloadLength = BlockSize - DataBlockPayloadOffset;
+        private const int RootHashTableOffset = 24;
+        private const int HashTableEntryCount = 72;
         private const uint PrimaryTypeDirectory = 2;
         private const uint PrimaryTypeData = 8;
         private const int SecondaryTypeRoot = 1;
@@ -22,6 +24,8 @@ namespace CopperMod.Amiga
         private const int SecondaryTypeFile = -3;
         private readonly AmigaDiskImage _disk;
         private readonly List<AmigaDosDirectoryEntry> _entries = new List<AmigaDosDirectoryEntry>();
+        private readonly Dictionary<int, int> _headerPhysicalBlocks = new Dictionary<int, int>();
+        private int _rootDirectoryKey = StandardRootBlock;
 
         public AmigaDosFileSystem(AmigaDiskImage disk)
         {
@@ -66,7 +70,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var parent = StandardRootBlock;
+            var parent = _rootDirectoryKey;
             for (var i = 0; i < parts.Length; i++)
             {
                 var isLast = i == parts.Length - 1;
@@ -251,7 +255,7 @@ namespace CopperMod.Amiga
             toolTypes = Array.Empty<string>();
             foreach (var entry in _entries)
             {
-                if (entry.ParentBlock != StandardRootBlock ||
+                if (entry.ParentBlock != _rootDirectoryKey ||
                     !entry.IsFile ||
                     entry.Name.EndsWith(".info", StringComparison.OrdinalIgnoreCase))
                 {
@@ -283,7 +287,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var secondaryType = unchecked((int)ReadUInt32(offset + SecondaryTypeOffset));
+                var secondaryType = ReadSecondaryType(offset);
                 if (secondaryType is not SecondaryTypeRoot and not SecondaryTypeDirectory and not SecondaryTypeFile)
                 {
                     continue;
@@ -295,17 +299,22 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var parent = block == StandardRootBlock ? 0 : checked((int)ReadUInt32(offset + ParentOffset));
+                var headerKey = ReadHeaderKey(offset, block);
+                var parent = secondaryType == SecondaryTypeRoot ? 0 : checked((int)ReadUInt32(offset + ParentOffset));
                 var size = secondaryType == SecondaryTypeFile ? checked((int)ReadUInt32(offset + FileSizeOffset)) : 0;
-                _entries.Add(new AmigaDosDirectoryEntry(block, parent, name, secondaryType, size));
+                _entries.Add(new AmigaDosDirectoryEntry(headerKey, parent, name, secondaryType, size));
+                _headerPhysicalBlocks[headerKey] = block;
             }
+
+            _rootDirectoryKey = ResolveRootDirectoryKey();
         }
 
         private byte[] ReadFile(AmigaDosDirectoryEntry entry)
         {
             var output = new byte[entry.Size];
             var outputOffset = 0;
-            var block = checked((int)ReadUInt32((entry.Block * BlockSize) + FirstDataBlockOffset));
+            var headerBlock = ResolvePhysicalHeaderBlock(entry.Block);
+            var block = checked((int)ReadUInt32((headerBlock * BlockSize) + FirstDataBlockOffset));
             var guard = 0;
             while (block != 0 && outputOffset < output.Length)
             {
@@ -333,6 +342,82 @@ namespace CopperMod.Amiga
             }
 
             return output;
+        }
+
+        private int ResolveRootDirectoryKey()
+        {
+            var rootOffset = StandardRootBlock * BlockSize;
+            if (rootOffset < 0 || rootOffset + BlockSize > _disk.Data.Length)
+            {
+                return StandardRootBlock;
+            }
+
+            var candidates = new Dictionary<int, int>();
+            for (var i = 0; i < HashTableEntryCount; i++)
+            {
+                var childKey = checked((int)ReadUInt32(rootOffset + RootHashTableOffset + (i * 4)));
+                if (childKey == 0 || !_headerPhysicalBlocks.ContainsKey(childKey))
+                {
+                    continue;
+                }
+
+                foreach (var entry in _entries)
+                {
+                    if (entry.Block != childKey || entry.ParentBlock == 0)
+                    {
+                        continue;
+                    }
+
+                    candidates.TryGetValue(entry.ParentBlock, out var count);
+                    candidates[entry.ParentBlock] = count + 1;
+                    break;
+                }
+            }
+
+            var bestKey = StandardRootBlock;
+            var bestCount = 0;
+            foreach (var pair in candidates)
+            {
+                if (pair.Value > bestCount)
+                {
+                    bestKey = pair.Key;
+                    bestCount = pair.Value;
+                }
+            }
+
+            return bestCount == 0 ? StandardRootBlock : bestKey;
+        }
+
+        private int ResolvePhysicalHeaderBlock(int headerKey)
+        {
+            if (_headerPhysicalBlocks.TryGetValue(headerKey, out var block))
+            {
+                return block;
+            }
+
+            return headerKey;
+        }
+
+        private int ReadHeaderKey(int offset, int fallbackBlock)
+        {
+            var headerKey = checked((int)ReadUInt32(offset + 4));
+            return headerKey > 0 && headerKey < _disk.Data.Length / BlockSize ? headerKey : fallbackBlock;
+        }
+
+        private int ReadSecondaryType(int offset)
+        {
+            var raw = ReadUInt32(offset + SecondaryTypeOffset);
+            if (raw <= 0x7F)
+            {
+                return (int)raw;
+            }
+
+            if (raw <= 0xFF)
+            {
+                return unchecked((sbyte)(byte)raw);
+            }
+
+            return unchecked((int)raw);
         }
 
         private string ReadDirectoryName(int offset)
@@ -377,7 +462,7 @@ namespace CopperMod.Amiga
             var normalized = NormalizeDisplayPath(path);
             if (normalized.Length == 0)
             {
-                return StandardRootBlock;
+                return _rootDirectoryKey;
             }
 
             if (!TryFindEntry(normalized, out var entry) || !entry.IsDirectory)

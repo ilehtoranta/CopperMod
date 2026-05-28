@@ -1,0 +1,15 @@
+{
+  "id": "vanilla-kickstart13",
+  "displayName": "Vanilla A500 + Kickstart 1.3 ROM",
+  "description": "A500 PAL, 512 KB chip RAM, real Kickstart 1.3 ROM.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 0,
+    "pseudoFastBase": "$C00000"
+  },
+  "kickstart": {
+    "source": "Kickstart13Rom",
+    "version": "1.3"
+  }
+}

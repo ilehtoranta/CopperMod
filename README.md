@@ -50,6 +50,45 @@ dotnet run --project .\CopperMod -- "path\to\tune.sid"
 If no file is provided, CopperMod tries to open the default MED test tune when it
 is available in the workspace.
 
+## CopperScreen
+
+`CopperScreen` is the Amiga 500 PAL emulator front-end in this workspace. It can
+boot an ADF or zipped ADF directly:
+
+```powershell
+dotnet run --project .\CopperScreen -- "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- "path\to\disk.zip"
+```
+
+By default CopperScreen starts from the `expanded-copperstart` profile config in
+`CopperScreen\Profiles`. Profiles are JSON files that describe the machine
+memory layout and Kickstart source. Select a bundled profile by id, or pass a
+path to a custom profile JSON file with `--profile`.
+
+A local real Kickstart 1.3 ROM can also be used for testing. Place it at
+`CopperScreen\ROM\Kickstart_13.rom`, or pass a path with `--kickstart-rom`.
+ROM files are local-only and should not be committed.
+
+Available startup profiles:
+
+| Profile config | Memory | Kickstart source |
+| --- | --- | --- |
+| `vanilla-copperstart` | 512 KB chip RAM | CopperStart 1.3 |
+| `expanded-copperstart` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | CopperStart 1.3 |
+| `vanilla-kickstart13` | 512 KB chip RAM | real Kickstart 1.3 ROM |
+| `expanded-kickstart13` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | real Kickstart 1.3 ROM |
+
+Examples:
+
+```powershell
+dotnet run --project .\CopperScreen -- --profile vanilla-copperstart "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- --profile expanded-kickstart13 --kickstart-rom ".\CopperScreen\ROM\Kickstart_13.rom" "path\to\disk.zip"
+dotnet run --project .\CopperScreen -- --profile ".\CopperScreen\Profiles\expanded-copperstart.json" "path\to\disk.adf"
+```
+
+The ROM-backed profiles are still an emulator bring-up path; CopperStart remains
+the default for day-to-day disk testing.
+
 ## Export
 
 `CopperMod.Tools` renders supported modules to files without opening the player:
@@ -72,3 +111,5 @@ MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
 - `CopperMod.Med` - MED / OctaMED backend.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.
+- `CopperMod.Amiga` - shared Amiga 500 emulation core.
+- `CopperScreen` - Avalonia Amiga 500 emulator front-end.

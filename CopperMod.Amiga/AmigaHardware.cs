@@ -34,7 +34,11 @@ namespace CopperMod.Amiga
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly long _palFrameCycles;
         private readonly double _palLineCycles;
+        private MappedMemoryRegion? _romOverlayRegion;
+        private bool _romOverlayEnabled = true;
         private long _nextVerticalBlankCycle;
+        private long _nextHorizontalSyncIndex;
+        private long _nextHorizontalSyncCycle;
 
         public AmigaBus(
             int chipRamSize = AmigaConstants.DefaultChipRamSize,
@@ -62,9 +66,11 @@ namespace CopperMod.Amiga
             Blitter = new AmigaBlitter(this);
             CiaA = new AmigaCia(AmigaCiaId.A);
             CiaB = new AmigaCia(AmigaCiaId.B);
+            Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
             _palFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
             _palLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
             _nextVerticalBlankCycle = _palFrameCycles;
+            ResetHorizontalSyncCounter();
             CiaA.Reset(0x02);
             CiaB.Reset();
         }
@@ -82,6 +88,8 @@ namespace CopperMod.Amiga
         public AmigaCia CiaA { get; }
 
         public AmigaCia CiaB { get; }
+
+        public AmigaKeyboard Keyboard { get; }
 
         public bool AudioFilterEnabled { get; private set; }
 
@@ -129,10 +137,13 @@ namespace CopperMod.Amiga
             Array.Clear(_pendingCustomByteWritten);
             _hostCallbacks.Clear();
             _mappedMemoryRegions.Clear();
+            _romOverlayRegion = null;
+            _romOverlayEnabled = true;
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             CiaA.Reset(0x02);
             CiaB.Reset();
+            Keyboard.Reset();
             AudioFilterEnabled = false;
             foreach (var gamePort in _gamePorts)
             {
@@ -144,6 +155,7 @@ namespace CopperMod.Amiga
             Display.Reset();
             Blitter.Reset();
             _nextVerticalBlankCycle = _palFrameCycles;
+            ResetHorizontalSyncCounter();
         }
 
         public void MoveGamePortMouse(int port, int deltaX, int deltaY)
@@ -188,6 +200,23 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        public void ResetExternalDevices(long cycle)
+        {
+            _ = cycle;
+            Array.Clear(_pendingCustomBytes);
+            Array.Clear(_pendingCustomByteWritten);
+            _pendingCiaInterrupts.Clear();
+            _busAccesses.Clear();
+            _romOverlayEnabled = true;
+            AudioFilterEnabled = false;
+            Paula.Reset();
+            Disk.Reset();
+            Display.Reset();
+            Blitter.Reset();
+            _nextVerticalBlankCycle = _palFrameCycles;
+            ResetHorizontalSyncCounter();
+        }
+
         public void MapReadOnlyMemory(uint baseAddress, ReadOnlySpan<byte> data)
         {
             MapMemory(baseAddress, data, readOnly: true);
@@ -206,7 +235,12 @@ namespace CopperMod.Amiga
             }
 
             var copy = data.ToArray();
-            _mappedMemoryRegions.Add(new MappedMemoryRegion(baseAddress, copy, readOnly));
+            var region = new MappedMemoryRegion(baseAddress, copy, readOnly);
+            _mappedMemoryRegions.Add(region);
+            if (readOnly && baseAddress + (uint)copy.Length == 0x0100_0000)
+            {
+                _romOverlayRegion = region;
+            }
         }
 
         public byte ReadByte(uint address)
@@ -222,6 +256,11 @@ namespace CopperMod.Amiga
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
             var value = ReadRawByte(address);
             cycle = access.CompletedCycle;
+            if (TryGetCiaRegister(address, out var cia, out var ciaRegister) && cia == CiaA && ciaRegister == 0x0C)
+            {
+                Keyboard.AcknowledgeSerialDataRead(cycle);
+            }
+
             return value;
         }
 
@@ -410,6 +449,15 @@ namespace CopperMod.Amiga
         public void AdvanceRasterTo(long targetCycle)
         {
             UpdateBeamPosition(targetCycle);
+            while (_nextHorizontalSyncCycle <= targetCycle)
+            {
+                CiaB.IncrementTod(_nextHorizontalSyncCycle, _pendingCiaInterrupts);
+                _nextHorizontalSyncIndex++;
+                _nextHorizontalSyncCycle = Math.Max(
+                    _nextHorizontalSyncCycle + 1,
+                    (long)Math.Round(_nextHorizontalSyncIndex * _palLineCycles));
+            }
+
             if (targetCycle < _nextVerticalBlankCycle)
             {
                 return;
@@ -417,6 +465,7 @@ namespace CopperMod.Amiga
 
             while (_nextVerticalBlankCycle <= targetCycle)
             {
+                CiaA.IncrementTod(_nextVerticalBlankCycle, _pendingCiaInterrupts);
                 WriteDeviceWord(
                     AmigaBusRequester.Bitplane,
                     AmigaBusAccessKind.CustomRegister,
@@ -437,8 +486,15 @@ namespace CopperMod.Amiga
             Paula.SetBeamPosition(line, horizontal, (frame & 1) != 0);
         }
 
+        private void ResetHorizontalSyncCounter()
+        {
+            _nextHorizontalSyncIndex = 1;
+            _nextHorizontalSyncCycle = Math.Max(1, (long)Math.Round(_palLineCycles));
+        }
+
         public void AdvanceCiasTo(long targetCycle)
         {
+            Disk.AdvanceTo(targetCycle);
             CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
             CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
         }
@@ -473,6 +529,11 @@ namespace CopperMod.Amiga
         public byte SetCiaInterrupts(AmigaCiaId id, byte value, long cycle)
         {
             return GetCia(id).SetInterrupts(value, cycle, _pendingCiaInterrupts);
+        }
+
+        public void PulseCiaFlag(AmigaCiaId id, long cycle)
+        {
+            GetCia(id).PulseFlag(cycle, _pendingCiaInterrupts);
         }
 
         public IReadOnlyList<AmigaCiaInterruptEvent> DrainCiaInterrupts()
@@ -518,6 +579,11 @@ namespace CopperMod.Amiga
 
         private AmigaBusAccessTarget ClassifyTarget(uint address)
         {
+            if (IsRomOverlayAddress(address))
+            {
+                return AmigaBusAccessTarget.Rom;
+            }
+
             if (IsChipRamAddress(address))
             {
                 return AmigaBusAccessTarget.ChipRam;
@@ -557,6 +623,11 @@ namespace CopperMod.Amiga
         private byte ReadRawByte(uint address)
         {
             address = NormalizeAddress(address);
+            if (TryReadRomOverlayByte(address, out var overlayValue))
+            {
+                return overlayValue;
+            }
+
             if (TryGetChipRamOffset(address, out var chipOffset))
             {
                 return _chipRam[chipOffset];
@@ -581,14 +652,14 @@ namespace CopperMod.Amiga
 
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
-                var value = cia.ReadRegister(ciaRegister);
                 if (cia == CiaA && ciaRegister == 0)
                 {
-                    value = Disk.ReadCiaAPortA(value);
-                    value = ApplyGamePortFireBits(value);
+                    var inputPins = Disk.ReadCiaAPortA(0xFF);
+                    inputPins = ApplyGamePortFireBits(inputPins);
+                    return cia.ReadPortRegister(ciaRegister, inputPins);
                 }
 
-                return value;
+                return cia.ReadRegister(ciaRegister);
             }
 
             for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
@@ -639,11 +710,12 @@ namespace CopperMod.Amiga
                 if (cia == CiaA && ciaRegister == 0)
                 {
                     AudioFilterEnabled = (value & 0x02) == 0;
+                    _romOverlayEnabled = (value & 0x01) != 0;
                 }
 
-                if (cia == CiaB)
+                if (cia == CiaB && ciaRegister is 1 or 3)
                 {
-                    Disk.WriteCiaBRegister(ciaRegister, value);
+                    Disk.WriteCiaBRegister(1, cia.ReadPortRegister(1, 0xFF), grantedCycle);
                 }
 
                 return;
@@ -815,6 +887,26 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        private bool IsRomOverlayAddress(uint address)
+        {
+            address = NormalizeAddress(address);
+            return _romOverlayEnabled &&
+                _romOverlayRegion != null &&
+                address < 0x0008_0000;
+        }
+
+        private bool TryReadRomOverlayByte(uint address, out byte value)
+        {
+            if (!IsRomOverlayAddress(address))
+            {
+                value = 0;
+                return false;
+            }
+
+            var romAddress = _romOverlayRegion!.BaseAddress + (address % (uint)_romOverlayRegion.Length);
+            return _romOverlayRegion.TryReadByte(romAddress, out value);
+        }
+
         private byte ApplyGamePortFireBits(byte value)
         {
             if (GamePort0FirePressed)
@@ -870,24 +962,16 @@ namespace CopperMod.Amiga
         {
             var gamePort = _gamePorts[port];
             var value = (ushort)((gamePort.MouseYCounter << 8) | gamePort.MouseXCounter);
-            if (gamePort.JoystickLeft)
+            if (gamePort.JoystickUp ||
+                gamePort.JoystickDown ||
+                gamePort.JoystickLeft ||
+                gamePort.JoystickRight)
             {
-                value |= 0x0001;
-            }
-
-            if (gamePort.JoystickRight)
-            {
-                value |= 0x0003;
-            }
-
-            if (gamePort.JoystickUp)
-            {
-                value |= 0x0100;
-            }
-
-            if (gamePort.JoystickDown)
-            {
-                value |= 0x0300;
+                var horizontal = (gamePort.JoystickDown ^ gamePort.JoystickRight ? 0x0001 : 0x0000) |
+                    (gamePort.JoystickRight ? 0x0002 : 0x0000);
+                var vertical = (gamePort.JoystickUp ^ gamePort.JoystickLeft ? 0x0100 : 0x0000) |
+                    (gamePort.JoystickLeft ? 0x0200 : 0x0000);
+                value = (ushort)((value & ~0x0303) | horizontal | vertical);
             }
 
             return value;
@@ -983,6 +1067,8 @@ namespace CopperMod.Amiga
             }
 
             public uint BaseAddress { get; }
+
+            public int Length => _data.Length;
 
             public bool ReadOnly { get; }
 

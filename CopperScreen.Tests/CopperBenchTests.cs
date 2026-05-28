@@ -52,6 +52,24 @@ public sealed class CopperBenchTests
 	}
 
 	[Fact]
+	public void CopperBenchSelectedDetailsIncludePreviewMetadata()
+	{
+		using var temp = new TemporaryDiskSet();
+		var diskPath = temp.WriteZip("CopperBench Test (Disk 1 of 1).zip", CreateWorkbenchDiskBytes());
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var bench = new CopperBenchViewModel(emulator);
+		bench.ShowOverlay();
+		bench.SelectIndex(bench.Entries.ToList().FindIndex(entry => entry.Name == "Project"));
+
+		var details = bench.SelectedDetails;
+
+		Assert.Contains("Project", details);
+		Assert.Contains("Path: DF0:Project", details);
+		Assert.Contains("default tool C/Tool", details);
+		Assert.Contains("STACK=4096", details);
+	}
+
+	[Fact]
 	public void CopperBenchLaunchesWorkbenchProjectThroughEmulator()
 	{
 		using var temp = new TemporaryDiskSet();
@@ -68,7 +86,57 @@ public sealed class CopperBenchTests
 	}
 
 	[Fact]
-	public void CopperBenchPauseResetAndNextDiskActionsCallEmulator()
+	public void WorkbenchStyleBootStopsAtCopperBenchUntilUserLaunchesProject()
+	{
+		using var temp = new TemporaryDiskSet();
+		var diskPath = temp.WriteZip("CopperBench Boot (Disk 1 of 1).zip", CreateBootableWorkbenchDiskBytes());
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var bench = new CopperBenchViewModel(emulator);
+
+		emulator.RenderNextFrame();
+
+		Assert.True(emulator.IsWorkbenchHandoffPending);
+		Assert.True(emulator.IsPaused);
+		Assert.True(emulator.ConsumeCopperBenchRequest());
+		Assert.Equal("Workbench handoff: choose a CopperBench item", emulator.StatusText);
+		bench.ShowOverlay();
+		Assert.True(bench.IsOverlayVisible);
+		var projectIndex = bench.Entries.ToList().FindIndex(entry => entry.Name == "Project");
+		Assert.True(projectIndex >= 0);
+		bench.SelectIndex(projectIndex);
+
+		Assert.True(bench.LaunchSelected(), bench.StatusMessage);
+
+		Assert.False(bench.IsOverlayVisible);
+		Assert.False(emulator.IsPaused);
+		Assert.False(emulator.IsWorkbenchHandoffPending);
+		Assert.StartsWith("CopperBench launched C/Tool", emulator.StatusText);
+	}
+
+	[Theory]
+	[InlineData("Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip")]
+	[InlineData("Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5)[cr Loons][f ATX].zip")]
+	public void CopperBenchBrowsesHiredGunsRootWhenAvailable(string fileName)
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var bench = new CopperBenchViewModel(emulator);
+
+		bench.ShowOverlay();
+
+		Assert.True(bench.Entries.Count > 5, bench.StatusMessage);
+		Assert.Contains(bench.Entries, entry => entry.Name == "C" && entry.Kind == CopperBenchEntryKind.Drawer);
+		Assert.Contains(bench.Entries, entry => entry.Name == "Hired Guns" && entry.Kind == CopperBenchEntryKind.Project);
+		Assert.DoesNotContain("Empty drawer", bench.StatusMessage);
+	}
+
+	[Fact]
+	public void CopperBenchPauseResetAndDiskNavigationActionsCallEmulator()
 	{
 		using var temp = new TemporaryDiskSet();
 		var disk1 = temp.WriteZip("CopperBench Test (Disk 1 of 2).zip", CreateWorkbenchDiskBytes());
@@ -85,6 +153,10 @@ public sealed class CopperBenchTests
 		bench.InsertNextDisk();
 		Assert.Equal(Path.GetFullPath(disk2), emulator.DiskPath);
 		Assert.StartsWith("Inserted ", bench.StatusMessage);
+
+		bench.InsertPreviousDisk();
+		Assert.Equal(Path.GetFullPath(disk1), emulator.DiskPath);
+		Assert.StartsWith("Inserted ", bench.StatusMessage);
 	}
 
 	private static byte[] CreateWorkbenchDiskBytes()
@@ -98,6 +170,19 @@ public sealed class CopperBenchTests
 		WriteFile(data, 11, 10, "Tool", CreateRtsHunk(), 100);
 		WriteFile(data, 12, 880, "Project", Encoding.ASCII.GetBytes("project"), 101);
 		WriteFile(data, 13, 880, "Project.info", CreateIconData("C/Tool", "STACK=4096", "FLAG=YES"), 102);
+		return data;
+	}
+
+	private static byte[] CreateBootableWorkbenchDiskBytes()
+	{
+		var data = CreateWorkbenchDiskBytes();
+		data[12] = 0x4E;
+		data[13] = 0xF9;
+		data[14] = 0x00;
+		data[15] = 0x00;
+		data[16] = 0x00;
+		data[17] = 0x00;
+		BigEndian.WriteUInt32(data, 4, CalculateBootChecksum(data.AsSpan(0, 1024)));
 		return data;
 	}
 
@@ -174,6 +259,40 @@ public sealed class CopperBenchTests
 	{
 		data.Add((byte)(value >> 8));
 		data.Add((byte)value);
+	}
+
+	private static uint CalculateBootChecksum(ReadOnlySpan<byte> bootBlock)
+	{
+		var sum = 0u;
+		for (var offset = 0; offset < 1024; offset += 4)
+		{
+			var value = BigEndian.ReadUInt32(bootBlock, offset, "boot block checksum word");
+			var previous = sum;
+			sum += value;
+			if (sum < previous)
+			{
+				sum++;
+			}
+		}
+
+		return ~sum;
+	}
+
+	private static string? TryFindWorkspaceFile(params string[] parts)
+	{
+		var directory = new DirectoryInfo(AppContext.BaseDirectory);
+		while (directory != null)
+		{
+			var candidate = Path.Combine(new[] { directory.FullName }.Concat(parts).ToArray());
+			if (File.Exists(candidate))
+			{
+				return candidate;
+			}
+
+			directory = directory.Parent;
+		}
+
+		return null;
 	}
 
 	private sealed class TemporaryDiskSet : IDisposable

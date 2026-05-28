@@ -1,0 +1,15 @@
+{
+  "id": "vanilla-copperstart",
+  "displayName": "Vanilla A500 + CopperStart",
+  "description": "A500 PAL, 512 KB chip RAM, CopperStart Kickstart 1.3 shim.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 0,
+    "pseudoFastBase": "$C00000"
+  },
+  "kickstart": {
+    "source": "CopperStart",
+    "version": "1.3"
+  }
+}

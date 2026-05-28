@@ -30,6 +30,10 @@
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Profiles\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">
     <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="Low">
       <Output TaskParameter="ConsoleOutput" PropertyName="CopperStartGitSha" />

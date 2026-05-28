@@ -118,12 +118,18 @@ public sealed class BasicRsidRunnerTests
 	[Fact]
 	public void BasicCorpusFixturesProduceAudibleOutputOrSpecificRunnerDiagnosticWhenPresent()
 	{
+		var corpusRoot = Environment.GetEnvironmentVariable("COPPERMOD_RSID_BASIC_CORPUS");
+		if (string.IsNullOrWhiteSpace(corpusRoot))
+		{
+			return;
+		}
+
 		var files = new[]
 		{
-			@"D:\Koodit\MODs\SID\GAMES\A-F\Boccia_BASIC.sid",
-			@"D:\Koodit\MODs\SID\GAMES\G-L\Gwendolyn_BASIC.sid",
-			@"D:\Koodit\MODs\SID\GAMES\M-R\Prospector_BASIC.sid",
-			@"D:\Koodit\MODs\SID\GAMES\M-R\Roulette_BASIC.sid"
+			Path.Combine(corpusRoot, "GAMES", "A-F", "Boccia_BASIC.sid"),
+			Path.Combine(corpusRoot, "GAMES", "G-L", "Gwendolyn_BASIC.sid"),
+			Path.Combine(corpusRoot, "GAMES", "M-R", "Prospector_BASIC.sid"),
+			Path.Combine(corpusRoot, "GAMES", "M-R", "Roulette_BASIC.sid")
 		};
 		if (!files.All(File.Exists))
 		{
