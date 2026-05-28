@@ -25,6 +25,12 @@ namespace CopperMod.Amiga
             _allocate = allocate ?? throw new ArgumentNullException(nameof(allocate));
         }
 
+        public static bool HasHunkHeader(ReadOnlySpan<byte> data)
+        {
+            return data.Length >= 4 &&
+                NormalizeHunkId(BigEndian.ReadUInt32(data, 0, "hunk header")) == HunkHeader;
+        }
+
         public AmigaHunkProgram Load(ReadOnlySpan<byte> data)
         {
             var reader = new HunkReader(data);

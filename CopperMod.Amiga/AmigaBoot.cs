@@ -96,6 +96,9 @@ namespace CopperMod.Amiga
         private uint _allocatedSignalMask;
         private uint _syntheticSignalMask;
         private IReadOnlyList<string> _workbenchToolTypes = Array.Empty<string>();
+        private string _workbenchDefaultToolPath = "C/SystemTakeover";
+        private string _workbenchCurrentDirectory = string.Empty;
+        private int _workbenchStackSize = 4096;
         private int? _workbenchLanguageSelectionIndex;
         private bool _workbenchLanguageSelectionApplied;
         private uint _workbenchDiskObjectAddress;
@@ -140,6 +143,28 @@ namespace CopperMod.Amiga
 
         public void StartBootFromDisk(AmigaDiskImage disk)
         {
+            ResetBootState(disk);
+            ValidateBootBlock(disk.BootBlock);
+            _machine.Bus.CopyToChipRam(BootBlockAddress, disk.BootBlock);
+            _machine.Bus.WriteWord(BootIoRequestAddress + IoCommandOffset, CmdRead);
+            var userStackTop = GetBootStackTopAddress();
+            _machine.Cpu.Reset(BootEntryAddress, userStackTop);
+            _machine.Cpu.State.ResetStackPointers(BootSupervisorStackTopAddress, userStackTop, supervisorMode: false);
+            _machine.Cpu.State.A[1] = BootIoRequestAddress;
+            _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
+        }
+
+        public void StartWorkbenchSession(AmigaDiskImage disk)
+        {
+            ResetBootState(disk);
+            var userStackTop = GetBootStackTopAddress();
+            _machine.Cpu.Reset(0, userStackTop);
+            _machine.Cpu.State.ResetStackPointers(BootSupervisorStackTopAddress, userStackTop, supervisorMode: false);
+            _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
+        }
+
+        private void ResetBootState(AmigaDiskImage disk)
+        {
             ArgumentNullException.ThrowIfNull(disk);
             _diagnostics.Clear();
             _dosHandles.Clear();
@@ -160,6 +185,9 @@ namespace CopperMod.Amiga
             _allocatedSignalMask = 0;
             _syntheticSignalMask = 0;
             _workbenchToolTypes = Array.Empty<string>();
+            _workbenchDefaultToolPath = "C/SystemTakeover";
+            _workbenchCurrentDirectory = string.Empty;
+            _workbenchStackSize = 4096;
             _workbenchLanguageSelectionIndex = null;
             _workbenchLanguageSelectionApplied = false;
             _workbenchDiskObjectAddress = 0;
@@ -185,14 +213,6 @@ namespace CopperMod.Amiga
             Drive0.Insert(disk);
             _machine.ResetHardware();
             InstallBootHostTraps();
-            ValidateBootBlock(disk.BootBlock);
-            _machine.Bus.CopyToChipRam(BootBlockAddress, disk.BootBlock);
-            _machine.Bus.WriteWord(BootIoRequestAddress + IoCommandOffset, CmdRead);
-            var userStackTop = GetBootStackTopAddress();
-            _machine.Cpu.Reset(BootEntryAddress, userStackTop);
-            _machine.Cpu.State.ResetStackPointers(BootSupervisorStackTopAddress, userStackTop, supervisorMode: false);
-            _machine.Cpu.State.A[1] = BootIoRequestAddress;
-            _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
         }
 
         public AmigaBootResult ContinueExecution(int maxInstructions = 20_000)
@@ -604,7 +624,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(path) || !EnsureDosFileSystem().TryReadFile(path, out var data))
+            if (string.IsNullOrWhiteSpace(path) || !TryReadDosFile(path, out var data))
             {
                 if (_dosOpenDiagnosticCount < 16)
                 {
@@ -679,7 +699,7 @@ namespace CopperMod.Amiga
         private void HostDosLock(M68kCpuState state)
         {
             var path = ReadDosPath(state.D[1]);
-            if (string.IsNullOrWhiteSpace(path) || !EnsureDosFileSystem().TryFindEntry(path, out var entry))
+            if (string.IsNullOrWhiteSpace(path) || !TryFindDosEntry(path, out var entry))
             {
                 state.D[0] = 0;
                 _lastDosError = 205;
@@ -883,7 +903,7 @@ namespace CopperMod.Amiga
                 return _workbenchDiskObjectAddress;
             }
 
-            var defaultToolAddress = WriteProgramString("C/SystemTakeover");
+            var defaultToolAddress = WriteProgramString(_workbenchDefaultToolPath);
             var toolTypeArrayAddress = AllocateProgramMemory((_workbenchToolTypes.Count + 1) * 4);
             for (var i = 0; i < _workbenchToolTypes.Count; i++)
             {
@@ -898,7 +918,7 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteWord(_workbenchDiskObjectAddress + 2, 1);
             _machine.Bus.WriteLong(_workbenchDiskObjectAddress + 0x34, defaultToolAddress);
             _machine.Bus.WriteLong(_workbenchDiskObjectAddress + 0x38, toolTypeArrayAddress);
-            _machine.Bus.WriteLong(_workbenchDiskObjectAddress + 0x4C, 4096);
+            _machine.Bus.WriteLong(_workbenchDiskObjectAddress + 0x4C, (uint)Math.Max(1, _workbenchStackSize));
             return _workbenchDiskObjectAddress;
         }
 
@@ -1291,25 +1311,84 @@ namespace CopperMod.Amiga
             _dosBootContinuationStarted = true;
             var fileSystem = EnsureDosFileSystem();
             if (!fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out var toolTypes) ||
-                !fileSystem.TryReadFile(toolPath, out var executable))
+                !fileSystem.TryReadFile(toolPath, out _))
             {
                 return false;
             }
 
-            _workbenchToolTypes = NormalizeToolTypes(toolTypes);
+            var request = new AmigaProgramLaunchRequest(
+                toolPath,
+                projectPath,
+                AmigaDosFileSystem.GetDirectoryName(projectPath),
+                toolTypes,
+                4096,
+                cliArguments: null);
+            if (!TryLaunchProgram(request, out _, out _))
+            {
+                return false;
+            }
+
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_DOS_AUTOSTART",
+                $"Started Workbench default tool {toolPath}."));
+            return true;
+        }
+
+        public bool TryLaunchProgram(
+            AmigaProgramLaunchRequest request,
+            out AmigaProgramLaunchResult result,
+            out string message)
+        {
+            result = default;
+            message = string.Empty;
+            if (Drive0.Disk == null)
+            {
+                message = "No disk is inserted in DF0:.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ExecutablePath))
+            {
+                message = "No executable path was provided.";
+                return false;
+            }
+
+            if (!EnsureDosFileSystem().TryReadFile(request.ExecutablePath, out var executable))
+            {
+                message = $"'{request.ExecutablePath}' could not be read from DF0:.";
+                return false;
+            }
+
+            if (!AmigaHunkProgramLoader.HasHunkHeader(executable))
+            {
+                message = $"'{request.ExecutablePath}' is not a HUNK executable.";
+                return false;
+            }
+
+            _workbenchToolTypes = NormalizeToolTypes(request.ToolTypes);
+            _workbenchDefaultToolPath = request.ExecutablePath;
+            _workbenchCurrentDirectory = request.CurrentDirectory;
+            _workbenchStackSize = Math.Max(1, request.StackSize);
             _workbenchLanguageSelectionIndex = FindWorkbenchLanguageSelectionIndex(_workbenchToolTypes);
             _workbenchLanguageSelectionApplied = false;
+            _workbenchDiskObjectAddress = 0;
+
             var loader = new AmigaHunkProgramLoader(_machine.Bus, AllocateProgramMemory);
             var program = loader.Load(executable);
-            var startupArguments = BuildCliArguments(_workbenchToolTypes);
+            var startupArguments = request.CliArguments ?? BuildCliArguments(_workbenchToolTypes);
             var startupAddress = WriteProgramString(startupArguments);
             _machine.Cpu.BeginSubroutine(program.EntryAddress, GetProgramStackTopAddress(), DosProgramReturnAddress);
             _machine.Cpu.State.D[0] = (uint)startupArguments.Length;
             _machine.Cpu.State.A[0] = startupAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
+            result = new AmigaProgramLaunchResult(
+                program.EntryAddress,
+                request.ExecutablePath,
+                startupArguments,
+                _workbenchStackSize);
             _diagnostics.Add(new AmigaBootDiagnostic(
-                "AMIGA_BOOT_DOS_AUTOSTART",
-                $"Started Workbench default tool {toolPath}."));
+                "AMIGA_BOOT_COPPERBENCH_LAUNCH",
+                $"Started {request.ExecutablePath}."));
             return true;
         }
 
@@ -1548,6 +1627,50 @@ namespace CopperMod.Amiga
             return value.Trim().Equals("YES", StringComparison.OrdinalIgnoreCase) ||
                 value.Trim().Equals("TRUE", StringComparison.OrdinalIgnoreCase) ||
                 value.Trim() == "1";
+        }
+
+        private bool TryReadDosFile(string path, out byte[] data)
+        {
+            var fileSystem = EnsureDosFileSystem();
+            if (fileSystem.TryReadFile(path, out data))
+            {
+                return true;
+            }
+
+            if (_workbenchCurrentDirectory.Length != 0 &&
+                path.IndexOf(':') < 0 &&
+                path.IndexOf('/') < 0 &&
+                path.IndexOf('\\') < 0)
+            {
+                return fileSystem.TryReadFile(
+                    AmigaDosFileSystem.CombinePath(_workbenchCurrentDirectory, path),
+                    out data);
+            }
+
+            data = Array.Empty<byte>();
+            return false;
+        }
+
+        private bool TryFindDosEntry(string path, out AmigaDosDirectoryEntry entry)
+        {
+            var fileSystem = EnsureDosFileSystem();
+            if (fileSystem.TryFindEntry(path, out entry))
+            {
+                return true;
+            }
+
+            if (_workbenchCurrentDirectory.Length != 0 &&
+                path.IndexOf(':') < 0 &&
+                path.IndexOf('/') < 0 &&
+                path.IndexOf('\\') < 0)
+            {
+                return fileSystem.TryFindEntry(
+                    AmigaDosFileSystem.CombinePath(_workbenchCurrentDirectory, path),
+                    out entry);
+            }
+
+            entry = default;
+            return false;
         }
 
         private AmigaDosFileSystem EnsureDosFileSystem()

@@ -21,6 +21,8 @@ public sealed class CustBoundaryTests
         var forbiddenTerms = new[]
         {
             "CopperScreen",
+            "CopperBench",
+            "Workbench",
             "AmigaDiskImage",
             "AmigaFloppyDrive",
             "AmigaBoot",

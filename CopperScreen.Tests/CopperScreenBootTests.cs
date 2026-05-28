@@ -387,6 +387,42 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void SuperfrogCrackedBootDecodesRawTrackBeforeJumpingWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Superfrog (1993)(Team 17)(Disk 1 of 4)[cr CSL][t +10 TRSI].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var disk = AmigaDiskImage.Load(diskPath);
+		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var boot = new AmigaBootController(machine);
+		var decodedRawTrack = false;
+
+		var result = boot.BootFromDisk(disk, maxInstructions: 250_000, runMode: AmigaBootRunMode.ContinueAfterBootDiskRead);
+		for (var i = 0; i < 4_000 && !machine.Cpu.State.Halted; i++)
+		{
+			var firePressed = machine.Cpu.State.Cycles < 4_000_000;
+			machine.Bus.GamePort0FirePressed = firePressed;
+			machine.Bus.GamePort1FirePressed = firePressed;
+			result = boot.ContinueExecution(maxInstructions: 2_500);
+			decodedRawTrack |= machine.Bus.ReadWord(0x0007_C180) == 0x4154;
+			if (result.Diagnostics.Any(diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT"))
+			{
+				break;
+			}
+		}
+
+		var fatalDiagnostics = result.Diagnostics
+			.Where(diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT")
+			.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")
+			.ToArray();
+		Assert.True(fatalDiagnostics.Length == 0, string.Join(Environment.NewLine, fatalDiagnostics));
+		Assert.True(decodedRawTrack);
+	}
+
+	[Fact]
 	public void CrackedDiskRenderDoesNotTreatExecutionSliceAsFatalWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip");
@@ -559,7 +595,7 @@ public sealed class CopperScreenBootTests
 		var reachedHamDisplay = false;
 		uint? previousLaceChecksum = null;
 		var stableLaceFrames = 0;
-		for (var frame = 0; frame < 860; frame++)
+		for (var frame = 0; frame < 1400; frame++)
 		{
 			if (frame == 260)
 			{
@@ -571,7 +607,7 @@ public sealed class CopperScreenBootTests
 			reachedHamDisplay |= (snapshot.Bplcon0 & 0x6800) == 0x6800 &&
 				snapshot.LastBitplaneNonZeroPixels > 1000 &&
 				snapshot.LastBitplaneMaxY >= 200;
-			if (frame > 840 && (snapshot.Bplcon0 & 0x0004) != 0)
+			if (reachedHamDisplay && (snapshot.Bplcon0 & 0x0004) != 0)
 			{
 				var checksum = Checksum(emulator.Framebuffer);
 				if (previousLaceChecksum == checksum)
@@ -580,6 +616,10 @@ public sealed class CopperScreenBootTests
 				}
 
 				previousLaceChecksum = checksum;
+				if (stableLaceFrames > 4)
+				{
+					break;
+				}
 			}
 		}
 

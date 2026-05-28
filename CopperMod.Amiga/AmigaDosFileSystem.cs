@@ -104,6 +104,146 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        public IReadOnlyList<AmigaDosDirectoryEntry> ListDirectory(string path)
+        {
+            var parentBlock = ResolveDirectoryBlock(path);
+            var entries = new List<AmigaDosDirectoryEntry>();
+            foreach (var entry in _entries)
+            {
+                if (entry.ParentBlock == parentBlock)
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            entries.Sort(CompareDirectoryEntries);
+            return entries;
+        }
+
+        public bool TryReadWorkbenchDiskObject(string path, out AmigaWorkbenchDiskObject diskObject)
+        {
+            diskObject = default;
+            var targetPath = TrimInfoSuffix(NormalizeDisplayPath(path));
+            if (targetPath.Length == 0)
+            {
+                return false;
+            }
+
+            var iconPath = targetPath + ".info";
+            if (!TryReadFile(iconPath, out var iconData))
+            {
+                return false;
+            }
+
+            var strings = ExtractIconStrings(iconData);
+            var toolTypes = new List<string>();
+            string? defaultTool = null;
+            foreach (var value in strings)
+            {
+                if (value.IndexOf('=') >= 0)
+                {
+                    toolTypes.Add(value);
+                    continue;
+                }
+
+                var normalized = value.Replace('\\', '/');
+                if (defaultTool == null &&
+                    (normalized.IndexOf(':') >= 0 || normalized.IndexOf('/') >= 0))
+                {
+                    defaultTool = normalized;
+                }
+            }
+
+            var stackSize = 4096;
+            foreach (var toolType in toolTypes)
+            {
+                var separator = toolType.IndexOf('=');
+                if (separator <= 0)
+                {
+                    continue;
+                }
+
+                var key = toolType.Substring(0, separator).Trim().TrimStart('$', '.');
+                if (key.Equals("STACK", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(toolType.Substring(separator + 1).Trim(), out var parsedStack) &&
+                    parsedStack > 0)
+                {
+                    stackSize = parsedStack;
+                }
+            }
+
+            var label = GetFileName(targetPath);
+            diskObject = new AmigaWorkbenchDiskObject(
+                targetPath,
+                iconPath,
+                label,
+                defaultTool,
+                toolTypes,
+                stackSize);
+            return true;
+        }
+
+        public bool TryCreateLaunchRequest(string path, out AmigaProgramLaunchRequest request, out string message)
+        {
+            request = default;
+            message = string.Empty;
+            var targetPath = TrimInfoSuffix(NormalizeDisplayPath(path));
+            if (targetPath.Length == 0)
+            {
+                message = "No AmigaDOS path was selected.";
+                return false;
+            }
+
+            if (!TryFindEntry(targetPath, out var targetEntry))
+            {
+                message = $"'{targetPath}' was not found on DF0:.";
+                return false;
+            }
+
+            if (targetEntry.IsDirectory)
+            {
+                message = $"'{targetPath}' is a drawer, not a launchable program.";
+                return false;
+            }
+
+            var executablePath = targetPath;
+            string? projectPath = null;
+            IReadOnlyList<string> toolTypes = Array.Empty<string>();
+            var stackSize = 4096;
+            if (TryReadWorkbenchDiskObject(targetPath, out var diskObject))
+            {
+                toolTypes = diskObject.ToolTypes;
+                stackSize = diskObject.StackSize;
+                if (!string.IsNullOrWhiteSpace(diskObject.DefaultToolPath))
+                {
+                    executablePath = diskObject.DefaultToolPath!;
+                    projectPath = targetPath;
+                }
+            }
+
+            if (!TryReadFile(executablePath, out var executable))
+            {
+                message = $"'{executablePath}' could not be read from DF0:.";
+                return false;
+            }
+
+            if (!AmigaHunkProgramLoader.HasHunkHeader(executable))
+            {
+                message = $"'{executablePath}' is not a HUNK executable.";
+                return false;
+            }
+
+            var currentDirectory = GetDirectoryName(projectPath ?? executablePath);
+            request = new AmigaProgramLaunchRequest(
+                executablePath,
+                projectPath,
+                currentDirectory,
+                toolTypes,
+                stackSize,
+                cliArguments: null);
+            return true;
+        }
+
         public bool TryResolveWorkbenchDefaultTool(out string projectPath, out string toolPath, out IReadOnlyList<string> toolTypes)
         {
             projectPath = string.Empty;
@@ -118,28 +258,13 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                if (!TryReadFile(entry.Name + ".info", out var iconData))
+                if (TryReadWorkbenchDiskObject(entry.Name, out var diskObject) &&
+                    !string.IsNullOrWhiteSpace(diskObject.DefaultToolPath) &&
+                    TryReadFile(diskObject.DefaultToolPath!, out _))
                 {
-                    continue;
-                }
-
-                var strings = ExtractIconStrings(iconData);
-                foreach (var value in strings)
-                {
-                    if (value.IndexOf('=') >= 0)
-                    {
-                        continue;
-                    }
-
-                    var normalized = value.Replace('\\', '/');
-                    if (normalized.IndexOf(':') < 0 && normalized.IndexOf('/') < 0)
-                    {
-                        continue;
-                    }
-
                     projectPath = entry.Name;
-                    toolPath = normalized;
-                    toolTypes = strings.FindAll(item => item.IndexOf('=') >= 0);
+                    toolPath = diskObject.DefaultToolPath!;
+                    toolTypes = diskObject.ToolTypes;
                     return true;
                 }
             }
@@ -247,6 +372,87 @@ namespace CopperMod.Amiga
             return path.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
+        private int ResolveDirectoryBlock(string path)
+        {
+            var normalized = NormalizeDisplayPath(path);
+            if (normalized.Length == 0)
+            {
+                return StandardRootBlock;
+            }
+
+            if (!TryFindEntry(normalized, out var entry) || !entry.IsDirectory)
+            {
+                return StandardRootBlock;
+            }
+
+            return entry.Block;
+        }
+
+        private static int CompareDirectoryEntries(AmigaDosDirectoryEntry left, AmigaDosDirectoryEntry right)
+        {
+            if (left.IsDirectory != right.IsDirectory)
+            {
+                return left.IsDirectory ? -1 : 1;
+            }
+
+            return StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name);
+        }
+
+        internal static string CombinePath(string parentPath, string name)
+        {
+            parentPath = NormalizeDisplayPath(parentPath);
+            name = NormalizeDisplayPath(name);
+            if (parentPath.Length == 0)
+            {
+                return name;
+            }
+
+            return parentPath + "/" + name;
+        }
+
+        internal static string GetDirectoryName(string path)
+        {
+            path = NormalizeDisplayPath(path);
+            var slash = path.LastIndexOf('/');
+            return slash < 0 ? string.Empty : path.Substring(0, slash);
+        }
+
+        internal static string GetFileName(string path)
+        {
+            path = NormalizeDisplayPath(path);
+            var slash = path.LastIndexOf('/');
+            return slash < 0 ? path : path.Substring(slash + 1);
+        }
+
+        internal static string NormalizeDisplayPath(string path)
+        {
+            path = (path ?? string.Empty).Trim().Trim('"').Replace('\\', '/');
+            var colon = path.IndexOf(':');
+            if (colon >= 0)
+            {
+                path = path.Substring(colon + 1);
+            }
+
+            while (path.StartsWith("/", StringComparison.Ordinal))
+            {
+                path = path.Substring(1);
+            }
+
+            while (path.EndsWith("/", StringComparison.Ordinal))
+            {
+                path = path.Substring(0, path.Length - 1);
+            }
+
+            return path;
+        }
+
+        internal static string TrimInfoSuffix(string path)
+        {
+            return path.EndsWith(".info", StringComparison.OrdinalIgnoreCase)
+                ? path.Substring(0, path.Length - ".info".Length)
+                : path;
+        }
+
         private static List<string> ExtractIconStrings(ReadOnlySpan<byte> data)
         {
             var values = new List<string>();
@@ -337,5 +543,122 @@ namespace CopperMod.Amiga
         public bool IsDirectory => SecondaryType == 1 || SecondaryType == 2;
 
         public bool IsFile => SecondaryType == -3;
+    }
+
+    internal readonly struct AmigaWorkbenchDiskObject
+    {
+        public AmigaWorkbenchDiskObject(
+            string targetPath,
+            string iconPath,
+            string label,
+            string? defaultToolPath,
+            IReadOnlyList<string> toolTypes,
+            int stackSize)
+        {
+            TargetPath = targetPath ?? string.Empty;
+            IconPath = iconPath ?? string.Empty;
+            Label = label ?? string.Empty;
+            DefaultToolPath = defaultToolPath;
+            ToolTypes = CopyList(toolTypes);
+            StackSize = Math.Max(1, stackSize);
+        }
+
+        public string TargetPath { get; }
+
+        public string IconPath { get; }
+
+        public string Label { get; }
+
+        public string? DefaultToolPath { get; }
+
+        public IReadOnlyList<string> ToolTypes { get; }
+
+        public int StackSize { get; }
+
+        public bool HasDefaultTool => !string.IsNullOrWhiteSpace(DefaultToolPath);
+
+        private static IReadOnlyList<string> CopyList(IReadOnlyList<string>? values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var copy = new string[values.Count];
+            for (var i = 0; i < values.Count; i++)
+            {
+                copy[i] = values[i];
+            }
+
+            return copy;
+        }
+    }
+
+    internal readonly struct AmigaProgramLaunchRequest
+    {
+        public AmigaProgramLaunchRequest(
+            string executablePath,
+            string? projectPath,
+            string currentDirectory,
+            IReadOnlyList<string> toolTypes,
+            int stackSize,
+            string? cliArguments)
+        {
+            ExecutablePath = AmigaDosFileSystem.NormalizeDisplayPath(executablePath);
+            ProjectPath = string.IsNullOrWhiteSpace(projectPath)
+                ? null
+                : AmigaDosFileSystem.NormalizeDisplayPath(projectPath);
+            CurrentDirectory = AmigaDosFileSystem.NormalizeDisplayPath(currentDirectory);
+            ToolTypes = CopyList(toolTypes);
+            StackSize = Math.Max(1, stackSize);
+            CliArguments = cliArguments;
+        }
+
+        public string ExecutablePath { get; }
+
+        public string? ProjectPath { get; }
+
+        public string CurrentDirectory { get; }
+
+        public IReadOnlyList<string> ToolTypes { get; }
+
+        public int StackSize { get; }
+
+        public string? CliArguments { get; }
+
+        private static IReadOnlyList<string> CopyList(IReadOnlyList<string>? values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var copy = new string[values.Count];
+            for (var i = 0; i < values.Count; i++)
+            {
+                copy[i] = values[i];
+            }
+
+            return copy;
+        }
+    }
+
+    internal readonly struct AmigaProgramLaunchResult
+    {
+        public AmigaProgramLaunchResult(uint entryAddress, string executablePath, string startupArguments, int stackSize)
+        {
+            EntryAddress = entryAddress;
+            ExecutablePath = executablePath ?? string.Empty;
+            StartupArguments = startupArguments ?? string.Empty;
+            StackSize = Math.Max(1, stackSize);
+        }
+
+        public uint EntryAddress { get; }
+
+        public string ExecutablePath { get; }
+
+        public string StartupArguments { get; }
+
+        public int StackSize { get; }
     }
 }

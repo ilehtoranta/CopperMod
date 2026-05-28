@@ -908,10 +908,13 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
 
-        bus.Paula.AdvanceTo(511);
+        var completionCycle = (long)Math.Round(
+            AmigaConstants.A500PalCpuClockHz / (AmigaDosTrackEncoder.EncodedTrackBytes * 5) * 0x200);
+
+        bus.Paula.AdvanceTo(completionCycle - 1);
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
 
-        bus.Paula.AdvanceTo(512);
+        bus.Paula.AdvanceTo(completionCycle);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x0002);
     }
 
@@ -919,9 +922,10 @@ public sealed class AmigaDiskDisplayTests
     public void AmigaDosTrackEncoderWritesValidMfmClockBitsAndDecodableSectorData()
     {
         var data = new byte[AmigaDiskImage.StandardAdfSize];
+        var firstPhysicalSectorOffset = 9 * AmigaDiskImage.SectorSize;
         for (var i = 0; i < AmigaDiskImage.SectorSize; i++)
         {
-            data[i] = (byte)i;
+            data[firstPhysicalSectorOffset + i] = (byte)i;
         }
 
         var disk = AmigaDiskImage.FromAdfBytes(data);
@@ -930,8 +934,8 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0x4489, BigEndian.ReadUInt16(track, 0x04, "first sync"));
         Assert.Equal(0x4489, BigEndian.ReadUInt16(track, 0x06, "second sync"));
         Assert.NotEqual(0u, BigEndian.ReadUInt32(track, 0x08, "encoded header odd") & 0xAAAA_AAAAu);
-        Assert.Equal(0xFF00_000Bu, DecodeOddEvenLong(track, 0x08, 0x0C));
-        Assert.Equal(BigEndian.ReadUInt32(data, 0, "source sector data"), DecodeOddEvenLong(track, 0x40, 0x240));
+        Assert.Equal(0xFF00_090Bu, DecodeOddEvenLong(track, 0x08, 0x0C));
+        Assert.Equal(BigEndian.ReadUInt32(data, firstPhysicalSectorOffset, "source sector data"), DecodeOddEvenLong(track, 0x40, 0x240));
     }
 
     [Fact]
@@ -948,8 +952,8 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "first synced DMA word"));
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4100, "second synced DMA word"));
-        Assert.Equal(0xFF00_000Bu, DecodeOddEvenLong(bus.ChipRam, 0x4002, 0x4006));
-        Assert.Equal(0xFF00_010Au, DecodeOddEvenLong(bus.ChipRam, 0x4102, 0x4106));
+        Assert.Equal(0xFF00_090Bu, DecodeOddEvenLong(bus.ChipRam, 0x4002, 0x4006));
+        Assert.Equal(0xFF00_0A0Au, DecodeOddEvenLong(bus.ChipRam, 0x4102, 0x4106));
     }
 
     [Fact]
@@ -965,7 +969,7 @@ public sealed class AmigaDiskDisplayTests
         StartDiskDma(bus, 0x5000, 0x0020);
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x5000, "synced DMA word"));
-        Assert.Equal(0xFF00_010Au, DecodeOddEvenLong(bus.ChipRam, 0x5002, 0x5006));
+        Assert.Equal(0xFF00_0A0Au, DecodeOddEvenLong(bus.ChipRam, 0x5002, 0x5006));
     }
 
     [Fact]

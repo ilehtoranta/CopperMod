@@ -202,7 +202,9 @@ namespace CopperMod.Amiga
         private const ushort DskWriteMode = 0x4000;
         private const ushort DskLengthMask = 0x3FFF;
         private const int DiskDmaCompletionBaseDelayCycles = 512;
-        private const int DiskDmaCompletionCyclesPerWord = 2;
+        private const int DiskRevolutionsPerSecond = 5;
+        private static readonly double DiskDmaCyclesPerByte =
+            AmigaConstants.A500PalCpuClockHz / (AmigaDosTrackEncoder.EncodedTrackBytes * DiskRevolutionsPerSecond);
 
         private readonly AmigaBus _bus;
         private ushort _dskbytr;
@@ -219,6 +221,8 @@ namespace CopperMod.Amiga
         private int _streamCylinder;
         private int _streamHead;
         private int _streamOffset;
+        private double _streamPosition;
+        private long _streamCycle;
 
         public AmigaDiskController(AmigaBus bus)
         {
@@ -266,6 +270,8 @@ namespace CopperMod.Amiga
             _streamCylinder = 0;
             _streamHead = 0;
             _streamOffset = 0;
+            _streamPosition = 0;
+            _streamCycle = 0;
             Drive0.ResetPosition();
         }
 
@@ -371,11 +377,14 @@ namespace CopperMod.Amiga
             }
 
             var track = AmigaDosTrackEncoder.EncodeTrack(Drive0.Disk, Drive0.Cylinder, Drive0.Head);
-            ResetStreamIfTrackChanged();
+            ResetStreamIfTrackChanged(cycle);
+            AdvanceStreamTo(track.Length, cycle);
             var sourceStart = _streamOffset;
+            var syncWaitBytes = 0;
             if ((_bus.Paula.Adkcon & 0x0400) != 0)
             {
                 sourceStart = (FindSyncOffset(track, _dsksync, _streamOffset) + 2) % track.Length;
+                syncWaitBytes = (sourceStart - _streamOffset + track.Length) % track.Length;
             }
 
             var targetAddress = _diskPointer & 0x00FF_FFFE;
@@ -396,11 +405,12 @@ namespace CopperMod.Amiga
             _lastTransferCylinder = Drive0.Cylinder;
             _lastTransferHead = Drive0.Head;
             _lastTransferAddress = targetAddress;
-            _streamOffset = (sourceStart + (requestedWords * 2)) % track.Length;
             _dskbytr = 0x9000;
+            var transferBytes = requestedWords * 2;
             var completionCycle = cycle + Math.Max(
                 DiskDmaCompletionBaseDelayCycles,
-                requestedWords * DiskDmaCompletionCyclesPerWord);
+                (long)Math.Round((syncWaitBytes + transferBytes) * DiskDmaCyclesPerByte));
+            SetStreamPosition((sourceStart + transferBytes) % track.Length, completionCycle);
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
@@ -409,7 +419,7 @@ namespace CopperMod.Amiga
                 completionCycle);
         }
 
-        private void ResetStreamIfTrackChanged()
+        private void ResetStreamIfTrackChanged(long cycle)
         {
             if (_streamCylinder == Drive0.Cylinder && _streamHead == Drive0.Head)
             {
@@ -418,7 +428,26 @@ namespace CopperMod.Amiga
 
             _streamCylinder = Drive0.Cylinder;
             _streamHead = Drive0.Head;
-            _streamOffset = 0;
+            SetStreamPosition(0, cycle);
+        }
+
+        private void AdvanceStreamTo(int trackLength, long cycle)
+        {
+            if (cycle <= _streamCycle)
+            {
+                return;
+            }
+
+            var elapsedCycles = cycle - _streamCycle;
+            var position = (_streamPosition + (elapsedCycles / DiskDmaCyclesPerByte)) % trackLength;
+            SetStreamPosition(position, cycle);
+        }
+
+        private void SetStreamPosition(double position, long cycle)
+        {
+            _streamPosition = position;
+            _streamOffset = (int)position & ~1;
+            _streamCycle = cycle;
         }
 
         private static int FindSyncOffset(ReadOnlySpan<byte> track, ushort sync, int startOffset)
@@ -528,8 +557,9 @@ namespace CopperMod.Amiga
     {
         private const int EncodedSectorBytes = 0x440;
         private const int EncodedTrackGapBytes = 0x140;
-        private const int EncodedTrackBytes = (EncodedSectorBytes * AmigaDiskImage.SectorsPerTrack) + EncodedTrackGapBytes;
+        internal const int EncodedTrackBytes = (EncodedSectorBytes * AmigaDiskImage.SectorsPerTrack) + EncodedTrackGapBytes;
         private const uint MfmDataMask = 0x5555_5555;
+        private static readonly int[] PhysicalSectorOrder = { 9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8 };
 
         public static byte[] EncodeTrack(AmigaDiskImage disk, int cylinder, int head)
         {
@@ -546,21 +576,27 @@ namespace CopperMod.Amiga
 
             var track = Enumerable.Repeat((byte)0xAA, EncodedTrackBytes).ToArray();
             var trackNumber = (cylinder * AmigaDiskImage.HeadCount) + head;
-            for (var sector = 0; sector < AmigaDiskImage.SectorsPerTrack; sector++)
+            for (var physicalIndex = 0; physicalIndex < PhysicalSectorOrder.Length; physicalIndex++)
             {
-                EncodeSector(disk.ReadSector(cylinder, head, sector), track.AsSpan(sector * EncodedSectorBytes, EncodedSectorBytes), trackNumber, sector);
+                var sector = PhysicalSectorOrder[physicalIndex];
+                var sectorsUntilGap = AmigaDiskImage.SectorsPerTrack - physicalIndex;
+                EncodeSector(
+                    disk.ReadSector(cylinder, head, sector),
+                    track.AsSpan(physicalIndex * EncodedSectorBytes, EncodedSectorBytes),
+                    trackNumber,
+                    sector,
+                    sectorsUntilGap);
             }
 
             return track;
         }
 
-        private static void EncodeSector(ReadOnlySpan<byte> source, Span<byte> destination, int trackNumber, int sector)
+        private static void EncodeSector(ReadOnlySpan<byte> source, Span<byte> destination, int trackNumber, int sector, int sectorsUntilGap)
         {
             destination.Fill(0xAA);
             BigEndian.WriteUInt16(destination, 0x04, 0x4489);
             BigEndian.WriteUInt16(destination, 0x06, 0x4489);
 
-            var sectorsUntilGap = AmigaDiskImage.SectorsPerTrack - sector;
             var header = 0xFF00_0000u | ((uint)trackNumber << 16) | ((uint)sector << 8) | (uint)sectorsUntilGap;
             Span<uint> headerAndLabel = stackalloc uint[10];
             WriteOddEvenPair(headerAndLabel, 0, header);

@@ -57,9 +57,27 @@ internal sealed class CopperScreenEmulator
 
 	public string StatusText { get; private set; }
 
+	public bool IsPaused { get; private set; }
+
 	public bool IsPrimaryFirePressed => _mousePrimaryFirePressed || _joystickPrimaryFirePressed || _firePulseFrames > 0;
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
+
+	public string DiskName => DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
+
+	public string ProgramCounterText => $"PC=${_machine.Cpu.State.ProgramCounter:X6}";
+
+	public string DriveStatusText
+	{
+		get
+		{
+			var disk = _machine.Bus.Disk.CaptureSnapshot();
+			var inserted = DiskPath == null ? "empty" : "DF0";
+			var motor = disk.MotorOn ? "motor" : "stopped";
+			var selected = disk.Selected ? "selected" : "idle";
+			return $"{inserted} cyl {disk.Cylinder:00}.{disk.Head} {motor} {selected}";
+		}
+	}
 
 	public int AudioFramesPerAppFrame(int sampleRate)
 	{
@@ -147,6 +165,72 @@ internal sealed class CopperScreenEmulator
 		return true;
 	}
 
+	public void Reset()
+	{
+		_bootAttempted = false;
+		_previousInterlaceFrameValid = false;
+		_firePulseFrames = 0;
+		_targetCycle = 0;
+		_audioCycle = 0;
+		_frameAudio.AsSpan().Clear();
+		_machine.ResetHardware();
+		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
+		StatusText = DiskPath == null ? "insert disk image" : Path.GetFileName(DiskPath);
+	}
+
+	public bool TogglePaused()
+	{
+		IsPaused = !IsPaused;
+		return IsPaused;
+	}
+
+	public void SetPaused(bool paused)
+	{
+		IsPaused = paused;
+	}
+
+	public bool LaunchCopperBenchPath(string amigaPath, out string message)
+	{
+		message = string.Empty;
+		if (DiskPath == null)
+		{
+			message = "No disk is inserted.";
+			return false;
+		}
+
+		try
+		{
+			var disk = AmigaDiskImage.Load(DiskPath);
+			var fileSystem = new AmigaDosFileSystem(disk);
+			if (!fileSystem.TryCreateLaunchRequest(amigaPath, out var request, out message))
+			{
+				return false;
+			}
+
+			_bootAttempted = true;
+			_previousInterlaceFrameValid = false;
+			_firePulseFrames = 0;
+			_boot.StartWorkbenchSession(disk);
+			if (!_boot.TryLaunchProgram(request, out var launchResult, out message))
+			{
+				return false;
+			}
+
+			_targetCycle = _machine.Cpu.State.Cycles;
+			_audioCycle = _targetCycle;
+			_frameAudio.AsSpan().Clear();
+			StatusText = "CopperBench launched " + launchResult.ExecutablePath;
+			message = StatusText;
+			return true;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		{
+			message = ex.Message;
+			StatusText = message;
+			return false;
+		}
+	}
+
 	public void PulsePrimaryFire(int frames = 30)
 	{
 		_firePulseFrames = Math.Max(_firePulseFrames, Math.Max(1, frames));
@@ -194,6 +278,13 @@ internal sealed class CopperScreenEmulator
 			return;
 		}
 
+		if (IsPaused)
+		{
+			_frameAudio.AsSpan().Clear();
+			AdvanceInputPulse();
+			return;
+		}
+
 		if (!_bootAttempted)
 		{
 			_bootAttempted = true;
@@ -233,7 +324,7 @@ internal sealed class CopperScreenEmulator
 		var frames = Math.Min(AudioFramesPerAppFrame(sampleRate), destination.Length / channels);
 		var span = destination.Slice(0, frames * channels);
 		span.Clear();
-		if (!_bootAttempted || DiskPath == null)
+		if (!_bootAttempted || DiskPath == null || IsPaused)
 		{
 			return frames;
 		}
