@@ -28,6 +28,31 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void MoveaDoesNotAlterConditionCodes()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x20, 0x40); // MOVEA.L D0,A0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 0x1234_5678;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.A[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
 	public void MovemPredecrementAndPostincrementRoundTripRegisters()
 	{
 		var bus = new TestBus();
@@ -184,6 +209,60 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void DivsAcceptsNegativeQuotientThatFitsWord()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x81, 0xD0); // DIVS.W (A0),D0
+		Write(bus.Memory, 0x2000, 0x00, 0x03);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 0xFFFF_FFF6; // -10
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xFFFF_FFFDu, cpu.State.D[0]); // remainder -1, quotient -3
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void DivsOverflowLeavesDestinationUnchanged()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x81, 0xD0); // DIVS.W (A0),D0
+		Write(bus.Memory, 0x2000, 0x00, 0x01);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 0xFFFF_7FFF; // -32769
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xFFFF_7FFFu, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
+	}
+
+	[Fact]
+	public void CmpaWordComparesSignExtendedOperandAgainstFullAddressRegister()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xB0, 0xC0); // CMPA.W D0,A0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x0001_0000;
+		cpu.State.D[0] = 0;
+		cpu.State.StatusRegister |= M68kCpuState.Zero;
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+	}
+
+	[Fact]
 	public void TrapPushesExceptionFrameAndVectorsThroughTrapTable()
 	{
 		var bus = new TestBus();
@@ -203,6 +282,67 @@ public sealed class M68kInterpreterTests
 			((uint)bus.Memory[0x2FFE] << 8) |
 			bus.Memory[0x2FFF]);
 		Assert.True(cpu.State.Cycles >= 34);
+	}
+
+	[Fact]
+	public void StatusRegisterSupervisorBitSwitchesBetweenUserAndSupervisorStacks()
+	{
+		var bus = new TestBus();
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x0400);
+		cpu.State.ResetStackPointers(supervisorStackPointer: 0x0400, userStackPointer: 0x2000, supervisorMode: false);
+		cpu.State.SetActiveStackPointer(0x1FF0);
+
+		cpu.State.StatusRegister |= M68kCpuState.Supervisor;
+
+		Assert.Equal(0x1FF0u, cpu.State.UserStackPointer);
+		Assert.Equal(0x0400u, cpu.State.A[7]);
+
+		cpu.State.SetActiveStackPointer(0x03F8);
+		cpu.State.StatusRegister &= unchecked((ushort)~M68kCpuState.Supervisor);
+
+		Assert.Equal(0x03F8u, cpu.State.SupervisorStackPointer);
+		Assert.Equal(0x1FF0u, cpu.State.A[7]);
+	}
+
+	[Fact]
+	public void TrapFromUserModeUsesSupervisorStack()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x41); // TRAP #1
+		bus.WriteLong((32 + 1) * 4, 0x0000_2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x0400);
+		cpu.State.ResetStackPointers(supervisorStackPointer: 0x0400, userStackPointer: 0x3000, supervisorMode: false);
+
+		cpu.ExecuteInstruction();
+
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Supervisor));
+		Assert.Equal(0x03FAu, cpu.State.A[7]);
+		Assert.Equal(0x3000u, cpu.State.UserStackPointer);
+		Assert.Equal(0x0000, (bus.Memory[0x03FA] << 8) | bus.Memory[0x03FB]);
+		Assert.Equal(0x0000_1002u, ((uint)bus.Memory[0x03FC] << 24) |
+			((uint)bus.Memory[0x03FD] << 16) |
+			((uint)bus.Memory[0x03FE] << 8) |
+			bus.Memory[0x03FF]);
+	}
+
+	[Fact]
+	public void RteRestoresUserStackAfterReadingSupervisorExceptionFrame()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x73); // RTE
+		Write(bus.Memory, 0x03FA, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x0400);
+		cpu.State.ResetStackPointers(supervisorStackPointer: 0x03FA, userStackPointer: 0x3000, supervisorMode: true);
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Supervisor));
+		Assert.Equal(0x0000_2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+		Assert.Equal(0x0400u, cpu.State.SupervisorStackPointer);
 	}
 
 	[Fact]

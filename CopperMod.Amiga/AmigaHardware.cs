@@ -26,7 +26,7 @@ namespace CopperMod.Amiga
         private readonly byte[] _chipRam;
         private readonly byte[] _expansionRam;
         private readonly Dictionary<uint, Action<M68kCpuState>> _hostCallbacks = new Dictionary<uint, Action<M68kCpuState>>();
-        private readonly List<MappedMemoryRegion> _readOnlyRegions = new List<MappedMemoryRegion>();
+        private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
@@ -128,7 +128,7 @@ namespace CopperMod.Amiga
             Array.Clear(_pendingCustomBytes);
             Array.Clear(_pendingCustomByteWritten);
             _hostCallbacks.Clear();
-            _readOnlyRegions.Clear();
+            _mappedMemoryRegions.Clear();
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             CiaA.Reset(0x02);
@@ -190,13 +190,23 @@ namespace CopperMod.Amiga
 
         public void MapReadOnlyMemory(uint baseAddress, ReadOnlySpan<byte> data)
         {
+            MapMemory(baseAddress, data, readOnly: true);
+        }
+
+        public void MapWritableMemory(uint baseAddress, ReadOnlySpan<byte> data)
+        {
+            MapMemory(baseAddress, data, readOnly: false);
+        }
+
+        private void MapMemory(uint baseAddress, ReadOnlySpan<byte> data, bool readOnly)
+        {
             if (data.IsEmpty)
             {
                 throw new ArgumentException("Mapped memory cannot be empty.", nameof(data));
             }
 
             var copy = data.ToArray();
-            _readOnlyRegions.Add(new MappedMemoryRegion(baseAddress, copy));
+            _mappedMemoryRegions.Add(new MappedMemoryRegion(baseAddress, copy, readOnly));
         }
 
         public byte ReadByte(uint address)
@@ -533,9 +543,9 @@ namespace CopperMod.Amiga
                 return AmigaBusAccessTarget.HostTrap;
             }
 
-            for (var i = _readOnlyRegions.Count - 1; i >= 0; i--)
+            for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
             {
-                if (_readOnlyRegions[i].Contains(address))
+                if (_mappedMemoryRegions[i].Contains(address))
                 {
                     return AmigaBusAccessTarget.Rom;
                 }
@@ -581,9 +591,9 @@ namespace CopperMod.Amiga
                 return value;
             }
 
-            for (var i = _readOnlyRegions.Count - 1; i >= 0; i--)
+            for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
             {
-                if (_readOnlyRegions[i].TryReadByte(address, out var value))
+                if (_mappedMemoryRegions[i].TryReadByte(address, out var value))
                 {
                     return value;
                 }
@@ -634,6 +644,16 @@ namespace CopperMod.Amiga
                 if (cia == CiaB)
                 {
                     Disk.WriteCiaBRegister(ciaRegister, value);
+                }
+
+                return;
+            }
+
+            for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
+            {
+                if (_mappedMemoryRegions[i].TryWriteByte(address, value))
+                {
+                    return;
                 }
             }
         }
@@ -955,13 +975,16 @@ namespace CopperMod.Amiga
         {
             private readonly byte[] _data;
 
-            public MappedMemoryRegion(uint baseAddress, byte[] data)
+            public MappedMemoryRegion(uint baseAddress, byte[] data, bool readOnly)
             {
                 BaseAddress = baseAddress;
                 _data = data ?? throw new ArgumentNullException(nameof(data));
+                ReadOnly = readOnly;
             }
 
             public uint BaseAddress { get; }
+
+            public bool ReadOnly { get; }
 
             public bool Contains(uint address)
             {
@@ -979,6 +1002,18 @@ namespace CopperMod.Amiga
                 }
 
                 value = _data[offset];
+                return true;
+            }
+
+            public bool TryWriteByte(uint address, byte value)
+            {
+                var offset = address - BaseAddress;
+                if (ReadOnly || address < BaseAddress || offset >= _data.Length)
+                {
+                    return false;
+                }
+
+                _data[offset] = value;
                 return true;
             }
         }

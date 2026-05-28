@@ -58,6 +58,7 @@ namespace CopperMod.Amiga
                 {
                     declaredSizes[i] = checked(CheckedInt(sizeWord & HunkIdMask, "hunk memory size") * 4);
                     allocations[i] = _allocate(Math.Max(4, declaredSizes[i]) + 4);
+                    _bus.ClearMemory(allocations[i], Math.Max(4, declaredSizes[i]) + 4);
                     bases[i] = allocations[i] + 4;
                 }
             }

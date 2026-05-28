@@ -491,7 +491,7 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void HiredGunsLoadingScreenUsesHighResolutionInterlacedFetchWhenAvailable()
+	public void HiredGunsSystemTakeoverUsesSelectedWorkbenchLanguageWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
 		if (diskPath == null)
@@ -500,17 +500,50 @@ public sealed class CopperScreenBootTests
 		}
 
 		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
-		for (var frame = 0; frame < 650; frame++)
+		for (var frame = 0; frame < 700; frame++)
 		{
 			emulator.RenderNextFrame();
 		}
 
+		var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+			.GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
+			.GetValue(emulator)!;
+		var boot = (AmigaBootController)typeof(CopperScreenEmulator)
+			.GetField("_boot", BindingFlags.Instance | BindingFlags.NonPublic)!
+			.GetValue(emulator)!;
+		var diagnostics = string.Join(Environment.NewLine, boot.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.False(machine.Cpu.State.Halted, diagnostics);
+		Assert.Equal(0, machine.Bus.ReadByte(0x00C02756));
+		Assert.DoesNotContain(boot.Diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT");
+	}
+
+	[Fact]
+	public void HiredGunsLoadingScreenReachesInterlacedHamTitleWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 1250; frame++)
+		{
+			emulator.RenderNextFrame();
+			var candidate = emulator.DisplaySnapshot;
+			if ((candidate.Bplcon0 & 0x6804) == 0x6804 && candidate.LastBitplaneNonZeroPixels > 40_000)
+			{
+				break;
+			}
+		}
+
 		var snapshot = emulator.DisplaySnapshot;
-		Assert.Equal(0x8004, snapshot.Bplcon0 & 0x8004);
-		Assert.Equal(0x3000, snapshot.Bplcon0 & 0x7000);
-		Assert.Equal(0x003C, snapshot.DdfStart & 0x00FC);
-		Assert.Equal(0x00D4, snapshot.DdfStop & 0x00FC);
-		Assert.True(snapshot.LastBitplaneNonZeroPixels > 15_000, $"Expected the Hired Guns loading screen to use the full high-res fetch width; saw {snapshot.LastBitplaneNonZeroPixels} pixels.");
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.Equal(0x6000, snapshot.Bplcon0 & 0x7000);
+		Assert.Equal(0x0804, snapshot.Bplcon0 & 0x0804);
+		Assert.True(snapshot.LastBitplaneNonZeroPixels > 40_000, $"Expected the Hired Guns title/loading screen to be decoded; saw {snapshot.LastBitplaneNonZeroPixels} pixels.");
+		Assert.True(snapshot.LastBitplaneMinX <= 4 && snapshot.LastBitplaneMaxX >= 340, $"Expected the loading screen to span the display width; box was {snapshot.LastBitplaneMinX}-{snapshot.LastBitplaneMaxX}.");
+		Assert.True(snapshot.LastBitplaneMinY <= 60 && snapshot.LastBitplaneMaxY >= 180, $"Expected the loading screen to span the title area; box was {snapshot.LastBitplaneMinY}-{snapshot.LastBitplaneMaxY}.");
 	}
 
 	[Fact]

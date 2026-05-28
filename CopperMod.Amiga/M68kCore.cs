@@ -80,9 +80,19 @@ namespace CopperMod.Amiga
 
         public uint[] A { get; } = new uint[8];
 
+        private ushort _statusRegister = Supervisor;
+
         public uint ProgramCounter { get; set; }
 
-        public ushort StatusRegister { get; set; } = Supervisor;
+        public ushort StatusRegister
+        {
+            get => _statusRegister;
+            set => SetStatusRegister(value);
+        }
+
+        public uint UserStackPointer { get; private set; }
+
+        public uint SupervisorStackPointer { get; private set; }
 
         public long Cycles { get; set; }
 
@@ -102,6 +112,75 @@ namespace CopperMod.Amiga
             StatusRegister = value
                 ? (ushort)(StatusRegister | flag)
                 : (ushort)(StatusRegister & ~flag);
+        }
+
+        public void ResetStackPointers(uint supervisorStackPointer, uint userStackPointer, bool supervisorMode)
+        {
+            SupervisorStackPointer = supervisorStackPointer;
+            UserStackPointer = userStackPointer;
+            A[7] = supervisorMode ? supervisorStackPointer : userStackPointer;
+            _statusRegister = supervisorMode ? Supervisor : (ushort)0;
+        }
+
+        public void SetActiveStackPointer(uint stackPointer)
+        {
+            A[7] = stackPointer;
+            if (GetFlag(Supervisor))
+            {
+                SupervisorStackPointer = stackPointer;
+            }
+            else
+            {
+                UserStackPointer = stackPointer;
+            }
+        }
+
+        public uint EnterSupervisorModeWithUserStack()
+        {
+            if (GetFlag(Supervisor))
+            {
+                return 0;
+            }
+
+            var oldSupervisorStackPointer = SupervisorStackPointer;
+            UserStackPointer = A[7];
+            SupervisorStackPointer = A[7];
+            _statusRegister |= Supervisor;
+            return oldSupervisorStackPointer;
+        }
+
+        public void ReturnToUserModeWithUserStack(uint supervisorStackPointer)
+        {
+            if (!GetFlag(Supervisor))
+            {
+                return;
+            }
+
+            UserStackPointer = A[7];
+            SupervisorStackPointer = supervisorStackPointer;
+            _statusRegister &= unchecked((ushort)~Supervisor);
+            A[7] = UserStackPointer;
+        }
+
+        private void SetStatusRegister(ushort value)
+        {
+            var wasSupervisor = (_statusRegister & Supervisor) != 0;
+            var isSupervisor = (value & Supervisor) != 0;
+            if (wasSupervisor != isSupervisor)
+            {
+                if (wasSupervisor)
+                {
+                    SupervisorStackPointer = A[7];
+                    A[7] = UserStackPointer;
+                }
+                else
+                {
+                    UserStackPointer = A[7];
+                    A[7] = SupervisorStackPointer;
+                }
+            }
+
+            _statusRegister = value;
         }
 
         public void SetNegativeZero(uint value, M68kOperandSize size)
@@ -222,8 +301,7 @@ namespace CopperMod.Amiga
             Array.Clear(State.D);
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
-            State.A[7] = stackPointer;
-            State.StatusRegister = M68kCpuState.Supervisor;
+            State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
             State.Cycles = 0;
             State.Halted = false;
             State.LastOpcode = 0;
@@ -231,7 +309,7 @@ namespace CopperMod.Amiga
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
-            State.A[7] = stackPointer;
+            State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);
             State.ProgramCounter = address;
             State.Halted = false;
@@ -250,9 +328,10 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            PushLong(State.ProgramCounter);
-            PushWord(State.StatusRegister);
+            var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((State.StatusRegister & 0xF8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
+            PushLong(State.ProgramCounter);
+            PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(vectorAddress);
             AddCycles(44);
         }
@@ -277,12 +356,8 @@ namespace CopperMod.Amiga
             var destReg = (opcode >> 9) & 7;
             var dest = ResolveEa(destMode, destReg, size, write: true);
             dest.Write(value);
-            if (destMode == 1)
-            {
-                State.SetFlag(M68kCpuState.Overflow, false);
-                State.SetFlag(M68kCpuState.Carry, false);
-            }
-            else
+            // MOVEA does not alter the condition codes.
+            if (destMode != 1)
             {
                 State.SetNegativeZero(value, size);
                 State.SetFlag(M68kCpuState.Overflow, false);
@@ -482,10 +557,14 @@ namespace CopperMod.Amiga
                     AddCycles(20);
                     return true;
                 case 0x4E73:
-                    State.StatusRegister = PullWord();
-                    State.ProgramCounter = PullLong();
+                {
+                    var statusRegister = PullWord();
+                    var programCounter = PullLong();
+                    State.StatusRegister = statusRegister;
+                    State.ProgramCounter = programCounter;
                     AddCycles(20);
                     return true;
+                }
                 case 0x4E75:
                     State.ProgramCounter = PullLong();
                     AddCycles(16);
@@ -505,8 +584,8 @@ namespace CopperMod.Amiga
                 var reg = opcode & 7;
                 PushLong(State.A[reg]);
                 var displacement = unchecked((short)FetchWord());
-                State.A[reg] = State.A[7];
-                State.A[7] = (uint)(State.A[7] + displacement);
+                SetAddressRegister(reg, State.A[7]);
+                State.SetActiveStackPointer((uint)(State.A[7] + displacement));
                 AddCycles(16);
                 return true;
             }
@@ -514,9 +593,10 @@ namespace CopperMod.Amiga
             if ((opcode & 0xFFF0) == 0x4E40)
             {
                 var vector = (uint)(32 + (opcode & 0x0F));
-                PushLong(State.ProgramCounter);
-                PushWord(State.StatusRegister);
+                var savedStatusRegister = State.StatusRegister;
                 State.StatusRegister |= M68kCpuState.Supervisor;
+                PushLong(State.ProgramCounter);
+                PushWord(savedStatusRegister);
                 State.ProgramCounter = ReadLong(vector * 4);
                 AddCycles(34);
                 return true;
@@ -525,8 +605,8 @@ namespace CopperMod.Amiga
             if ((opcode & 0xFFF8) == 0x4E58)
             {
                 var reg = opcode & 7;
-                State.A[7] = State.A[reg];
-                State.A[reg] = PullLong();
+                State.SetActiveStackPointer(State.A[reg]);
+                SetAddressRegister(reg, PullLong());
                 AddCycles(12);
                 return true;
             }
@@ -585,7 +665,7 @@ namespace CopperMod.Amiga
             {
                 var addressRegister = (opcode >> 9) & 7;
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
-                State.A[addressRegister] = ea.Address;
+                SetAddressRegister(addressRegister, ea.Address);
                 AddCycles(8);
                 return true;
             }
@@ -728,9 +808,11 @@ namespace CopperMod.Amiga
             if (mode == 1)
             {
                 var reg = opcode & 7;
-                State.A[reg] = subtract
-                    ? unchecked(State.A[reg] - (uint)count)
-                    : unchecked(State.A[reg] + (uint)count);
+                SetAddressRegister(
+                    reg,
+                    subtract
+                        ? unchecked(State.A[reg] - (uint)count)
+                        : unchecked(State.A[reg] + (uint)count));
                 AddCycles(8);
                 return true;
             }
@@ -803,25 +885,37 @@ namespace CopperMod.Amiga
                 {
                     quotient = dividend / divisor;
                     remainder = dividend % divisor;
+                    if ((quotient & 0xFFFF_0000) != 0)
+                    {
+                        State.SetFlag(M68kCpuState.Overflow, true);
+                    }
+                    else
+                    {
+                        State.D[reg] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                        State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                        State.SetFlag(M68kCpuState.Overflow, false);
+                        State.SetFlag(M68kCpuState.Carry, false);
+                    }
                 }
                 else
                 {
                     var signedDivisor = unchecked((short)divisor);
                     var signedDividend = unchecked((int)dividend);
-                    quotient = (uint)(signedDividend / signedDivisor);
-                    remainder = (uint)(signedDividend % signedDivisor);
-                }
-
-                if ((quotient & 0xFFFF_0000) != 0)
-                {
-                    State.SetFlag(M68kCpuState.Overflow, true);
-                }
-                else
-                {
-                    State.D[reg] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
-                    State.SetNegativeZero(quotient, M68kOperandSize.Word);
-                    State.SetFlag(M68kCpuState.Overflow, false);
-                    State.SetFlag(M68kCpuState.Carry, false);
+                    var signedQuotient = signedDividend / signedDivisor;
+                    var signedRemainder = signedDividend % signedDivisor;
+                    if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
+                    {
+                        State.SetFlag(M68kCpuState.Overflow, true);
+                    }
+                    else
+                    {
+                        quotient = unchecked((uint)signedQuotient);
+                        remainder = unchecked((uint)signedRemainder);
+                        State.D[reg] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                        State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                        State.SetFlag(M68kCpuState.Overflow, false);
+                        State.SetFlag(M68kCpuState.Carry, false);
+                    }
                 }
 
                 AddCycles(140);
@@ -835,15 +929,18 @@ namespace CopperMod.Amiga
                 var value = ea.Read();
                 if (line == 0xB)
                 {
-                    _ = Subtract(State.A[reg], value, size, setExtend: false, storeResult: false);
+                    var compareValue = size == M68kOperandSize.Word
+                        ? M68kCpuState.SignExtend(value, M68kOperandSize.Word)
+                        : value;
+                    _ = Subtract(State.A[reg], compareValue, M68kOperandSize.Long, setExtend: false, storeResult: false);
                 }
                 else if (line == 0x9)
                 {
-                    State.A[reg] = State.A[reg] - M68kCpuState.SignExtend(value, size);
+                    SetAddressRegister(reg, State.A[reg] - M68kCpuState.SignExtend(value, size));
                 }
                 else
                 {
-                    State.A[reg] = State.A[reg] + M68kCpuState.SignExtend(value, size);
+                    SetAddressRegister(reg, State.A[reg] + M68kCpuState.SignExtend(value, size));
                 }
 
                 AddCycles(size == M68kOperandSize.Long ? 8 : 6);
@@ -964,8 +1061,8 @@ namespace CopperMod.Amiga
             else
             {
                 var increment = AddressIncrement(sourceRegister, size);
-                State.A[sourceRegister] -= increment;
-                State.A[destinationRegister] -= AddressIncrement(destinationRegister, size);
+                SetAddressRegister(sourceRegister, State.A[sourceRegister] - increment);
+                SetAddressRegister(destinationRegister, State.A[destinationRegister] - AddressIncrement(destinationRegister, size));
                 source = size switch
                 {
                     M68kOperandSize.Byte => ReadByte(State.A[sourceRegister]),
@@ -1086,7 +1183,7 @@ namespace CopperMod.Amiga
                     }
                 }
 
-                State.A[reg] = address;
+                SetAddressRegister(reg, address);
                 AddCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
                 return;
             }
@@ -1111,7 +1208,7 @@ namespace CopperMod.Amiga
                     }
                     else
                     {
-                        State.A[register - 8] = value;
+                        SetAddressRegister(register - 8, value);
                     }
                 }
                 else
@@ -1132,7 +1229,7 @@ namespace CopperMod.Amiga
 
             if (directionMemoryToRegisters && mode == 3)
             {
-                State.A[reg] = current;
+                SetAddressRegister(reg, current);
             }
 
             AddCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
@@ -1153,14 +1250,14 @@ namespace CopperMod.Amiga
                     var address = State.A[reg];
                     if (!addressOnly)
                     {
-                        State.A[reg] += AddressIncrement(reg, size);
+                        SetAddressRegister(reg, State.A[reg] + AddressIncrement(reg, size));
                     }
 
                     return EaOperand.Memory(this, address, size);
                 }
                 case 4:
                 {
-                    State.A[reg] -= AddressIncrement(reg, size);
+                    SetAddressRegister(reg, State.A[reg] - AddressIncrement(reg, size));
                     return EaOperand.Memory(this, State.A[reg], size);
                 }
                 case 5:
@@ -1234,6 +1331,17 @@ namespace CopperMod.Amiga
             State.D[reg] = size == M68kOperandSize.Long
                 ? value
                 : (State.D[reg] & ~mask) | (value & mask);
+        }
+
+        private void SetAddressRegister(int reg, uint value)
+        {
+            if (reg == 7)
+            {
+                State.SetActiveStackPointer(value);
+                return;
+            }
+
+            State.A[reg] = value;
         }
 
         private uint Add(uint destination, uint source, M68kOperandSize size, bool setExtend)
@@ -1532,27 +1640,27 @@ namespace CopperMod.Amiga
 
         private void PushWord(ushort value)
         {
-            State.A[7] -= 2;
+            State.SetActiveStackPointer(State.A[7] - 2);
             WriteWord(State.A[7], value);
         }
 
         private void PushLong(uint value)
         {
-            State.A[7] -= 4;
+            State.SetActiveStackPointer(State.A[7] - 4);
             WriteLong(State.A[7], value);
         }
 
         private ushort PullWord()
         {
             var value = ReadWord(State.A[7]);
-            State.A[7] += 2;
+            State.SetActiveStackPointer(State.A[7] + 2);
             return value;
         }
 
         private uint PullLong()
         {
             var value = ReadLong(State.A[7]);
-            State.A[7] += 4;
+            State.SetActiveStackPointer(State.A[7] + 4);
             return value;
         }
 
@@ -1658,9 +1766,11 @@ namespace CopperMod.Amiga
                         _cpu.WriteDataRegister(_reg, value, Size);
                         break;
                     case 1:
-                        _cpu.State.A[_reg] = Size == M68kOperandSize.Word
-                            ? M68kCpuState.SignExtend(value, M68kOperandSize.Word)
-                            : value;
+                        _cpu.SetAddressRegister(
+                            _reg,
+                            Size == M68kOperandSize.Word
+                                ? M68kCpuState.SignExtend(value, M68kOperandSize.Word)
+                                : value);
                         break;
                     case 2:
                         if (Size == M68kOperandSize.Byte)

@@ -432,12 +432,32 @@ namespace CopperMod.Amiga
                 {
                     if (BigEndian.ReadUInt16(track, offset, "encoded disk sync word") == sync)
                     {
-                        return offset;
+                        return RewindConsecutiveSync(track, sync, offset);
                     }
                 }
             }
 
             return 0;
+        }
+
+        private static int RewindConsecutiveSync(ReadOnlySpan<byte> track, ushort sync, int offset)
+        {
+            if (track.Length < 4)
+            {
+                return offset;
+            }
+
+            var current = offset;
+            while (true)
+            {
+                var previous = (current - 2 + track.Length) % track.Length;
+                if (previous == offset || BigEndian.ReadUInt16(track, previous, "encoded disk sync word") != sync)
+                {
+                    return current;
+                }
+
+                current = previous;
+            }
         }
     }
 

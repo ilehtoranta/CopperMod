@@ -16,15 +16,38 @@ namespace CopperMod.Amiga
         public const uint BootEntryAddress = BootBlockAddress + 0x0C;
         public const uint BootIoRequestAddress = 0x0000_0800;
         public const int CmdRead = 2;
+        private const int IoCommandOffset = 0x1C;
+        private const int IoErrorOffset = 0x1F;
+        private const int IoActualOffset = 0x20;
+        private const int IoLengthOffset = 0x24;
+        private const int IoDataOffset = 0x28;
+        private const int IoOffsetOffset = 0x2C;
         private const uint DosResidentAddress = 0x0000_3400;
         private const uint DosResidentNameAddress = DosResidentAddress + 0x40;
         private const uint DosResidentIdAddress = DosResidentAddress + 0x50;
         private const uint DosResidentInitAddress = 0x00F2_0100;
         private const uint WorkbenchRootLock = 0x00F8_0000;
-        private const uint ChipOnlyMemHeaderAddress = 0x0000_2400;
-        private const uint ChipOnlyMemNameAddress = 0x0000_2480;
         private const int ExecBaseImageSize = 0x180;
+        private const int ExecSoftVerOffset = 0x22;
+        private const int ExecLowMemChkSumOffset = 0x24;
+        private const int ExecChkBaseOffset = 0x26;
+        private const int ExecSysStkUpperOffset = 0x36;
+        private const int ExecSysStkLowerOffset = 0x3A;
+        private const int ExecMaxLocMemOffset = 0x3E;
+        private const int ExecMaxExtMemOffset = 0x4E;
+        private const int ExecChkSumOffset = 0x52;
+        private const int ExecThisTaskOffset = 0x114;
+        private const int ExecTaskTrapCodeOffset = 0x130;
+        private const int ExecTaskTrapAllocOffset = 0x140;
         private const int ExecMemListOffset = 0x142;
+        private const int TaskNodeTypeOffset = 0x08;
+        private const int TaskNodeNameOffset = 0x0A;
+        private const int TaskTrapAllocOffset = 0x22;
+        private const int TaskTrapAbleOffset = 0x24;
+        private const int TaskTrapCodeOffset = 0x32;
+        private const int TaskStackPointerOffset = 0x36;
+        private const int TaskStackLowerOffset = 0x3A;
+        private const int TaskStackUpperOffset = 0x3E;
         private const int MemNodeNameOffset = 0x0A;
         private const int MemHeaderAttributesOffset = 0x0E;
         private const int MemHeaderFirstChunkOffset = 0x10;
@@ -36,12 +59,21 @@ namespace CopperMod.Amiga
         private const uint MemfPublic = 0x0000_0001;
         private const uint MemfChip = 0x0000_0002;
         private const uint MemfFast = 0x0000_0004;
+        private const uint MemfClear = 0x0001_0000;
         private const uint MemfLargest = 0x0002_0000;
         private const uint MemfTotal = 0x0008_0000;
-        private const uint BootChipOnlyReservedLower = 0x0000_2800;
-        private const uint BootPseudoFastMetadataSize = 0x0000_0100;
+        private const uint BootChipPublicLowerAddress = 0x0000_0400;
+        private const uint BootSupervisorStackTopAddress = 0x0000_0400;
+        private const uint DosProgramReturnAddress = 0x00FF_FFFC;
+        private const uint TaskTrapDispatcherBaseAddress = 0x00F0_8000;
+        private const uint DefaultTaskTrapCodeAddress = 0x00F0_8100;
+        private const uint BootPseudoFastMetadataSize = 0x0000_0200;
         private const uint BootPseudoFastStackReserve = 0x0000_1000;
-        private const uint BootChipKillSysLower = 0x0000_0100;
+        private const uint BootChipOnlyPrivateMetadataSize = 0x0000_1000;
+        private const uint BootPseudoFastCurrentTaskOffset = 0x0000_0100;
+        private const uint BootChipOnlyMemHeaderOffset = 0x0000_0100;
+        private const uint BootChipOnlyMemNameOffset = 0x0000_0180;
+        private const ushort Kickstart13SoftVer = 34;
 
         private readonly AmigaMachine _machine;
         private readonly IAmigaDiskDmaEngine _diskDma;
@@ -64,6 +96,8 @@ namespace CopperMod.Amiga
         private uint _allocatedSignalMask;
         private uint _syntheticSignalMask;
         private IReadOnlyList<string> _workbenchToolTypes = Array.Empty<string>();
+        private int? _workbenchLanguageSelectionIndex;
+        private bool _workbenchLanguageSelectionApplied;
         private uint _workbenchDiskObjectAddress;
         private uint _syntheticScreenAddress;
         private uint _syntheticWindowAddress;
@@ -77,6 +111,7 @@ namespace CopperMod.Amiga
         private uint _fastMemHeaderAddress;
         private uint _chipMemNameAddress;
         private uint _fastMemNameAddress;
+        private uint _currentTaskAddress;
         private uint _chipMemLower;
         private uint _chipMemUpper;
         private uint _fastMemLower;
@@ -125,6 +160,8 @@ namespace CopperMod.Amiga
             _allocatedSignalMask = 0;
             _syntheticSignalMask = 0;
             _workbenchToolTypes = Array.Empty<string>();
+            _workbenchLanguageSelectionIndex = null;
+            _workbenchLanguageSelectionApplied = false;
             _workbenchDiskObjectAddress = 0;
             _syntheticScreenAddress = 0;
             _syntheticWindowAddress = 0;
@@ -138,6 +175,7 @@ namespace CopperMod.Amiga
             _fastMemHeaderAddress = 0;
             _chipMemNameAddress = 0;
             _fastMemNameAddress = 0;
+            _currentTaskAddress = 0;
             _chipMemLower = 0;
             _chipMemUpper = 0;
             _fastMemLower = 0;
@@ -149,7 +187,10 @@ namespace CopperMod.Amiga
             InstallBootHostTraps();
             ValidateBootBlock(disk.BootBlock);
             _machine.Bus.CopyToChipRam(BootBlockAddress, disk.BootBlock);
-            _machine.Cpu.Reset(BootEntryAddress, GetBootStackTopAddress());
+            _machine.Bus.WriteWord(BootIoRequestAddress + IoCommandOffset, CmdRead);
+            var userStackTop = GetBootStackTopAddress();
+            _machine.Cpu.Reset(BootEntryAddress, userStackTop);
+            _machine.Cpu.State.ResetStackPointers(BootSupervisorStackTopAddress, userStackTop, supervisorMode: false);
             _machine.Cpu.State.A[1] = BootIoRequestAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
         }
@@ -236,6 +277,7 @@ namespace CopperMod.Amiga
                 bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, captured), state => HostExecGeneric(state, captured));
             }
 
+            InstallTaskTrapDispatchers();
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -456), HostDoIo);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -96), HostFindResident);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -132), HostOk);
@@ -278,6 +320,19 @@ namespace CopperMod.Amiga
             InstallKickstartMemoryList();
         }
 
+        private void InstallTaskTrapDispatchers()
+        {
+            var bus = _machine.Bus;
+            bus.RegisterHostCallback(DefaultTaskTrapCodeAddress, HostDefaultTaskTrapCode);
+            for (var trap = 0; trap < 16; trap++)
+            {
+                var vector = 32 + trap;
+                var dispatcherAddress = TaskTrapDispatcherBaseAddress + (uint)(trap * 4);
+                bus.RegisterHostCallback(dispatcherAddress, state => HostTaskTrapDispatcher(state, vector));
+                bus.WriteLong((uint)(vector * 4), dispatcherAddress);
+            }
+        }
+
         private AmigaBootResult ExecuteBootBlock(
             int maxInstructions,
             AmigaBootRunMode runMode,
@@ -304,12 +359,13 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    if (_machine.Cpu.State.ProgramCounter == 0x0000_0400 && instructions > 0)
+                    if (_machine.Cpu.State.ProgramCounter == DosProgramReturnAddress && instructions > 0)
                     {
                         completed = true;
                         break;
                     }
 
+                    ApplyWorkbenchLanguageSelectionIfNeeded();
                     var previousCycle = _machine.Cpu.State.Cycles;
                     _machine.Cpu.ExecuteInstruction();
                     beforeDeviceAdvance?.Invoke(previousCycle, _machine.Cpu.State.Cycles);
@@ -356,18 +412,24 @@ namespace CopperMod.Amiga
         private void HostDoIo(M68kCpuState state)
         {
             var io = state.A[1];
-            var command = _machine.Bus.ReadWord(io + 0x1C);
-            var length = _machine.Bus.ReadLong(io + 0x24);
-            var destination = _machine.Bus.ReadLong(io + 0x28);
-            var offset = _machine.Bus.ReadLong(io + 0x2C);
+            var command = _machine.Bus.ReadWord(io + IoCommandOffset);
+            var length = _machine.Bus.ReadLong(io + IoLengthOffset);
+            var destination = _machine.Bus.ReadLong(io + IoDataOffset);
+            var offset = _machine.Bus.ReadLong(io + IoOffsetOffset);
             if (command != CmdRead)
             {
-                _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_UNSUPPORTED_IO", $"Unsupported boot IO command {command}."));
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_UNSUPPORTED_IO",
+                    $"Unsupported boot IO command {command} at IO request 0x{io:X8}, length 0x{length:X8}, data 0x{destination:X8}, offset 0x{offset:X8}."));
+                _machine.Bus.WriteByte(io + IoErrorOffset, 1, state.Cycles);
+                _machine.Bus.WriteLong(io + IoActualOffset, 0, state.Cycles);
                 state.D[0] = 1;
                 return;
             }
 
             ReadBootDiskBytesToChipRam(checked((int)offset), checked((int)length), destination, state.Cycles);
+            _machine.Bus.WriteByte(io + IoErrorOffset, 0, state.Cycles);
+            _machine.Bus.WriteLong(io + IoActualOffset, length, state.Cycles);
             _bootDiskReadCompleted = true;
             TryInstallKnownBootLoaderTraps();
             state.D[0] = 0;
@@ -703,8 +765,10 @@ namespace CopperMod.Amiga
                 -324 => HostExecSignal(state),
                 -330 => HostExecAllocSignal(state),
                 -336 => HostExecFreeSignal(state),
-                -342 => 0xFFFF_FFFF,
-                -348 => 0,
+                -150 => HostExecSuperState(state),
+                -156 => HostExecUserState(state),
+                -342 => HostExecAllocTrap(state),
+                -348 => HostExecFreeTrap(state),
                 -354 => 0,
                 -360 => 0,
                 -366 => 0,
@@ -714,6 +778,46 @@ namespace CopperMod.Amiga
                 -390 => 0,
                 _ => 0
             };
+        }
+
+        private static uint HostExecSuperState(M68kCpuState state)
+        {
+            return state.EnterSupervisorModeWithUserStack();
+        }
+
+        private static uint HostExecUserState(M68kCpuState state)
+        {
+            state.ReturnToUserModeWithUserStack(state.D[0]);
+            return 0;
+        }
+
+        private void HostTaskTrapDispatcher(M68kCpuState state, int vector)
+        {
+            var task = GetCurrentTaskAddress();
+            var trapCode = task != 0 ? _machine.Bus.ReadLong(task + TaskTrapCodeOffset) : 0;
+            if (trapCode == 0)
+            {
+                trapCode = _machine.Bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecTaskTrapCodeOffset);
+            }
+
+            if (trapCode == 0)
+            {
+                trapCode = DefaultTaskTrapCodeAddress;
+            }
+
+            state.SetActiveStackPointer(state.A[7] - 4);
+            _machine.Bus.WriteLong(state.A[7], (uint)vector);
+            state.ProgramCounter = trapCode;
+        }
+
+        private void HostDefaultTaskTrapCode(M68kCpuState state)
+        {
+            var frameAddress = state.A[7] + 4;
+            var statusRegister = _machine.Bus.ReadWord(frameAddress);
+            var programCounter = _machine.Bus.ReadLong(frameAddress + 2);
+            state.SetActiveStackPointer(frameAddress + 6);
+            state.StatusRegister = statusRegister;
+            state.ProgramCounter = programCounter;
         }
 
         private void HostGraphicsGeneric(M68kCpuState state, int displacement)
@@ -906,6 +1010,60 @@ namespace CopperMod.Amiga
             return 0;
         }
 
+        private uint HostExecAllocTrap(M68kCpuState state)
+        {
+            var task = GetCurrentTaskAddress();
+            var requested = unchecked((int)state.D[0]);
+            var allocated = _machine.Bus.ReadWord(task + TaskTrapAllocOffset);
+            if (requested is >= 0 and < 16)
+            {
+                return TryAllocateTrap(task, allocated, requested);
+            }
+
+            if (requested != -1)
+            {
+                return 0xFFFF_FFFF;
+            }
+
+            for (var trap = 0; trap < 16; trap++)
+            {
+                if ((allocated & (1 << trap)) == 0)
+                {
+                    return TryAllocateTrap(task, allocated, trap);
+                }
+            }
+
+            return 0xFFFF_FFFF;
+        }
+
+        private uint TryAllocateTrap(uint task, ushort allocated, int trap)
+        {
+            var mask = 1 << trap;
+            if ((allocated & mask) != 0)
+            {
+                return 0xFFFF_FFFF;
+            }
+
+            _machine.Bus.WriteWord(task + TaskTrapAllocOffset, (ushort)(allocated | mask));
+            _machine.Bus.WriteWord(task + TaskTrapAbleOffset, (ushort)(_machine.Bus.ReadWord(task + TaskTrapAbleOffset) | mask));
+            return (uint)trap;
+        }
+
+        private uint HostExecFreeTrap(M68kCpuState state)
+        {
+            var trap = unchecked((int)state.D[0]);
+            if (trap is < 0 or >= 16)
+            {
+                return 0;
+            }
+
+            var task = GetCurrentTaskAddress();
+            var mask = (ushort)~(1 << trap);
+            _machine.Bus.WriteWord(task + TaskTrapAllocOffset, (ushort)(_machine.Bus.ReadWord(task + TaskTrapAllocOffset) & mask));
+            _machine.Bus.WriteWord(task + TaskTrapAbleOffset, (ushort)(_machine.Bus.ReadWord(task + TaskTrapAbleOffset) & mask));
+            return 0;
+        }
+
         private uint HostExecGetMsg()
         {
             if (_pendingSyntheticMessages <= 0)
@@ -919,7 +1077,18 @@ namespace CopperMod.Amiga
 
         private uint EnsureSyntheticTask()
         {
-            return EnsureSyntheticHostObject();
+            return GetCurrentTaskAddress();
+        }
+
+        private uint GetCurrentTaskAddress()
+        {
+            var task = _machine.Bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecThisTaskOffset);
+            if (task != 0)
+            {
+                return task;
+            }
+
+            return _currentTaskAddress != 0 ? _currentTaskAddress : AmigaKickstartHost.ExecStructAddress;
         }
 
         private uint EnsureSyntheticMessage()
@@ -1128,11 +1297,13 @@ namespace CopperMod.Amiga
             }
 
             _workbenchToolTypes = NormalizeToolTypes(toolTypes);
+            _workbenchLanguageSelectionIndex = FindWorkbenchLanguageSelectionIndex(_workbenchToolTypes);
+            _workbenchLanguageSelectionApplied = false;
             var loader = new AmigaHunkProgramLoader(_machine.Bus, AllocateProgramMemory);
             var program = loader.Load(executable);
             var startupArguments = BuildCliArguments(_workbenchToolTypes);
             var startupAddress = WriteProgramString(startupArguments);
-            _machine.Cpu.BeginSubroutine(program.EntryAddress, GetProgramStackTopAddress(), 0x0000_0400);
+            _machine.Cpu.BeginSubroutine(program.EntryAddress, GetProgramStackTopAddress(), DosProgramReturnAddress);
             _machine.Cpu.State.D[0] = (uint)startupArguments.Length;
             _machine.Cpu.State.A[0] = startupAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
@@ -1140,6 +1311,33 @@ namespace CopperMod.Amiga
                 "AMIGA_BOOT_DOS_AUTOSTART",
                 $"Started Workbench default tool {toolPath}."));
             return true;
+        }
+
+        private void ApplyWorkbenchLanguageSelectionIfNeeded()
+        {
+            if (_workbenchLanguageSelectionApplied ||
+                !_workbenchLanguageSelectionIndex.HasValue)
+            {
+                return;
+            }
+
+            if (_machine.Bus.ExpansionRam.Length == 0 ||
+                _machine.Cpu.State.ProgramCounter != _machine.Bus.ExpansionRamBase)
+            {
+                return;
+            }
+
+            var pc = _machine.Cpu.State.ProgramCounter;
+            var d0 = _machine.Cpu.State.D[0];
+            if ((d0 & 0xFF) == 0xFF)
+            {
+                _machine.Cpu.State.D[0] = (d0 & 0xFFFF_FF00) | (uint)_workbenchLanguageSelectionIndex.Value;
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_LANGUAGE_SELECTION",
+                    $"Applied Workbench language selection {_workbenchLanguageSelectionIndex.Value} at PC=0x{pc:X6}."));
+            }
+
+            _workbenchLanguageSelectionApplied = true;
         }
 
         private static IReadOnlyList<string> NormalizeToolTypes(IEnumerable<string> toolTypes)
@@ -1153,11 +1351,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var key = toolType.Substring(0, separator).Trim();
-                while (key.Length > 0 && !char.IsLetter(key[0]))
-                {
-                    key = key.Substring(1);
-                }
+                var key = NormalizeWorkbenchToolTypeKey(toolType.Substring(0, separator));
 
                 if (key.Length == 0)
                 {
@@ -1170,7 +1364,27 @@ namespace CopperMod.Amiga
             return normalized;
         }
 
-        private static string BuildCliArguments(IEnumerable<string> toolTypes)
+        private static int? FindWorkbenchLanguageSelectionIndex(IEnumerable<string> toolTypes)
+        {
+            foreach (var toolType in toolTypes)
+            {
+                var separator = toolType.IndexOf('=');
+                if (separator <= 0)
+                {
+                    continue;
+                }
+
+                var key = NormalizeWorkbenchToolTypeKey(toolType.Substring(0, separator));
+                if (TryGetLanguageSelectionIndex(key, out var selection))
+                {
+                    return selection;
+                }
+            }
+
+            return null;
+        }
+
+        internal static string BuildCliArguments(IEnumerable<string> toolTypes)
         {
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var toolType in toolTypes)
@@ -1181,15 +1395,19 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var key = toolType.Substring(0, separator).Trim();
-                while (key.Length > 0 && !char.IsLetter(key[0]))
-                {
-                    key = key.Substring(1);
-                }
+                var key = NormalizeWorkbenchToolTypeKey(toolType.Substring(0, separator));
+                var value = toolType.Substring(separator + 1);
 
                 if (key.Length != 0)
                 {
-                    values[key] = toolType.Substring(separator + 1);
+                    if (TryNormalizeLanguageSelection(key, value, out var selectedLanguage))
+                    {
+                        values["LANGUAGES"] = selectedLanguage;
+                    }
+                    else
+                    {
+                        values[key] = value;
+                    }
                 }
             }
 
@@ -1273,6 +1491,58 @@ namespace CopperMod.Amiga
             return builder.ToString();
         }
 
+        private static string NormalizeWorkbenchToolTypeKey(string key)
+        {
+            key = key.Trim();
+            while (key.Length > 0 && (key[0] == '$' || key[0] == '.'))
+            {
+                key = key.Substring(1).TrimStart();
+            }
+
+            return key;
+        }
+
+        private static bool TryNormalizeLanguageSelection(string key, string value, out string selectedLanguage)
+        {
+            selectedLanguage = string.Empty;
+            if (!TryGetLanguageSelectionIndex(key, out var selection))
+            {
+                return false;
+            }
+
+            var rawLanguages = value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            var languages = new List<string>();
+            foreach (var rawLanguage in rawLanguages)
+            {
+                var language = rawLanguage.Trim();
+                if (language.Length != 0)
+                {
+                    languages.Add(language);
+                }
+            }
+            if (selection >= languages.Count)
+            {
+                return false;
+            }
+
+            selectedLanguage = languages[selection];
+            return true;
+        }
+
+        private static bool TryGetLanguageSelectionIndex(string key, out int selection)
+        {
+            selection = -1;
+            var languageSuffix = "LANGUAGES";
+            if (key.Length <= languageSuffix.Length ||
+                !key.EndsWith(languageSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var selectionText = key.Substring(0, key.Length - languageSuffix.Length);
+            return int.TryParse(selectionText, out selection) && selection >= 0;
+        }
+
         private static bool IsTruthyToolTypeValue(string value)
         {
             return value.Trim().Equals("YES", StringComparison.OrdinalIgnoreCase) ||
@@ -1307,32 +1577,40 @@ namespace CopperMod.Amiga
                 _chipMemHeaderAddress = metadataBase + 0x40;
                 _fastMemNameAddress = metadataBase + 0x80;
                 _chipMemNameAddress = metadataBase + 0x90;
+                _currentTaskAddress = metadataBase + BootPseudoFastCurrentTaskOffset;
                 _fastMemLower = metadataBase + BootPseudoFastMetadataSize;
                 _fastMemUpper = metadataBase + (uint)_machine.Bus.ExpansionRam.Length - BootPseudoFastStackReserve;
-                _chipMemLower = BootChipKillSysLower;
+                _chipMemLower = BootChipPublicLowerAddress;
                 _chipMemUpper = (uint)_machine.Bus.ChipRam.Length;
             }
             else
             {
-                _chipMemHeaderAddress = ChipOnlyMemHeaderAddress;
-                _chipMemNameAddress = ChipOnlyMemNameAddress;
+                var privateBase = GetChipOnlyPrivateMetadataBase();
+                _currentTaskAddress = privateBase;
+                _chipMemHeaderAddress = privateBase + BootChipOnlyMemHeaderOffset;
+                _chipMemNameAddress = privateBase + BootChipOnlyMemNameOffset;
                 _fastMemHeaderAddress = 0;
                 _fastMemNameAddress = 0;
                 _fastMemLower = 0;
                 _fastMemUpper = 0;
-                _chipMemLower = BootChipOnlyReservedLower;
-                _chipMemUpper = (uint)Math.Max(0, _machine.Bus.ChipRam.Length - BootPseudoFastStackReserve);
+                _chipMemLower = BootChipPublicLowerAddress;
+                _chipMemUpper = privateBase;
             }
 
             var execImage = new byte[ExecBaseImageSize];
             var firstHeader = hasPseudoFast ? _fastMemHeaderAddress : _chipMemHeaderAddress;
             var lastHeader = _chipMemHeaderAddress;
+            WriteExecBaseStaticFields(execImage);
+            BigEndian.WriteUInt32(execImage, ExecThisTaskOffset, _currentTaskAddress);
+            BigEndian.WriteUInt32(execImage, ExecTaskTrapCodeOffset, DefaultTaskTrapCodeAddress);
+            BigEndian.WriteUInt16(execImage, ExecTaskTrapAllocOffset, 0);
             BigEndian.WriteUInt32(execImage, ExecMemListOffset, firstHeader);
             BigEndian.WriteUInt32(execImage, ExecMemListOffset + 4, 0);
             BigEndian.WriteUInt32(execImage, ExecMemListOffset + 8, lastHeader);
             execImage[ExecMemListOffset + 12] = 0;
             execImage[ExecMemListOffset + 13] = 0;
-            _machine.Bus.MapReadOnlyMemory(AmigaKickstartHost.ExecLibraryBase, execImage);
+            _machine.Bus.MapWritableMemory(AmigaKickstartHost.ExecLibraryBase, execImage);
+            WriteInitialTask();
 
             if (hasPseudoFast)
             {
@@ -1370,6 +1648,41 @@ namespace CopperMod.Amiga
             }
 
             _memoryListInstalled = true;
+        }
+
+        private void WriteExecBaseStaticFields(Span<byte> execImage)
+        {
+            var maxLocalMemory = AlignDown((uint)_machine.Bus.ChipRam.Length, 4);
+            var maxExtendedMemory = _machine.Bus.ExpansionRam.Length != 0
+                ? AlignDown(_machine.Bus.ExpansionRamBase + (uint)_machine.Bus.ExpansionRam.Length, 4)
+                : 0;
+
+            BigEndian.WriteUInt16(execImage, ExecSoftVerOffset, Kickstart13SoftVer);
+            BigEndian.WriteUInt16(execImage, ExecLowMemChkSumOffset, CalculateLowMemoryVectorChecksum());
+            BigEndian.WriteUInt32(execImage, ExecChkBaseOffset, ~AmigaKickstartHost.ExecLibraryBase);
+            BigEndian.WriteUInt32(execImage, ExecSysStkUpperOffset, BootSupervisorStackTopAddress);
+            BigEndian.WriteUInt32(execImage, ExecSysStkLowerOffset, 0);
+            BigEndian.WriteUInt32(execImage, ExecMaxLocMemOffset, maxLocalMemory);
+            BigEndian.WriteUInt32(execImage, ExecMaxExtMemOffset, maxExtendedMemory);
+            BigEndian.WriteUInt16(execImage, ExecChkSumOffset, CalculateExecBaseStaticChecksum(execImage));
+        }
+
+        private void WriteInitialTask()
+        {
+            var taskAddress = _currentTaskAddress != 0 ? _currentTaskAddress : AmigaKickstartHost.ExecStructAddress;
+            var taskNameAddress = taskAddress + 0x70;
+            var stackUpper = AlignDown((uint)Math.Max(0, _machine.Bus.ChipRam.Length - BootPseudoFastStackReserve), 4);
+            var stackPointer = stackUpper >= 4 ? stackUpper - 4 : 0;
+            _machine.Bus.ClearMemory(taskAddress, 0x80);
+            _machine.Bus.WriteByte(taskAddress + TaskNodeTypeOffset, 1, 0);
+            _machine.Bus.WriteLong(taskAddress + TaskNodeNameOffset, taskNameAddress);
+            _machine.Bus.WriteWord(taskAddress + TaskTrapAllocOffset, 0);
+            _machine.Bus.WriteWord(taskAddress + TaskTrapAbleOffset, 0);
+            _machine.Bus.WriteLong(taskAddress + TaskTrapCodeOffset, DefaultTaskTrapCodeAddress);
+            _machine.Bus.WriteLong(taskAddress + TaskStackPointerOffset, stackPointer);
+            _machine.Bus.WriteLong(taskAddress + TaskStackLowerOffset, BootChipPublicLowerAddress);
+            _machine.Bus.WriteLong(taskAddress + TaskStackUpperOffset, stackUpper);
+            _machine.Bus.CopyToMemory(taskNameAddress, Encoding.ASCII.GetBytes("CopperStart\0"));
         }
 
         private void WriteInitialMemoryHeader(
@@ -1435,14 +1748,21 @@ namespace CopperMod.Amiga
                         }
                         else
                         {
-                            allocatedAddress = chunkAddress + chunkBytes - size;
+                            allocatedAddress = chunkAddress;
                             allocatedBytes = size;
-                            _machine.Bus.WriteLong(chunkAddress + MemChunkBytesOffset, chunkBytes - size);
+                            var remainingChunkAddress = chunkAddress + size;
+                            _machine.Bus.WriteLong(previousLinkAddress, remainingChunkAddress);
+                            _machine.Bus.WriteLong(remainingChunkAddress + MemChunkNextOffset, nextChunkAddress);
+                            _machine.Bus.WriteLong(remainingChunkAddress + MemChunkBytesOffset, chunkBytes - size);
                         }
 
                         var freeBytes = _machine.Bus.ReadLong(headerAddress + MemHeaderFreeOffset);
                         _machine.Bus.WriteLong(headerAddress + MemHeaderFreeOffset, freeBytes >= allocatedBytes ? freeBytes - allocatedBytes : 0);
-                        _machine.Bus.ClearMemory(allocatedAddress, checked((int)allocatedBytes));
+                        if ((flags & MemfClear) != 0)
+                        {
+                            _machine.Bus.ClearMemory(allocatedAddress, checked((int)allocatedBytes));
+                        }
+
                         return allocatedAddress;
                     }
 
@@ -1742,7 +2062,8 @@ namespace CopperMod.Amiga
 
         private uint GetBootStackTopAddress()
         {
-            return AlignDown((uint)_machine.Bus.ChipRam.Length, 4) - 4;
+            var reservedTop = Math.Max(0, _machine.Bus.ChipRam.Length - BootPseudoFastStackReserve);
+            return AlignDown((uint)reservedTop, 4) - 4;
         }
 
         private uint GetProgramStackTopAddress()
@@ -1755,6 +2076,20 @@ namespace CopperMod.Amiga
             return GetBootStackTopAddress();
         }
 
+        private uint GetChipOnlyPrivateMetadataBase()
+        {
+            var chipLength = (uint)_machine.Bus.ChipRam.Length;
+            if (chipLength <= BootChipPublicLowerAddress)
+            {
+                return AlignDown(chipLength, 4);
+            }
+
+            var privateBase = chipLength > BootChipOnlyPrivateMetadataSize
+                ? chipLength - BootChipOnlyPrivateMetadataSize
+                : BootChipPublicLowerAddress;
+            return AlignDown(privateBase, 4);
+        }
+
         private static uint Align(uint value, uint alignment)
         {
             return (value + alignment - 1) & ~(alignment - 1);
@@ -1763,6 +2098,28 @@ namespace CopperMod.Amiga
         private static uint AlignDown(uint value, uint alignment)
         {
             return value & ~(alignment - 1);
+        }
+
+        private ushort CalculateLowMemoryVectorChecksum()
+        {
+            var sum = 0;
+            for (var address = 0u; address < BootSupervisorStackTopAddress; address += 2)
+            {
+                sum = (sum + _machine.Bus.ReadWord(address)) & 0xFFFF;
+            }
+
+            return unchecked((ushort)-sum);
+        }
+
+        private static ushort CalculateExecBaseStaticChecksum(ReadOnlySpan<byte> execImage)
+        {
+            var sum = 0;
+            for (var offset = ExecSoftVerOffset; offset < ExecChkSumOffset; offset += 2)
+            {
+                sum = (sum + BigEndian.ReadUInt16(execImage, offset, "exec static checksum word")) & 0xFFFF;
+            }
+
+            return unchecked((ushort)-sum);
         }
 
         private sealed class BootDosHandle
