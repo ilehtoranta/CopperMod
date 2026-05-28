@@ -31,6 +31,7 @@ namespace CopperMod.Amiga
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
         private readonly bool[] _pendingCustomByteWritten = new bool[0x200];
+        private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly long _palFrameCycles;
         private readonly double _palLineCycles;
         private long _nextVerticalBlankCycle;
@@ -84,9 +85,29 @@ namespace CopperMod.Amiga
 
         public bool AudioFilterEnabled { get; private set; }
 
-        public bool GamePort0FirePressed { get; set; }
+        public bool GamePort0FirePressed
+        {
+            get => _gamePorts[0].PrimaryFirePressed;
+            set => _gamePorts[0].PrimaryFirePressed = value;
+        }
 
-        public bool GamePort1FirePressed { get; set; }
+        public bool GamePort1FirePressed
+        {
+            get => _gamePorts[1].PrimaryFirePressed;
+            set => _gamePorts[1].PrimaryFirePressed = value;
+        }
+
+        public bool GamePort0SecondFirePressed
+        {
+            get => _gamePorts[0].SecondFirePressed;
+            set => _gamePorts[0].SecondFirePressed = value;
+        }
+
+        public bool GamePort1SecondFirePressed
+        {
+            get => _gamePorts[1].SecondFirePressed;
+            set => _gamePorts[1].SecondFirePressed = value;
+        }
 
         public byte[] ChipRam => _chipRam;
 
@@ -113,13 +134,32 @@ namespace CopperMod.Amiga
             CiaA.Reset(0x02);
             CiaB.Reset();
             AudioFilterEnabled = false;
-            GamePort0FirePressed = false;
-            GamePort1FirePressed = false;
+            foreach (var gamePort in _gamePorts)
+            {
+                gamePort.Reset();
+            }
+
             Paula.Reset();
             Disk.Reset();
             Display.Reset();
             Blitter.Reset();
             _nextVerticalBlankCycle = _palFrameCycles;
+        }
+
+        public void MoveGamePortMouse(int port, int deltaX, int deltaY)
+        {
+            var gamePort = GetGamePort(port);
+            gamePort.MouseXCounter = unchecked((byte)(gamePort.MouseXCounter + deltaX));
+            gamePort.MouseYCounter = unchecked((byte)(gamePort.MouseYCounter + deltaY));
+        }
+
+        public void SetGamePortJoystick(int port, bool up, bool down, bool left, bool right)
+        {
+            var gamePort = GetGamePort(port);
+            gamePort.JoystickUp = up;
+            gamePort.JoystickDown = down;
+            gamePort.JoystickLeft = left;
+            gamePort.JoystickRight = right;
         }
 
         public void RegisterHostCallback(uint address, Action<M68kCpuState> callback)
@@ -520,6 +560,11 @@ namespace CopperMod.Amiga
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
                 var offset = (ushort)(address - 0x00DFF000);
+                if (TryReadGamePortCustomByte(offset, out var gamePortValue))
+                {
+                    return gamePortValue;
+                }
+
                 var diskValue = Disk.ReadByte(offset);
                 return diskValue != 0 ? diskValue : Paula.ReadByte(offset);
             }
@@ -773,6 +818,87 @@ namespace CopperMod.Amiga
             return value;
         }
 
+        private bool TryReadGamePortCustomByte(ushort offset, out byte value)
+        {
+            switch (offset)
+            {
+                case 0x00A:
+                    value = (byte)(ReadGamePortData(0) >> 8);
+                    return true;
+                case 0x00B:
+                    value = (byte)ReadGamePortData(0);
+                    return true;
+                case 0x00C:
+                    value = (byte)(ReadGamePortData(1) >> 8);
+                    return true;
+                case 0x00D:
+                    value = (byte)ReadGamePortData(1);
+                    return true;
+                case 0x016:
+                    value = (byte)(ReadPotGoData() >> 8);
+                    return true;
+                case 0x017:
+                    value = (byte)ReadPotGoData();
+                    return true;
+                default:
+                    value = 0;
+                    return false;
+            }
+        }
+
+        private ushort ReadGamePortData(int port)
+        {
+            var gamePort = _gamePorts[port];
+            var value = (ushort)((gamePort.MouseYCounter << 8) | gamePort.MouseXCounter);
+            if (gamePort.JoystickLeft)
+            {
+                value |= 0x0001;
+            }
+
+            if (gamePort.JoystickRight)
+            {
+                value |= 0x0003;
+            }
+
+            if (gamePort.JoystickUp)
+            {
+                value |= 0x0100;
+            }
+
+            if (gamePort.JoystickDown)
+            {
+                value |= 0x0300;
+            }
+
+            return value;
+        }
+
+        private ushort ReadPotGoData()
+        {
+            var value = (ushort)0x5500;
+            if (GamePort0SecondFirePressed)
+            {
+                value = (ushort)(value & ~0x0400);
+            }
+
+            if (GamePort1SecondFirePressed)
+            {
+                value = (ushort)(value & ~0x4000);
+            }
+
+            return value;
+        }
+
+        private GamePortState GetGamePort(int port)
+        {
+            if ((uint)port >= _gamePorts.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(port), port, "Game port must be 0 or 1.");
+            }
+
+            return _gamePorts[port];
+        }
+
         private bool TryGetCiaRegister(uint address, out AmigaCia cia, out int register)
         {
             if (address >= 0x00BFE001 && address <= 0x00BFEF01 && (address & 0xFF) == 0x01)
@@ -792,6 +918,37 @@ namespace CopperMod.Amiga
             cia = null!;
             register = 0;
             return false;
+        }
+
+        private sealed class GamePortState
+        {
+            public byte MouseXCounter { get; set; }
+
+            public byte MouseYCounter { get; set; }
+
+            public bool JoystickUp { get; set; }
+
+            public bool JoystickDown { get; set; }
+
+            public bool JoystickLeft { get; set; }
+
+            public bool JoystickRight { get; set; }
+
+            public bool PrimaryFirePressed { get; set; }
+
+            public bool SecondFirePressed { get; set; }
+
+            public void Reset()
+            {
+                MouseXCounter = 0;
+                MouseYCounter = 0;
+                JoystickUp = false;
+                JoystickDown = false;
+                JoystickLeft = false;
+                JoystickRight = false;
+                PrimaryFirePressed = false;
+                SecondFirePressed = false;
+            }
         }
 
         private sealed class MappedMemoryRegion
@@ -981,8 +1138,15 @@ namespace CopperMod.Amiga
         public void ScheduleWrite(long cycle, ushort offset, ushort value)
         {
             offset = (ushort)(offset & 0x01FE);
+            var pending = new PendingWrite(cycle, offset, value);
             _writes.Add(new CustomRegisterWrite(cycle, offset, value));
-            _pendingWrites.Add(new PendingWrite(cycle, offset, value));
+            var insertIndex = _pendingWrites.Count;
+            while (insertIndex > _pendingWriteIndex && _pendingWrites[insertIndex - 1].Cycle > cycle)
+            {
+                insertIndex--;
+            }
+
+            _pendingWrites.Insert(insertIndex, pending);
         }
 
         public IReadOnlyList<PaulaInterruptEvent> DrainInterrupts()

@@ -201,6 +201,8 @@ namespace CopperMod.Amiga
         private const ushort DskDmaEnable = 0x8000;
         private const ushort DskWriteMode = 0x4000;
         private const ushort DskLengthMask = 0x3FFF;
+        private const int DiskDmaCompletionBaseDelayCycles = 512;
+        private const int DiskDmaCompletionCyclesPerWord = 2;
 
         private readonly AmigaBus _bus;
         private ushort _dskbytr;
@@ -396,12 +398,15 @@ namespace CopperMod.Amiga
             _lastTransferAddress = targetAddress;
             _streamOffset = (sourceStart + (requestedWords * 2)) % track.Length;
             _dskbytr = 0x9000;
+            var completionCycle = cycle + Math.Max(
+                DiskDmaCompletionBaseDelayCycles,
+                requestedWords * DiskDmaCompletionCyclesPerWord);
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
                 0x00DFF09C,
                 (ushort)(0x8000 | DskBlkInterrupt),
-                cycle);
+                completionCycle);
         }
 
         private void ResetStreamIfTrackChanged()
@@ -501,8 +506,9 @@ namespace CopperMod.Amiga
 
     internal static class AmigaDosTrackEncoder
     {
-        private const int EncodedTrackBytes = 0x1900 * 2;
         private const int EncodedSectorBytes = 0x440;
+        private const int EncodedTrackGapBytes = 0x140;
+        private const int EncodedTrackBytes = (EncodedSectorBytes * AmigaDiskImage.SectorsPerTrack) + EncodedTrackGapBytes;
         private const uint MfmDataMask = 0x5555_5555;
 
         public static byte[] EncodeTrack(AmigaDiskImage disk, int cylinder, int head)

@@ -22,6 +22,14 @@ internal sealed class CopperScreenEmulator
 	private long _frameAudioStartCycle;
 	private long _frameAudioEndCycle;
 	private int _frameAudioSampleIndex;
+	private bool _mousePrimaryFirePressed;
+	private bool _mouseSecondFirePressed;
+	private bool _joystickUp;
+	private bool _joystickDown;
+	private bool _joystickLeft;
+	private bool _joystickRight;
+	private bool _joystickPrimaryFirePressed;
+	private bool _joystickSecondFirePressed;
 
 	private CopperScreenEmulator(string? diskPath)
 	{
@@ -46,7 +54,7 @@ internal sealed class CopperScreenEmulator
 
 	public string StatusText { get; private set; }
 
-	public bool IsPrimaryFirePressed => _machine.Bus.GamePort0FirePressed || _machine.Bus.GamePort1FirePressed;
+	public bool IsPrimaryFirePressed => _mousePrimaryFirePressed || _joystickPrimaryFirePressed || _firePulseFrames > 0;
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
 
@@ -141,9 +149,38 @@ internal sealed class CopperScreenEmulator
 		_firePulseFrames = Math.Max(_firePulseFrames, Math.Max(1, frames));
 	}
 
+	public void MoveMousePort(int deltaX, int deltaY)
+	{
+		_machine.Bus.MoveGamePortMouse(0, deltaX, deltaY);
+	}
+
+	public void SetMouseButtons(bool primaryFirePressed, bool secondFirePressed)
+	{
+		_mousePrimaryFirePressed = primaryFirePressed;
+		_mouseSecondFirePressed = secondFirePressed;
+		ApplyInputState();
+	}
+
+	public void SetJoystickPort(
+		bool up,
+		bool down,
+		bool left,
+		bool right,
+		bool primaryFirePressed,
+		bool secondFirePressed)
+	{
+		_joystickUp = up;
+		_joystickDown = down;
+		_joystickLeft = left;
+		_joystickRight = right;
+		_joystickPrimaryFirePressed = primaryFirePressed;
+		_joystickSecondFirePressed = secondFirePressed;
+		ApplyInputState();
+	}
+
 	public void RenderNextFrame()
 	{
-		SetPrimaryFirePressed(_firePulseFrames > 0);
+		ApplyInputState();
 		if (DiskPath == null)
 		{
 			_frameAudio.AsSpan().Clear();
@@ -306,13 +343,17 @@ internal sealed class CopperScreenEmulator
 			_firePulseFrames--;
 		}
 
-		SetPrimaryFirePressed(_firePulseFrames > 0);
+		ApplyInputState();
 	}
 
-	private void SetPrimaryFirePressed(bool pressed)
+	private void ApplyInputState()
 	{
-		_machine.Bus.GamePort0FirePressed = pressed;
-		_machine.Bus.GamePort1FirePressed = pressed;
+		var pulsePrimaryFirePressed = _firePulseFrames > 0;
+		_machine.Bus.GamePort0FirePressed = _mousePrimaryFirePressed || pulsePrimaryFirePressed;
+		_machine.Bus.GamePort1FirePressed = _joystickPrimaryFirePressed || pulsePrimaryFirePressed;
+		_machine.Bus.GamePort0SecondFirePressed = _mouseSecondFirePressed;
+		_machine.Bus.GamePort1SecondFirePressed = _joystickSecondFirePressed;
+		_machine.Bus.SetGamePortJoystick(1, _joystickUp, _joystickDown, _joystickLeft, _joystickRight);
 	}
 
 	private bool HandleBootResult(AmigaBootResult result)

@@ -490,3 +490,6 @@ CopperMod.Sid/References
 CopperScreen/TestImages
 CopperMod.Amiga/References
 *.csx
+*.bin
+*.png
+*.bgra

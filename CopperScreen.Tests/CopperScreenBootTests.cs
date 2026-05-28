@@ -159,12 +159,49 @@ public sealed class CopperScreenBootTests
 		emulator.PulsePrimaryFire(frames: 2);
 		emulator.RenderNextFrame();
 
-		var machine = (AmigaMachine)typeof(CopperScreenEmulator)
-			.GetField("_machine", BindingFlags.NonPublic | BindingFlags.Instance)!
-			.GetValue(emulator)!;
+		var machine = GetMachine(emulator);
 		var ciaPortA = machine.Bus.ReadByte(0x00BFE001);
 		Assert.Equal(0, ciaPortA & 0xC0);
 		Assert.True(emulator.IsPrimaryFirePressed);
+	}
+
+	[Fact]
+	public void MousePortInputReachesAmigaPortOneRegisters()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+
+		emulator.MoveMousePort(5, -1);
+		emulator.SetMouseButtons(primaryFirePressed: true, secondFirePressed: true);
+		emulator.RenderNextFrame();
+
+		var machine = GetMachine(emulator);
+		Assert.Equal(0xFF05, machine.Bus.ReadWord(0x00DFF00A));
+		Assert.Equal(0, machine.Bus.ReadByte(0x00BFE001) & 0x40);
+		Assert.NotEqual(0, machine.Bus.ReadByte(0x00BFE001) & 0x80);
+		Assert.Equal(0, machine.Bus.ReadWord(0x00DFF016) & 0x0400);
+		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF016) & 0x4000);
+	}
+
+	[Fact]
+	public void NumpadJoystickInputReachesAmigaPortTwoRegisters()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+
+		emulator.SetJoystickPort(
+			up: true,
+			down: false,
+			left: true,
+			right: false,
+			primaryFirePressed: true,
+			secondFirePressed: true);
+		emulator.RenderNextFrame();
+
+		var machine = GetMachine(emulator);
+		Assert.Equal(0x0101, machine.Bus.ReadWord(0x00DFF00C));
+		Assert.NotEqual(0, machine.Bus.ReadByte(0x00BFE001) & 0x40);
+		Assert.Equal(0, machine.Bus.ReadByte(0x00BFE001) & 0x80);
+		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF016) & 0x0400);
+		Assert.Equal(0, machine.Bus.ReadWord(0x00DFF016) & 0x4000);
 	}
 
 	[Fact]
@@ -454,6 +491,29 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void HiredGunsLoadingScreenUsesHighResolutionInterlacedFetchWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 650; frame++)
+		{
+			emulator.RenderNextFrame();
+		}
+
+		var snapshot = emulator.DisplaySnapshot;
+		Assert.Equal(0x8004, snapshot.Bplcon0 & 0x8004);
+		Assert.Equal(0x3000, snapshot.Bplcon0 & 0x7000);
+		Assert.Equal(0x003C, snapshot.DdfStart & 0x00FC);
+		Assert.Equal(0x00D4, snapshot.DdfStop & 0x00FC);
+		Assert.True(snapshot.LastBitplaneNonZeroPixels > 15_000, $"Expected the Hired Guns loading screen to use the full high-res fetch width; saw {snapshot.LastBitplaneNonZeroPixels} pixels.");
+	}
+
+	[Fact]
 	public void CrackedDiskPostFireReachesHamDisplayWithoutExitingWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip");
@@ -506,6 +566,13 @@ public sealed class CopperScreenBootTests
 		}
 
 		return string.Join(Path.DirectorySeparatorChar, parts);
+	}
+
+	private static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+	{
+		return (AmigaMachine)typeof(CopperScreenEmulator)
+			.GetField("_machine", BindingFlags.NonPublic | BindingFlags.Instance)!
+			.GetValue(emulator)!;
 	}
 
 	private static string? TryFindWorkspaceFile(params string[] parts)

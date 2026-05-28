@@ -283,21 +283,39 @@ namespace CopperMod.Amiga
         public const uint BaseAddress = 0x00FC_0000;
         public const uint FontMarkerAddress = BaseAddress + 0x20;
         public const uint FontBaseAddress = FontMarkerAddress - 0x20;
-        private static readonly int[] RowOffsets = { 0x000, 0x180, 0x240, 0x300, 0x480 };
+        private const int FontHeight = 8;
+        private const int FontBytesPerRow = 0x100;
+        private static readonly int[] RowOffsets = { 0x000, 0x100, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700 };
+        private static readonly int[] CompactRowOffsets = { 0x000, 0x180, 0x240, 0x300, 0x480 };
 
         public static byte[] CreateTopazCompatibleFont()
         {
-            var data = new byte[0x520];
+            var data = new byte[FontHeight * FontBytesPerRow];
             foreach (var (character, rows) in Glyphs)
             {
-                var index = (byte)character;
-                for (var row = 0; row < RowOffsets.Length; row++)
+                WriteGlyph(data, (byte)character, rows);
+                WriteGlyph(data, (byte)character, rows, CompactRowOffsets);
+                if (character is >= 'A' and <= 'Z')
                 {
-                    data[RowOffsets[row] + index] = rows[row];
+                    WriteGlyph(data, (byte)(character + ('a' - 'A')), rows);
+                    WriteGlyph(data, (byte)(character + ('a' - 'A')), rows, CompactRowOffsets);
                 }
             }
 
             return data;
+        }
+
+        private static void WriteGlyph(byte[] data, byte index, ReadOnlySpan<byte> rows)
+        {
+            WriteGlyph(data, index, rows, RowOffsets);
+        }
+
+        private static void WriteGlyph(byte[] data, byte index, ReadOnlySpan<byte> rows, ReadOnlySpan<int> rowOffsets)
+        {
+            for (var row = 0; row < rowOffsets.Length; row++)
+            {
+                data[rowOffsets[row] + index] = row < rows.Length ? rows[row] : (byte)0;
+            }
         }
 
         private static readonly IReadOnlyDictionary<char, byte[]> Glyphs = new Dictionary<char, byte[]>
@@ -306,10 +324,16 @@ namespace CopperMod.Amiga
             ['!'] = Glyph("   ## ", "   ## ", "   ## ", "      ", "   ## "),
             ['"'] = Glyph(" ## ##", " ## ##", "      ", "      ", "      "),
             ['#'] = Glyph(" ## ##", "######", " ## ##", "######", " ## ##"),
+            ['\''] = Glyph("  ##  ", "  ##  ", " ##   ", "      ", "      "),
+            ['('] = Glyph("   ## ", "  ##  ", "  ##  ", "  ##  ", "   ## "),
+            [')'] = Glyph(" ##   ", "  ##  ", "  ##  ", "  ##  ", " ##   "),
+            ['*'] = Glyph("      ", "##  ##", " #### ", "##  ##", "      "),
+            ['+'] = Glyph("      ", "  ##  ", "######", "  ##  ", "      "),
             ['.'] = Glyph("      ", "      ", "      ", "      ", "  ##  "),
             [','] = Glyph("      ", "      ", "      ", "  ##  ", " ##   "),
             [':'] = Glyph("      ", "  ##  ", "      ", "  ##  ", "      "),
             ['-'] = Glyph("      ", "      ", " #### ", "      ", "      "),
+            ['/'] = Glyph("    ##", "   ## ", "  ##  ", " ##   ", "##    "),
             ['0'] = Glyph(" #### ", "##  ##", "##  ##", "##  ##", " #### "),
             ['1'] = Glyph("  ##  ", " ###  ", "  ##  ", "  ##  ", " #### "),
             ['2'] = Glyph(" #### ", "##  ##", "   ## ", "  ##  ", "######"),
@@ -320,6 +344,7 @@ namespace CopperMod.Amiga
             ['7'] = Glyph("######", "    ##", "   ## ", "  ##  ", "  ##  "),
             ['8'] = Glyph(" #### ", "##  ##", " #### ", "##  ##", " #### "),
             ['9'] = Glyph(" #### ", "##  ##", " #####", "    ##", " #### "),
+            ['?'] = Glyph(" #### ", "##  ##", "   ## ", "      ", "  ##  "),
             ['A'] = Glyph(" #### ", "##  ##", "######", "##  ##", "##  ##"),
             ['B'] = Glyph("##### ", "##  ##", "##### ", "##  ##", "##### "),
             ['C'] = Glyph(" #### ", "##  ##", "##    ", "##  ##", " #### "),
@@ -350,7 +375,7 @@ namespace CopperMod.Amiga
 
         private static byte[] Glyph(params string[] rows)
         {
-            var result = new byte[5];
+            var result = new byte[FontHeight];
             for (var row = 0; row < result.Length; row++)
             {
                 var pattern = row < rows.Length ? rows[row] : string.Empty;

@@ -16,6 +16,9 @@ internal sealed class MainWindow : Window
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
 	private readonly float[] _audioBuffer;
+	private readonly HashSet<Key> _pressedKeys = new HashSet<Key>();
+	private double? _lastMouseX;
+	private double? _lastMouseY;
 
 	public MainWindow(string[] args)
 	{
@@ -41,27 +44,28 @@ internal sealed class MainWindow : Window
 			PresentFrame(catchUpAudio: true);
 			_timer.Start();
 		};
+		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
 		_presenter.PointerPressed += (_, args) =>
 		{
-			_emulator.PulsePrimaryFire();
+			_presenter.Focus();
+			UpdateMousePort(args);
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
 		};
-		KeyDown += (_, args) =>
+		_presenter.PointerReleased += (_, args) =>
 		{
-			if (args.Key == Key.F12)
-			{
-				_emulator.InsertNextDisk();
-				args.Handled = true;
-				PresentFrame(catchUpAudio: false);
-			}
-			else if (args.Key is Key.Space or Key.Enter)
-			{
-				_emulator.PulsePrimaryFire();
-				args.Handled = true;
-				PresentFrame(catchUpAudio: false);
-			}
+			UpdateMousePort(args);
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
 		};
+		_presenter.PointerExited += (_, _) =>
+		{
+			_lastMouseX = null;
+			_lastMouseY = null;
+		};
+		KeyDown += OnKeyDown;
+		KeyUp += OnKeyUp;
+		Deactivated += (_, _) => ReleaseInteractiveInput();
 		Closed += (_, _) =>
 		{
 			_timer.Stop();
@@ -80,7 +84,110 @@ internal sealed class MainWindow : Window
 		}
 
 		_presenter.Update(_emulator.Framebuffer);
-		Title = "CopperScreen - " + _emulator.StatusText + " - Space/Enter/click fire, F12 next disk";
+		Title = "CopperScreen - " + _emulator.StatusText + " - mouse port 1, numpad port 2, F12 next disk";
+	}
+
+	private void UpdateMousePort(PointerEventArgs args)
+	{
+		var position = args.GetPosition(_presenter);
+		var bounds = _presenter.Bounds;
+		if (bounds.Width > 0 && bounds.Height > 0)
+		{
+			var mouseX = position.X * _emulator.Width / bounds.Width;
+			var mouseY = position.Y * _emulator.Height / bounds.Height;
+			if (_lastMouseX.HasValue && _lastMouseY.HasValue)
+			{
+				var deltaX = (int)Math.Round(mouseX - _lastMouseX.Value);
+				var deltaY = (int)Math.Round(mouseY - _lastMouseY.Value);
+				if (deltaX != 0 || deltaY != 0)
+				{
+					_emulator.MoveMousePort(deltaX, deltaY);
+				}
+			}
+
+			_lastMouseX = mouseX;
+			_lastMouseY = mouseY;
+		}
+
+		var properties = args.GetCurrentPoint(_presenter).Properties;
+		_emulator.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
+	}
+
+	private void OnKeyDown(object? sender, KeyEventArgs args)
+	{
+		if (args.Key == Key.F12)
+		{
+			_emulator.InsertNextDisk();
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
+			return;
+		}
+
+		if (args.Key is Key.Space or Key.Enter)
+		{
+			_emulator.PulsePrimaryFire();
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
+			return;
+		}
+
+		if (IsJoystickKey(args.Key))
+		{
+			_pressedKeys.Add(args.Key);
+			UpdateJoystickPort();
+			args.Handled = true;
+			PresentFrame(catchUpAudio: false);
+		}
+	}
+
+	private void OnKeyUp(object? sender, KeyEventArgs args)
+	{
+		if (!IsJoystickKey(args.Key))
+		{
+			return;
+		}
+
+		_pressedKeys.Remove(args.Key);
+		UpdateJoystickPort();
+		args.Handled = true;
+		PresentFrame(catchUpAudio: false);
+	}
+
+	private void UpdateJoystickPort()
+	{
+		var up = IsPressed(Key.NumPad8) || IsPressed(Key.NumPad7) || IsPressed(Key.NumPad9);
+		var down = IsPressed(Key.NumPad2) || IsPressed(Key.NumPad1) || IsPressed(Key.NumPad3);
+		var left = IsPressed(Key.NumPad4) || IsPressed(Key.NumPad7) || IsPressed(Key.NumPad1);
+		var right = IsPressed(Key.NumPad6) || IsPressed(Key.NumPad9) || IsPressed(Key.NumPad3);
+		var primaryFire = IsPressed(Key.NumPad5);
+		var secondFire = IsPressed(Key.Decimal) || IsPressed(Key.Delete);
+		_emulator.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
+	}
+
+	private bool IsPressed(Key key)
+	{
+		return _pressedKeys.Contains(key);
+	}
+
+	private static bool IsJoystickKey(Key key)
+	{
+		return key is Key.NumPad1 or Key.NumPad2 or Key.NumPad3 or Key.NumPad4 or Key.NumPad5 or
+			Key.NumPad6 or Key.NumPad7 or Key.NumPad8 or Key.NumPad9 or Key.Decimal or Key.Delete;
+	}
+
+	private void ReleaseInteractiveInput()
+	{
+		_pressedKeys.Clear();
+		_lastMouseX = null;
+		_lastMouseY = null;
+		_emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+		_emulator.SetJoystickPort(
+			up: false,
+			down: false,
+			left: false,
+			right: false,
+			primaryFirePressed: false,
+			secondFirePressed: false);
 	}
 
 	internal static int CalculateFramesToRender(int? queuedAudioBuffers, bool catchUpAudio)

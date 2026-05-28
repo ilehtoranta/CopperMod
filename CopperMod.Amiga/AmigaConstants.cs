@@ -7,6 +7,7 @@ namespace CopperMod.Amiga
         public const double A500PalPaulaClockHz = 3_546_895.0;
         public const double A500PalVBlankHz = 50.0;
         public const ushort IntreqPorts = 0x0008;
+        public const ushort IntreqCopper = 0x0010;
         public const ushort IntreqVerticalBlank = 0x0020;
         public const ushort IntreqExternal = 0x2000;
         public const int A500PalRasterLines = 312;

@@ -37,8 +37,11 @@ public sealed class AmigaKickstartTests
 
 		Assert.Equal(0x0018_6C6Cu, bus.ReadLong(AmigaKickstartRomFont.FontMarkerAddress));
 		Assert.Equal(0xFCu, bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + (byte)'F'));
+		Assert.Equal(0xC0u, bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x100 + (byte)'F'));
+		Assert.Equal(0xF8u, bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x200 + (byte)'F'));
 		Assert.Equal(0xC0u, bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x180 + (byte)'F'));
 		Assert.Equal(0xF8u, bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x240 + (byte)'F'));
+		Assert.Equal(bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x100 + (byte)'F'), bus.ReadByte(AmigaKickstartRomFont.FontBaseAddress + 0x100 + (byte)'f'));
 	}
 
 	[Fact]
