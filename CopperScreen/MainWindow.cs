@@ -16,7 +16,7 @@ internal sealed class MainWindow : Window
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
 	private readonly float[] _audioBuffer;
-	private readonly HashSet<Key> _pressedKeys = new HashSet<Key>();
+	private JoystickKeys _pressedJoystickKeys;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
@@ -133,7 +133,7 @@ internal sealed class MainWindow : Window
 
 		if (IsJoystickKey(args.Key))
 		{
-			_pressedKeys.Add(args.Key);
+			_pressedJoystickKeys |= GetJoystickKey(args.Key);
 			UpdateJoystickPort();
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
@@ -147,7 +147,7 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		_pressedKeys.Remove(args.Key);
+		_pressedJoystickKeys &= ~GetJoystickKey(args.Key);
 		UpdateJoystickPort();
 		args.Handled = true;
 		PresentFrame(catchUpAudio: false);
@@ -155,18 +155,18 @@ internal sealed class MainWindow : Window
 
 	private void UpdateJoystickPort()
 	{
-		var up = IsPressed(Key.NumPad8) || IsPressed(Key.NumPad7) || IsPressed(Key.NumPad9);
-		var down = IsPressed(Key.NumPad2) || IsPressed(Key.NumPad1) || IsPressed(Key.NumPad3);
-		var left = IsPressed(Key.NumPad4) || IsPressed(Key.NumPad7) || IsPressed(Key.NumPad1);
-		var right = IsPressed(Key.NumPad6) || IsPressed(Key.NumPad9) || IsPressed(Key.NumPad3);
-		var primaryFire = IsPressed(Key.NumPad5);
-		var secondFire = IsPressed(Key.Decimal) || IsPressed(Key.Delete);
+		var up = IsPressed(JoystickKeys.NumPad8 | JoystickKeys.NumPad7 | JoystickKeys.NumPad9);
+		var down = IsPressed(JoystickKeys.NumPad2 | JoystickKeys.NumPad1 | JoystickKeys.NumPad3);
+		var left = IsPressed(JoystickKeys.NumPad4 | JoystickKeys.NumPad7 | JoystickKeys.NumPad1);
+		var right = IsPressed(JoystickKeys.NumPad6 | JoystickKeys.NumPad9 | JoystickKeys.NumPad3);
+		var primaryFire = IsPressed(JoystickKeys.NumPad5);
+		var secondFire = IsPressed(JoystickKeys.Decimal | JoystickKeys.Delete);
 		_emulator.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
 	}
 
-	private bool IsPressed(Key key)
+	private bool IsPressed(JoystickKeys keys)
 	{
-		return _pressedKeys.Contains(key);
+		return (_pressedJoystickKeys & keys) != 0;
 	}
 
 	private static bool IsJoystickKey(Key key)
@@ -175,9 +175,28 @@ internal sealed class MainWindow : Window
 			Key.NumPad6 or Key.NumPad7 or Key.NumPad8 or Key.NumPad9 or Key.Decimal or Key.Delete;
 	}
 
+	private static JoystickKeys GetJoystickKey(Key key)
+	{
+		return key switch
+		{
+			Key.NumPad1 => JoystickKeys.NumPad1,
+			Key.NumPad2 => JoystickKeys.NumPad2,
+			Key.NumPad3 => JoystickKeys.NumPad3,
+			Key.NumPad4 => JoystickKeys.NumPad4,
+			Key.NumPad5 => JoystickKeys.NumPad5,
+			Key.NumPad6 => JoystickKeys.NumPad6,
+			Key.NumPad7 => JoystickKeys.NumPad7,
+			Key.NumPad8 => JoystickKeys.NumPad8,
+			Key.NumPad9 => JoystickKeys.NumPad9,
+			Key.Decimal => JoystickKeys.Decimal,
+			Key.Delete => JoystickKeys.Delete,
+			_ => JoystickKeys.None
+		};
+	}
+
 	private void ReleaseInteractiveInput()
 	{
-		_pressedKeys.Clear();
+		_pressedJoystickKeys = JoystickKeys.None;
 		_lastMouseX = null;
 		_lastMouseY = null;
 		_emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
@@ -188,6 +207,23 @@ internal sealed class MainWindow : Window
 			right: false,
 			primaryFirePressed: false,
 			secondFirePressed: false);
+	}
+
+	[Flags]
+	private enum JoystickKeys
+	{
+		None = 0,
+		NumPad1 = 1 << 0,
+		NumPad2 = 1 << 1,
+		NumPad3 = 1 << 2,
+		NumPad4 = 1 << 3,
+		NumPad5 = 1 << 4,
+		NumPad6 = 1 << 5,
+		NumPad7 = 1 << 6,
+		NumPad8 = 1 << 7,
+		NumPad9 = 1 << 8,
+		Decimal = 1 << 9,
+		Delete = 1 << 10
 	}
 
 	internal static int CalculateFramesToRender(int? queuedAudioBuffers, bool catchUpAudio)

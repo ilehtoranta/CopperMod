@@ -109,8 +109,10 @@ namespace CopperMod.Amiga
 
         public bool DispatchPendingHardwareInterrupt()
         {
-            foreach (var ciaEvent in Bus.DrainCiaInterrupts())
+            var ciaEvents = Bus.DrainCiaInterrupts();
+            for (var i = 0; i < ciaEvents.Count; i++)
             {
+                var ciaEvent = ciaEvents[i];
                 var cia = Bus.GetCia(ciaEvent.Cia);
                 if ((cia.PendingInterrupts & cia.InterruptMask) == 0)
                 {

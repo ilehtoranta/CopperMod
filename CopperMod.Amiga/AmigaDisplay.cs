@@ -13,12 +13,15 @@ namespace CopperMod.Amiga
         private const ushort DefaultDdfStart = 0x0038;
         private const ushort DefaultDdfStop = 0x00D0;
         private const ushort DefaultHighResDdfStart = 0x003C;
+        private const int MaxBitplaneFetchWords = 64;
         private static readonly double PalLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
         private readonly AmigaBus _bus;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>();
         private readonly ushort[] _colors = new ushort[32];
         private readonly uint[] _bitplanePointers = new uint[6];
         private readonly int[] _bitplaneBaseRows = new int[6];
+        private readonly ushort[,] _renderPlaneWords = new ushort[6, MaxBitplaneFetchWords];
+        private readonly bool[] _renderPlaneHasRow = new bool[6];
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private int _pendingIndex;
         private uint _copperListPointer;
@@ -589,8 +592,8 @@ namespace CopperMod.Amiga
             }
 
             planeCount = Math.Min(planeCount, _bitplanePointers.Length);
-            var planeWords = new ushort[6, 64];
-            var planeHasRow = new bool[6];
+            var planeWords = _renderPlaneWords;
+            var planeHasRow = _renderPlaneHasRow;
             var window = GetDisplayWindow();
             var fetchWords = GetDataFetchWordCount();
             if (window.Width <= 0 || window.Height <= 0 || fetchWords <= 0)
@@ -694,7 +697,7 @@ namespace CopperMod.Amiga
                 }
 
                 var word = relativeX >> 4;
-                if (word < 0 || word >= planeWords.GetLength(1))
+                if (word < 0 || word >= MaxBitplaneFetchWords)
                 {
                     continue;
                 }
@@ -755,8 +758,8 @@ namespace CopperMod.Amiga
             }
 
             return IsHighResolutionEnabled()
-                ? Math.Clamp(((ddfStop - ddfStart) / 4) + 2, 0, 64)
-                : Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, 64);
+                ? Math.Clamp(((ddfStop - ddfStart) / 4) + 2, 0, MaxBitplaneFetchWords)
+                : Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, MaxBitplaneFetchWords);
         }
 
         private bool IsHighResolutionEnabled()

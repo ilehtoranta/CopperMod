@@ -9,6 +9,8 @@
     <Title>CopperScreen</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Slim Amiga 500 PAL emulator front-end backed by CopperMod.Amiga.</Description>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

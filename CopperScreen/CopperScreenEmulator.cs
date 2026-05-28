@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using CopperMod.Amiga;
 
@@ -14,6 +15,7 @@ internal sealed class CopperScreenEmulator
 	private readonly AmigaBootController _boot;
 	private readonly float[] _frameAudio;
 	private readonly int[] _previousInterlaceFrame;
+	private readonly Action<long, long> _renderFrameAudioUntil;
 	private bool _bootAttempted;
 	private bool _previousInterlaceFrameValid;
 	private int _firePulseFrames;
@@ -40,6 +42,7 @@ internal sealed class CopperScreenEmulator
 		_boot = new AmigaBootController(_machine);
 		_frameAudio = new float[AudioFramesPerAppFrame(DefaultAudioSampleRate) * DefaultAudioChannels];
 		_previousInterlaceFrame = new int[Framebuffer.Length];
+		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = diskPath;
 		StatusText = diskPath == null ? "insert disk image" : Path.GetFileName(diskPath);
 	}
@@ -202,7 +205,7 @@ internal sealed class CopperScreenEmulator
 
 		_targetCycle += PalFrameCycles;
 		BeginFrameAudio(_targetCycle);
-		var result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, RenderFrameAudioUntil);
+		var result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
 		FinishFrameAudio();
 		if (HandleBootResult(result))
 		{
@@ -358,19 +361,47 @@ internal sealed class CopperScreenEmulator
 
 	private bool HandleBootResult(AmigaBootResult result)
 	{
-		var fatalDiagnostics = result.Diagnostics
-			.Where(diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED")
-			.ToArray();
-		StatusText = fatalDiagnostics.Length == 0
+		var fatalStatus = BuildFatalStatus(result.Diagnostics);
+		StatusText = fatalStatus == null
 			? $"boot program running: PC=${result.FinalProgramCounter:X6}"
-			: string.Join(", ", fatalDiagnostics.Select(diagnostic => diagnostic.Code));
-		if (fatalDiagnostics.Length == 0)
+			: fatalStatus;
+		if (fatalStatus == null)
 		{
 			return false;
 		}
 
 		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
 		return true;
+	}
+
+	private static string? BuildFatalStatus(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		StringBuilder? builder = null;
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			var code = diagnostics[i].Code;
+			if (!IsFatalDiagnostic(code))
+			{
+				continue;
+			}
+
+			if (builder == null)
+			{
+				builder = new StringBuilder(code);
+			}
+			else
+			{
+				builder.Append(", ");
+				builder.Append(code);
+			}
+		}
+
+		return builder?.ToString();
+	}
+
+	private static bool IsFatalDiagnostic(string code)
+	{
+		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED";
 	}
 
 }

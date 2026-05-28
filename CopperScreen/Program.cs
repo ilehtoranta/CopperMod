@@ -1,3 +1,4 @@
+using System.Runtime;
 using Avalonia;
 
 namespace CopperScreen;
@@ -10,6 +11,7 @@ internal static class Program
 	public static void Main(string[] args)
 	{
 		StartupArgs = args ?? Array.Empty<string>();
+		GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 		BuildAvaloniaApp().StartWithClassicDesktopLifetime(StartupArgs);
 	}
 
