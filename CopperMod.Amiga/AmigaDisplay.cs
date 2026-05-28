@@ -6,8 +6,8 @@ namespace CopperMod.Amiga
     internal sealed class OcsDisplay
     {
         private const int MaxPendingWrites = 65536;
-        private const int StandardHStart = 0x81;
-        private const int StandardVStart = 0x2C;
+        private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
+        private const int StandardVStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         private const ushort DefaultDiwStart = 0x2C81;
         private const ushort DefaultDiwStop = 0x2CC1;
         private const ushort DefaultDdfStart = 0x0038;
@@ -100,7 +100,7 @@ namespace CopperMod.Amiga
             _bpl2mod = 0;
             ResetFrameCounters();
             Array.Clear(_colors);
-            _colors[0] = 0x005;
+            _colors[0] = 0x000;
             _colors[1] = 0xFFF;
             foreach (var sprite in _sprites)
             {

@@ -22,7 +22,9 @@ namespace CopperMod.Amiga
     internal sealed class AmigaBus : IM68kBus
     {
         private const int MaxCapturedBusAccesses = 65536;
+        private const uint ChipRamDecodeSize = 0x0020_0000;
         private readonly byte[] _chipRam;
+        private readonly byte[] _expansionRam;
         private readonly Dictionary<uint, Action<M68kCpuState>> _hostCallbacks = new Dictionary<uint, Action<M68kCpuState>>();
         private readonly List<MappedMemoryRegion> _readOnlyRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
@@ -33,14 +35,25 @@ namespace CopperMod.Amiga
         private readonly double _palLineCycles;
         private long _nextVerticalBlankCycle;
 
-        public AmigaBus(int chipRamSize = AmigaConstants.DefaultChipRamSize, IAmigaBusArbiter? arbiter = null)
+        public AmigaBus(
+            int chipRamSize = AmigaConstants.DefaultChipRamSize,
+            IAmigaBusArbiter? arbiter = null,
+            int expansionRamSize = 0,
+            uint expansionRamBase = AmigaConstants.A500BootPseudoFastRamBase)
         {
             if (chipRamSize <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be positive.");
             }
 
+            if (expansionRamSize < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(expansionRamSize), expansionRamSize, "Expansion RAM size cannot be negative.");
+            }
+
             _chipRam = new byte[chipRamSize];
+            _expansionRam = new byte[expansionRamSize];
+            ExpansionRamBase = NormalizeAddress(expansionRamBase);
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this);
@@ -77,6 +90,10 @@ namespace CopperMod.Amiga
 
         public byte[] ChipRam => _chipRam;
 
+        public byte[] ExpansionRam => _expansionRam;
+
+        public uint ExpansionRamBase { get; }
+
         public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => Paula.Writes;
 
         public IReadOnlyList<AmigaBusAccessResult> BusAccesses => _busAccesses;
@@ -86,6 +103,7 @@ namespace CopperMod.Amiga
         public void Reset()
         {
             Array.Clear(_chipRam);
+            Array.Clear(_expansionRam);
             Array.Clear(_pendingCustomBytes);
             Array.Clear(_pendingCustomByteWritten);
             _hostCallbacks.Clear();
@@ -246,6 +264,62 @@ namespace CopperMod.Amiga
             data.CopyTo(_chipRam.AsSpan((int)address, data.Length));
         }
 
+        public void CopyToMemory(uint address, ReadOnlySpan<byte> data)
+        {
+            if (data.IsEmpty)
+            {
+                return;
+            }
+
+            address = NormalizeAddress(address);
+            if (TryGetContiguousWritableSpan(address, data.Length, out var destination))
+            {
+                data.CopyTo(destination);
+                return;
+            }
+
+            for (var i = 0; i < data.Length; i++)
+            {
+                WriteByte(address + (uint)i, data[i], 0);
+            }
+        }
+
+        public void ClearMemory(uint address, int byteCount)
+        {
+            if (byteCount <= 0)
+            {
+                return;
+            }
+
+            address = NormalizeAddress(address);
+            if (TryGetContiguousWritableSpan(address, byteCount, out var destination))
+            {
+                destination.Clear();
+                return;
+            }
+
+            for (var i = 0; i < byteCount; i++)
+            {
+                WriteByte(address + (uint)i, 0, 0);
+            }
+        }
+
+        public bool IsMappedMemoryRange(uint address, int byteCount)
+        {
+            if (byteCount < 0)
+            {
+                return false;
+            }
+
+            if (byteCount == 0)
+            {
+                return true;
+            }
+
+            address = NormalizeAddress(address);
+            return IsChipRamRange(address, byteCount) || IsExpansionRamRange(address, byteCount);
+        }
+
         public PaulaDmaReadResult ReadPaulaDmaWord(uint address, long requestedCycle)
         {
             address = NormalizeAddress(address);
@@ -394,9 +468,14 @@ namespace CopperMod.Amiga
 
         private AmigaBusAccessTarget ClassifyTarget(uint address)
         {
-            if (address < _chipRam.Length)
+            if (IsChipRamAddress(address))
             {
                 return AmigaBusAccessTarget.ChipRam;
+            }
+
+            if (IsExpansionRamAddress(address))
+            {
+                return AmigaBusAccessTarget.ExpansionRam;
             }
 
             if (address >= 0x00DFF000 && address < 0x00DFF200)
@@ -428,9 +507,14 @@ namespace CopperMod.Amiga
         private byte ReadRawByte(uint address)
         {
             address = NormalizeAddress(address);
-            if (address < _chipRam.Length)
+            if (TryGetChipRamOffset(address, out var chipOffset))
             {
-                return _chipRam[address];
+                return _chipRam[chipOffset];
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset))
+            {
+                return _expansionRam[expansionOffset];
             }
 
             if (address >= 0x00DFF000 && address < 0x00DFF200)
@@ -476,9 +560,15 @@ namespace CopperMod.Amiga
         private void WriteRawByte(uint address, byte value, long grantedCycle)
         {
             address = NormalizeAddress(address);
-            if (address < _chipRam.Length)
+            if (TryGetChipRamOffset(address, out var chipOffset))
             {
-                _chipRam[address] = value;
+                _chipRam[chipOffset] = value;
+                return;
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset))
+            {
+                _expansionRam[expansionOffset] = value;
                 return;
             }
 
@@ -552,6 +642,112 @@ namespace CopperMod.Amiga
         private static uint NormalizeAddress(uint address)
         {
             return address & 0x00FF_FFFF;
+        }
+
+        private bool TryGetContiguousWritableSpan(uint address, int byteCount, out Span<byte> span)
+        {
+            if (IsContiguousChipRamRange(address, byteCount))
+            {
+                span = _chipRam.AsSpan(GetChipRamOffset(address), byteCount);
+                return true;
+            }
+
+            if (IsExpansionRamRange(address, byteCount))
+            {
+                var offset = checked((int)(address - ExpansionRamBase));
+                span = _expansionRam.AsSpan(offset, byteCount);
+                return true;
+            }
+
+            span = default;
+            return false;
+        }
+
+        private bool IsChipRamRange(uint address, int byteCount)
+        {
+            if (byteCount < 0)
+            {
+                return false;
+            }
+
+            if (byteCount == 0)
+            {
+                return true;
+            }
+
+            return address < ChipRamDecodeSize &&
+                (ulong)address + (ulong)byteCount <= ChipRamDecodeSize;
+        }
+
+        private bool IsContiguousChipRamRange(uint address, int byteCount)
+        {
+            if (!IsChipRamRange(address, byteCount))
+            {
+                return false;
+            }
+
+            var offset = GetChipRamOffset(address);
+            return (ulong)offset + (ulong)byteCount <= (ulong)_chipRam.Length;
+        }
+
+        private bool IsChipRamAddress(uint address)
+        {
+            return TryGetChipRamOffset(address, out _);
+        }
+
+        private bool TryGetChipRamOffset(uint address, out int offset)
+        {
+            address = NormalizeAddress(address);
+            if (_chipRam.Length > 0 && address < ChipRamDecodeSize)
+            {
+                offset = (int)(address % (uint)_chipRam.Length);
+                return true;
+            }
+
+            offset = 0;
+            return false;
+        }
+
+        private int GetChipRamOffset(uint address)
+        {
+            if (!TryGetChipRamOffset(address, out var offset))
+            {
+                throw new ArgumentOutOfRangeException(nameof(address), address, "Address is outside the chip RAM decode window.");
+            }
+
+            return offset;
+        }
+
+        private bool IsExpansionRamRange(uint address, int byteCount)
+        {
+            if (_expansionRam.Length == 0 || address < ExpansionRamBase)
+            {
+                return false;
+            }
+
+            var offset = address - ExpansionRamBase;
+            return offset < _expansionRam.Length && (ulong)offset + (ulong)byteCount <= (ulong)_expansionRam.Length;
+        }
+
+        private bool IsExpansionRamAddress(uint address)
+        {
+            return TryGetExpansionRamOffset(address, out _);
+        }
+
+        private bool TryGetExpansionRamOffset(uint address, out int offset)
+        {
+            if (_expansionRam.Length != 0 && address >= ExpansionRamBase)
+            {
+                var candidate = address - ExpansionRamBase;
+                if (candidate < _expansionRam.Length)
+                {
+                    offset = (int)candidate;
+                    return true;
+                }
+            }
+
+            offset = 0;
+            return false;
         }
 
         private byte ApplyGamePortFireBits(byte value)
@@ -667,6 +863,10 @@ namespace CopperMod.Amiga
         }
 
         public IReadOnlyList<CustomRegisterWrite> Writes => _writes;
+
+        public ushort Adkcon => _adkcon;
+
+        public ushort Dmacon => _dmacon;
 
         public ushort ActiveInterruptBits
         {

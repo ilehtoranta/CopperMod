@@ -213,6 +213,10 @@ namespace CopperMod.Amiga
         private int _lastTransferCylinder;
         private int _lastTransferHead;
         private uint _lastTransferAddress;
+        private ushort? _armedDsklen;
+        private int _streamCylinder;
+        private int _streamHead;
+        private int _streamOffset;
 
         public AmigaDiskController(AmigaBus bus)
         {
@@ -236,6 +240,7 @@ namespace CopperMod.Amiga
                 Drive0.Head,
                 Drive0.MotorOn,
                 Drive0.Selected,
+                _ciabPortB,
                 _transferCount,
                 _lastTransferWords,
                 _lastTransferCylinder,
@@ -255,6 +260,10 @@ namespace CopperMod.Amiga
             _lastTransferCylinder = 0;
             _lastTransferHead = 0;
             _lastTransferAddress = 0;
+            _armedDsklen = null;
+            _streamCylinder = 0;
+            _streamHead = 0;
+            _streamOffset = 0;
             Drive0.ResetPosition();
         }
 
@@ -301,9 +310,20 @@ namespace CopperMod.Amiga
                     break;
                 case DskLen:
                     _dsklen = value;
-                    if ((value & DskDmaEnable) != 0 && (value & DskWriteMode) == 0)
+                    if ((value & DskDmaEnable) == 0 || (value & DskWriteMode) != 0 || (value & DskLengthMask) == 0)
                     {
+                        _armedDsklen = null;
+                        break;
+                    }
+
+                    if (_armedDsklen == value)
+                    {
+                        _armedDsklen = null;
                         StartReadDma((ushort)(value & DskLengthMask), cycle);
+                    }
+                    else
+                    {
+                        _armedDsklen = value;
                     }
 
                     break;
@@ -322,13 +342,13 @@ namespace CopperMod.Amiga
 
             var previous = _ciabPortB;
             _ciabPortB = value;
-            Drive0.SetSelected((value & 0x08) == 0);
+            Drive0.SetSelected((value & 0x78) != 0x78);
             Drive0.SetMotorOn((value & 0x80) == 0);
             Drive0.SetHead((value & 0x04) == 0 ? 1 : 0);
 
             var previousStepHigh = (previous & 0x01) != 0;
             var stepHigh = (value & 0x01) != 0;
-            if ((Drive0.Selected || Drive0.HasDisk) && previousStepHigh && !stepHigh)
+            if (Drive0.Selected && previousStepHigh && !stepHigh)
             {
                 var inward = (value & 0x02) == 0;
                 Drive0.Step(inward ? 1 : -1);
@@ -349,7 +369,13 @@ namespace CopperMod.Amiga
             }
 
             var track = AmigaDosTrackEncoder.EncodeTrack(Drive0.Disk, Drive0.Cylinder, Drive0.Head);
-            var sourceStart = FindSyncOffset(track, _dsksync);
+            ResetStreamIfTrackChanged();
+            var sourceStart = _streamOffset;
+            if ((_bus.Paula.Adkcon & 0x0400) != 0)
+            {
+                sourceStart = (FindSyncOffset(track, _dsksync, _streamOffset) + 2) % track.Length;
+            }
+
             var targetAddress = _diskPointer & 0x00FF_FFFE;
             for (var word = 0; word < requestedWords; word++)
             {
@@ -368,6 +394,7 @@ namespace CopperMod.Amiga
             _lastTransferCylinder = Drive0.Cylinder;
             _lastTransferHead = Drive0.Head;
             _lastTransferAddress = targetAddress;
+            _streamOffset = (sourceStart + (requestedWords * 2)) % track.Length;
             _dskbytr = 0x9000;
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
@@ -377,13 +404,31 @@ namespace CopperMod.Amiga
                 cycle);
         }
 
-        private static int FindSyncOffset(ReadOnlySpan<byte> track, ushort sync)
+        private void ResetStreamIfTrackChanged()
         {
-            for (var offset = 0; offset + 1 < track.Length; offset += 2)
+            if (_streamCylinder == Drive0.Cylinder && _streamHead == Drive0.Head)
             {
-                if (BigEndian.ReadUInt16(track, offset, "encoded disk sync word") == sync)
+                return;
+            }
+
+            _streamCylinder = Drive0.Cylinder;
+            _streamHead = Drive0.Head;
+            _streamOffset = 0;
+        }
+
+        private static int FindSyncOffset(ReadOnlySpan<byte> track, ushort sync, int startOffset)
+        {
+            startOffset = Math.Clamp(startOffset & ~1, 0, Math.Max(0, track.Length - 2));
+            for (var pass = 0; pass < 2; pass++)
+            {
+                var offset = pass == 0 ? startOffset : 0;
+                var end = pass == 0 ? track.Length - 1 : startOffset;
+                for (; offset + 1 < end; offset += 2)
                 {
-                    return offset;
+                    if (BigEndian.ReadUInt16(track, offset, "encoded disk sync word") == sync)
+                    {
+                        return offset;
+                    }
                 }
             }
 
@@ -402,6 +447,7 @@ namespace CopperMod.Amiga
             int head,
             bool motorOn,
             bool selected,
+            byte ciabPortB,
             int transferCount,
             int lastTransferWords,
             int lastTransferCylinder,
@@ -416,6 +462,7 @@ namespace CopperMod.Amiga
             Head = head;
             MotorOn = motorOn;
             Selected = selected;
+            CiabPortB = ciabPortB;
             TransferCount = transferCount;
             LastTransferWords = lastTransferWords;
             LastTransferCylinder = lastTransferCylinder;
@@ -438,6 +485,8 @@ namespace CopperMod.Amiga
         public bool MotorOn { get; }
 
         public bool Selected { get; }
+
+        public byte CiabPortB { get; }
 
         public int TransferCount { get; }
 
@@ -487,44 +536,85 @@ namespace CopperMod.Amiga
 
             var sectorsUntilGap = AmigaDiskImage.SectorsPerTrack - sector;
             var header = 0xFF00_0000u | ((uint)trackNumber << 16) | ((uint)sector << 8) | (uint)sectorsUntilGap;
-            WriteOddEvenPair(destination, 0x08, header);
+            Span<uint> headerAndLabel = stackalloc uint[10];
+            WriteOddEvenPair(headerAndLabel, 0, header);
 
             for (var i = 0; i < 4; i++)
             {
-                WriteOddEvenSplit(destination, 0x10 + (i * 4), 0x20 + (i * 4), 0);
+                WriteOddEvenSplit(headerAndLabel, 2 + i, 6 + i, 0);
             }
 
-            var headerChecksum = ComputeMfmChecksum(destination.Slice(0x08, 0x28));
-            WriteOddEvenPair(destination, 0x30, headerChecksum);
-
+            Span<uint> data = stackalloc uint[256];
             for (var i = 0; i < source.Length / 4; i++)
             {
                 var value = BigEndian.ReadUInt32(source, i * 4, "ADF sector longword");
-                WriteOddEvenSplit(destination, 0x40 + (i * 4), 0x240 + (i * 4), value);
+                WriteOddEvenSplit(data, i, 128 + i, value);
             }
 
-            var dataChecksum = ComputeMfmChecksum(destination.Slice(0x40, 0x400));
-            WriteOddEvenPair(destination, 0x38, dataChecksum);
+            var headerChecksum = ComputeMfmChecksum(headerAndLabel);
+            var dataChecksum = ComputeMfmChecksum(data);
+            var previousDataBit = (BigEndian.ReadUInt16(destination, 0x06, "MFM sync word") & 1) != 0;
+            WriteMfmLongs(destination, 0x08, headerAndLabel, ref previousDataBit);
+            WriteOddEvenPair(destination, 0x30, headerChecksum, ref previousDataBit);
+            WriteOddEvenPair(destination, 0x38, dataChecksum, ref previousDataBit);
+            WriteMfmLongs(destination, 0x40, data, ref previousDataBit);
         }
 
-        private static void WriteOddEvenPair(Span<byte> destination, int offset, uint value)
+        private static void WriteOddEvenPair(Span<uint> destination, int offset, uint value)
         {
-            BigEndian.WriteUInt32(destination, offset, Odd(value));
-            BigEndian.WriteUInt32(destination, offset + 4, Even(value));
+            destination[offset] = Odd(value);
+            destination[offset + 1] = Even(value);
         }
 
-        private static void WriteOddEvenSplit(Span<byte> destination, int oddOffset, int evenOffset, uint value)
+        private static void WriteOddEvenSplit(Span<uint> destination, int oddOffset, int evenOffset, uint value)
         {
-            BigEndian.WriteUInt32(destination, oddOffset, Odd(value));
-            BigEndian.WriteUInt32(destination, evenOffset, Even(value));
+            destination[oddOffset] = Odd(value);
+            destination[evenOffset] = Even(value);
         }
 
-        private static uint ComputeMfmChecksum(ReadOnlySpan<byte> encodedLongs)
+        private static void WriteOddEvenPair(Span<byte> destination, int offset, uint value, ref bool previousDataBit)
+        {
+            WriteMfmLong(destination, offset, Odd(value), ref previousDataBit);
+            WriteMfmLong(destination, offset + 4, Even(value), ref previousDataBit);
+        }
+
+        private static void WriteMfmLongs(Span<byte> destination, int offset, ReadOnlySpan<uint> values, ref bool previousDataBit)
+        {
+            for (var i = 0; i < values.Length; i++)
+            {
+                WriteMfmLong(destination, offset + (i * 4), values[i], ref previousDataBit);
+            }
+        }
+
+        private static void WriteMfmLong(Span<byte> destination, int offset, uint dataBits, ref bool previousDataBit)
+        {
+            BigEndian.WriteUInt32(destination, offset, EncodeMfmDataBits(dataBits, ref previousDataBit));
+        }
+
+        private static uint EncodeMfmDataBits(uint dataBits, ref bool previousDataBit)
+        {
+            dataBits &= MfmDataMask;
+            var result = dataBits;
+            for (var dataBit = 30; dataBit >= 0; dataBit -= 2)
+            {
+                var currentDataBit = ((dataBits >> dataBit) & 1) != 0;
+                if (!previousDataBit && !currentDataBit)
+                {
+                    result |= 1u << (dataBit + 1);
+                }
+
+                previousDataBit = currentDataBit;
+            }
+
+            return result;
+        }
+
+        private static uint ComputeMfmChecksum(ReadOnlySpan<uint> encodedLongs)
         {
             var checksum = 0u;
-            for (var offset = 0; offset < encodedLongs.Length; offset += 4)
+            for (var offset = 0; offset < encodedLongs.Length; offset++)
             {
-                checksum ^= BigEndian.ReadUInt32(encodedLongs, offset, "MFM checksum longword");
+                checksum ^= encodedLongs[offset];
             }
 
             return checksum & MfmDataMask;

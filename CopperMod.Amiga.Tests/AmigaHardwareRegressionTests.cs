@@ -76,6 +76,40 @@ public sealed class AmigaHardwareRegressionTests
 	}
 
 	[Fact]
+	public void HalfMegChipRamMirrorsAcrossLowChipDecodeWindow()
+	{
+		var bus = new AmigaBus(AmigaConstants.A500BootChipRamSize);
+
+		bus.WriteByte(0x00080000, 0x5A, 0);
+		bus.WriteByte(0x00100123, 0xC3, 0);
+		bus.WriteByte(0x001FFFFF, 0x7E, 0);
+
+		Assert.Equal(0x5A, bus.ChipRam[0x00000]);
+		Assert.Equal(0x5A, bus.ReadByte(0x00000000));
+		Assert.Equal(0xC3, bus.ChipRam[0x00123]);
+		Assert.Equal(0xC3, bus.ReadByte(0x00080123));
+		Assert.Equal(0x7E, bus.ChipRam[^1]);
+		Assert.Equal(0x7E, bus.ReadByte(0x0007FFFF));
+		Assert.Contains(bus.BusAccesses, access =>
+			access.Request.Target == AmigaBusAccessTarget.ChipRam &&
+			access.Request.Address == 0x00080000);
+	}
+
+	[Fact]
+	public void FullTwoMegChipRamKeepsUpperLowChipAddressesDistinct()
+	{
+		var bus = new AmigaBus(AmigaConstants.DefaultChipRamSize);
+
+		bus.WriteByte(0x00000000, 0x11, 0);
+		bus.WriteByte(0x00080000, 0x22, 0);
+
+		Assert.Equal(0x11, bus.ChipRam[0x00000]);
+		Assert.Equal(0x22, bus.ChipRam[0x80000]);
+		Assert.Equal(0x11, bus.ReadByte(0x00000000));
+		Assert.Equal(0x22, bus.ReadByte(0x00080000));
+	}
+
+	[Fact]
 	public void CiaBTimerALatchExposesCpuCycleInterval()
 	{
 		var bus = new AmigaBus();

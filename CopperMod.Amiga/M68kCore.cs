@@ -511,6 +511,17 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((opcode & 0xFFF0) == 0x4E40)
+            {
+                var vector = (uint)(32 + (opcode & 0x0F));
+                PushLong(State.ProgramCounter);
+                PushWord(State.StatusRegister);
+                State.StatusRegister |= M68kCpuState.Supervisor;
+                State.ProgramCounter = ReadLong(vector * 4);
+                AddCycles(34);
+                return true;
+            }
+
             if ((opcode & 0xFFF8) == 0x4E58)
             {
                 var reg = opcode & 7;

@@ -8,6 +8,7 @@ namespace CopperMod.Amiga
     {
         Cpu,
         Paula,
+        Cia,
         Disk,
         Copper,
         Blitter,
@@ -34,6 +35,7 @@ namespace CopperMod.Amiga
     internal enum AmigaBusAccessTarget
     {
         ChipRam,
+        ExpansionRam,
         CustomRegisters,
         Cia,
         Rom,

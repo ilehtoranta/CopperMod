@@ -142,6 +142,10 @@ namespace CopperMod.Amiga
         public const uint ReqLibraryBase = 0x00F4_0000;
         public const uint DummyLibraryBase = 0x00F5_0000;
         public const uint CiaAResourceBase = 0x00F6_0000;
+        public const uint IconLibraryBase = 0x00F7_0000;
+        public const uint GraphicsLibraryBase = 0x00F9_0000;
+        public const uint IntuitionLibraryBase = 0x00FA_0000;
+        public const uint ExpansionLibraryBase = 0x00FB_0000;
         public const uint ExecStructAddress = 0x0000_2000;
         public const uint HostPathBufferAddress = 0x0000_3000;
         public const int HostPathBufferLength = 512;

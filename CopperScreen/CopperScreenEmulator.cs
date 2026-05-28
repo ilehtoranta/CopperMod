@@ -46,7 +46,7 @@ internal sealed class CopperScreenEmulator
 
 	public string StatusText { get; private set; }
 
-	public bool IsPrimaryFirePressed => _machine.Bus.GamePort0FirePressed;
+	public bool IsPrimaryFirePressed => _machine.Bus.GamePort0FirePressed || _machine.Bus.GamePort1FirePressed;
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
 
@@ -143,7 +143,7 @@ internal sealed class CopperScreenEmulator
 
 	public void RenderNextFrame()
 	{
-		_machine.Bus.GamePort0FirePressed = _firePulseFrames > 0;
+		SetPrimaryFirePressed(_firePulseFrames > 0);
 		if (DiskPath == null)
 		{
 			_frameAudio.AsSpan().Clear();
@@ -178,10 +178,6 @@ internal sealed class CopperScreenEmulator
 			_targetCycle - PalFrameCycles,
 			_targetCycle);
 		StabilizeInterlaceFrame();
-		if (IsBlank(Framebuffer))
-		{
-			InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
-		}
 
 		AdvanceInputPulse();
 	}
@@ -310,7 +306,13 @@ internal sealed class CopperScreenEmulator
 			_firePulseFrames--;
 		}
 
-		_machine.Bus.GamePort0FirePressed = _firePulseFrames > 0;
+		SetPrimaryFirePressed(_firePulseFrames > 0);
+	}
+
+	private void SetPrimaryFirePressed(bool pressed)
+	{
+		_machine.Bus.GamePort0FirePressed = pressed;
+		_machine.Bus.GamePort1FirePressed = pressed;
 	}
 
 	private bool HandleBootResult(AmigaBootResult result)
@@ -330,22 +332,4 @@ internal sealed class CopperScreenEmulator
 		return true;
 	}
 
-	private static bool IsBlank(ReadOnlySpan<int> pixels)
-	{
-		if (pixels.IsEmpty)
-		{
-			return true;
-		}
-
-		var first = pixels[0];
-		for (var i = 1; i < pixels.Length; i++)
-		{
-			if (pixels[i] != first)
-			{
-				return false;
-			}
-		}
-
-		return true;
-	}
 }

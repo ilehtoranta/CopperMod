@@ -184,6 +184,28 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void TrapPushesExceptionFrameAndVectorsThroughTrapTable()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x41); // TRAP #1
+		bus.WriteLong((32 + 1) * 4, 0x0000_2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Zero | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.Supervisor | M68kCpuState.Zero | M68kCpuState.Carry, (ushort)((bus.Memory[0x2FFA] << 8) | bus.Memory[0x2FFB]));
+		Assert.Equal(0x0000_1002u, ((uint)bus.Memory[0x2FFC] << 24) |
+			((uint)bus.Memory[0x2FFD] << 16) |
+			((uint)bus.Memory[0x2FFE] << 8) |
+			bus.Memory[0x2FFF]);
+		Assert.True(cpu.State.Cycles >= 34);
+	}
+
+	[Fact]
 	public void RoxrUsesExtendAsIncomingBitAndUpdatesCarryExtend()
 	{
 		var bus = new TestBus();

@@ -6,6 +6,7 @@ namespace CopperMod.Amiga
     {
         A500PalCustPlayback,
         A500PalFullEmulationSkeleton,
+        A500Pal512KChipOnlyBoot,
         A500Pal512KBoot
     }
 
@@ -20,6 +21,10 @@ namespace CopperMod.Amiga
 
         public int ChipRamSize { get; private set; } = AmigaConstants.DefaultChipRamSize;
 
+        public int ExpansionRamSize { get; private set; }
+
+        public uint ExpansionRamBase { get; private set; } = AmigaConstants.A500BootPseudoFastRamBase;
+
         public IAmigaBusArbiter BusArbiter { get; private set; } = new ZeroWaitBusArbiter();
 
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
@@ -31,9 +36,14 @@ namespace CopperMod.Amiga
         public static AmigaMachineOptions ForProfile(AmigaMachineProfile profile)
         {
             var options = new AmigaMachineOptions(profile);
-            if (profile == AmigaMachineProfile.A500Pal512KBoot)
+            if (profile == AmigaMachineProfile.A500Pal512KChipOnlyBoot)
             {
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
+            }
+            else if (profile == AmigaMachineProfile.A500Pal512KBoot)
+            {
+                options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
+                options.ExpansionRamSize = AmigaConstants.A500BootPseudoFastRamSize;
             }
 
             return options;
@@ -57,6 +67,18 @@ namespace CopperMod.Amiga
             BusArbiter = arbiter ?? throw new ArgumentNullException(nameof(arbiter));
             return this;
         }
+
+        public AmigaMachineOptions WithExpansionRam(int size, uint baseAddress = AmigaConstants.A500BootPseudoFastRamBase)
+        {
+            if (size < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Expansion RAM size cannot be negative.");
+            }
+
+            ExpansionRamSize = size;
+            ExpansionRamBase = baseAddress;
+            return this;
+        }
     }
 
     internal sealed class AmigaMachine
@@ -64,7 +86,7 @@ namespace CopperMod.Amiga
         public AmigaMachine(AmigaMachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
-            Bus = new AmigaBus(options.ChipRamSize, options.BusArbiter);
+            Bus = new AmigaBus(options.ChipRamSize, options.BusArbiter, options.ExpansionRamSize, options.ExpansionRamBase);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }
@@ -87,6 +109,25 @@ namespace CopperMod.Amiga
 
         public bool DispatchPendingHardwareInterrupt()
         {
+            foreach (var ciaEvent in Bus.DrainCiaInterrupts())
+            {
+                var cia = Bus.GetCia(ciaEvent.Cia);
+                if ((cia.PendingInterrupts & cia.InterruptMask) == 0)
+                {
+                    continue;
+                }
+
+                var intreqBit = ciaEvent.Cia == AmigaCiaId.A
+                    ? AmigaConstants.IntreqPorts
+                    : AmigaConstants.IntreqExternal;
+                Bus.WriteDeviceWord(
+                    AmigaBusRequester.Cia,
+                    AmigaBusAccessKind.CustomRegister,
+                    0x00DFF09C,
+                    (ushort)(0x8000 | intreqBit),
+                    ciaEvent.Cycle);
+            }
+
             var level = Bus.Paula.GetHighestPendingInterruptLevel();
             if (level <= 0)
             {
