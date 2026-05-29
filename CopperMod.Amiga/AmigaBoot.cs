@@ -354,6 +354,7 @@ namespace CopperMod.Amiga
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -138), HostOk);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -276), HostFindName);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), HostAllocMem);
+            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), HostAllocAbs);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -210), HostFreeMem);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -216), HostAvailMem);
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -408), HostOpenLibrary);
@@ -722,6 +723,20 @@ namespace CopperMod.Amiga
         private void HostAvailMem(M68kCpuState state)
         {
             state.D[0] = QueryAvailableMemory(state.D[1]);
+        }
+
+        private void HostAllocAbs(M68kCpuState state)
+        {
+            var size = (int)Math.Min(state.D[0], int.MaxValue);
+            var location = state.A[1];
+            state.D[0] = AllocateAbsoluteMemoryFromMemList(Math.Max(4, size), location);
+            if (_hostAllocationDiagnosticCount < 16)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_ALLOC_ABS",
+                    $"AllocAbs requested 0x{size:X} bytes at 0x{location:X8} and returned 0x{state.D[0]:X8}."));
+                _hostAllocationDiagnosticCount++;
+            }
         }
 
         private void HostFreeMem(M68kCpuState state)
@@ -2577,6 +2592,71 @@ namespace CopperMod.Amiga
                     previousLinkAddress = chunkAddress + MemChunkNextOffset;
                     chunkAddress = nextChunkAddress;
                 }
+            }
+
+            return 0;
+        }
+
+        private uint AllocateAbsoluteMemoryFromMemList(int byteCount, uint location)
+        {
+            if (!_memoryListInstalled || byteCount <= 0 || location == 0)
+            {
+                return 0;
+            }
+
+            var size = Align((uint)byteCount, 8);
+            var end = location + size;
+            if (end <= location || !_machine.Bus.IsMappedMemoryRange(location, checked((int)size)))
+            {
+                return 0;
+            }
+
+            var headerAddress = FindOwningMemoryHeader(location, size);
+            if (headerAddress == 0)
+            {
+                return 0;
+            }
+
+            var previousLinkAddress = headerAddress + MemHeaderFirstChunkOffset;
+            var chunkAddress = _machine.Bus.ReadLong(previousLinkAddress);
+            while (chunkAddress != 0)
+            {
+                var nextChunkAddress = _machine.Bus.ReadLong(chunkAddress + MemChunkNextOffset);
+                var chunkBytes = _machine.Bus.ReadLong(chunkAddress + MemChunkBytesOffset);
+                var chunkEnd = chunkAddress + chunkBytes;
+                if (location >= chunkAddress && end <= chunkEnd)
+                {
+                    var beforeBytes = location - chunkAddress;
+                    var afterBytes = chunkEnd - end;
+                    if (beforeBytes >= 8)
+                    {
+                        _machine.Bus.WriteLong(previousLinkAddress, chunkAddress);
+                        _machine.Bus.WriteLong(chunkAddress + MemChunkNextOffset, afterBytes >= 8 ? end : nextChunkAddress);
+                        _machine.Bus.WriteLong(chunkAddress + MemChunkBytesOffset, beforeBytes);
+                    }
+                    else if (afterBytes >= 8)
+                    {
+                        _machine.Bus.WriteLong(previousLinkAddress, end);
+                    }
+                    else
+                    {
+                        _machine.Bus.WriteLong(previousLinkAddress, nextChunkAddress);
+                    }
+
+                    if (afterBytes >= 8)
+                    {
+                        _machine.Bus.WriteLong(end + MemChunkNextOffset, nextChunkAddress);
+                        _machine.Bus.WriteLong(end + MemChunkBytesOffset, afterBytes);
+                    }
+
+                    var allocatedBytes = chunkBytes - (beforeBytes >= 8 ? beforeBytes : 0) - (afterBytes >= 8 ? afterBytes : 0);
+                    var freeBytes = _machine.Bus.ReadLong(headerAddress + MemHeaderFreeOffset);
+                    _machine.Bus.WriteLong(headerAddress + MemHeaderFreeOffset, freeBytes >= allocatedBytes ? freeBytes - allocatedBytes : 0);
+                    return location;
+                }
+
+                previousLinkAddress = chunkAddress + MemChunkNextOffset;
+                chunkAddress = nextChunkAddress;
             }
 
             return 0;

@@ -33,6 +33,50 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void EncodedTrackBackedImagesExposeDecodedStandardSectors()
+    {
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        var expectedOffset = (((7 * AmigaDiskImage.HeadCount) + 1) * AmigaDiskImage.SectorsPerTrack + 4) * AmigaDiskImage.SectorSize;
+        data[expectedOffset] = 0x7A;
+        data[expectedOffset + 511] = 0xC3;
+        var sectorDisk = AmigaDiskImage.FromAdfBytes(data);
+        var tracks = new byte[AmigaDiskImage.CylinderCount * AmigaDiskImage.HeadCount][];
+        for (var cylinder = 0; cylinder < AmigaDiskImage.CylinderCount; cylinder++)
+        {
+            for (var head = 0; head < AmigaDiskImage.HeadCount; head++)
+            {
+                tracks[(cylinder * AmigaDiskImage.HeadCount) + head] = AmigaDosTrackEncoder.EncodeTrack(sectorDisk, cylinder, head);
+            }
+        }
+
+        var decodedDisk = AmigaDiskImage.FromEncodedTracks(tracks);
+        var sector = decodedDisk.ReadSector(7, 1, 4);
+
+        Assert.True(decodedDisk.HasCompleteSectorData);
+        Assert.Equal(0x7A, sector[0]);
+        Assert.Equal(0xC3, sector[^1]);
+    }
+
+    [Fact]
+    public void ShadowOfTheBeastIpfZipLoadsManagedEncodedTracksWhenPresent()
+    {
+        var path = TryFindWorkspaceFile(
+            "CopperScreen",
+            "TestImages",
+            "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip");
+        if (path == null)
+        {
+            return;
+        }
+
+        var disk = AmigaDiskImage.Load(path);
+
+        var track = disk.ReadEncodedTrack(0, 0);
+        Assert.True(track.Length > 0);
+        Assert.True(ContainsWord(track, 0x4489));
+    }
+
+    [Fact]
     public void BootBlockChecksumValidationAcceptsOnesComplementChecksum()
     {
         var bootBlock = new byte[1024];
@@ -1530,11 +1574,45 @@ public sealed class AmigaDiskDisplayTests
         var completionCycle = (long)Math.Round(
             AmigaConstants.A500PalCpuClockHz / (AmigaDosTrackEncoder.EncodedTrackBytes * 5) * 0x200);
 
+        bus.AdvanceCiasTo(completionCycle - 1);
         bus.Paula.AdvanceTo(completionCycle - 1);
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
 
+        bus.AdvanceCiasTo(completionCycle);
         bus.Paula.AdvanceTo(completionCycle);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+    }
+
+    [Fact]
+    public void DiskDmaStopCancelsUntransferredWordsBeforeOverlappingRestart()
+    {
+        var bus = new AmigaBus();
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
+        bus.WriteWord(0x00DFF09E, 0x8400);
+        bus.Paula.AdvanceTo(0);
+
+        StartDiskDma(bus, 0x6000, 0x1540, 0);
+        bus.WriteWord(0x00DFF024, 0x0000, 144);
+        StartDiskDma(bus, 0x6006, 0x0220, 148);
+        CompleteDiskDma(bus, 148, 0x0220);
+
+        Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, 0x6000 + 0x0880, "cancelled long DMA body"));
+        Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x6006, "short DMA synced word"));
+        Assert.Equal(0xFF00_090Bu, DecodeOddEvenLong(bus.ChipRam, 0x6008, 0x600C));
+    }
+
+    [Fact]
+    public void DiskDmaAdvancesDskptToNextWord()
+    {
+        var bus = new AmigaBus();
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
+
+        StartDiskDma(bus, 0x4000, 0x0100);
+        CompleteDiskDma(bus, 0, 0x0100);
+
+        Assert.Equal(0x4200u, bus.Disk.CaptureSnapshot().DiskPointer);
     }
 
     [Fact]
@@ -1566,8 +1644,11 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF09E, 0x8400);
         bus.Paula.AdvanceTo(0);
 
-        StartDiskDma(bus, 0x4000, 0x0020);
-        StartDiskDma(bus, 0x4100, 0x0020);
+        var cycle = 0L;
+        StartDiskDma(bus, 0x4000, 0x0020, cycle);
+        cycle = CompleteDiskDma(bus, cycle, 0x0020);
+        StartDiskDma(bus, 0x4100, 0x0020, cycle);
+        CompleteDiskDma(bus, cycle, 0x0020);
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "first synced DMA word"));
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4100, "second synced DMA word"));
@@ -1584,7 +1665,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF09E, 0x8400);
         bus.Paula.AdvanceTo(0);
 
-        StartDiskDma(bus, 0x4000, 0x0020, 1_000_000);
+        const long startCycle = 1_000_000;
+        StartDiskDma(bus, 0x4000, 0x0020, startCycle);
+        CompleteDiskDma(bus, startCycle, 0x0020);
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "synced DMA word"));
         Assert.Equal(0xFF00_090Bu, DecodeOddEvenLong(bus.ChipRam, 0x4002, 0x4006));
@@ -1599,8 +1682,11 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF09E, 0x8400);
         bus.Paula.AdvanceTo(0);
 
-        StartDiskDma(bus, 0x4000, 0x0220);
-        StartDiskDma(bus, 0x5000, 0x0020);
+        var cycle = 0L;
+        StartDiskDma(bus, 0x4000, 0x0220, cycle);
+        cycle = CompleteDiskDma(bus, cycle, 0x0220);
+        StartDiskDma(bus, 0x5000, 0x0020, cycle);
+        CompleteDiskDma(bus, cycle, 0x0020);
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x5000, "synced DMA word"));
         Assert.Equal(0xFF00_0A0Au, DecodeOddEvenLong(bus.ChipRam, 0x5002, 0x5006));
@@ -1615,8 +1701,11 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF09E, 0x8400);
         bus.Paula.AdvanceTo(0);
 
-        StartDiskDma(bus, 0x4000, 0x0020);
-        StartDiskDma(bus, 0x5000, 0x1900);
+        var cycle = 0L;
+        StartDiskDma(bus, 0x4000, 0x0020, cycle);
+        cycle = CompleteDiskDma(bus, cycle, 0x0020);
+        StartDiskDma(bus, 0x5000, 0x1900, cycle);
+        CompleteDiskDma(bus, cycle, 0x1900);
 
         var sectors = new SortedSet<int>();
         for (var address = 0x5000; address + 0x10 < 0x5000 + 0x3200; address += 2)
@@ -1901,6 +1990,14 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF024, dsklen, cycle);
     }
 
+    private static long CompleteDiskDma(AmigaBus bus, long startCycle, ushort words)
+    {
+        var completionCycle = startCycle + 2_000_000 + words;
+        bus.AdvanceCiasTo(completionCycle);
+        bus.Paula.AdvanceTo(completionCycle);
+        return completionCycle;
+    }
+
     private static uint DecodeOddEvenLong(ReadOnlySpan<byte> data, int oddOffset, int evenOffset)
     {
         var odd = BigEndian.ReadUInt32(data, oddOffset, "odd MFM longword");
@@ -1924,5 +2021,35 @@ public sealed class AmigaDiskDisplayTests
         }
 
         return ~sum;
+    }
+
+    private static bool ContainsWord(ReadOnlySpan<byte> data, ushort expected)
+    {
+        for (var offset = 0; offset + 1 < data.Length; offset += 2)
+        {
+            if (BigEndian.ReadUInt16(data, offset, "encoded track word") == expected)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryFindWorkspaceFile(params string[] parts)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(new[] { directory.FullName }.Concat(parts).ToArray());
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }

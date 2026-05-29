@@ -16,20 +16,41 @@ namespace CopperMod.Amiga
 
         private readonly byte[][] _encodedTracks = new byte[TrackCount][];
 
-        private AmigaDiskImage(byte[] data, string name)
+        private AmigaDiskImage(byte[] data, string name, byte[][]? encodedTracks = null, bool hasCompleteSectorData = true)
         {
             if (data.Length != StandardAdfSize)
             {
-                throw new AmigaEmulationException($"Only standard {StandardAdfSize}-byte ADF images are supported.");
+                throw new AmigaEmulationException($"Only standard {StandardAdfSize}-byte sector images are supported.");
             }
 
             Data = data;
             Name = name;
+            HasCompleteSectorData = hasCompleteSectorData;
+
+            if (encodedTracks == null)
+            {
+                return;
+            }
+
+            if (encodedTracks.Length != TrackCount)
+            {
+                throw new ArgumentException($"Exactly {TrackCount} encoded tracks are required.", nameof(encodedTracks));
+            }
+
+            for (var index = 0; index < encodedTracks.Length; index++)
+            {
+                if (encodedTracks[index] is { Length: > 0 } track)
+                {
+                    _encodedTracks[index] = track;
+                }
+            }
         }
 
         public byte[] Data { get; }
 
         public string Name { get; }
+
+        public bool HasCompleteSectorData { get; }
 
         public ReadOnlySpan<byte> BootBlock => Data.AsSpan(0, 1024);
 
@@ -46,29 +67,47 @@ namespace CopperMod.Amiga
                 return FromAdfBytes(File.ReadAllBytes(path), Path.GetFileName(path));
             }
 
+            if (extension.Equals(".ipf", StringComparison.OrdinalIgnoreCase))
+            {
+                return AmigaIpfDiskDecoder.DecodeBytes(File.ReadAllBytes(path), Path.GetFileName(path));
+            }
+
             if (extension.Equals(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 using var archive = ZipFile.OpenRead(path);
                 var entries = archive.Entries
-                    .Where(entry => !string.IsNullOrEmpty(entry.Name) && entry.Name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase))
+                    .Where(entry =>
+                        !string.IsNullOrEmpty(entry.Name) &&
+                        (entry.Name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
+                            entry.Name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase)))
                     .ToArray();
                 if (entries.Length != 1)
                 {
-                    throw new AmigaEmulationException("A zipped disk image must contain exactly one ADF file.");
+                    throw new AmigaEmulationException("A zipped disk image must contain exactly one ADF or IPF file.");
                 }
 
                 using var stream = entries[0].Open();
                 using var memory = new MemoryStream();
                 stream.CopyTo(memory);
-                return FromAdfBytes(memory.ToArray(), entries[0].Name);
+                var data = memory.ToArray();
+                return entries[0].Name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase)
+                    ? AmigaIpfDiskDecoder.DecodeBytes(data, entries[0].Name)
+                    : FromAdfBytes(data, entries[0].Name);
             }
 
-            throw new AmigaEmulationException("Unsupported disk image extension. Expected .adf or .zip.");
+            throw new AmigaEmulationException("Unsupported disk image extension. Expected .adf, .ipf, or .zip.");
         }
 
         public static AmigaDiskImage FromAdfBytes(byte[] data, string name = "disk.adf")
         {
             return new AmigaDiskImage(data ?? throw new ArgumentNullException(nameof(data)), name);
+        }
+
+        public static AmigaDiskImage FromEncodedTracks(byte[][] encodedTracks, string name = "disk.ipf")
+        {
+            ArgumentNullException.ThrowIfNull(encodedTracks);
+            var sectorData = AmigaDosTrackDecoder.DecodeBestEffort(encodedTracks, out var hasCompleteSectorData);
+            return new AmigaDiskImage(sectorData, name, encodedTracks, hasCompleteSectorData);
         }
 
         public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
@@ -254,6 +293,19 @@ namespace CopperMod.Amiga
         private double _streamPosition;
         private long _streamCycle;
         private long _nextIndexPulseCycle;
+        private bool _activeDma;
+        private uint _activeDmaTargetAddress;
+        private int _activeDmaSourceStart;
+        private ushort _activeDmaRequestedWords;
+        private int _activeDmaTransferredWords;
+        private int _activeDmaCylinder;
+        private int _activeDmaHead;
+        private int _activeDmaTrackLength;
+        private double _activeDmaStreamStartPosition;
+        private long _activeDmaStartCycle;
+        private long _activeDmaDataStartCycle;
+        private long _activeDmaCompletionCycle;
+        private double _activeDmaCyclesPerByte;
 
         public AmigaDiskController(AmigaBus bus)
         {
@@ -304,11 +356,14 @@ namespace CopperMod.Amiga
             _streamPosition = 0;
             _streamCycle = 0;
             _nextIndexPulseCycle = DiskIndexPulseCycles;
+            ClearActiveDma();
             Drive0.ResetPosition();
         }
 
         public void AdvanceTo(long targetCycle)
         {
+            AdvanceActiveDmaTo(targetCycle);
+
             if (targetCycle < _nextIndexPulseCycle)
             {
                 return;
@@ -367,9 +422,11 @@ namespace CopperMod.Amiga
                     _diskPointer = (_diskPointer & 0xFFFF_0000) | value;
                     break;
                 case DskLen:
+                    AdvanceActiveDmaTo(cycle);
                     _dsklen = value;
                     if ((value & DskDmaEnable) == 0 || (value & DskWriteMode) != 0 || (value & DskLengthMask) == 0)
                     {
+                        CancelActiveDma(cycle);
                         _armedDsklen = null;
                         break;
                     }
@@ -444,6 +501,8 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            CancelActiveDma(cycle);
+
             var track = Drive0.ReadEncodedTrack(Drive0.Cylinder, Drive0.Head);
             var cyclesPerByte = GetDiskDmaCyclesPerByte(track.Length);
             ResetStreamIfTrackChanged(cycle);
@@ -461,18 +520,6 @@ namespace CopperMod.Amiga
             }
 
             var targetAddress = _diskPointer & 0x00FF_FFFE;
-            for (var word = 0; word < requestedWords; word++)
-            {
-                var sourceOffset = (sourceStart + (word * 2)) % track.Length;
-                var value = BigEndian.ReadUInt16(track, sourceOffset, "encoded disk DMA word");
-                _bus.WriteChipWordForDevice(
-                    AmigaBusRequester.Disk,
-                    AmigaBusAccessKind.DiskDma,
-                    targetAddress + (uint)(word * 2),
-                    value,
-                    cycle);
-            }
-
             _transferCount++;
             _lastTransferWords = requestedWords;
             _lastTransferCylinder = Drive0.Cylinder;
@@ -483,13 +530,140 @@ namespace CopperMod.Amiga
             var completionCycle = cycle + Math.Max(
                 DiskDmaCompletionBaseDelayCycles,
                 (long)Math.Round((syncWaitBytes + transferBytes) * cyclesPerByte));
-            SetStreamPosition((sourceStart + transferBytes) % track.Length, completionCycle);
+            _activeDma = true;
+            _activeDmaTargetAddress = targetAddress;
+            _activeDmaSourceStart = sourceStart;
+            _activeDmaRequestedWords = requestedWords;
+            _activeDmaTransferredWords = 0;
+            _activeDmaCylinder = Drive0.Cylinder;
+            _activeDmaHead = Drive0.Head;
+            _activeDmaTrackLength = track.Length;
+            _activeDmaStreamStartPosition = _streamPosition;
+            _activeDmaStartCycle = cycle;
+            _activeDmaDataStartCycle = cycle + (long)Math.Round(syncWaitBytes * cyclesPerByte);
+            _activeDmaCompletionCycle = completionCycle;
+            _activeDmaCyclesPerByte = cyclesPerByte;
+            AdvanceActiveDmaTo(cycle);
+        }
+
+        private void AdvanceActiveDmaTo(long targetCycle)
+        {
+            if (!_activeDma)
+            {
+                return;
+            }
+
+            if (Drive0.Disk == null)
+            {
+                ClearActiveDma();
+                return;
+            }
+
+            if (targetCycle < _activeDmaStartCycle)
+            {
+                return;
+            }
+
+            var advanceCycle = Math.Min(targetCycle, _activeDmaCompletionCycle);
+            var targetWords = targetCycle >= _activeDmaCompletionCycle
+                ? _activeDmaRequestedWords
+                : GetActiveDmaTransferredWordsAt(advanceCycle);
+            if (targetWords > _activeDmaTransferredWords)
+            {
+                var track = Drive0.ReadEncodedTrack(_activeDmaCylinder, _activeDmaHead);
+                for (var word = _activeDmaTransferredWords; word < targetWords; word++)
+                {
+                    var sourceOffset = (_activeDmaSourceStart + (word * 2)) % _activeDmaTrackLength;
+                    var value = BigEndian.ReadUInt16(track, sourceOffset, "encoded disk DMA word");
+                    var wordCycle = _activeDmaDataStartCycle + (long)Math.Round((word + 1) * 2 * _activeDmaCyclesPerByte);
+                    _bus.WriteChipWordForDevice(
+                        AmigaBusRequester.Disk,
+                        AmigaBusAccessKind.DiskDma,
+                        _activeDmaTargetAddress + (uint)(word * 2),
+                        value,
+                        wordCycle);
+                }
+
+                _activeDmaTransferredWords = targetWords;
+                UpdateActiveDmaPointer();
+            }
+
+            if (targetCycle < _activeDmaCompletionCycle)
+            {
+                return;
+            }
+
+            CompleteActiveDma();
+        }
+
+        private int GetActiveDmaTransferredWordsAt(long cycle)
+        {
+            if (cycle < _activeDmaDataStartCycle)
+            {
+                return 0;
+            }
+
+            var elapsedBytes = (cycle - _activeDmaDataStartCycle) / _activeDmaCyclesPerByte;
+            var words = (int)Math.Floor(elapsedBytes / 2.0);
+            return Math.Clamp(words, 0, _activeDmaRequestedWords);
+        }
+
+        private void CompleteActiveDma()
+        {
+            var transferBytes = _activeDmaRequestedWords * 2;
+            _activeDmaTransferredWords = _activeDmaRequestedWords;
+            UpdateActiveDmaPointer();
+            SetStreamPosition((_activeDmaSourceStart + transferBytes) % _activeDmaTrackLength, _activeDmaCompletionCycle);
+            _dskbytr = 0x9000;
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
                 0x00DFF09C,
                 (ushort)(0x8000 | DskBlkInterrupt),
-                completionCycle);
+                _activeDmaCompletionCycle);
+            ClearActiveDma();
+        }
+
+        private void CancelActiveDma(long cycle)
+        {
+            if (!_activeDma)
+            {
+                return;
+            }
+
+            AdvanceActiveDmaTo(cycle);
+            if (!_activeDma)
+            {
+                return;
+            }
+
+            var elapsedCycles = Math.Max(0, cycle - _activeDmaStartCycle);
+            var position = (_activeDmaStreamStartPosition + (elapsedCycles / _activeDmaCyclesPerByte)) % _activeDmaTrackLength;
+            SetStreamPosition(position, cycle);
+            _dskbytr = 0;
+            ClearActiveDma();
+        }
+
+        private void ClearActiveDma()
+        {
+            _activeDma = false;
+            _activeDmaTargetAddress = 0;
+            _activeDmaSourceStart = 0;
+            _activeDmaRequestedWords = 0;
+            _activeDmaTransferredWords = 0;
+            _activeDmaCylinder = 0;
+            _activeDmaHead = 0;
+            _activeDmaTrackLength = 0;
+            _activeDmaStreamStartPosition = 0;
+            _activeDmaStartCycle = 0;
+            _activeDmaDataStartCycle = 0;
+            _activeDmaCompletionCycle = 0;
+            _activeDmaCyclesPerByte = 0;
+        }
+
+        private void UpdateActiveDmaPointer()
+        {
+            _diskPointer = (_activeDmaTargetAddress + (uint)(_activeDmaTransferredWords * 2)) & 0x00FF_FFFE;
         }
 
         private void ResetStreamIfTrackChanged(long cycle)
@@ -674,6 +848,11 @@ namespace CopperMod.Amiga
             return track;
         }
 
+        public static byte[] CreateUnformattedTrack()
+        {
+            return Enumerable.Repeat((byte)0xAA, EncodedTrackBytes).ToArray();
+        }
+
         private static void EncodeSector(ReadOnlySpan<byte> source, Span<byte> destination, int trackNumber, int sector, int sectorsUntilGap)
         {
             destination.Fill(0xAA);
@@ -773,6 +952,168 @@ namespace CopperMod.Amiga
         private static uint Even(uint value)
         {
             return value & MfmDataMask;
+        }
+    }
+
+    internal static class AmigaDosTrackDecoder
+    {
+        private const ushort SyncWord = 0x4489;
+        private const uint MfmDataMask = 0x5555_5555;
+        private const int TrackCount = AmigaDiskImage.CylinderCount * AmigaDiskImage.HeadCount;
+        private const int EncodedSectorBytesAfterSync = 0x43C;
+
+        public static byte[] DecodeBestEffort(byte[][] encodedTracks, out bool hasCompleteSectorData)
+        {
+            ArgumentNullException.ThrowIfNull(encodedTracks);
+            if (encodedTracks.Length != TrackCount)
+            {
+                throw new ArgumentException($"Exactly {TrackCount} encoded tracks are required.", nameof(encodedTracks));
+            }
+
+            var data = new byte[AmigaDiskImage.StandardAdfSize];
+            var decodedSectors = new bool[TrackCount * AmigaDiskImage.SectorsPerTrack];
+            var decodedSectorCount = 0;
+            for (var trackNumber = 0; trackNumber < encodedTracks.Length; trackNumber++)
+            {
+                var track = encodedTracks[trackNumber];
+                if (track == null || track.Length < EncodedSectorBytesAfterSync)
+                {
+                    continue;
+                }
+
+                DecodeTrack(track, trackNumber, data, decodedSectors, ref decodedSectorCount);
+            }
+
+            hasCompleteSectorData = decodedSectorCount == decodedSectors.Length;
+            return data;
+        }
+
+        private static void DecodeTrack(
+            ReadOnlySpan<byte> track,
+            int expectedTrackNumber,
+            byte[] diskData,
+            bool[] decodedSectors,
+            ref int decodedSectorCount)
+        {
+            var length = track.Length & ~1;
+            if (length < EncodedSectorBytesAfterSync)
+            {
+                return;
+            }
+
+            for (var offset = 0; offset < length; offset += 2)
+            {
+                if (ReadUInt16Circular(track, length, offset) != SyncWord ||
+                    ReadUInt16Circular(track, length, offset + 2) != SyncWord)
+                {
+                    continue;
+                }
+
+                TryDecodeSector(track, length, offset, expectedTrackNumber, diskData, decodedSectors, ref decodedSectorCount);
+            }
+        }
+
+        private static void TryDecodeSector(
+            ReadOnlySpan<byte> track,
+            int length,
+            int syncOffset,
+            int expectedTrackNumber,
+            byte[] diskData,
+            bool[] decodedSectors,
+            ref int decodedSectorCount)
+        {
+            var header = DecodeOddEven(ReadMfmLong(track, length, syncOffset + 0x04), ReadMfmLong(track, length, syncOffset + 0x08));
+            if ((header & 0xFF00_0000) != 0xFF00_0000)
+            {
+                return;
+            }
+
+            var trackNumber = (int)((header >> 16) & 0xFF);
+            var sector = (int)((header >> 8) & 0xFF);
+            if (trackNumber != expectedTrackNumber ||
+                (uint)trackNumber >= TrackCount ||
+                (uint)sector >= AmigaDiskImage.SectorsPerTrack)
+            {
+                return;
+            }
+
+            var decodedHeaderChecksum = DecodeOddEven(
+                ReadMfmLong(track, length, syncOffset + 0x2C),
+                ReadMfmLong(track, length, syncOffset + 0x30));
+            var calculatedHeaderChecksum = ComputeMfmChecksum(track, length, syncOffset + 0x04, 10);
+            if ((decodedHeaderChecksum & MfmDataMask) != calculatedHeaderChecksum)
+            {
+                return;
+            }
+
+            var decodedDataChecksum = DecodeOddEven(
+                ReadMfmLong(track, length, syncOffset + 0x34),
+                ReadMfmLong(track, length, syncOffset + 0x38));
+            var calculatedDataChecksum = ComputeMfmChecksum(track, length, syncOffset + 0x3C, 256);
+            if ((decodedDataChecksum & MfmDataMask) != calculatedDataChecksum)
+            {
+                return;
+            }
+
+            var logicalSector = (trackNumber * AmigaDiskImage.SectorsPerTrack) + sector;
+            var destinationOffset = logicalSector * AmigaDiskImage.SectorSize;
+            for (var longIndex = 0; longIndex < AmigaDiskImage.SectorSize / 4; longIndex++)
+            {
+                var odd = ReadMfmLong(track, length, syncOffset + 0x3C + (longIndex * 4));
+                var even = ReadMfmLong(track, length, syncOffset + 0x3C + ((AmigaDiskImage.SectorSize / 4) + longIndex) * 4);
+                BigEndian.WriteUInt32(diskData, destinationOffset + (longIndex * 4), DecodeOddEven(odd, even));
+            }
+
+            if (!decodedSectors[logicalSector])
+            {
+                decodedSectors[logicalSector] = true;
+                decodedSectorCount++;
+            }
+        }
+
+        private static uint ComputeMfmChecksum(ReadOnlySpan<byte> track, int length, int offset, int longCount)
+        {
+            var checksum = 0u;
+            for (var index = 0; index < longCount; index++)
+            {
+                checksum ^= ReadMfmLong(track, length, offset + (index * 4));
+            }
+
+            return checksum & MfmDataMask;
+        }
+
+        private static uint ReadMfmLong(ReadOnlySpan<byte> track, int length, int offset)
+        {
+            return ReadUInt32Circular(track, length, offset) & MfmDataMask;
+        }
+
+        private static uint DecodeOddEven(uint odd, uint even)
+        {
+            return ((odd & MfmDataMask) << 1) | (even & MfmDataMask);
+        }
+
+        private static ushort ReadUInt16Circular(ReadOnlySpan<byte> data, int length, int offset)
+        {
+            return (ushort)((ReadByteCircular(data, length, offset) << 8) | ReadByteCircular(data, length, offset + 1));
+        }
+
+        private static uint ReadUInt32Circular(ReadOnlySpan<byte> data, int length, int offset)
+        {
+            return ((uint)ReadByteCircular(data, length, offset) << 24) |
+                ((uint)ReadByteCircular(data, length, offset + 1) << 16) |
+                ((uint)ReadByteCircular(data, length, offset + 2) << 8) |
+                ReadByteCircular(data, length, offset + 3);
+        }
+
+        private static byte ReadByteCircular(ReadOnlySpan<byte> data, int length, int offset)
+        {
+            offset %= length;
+            if (offset < 0)
+            {
+                offset += length;
+            }
+
+            return data[offset];
         }
     }
 

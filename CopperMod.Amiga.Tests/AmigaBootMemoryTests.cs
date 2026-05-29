@@ -207,6 +207,33 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void AllocAbsReservesFixedAddressFromKickstartMemList()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var chipHeader = bus.ExpansionRamBase + 0x40;
+		var initialChipFree = bus.ReadLong(chipHeader + MemHeaderFreeOffset);
+
+		var allocation = InvokeAllocAbs(bus, 0x200, 0x1000);
+		var duplicate = InvokeAllocAbs(bus, 0x200, 0x1000);
+
+		Assert.Equal(0x1000u, allocation);
+		Assert.Equal(0u, duplicate);
+		Assert.Equal(initialChipFree - 0x200, bus.ReadLong(chipHeader + MemHeaderFreeOffset));
+		Assert.Equal(ChipPublicLowerAddress, bus.ReadLong(chipHeader + MemHeaderFirstChunkOffset));
+		Assert.Equal(0x1000u - ChipPublicLowerAddress, bus.ReadLong(ChipPublicLowerAddress + MemChunkBytesOffset));
+		Assert.Equal(0x1200u, bus.ReadLong(ChipPublicLowerAddress + MemChunkNextOffset));
+		Assert.Equal((uint)bus.ChipRam.Length - 0x1200u, bus.ReadLong(0x1200 + MemChunkBytesOffset));
+
+		InvokeFreeMem(bus, allocation, 0x200);
+
+		Assert.Equal(initialChipFree, bus.ReadLong(chipHeader + MemHeaderFreeOffset));
+		Assert.Equal(ChipPublicLowerAddress, bus.ReadLong(chipHeader + MemHeaderFirstChunkOffset));
+		Assert.Equal(0u, bus.ReadLong(ChipPublicLowerAddress + MemChunkNextOffset));
+		Assert.Equal(initialChipFree, bus.ReadLong(ChipPublicLowerAddress + MemChunkBytesOffset));
+	}
+
+	[Fact]
 	public void DoIoReadClearsIoErrorAndReportsActualLength()
 	{
 		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
@@ -349,6 +376,15 @@ public sealed class AmigaBootMemoryTests
 		state.D[0] = byteCount;
 		state.D[1] = flags;
 		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), state));
+		return state.D[0];
+	}
+
+	private static uint InvokeAllocAbs(AmigaBus bus, uint byteCount, uint location)
+	{
+		var state = new M68kCpuState();
+		state.D[0] = byteCount;
+		state.A[1] = location;
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), state));
 		return state.D[0];
 	}
 

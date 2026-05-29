@@ -587,7 +587,7 @@ internal sealed class MainWindow : Window
 			{
 				new FilePickerFileType("Amiga disk images")
 				{
-					Patterns = new[] { "*.adf", "*.zip" }
+					Patterns = new[] { "*.adf", "*.ipf", "*.zip" }
 				}
 			}
 		});

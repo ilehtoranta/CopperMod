@@ -4,16 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Amiga</PackageId>
-    <Title>CopperMod.Amiga</Title>
+    <PackageId>CopperMod.Ipf</PackageId>
+    <Title>CopperMod.Ipf</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Internal Amiga hardware emulation core shared by CUST playback and future emulator hosts.</Description>
+    <Description>Managed IPF disk image decoder for Amiga emulation.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;m68000;paula;cia</PackageTags>
+    <PackageTags>amiga;emulation;ipf;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
@@ -31,10 +31,6 @@
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\CopperMod.Ipf\CopperMod.Ipf.csproj" />
   </ItemGroup>
 
 </Project>
