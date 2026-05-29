@@ -236,7 +236,7 @@ internal sealed class CopperScreenEmulator
 			_pendingDiskImage = disk;
 			_pendingDiskPath = fullPath;
 			_pendingDiskInsertFrames = DiskSwapEjectFrames;
-			_boot.Drive0.Eject();
+			EjectAllDrives();
 			StatusText = "changing disk to " + Path.GetFileName(fullPath);
 			return true;
 		}
@@ -246,7 +246,7 @@ internal sealed class CopperScreenEmulator
 		_pendingDiskInsertFrames = 0;
 		if (_bootAttempted)
 		{
-			_boot.Drive0.Insert(disk, markChanged);
+			InsertDiskSet(disk, fullPath, markChanged);
 		}
 
 		StatusText = "inserted " + Path.GetFileName(fullPath);
@@ -289,6 +289,55 @@ internal sealed class CopperScreenEmulator
 			.Insert(match.Groups["number"].Index, replacement);
 		var candidate = Path.Combine(directory, nextName);
 		return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
+	}
+
+	private void InsertDiskSet(AmigaDiskImage disk, string? diskPath, bool markChanged)
+	{
+		_boot.Drive0.Insert(disk, markChanged);
+		InsertAdjacentExternalDisks(diskPath, markChanged);
+	}
+
+	private void InsertAdjacentExternalDisks(string? diskPath, bool markChanged = false)
+	{
+		for (var driveIndex = 1; driveIndex < _machine.Bus.Disk.ConnectedDriveCount; driveIndex++)
+		{
+			var drive = GetDrive(driveIndex);
+			var adjacentPath = ResolveAdjacentDiskPath(diskPath, driveIndex);
+			if (adjacentPath == null)
+			{
+				drive.Eject();
+				continue;
+			}
+
+			try
+			{
+				drive.Insert(AmigaDiskImage.Load(adjacentPath), markChanged);
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+			{
+				drive.Eject();
+			}
+		}
+	}
+
+	private void EjectAllDrives()
+	{
+		for (var driveIndex = 0; driveIndex < 4; driveIndex++)
+		{
+			GetDrive(driveIndex).Eject();
+		}
+	}
+
+	private AmigaFloppyDrive GetDrive(int driveIndex)
+	{
+		return driveIndex switch
+		{
+			0 => _boot.Drive0,
+			1 => _boot.Drive1,
+			2 => _boot.Drive2,
+			3 => _boot.Drive3,
+			_ => throw new ArgumentOutOfRangeException(nameof(driveIndex))
+		};
 	}
 
 	public void Reset()
@@ -370,6 +419,7 @@ internal sealed class CopperScreenEmulator
 			_copperBenchRequestPending = false;
 			_firePulseFrames = 0;
 			_boot.StartWorkbenchSession(disk);
+			InsertAdjacentExternalDisks(DiskPath);
 			if (!_boot.TryLaunchProgram(request, out var launchResult, out message))
 			{
 				return false;
@@ -480,6 +530,8 @@ internal sealed class CopperScreenEmulator
 				{
 					_boot.StartBootFromDisk(disk);
 				}
+
+				InsertAdjacentExternalDisks(DiskPath);
 
 				_targetCycle = 0;
 				_audioCycle = _machine.Cpu.State.Cycles;
@@ -611,8 +663,8 @@ internal sealed class CopperScreenEmulator
 			return;
 		}
 
-		_boot.Drive0.Insert(_pendingDiskImage, markChanged: true);
 		var insertedPath = _pendingDiskPath ?? DiskPath;
+		InsertDiskSet(_pendingDiskImage, insertedPath, markChanged: true);
 		_pendingDiskImage = null;
 		_pendingDiskPath = null;
 		StatusText = insertedPath == null

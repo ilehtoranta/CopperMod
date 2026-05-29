@@ -487,6 +487,10 @@ CopperMod.Sid/ReferenceTunes
 CopperMod.Sid/ReferenceLinks
 CopperMod.Sid/References
 *.ps1
+!publish-coppermod.ps1
+!release-coppermod.ps1
+!publish-copperscreen.ps1
+!release-copperscreen.ps1
 CopperScreen/TestImages
 CopperMod.Amiga/References
 *.csx

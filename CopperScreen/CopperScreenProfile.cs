@@ -28,6 +28,7 @@ internal sealed class CopperScreenProfile
 		int chipRamSize,
 		int expansionRamSize,
 		uint expansionRamBase,
+		int floppyDriveCount,
 		CopperScreenKickstartSource kickstartSource,
 		string? configPath)
 	{
@@ -37,6 +38,7 @@ internal sealed class CopperScreenProfile
 		ChipRamSize = chipRamSize;
 		ExpansionRamSize = expansionRamSize;
 		ExpansionRamBase = expansionRamBase;
+		FloppyDriveCount = floppyDriveCount;
 		KickstartSource = kickstartSource;
 		ConfigPath = configPath;
 	}
@@ -53,6 +55,8 @@ internal sealed class CopperScreenProfile
 
 	public uint ExpansionRamBase { get; }
 
+	public int FloppyDriveCount { get; }
+
 	public CopperScreenKickstartSource KickstartSource { get; }
 
 	public string? ConfigPath { get; }
@@ -68,7 +72,8 @@ internal sealed class CopperScreenProfile
 		return AmigaMachineOptions
 			.ForProfile(MachineProfile)
 			.WithChipRam(ChipRamSize)
-			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase);
+			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
+			.WithFloppyDriveCount(FloppyDriveCount);
 	}
 
 	public static CopperScreenProfile LoadDefault(string baseDirectory, out string? error)
@@ -166,6 +171,12 @@ internal sealed class CopperScreenProfile
 		var chipRamSize = CheckedKilobytes(machine.ChipRamKb, "machine.chipRamKb");
 		var expansionRamSize = CheckedKilobytes(machine.PseudoFastRamKb, "machine.pseudoFastRamKb");
 		var expansionRamBase = ParseAddress(machine.PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase);
+		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
+		if (floppyDriveCount is < 1 or > 4)
+		{
+			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
+		}
+
 		var kickstartSource = ParseKickstartSource(kickstart.Source);
 		var description = string.IsNullOrWhiteSpace(config.Description)
 			? displayName
@@ -178,6 +189,7 @@ internal sealed class CopperScreenProfile
 			chipRamSize,
 			expansionRamSize,
 			expansionRamBase,
+			floppyDriveCount,
 			kickstartSource,
 			Path.GetFullPath(path));
 	}
@@ -286,6 +298,7 @@ internal sealed class CopperScreenProfile
 			AmigaConstants.A500BootChipRamSize,
 			AmigaConstants.A500BootPseudoFastRamSize,
 			AmigaConstants.A500BootPseudoFastRamBase,
+			2,
 			CopperScreenKickstartSource.CopperStart,
 			null);
 	}
@@ -312,6 +325,8 @@ internal sealed class CopperScreenProfile
 		public int PseudoFastRamKb { get; set; }
 
 		public string? PseudoFastBase { get; set; }
+
+		public int? FloppyDriveCount { get; set; }
 	}
 
 	private sealed class KickstartFile

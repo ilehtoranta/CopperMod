@@ -53,12 +53,20 @@ is available in the workspace.
 ## CopperScreen
 
 `CopperScreen` is the Amiga 500 PAL emulator front-end in this workspace. It can
-boot an ADF or zipped ADF directly:
+boot ADF and IPF disk images directly, or a ZIP containing exactly one ADF or
+IPF image:
 
 ```powershell
 dotnet run --project .\CopperScreen -- "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- "path\to\disk.ipf"
 dotnet run --project .\CopperScreen -- "path\to\disk.zip"
 ```
+
+IPF support is provided by the native `CopperMod.Ipf` decoder. It decodes SPS /
+CAPS IPF images into raw Amiga track streams for CopperScreen's floppy path, so
+protected or non-standard disks can be tested without converting them to sector
+ADF images first. This is still part of emulator bring-up, so tricky protection
+schemes may continue to expose missing floppy-controller or disk-DMA behavior.
 
 By default CopperScreen starts from the `expanded-copperstart` profile config in
 `CopperScreen\Profiles`. Profiles are JSON files that describe the machine
@@ -102,6 +110,28 @@ dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.m
 WAV output is 32-bit float. PCM output is raw interleaved little-endian Float32.
 MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
 
+## Binary Releases
+
+CopperMod and CopperScreen are released separately. Each release script publishes
+a Windows self-contained zip and a portable .NET zip that can be run with
+`dotnet CopperMod.dll` or `dotnet CopperScreen.dll`.
+
+```powershell
+.\publish-coppermod.ps1 -Version 1.0.0
+.\release-coppermod.ps1 -Version 1.0.0
+
+.\publish-copperscreen.ps1 -Version 1.0.0
+.\release-copperscreen.ps1 -Version 1.0.0
+```
+
+The publish scripts strip `.pdb` and `.xml` files before zipping. CopperMod
+releases use tags like `coppermod-v1.0.0`; CopperScreen releases use tags like
+`copperscreen-v1.0.0`.
+
+The release scripts use GitHub CLI (`gh`) when it is installed. Without `gh`,
+run the release script with `-TagOnly`, then create the GitHub release manually
+and upload the generated zip files plus `SHA256SUMS.txt`.
+
 ## Projects
 
 - `CopperMod` - terminal player application.
@@ -112,4 +142,5 @@ MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.
 - `CopperMod.Amiga` - shared Amiga 500 emulation core.
+- `CopperMod.Ipf` - native SPS / CAPS IPF disk image decoder.
 - `CopperScreen` - Avalonia Amiga 500 emulator front-end.

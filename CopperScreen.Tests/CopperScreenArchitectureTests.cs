@@ -31,10 +31,10 @@ public sealed class CopperScreenArchitectureTests
 	[Fact]
 	public void StartupProfilesExposeVanillaAndExpandedCopperStartAndKickstartCombinations()
 	{
-		AssertProfile("vanilla-copperstart", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.CopperStart, 0);
-		AssertProfile("expanded-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024);
-		AssertProfile("vanilla-kickstart13", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0);
-		AssertProfile("expanded-kickstart13", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024);
+		AssertProfile("vanilla-copperstart", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.CopperStart, 0, 1);
+		AssertProfile("expanded-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
+		AssertProfile("vanilla-kickstart13", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0, 1);
+		AssertProfile("expanded-kickstart13", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
 	}
 
 	[Fact]
@@ -134,11 +134,21 @@ public sealed class CopperScreenArchitectureTests
 		AmigaMachineProfile expectedMachineProfile,
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize)
+		=> AssertProfile(id, expectedMachineProfile, expectedKickstartSource, expectedExpansionRamSize, expectedExpansionRamSize > 0 ? 2 : 1);
+
+	private static void AssertProfile(
+		string id,
+		AmigaMachineProfile expectedMachineProfile,
+		CopperScreenKickstartSource expectedKickstartSource,
+		int expectedExpansionRamSize,
+		int expectedFloppyDriveCount)
 	{
 		Assert.True(CopperScreenProfile.TryLoad(id, AppContext.BaseDirectory, out var profile, out var error), error);
 		Assert.Equal(expectedMachineProfile, profile.MachineProfile);
 		Assert.Equal(expectedKickstartSource, profile.KickstartSource);
 		Assert.Equal(512 * 1024, profile.ChipRamSize);
 		Assert.Equal(expectedExpansionRamSize, profile.ExpansionRamSize);
+		Assert.Equal(expectedFloppyDriveCount, profile.FloppyDriveCount);
+		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);
 	}
 }

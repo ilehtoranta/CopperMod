@@ -30,6 +30,7 @@ internal sealed class MainWindow : Window
 	private readonly Button _pauseButton;
 	private readonly Button _numpadModeButton;
 	private readonly Button _fullscreenButton;
+	private readonly Button _overscanButton;
 	private readonly StackPanel _entryList;
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
@@ -37,6 +38,7 @@ internal sealed class MainWindow : Window
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
+	private bool _showFullOverscan;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
@@ -53,9 +55,11 @@ internal sealed class MainWindow : Window
 		_presenter = new FramebufferPresenter(_emulator.Width, _emulator.Height)
 		{
 			Focusable = true,
+			Cursor = new Cursor(StandardCursorType.None),
 			HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
 			VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
 		};
+		ApplyPresenterViewport();
 		_toolbarStatus = new TextBlock();
 		_benchPath = new TextBlock();
 		_benchDetails = new TextBlock();
@@ -63,6 +67,7 @@ internal sealed class MainWindow : Window
 		_pauseButton = CreateToolbarButton("Pause", TogglePause);
 		_numpadModeButton = CreateToolbarButton("Numpad: Joy", ToggleNumpadMode);
 		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen);
+		_overscanButton = CreateToolbarButton("Overscan", ToggleOverscan);
 		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
 		_root = new Grid();
 		_benchPanel = CreateCopperBenchPanel();
@@ -133,23 +138,25 @@ internal sealed class MainWindow : Window
 	private void UpdateMousePort(PointerEventArgs args)
 	{
 		var position = args.GetPosition(_presenter);
-		var bounds = _presenter.Bounds;
-		if (bounds.Width > 0 && bounds.Height > 0)
+		if (_presenter.TryMapPointToFramebuffer(position, out var framebufferPoint))
 		{
-			var mouseX = position.X * _emulator.Width / bounds.Width;
-			var mouseY = position.Y * _emulator.Height / bounds.Height;
 			if (_lastMouseX.HasValue && _lastMouseY.HasValue)
 			{
-				var deltaX = (int)Math.Round(mouseX - _lastMouseX.Value);
-				var deltaY = (int)Math.Round(mouseY - _lastMouseY.Value);
+				var deltaX = (int)Math.Round(framebufferPoint.X - _lastMouseX.Value);
+				var deltaY = (int)Math.Round(framebufferPoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
 					_emulator.MoveMousePort(deltaX, deltaY);
 				}
 			}
 
-			_lastMouseX = mouseX;
-			_lastMouseY = mouseY;
+			_lastMouseX = framebufferPoint.X;
+			_lastMouseY = framebufferPoint.Y;
+		}
+		else
+		{
+			_lastMouseX = null;
+			_lastMouseY = null;
 		}
 
 		var properties = args.GetCurrentPoint(_presenter).Properties;
@@ -374,6 +381,7 @@ internal sealed class MainWindow : Window
 			PresentFrame(catchUpAudio: false);
 		}));
 		bar.Children.Add(_fullscreenButton);
+		bar.Children.Add(_overscanButton);
 		bar.Children.Add(_numpadModeButton);
 		bar.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
 		bar.Children.Add(CreateToolbarButton("Prev", () =>
@@ -584,6 +592,32 @@ internal sealed class MainWindow : Window
 		RefreshCopperBenchUi();
 	}
 
+	private void ToggleOverscan()
+	{
+		_showFullOverscan = !_showFullOverscan;
+		ApplyPresenterViewport();
+		RefreshCopperBenchUi();
+	}
+
+	private void ApplyPresenterViewport()
+	{
+		if (_showFullOverscan)
+		{
+			_presenter.SetSourceViewport(0, 0, _emulator.Width, _emulator.Height);
+		}
+		else
+		{
+			_presenter.SetSourceViewport(
+				AmigaConstants.PalLowResOverscanBorderX,
+				AmigaConstants.PalLowResOverscanBorderY,
+				AmigaConstants.PalLowResStandardWidth,
+				AmigaConstants.PalLowResStandardHeight);
+		}
+
+		_lastMouseX = null;
+		_lastMouseY = null;
+	}
+
 	private void ToggleNumpadMode()
 	{
 		ReleaseInteractiveInput();
@@ -633,6 +667,7 @@ internal sealed class MainWindow : Window
 		_pauseButton.Content = _bench.IsPaused ? "Run" : "Pause";
 		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "Numpad: Joy" : "Numpad: Keys";
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
+		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
 		_benchPath.Text = _bench.DisplayPath;
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
@@ -690,6 +725,7 @@ internal sealed class MainWindow : Window
 	private void UpdateToolbarStatus()
 	{
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
+		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
 		_toolbarStatus.Text = $"{_emulator.ProfileName} | {_emulator.DiskName} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
 	}
 

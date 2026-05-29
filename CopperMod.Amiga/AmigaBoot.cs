@@ -153,6 +153,12 @@ namespace CopperMod.Amiga
 
         public AmigaFloppyDrive Drive0 => _machine.Bus.Disk.Drive0;
 
+        public AmigaFloppyDrive Drive1 => _machine.Bus.Disk.Drive1;
+
+        public AmigaFloppyDrive Drive2 => _machine.Bus.Disk.Drive2;
+
+        public AmigaFloppyDrive Drive3 => _machine.Bus.Disk.Drive3;
+
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 
         public bool AutoStartWorkbenchDefaultTool { get; set; } = true;
@@ -275,11 +281,25 @@ namespace CopperMod.Amiga
             _dosFileSystem = null;
             PendingWorkbenchLaunchRequest = null;
             Drive0.Insert(disk);
+            Drive1.Eject();
+            Drive2.Eject();
+            Drive3.Eject();
             _machine.ResetHardware();
             if (installHostShim)
             {
+                PrimeBootDiskController();
                 InstallBootHostTraps();
             }
+        }
+
+        private void PrimeBootDiskController()
+        {
+            _machine.Bus.WriteByte(0x00BFD100, 0xFF, 0);
+            _machine.Bus.WriteByte(0x00BFD300, 0xFF, 0);
+            _machine.Bus.WriteByte(0x00BFD100, 0x77, 0);
+            _machine.Bus.WriteWord(0x00DFF096, 0x8210, 0);
+            _machine.Bus.WriteWord(0x00DFF024, 0x4000, 0);
+            _machine.Bus.Paula.AdvanceTo(0);
         }
 
         public AmigaBootResult ContinueExecution(int maxInstructions = 20_000)

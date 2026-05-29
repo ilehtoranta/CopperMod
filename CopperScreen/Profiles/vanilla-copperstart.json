@@ -6,7 +6,8 @@
     "model": "A500PAL",
     "chipRamKb": 512,
     "pseudoFastRamKb": 0,
-    "pseudoFastBase": "$C00000"
+    "pseudoFastBase": "$C00000",
+    "floppyDriveCount": 1
   },
   "kickstart": {
     "source": "CopperStart",

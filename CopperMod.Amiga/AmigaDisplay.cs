@@ -1589,6 +1589,15 @@ namespace CopperMod.Amiga
         private ushort _dataA;
         private ushort _dataB;
         private ushort _dataC;
+        private ushort _activeFirstWordMask = 0xFFFF;
+        private ushort _activeLastWordMask = 0xFFFF;
+        private ushort _activeDataA;
+        private ushort _activeDataB;
+        private ushort _activeDataC;
+        private short _activeSourceAModulo;
+        private short _activeSourceBModulo;
+        private short _activeSourceCModulo;
+        private short _activeDestinationDModulo;
         private bool _busy;
         private bool _zeroFlag = true;
         private long _currentCycle;
@@ -1666,6 +1675,15 @@ namespace CopperMod.Amiga
             _dataA = 0;
             _dataB = 0;
             _dataC = 0;
+            _activeFirstWordMask = 0xFFFF;
+            _activeLastWordMask = 0xFFFF;
+            _activeDataA = 0;
+            _activeDataB = 0;
+            _activeDataC = 0;
+            _activeSourceAModulo = 0;
+            _activeSourceBModulo = 0;
+            _activeSourceCModulo = 0;
+            _activeDestinationDModulo = 0;
             _busy = false;
             _zeroFlag = true;
             _currentCycle = 0;
@@ -1866,8 +1884,17 @@ namespace CopperMod.Amiga
             _workSourceB = GetEffectiveBlitterAddress(_sourceB);
             _workSourceC = GetEffectiveBlitterAddress(_sourceC);
             _workDestinationD = GetEffectiveBlitterAddress(_destinationD);
-            _previousA = _useA ? (ushort)0 : _dataA;
-            _previousB = _useB ? (ushort)0 : _dataB;
+            _activeFirstWordMask = _firstWordMask;
+            _activeLastWordMask = _lastWordMask;
+            _activeDataA = _dataA;
+            _activeDataB = _dataB;
+            _activeDataC = _dataC;
+            _activeSourceAModulo = _sourceAModulo;
+            _activeSourceBModulo = _sourceBModulo;
+            _activeSourceCModulo = _sourceCModulo;
+            _activeDestinationDModulo = _destinationDModulo;
+            _previousA = 0;
+            _previousB = 0;
             _fillEnabled = (_bltcon1 & (Bltcon1InclusiveFill | Bltcon1ExclusiveFill)) != 0;
             _fillExclusive = (_bltcon1 & Bltcon1ExclusiveFill) != 0;
             _fillCarryInitial = (_bltcon1 & Bltcon1FillCarryIn) != 0;
@@ -1925,37 +1952,37 @@ namespace CopperMod.Amiga
             var mask = 0xFFFF;
             if (_wordX == 0)
             {
-                mask &= _firstWordMask;
+                mask &= _activeFirstWordMask;
             }
 
             if (_wordX == _widthWords - 1)
             {
-                mask &= _lastWordMask;
+                mask &= _activeLastWordMask;
             }
 
-            var rawA = _dataA;
+            var rawA = _activeDataA;
             if (_useA)
             {
-                var read = ReadAndStep(ref _workSourceA, _step, nextCycle);
+                var read = ReadAndStep(ref _workSourceA, _step, stepStart);
                 rawA = read.Value;
-                nextCycle = read.BusAccess.CompletedCycle + 1;
+                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
             }
 
-            var rawB = _dataB;
+            var rawB = _activeDataB;
             if (_useB)
             {
-                var read = ReadAndStep(ref _workSourceB, _step, nextCycle);
+                var read = ReadAndStep(ref _workSourceB, _step, stepStart);
                 rawB = read.Value;
-                nextCycle = read.BusAccess.CompletedCycle + 1;
+                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
             }
 
-            var rawC = _dataC;
+            var rawC = _activeDataC;
             if (_useC)
             {
-                var read = ReadAndStep(ref _workSourceC, _step, nextCycle);
+                var read = ReadAndStep(ref _workSourceC, _step, stepStart);
                 rawC = read.Value;
-                _dataC = rawC;
-                nextCycle = read.BusAccess.CompletedCycle + 1;
+                _activeDataC = rawC;
+                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
             }
 
             rawA = (ushort)(rawA & mask);
@@ -1974,8 +2001,8 @@ namespace CopperMod.Amiga
 
             if (_useD)
             {
-                var write = WriteAndStep(ref _workDestinationD, _step, output, nextCycle);
-                nextCycle = write.CompletedCycle + 1;
+                var write = WriteAndStep(ref _workDestinationD, _step, output, stepStart);
+                nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             }
 
             _currentCycle = Math.Max(nextCycle, stepStart + GetAreaWordCycles());
@@ -2000,22 +2027,22 @@ namespace CopperMod.Amiga
 
             if (_useA)
             {
-                _workSourceA = AddModulo(_workSourceA, _sourceAModulo, _descending);
+                _workSourceA = AddModulo(_workSourceA, _activeSourceAModulo, _descending);
             }
 
             if (_useB)
             {
-                _workSourceB = AddModulo(_workSourceB, _sourceBModulo, _descending);
+                _workSourceB = AddModulo(_workSourceB, _activeSourceBModulo, _descending);
             }
 
             if (_useC)
             {
-                _workSourceC = AddModulo(_workSourceC, _sourceCModulo, _descending);
+                _workSourceC = AddModulo(_workSourceC, _activeSourceCModulo, _descending);
             }
 
             if (_useD)
             {
-                _workDestinationD = AddModulo(_workDestinationD, _destinationDModulo, _descending);
+                _workDestinationD = AddModulo(_workDestinationD, _activeDestinationDModulo, _descending);
             }
 
             _fillCarry = _fillCarryInitial;
@@ -2157,6 +2184,7 @@ namespace CopperMod.Amiga
                 if (_useC)
                 {
                     _sourceC = _workSourceC;
+                    _dataC = _activeDataC;
                 }
 
                 if (_useD)

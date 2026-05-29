@@ -25,6 +25,8 @@ namespace CopperMod.Amiga
 
         public uint ExpansionRamBase { get; private set; } = AmigaConstants.A500BootPseudoFastRamBase;
 
+        public int FloppyDriveCount { get; private set; } = 1;
+
         public IAmigaBusArbiter BusArbiter { get; private set; } = new ZeroWaitBusArbiter();
 
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
@@ -44,6 +46,7 @@ namespace CopperMod.Amiga
             {
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
                 options.ExpansionRamSize = AmigaConstants.A500BootPseudoFastRamSize;
+                options.FloppyDriveCount = 2;
             }
 
             return options;
@@ -90,6 +93,17 @@ namespace CopperMod.Amiga
             ExpansionRamBase = baseAddress;
             return this;
         }
+
+        public AmigaMachineOptions WithFloppyDriveCount(int count)
+        {
+            if (count is < 1 or > 4)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count), count, "The connected floppy drive count must be between 1 and 4.");
+            }
+
+            FloppyDriveCount = count;
+            return this;
+        }
     }
 
     internal sealed class AmigaMachine
@@ -97,7 +111,12 @@ namespace CopperMod.Amiga
         public AmigaMachine(AmigaMachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
-            Bus = new AmigaBus(options.ChipRamSize, options.BusArbiter, options.ExpansionRamSize, options.ExpansionRamBase);
+            Bus = new AmigaBus(
+                options.ChipRamSize,
+                options.BusArbiter,
+                options.ExpansionRamSize,
+                options.ExpansionRamBase,
+                options.FloppyDriveCount);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }

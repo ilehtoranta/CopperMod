@@ -44,7 +44,8 @@ namespace CopperMod.Amiga
             int chipRamSize = AmigaConstants.DefaultChipRamSize,
             IAmigaBusArbiter? arbiter = null,
             int expansionRamSize = 0,
-            uint expansionRamBase = AmigaConstants.A500BootPseudoFastRamBase)
+            uint expansionRamBase = AmigaConstants.A500BootPseudoFastRamBase,
+            int floppyDriveCount = 1)
         {
             if (chipRamSize <= 0)
             {
@@ -61,7 +62,7 @@ namespace CopperMod.Amiga
             ExpansionRamBase = NormalizeAddress(expansionRamBase);
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
             Paula = new Paula(this);
-            Disk = new AmigaDiskController(this);
+            Disk = new AmigaDiskController(this, floppyDriveCount);
             Display = new OcsDisplay(this);
             Blitter = new AmigaBlitter(this);
             CiaA = new AmigaCia(AmigaCiaId.A);
@@ -528,6 +529,7 @@ namespace CopperMod.Amiga
         public void AdvanceDmaTo(long targetCycle)
         {
             Paula.AdvanceTo(targetCycle);
+            Disk.AdvanceTo(targetCycle);
             Blitter.AdvanceTo(targetCycle);
             Paula.AdvanceTo(targetCycle);
         }
@@ -693,8 +695,7 @@ namespace CopperMod.Amiga
                     return gamePortValue;
                 }
 
-                var diskValue = Disk.ReadByte(offset);
-                return diskValue != 0 ? diskValue : Paula.ReadByte(offset);
+                return Disk.TryReadByte(offset, out var diskValue) ? diskValue : Paula.ReadByte(offset);
             }
 
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))

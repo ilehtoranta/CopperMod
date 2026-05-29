@@ -10,8 +10,10 @@ namespace CopperScreen;
 internal sealed class FramebufferPresenter : Image
 {
 	private readonly WriteableBitmap _bitmap;
+	private readonly CroppedBitmap _croppedBitmap;
 	private readonly int _width;
 	private readonly int _height;
+	private PixelRect _sourceRect;
 
 	public FramebufferPresenter(int width, int height)
 	{
@@ -24,7 +26,13 @@ internal sealed class FramebufferPresenter : Image
 			new Vector(96, 96),
 			PixelFormat.Bgra8888,
 			AlphaFormat.Opaque);
-		Source = _bitmap;
+		_sourceRect = new PixelRect(0, 0, width, height);
+		_croppedBitmap = new CroppedBitmap
+		{
+			Source = _bitmap,
+			SourceRect = _sourceRect
+		};
+		Source = _croppedBitmap;
 	}
 
 	public void Update(int[] bgra)
@@ -38,4 +46,65 @@ internal sealed class FramebufferPresenter : Image
 		Marshal.Copy(bgra, 0, framebuffer.Address, _width * _height);
 		InvalidateVisual();
 	}
+
+	public void SetSourceViewport(int x, int y, int width, int height)
+	{
+		x = Math.Clamp(x, 0, _width - 1);
+		y = Math.Clamp(y, 0, _height - 1);
+		width = Math.Clamp(width, 1, _width - x);
+		height = Math.Clamp(height, 1, _height - y);
+		_sourceRect = new PixelRect(x, y, width, height);
+		_croppedBitmap.SourceRect = _sourceRect;
+		InvalidateMeasure();
+		InvalidateVisual();
+	}
+
+	public bool TryMapPointToFramebuffer(Point position, out Point framebufferPoint)
+	{
+		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, out framebufferPoint);
+	}
+
+	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
+	{
+		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
+		{
+			framebufferPoint = default;
+			return false;
+		}
+
+		framebufferPoint = new Point(sourceRect.X + sourcePoint.X, sourceRect.Y + sourcePoint.Y);
+		return true;
+	}
+
+	internal static bool TryMapUniformStretchPoint(Size bounds, Size source, Point position, out Point framebufferPoint)
+	{
+		framebufferPoint = default;
+		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		{
+			return false;
+		}
+
+		var scale = Math.Min(bounds.Width / source.Width, bounds.Height / source.Height);
+		if (scale <= 0)
+		{
+			return false;
+		}
+
+		var imageWidth = source.Width * scale;
+		var imageHeight = source.Height * scale;
+		var offsetX = (bounds.Width - imageWidth) / 2.0;
+		var offsetY = (bounds.Height - imageHeight) / 2.0;
+		var imageX = position.X - offsetX;
+		var imageY = position.Y - offsetY;
+		if (imageX < 0 || imageY < 0 || imageX >= imageWidth || imageY >= imageHeight)
+		{
+			return false;
+		}
+
+		framebufferPoint = new Point(
+			Math.Clamp(imageX / scale, 0, source.Width - 1),
+			Math.Clamp(imageY / scale, 0, source.Height - 1));
+		return true;
+	}
+
 }
