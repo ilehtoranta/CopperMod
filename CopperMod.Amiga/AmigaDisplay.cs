@@ -16,6 +16,7 @@ namespace CopperMod.Amiga
         private const ushort DmaconMasterEnable = 0x0200;
         private const ushort DmaconSpriteEnable = 0x0020;
         private const int MaxBitplaneFetchWords = 64;
+        private const uint ChipDmaPointerMask = 0x001F_FFFE;
         private static readonly double PalLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
         private readonly AmigaBus _bus;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>();
@@ -504,25 +505,25 @@ namespace CopperMod.Amiga
 
             if (offset == 0x080)
             {
-                _copperListPointer = (_copperListPointer & 0x0000_FFFF) | ((uint)value << 16);
+                _copperListPointer = WriteDmaPointerHigh(_copperListPointer, value);
                 return;
             }
 
             if (offset == 0x082)
             {
-                _copperListPointer = (_copperListPointer & 0xFFFF_0000) | value;
+                _copperListPointer = WriteDmaPointerLow(_copperListPointer, value);
                 return;
             }
 
             if (offset == 0x084)
             {
-                _copperListPointer2 = (_copperListPointer2 & 0x0000_FFFF) | ((uint)value << 16);
+                _copperListPointer2 = WriteDmaPointerHigh(_copperListPointer2, value);
                 return;
             }
 
             if (offset == 0x086)
             {
-                _copperListPointer2 = (_copperListPointer2 & 0xFFFF_0000) | value;
+                _copperListPointer2 = WriteDmaPointerLow(_copperListPointer2, value);
                 return;
             }
 
@@ -588,11 +589,11 @@ namespace CopperMod.Amiga
                 {
                     if ((offset & 2) == 0)
                     {
-                        _bitplanePointers[plane] = (_bitplanePointers[plane] & 0x0000_FFFF) | ((uint)value << 16);
+                        _bitplanePointers[plane] = WriteDmaPointerHigh(_bitplanePointers[plane], value);
                     }
                     else
                     {
-                        _bitplanePointers[plane] = (_bitplanePointers[plane] & 0xFFFF_0000) | value;
+                        _bitplanePointers[plane] = WriteDmaPointerLow(_bitplanePointers[plane], value);
                     }
 
                     if (!_renderingCopperFrame || ((_bplcon0 >> 12) & 0x7) != 0)
@@ -638,6 +639,11 @@ namespace CopperMod.Amiga
             var windowY = GetDisplayWindow().Y;
             if (_renderingCopperFrame)
             {
+                if (_currentCopperRow == 0 && windowY < 0)
+                {
+                    return windowY;
+                }
+
                 return Math.Max(_currentCopperRow, windowY);
             }
 
@@ -681,7 +687,7 @@ namespace CopperMod.Amiga
                 var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
                 var rowStride = (fetchWords * 2) + mod;
                 var byteOffset = displaySourceY * rowStride;
-                _bitplanePointers[plane] = unchecked((uint)((long)_bitplanePointers[plane] + byteOffset));
+                _bitplanePointers[plane] = AddDmaPointerOffset(_bitplanePointers[plane], byteOffset);
                 _bitplaneBaseRows[plane] = row;
             }
         }
@@ -739,11 +745,11 @@ namespace CopperMod.Amiga
                 {
                     if ((offset & 2) == 0)
                     {
-                        _sprites[sprite].Pointer = (_sprites[sprite].Pointer & 0x0000_FFFF) | ((uint)value << 16);
+                        _sprites[sprite].Pointer = WriteDmaPointerHigh(_sprites[sprite].Pointer, value);
                     }
                     else
                     {
-                        _sprites[sprite].Pointer = (_sprites[sprite].Pointer & 0xFFFF_0000) | value;
+                        _sprites[sprite].Pointer = WriteDmaPointerLow(_sprites[sprite].Pointer, value);
                     }
                 }
 
@@ -1018,9 +1024,14 @@ namespace CopperMod.Amiga
                 return 0;
             }
 
-            return IsHighResolutionEnabled()
-                ? Math.Clamp(((ddfStop - ddfStart) / 4) + 2, 0, MaxBitplaneFetchWords)
-                : Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, MaxBitplaneFetchWords);
+            if (IsHighResolutionEnabled())
+            {
+                var fetchWords = ((ddfStop - ddfStart) / 4) + 2;
+                var visibleWords = ((Math.Max(1, GetDisplayWindow().Width) * 2) + 15) / 16;
+                return Math.Clamp(Math.Max(fetchWords, visibleWords), 0, MaxBitplaneFetchWords);
+            }
+
+            return Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, MaxBitplaneFetchWords);
         }
 
         private bool IsHighResolutionEnabled()
@@ -1031,6 +1042,21 @@ namespace CopperMod.Amiga
         private bool IsDualPlayfieldEnabled()
         {
             return (_bplcon0 & 0x0400) != 0;
+        }
+
+        private static uint WriteDmaPointerHigh(uint pointer, ushort highWord)
+        {
+            return (((uint)(highWord & 0x001F) << 16) | (pointer & 0x0000_FFFE)) & ChipDmaPointerMask;
+        }
+
+        private static uint WriteDmaPointerLow(uint pointer, ushort lowWord)
+        {
+            return ((pointer & 0x001F_0000) | (uint)(lowWord & 0xFFFE)) & ChipDmaPointerMask;
+        }
+
+        private static uint AddDmaPointerOffset(uint pointer, int byteOffset)
+        {
+            return (uint)(((long)pointer + byteOffset) & ChipDmaPointerMask);
         }
 
         private int GetDataFetchStartValue()

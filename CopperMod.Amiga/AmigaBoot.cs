@@ -297,7 +297,7 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteByte(0x00BFD100, 0xFF, 0);
             _machine.Bus.WriteByte(0x00BFD300, 0xFF, 0);
             _machine.Bus.WriteByte(0x00BFD100, 0x77, 0);
-            _machine.Bus.WriteWord(0x00DFF096, 0x8210, 0);
+            _machine.Bus.WriteWord(0x00DFF096, 0x82D0, 0);
             _machine.Bus.WriteWord(0x00DFF024, 0x4000, 0);
             _machine.Bus.Paula.AdvanceTo(0);
         }

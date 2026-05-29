@@ -557,6 +557,9 @@ internal sealed class CopperScreenEmulator
 			return;
 		}
 
+		_machine.Bus.AdvanceRasterTo(_targetCycle);
+		_machine.Bus.AdvanceCiasTo(_targetCycle);
+		_machine.Bus.AdvanceDmaTo(_targetCycle);
 		_machine.Bus.Display.RenderFrame(
 			MemoryMarshal.Cast<int, uint>(Framebuffer.AsSpan()),
 			_targetCycle - PalFrameCycles,

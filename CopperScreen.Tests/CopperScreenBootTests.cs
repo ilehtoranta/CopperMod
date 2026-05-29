@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Avalonia.Input;
 using CopperMod.Amiga;
 using CopperScreen;
@@ -389,6 +390,36 @@ public sealed class CopperScreenBootTests
 		Assert.True(
 			diskSnapshot.TransferCount > 0,
 			$"Expected a raw disk transfer; selectedDrive={diskSnapshot.SelectedDrive}, activeDmaDrive={diskSnapshot.ActiveDmaDrive}, selected={diskSnapshot.Selected}, motor={diskSnapshot.MotorOn}, ciab=0x{diskSnapshot.CiabPortB:X2}, dsklen=0x{diskSnapshot.Dsklen:X4}, dskbytr=0x{diskSnapshot.Dskbytr:X4}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+	}
+
+	[Fact]
+	public void FullContactCopperStartDoesNotStickInInitialBlitterWaitWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 420; frame++)
+		{
+			if (frame == 260)
+			{
+				emulator.PulsePrimaryFire(frames: 30);
+			}
+
+			emulator.RenderNextFrame();
+		}
+
+		var machine = GetMachine(emulator);
+		var disk = machine.Bus.Disk.CaptureSnapshot();
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.NotEqual(0x04D89Cu, machine.Cpu.State.ProgramCounter);
+		Assert.True(
+			disk.TransferCount > 0,
+			$"Expected CopperStart to reach the raw loader after the intro blit; transfers={disk.TransferCount}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+		Assert.NotEqual(0, machine.Bus.Paula.Dmacon & 0x0040);
 	}
 
 	[Fact]
@@ -911,7 +942,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		if (CopperScreenEmulator.ResolveNextDiskPath(diskPath) == null)
+		if (!HasCompleteAdjacentDiskSet(diskPath))
 		{
 			return;
 		}
@@ -968,7 +999,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		if (CopperScreenEmulator.ResolveNextDiskPath(diskPath) == null)
+		if (!HasCompleteAdjacentDiskSet(diskPath))
 		{
 			return;
 		}
@@ -1064,7 +1095,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		if (CopperScreenEmulator.ResolveNextDiskPath(diskPath) == null)
+		if (!HasCompleteAdjacentDiskSet(diskPath))
 		{
 			return;
 		}
@@ -1260,6 +1291,32 @@ public sealed class CopperScreenBootTests
 
 			GetDrive(machine, driveIndex).Insert(AmigaDiskImage.Load(adjacentPath));
 		}
+	}
+
+	private static bool HasCompleteAdjacentDiskSet(string diskPath)
+	{
+		var match = Regex.Match(
+			Path.GetFileName(diskPath),
+			@"Disk\s*(?<number>\d+)\s*of\s*(?<total>\d+)",
+			RegexOptions.IgnoreCase);
+		if (!match.Success ||
+			!int.TryParse(match.Groups["number"].Value, out var number) ||
+			!int.TryParse(match.Groups["total"].Value, out var total))
+		{
+			return false;
+		}
+
+		var currentPath = diskPath;
+		for (var diskNumber = number + 1; diskNumber <= total; diskNumber++)
+		{
+			currentPath = CopperScreenEmulator.ResolveNextDiskPath(currentPath);
+			if (currentPath == null)
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	private static AmigaFloppyDrive GetDrive(AmigaMachine machine, int driveIndex)

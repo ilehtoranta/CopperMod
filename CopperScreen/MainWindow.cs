@@ -38,7 +38,7 @@ internal sealed class MainWindow : Window
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
-	private bool _showFullOverscan;
+	private bool _showFullOverscan = true;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
