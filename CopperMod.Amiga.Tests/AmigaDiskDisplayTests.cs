@@ -195,6 +195,86 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void DisplayHighResolutionOutputKeepsSeparateSubpixels()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF092, 0x003C);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF100, 0x9000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1050, 0x4000);
+        var frame = new uint[bus.Display.Width * bus.Display.Height];
+
+        bus.Display.RenderFrame(frame);
+
+        var firstLine = StandardY * 2;
+        var secondLine = (StandardY + 1) * 2;
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, firstLine));
+        Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, firstLine));
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, firstLine + 1));
+        Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, firstLine + 1));
+        Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, secondLine));
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, secondLine));
+        Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, secondLine + 1));
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, secondLine + 1));
+    }
+
+    [Fact]
+    public void DisplayInterlaceFullHeightOutputAlternatesFields()
+    {
+        var bus = new AmigaBus();
+        var frameCycle = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF100, 0x1004);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        var frame = new uint[bus.Display.Width * bus.Display.Height];
+        Array.Fill(frame, 0xFF000000u);
+
+        bus.Display.RenderFrame(frame, 0, frameCycle);
+
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, StandardY * 2));
+        Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, (StandardY * 2) + 1));
+
+        bus.Display.RenderFrame(frame, frameCycle, frameCycle * 2);
+
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, StandardY * 2));
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, (StandardY * 2) + 1));
+    }
+
+    [Fact]
+    public void DisplayStopsAtInferredContiguousPlanarBitmapHeight()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF184, 0x00F0);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF0E4, 0x0000);
+        bus.WriteWord(0x00DFF0E6, 0x1050);
+        bus.WriteWord(0x00DFF100, 0x2000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1078, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x10A0, 0x8000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY + 1));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY + 2));
+    }
+
+    [Fact]
     public void DisplayHonorsDisplayWindowPosition()
     {
         var bus = new AmigaBus();
@@ -251,8 +331,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(352, bus.Display.Width);
-        Assert.Equal(288, bus.Display.Height);
+        Assert.Equal(AmigaConstants.PalHighResWidth, bus.Display.Width);
+        Assert.Equal(AmigaConstants.PalHighResHeight, bus.Display.Height);
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 1, StandardY));
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY - 1));
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
@@ -1551,6 +1631,31 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void BlitterLineModeUsesCModuloForDestinationStrideWhenDModuloIsZero()
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+        const int RowStride = 8;
+
+        ConfigureLineBlit(
+            bus,
+            Base,
+            RowStride,
+            0x0041,
+            initialAccumulator: -2,
+            aModulo: -4,
+            bModulo: 0,
+            dModulo: 0);
+        bus.WriteWord(0x00DFF058, 0x0102);
+        RunBlitterUntilIdle(bus);
+
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 0), "Expected the first vertical line pixel.");
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 1), "Expected the second vertical line pixel.");
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 2), "Expected the third vertical line pixel.");
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 3), "Expected the fourth vertical line pixel.");
+    }
+
+    [Fact]
     public void BlitterLineSingleDotModeDrawsOnlyOnePixelPerRow()
     {
         var bus = new AmigaBus();
@@ -2183,6 +2288,11 @@ public sealed class AmigaDiskDisplayTests
         return frame[(y * AmigaConstants.PalLowResWidth) + x];
     }
 
+    private static uint HighResPixel(uint[] frame, int width, int x, int y)
+    {
+        return frame[(y * width) + x];
+    }
+
     private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height, bool attached = false)
     {
         var hStart = x + (0x81 - AmigaConstants.PalLowResOverscanBorderX);
@@ -2227,7 +2337,8 @@ public sealed class AmigaDiskDisplayTests
         byte minterm = 0xCA,
         short initialAccumulator = 0,
         short aModulo = 0,
-        short bModulo = 0)
+        short bModulo = 0,
+        short? dModulo = null)
     {
         bus.WriteWord(0x00DFF040, (ushort)(0x0B00 | minterm));
         bus.WriteWord(0x00DFF042, bltcon1);
@@ -2240,7 +2351,7 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF060, rowStride);
         bus.WriteWord(0x00DFF062, unchecked((ushort)bModulo));
         bus.WriteWord(0x00DFF064, unchecked((ushort)aModulo));
-        bus.WriteWord(0x00DFF066, rowStride);
+        bus.WriteWord(0x00DFF066, unchecked((ushort)(dModulo ?? (short)rowStride)));
         bus.WriteWord(0x00DFF072, texture);
         bus.WriteWord(0x00DFF074, 0x8000);
         EnableBlitterDma(bus);

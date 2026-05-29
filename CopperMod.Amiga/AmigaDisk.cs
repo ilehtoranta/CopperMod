@@ -581,7 +581,7 @@ namespace CopperMod.Amiga
             return offset switch
             {
                 DskBytr => ReadDskbytr(),
-                DskPth => (ushort)((_diskPointer >> 16) & 0x0007),
+                DskPth => (ushort)((_diskPointer >> 16) & (_bus.ChipDmaAddressMask >> 16)),
                 DskPtl => (ushort)(_diskPointer & 0xFFFE),
                 DskLen => _dsklen,
                 DskSync => _dsksync,
@@ -595,10 +595,10 @@ namespace CopperMod.Amiga
             switch (offset)
             {
                 case DskPth:
-                    _diskPointer = (_diskPointer & 0x0000_FFFE) | ((uint)(value & 0x0007) << 16);
+                    _diskPointer = _bus.WriteChipDmaPointerHigh(_diskPointer, value);
                     break;
                 case DskPtl:
-                    _diskPointer = (_diskPointer & 0x0007_0000) | (uint)(value & 0xFFFE);
+                    _diskPointer = _bus.WriteChipDmaPointerLow(_diskPointer, value);
                     break;
                 case DskLen:
                     AdvanceActiveDmaTo(cycle);
@@ -864,7 +864,7 @@ namespace CopperMod.Amiga
                 syncWaitBytes = (sourceStart - stream.Offset + track.Length) % track.Length;
             }
 
-            var targetAddress = _diskPointer & 0x00FF_FFFE;
+            var targetAddress = _bus.MaskChipDmaAddress(_diskPointer);
             _transferCount++;
             _lastTransferWords = requestedWords;
             _lastTransferDrive = driveIndex;
@@ -930,7 +930,7 @@ namespace CopperMod.Amiga
                     _bus.WriteChipWordForDevice(
                         AmigaBusRequester.Disk,
                         AmigaBusAccessKind.DiskDma,
-                        _activeDmaTargetAddress + (uint)(word * 2),
+                        _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2),
                         value,
                         wordCycle);
                 }
@@ -1029,7 +1029,7 @@ namespace CopperMod.Amiga
 
         private void UpdateActiveDmaPointer()
         {
-            _diskPointer = (_activeDmaTargetAddress + (uint)(_activeDmaTransferredWords * 2)) & 0x0007_FFFE;
+            _diskPointer = _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, _activeDmaTransferredWords * 2);
         }
 
         private void UpdateActiveDmaLength()

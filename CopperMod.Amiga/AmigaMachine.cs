@@ -29,6 +29,8 @@ namespace CopperMod.Amiga
 
         public IAmigaBusArbiter BusArbiter { get; private set; } = new ZeroWaitBusArbiter();
 
+        public bool CaptureBusAccesses { get; private set; } = true;
+
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
@@ -71,11 +73,27 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithBusAccessLogging(bool enabled)
+        {
+            CaptureBusAccesses = enabled;
+            return this;
+        }
+
         public AmigaMachineOptions WithChipRam(int size)
         {
             if (size <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size must be positive.");
+            }
+
+            if (size > AmigaConstants.MaxChipRamSize)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size cannot exceed the custom-chip DMA address space.");
+            }
+
+            if (!IsPowerOfTwo(size))
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size must be a power of two so custom-chip DMA address masking is well-defined.");
             }
 
             ChipRamSize = size;
@@ -104,6 +122,11 @@ namespace CopperMod.Amiga
             FloppyDriveCount = count;
             return this;
         }
+
+        private static bool IsPowerOfTwo(int value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
     }
 
     internal sealed class AmigaMachine
@@ -116,7 +139,8 @@ namespace CopperMod.Amiga
                 options.BusArbiter,
                 options.ExpansionRamSize,
                 options.ExpansionRamBase,
-                options.FloppyDriveCount);
+                options.FloppyDriveCount,
+                options.CaptureBusAccesses);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }

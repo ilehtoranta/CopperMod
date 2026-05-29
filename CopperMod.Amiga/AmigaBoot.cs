@@ -104,6 +104,7 @@ namespace CopperMod.Amiga
         private bool _bootDiskReadCompleted;
         private bool _knownProtectionGateInstalled;
         private bool _dosBootContinuationStarted;
+        private bool _dosBootBlockHeaderProbeEnabled;
         private int _hostAllocationDiagnosticCount;
         private int _dosOpenDiagnosticCount;
         private int _dosReadDiagnosticCount;
@@ -239,6 +240,7 @@ namespace CopperMod.Amiga
             _bootDiskReadCompleted = false;
             _knownProtectionGateInstalled = false;
             _dosBootContinuationStarted = false;
+            _dosBootBlockHeaderProbeEnabled = true;
             _hostAllocationDiagnosticCount = 0;
             _dosOpenDiagnosticCount = 0;
             _dosReadDiagnosticCount = 0;
@@ -538,16 +540,28 @@ namespace CopperMod.Amiga
 
         private void SkipDosBootBlockHeaderIfNeeded()
         {
+            if (!_dosBootBlockHeaderProbeEnabled)
+            {
+                return;
+            }
+
             var pc = _machine.Cpu.State.ProgramCounter;
             if (TrySkipDosBootBlockHeader(pc, pc))
             {
+                _dosBootBlockHeaderProbeEnabled = false;
                 return;
             }
 
             if (pc >= 4)
             {
-                _ = TrySkipDosBootBlockHeader(pc - 4, pc);
+                if (TrySkipDosBootBlockHeader(pc - 4, pc))
+                {
+                    _dosBootBlockHeaderProbeEnabled = false;
+                    return;
+                }
             }
+
+            _dosBootBlockHeaderProbeEnabled = false;
         }
 
         private bool TrySkipDosBootBlockHeader(uint headerAddress, uint currentProgramCounter)
@@ -1986,6 +2000,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            _dosBootBlockHeaderProbeEnabled = true;
             _diagnostics.Add(new AmigaBootDiagnostic(
                 "AMIGA_BOOT_DOS_AUTOSTART",
                 $"Started {autostartDescription}."));

@@ -6,11 +6,13 @@ namespace CopperScreen;
 internal sealed class CopperBenchViewModel
 {
 	private readonly CopperScreenEmulator _emulator;
+	private readonly object _emulatorSync;
 	private readonly List<CopperBenchEntry> _entries = new List<CopperBenchEntry>();
 
-	public CopperBenchViewModel(CopperScreenEmulator emulator)
+	public CopperBenchViewModel(CopperScreenEmulator emulator, object? emulatorSync = null)
 	{
 		_emulator = emulator ?? throw new ArgumentNullException(nameof(emulator));
+		_emulatorSync = emulatorSync ?? new object();
 		IsToolbarVisible = true;
 		CurrentPath = string.Empty;
 		StatusMessage = "CopperBench ready";
@@ -20,7 +22,16 @@ internal sealed class CopperBenchViewModel
 
 	public bool IsToolbarVisible { get; private set; }
 
-	public bool IsPaused => _emulator.IsPaused;
+	public bool IsPaused
+	{
+		get
+		{
+			lock (_emulatorSync)
+			{
+				return _emulator.IsPaused;
+			}
+		}
+	}
 
 	public string CurrentPath { get; private set; }
 
@@ -95,65 +106,106 @@ internal sealed class CopperBenchViewModel
 
 	public void TogglePause()
 	{
-		_emulator.TogglePaused();
-		StatusMessage = _emulator.IsPaused ? "Paused" : "Running";
+		lock (_emulatorSync)
+		{
+			_emulator.TogglePaused();
+			StatusMessage = _emulator.IsPaused ? "Paused" : "Running";
+		}
 	}
 
 	public void Reset()
 	{
-		_emulator.Reset();
+		lock (_emulatorSync)
+		{
+			_emulator.Reset();
+		}
+
 		Refresh();
 		StatusMessage = "Reset";
 	}
 
 	public void PulseFire()
 	{
-		_emulator.PulsePrimaryFire();
+		lock (_emulatorSync)
+		{
+			_emulator.PulsePrimaryFire();
+		}
+
 		StatusMessage = "Fire";
 	}
 
 	public void InsertDisk(string diskPath)
 	{
-		if (_emulator.InsertDisk(diskPath))
+		var inserted = false;
+		string diskName;
+		string statusText;
+		lock (_emulatorSync)
+		{
+			inserted = _emulator.InsertDisk(diskPath);
+			diskName = _emulator.DiskName;
+			statusText = _emulator.StatusText;
+		}
+
+		if (inserted)
 		{
 			CurrentPath = string.Empty;
 			Refresh();
-			StatusMessage = "Inserted " + _emulator.DiskName;
+			StatusMessage = "Inserted " + diskName;
 		}
 		else
 		{
 			Refresh();
-			StatusMessage = _emulator.StatusText;
+			StatusMessage = statusText;
 		}
 	}
 
 	public void InsertNextDisk()
 	{
-		if (_emulator.InsertNextDisk())
+		var inserted = false;
+		string diskName;
+		string statusText;
+		lock (_emulatorSync)
+		{
+			inserted = _emulator.InsertNextDisk();
+			diskName = _emulator.DiskName;
+			statusText = _emulator.StatusText;
+		}
+
+		if (inserted)
 		{
 			CurrentPath = string.Empty;
 			Refresh();
-			StatusMessage = "Inserted " + _emulator.DiskName;
+			StatusMessage = "Inserted " + diskName;
 		}
 		else
 		{
 			Refresh();
-			StatusMessage = _emulator.StatusText;
+			StatusMessage = statusText;
 		}
 	}
 
 	public void InsertPreviousDisk()
 	{
-		if (_emulator.InsertPreviousDisk())
+		var inserted = false;
+		string diskName;
+		string statusText;
+		lock (_emulatorSync)
+		{
+			inserted = _emulator.InsertPreviousDisk();
+			diskName = _emulator.DiskName;
+			statusText = _emulator.StatusText;
+		}
+
+		if (inserted)
 		{
 			CurrentPath = string.Empty;
 			Refresh();
-			StatusMessage = "Inserted " + _emulator.DiskName;
+			StatusMessage = "Inserted " + diskName;
 		}
 		else
 		{
 			Refresh();
-			StatusMessage = _emulator.StatusText;
+			StatusMessage = statusText;
 		}
 	}
 
@@ -161,7 +213,13 @@ internal sealed class CopperBenchViewModel
 	{
 		_entries.Clear();
 		SelectedIndex = -1;
-		if (_emulator.DiskPath == null)
+		string? diskPath;
+		lock (_emulatorSync)
+		{
+			diskPath = _emulator.DiskPath;
+		}
+
+		if (diskPath == null)
 		{
 			StatusMessage = "No disk image";
 			return;
@@ -169,7 +227,7 @@ internal sealed class CopperBenchViewModel
 
 		try
 		{
-			var disk = AmigaDiskImage.Load(_emulator.DiskPath);
+			var disk = AmigaDiskImage.Load(diskPath);
 			if (!AmigaDosFileSystem.IsSupported(disk))
 			{
 				StatusMessage = "DF0: is not a supported OFS DOS\\0 disk";
@@ -245,7 +303,14 @@ internal sealed class CopperBenchViewModel
 			return false;
 		}
 
-		if (!_emulator.LaunchCopperBenchPath(selected.Path, out var message))
+		string message;
+		bool launched;
+		lock (_emulatorSync)
+		{
+			launched = _emulator.LaunchCopperBenchPath(selected.Path, out message);
+		}
+
+		if (!launched)
 		{
 			StatusMessage = message;
 			return false;

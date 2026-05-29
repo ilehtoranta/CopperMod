@@ -113,6 +113,14 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal("Expanded A500 + CopperStart", emulator.ProfileName);
 	}
 
+	[Fact]
+	public void CrashLogUsesStableTimestampedFileNames()
+	{
+		var fileName = CopperScreenCrashLog.CreateLogFileName(new DateTimeOffset(2026, 5, 29, 13, 45, 12, TimeSpan.Zero), 1234);
+
+		Assert.Equal("CopperScreen-20260529-134512-1234.log", fileName);
+	}
+
     private static string FindWorkspaceDirectory()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

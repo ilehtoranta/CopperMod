@@ -17,9 +17,16 @@ internal sealed class MainWindow : Window
 	private const int AudioOutputBufferCount = 8;
 	private const int TargetQueuedAudioBuffers = 5;
 	private const int MaxFramesPerTick = 5;
+	private const int DisplayTimerIntervalMilliseconds = 20;
+	private const int StatusUpdateIntervalMilliseconds = 250;
+	private long _presentedFrames;
 	private readonly CopperScreenEmulator _emulator;
+	private readonly object _emulatorSync = new object();
+	private readonly object _presentationSync = new object();
 	private readonly CopperBenchViewModel _bench;
 	private readonly FramebufferPresenter _presenter;
+	private readonly int[] _latestFramebuffer;
+	private readonly int[] _presentationFramebuffer;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
 	private readonly Border _benchPanel;
@@ -35,6 +42,13 @@ internal sealed class MainWindow : Window
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
 	private readonly float[] _audioBuffer;
+	private Thread? _emulationThread;
+	private volatile bool _emulationThreadRunning;
+	private long _latestFrameNumber;
+	private long _displayedFrameNumber;
+	private long _lastStatusUpdateTick;
+	private bool _pendingCopperBenchRequest;
+	private CopperScreenUiState _latestUiState;
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
@@ -49,9 +63,16 @@ internal sealed class MainWindow : Window
 		Height = 768;
 		Focusable = true;
 		_emulator = CopperScreenEmulator.Create(args, AppContext.BaseDirectory);
-		_bench = new CopperBenchViewModel(_emulator);
+		_bench = new CopperBenchViewModel(_emulator, _emulatorSync);
 		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(AudioSampleRate) * AudioChannels];
 		_audio = WaveOutAudioOutput.TryCreate(AudioSampleRate, AudioChannels, _audioBuffer.Length / AudioChannels, AudioOutputBufferCount);
+		_latestFramebuffer = new int[_emulator.Framebuffer.Length];
+		_presentationFramebuffer = new int[_emulator.Framebuffer.Length];
+		lock (_emulatorSync)
+		{
+			PublishCurrentFrameLocked(framesRendered: 0);
+		}
+
 		_presenter = new FramebufferPresenter(_emulator.Width, _emulator.Height)
 		{
 			Focusable = true,
@@ -77,12 +98,13 @@ internal sealed class MainWindow : Window
 		_root.Children.Add(_toolbar);
 		Content = _root;
 		RefreshCopperBenchUi();
-		_timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
-		_timer.Tick += (_, _) => PresentFrame();
+		_timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds) };
+		_timer.Tick += (_, _) => PresentLatestFrame();
 		Opened += (_, _) =>
 		{
 			_presenter.Focus();
-			PresentFrame(catchUpAudio: true);
+			StartEmulationThread();
+			PresentLatestFrame(forceStatus: true);
 			_timer.Start();
 		};
 		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
@@ -110,29 +132,191 @@ internal sealed class MainWindow : Window
 		Closed += (_, _) =>
 		{
 			_timer.Stop();
+			StopEmulationThread();
 			_audio?.Dispose();
 		};
 	}
 
 	private void PresentFrame(bool catchUpAudio = true)
 	{
-		var framesToRender = _emulator.IsPaused ? 0 : CalculateFramesToRender(_audio?.QueuedBufferCount, catchUpAudio);
-		for (var frame = 0; frame < framesToRender; frame++)
+		_ = catchUpAudio;
+		PresentLatestFrame(forceStatus: true);
+	}
+
+	private void StartEmulationThread()
+	{
+		if (_emulationThreadRunning)
 		{
-			_emulator.RenderNextFrame();
-			var audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
-			_audio?.Submit(_audioBuffer.AsSpan(0, audioFrames * AudioChannels));
+			return;
 		}
 
-		_presenter.Update(_emulator.Framebuffer);
-		if (_emulator.ConsumeCopperBenchRequest())
+		_emulationThreadRunning = true;
+		_emulationThread = new Thread(RunEmulationLoop)
 		{
+			IsBackground = true,
+			Name = "CopperScreen emulation"
+		};
+		_emulationThread.Start();
+	}
+
+	private void StopEmulationThread()
+	{
+		_emulationThreadRunning = false;
+		var thread = _emulationThread;
+		if (thread != null && thread.IsAlive)
+		{
+			thread.Join(TimeSpan.FromSeconds(1));
+		}
+	}
+
+	private void RunEmulationLoop()
+	{
+		var nextSilentFrameTime = Environment.TickCount64;
+		while (_emulationThreadRunning)
+		{
+			var paused = false;
+			lock (_emulatorSync)
+			{
+				if (_emulator.IsPaused)
+				{
+					PublishCurrentFrameLocked(framesRendered: 0);
+					paused = true;
+				}
+			}
+
+			if (paused)
+			{
+				Thread.Sleep(10);
+				continue;
+			}
+
+			if (_audio == null)
+			{
+				var now = Environment.TickCount64;
+				if (now < nextSilentFrameTime)
+				{
+					Thread.Sleep((int)Math.Min(5, nextSilentFrameTime - now));
+					continue;
+				}
+
+				RenderFramesOnEmulationThread(1);
+				nextSilentFrameTime += DisplayTimerIntervalMilliseconds;
+				if (nextSilentFrameTime < now - DisplayTimerIntervalMilliseconds)
+				{
+					nextSilentFrameTime = now + DisplayTimerIntervalMilliseconds;
+				}
+
+				continue;
+			}
+
+			var framesToRender = CalculateFramesToRender(_audio.QueuedBufferCount, catchUpAudio: true);
+			if (framesToRender <= 0)
+			{
+				Thread.Sleep(1);
+				continue;
+			}
+
+			RenderFramesOnEmulationThread(framesToRender);
+		}
+	}
+
+	private void RenderFramesOnEmulationThread(int framesToRender)
+	{
+		for (var frame = 0; frame < framesToRender && _emulationThreadRunning; frame++)
+		{
+			int audioFrames;
+			lock (_emulatorSync)
+			{
+				if (_emulator.IsPaused)
+				{
+					PublishCurrentFrameLocked(framesRendered: 0);
+					break;
+				}
+
+				_emulator.RenderNextFrame();
+				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+				PublishCurrentFrameLocked(framesRendered: 1);
+			}
+
+			_audio?.Submit(_audioBuffer.AsSpan(0, audioFrames * AudioChannels));
+		}
+	}
+
+	private void PublishCurrentFrameLocked(int framesRendered)
+	{
+		_pendingCopperBenchRequest |= _emulator.ConsumeCopperBenchRequest();
+		var state = CaptureUiStateLocked(framesRendered, _pendingCopperBenchRequest);
+		lock (_presentationSync)
+		{
+			_emulator.Framebuffer.AsSpan().CopyTo(_latestFramebuffer);
+			_latestUiState = state;
+			_latestFrameNumber++;
+		}
+	}
+
+	private CopperScreenUiState CaptureUiStateLocked(int framesRendered, bool copperBenchRequestPending = false)
+	{
+		return new CopperScreenUiState(
+			_emulator.ProfileName,
+			_emulator.DiskName,
+			_emulator.DriveStatusText,
+			_emulator.ProgramCounterText,
+			_emulator.StatusText,
+			_emulator.IsPaused,
+			framesRendered,
+			copperBenchRequestPending);
+	}
+
+	private void PresentLatestFrame(bool forceStatus = false)
+	{
+		CopperScreenUiState state;
+		long frameNumber;
+		lock (_presentationSync)
+		{
+			frameNumber = _latestFrameNumber;
+			if (!forceStatus && frameNumber == _displayedFrameNumber)
+			{
+				return;
+			}
+
+			_latestFramebuffer.AsSpan().CopyTo(_presentationFramebuffer);
+			state = _latestUiState;
+			_displayedFrameNumber = frameNumber;
+		}
+
+		if (frameNumber != _presentedFrames)
+		{
+			_presenter.Update(_presentationFramebuffer);
+			_presentedFrames = frameNumber;
+		}
+
+		if (state.CopperBenchRequestPending)
+		{
+			lock (_emulatorSync)
+			{
+				_pendingCopperBenchRequest = false;
+				PublishCurrentFrameLocked(framesRendered: 0);
+			}
+
 			_bench.ShowOverlay();
 			RefreshCopperBenchUi();
 		}
 
-		UpdateToolbarStatus();
-		Title = "CopperScreen - " + _emulator.ProfileName + " - " + _emulator.StatusText + " - F11 toolbar, Alt+Enter fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
+		var now = Environment.TickCount64;
+		if (forceStatus ||
+			state.CopperBenchRequestPending ||
+			now - _lastStatusUpdateTick >= StatusUpdateIntervalMilliseconds)
+		{
+			_lastStatusUpdateTick = now;
+			UpdateToolbarStatus(state);
+			Title = "CopperScreen - " + state.ProfileName + " - " + state.StatusText + " - F11 toolbar, Alt+Enter fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
+			CopperScreenCrashLog.Heartbeat(() => BuildCrashLogState(state));
+		}
+	}
+
+	private string BuildCrashLogState(CopperScreenUiState state)
+	{
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", {state.ProgramCounterText}, status=\"{state.StatusText}\", framebuffer={_emulator.Width}x{_emulator.Height}";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)
@@ -146,7 +330,10 @@ internal sealed class MainWindow : Window
 				var deltaY = (int)Math.Round(framebufferPoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
-					_emulator.MoveMousePort(deltaX, deltaY);
+					lock (_emulatorSync)
+					{
+						_emulator.MoveMousePort(deltaX, deltaY);
+					}
 				}
 			}
 
@@ -160,7 +347,10 @@ internal sealed class MainWindow : Window
 		}
 
 		var properties = args.GetCurrentPoint(_presenter).Properties;
-		_emulator.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
+		lock (_emulatorSync)
+		{
+			_emulator.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
+		}
 	}
 
 	private void OnKeyDown(object? sender, KeyEventArgs args)
@@ -236,7 +426,11 @@ internal sealed class MainWindow : Window
 		{
 			if (_pressedAmigaKeys.Add(rawKey))
 			{
-				_emulator.KeyDown(rawKey);
+				lock (_emulatorSync)
+				{
+					_emulator.KeyDown(rawKey);
+				}
+
 				PresentFrame(catchUpAudio: false);
 			}
 
@@ -265,7 +459,11 @@ internal sealed class MainWindow : Window
 		{
 			if (_pressedAmigaKeys.Remove(rawKey))
 			{
-				_emulator.KeyUp(rawKey);
+				lock (_emulatorSync)
+				{
+					_emulator.KeyUp(rawKey);
+				}
+
 				PresentFrame(catchUpAudio: false);
 			}
 
@@ -281,7 +479,10 @@ internal sealed class MainWindow : Window
 		var right = IsPressed(JoystickKeys.NumPad6 | JoystickKeys.NumPad9 | JoystickKeys.NumPad3);
 		var primaryFire = IsPressed(JoystickKeys.NumPad5);
 		var secondFire = IsPressed(JoystickKeys.Decimal | JoystickKeys.Delete);
-		_emulator.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
+		lock (_emulatorSync)
+		{
+			_emulator.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
+		}
 	}
 
 	private bool IsPressed(JoystickKeys keys)
@@ -341,21 +542,27 @@ internal sealed class MainWindow : Window
 	{
 		foreach (var rawKey in _pressedAmigaKeys)
 		{
-			_emulator.KeyUp(rawKey);
+			lock (_emulatorSync)
+			{
+				_emulator.KeyUp(rawKey);
+			}
 		}
 
 		_pressedAmigaKeys.Clear();
 		_pressedJoystickKeys = JoystickKeys.None;
 		_lastMouseX = null;
 		_lastMouseY = null;
-		_emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
-		_emulator.SetJoystickPort(
-			up: false,
-			down: false,
-			left: false,
-			right: false,
-			primaryFirePressed: false,
-			secondFirePressed: false);
+		lock (_emulatorSync)
+		{
+			_emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+			_emulator.SetJoystickPort(
+				up: false,
+				down: false,
+				left: false,
+				right: false,
+				primaryFirePressed: false,
+				secondFirePressed: false);
+		}
 	}
 
 	private Border CreateToolbar()
@@ -724,10 +931,31 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus()
 	{
+		CopperScreenUiState state;
+		lock (_presentationSync)
+		{
+			state = _latestUiState;
+		}
+
+		UpdateToolbarStatus(state);
+	}
+
+	private void UpdateToolbarStatus(CopperScreenUiState state)
+	{
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
 		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
-		_toolbarStatus.Text = $"{_emulator.ProfileName} | {_emulator.DiskName} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
+		_toolbarStatus.Text = $"{state.ProfileName} | {state.DiskName} | {state.DriveStatusText} | {state.ProgramCounterText} | {state.StatusText}";
 	}
+
+	private readonly record struct CopperScreenUiState(
+		string ProfileName,
+		string DiskName,
+		string DriveStatusText,
+		string ProgramCounterText,
+		string StatusText,
+		bool IsPaused,
+		int FramesRendered,
+		bool CopperBenchRequestPending);
 
 	[Flags]
 	internal enum JoystickKeys

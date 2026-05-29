@@ -73,7 +73,8 @@ internal sealed class CopperScreenProfile
 			.ForProfile(MachineProfile)
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
-			.WithFloppyDriveCount(FloppyDriveCount);
+			.WithFloppyDriveCount(FloppyDriveCount)
+			.WithBusAccessLogging(false);
 	}
 
 	public static CopperScreenProfile LoadDefault(string baseDirectory, out string? error)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
@@ -22,16 +23,19 @@ namespace CopperMod.Amiga
     internal sealed class AmigaBus : IM68kBus
     {
         private const int MaxCapturedBusAccesses = 65536;
-        private const uint ChipRamDecodeSize = 0x0020_0000;
+        private const uint MinimumChipRamDecodeSize = 0x0020_0000;
         private readonly byte[] _chipRam;
         private readonly byte[] _expansionRam;
         private readonly Dictionary<uint, Action<M68kCpuState>> _hostCallbacks = new Dictionary<uint, Action<M68kCpuState>>();
         private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
+        private readonly bool _captureBusAccesses;
+        private readonly bool _useFastZeroWaitAccesses;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
         private readonly bool[] _pendingCustomByteWritten = new bool[0x200];
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
+        private readonly uint _chipRamDecodeSize;
         private readonly long _palFrameCycles;
         private readonly double _palLineCycles;
         private MappedMemoryRegion? _romOverlayRegion;
@@ -45,11 +49,22 @@ namespace CopperMod.Amiga
             IAmigaBusArbiter? arbiter = null,
             int expansionRamSize = 0,
             uint expansionRamBase = AmigaConstants.A500BootPseudoFastRamBase,
-            int floppyDriveCount = 1)
+            int floppyDriveCount = 1,
+            bool captureBusAccesses = true)
         {
             if (chipRamSize <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be positive.");
+            }
+
+            if (chipRamSize > AmigaConstants.MaxChipRamSize)
+            {
+                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size cannot exceed the custom-chip DMA address space.");
+            }
+
+            if (!IsPowerOfTwo(chipRamSize))
+            {
+                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be a power of two so custom-chip DMA address masking is well-defined.");
             }
 
             if (expansionRamSize < 0)
@@ -59,8 +74,15 @@ namespace CopperMod.Amiga
 
             _chipRam = new byte[chipRamSize];
             _expansionRam = new byte[expansionRamSize];
+            _captureBusAccesses = captureBusAccesses;
+            _chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
+            ChipDmaAddressMask = ((uint)chipRamSize - 1u) & 0x00FF_FFFEu;
             ExpansionRamBase = NormalizeAddress(expansionRamBase);
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
+            _useFastZeroWaitAccesses =
+                !captureBusAccesses &&
+                Arbiter is ZeroWaitBusArbiter zeroWait &&
+                zeroWait.BaseAccessCycles == 0;
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount);
             Display = new OcsDisplay(this);
@@ -121,6 +143,8 @@ namespace CopperMod.Amiga
         public byte[] ChipRam => _chipRam;
 
         public byte[] ExpansionRam => _expansionRam;
+
+        public uint ChipDmaAddressMask { get; }
 
         public uint ExpansionRamBase { get; }
 
@@ -254,6 +278,20 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                var fastValue = ReadRawByte(address);
+                cycle = grantedCycle;
+                if (TryGetCiaRegister(address, out var fastCia, out var fastCiaRegister) && fastCia == CiaA && fastCiaRegister == 0x0C)
+                {
+                    Keyboard.AcknowledgeSerialDataRead(cycle);
+                }
+
+                return fastValue;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawByte(address);
@@ -275,6 +313,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                WriteRawByte(address, value, grantedCycle);
+                cycle = grantedCycle;
+                return;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: true);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawByte(address, value, access.GrantedCycle);
@@ -290,6 +337,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                WriteRawWord(address, value, grantedCycle);
+                cycle = grantedCycle;
+                return;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: true);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawWord(address, value, access.GrantedCycle);
@@ -306,6 +362,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                var fastValue = ReadRawWord(address);
+                cycle = grantedCycle;
+                return fastValue;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawWord(address);
@@ -323,6 +388,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                var fastValue = ReadRawLong(address);
+                cycle = grantedCycle;
+                return fastValue;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: false);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawLong(address);
@@ -344,6 +418,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            if (_useFastZeroWaitAccesses)
+            {
+                var grantedCycle = GrantFastCpuAccess(target, cycle);
+                AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+                WriteRawLong(address, value, grantedCycle);
+                cycle = grantedCycle;
+                return;
+            }
+
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: true);
             AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawLong(address, value, access.GrantedCycle);
@@ -416,24 +499,54 @@ namespace CopperMod.Amiga
             return IsChipRamRange(address, byteCount) || IsExpansionRamRange(address, byteCount);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public uint MaskChipDmaAddress(uint address)
+        {
+            return address & ChipDmaAddressMask;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public uint WriteChipDmaPointerHigh(uint pointer, ushort highWord)
+        {
+            return (((uint)highWord << 16) | (pointer & 0x0000_FFFEu)) & ChipDmaAddressMask;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public uint WriteChipDmaPointerLow(uint pointer, ushort lowWord)
+        {
+            return ((pointer & 0x00FF_0000u) | (uint)(lowWord & 0xFFFE)) & ChipDmaAddressMask;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public uint AddChipDmaPointerOffset(uint pointer, int byteOffset)
+        {
+            return (pointer + unchecked((uint)byteOffset)) & ChipDmaAddressMask;
+        }
+
         public PaulaDmaReadResult ReadPaulaDmaWord(uint address, long requestedCycle)
         {
-            address = NormalizeAddress(address);
-            var target = ClassifyTarget(address);
+            address = MaskChipDmaAddress(address);
             var access = Arbitrate(
                 AmigaBusRequester.Paula,
                 AmigaBusAccessKind.PaulaDma,
-                target,
+                AmigaBusAccessTarget.ChipRam,
                 address,
                 AmigaBusAccessSize.Word,
                 requestedCycle,
                 isWrite: false);
-            return new PaulaDmaReadResult(ReadRawWord(address), access);
+            return new PaulaDmaReadResult(ReadChipDmaWord(address), access);
         }
 
         public ushort ReadChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, long requestedCycle)
         {
             return ReadChipWordForDeviceWithResult(requester, kind, address, requestedCycle).Value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ushort ReadChipWordForPresentation(uint address)
+        {
+            address = MaskChipDmaAddress(address);
+            return ReadChipDmaWord(address);
         }
 
         public AmigaDeviceWordReadResult ReadChipWordForDeviceWithResult(
@@ -442,9 +555,9 @@ namespace CopperMod.Amiga
             uint address,
             long requestedCycle)
         {
-            address = NormalizeAddress(address);
-            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: false);
-            return new AmigaDeviceWordReadResult(ReadRawWord(address), access);
+            address = MaskChipDmaAddress(address);
+            var access = Arbitrate(requester, kind, AmigaBusAccessTarget.ChipRam, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: false);
+            return new AmigaDeviceWordReadResult(ReadChipDmaWord(address), access);
         }
 
         public void WriteChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
@@ -459,10 +572,9 @@ namespace CopperMod.Amiga
             ushort value,
             long requestedCycle)
         {
-            address = NormalizeAddress(address);
-            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
-            WriteRawByte(address, (byte)(value >> 8), access.GrantedCycle);
-            WriteRawByte(address + 1, (byte)value, access.GrantedCycle);
+            address = MaskChipDmaAddress(address);
+            var access = Arbitrate(requester, kind, AmigaBusAccessTarget.ChipRam, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
+            WriteChipDmaWord(address, value);
             return access;
         }
 
@@ -613,17 +725,47 @@ namespace CopperMod.Amiga
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
 
+            requestedCycle = Math.Max(0, requestedCycle);
+
+            if (_useFastZeroWaitAccesses)
+            {
+                var fastRequest = new AmigaBusAccessRequest(
+                    requester,
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite);
+                return new AmigaBusAccessResult(fastRequest, requestedCycle, requestedCycle);
+            }
+
             var request = new AmigaBusAccessRequest(
                 requester,
                 kind,
                 target,
                 address,
                 size,
-                Math.Max(0, requestedCycle),
+                requestedCycle,
                 isWrite);
             var result = Arbiter.Arbitrate(request);
-            _busAccesses.Add(result);
+            if (_captureBusAccesses)
+            {
+                _busAccesses.Add(result);
+            }
+
             return result;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GrantFastCpuAccess(AmigaBusAccessTarget target, long requestedCycle)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam || target == AmigaBusAccessTarget.CustomRegisters)
+            {
+                requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
+            }
+
+            return Math.Max(0, requestedCycle);
         }
 
         private AmigaBusAccessTarget ClassifyTarget(uint address)
@@ -721,8 +863,38 @@ namespace CopperMod.Amiga
             return 0;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadChipDmaWord(uint address)
+        {
+            var offset = (int)(address & ChipDmaAddressMask);
+            var nextOffset = (offset + 1) & (_chipRam.Length - 1);
+            return (ushort)((_chipRam[offset] << 8) | _chipRam[nextOffset]);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteChipDmaWord(uint address, ushort value)
+        {
+            var offset = (int)(address & ChipDmaAddressMask);
+            var nextOffset = (offset + 1) & (_chipRam.Length - 1);
+            _chipRam[offset] = (byte)(value >> 8);
+            _chipRam[nextOffset] = (byte)value;
+        }
+
         private ushort ReadRawWord(uint address)
         {
+            address = NormalizeAddress(address);
+            if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
+            {
+                var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
+                return (ushort)((_chipRam[chipOffset] << 8) | _chipRam[nextOffset]);
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
+                expansionOffset + 1 < _expansionRam.Length)
+            {
+                return (ushort)((_expansionRam[expansionOffset] << 8) | _expansionRam[expansionOffset + 1]);
+            }
+
             return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
         }
 
@@ -790,6 +962,22 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (TryGetChipRamOffset(address, out var chipOffset))
+            {
+                var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
+                _chipRam[chipOffset] = (byte)(value >> 8);
+                _chipRam[nextOffset] = (byte)value;
+                return;
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
+                expansionOffset + 1 < _expansionRam.Length)
+            {
+                _expansionRam[expansionOffset] = (byte)(value >> 8);
+                _expansionRam[expansionOffset + 1] = (byte)value;
+                return;
+            }
+
             WriteRawByte(address, (byte)(value >> 8), grantedCycle);
             WriteRawByte(address + 1, (byte)value, grantedCycle);
         }
@@ -829,6 +1017,11 @@ namespace CopperMod.Amiga
             return address & 0x00FF_FFFF;
         }
 
+        private static bool IsPowerOfTwo(int value)
+        {
+            return value > 0 && (value & (value - 1)) == 0;
+        }
+
         private bool TryGetContiguousWritableSpan(uint address, int byteCount, out Span<byte> span)
         {
             if (IsContiguousChipRamRange(address, byteCount))
@@ -860,8 +1053,8 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            return address < ChipRamDecodeSize &&
-                (ulong)address + (ulong)byteCount <= ChipRamDecodeSize;
+            return address < _chipRamDecodeSize &&
+                (ulong)address + (ulong)byteCount <= _chipRamDecodeSize;
         }
 
         private bool IsContiguousChipRamRange(uint address, int byteCount)
@@ -883,9 +1076,9 @@ namespace CopperMod.Amiga
         private bool TryGetChipRamOffset(uint address, out int offset)
         {
             address = NormalizeAddress(address);
-            if (_chipRam.Length > 0 && address < ChipRamDecodeSize)
+            if (_chipRam.Length > 0 && address < _chipRamDecodeSize)
             {
-                offset = (int)(address % (uint)_chipRam.Length);
+                offset = (int)(address & ((uint)_chipRam.Length - 1u));
                 return true;
             }
 
@@ -1604,10 +1797,10 @@ namespace CopperMod.Amiga
             switch (register)
             {
                 case 0x00:
-                    channel.Location = (channel.Location & 0x0000_FFFF) | ((uint)value << 16);
+                    channel.Location = _bus.WriteChipDmaPointerHigh(channel.Location, value);
                     break;
                 case 0x02:
-                    channel.Location = (channel.Location & 0xFFFF_0000) | value;
+                    channel.Location = _bus.WriteChipDmaPointerLow(channel.Location, value);
                     break;
                 case 0x04:
                     channel.LengthWords = Math.Max(1, (int)value);
@@ -1848,7 +2041,7 @@ namespace CopperMod.Amiga
                 }
 
                 DmaEnabled = true;
-                _currentAddress = Location;
+                _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
                 FetchDmaWord(bus, cycle, paula, forceInterrupt: true);
                 _nextSampleCycle = cycle + GetPeriodCycles(Period);
@@ -1916,14 +2109,14 @@ namespace CopperMod.Amiga
             {
                 if (_remainingWords <= 0)
                 {
-                    _currentAddress = Location;
+                    _currentAddress = bus.MaskChipDmaAddress(Location);
                     _remainingWords = Math.Max(1, LengthWords);
                     paula.RequestAudioInterrupt(Index, cycle);
                 }
 
                 var dmaRead = bus.ReadPaulaDmaWord(_currentAddress, cycle);
                 _dataWord = dmaRead.Value;
-                _currentAddress += 2;
+                _currentAddress = bus.AddChipDmaPointerOffset(_currentAddress, 2);
                 _remainingWords--;
                 _hasDataWord = true;
                 _nextByteIsLow = true;

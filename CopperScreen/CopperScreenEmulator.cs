@@ -31,7 +31,9 @@ internal sealed class CopperScreenEmulator
 	private long _audioCycle;
 	private long _frameAudioStartCycle;
 	private long _frameAudioEndCycle;
+	private long _frameAudioNextSampleCycle;
 	private int _frameAudioSampleIndex;
+	private int _frameAudioSampleCount;
 	private bool _mousePrimaryFirePressed;
 	private bool _mouseSecondFirePressed;
 	private bool _joystickUp;
@@ -622,29 +624,38 @@ internal sealed class CopperScreenEmulator
 		_frameAudioStartCycle = _audioCycle;
 		_frameAudioEndCycle = Math.Max(_frameAudioStartCycle, targetCycle);
 		_frameAudioSampleIndex = 0;
+		_frameAudioSampleCount = _frameAudio.Length / DefaultAudioChannels;
+		_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(0);
 	}
 
 	private void RenderFrameAudioUntil(long previousCycle, long currentCycle)
 	{
 		_ = previousCycle;
-		if (_frameAudioEndCycle <= _frameAudioStartCycle)
+		if (_frameAudioEndCycle <= _frameAudioStartCycle ||
+			_frameAudioSampleIndex >= _frameAudioSampleCount ||
+			currentCycle < _frameAudioNextSampleCycle)
 		{
 			return;
 		}
 
-		var frames = _frameAudio.Length / DefaultAudioChannels;
-		while (_frameAudioSampleIndex < frames)
+		while (_frameAudioSampleIndex < _frameAudioSampleCount &&
+			_frameAudioNextSampleCycle <= currentCycle)
 		{
-			var sampleCycle = _frameAudioStartCycle + (long)Math.Round(
-				(_frameAudioEndCycle - _frameAudioStartCycle) * ((_frameAudioSampleIndex + 1) / (double)frames));
-			if (sampleCycle > currentCycle)
-			{
-				break;
-			}
-
-			_machine.Bus.Paula.RenderSample(sampleCycle, _frameAudio, _frameAudioSampleIndex, DefaultAudioChannels);
+			_machine.Bus.Paula.RenderSample(_frameAudioNextSampleCycle, _frameAudio, _frameAudioSampleIndex, DefaultAudioChannels);
 			_frameAudioSampleIndex++;
+			_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(_frameAudioSampleIndex);
 		}
+	}
+
+	private long GetFrameAudioSampleCycle(int sampleIndex)
+	{
+		if (_frameAudioSampleCount <= 0)
+		{
+			return _frameAudioEndCycle;
+		}
+
+		var frameCycles = _frameAudioEndCycle - _frameAudioStartCycle;
+		return _frameAudioStartCycle + ((frameCycles * (sampleIndex + 1)) / _frameAudioSampleCount);
 	}
 
 	private void FinishFrameAudio()

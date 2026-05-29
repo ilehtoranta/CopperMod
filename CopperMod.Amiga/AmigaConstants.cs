@@ -14,6 +14,7 @@ namespace CopperMod.Amiga
         public const int A500PalRasterLines = 312;
         public const int PaulaChannelCount = 4;
         public const int DefaultChipRamSize = 2 * 1024 * 1024;
+        public const int MaxChipRamSize = 8 * 1024 * 1024;
         public const int A500BootChipRamSize = 512 * 1024;
         public const int A500BootPseudoFastRamSize = 512 * 1024;
         public const uint A500BootPseudoFastRamBase = 0x00C0_0000;
@@ -23,5 +24,7 @@ namespace CopperMod.Amiga
         public const int PalLowResOverscanBorderY = 16;
         public const int PalLowResWidth = PalLowResStandardWidth + (PalLowResOverscanBorderX * 2);
         public const int PalLowResHeight = PalLowResStandardHeight + (PalLowResOverscanBorderY * 2);
+        public const int PalHighResWidth = PalLowResWidth * 2;
+        public const int PalHighResHeight = PalLowResHeight * 2;
     }
 }
