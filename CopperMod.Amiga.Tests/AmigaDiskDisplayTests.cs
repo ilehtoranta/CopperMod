@@ -58,6 +58,24 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void PartialTrackBackedSectorViewsAreNotTreatedAsCompleteAmigaDosDisks()
+    {
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        data[0] = (byte)'D';
+        data[1] = (byte)'O';
+        data[2] = (byte)'S';
+        data[3] = 0;
+        var sectorDisk = AmigaDiskImage.FromAdfBytes(data);
+        var tracks = new byte[AmigaDiskImage.CylinderCount * AmigaDiskImage.HeadCount][];
+        tracks[0] = AmigaDosTrackEncoder.EncodeTrack(sectorDisk, 0, 0);
+
+        var decodedDisk = AmigaDiskImage.FromEncodedTracks(tracks);
+
+        Assert.False(decodedDisk.HasCompleteSectorData);
+        Assert.False(AmigaDosFileSystem.IsSupported(decodedDisk));
+    }
+
+    [Fact]
     public void ShadowOfTheBeastIpfZipLoadsManagedEncodedTracksWhenPresent()
     {
         var path = TryFindWorkspaceFile(

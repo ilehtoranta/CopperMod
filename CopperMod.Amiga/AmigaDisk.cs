@@ -5,54 +5,31 @@ using System.Linq;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class AmigaDiskImage
+    internal sealed class AmigaDiskImage : IAmigaSectorDiskMedia
     {
         public const int SectorSize = 512;
         public const int SectorsPerTrack = 11;
         public const int HeadCount = 2;
         public const int CylinderCount = 80;
         public const int StandardAdfSize = CylinderCount * HeadCount * SectorsPerTrack * SectorSize;
-        private const int TrackCount = CylinderCount * HeadCount;
+        internal const int TrackCount = CylinderCount * HeadCount;
 
-        private readonly byte[][] _encodedTracks = new byte[TrackCount][];
+        private readonly IAmigaDiskMedia _media;
+        private readonly IAmigaSectorDiskMedia? _sectorMedia;
 
-        private AmigaDiskImage(byte[] data, string name, byte[][]? encodedTracks = null, bool hasCompleteSectorData = true)
+        private AmigaDiskImage(IAmigaDiskMedia media)
         {
-            if (data.Length != StandardAdfSize)
-            {
-                throw new AmigaEmulationException($"Only standard {StandardAdfSize}-byte sector images are supported.");
-            }
-
-            Data = data;
-            Name = name;
-            HasCompleteSectorData = hasCompleteSectorData;
-
-            if (encodedTracks == null)
-            {
-                return;
-            }
-
-            if (encodedTracks.Length != TrackCount)
-            {
-                throw new ArgumentException($"Exactly {TrackCount} encoded tracks are required.", nameof(encodedTracks));
-            }
-
-            for (var index = 0; index < encodedTracks.Length; index++)
-            {
-                if (encodedTracks[index] is { Length: > 0 } track)
-                {
-                    _encodedTracks[index] = track;
-                }
-            }
+            _media = media ?? throw new ArgumentNullException(nameof(media));
+            _sectorMedia = media as IAmigaSectorDiskMedia;
         }
 
-        public byte[] Data { get; }
+        public byte[] Data => RequireSectorMedia().Data;
 
-        public string Name { get; }
+        public string Name => _media.Name;
 
-        public bool HasCompleteSectorData { get; }
+        public bool HasCompleteSectorData => _sectorMedia?.HasCompleteSectorData == true;
 
-        public ReadOnlySpan<byte> BootBlock => Data.AsSpan(0, 1024);
+        public ReadOnlySpan<byte> BootBlock => RequireSectorMedia().BootBlock;
 
         public static AmigaDiskImage Load(string path)
         {
@@ -100,65 +77,35 @@ namespace CopperMod.Amiga
 
         public static AmigaDiskImage FromAdfBytes(byte[] data, string name = "disk.adf")
         {
-            return new AmigaDiskImage(data ?? throw new ArgumentNullException(nameof(data)), name);
+            return new AmigaDiskImage(new AdfDiskMedia(data ?? throw new ArgumentNullException(nameof(data)), name));
         }
 
         public static AmigaDiskImage FromEncodedTracks(byte[][] encodedTracks, string name = "disk.ipf")
         {
-            ArgumentNullException.ThrowIfNull(encodedTracks);
-            var sectorData = AmigaDosTrackDecoder.DecodeBestEffort(encodedTracks, out var hasCompleteSectorData);
-            return new AmigaDiskImage(sectorData, name, encodedTracks, hasCompleteSectorData);
+            return new AmigaDiskImage(new TrackBackedDiskMedia(encodedTracks, name));
         }
 
         public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
         {
-            if (cylinder < 0 || cylinder >= CylinderCount)
-            {
-                throw new ArgumentOutOfRangeException(nameof(cylinder));
-            }
-
-            if (head < 0 || head >= HeadCount)
-            {
-                throw new ArgumentOutOfRangeException(nameof(head));
-            }
-
-            if (sector < 0 || sector >= SectorsPerTrack)
-            {
-                throw new ArgumentOutOfRangeException(nameof(sector));
-            }
-
-            var lba = ((cylinder * HeadCount) + head) * SectorsPerTrack + sector;
-            return ReadSector(lba);
+            return RequireSectorMedia().ReadSector(cylinder, head, sector);
         }
 
         public ReadOnlySpan<byte> ReadSector(int logicalSector)
         {
-            var offset = checked(logicalSector * SectorSize);
-            if (logicalSector < 0 || offset + SectorSize > Data.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(logicalSector));
-            }
-
-            return Data.AsSpan(offset, SectorSize);
+            return RequireSectorMedia().ReadSector(logicalSector);
         }
 
         public ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount)
         {
-            if (byteOffset < 0 || byteCount < 0 || byteOffset + byteCount > Data.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(byteOffset), "Requested disk byte range is outside the ADF image.");
-            }
-
-            return Data.AsSpan(byteOffset, byteCount);
+            return RequireSectorMedia().ReadBytes(byteOffset, byteCount);
         }
 
         public ReadOnlySpan<byte> ReadEncodedTrack(int cylinder, int head)
         {
-            var index = GetTrackIndex(cylinder, head);
-            return _encodedTracks[index] ??= AmigaDosTrackEncoder.EncodeTrack(this, cylinder, head);
+            return _media.ReadEncodedTrack(cylinder, head);
         }
 
-        private static int GetTrackIndex(int cylinder, int head)
+        internal static int GetTrackIndex(int cylinder, int head)
         {
             if (cylinder < 0 || cylinder >= CylinderCount)
             {
@@ -171,6 +118,159 @@ namespace CopperMod.Amiga
             }
 
             return (cylinder * HeadCount) + head;
+        }
+
+        internal static int GetLogicalSector(int cylinder, int head, int sector)
+        {
+            _ = GetTrackIndex(cylinder, head);
+            if (sector < 0 || sector >= SectorsPerTrack)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sector));
+            }
+
+            return ((cylinder * HeadCount) + head) * SectorsPerTrack + sector;
+        }
+
+        private IAmigaSectorDiskMedia RequireSectorMedia()
+        {
+            return _sectorMedia ?? throw new AmigaEmulationException($"Disk image '{Name}' does not expose standard AmigaDOS sectors.");
+        }
+    }
+
+    internal interface IAmigaDiskMedia
+    {
+        string Name { get; }
+
+        ReadOnlySpan<byte> ReadEncodedTrack(int cylinder, int head);
+    }
+
+    internal interface IAmigaSectorDiskMedia : IAmigaDiskMedia
+    {
+        byte[] Data { get; }
+
+        bool HasCompleteSectorData { get; }
+
+        ReadOnlySpan<byte> BootBlock { get; }
+
+        ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector);
+
+        ReadOnlySpan<byte> ReadSector(int logicalSector);
+
+        ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount);
+    }
+
+    internal sealed class AdfDiskMedia : IAmigaSectorDiskMedia
+    {
+        private readonly byte[][] _encodedTracks = new byte[AmigaDiskImage.TrackCount][];
+
+        public AdfDiskMedia(byte[] data, string name)
+        {
+            if (data.Length != AmigaDiskImage.StandardAdfSize)
+            {
+                throw new AmigaEmulationException($"Only standard {AmigaDiskImage.StandardAdfSize}-byte sector images are supported.");
+            }
+
+            Data = data;
+            Name = name;
+        }
+
+        public byte[] Data { get; }
+
+        public string Name { get; }
+
+        public bool HasCompleteSectorData => true;
+
+        public ReadOnlySpan<byte> BootBlock => Data.AsSpan(0, 1024);
+
+        public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
+        {
+            return ReadSector(AmigaDiskImage.GetLogicalSector(cylinder, head, sector));
+        }
+
+        public ReadOnlySpan<byte> ReadSector(int logicalSector)
+        {
+            var offset = checked(logicalSector * AmigaDiskImage.SectorSize);
+            if (logicalSector < 0 || offset + AmigaDiskImage.SectorSize > Data.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(logicalSector));
+            }
+
+            return Data.AsSpan(offset, AmigaDiskImage.SectorSize);
+        }
+
+        public ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount)
+        {
+            if (byteOffset < 0 || byteCount < 0 || byteOffset + byteCount > Data.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(byteOffset), "Requested disk byte range is outside the sector image.");
+            }
+
+            return Data.AsSpan(byteOffset, byteCount);
+        }
+
+        public ReadOnlySpan<byte> ReadEncodedTrack(int cylinder, int head)
+        {
+            var index = AmigaDiskImage.GetTrackIndex(cylinder, head);
+            return _encodedTracks[index] ??= AmigaDosTrackEncoder.EncodeTrack(this, cylinder, head);
+        }
+    }
+
+    internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia
+    {
+        private readonly byte[][] _encodedTracks;
+
+        public TrackBackedDiskMedia(byte[][] encodedTracks, string name)
+        {
+            ArgumentNullException.ThrowIfNull(encodedTracks);
+            if (encodedTracks.Length != AmigaDiskImage.TrackCount)
+            {
+                throw new ArgumentException($"Exactly {AmigaDiskImage.TrackCount} encoded tracks are required.", nameof(encodedTracks));
+            }
+
+            _encodedTracks = encodedTracks;
+            Data = AmigaDosTrackDecoder.DecodeBestEffort(encodedTracks, out var hasCompleteSectorData);
+            HasCompleteSectorData = hasCompleteSectorData;
+            Name = name;
+        }
+
+        public byte[] Data { get; }
+
+        public string Name { get; }
+
+        public bool HasCompleteSectorData { get; }
+
+        public ReadOnlySpan<byte> BootBlock => Data.AsSpan(0, 1024);
+
+        public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
+        {
+            return ReadSector(AmigaDiskImage.GetLogicalSector(cylinder, head, sector));
+        }
+
+        public ReadOnlySpan<byte> ReadSector(int logicalSector)
+        {
+            var offset = checked(logicalSector * AmigaDiskImage.SectorSize);
+            if (logicalSector < 0 || offset + AmigaDiskImage.SectorSize > Data.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(logicalSector));
+            }
+
+            return Data.AsSpan(offset, AmigaDiskImage.SectorSize);
+        }
+
+        public ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount)
+        {
+            if (byteOffset < 0 || byteCount < 0 || byteOffset + byteCount > Data.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(byteOffset), "Requested disk byte range is outside the decoded sector view.");
+            }
+
+            return Data.AsSpan(byteOffset, byteCount);
+        }
+
+        public ReadOnlySpan<byte> ReadEncodedTrack(int cylinder, int head)
+        {
+            var index = AmigaDiskImage.GetTrackIndex(cylinder, head);
+            return _encodedTracks[index] ??= AmigaDosTrackEncoder.CreateUnformattedTrack();
         }
     }
 
@@ -818,7 +918,7 @@ namespace CopperMod.Amiga
         private const uint MfmDataMask = 0x5555_5555;
         private static readonly int[] PhysicalSectorOrder = { 9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8 };
 
-        public static byte[] EncodeTrack(AmigaDiskImage disk, int cylinder, int head)
+        public static byte[] EncodeTrack(IAmigaSectorDiskMedia disk, int cylinder, int head)
         {
             ArgumentNullException.ThrowIfNull(disk);
             if (cylinder < 0 || cylinder >= AmigaDiskImage.CylinderCount)

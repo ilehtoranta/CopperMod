@@ -32,6 +32,49 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void ShadowOfTheBeastIpfDoesNotExitDuringInitialFramesWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+
+		for (var frame = 0; frame < 120; frame++)
+		{
+			emulator.RenderNextFrame();
+		}
+
+		Assert.False(string.IsNullOrWhiteSpace(emulator.StatusText));
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.False(emulator.StatusText.StartsWith("AMIGA_BOOT_", StringComparison.Ordinal), emulator.StatusText);
+	}
+
+	[Fact]
+	public void InvalidStartupDiskRendersStatusInsteadOfThrowing()
+	{
+		var diskPath = Path.Combine(Path.GetTempPath(), "copperscreen-invalid-startup.adf");
+		File.WriteAllBytes(diskPath, new byte[128]);
+		try
+		{
+			var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+
+			emulator.RenderNextFrame();
+
+			Assert.Contains("sector images", emulator.StatusText);
+		}
+		finally
+		{
+			File.Delete(diskPath);
+		}
+	}
+
+	[Fact]
 	public void BootingDiskLeavesBlankHardwareFrameInsteadOfInsertDiskOverlay()
 	{
 		var diskPath = Path.Combine(Path.GetTempPath(), "copperscreen-blank-boot.adf");

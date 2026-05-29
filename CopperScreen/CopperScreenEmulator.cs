@@ -217,7 +217,17 @@ internal sealed class CopperScreenEmulator
 		}
 
 		var fullPath = Path.GetFullPath(diskPath);
-		var disk = AmigaDiskImage.Load(fullPath);
+		AmigaDiskImage disk;
+		try
+		{
+			disk = AmigaDiskImage.Load(fullPath);
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		{
+			StatusText = ex.Message;
+			return false;
+		}
+
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		DiskPath = fullPath;
@@ -458,19 +468,31 @@ internal sealed class CopperScreenEmulator
 
 		if (!_bootAttempted)
 		{
-			_bootAttempted = true;
-			var disk = AmigaDiskImage.Load(DiskPath);
-			if (_profile.UsesKickstartRom)
+			try
 			{
-				_boot.StartKickstartRomBoot(disk);
-			}
-			else
-			{
-				_boot.StartBootFromDisk(disk);
-			}
+				_bootAttempted = true;
+				var disk = AmigaDiskImage.Load(DiskPath);
+				if (_profile.UsesKickstartRom)
+				{
+					_boot.StartKickstartRomBoot(disk);
+				}
+				else
+				{
+					_boot.StartBootFromDisk(disk);
+				}
 
-			_targetCycle = 0;
-			_audioCycle = _machine.Cpu.State.Cycles;
+				_targetCycle = 0;
+				_audioCycle = _machine.Cpu.State.Cycles;
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+			{
+				_frameAudio.AsSpan().Clear();
+				_previousInterlaceFrameValid = false;
+				StatusText = ex.Message;
+				InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
+				AdvanceInputPulse();
+				return;
+			}
 		}
 
 		_targetCycle += PalFrameCycles;

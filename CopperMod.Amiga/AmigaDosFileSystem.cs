@@ -42,7 +42,8 @@ namespace CopperMod.Amiga
 
         public static bool IsSupported(AmigaDiskImage disk)
         {
-            return disk.Data.Length >= (StandardRootBlock + 1) * BlockSize &&
+            return disk.HasCompleteSectorData &&
+                disk.Data.Length >= (StandardRootBlock + 1) * BlockSize &&
                 disk.Data[0] == (byte)'D' &&
                 disk.Data[1] == (byte)'O' &&
                 disk.Data[2] == (byte)'S' &&

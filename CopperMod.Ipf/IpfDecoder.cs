@@ -265,7 +265,13 @@ public static class IpfDecoder
             var written = 0;
             while (written < gapBits)
             {
-                written += context.WriteMfm(gap, gapBits - written);
+                var progress = context.WriteMfm(gap, gapBits - written);
+                if (progress == 0)
+                {
+                    throw new IpfDecodeException("Unable to make progress while generating an MFM gap.");
+                }
+
+                written += progress;
             }
         }
 
@@ -305,7 +311,13 @@ public static class IpfDecoder
                         var written = 0;
                         while (written < maxOutputBits)
                         {
-                            written += context.WriteMfm(zero, maxOutputBits - written);
+                            var progress = context.WriteMfm(zero, maxOutputBits - written);
+                            if (progress == 0)
+                            {
+                                throw new IpfDecodeException("Unable to make progress while generating weak MFM data.");
+                            }
+
+                            written += progress;
                         }
                     }
                     else
@@ -485,16 +497,21 @@ public static class IpfDecoder
         public int WriteMfm(ReadOnlySpan<byte> data, int maxOutputBits)
         {
             var written = 0;
-            for (var index = 0; index < data.Length && written + 1 < maxOutputBits; index++)
+            for (var index = 0; index < data.Length && written < maxOutputBits; index++)
             {
                 var value = data[index];
-                for (var bitIndex = 7; bitIndex >= 0 && written + 1 < maxOutputBits; bitIndex--)
+                for (var bitIndex = 7; bitIndex >= 0 && written < maxOutputBits; bitIndex--)
                 {
                     var dataBit = ((value >> bitIndex) & 1) != 0;
                     var clockBit = !PreviousDataBit && !dataBit;
                     Writer.WriteBit(clockBit);
-                    Writer.WriteBit(dataBit);
-                    written += 2;
+                    written++;
+                    if (written < maxOutputBits)
+                    {
+                        Writer.WriteBit(dataBit);
+                        written++;
+                    }
+
                     PreviousDataBit = dataBit;
                 }
             }

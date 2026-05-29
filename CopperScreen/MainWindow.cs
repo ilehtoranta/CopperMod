@@ -29,6 +29,7 @@ internal sealed class MainWindow : Window
 	private readonly Button _benchToggleButton;
 	private readonly Button _pauseButton;
 	private readonly Button _numpadModeButton;
+	private readonly Button _fullscreenButton;
 	private readonly StackPanel _entryList;
 	private readonly DispatcherTimer _timer;
 	private readonly WaveOutAudioOutput? _audio;
@@ -61,6 +62,7 @@ internal sealed class MainWindow : Window
 		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench);
 		_pauseButton = CreateToolbarButton("Pause", TogglePause);
 		_numpadModeButton = CreateToolbarButton("Numpad: Joy", ToggleNumpadMode);
+		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen);
 		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
 		_root = new Grid();
 		_benchPanel = CreateCopperBenchPanel();
@@ -125,7 +127,7 @@ internal sealed class MainWindow : Window
 		}
 
 		UpdateToolbarStatus();
-		Title = "CopperScreen - " + _emulator.ProfileName + " - " + _emulator.StatusText + " - F11 toolbar, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
+		Title = "CopperScreen - " + _emulator.ProfileName + " - " + _emulator.StatusText + " - F11 toolbar, Alt+Enter fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)
@@ -160,6 +162,14 @@ internal sealed class MainWindow : Window
 		{
 			_bench.ToggleToolbar();
 			RefreshCopperBenchUi();
+			args.Handled = true;
+			return;
+		}
+
+		if ((args.Key == Key.Enter || args.Key == Key.Return || args.PhysicalKey == PhysicalKey.Enter || args.PhysicalKey == PhysicalKey.NumPadEnter) &&
+			(args.KeyModifiers & KeyModifiers.Alt) != 0)
+		{
+			ToggleFullscreen();
 			args.Handled = true;
 			return;
 		}
@@ -343,11 +353,17 @@ internal sealed class MainWindow : Window
 
 	private Border CreateToolbar()
 	{
+		_toolbarStatus.Foreground = Brushes.White;
+		_toolbarStatus.FontSize = 12;
+		_toolbarStatus.TextWrapping = TextWrapping.NoWrap;
+		_toolbarStatus.TextTrimming = TextTrimming.CharacterEllipsis;
+
 		var bar = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
 			Spacing = 6,
-			VerticalAlignment = VerticalAlignment.Center
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Left
 		};
 		bar.Children.Add(_benchToggleButton);
 		bar.Children.Add(_pauseButton);
@@ -357,12 +373,7 @@ internal sealed class MainWindow : Window
 			RefreshCopperBenchUi();
 			PresentFrame(catchUpAudio: false);
 		}));
-		bar.Children.Add(CreateToolbarButton("Fire", () =>
-		{
-			_bench.PulseFire();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
-		}));
+		bar.Children.Add(_fullscreenButton);
 		bar.Children.Add(_numpadModeButton);
 		bar.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
 		bar.Children.Add(CreateToolbarButton("Prev", () =>
@@ -377,20 +388,24 @@ internal sealed class MainWindow : Window
 			RefreshCopperBenchUi();
 			PresentFrame(catchUpAudio: false);
 		}));
-		_toolbarStatus.Foreground = Brushes.White;
-		_toolbarStatus.VerticalAlignment = VerticalAlignment.Center;
-		_toolbarStatus.TextWrapping = TextWrapping.NoWrap;
-		bar.Children.Add(_toolbarStatus);
+
+		var layout = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 5
+		};
+		layout.Children.Add(_toolbarStatus);
+		layout.Children.Add(bar);
 
 		return new Border
 		{
 			Background = new SolidColorBrush(Color.FromArgb(220, 18, 22, 28)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(70, 78, 92)),
 			BorderThickness = new Thickness(0, 0, 0, 1),
-			Padding = new Thickness(8, 6),
+			Padding = new Thickness(8, 5),
 			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Top,
-			Child = bar
+			Child = layout
 		};
 	}
 
@@ -507,7 +522,7 @@ internal sealed class MainWindow : Window
 		return new Border
 		{
 			Width = 820,
-			Margin = new Thickness(12, 48, 0, 12),
+			Margin = new Thickness(12, 78, 0, 12),
 			Padding = new Thickness(12),
 			CornerRadius = new CornerRadius(6),
 			Background = new SolidColorBrush(Color.FromArgb(235, 20, 24, 31)),
@@ -561,6 +576,14 @@ internal sealed class MainWindow : Window
 		PresentFrame(catchUpAudio: false);
 	}
 
+	private void ToggleFullscreen()
+	{
+		WindowState = WindowState == WindowState.FullScreen
+			? WindowState.Normal
+			: WindowState.FullScreen;
+		RefreshCopperBenchUi();
+	}
+
 	private void ToggleNumpadMode()
 	{
 		ReleaseInteractiveInput();
@@ -609,6 +632,7 @@ internal sealed class MainWindow : Window
 		_benchToggleButton.Content = _bench.IsOverlayVisible ? "Hide" : "Bench";
 		_pauseButton.Content = _bench.IsPaused ? "Run" : "Pause";
 		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "Numpad: Joy" : "Numpad: Keys";
+		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
 		_benchPath.Text = _bench.DisplayPath;
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
@@ -665,8 +689,8 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus()
 	{
-		var numpad = _numpadMode == NumpadInputMode.Joystick ? "numpad joystick" : "numpad keys";
-		_toolbarStatus.Text = $"{_emulator.ProfileName} | {_emulator.DiskName} | {numpad} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
+		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
+		_toolbarStatus.Text = $"{_emulator.ProfileName} | {_emulator.DiskName} | {_emulator.DriveStatusText} | {_emulator.ProgramCounterText} | {_emulator.StatusText}";
 	}
 
 	[Flags]
