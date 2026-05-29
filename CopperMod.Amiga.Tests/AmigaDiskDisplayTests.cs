@@ -76,6 +76,42 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void EncodedTrackReadsAcrossByteBoundariesAndWrapsAtBitLength()
+    {
+        var track = new AmigaEncodedTrack(new byte[] { 0x12, 0x34, 0x50 }, 20);
+
+        Assert.Equal(0x12, track.ReadByte(0));
+        Assert.Equal(0x2345, track.ReadUInt16(4));
+        Assert.Equal(0x5123, track.ReadUInt16(16));
+        Assert.Equal(0x2345u, track.ReadUInt32(4) >> 16);
+    }
+
+    [Fact]
+    public void EncodedTrackBackedImagesDecodeAmigaDosSectorsAtNonByteBitOffsets()
+    {
+        var data = new byte[AmigaDiskImage.StandardAdfSize];
+        data[0] = (byte)'D';
+        data[1] = (byte)'O';
+        data[2] = (byte)'S';
+        data[3] = 0;
+        data[AmigaDiskImage.SectorSize] = 0x42;
+        data[AmigaDiskImage.SectorSize + 511] = 0x99;
+        var sectorDisk = AmigaDiskImage.FromAdfBytes(data);
+        var tracks = CreateUnformattedEncodedTrackSet();
+        tracks[0] = ShiftTrackBits(AmigaDosTrackEncoder.EncodeTrack(sectorDisk, 0, 0), 3);
+
+        var decodedDisk = AmigaDiskImage.FromEncodedTracks(tracks);
+        var sector = decodedDisk.ReadSector(0, 0, 1);
+
+        Assert.False(decodedDisk.HasCompleteSectorData);
+        Assert.Equal((byte)'D', decodedDisk.BootBlock[0]);
+        Assert.Equal((byte)'O', decodedDisk.BootBlock[1]);
+        Assert.Equal((byte)'S', decodedDisk.BootBlock[2]);
+        Assert.Equal(0x42, sector[0]);
+        Assert.Equal(0x99, sector[^1]);
+    }
+
+    [Fact]
     public void ShadowOfTheBeastIpfZipLoadsManagedEncodedTracksWhenPresent()
     {
         var path = TryFindWorkspaceFile(
@@ -90,7 +126,7 @@ public sealed class AmigaDiskDisplayTests
         var disk = AmigaDiskImage.Load(path);
 
         var track = disk.ReadEncodedTrack(0, 0);
-        Assert.True(track.Length > 0);
+        Assert.True(track.BitLength > 0);
         Assert.True(ContainsWord(track, 0x4489));
     }
 
@@ -1996,6 +2032,31 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void WordSyncedDiskDmaReadsNonByteAlignedBitstreamWords()
+    {
+        var bus = new AmigaBus();
+        var tracks = CreateUnformattedEncodedTrackSet();
+        var rawTrack = new byte[8];
+        BigEndian.WriteUInt16(rawTrack, 0, 0x4489);
+        BigEndian.WriteUInt16(rawTrack, 2, 0x4489);
+        BigEndian.WriteUInt16(rawTrack, 4, 0xABCD);
+        BigEndian.WriteUInt16(rawTrack, 6, 0x1357);
+        tracks[0] = ShiftTrackBits(rawTrack, 3);
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
+        bus.WriteWord(0x00DFF09E, 0x8400);
+        bus.Paula.AdvanceTo(0);
+
+        StartDiskDma(bus, 0x4000, 0x0003);
+        CompleteDiskDma(bus, 0, 0x0003);
+
+        Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "non-byte-aligned sync DMA word"));
+        Assert.Equal(0xABCD, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "non-byte-aligned payload word"));
+        Assert.Equal(0x1357, BigEndian.ReadUInt16(bus.ChipRam, 0x4004, "non-byte-aligned second payload word"));
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x1000);
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+    }
+
+    [Fact]
     public void DiskDmaDoesNotStartUntilDriveIsSelectedAndMotorOn()
     {
         var bus = new AmigaBus();
@@ -2438,6 +2499,45 @@ public sealed class AmigaDiskDisplayTests
         return tracks;
     }
 
+    private static AmigaEncodedTrack[] CreateUnformattedEncodedTrackSet()
+    {
+        var tracks = new AmigaEncodedTrack[AmigaDiskImage.TrackCount];
+        for (var trackIndex = 0; trackIndex < tracks.Length; trackIndex++)
+        {
+            tracks[trackIndex] = AmigaEncodedTrack.FromBytes(AmigaDosTrackEncoder.CreateUnformattedTrack());
+        }
+
+        return tracks;
+    }
+
+    private static AmigaEncodedTrack ShiftTrackBits(byte[] source, int shiftBits)
+    {
+        var bitLength = source.Length * 8;
+        var shifted = new byte[source.Length];
+        shiftBits = AmigaEncodedTrack.Mod(shiftBits, bitLength);
+        for (var bit = 0; bit < bitLength; bit++)
+        {
+            if (!ReadBit(source, bit))
+            {
+                continue;
+            }
+
+            WriteBit(shifted, (bit + shiftBits) % bitLength);
+        }
+
+        return new AmigaEncodedTrack(shifted, bitLength);
+    }
+
+    private static bool ReadBit(ReadOnlySpan<byte> data, int bitOffset)
+    {
+        return ((data[bitOffset >> 3] >> (7 - (bitOffset & 7))) & 1) != 0;
+    }
+
+    private static void WriteBit(Span<byte> data, int bitOffset)
+    {
+        data[bitOffset >> 3] = (byte)(data[bitOffset >> 3] | (1 << (7 - (bitOffset & 7))));
+    }
+
     private static uint DecodeOddEvenLong(ReadOnlySpan<byte> data, int oddOffset, int evenOffset)
     {
         var odd = BigEndian.ReadUInt32(data, oddOffset, "odd MFM longword");
@@ -2468,6 +2568,19 @@ public sealed class AmigaDiskDisplayTests
         for (var offset = 0; offset + 1 < data.Length; offset += 2)
         {
             if (BigEndian.ReadUInt16(data, offset, "encoded track word") == expected)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsWord(AmigaEncodedTrack track, ushort expected)
+    {
+        for (var bitOffset = 0; bitOffset < track.BitLength; bitOffset++)
+        {
+            if (track.ReadUInt16(bitOffset) == expected)
             {
                 return true;
             }

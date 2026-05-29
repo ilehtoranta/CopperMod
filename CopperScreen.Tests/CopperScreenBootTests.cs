@@ -57,6 +57,35 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void OperationThunderboltIpfDoesNotHitEarlyRawLoaderFaultWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Operation Thunderbolt (1990)(Ocean)(FR)(en)(Disk 1 of 2)[compilation Les Justiciers 2].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 240; frame++)
+		{
+			emulator.RenderNextFrame();
+			if (emulator.StatusText.Contains("AMIGA_BOOT_UNSUPPORTED_OPCODE", StringComparison.Ordinal) ||
+				emulator.StatusText.Contains("AMIGA_BOOT_FAULT", StringComparison.Ordinal))
+			{
+				break;
+			}
+		}
+
+		Assert.False(string.IsNullOrWhiteSpace(emulator.StatusText));
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_UNSUPPORTED_OPCODE", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_FAULT", emulator.StatusText);
+	}
+
+	[Fact]
 	public void InvalidStartupDiskRendersStatusInsteadOfThrowing()
 	{
 		var diskPath = Path.Combine(Path.GetTempPath(), "copperscreen-invalid-startup.adf");

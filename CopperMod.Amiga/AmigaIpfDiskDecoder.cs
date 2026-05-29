@@ -11,7 +11,7 @@ namespace CopperMod.Amiga
             try
             {
                 var ipf = IpfDecoder.Decode(data);
-                var tracks = new byte[AmigaDiskImage.CylinderCount * AmigaDiskImage.HeadCount][];
+                var tracks = new AmigaEncodedTrack[AmigaDiskImage.CylinderCount * AmigaDiskImage.HeadCount];
                 foreach (var track in ipf.Tracks)
                 {
                     if ((uint)track.Cylinder >= AmigaDiskImage.CylinderCount ||
@@ -20,12 +20,15 @@ namespace CopperMod.Amiga
                         continue;
                     }
 
-                    tracks[(track.Cylinder * AmigaDiskImage.HeadCount) + track.Head] = track.Data;
+                    tracks[(track.Cylinder * AmigaDiskImage.HeadCount) + track.Head] = new AmigaEncodedTrack(track.Data, track.BitLength);
                 }
 
                 for (var index = 0; index < tracks.Length; index++)
                 {
-                    tracks[index] ??= AmigaDosTrackEncoder.CreateUnformattedTrack();
+                    if (tracks[index].BitLength == 0)
+                    {
+                        tracks[index] = AmigaEncodedTrack.FromBytes(AmigaDosTrackEncoder.CreateUnformattedTrack());
+                    }
                 }
 
                 return AmigaDiskImage.FromEncodedTracks(tracks, name);

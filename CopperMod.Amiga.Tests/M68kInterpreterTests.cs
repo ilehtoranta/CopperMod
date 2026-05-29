@@ -131,6 +131,23 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void IllegalInstructionVectorsThroughIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x4A, 0xFC); // ILLEGAL
+		bus.WriteLong(0x0010, 0x2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.Supervisor, (ushort)(BigEndian.ReadUInt16(bus.Memory, 0x2FFA, "saved status register") & M68kCpuState.Supervisor));
+		Assert.Equal(0x1000u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+	}
+
+	[Fact]
 	public void LineAAndLineFOpcodesVectorThroughEmulatorExceptions()
 	{
 		var bus = new TestBus();

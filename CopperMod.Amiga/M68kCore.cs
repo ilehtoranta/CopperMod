@@ -663,6 +663,9 @@ namespace CopperMod.Amiga
                     State.StatusRegister = PullWord();
                     AddCycles(12);
                     return true;
+                case 0x4AFC:
+                    RaiseException(4, instructionPc, 34);
+                    return true;
             }
 
             if (opcode is 0x4E7A or 0x4E7B)

@@ -150,7 +150,7 @@ public static class IpfDecoder
 
             var writer = new TrackBitWriter(trackBits);
             var context = new TrackEncodingContext(writer);
-            var startBit = options.StartAtIndex ? 0 : image.StartBit % Math.Max(1, trackBits);
+            var startBit = options.StartAtIndex ? image.StartBit % Math.Max(1, trackBits) : 0;
             writer.Position = startBit;
             for (var index = 0; index < blocks.Length; index++)
             {
