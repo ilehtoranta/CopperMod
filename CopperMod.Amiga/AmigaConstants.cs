@@ -9,6 +9,7 @@ namespace CopperMod.Amiga
         public const ushort IntreqPorts = 0x0008;
         public const ushort IntreqCopper = 0x0010;
         public const ushort IntreqVerticalBlank = 0x0020;
+        public const ushort IntreqBlitter = 0x0040;
         public const ushort IntreqExternal = 0x2000;
         public const int A500PalRasterLines = 312;
         public const int PaulaChannelCount = 4;

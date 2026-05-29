@@ -59,8 +59,11 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(107, bus.CustomRegisterWrites[0].Cycle);
 		Assert.Equal(116, bus.CustomRegisterWrites[1].Cycle);
 		Assert.Equal(125, bus.CustomRegisterWrites[2].Cycle);
+		var cpuCustomWrites = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Cpu && access.Request.Target == AmigaBusAccessTarget.CustomRegisters)
+			.ToArray();
 		Assert.All(
-			bus.CustomRegisterWrites.Zip(bus.BusAccesses),
+			bus.CustomRegisterWrites.Zip(cpuCustomWrites),
 			pair => Assert.Equal(pair.Second.GrantedCycle, pair.First.Cycle));
 	}
 

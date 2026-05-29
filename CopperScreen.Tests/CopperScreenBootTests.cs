@@ -528,6 +528,35 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void SuperfrogCslCracktroFilledCubeRemainsInTopLeftWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Superfrog (1993)(Team 17)(Disk 1 of 4)[cr CSL].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 500; frame++)
+		{
+			emulator.RenderNextFrame();
+			if (emulator.StatusText.Contains("AMIGA_BOOT_UNSUPPORTED_OPCODE", StringComparison.Ordinal) ||
+				emulator.StatusText.Contains("AMIGA_BOOT_FAULT", StringComparison.Ordinal))
+			{
+				break;
+			}
+		}
+
+		var cubeRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: 0, y0: 0, width: 180, height: 170);
+		var strayRightRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: 220, y0: 0, width: 100, height: 170);
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_UNSUPPORTED_OPCODE", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_FAULT", emulator.StatusText);
+		Assert.True(cubeRegion > 8_000, $"Expected the filled cube/viewport in the top-left region, saw {cubeRegion} non-black pixels.");
+		Assert.True(strayRightRegion < 250, $"Expected the polygon line blits to stay out of the top-right region, saw {strayRightRegion} non-black pixels.");
+	}
+
+	[Fact]
 	public void MajorMotionDosBootStartsStartupSequenceWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Major Motion (1988)(Microdeal).zip");
@@ -577,6 +606,66 @@ public sealed class CopperScreenBootTests
 		Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_UNSUPPORTED_IO");
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Cpu.State.A[6]);
 		Assert.True(machine.Cpu.State.ProgramCounter is >= 0x0005_0000 and < 0x0005_0200, $"Expected Xenon 2 loader wait, PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+	}
+
+	[Fact]
+	public void MajorMotionCopperBenchLaunchReceivesVblankInterruptsWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Major Motion (1988)(Microdeal).zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		emulator.RenderNextFrame();
+		Assert.True(emulator.IsWorkbenchHandoffPending);
+		Assert.True(emulator.LaunchCopperBenchPath("major", out var message), message);
+
+		for (var frame = 0; frame < 360; frame++)
+		{
+			if (frame is 120 or 210 or 300)
+			{
+				emulator.PulsePrimaryFire(frames: 35);
+			}
+
+			emulator.RenderNextFrame();
+		}
+
+		var machine = GetMachine(emulator);
+		var disk = machine.Bus.Disk.CaptureSnapshot();
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_FAULT", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_UNSUPPORTED_OPCODE", emulator.StatusText);
+		Assert.NotEqual(0x000C_0736u, machine.Cpu.State.ProgramCounter);
+		Assert.True(disk.TransferCount > 0, $"Expected Major Motion VBL code to progress into disk DMA; PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+	}
+
+	[Fact]
+	public void Xenon2CrackedBootReportsNullPcInsteadOfSilentHangWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Xenon 2 - Megablast (1989)(Image Works)(Disk 1 of 2)[cr Band][h Cardinals][t +3 Band].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		for (var frame = 0; frame < 520; frame++)
+		{
+			if (frame == 360)
+			{
+				emulator.PulsePrimaryFire(frames: 35);
+			}
+
+			emulator.RenderNextFrame();
+			if (emulator.StatusText.Contains("AMIGA_BOOT_NULL_PC", StringComparison.Ordinal))
+			{
+				break;
+			}
+		}
+
+		Assert.Contains("AMIGA_BOOT_NULL_PC", emulator.StatusText);
 	}
 
 	[Fact]
@@ -658,7 +747,7 @@ public sealed class CopperScreenBootTests
 
 			machine.Bus.AdvanceRasterTo(machine.Cpu.State.Cycles);
 			machine.Bus.AdvanceCiasTo(machine.Cpu.State.Cycles);
-			machine.Bus.Paula.AdvanceTo(machine.Cpu.State.Cycles);
+			machine.Bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
 			machine.DispatchPendingHardwareInterrupt();
 
 			var snapshot = machine.Bus.Disk.CaptureSnapshot();
@@ -771,7 +860,7 @@ public sealed class CopperScreenBootTests
 			machine.Cpu.ExecuteInstruction();
 			machine.Bus.AdvanceRasterTo(machine.Cpu.State.Cycles);
 			machine.Bus.AdvanceCiasTo(machine.Cpu.State.Cycles);
-			machine.Bus.Paula.AdvanceTo(machine.Cpu.State.Cycles);
+			machine.Bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
 			machine.DispatchPendingHardwareInterrupt();
 		}
 
@@ -1037,6 +1126,24 @@ public sealed class CopperScreenBootTests
 		}
 
 		return checksum;
+	}
+
+	private static int CountNonBlackPixels(IReadOnlyList<int> framebuffer, int stride, int x0, int y0, int width, int height)
+	{
+		var count = 0;
+		const int Black = unchecked((int)0xFF000000);
+		for (var y = y0; y < y0 + height; y++)
+		{
+			for (var x = x0; x < x0 + width; x++)
+			{
+				if (framebuffer[(y * stride) + x] != Black)
+				{
+					count++;
+				}
+			}
+		}
+
+		return count;
 	}
 
 	private static byte[] CreateBranchToSelfBootDisk()

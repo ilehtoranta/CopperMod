@@ -702,7 +702,7 @@ internal sealed class CopperScreenEmulator
 
 	private static bool IsFatalDiagnostic(string code)
 	{
-		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED";
+		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED" or "AMIGA_BOOT_NULL_PC";
 	}
 
 }

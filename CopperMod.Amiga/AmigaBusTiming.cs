@@ -218,4 +218,17 @@ namespace CopperMod.Amiga
 
         public AmigaBusAccessResult BusAccess { get; }
     }
+
+    internal readonly struct AmigaDeviceWordReadResult
+    {
+        public AmigaDeviceWordReadResult(ushort value, AmigaBusAccessResult busAccess)
+        {
+            Value = value;
+            BusAccess = busAccess;
+        }
+
+        public ushort Value { get; }
+
+        public AmigaBusAccessResult BusAccess { get; }
+    }
 }

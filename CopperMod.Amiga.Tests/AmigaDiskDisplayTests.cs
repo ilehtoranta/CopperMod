@@ -935,7 +935,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "blitter destination"));
         Assert.Contains(bus.BusAccesses, access => access.Request.Requester == AmigaBusRequester.Blitter);
@@ -955,7 +957,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0xFF00, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "blitter destination"));
     }
@@ -975,7 +979,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF056, 0x4000);
         bus.WriteWord(0x00DFF072, 0xFFFF);
         bus.WriteWord(0x00DFF074, 0x8000);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0042);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x8000, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "line-mode destination"));
         Assert.Equal(0x5678, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "line-mode overflow sentinel"));
@@ -995,7 +1001,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF056, 0x4000);
         bus.WriteWord(0x00DFF064, 0x0001);
         bus.WriteWord(0x00DFF066, 0x0001);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0081);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x1111, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "first blit row"));
         Assert.Equal(0x2222, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "second blit row"));
@@ -1012,7 +1020,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3001);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4001);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "even destination"));
         Assert.Equal(0, bus.ChipRam[0x4002]);
@@ -1030,11 +1040,14 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF056, 0x4000);
         bus.WriteWord(0x00DFF064, 0x0004);
         bus.WriteWord(0x00DFF040, 0x0100);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0081);
+        RunBlitterUntilIdle(bus);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
         bus.WriteWord(0x00DFF040, 0x09F0);
         bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "source A pointer after disabled blit"));
     }
@@ -1051,7 +1064,9 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x0000, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "first shifted DMA word"));
     }
@@ -1068,10 +1083,325 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0081);
+        RunBlitterUntilIdle(bus);
 
         Assert.Equal(0x0000, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "first shifted row"));
         Assert.Equal(0x8000, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "second shifted row"));
+    }
+
+    [Fact]
+    public void BlitterBusyBitRemainsSetUntilDmaCyclesComplete()
+    {
+        var bus = new AmigaBus();
+        for (var i = 0; i < 4; i++)
+        {
+            BigEndian.WriteUInt16(bus.ChipRam, 0x3000 + (i * 2), (ushort)(0x1000 + i));
+        }
+
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0044);
+
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF002) & 0x4000);
+
+        bus.AdvanceDmaTo(1);
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF002) & 0x4000);
+
+        RunBlitterUntilIdle(bus);
+        Assert.Equal(0, bus.ReadWord(0x00DFF002) & 0x4000);
+        Assert.Equal(0x1003, BigEndian.ReadUInt16(bus.ChipRam, 0x4006, "last blit word"));
+    }
+
+    [Fact]
+    public void BlitterRequestsLevelThreeInterruptOnCompletion()
+    {
+        var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+        var bus = machine.Bus;
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
+        machine.Bus.WriteLong(0x6C, 0x0000_2000);
+        machine.Cpu.Reset(0x1000, 0x3000);
+
+        bus.WriteWord(0x00DFF09A, 0xC040);
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqBlitter);
+        Assert.True(machine.DispatchPendingHardwareInterrupt());
+        Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);
+        Assert.Equal(3, (machine.Cpu.State.StatusRegister >> 8) & 7);
+    }
+
+    [Fact]
+    public void BlitterZeroFlagTracksAllZeroAndNonZeroOutput()
+    {
+        var bus = new AmigaBus();
+
+        bus.WriteWord(0x00DFF040, 0x0100);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF002) & 0x2000);
+
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x0001);
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0, bus.ReadWord(0x00DFF002) & 0x2000);
+    }
+
+    [Fact]
+    public void BlitterWaitsForDmaMasterAndBlitterEnable()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
+
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        bus.WriteWord(0x00DFF058, 0x0041);
+
+        bus.AdvanceDmaTo(1000);
+        Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+        Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "gated destination"));
+
+        EnableBlitterDma(bus, 1000);
+        bus.AdvanceDmaTo(2000);
+
+        Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+        Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "ungated destination"));
+    }
+
+    [Fact]
+    public void BlitterNastyModeStallsCpuChipAccessButNotExpansionRam()
+    {
+        var nastyBus = new AmigaBus(expansionRamSize: 0x10000);
+        BigEndian.WriteUInt16(nastyBus.ChipRam, 0x3000, 0x1234);
+        ConfigureFourWordCopyBlit(nastyBus);
+        nastyBus.WriteWord(0x00DFF096, 0x8640);
+        nastyBus.AdvanceDmaTo(0);
+        nastyBus.WriteWord(0x00DFF058, 0x0044);
+
+        var expansionCycle = 0L;
+        _ = nastyBus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref expansionCycle, AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(0, expansionCycle);
+        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+
+        var chipCycle = 0L;
+        _ = nastyBus.ReadWord(0x00001000, ref chipCycle, AmigaBusAccessKind.CpuDataRead);
+        Assert.True(chipCycle > 0);
+        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+
+        var normalBus = new AmigaBus();
+        BigEndian.WriteUInt16(normalBus.ChipRam, 0x3000, 0x1234);
+        ConfigureFourWordCopyBlit(normalBus);
+        EnableBlitterDma(normalBus);
+        normalBus.WriteWord(0x00DFF058, 0x0044);
+
+        var normalCycle = 0L;
+        _ = normalBus.ReadWord(0x00001000, ref normalCycle, AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(0, normalCycle);
+        Assert.True(normalBus.Blitter.CaptureSnapshot().Busy);
+    }
+
+    [Fact]
+    public void BlitterBusAccessLogShowsOrderedDmaReadsAndWrites()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
+
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+
+        var blitterDma = bus.BusAccesses
+            .Where(access => access.Request.Requester == AmigaBusRequester.Blitter && access.Request.Kind == AmigaBusAccessKind.Blitter)
+            .ToArray();
+        Assert.Equal(2, blitterDma.Length);
+        Assert.False(blitterDma[0].Request.IsWrite);
+        Assert.Equal(0x3000u, blitterDma[0].Request.Address);
+        Assert.True(blitterDma[1].Request.IsWrite);
+        Assert.Equal(0x4000u, blitterDma[1].Request.Address);
+        Assert.True(blitterDma[0].RequestedCycle <= blitterDma[1].RequestedCycle);
+    }
+
+    [Theory]
+    [InlineData(0x000A, 0x0008, 0xFFF8)]
+    [InlineData(0x0012, 0x0008, 0xFFF0)]
+    [InlineData(0x000E, 0x0000, 0xFFFF)]
+    [InlineData(0x0016, 0x0000, 0xFFFF)]
+    public void BlitterAreaFillHandlesInclusiveExclusiveAndInitialCarry(ushort bltcon1, ushort source, ushort expected)
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, source);
+
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF042, bltcon1);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(expected, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "filled word"));
+    }
+
+    [Fact]
+    public void BlitterAreaFillCarriesAcrossDescendingWordsAndResetsEachRow()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3002, 0x0008);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3004, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3006, 0x0008);
+
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF042, 0x000A);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3006);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4006);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0082);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0xFFFF, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "row 0 carry word"));
+        Assert.Equal(0xFFF8, BigEndian.ReadUInt16(bus.ChipRam, 0x4002, "row 0 edge word"));
+        Assert.Equal(0xFFFF, BigEndian.ReadUInt16(bus.ChipRam, 0x4004, "row 1 carry word"));
+        Assert.Equal(0xFFF8, BigEndian.ReadUInt16(bus.ChipRam, 0x4006, "row 1 edge word"));
+    }
+
+    [Fact]
+    public void BlitterAreaFillRunsAfterMinterm()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0xFFF7);
+
+        bus.WriteWord(0x00DFF040, 0x090F);
+        bus.WriteWord(0x00DFF042, 0x000A);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        EnableBlitterDma(bus);
+        bus.WriteWord(0x00DFF058, 0x0041);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0xFFF8, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "fill-after-minterm destination"));
+    }
+
+    [Theory]
+    [InlineData(0x0000, 1, 1)]
+    [InlineData(0x0004, 1, -1)]
+    [InlineData(0x0008, -1, 1)]
+    [InlineData(0x000C, -1, -1)]
+    [InlineData(0x0010, 1, 1)]
+    [InlineData(0x0014, -1, 1)]
+    [InlineData(0x0018, 1, -1)]
+    [InlineData(0x001C, -1, -1)]
+    public void BlitterLineModeUsesOctantBitsForMinorAndMajorSteps(ushort octantBits, int expectedSecondX, int expectedSecondY)
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+        const int RowStride = 8;
+
+        ConfigureLineBlit(bus, Base, RowStride, (ushort)(0x0001 | octantBits));
+        bus.WriteWord(0x00DFF058, 0x0082);
+        RunBlitterUntilIdle(bus);
+
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 0), "Expected the first line pixel.");
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, expectedSecondX, expectedSecondY), "Expected the second line pixel.");
+    }
+
+    [Theory]
+    [InlineData(0x0000, 0, 1)]
+    [InlineData(0x0004, 0, -1)]
+    [InlineData(0x0008, 0, 1)]
+    [InlineData(0x000C, 0, -1)]
+    [InlineData(0x0010, 1, 0)]
+    [InlineData(0x0014, -1, 0)]
+    [InlineData(0x0018, 1, 0)]
+    [InlineData(0x001C, -1, 0)]
+    public void BlitterLineModeUsesOctantBitsForMajorOnlyStepsWhenSignIsSet(ushort octantBits, int expectedSecondX, int expectedSecondY)
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+        const int RowStride = 8;
+
+        ConfigureLineBlit(bus, Base, RowStride, (ushort)(0x0041 | octantBits), initialAccumulator: -2);
+        bus.WriteWord(0x00DFF058, 0x0082);
+        RunBlitterUntilIdle(bus);
+
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, 0, 0), "Expected the first line pixel.");
+        Assert.True(IsLinePixelSet(bus, Base, RowStride, expectedSecondX, expectedSecondY), "Expected the major-axis line pixel.");
+    }
+
+    [Fact]
+    public void BlitterLineSingleDotModeDrawsOnlyOnePixelPerRow()
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+        const int RowStride = 8;
+
+        ConfigureLineBlit(bus, Base, RowStride, 0x0007);
+        bus.WriteWord(0x00DFF058, 0x0082);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0x8000, BigEndian.ReadUInt16(bus.ChipRam, (int)Base, "single-dot row"));
+    }
+
+    [Fact]
+    public void BlitterLineTextureStartPhaseControlsFirstPixel()
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+
+        ConfigureLineBlit(bus, Base, 8, 0x1001, texture: 0x8000);
+        bus.WriteWord(0x00DFF058, 0x0042);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, (int)Base, "texture-skipped first pixel"));
+    }
+
+    [Fact]
+    public void BlitterLineXorModeCanEraseAnExistingPixel()
+    {
+        var bus = new AmigaBus();
+        const uint Base = 0x4200;
+        BigEndian.WriteUInt16(bus.ChipRam, (int)Base, 0x8000);
+
+        ConfigureLineBlit(bus, Base, 8, 0x0001, minterm: 0x4A);
+        bus.WriteWord(0x00DFF058, 0x0042);
+        RunBlitterUntilIdle(bus);
+
+        Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, (int)Base, "xor-erased pixel"));
     }
 
     [Fact]
@@ -1497,6 +1827,69 @@ public sealed class AmigaDiskDisplayTests
             ((vStart & 0x100) != 0 ? 0x0004 : 0) |
             (attached ? 0x0080 : 0));
         return (pos, ctl);
+    }
+
+    private static void EnableBlitterDma(AmigaBus bus, long cycle = 0)
+    {
+        bus.WriteWord(0x00DFF096, 0x8240, cycle);
+        bus.AdvanceDmaTo(cycle);
+    }
+
+    private static void RunBlitterUntilIdle(AmigaBus bus, long cycle = 100_000)
+    {
+        bus.AdvanceDmaTo(cycle);
+        Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+    }
+
+    private static void ConfigureFourWordCopyBlit(AmigaBus bus)
+    {
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+    }
+
+    private static void ConfigureLineBlit(
+        AmigaBus bus,
+        uint baseAddress,
+        ushort rowStride,
+        ushort bltcon1,
+        ushort texture = 0xFFFF,
+        byte minterm = 0xCA,
+        short initialAccumulator = 0,
+        short aModulo = 0,
+        short bModulo = 0)
+    {
+        bus.WriteWord(0x00DFF040, (ushort)(0x0B00 | minterm));
+        bus.WriteWord(0x00DFF042, bltcon1);
+        bus.WriteWord(0x00DFF048, (ushort)(baseAddress >> 16));
+        bus.WriteWord(0x00DFF04A, (ushort)baseAddress);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, unchecked((ushort)initialAccumulator));
+        bus.WriteWord(0x00DFF054, (ushort)(baseAddress >> 16));
+        bus.WriteWord(0x00DFF056, (ushort)baseAddress);
+        bus.WriteWord(0x00DFF060, rowStride);
+        bus.WriteWord(0x00DFF062, unchecked((ushort)bModulo));
+        bus.WriteWord(0x00DFF064, unchecked((ushort)aModulo));
+        bus.WriteWord(0x00DFF066, rowStride);
+        bus.WriteWord(0x00DFF072, texture);
+        bus.WriteWord(0x00DFF074, 0x8000);
+        EnableBlitterDma(bus);
+    }
+
+    private static bool IsLinePixelSet(AmigaBus bus, uint baseAddress, int rowStride, int x, int y)
+    {
+        var wordOffset = Math.DivRem(x, 16, out var bit);
+        if (bit < 0)
+        {
+            bit += 16;
+            wordOffset--;
+        }
+
+        var address = (int)baseAddress + (y * rowStride) + (wordOffset * 2);
+        var word = BigEndian.ReadUInt16(bus.ChipRam, address, "line pixel word");
+        return (word & (0x8000 >> bit)) != 0;
     }
 
     private static void StartDiskDma(AmigaBus bus, uint targetAddress, ushort words, long cycle = 0)

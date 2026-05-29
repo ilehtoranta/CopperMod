@@ -1500,8 +1500,79 @@ namespace CopperMod.Amiga
         }
     }
 
+    internal readonly struct AmigaBlitterSnapshot
+    {
+        public AmigaBlitterSnapshot(
+            bool busy,
+            bool zero,
+            long currentCycle,
+            uint sourceA,
+            uint sourceB,
+            uint sourceC,
+            uint destinationD,
+            int widthWords,
+            int height,
+            int wordX,
+            int rowY,
+            bool lineMode)
+        {
+            Busy = busy;
+            Zero = zero;
+            CurrentCycle = currentCycle;
+            SourceA = sourceA;
+            SourceB = sourceB;
+            SourceC = sourceC;
+            DestinationD = destinationD;
+            WidthWords = widthWords;
+            Height = height;
+            WordX = wordX;
+            RowY = rowY;
+            LineMode = lineMode;
+        }
+
+        public bool Busy { get; }
+
+        public bool Zero { get; }
+
+        public long CurrentCycle { get; }
+
+        public uint SourceA { get; }
+
+        public uint SourceB { get; }
+
+        public uint SourceC { get; }
+
+        public uint DestinationD { get; }
+
+        public int WidthWords { get; }
+
+        public int Height { get; }
+
+        public int WordX { get; }
+
+        public int RowY { get; }
+
+        public bool LineMode { get; }
+    }
+
     internal sealed class AmigaBlitter
     {
+        private const ushort DmaMasterEnable = 0x0200;
+        private const ushort DmaBlitterEnable = 0x0040;
+        private const ushort DmaBlitterNasty = 0x0400;
+        private const ushort DmaconBlitterZero = 0x2000;
+        private const ushort DmaconBlitterBusy = 0x4000;
+        private const ushort Bltcon1LineMode = 0x0001;
+        private const ushort Bltcon1SingleDot = 0x0002;
+        private const ushort Bltcon1Descending = 0x0002;
+        private const ushort Bltcon1FillCarryIn = 0x0004;
+        private const ushort Bltcon1InclusiveFill = 0x0008;
+        private const ushort Bltcon1ExclusiveFill = 0x0010;
+        private const ushort Bltcon1LineSud = 0x0010;
+        private const ushort Bltcon1LineSul = 0x0008;
+        private const ushort Bltcon1LineAul = 0x0004;
+        private const ushort Bltcon1LineSign = 0x0040;
+
         private readonly AmigaBus _bus;
         private uint _sourceA;
         private uint _sourceB;
@@ -1518,10 +1589,64 @@ namespace CopperMod.Amiga
         private ushort _dataA;
         private ushort _dataB;
         private ushort _dataC;
+        private bool _busy;
+        private bool _zeroFlag = true;
+        private long _currentCycle;
+        private bool _useA;
+        private bool _useB;
+        private bool _useC;
+        private bool _useD;
+        private byte _minterm;
+        private int _shiftA;
+        private int _shiftB;
+        private bool _lineMode;
+        private bool _descending;
+        private int _step;
+        private int _widthWords;
+        private int _height;
+        private int _wordX;
+        private int _rowY;
+        private uint _workSourceA;
+        private uint _workSourceB;
+        private uint _workSourceC;
+        private uint _workDestinationD;
+        private ushort _previousA;
+        private ushort _previousB;
+        private bool _fillEnabled;
+        private bool _fillExclusive;
+        private bool _fillCarryInitial;
+        private bool _fillCarry;
+        private int _lineIndex;
+        private int _lineLength;
+        private int _lineBit;
+        private int _lineY;
+        private int _lineLastDrawnY;
+        private bool _lineSingleDot;
+        private bool _lineSud;
+        private bool _lineSul;
+        private bool _lineAul;
+        private bool _lineSign;
+        private int _lineError;
+        private int _lineSourceRowStride;
+        private int _lineDestinationRowStride;
 
         public AmigaBlitter(AmigaBus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+        }
+
+        public ushort DmaconStatusBits
+        {
+            get
+            {
+                var status = _zeroFlag ? DmaconBlitterZero : (ushort)0;
+                if (_busy)
+                {
+                    status |= DmaconBlitterBusy;
+                }
+
+                return status;
+            }
         }
 
         public void Reset()
@@ -1541,6 +1666,63 @@ namespace CopperMod.Amiga
             _dataA = 0;
             _dataB = 0;
             _dataC = 0;
+            _busy = false;
+            _zeroFlag = true;
+            _currentCycle = 0;
+            _useA = false;
+            _useB = false;
+            _useC = false;
+            _useD = false;
+            _minterm = 0;
+            _shiftA = 0;
+            _shiftB = 0;
+            _lineMode = false;
+            _descending = false;
+            _step = 2;
+            _widthWords = 0;
+            _height = 0;
+            _wordX = 0;
+            _rowY = 0;
+            _workSourceA = 0;
+            _workSourceB = 0;
+            _workSourceC = 0;
+            _workDestinationD = 0;
+            _previousA = 0;
+            _previousB = 0;
+            _fillEnabled = false;
+            _fillExclusive = false;
+            _fillCarryInitial = false;
+            _fillCarry = false;
+            _lineIndex = 0;
+            _lineLength = 0;
+            _lineBit = 0;
+            _lineY = 0;
+            _lineLastDrawnY = int.MinValue;
+            _lineSingleDot = false;
+            _lineSud = false;
+            _lineSul = false;
+            _lineAul = false;
+            _lineSign = false;
+            _lineError = 0;
+            _lineSourceRowStride = 0;
+            _lineDestinationRowStride = 0;
+        }
+
+        public AmigaBlitterSnapshot CaptureSnapshot()
+        {
+            return new AmigaBlitterSnapshot(
+                _busy,
+                _zeroFlag,
+                _currentCycle,
+                _lineMode ? _sourceA : _workSourceA,
+                _workSourceB,
+                _workSourceC,
+                _workDestinationD,
+                _widthWords,
+                _height,
+                _wordX,
+                _rowY,
+                _lineMode);
         }
 
         public void WriteRegister(ushort offset, ushort value, long cycle)
@@ -1584,7 +1766,7 @@ namespace CopperMod.Amiga
                     _destinationD = (_destinationD & 0xFFFF_0000) | value;
                     break;
                 case 0x058:
-                    Run(value, cycle);
+                    StartBlit(value, cycle);
                     break;
                 case 0x060:
                     _sourceCModulo = unchecked((short)value);
@@ -1610,249 +1792,466 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void Run(ushort bltsize, long cycle)
+        public void AdvanceTo(long targetCycle)
         {
-            var widthWords = bltsize & 0x3F;
-            if (widthWords == 0)
+            targetCycle = Math.Max(0, targetCycle);
+            if (!_busy)
             {
-                widthWords = 64;
-            }
-
-            var height = (bltsize >> 6) & 0x03FF;
-            if (height == 0)
-            {
-                height = 1024;
-            }
-
-            var useA = (_bltcon0 & 0x0800) != 0;
-            var useB = (_bltcon0 & 0x0400) != 0;
-            var useC = (_bltcon0 & 0x0200) != 0;
-            var useD = (_bltcon0 & 0x0100) != 0;
-            var minterm = (byte)(_bltcon0 & 0x00FF);
-            var shiftA = (_bltcon0 >> 12) & 0x0F;
-            var shiftB = (_bltcon1 >> 12) & 0x0F;
-            var lineMode = (_bltcon1 & 0x0001) != 0;
-            if (lineMode)
-            {
-                RunLine(bltsize, minterm, shiftA, shiftB, cycle);
+                _currentCycle = Math.Max(_currentCycle, targetCycle);
                 return;
             }
 
-            var descending = (_bltcon1 & 0x0002) != 0;
-            var step = descending ? -2 : 2;
-            var sourceA = GetEffectiveBlitterAddress(_sourceA);
-            var sourceB = GetEffectiveBlitterAddress(_sourceB);
-            var sourceC = GetEffectiveBlitterAddress(_sourceC);
-            var destinationD = GetEffectiveBlitterAddress(_destinationD);
-            var previousA = useA ? (ushort)0 : _dataA;
-            var previousB = useB ? (ushort)0 : _dataB;
-
-            for (var y = 0; y < height; y++)
+            while (_busy && _currentCycle <= targetCycle)
             {
-                for (var x = 0; x < widthWords; x++)
+                if (!IsBlitterDmaEnabled())
                 {
-                    var mask = 0xFFFF;
-                    if (x == 0)
-                    {
-                        mask &= _firstWordMask;
-                    }
-
-                    if (x == widthWords - 1)
-                    {
-                        mask &= _lastWordMask;
-                    }
-
-                    var rawA = useA ? ReadAndStep(ref sourceA, step, cycle) : _dataA;
-                    var rawB = useB ? ReadAndStep(ref sourceB, step, cycle) : _dataB;
-                    var rawC = useC ? ReadAndStep(ref sourceC, step, cycle) : _dataC;
-                    rawA = (ushort)(rawA & mask);
-
-                    var a = ShiftSource(rawA, ref previousA, shiftA, descending);
-                    var b = ShiftSource(rawB, ref previousB, shiftB, descending);
-                    var output = ApplyMinterm(minterm, a, b, rawC);
-                    if (useD)
-                    {
-                        WriteAndStep(ref destinationD, step, output, cycle);
-                    }
+                    _currentCycle = Math.Max(_currentCycle, targetCycle);
+                    return;
                 }
 
-                if (useA)
+                if (_lineMode)
                 {
-                    sourceA = AddModulo(sourceA, _sourceAModulo, descending);
-                }
-
-                if (useB)
-                {
-                    sourceB = AddModulo(sourceB, _sourceBModulo, descending);
-                }
-
-                if (useC)
-                {
-                    sourceC = AddModulo(sourceC, _sourceCModulo, descending);
-                }
-
-                if (useD)
-                {
-                    destinationD = AddModulo(destinationD, _destinationDModulo, descending);
-                }
-            }
-
-            if (useA)
-            {
-                _sourceA = sourceA;
-                _dataA = previousA;
-            }
-
-            if (useB)
-            {
-                _sourceB = sourceB;
-                _dataB = previousB;
-            }
-
-            if (useC)
-            {
-                _sourceC = sourceC;
-            }
-
-            if (useD)
-            {
-                _destinationD = destinationD;
-            }
-        }
-
-        private void RunLine(ushort bltsize, byte minterm, int shiftA, int shiftB, long cycle)
-        {
-            var length = (bltsize >> 6) & 0x03FF;
-            if (length == 0)
-            {
-                length = 1024;
-            }
-
-            var majorX = (_bltcon1 & 0x0010) != 0;
-            var xDirection = majorX
-                ? ((_bltcon1 & 0x0004) != 0 ? -1 : 1)
-                : ((_bltcon1 & 0x0008) != 0 ? -1 : 1);
-            var yDirection = majorX
-                ? ((_bltcon1 & 0x0008) != 0 ? -1 : 1)
-                : ((_bltcon1 & 0x0004) != 0 ? -1 : 1);
-            var singleDot = (_bltcon1 & 0x0002) != 0;
-            var sourceAddress = GetEffectiveBlitterAddress(_sourceC);
-            var destinationAddress = GetEffectiveBlitterAddress(_destinationD);
-            var sourceRowStride = _sourceCModulo & ~1;
-            var rowStride = _destinationDModulo & ~1;
-            var bit = shiftA & 0x0F;
-            var y = 0;
-            var lastDrawnY = int.MinValue;
-            var error = unchecked((short)_sourceA);
-            var errorIncrement = _sourceBModulo;
-            var errorDecrement = _sourceAModulo;
-
-            for (var i = 0; i < length; i++)
-            {
-                if (!singleDot || y != lastDrawnY)
-                {
-                    DrawLinePixel(sourceAddress, destinationAddress, bit, minterm, shiftB, i, cycle);
-                    lastDrawnY = y;
-                }
-
-                var stepMinor = error >= 0;
-                if (stepMinor)
-                {
-                    error += errorDecrement;
+                    StepLinePixel();
                 }
                 else
                 {
-                    error += errorIncrement;
-                }
-
-                if (majorX)
-                {
-                    MoveLineX(ref sourceAddress, ref destinationAddress, ref bit, xDirection);
-                    if (stepMinor)
-                    {
-                        MoveLineY(ref sourceAddress, sourceRowStride, yDirection);
-                        MoveLineY(ref destinationAddress, rowStride, yDirection);
-                        y += yDirection;
-                    }
-                }
-                else
-                {
-                    MoveLineY(ref sourceAddress, sourceRowStride, yDirection);
-                    MoveLineY(ref destinationAddress, rowStride, yDirection);
-                    y += yDirection;
-                    if (stepMinor)
-                    {
-                        MoveLineX(ref sourceAddress, ref destinationAddress, ref bit, xDirection);
-                    }
+                    StepAreaWord();
                 }
             }
-
-            _destinationD = destinationAddress;
-            _sourceC = sourceAddress;
-            _sourceA = (uint)(ushort)error;
         }
 
-        private void DrawLinePixel(uint sourceAddress, uint destinationAddress, int bit, byte minterm, int shiftB, int textureStep, long cycle)
+        public long AdvanceThroughCpuStall(long requestedCycle)
         {
-            var current = _bus.ReadChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, sourceAddress, cycle);
-            var lineMask = RotateRight(_dataA, bit);
-            var textureBit = (_dataB & (0x8000 >> ((shiftB + textureStep) & 0x0F))) != 0;
-            var texture = textureBit ? (ushort)0xFFFF : (ushort)0;
-            var output = ApplyMinterm(minterm, lineMask, texture, current);
-            _bus.WriteChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, destinationAddress, output, cycle);
+            if (!ShouldStallCpu())
+            {
+                return requestedCycle;
+            }
+
+            AdvanceTo(requestedCycle);
+            return Math.Max(requestedCycle, _currentCycle);
         }
 
-        private static void MoveLineX(ref uint sourceAddress, ref uint destinationAddress, ref int bit, int direction)
+        private void StartBlit(ushort bltsize, long cycle)
+        {
+            AdvanceTo(cycle);
+            DecodeCommonRegisters();
+            _lineMode = (_bltcon1 & Bltcon1LineMode) != 0;
+            _zeroFlag = true;
+            _busy = true;
+            _currentCycle = Math.Max(_currentCycle, Math.Max(0, cycle));
+
+            if (_lineMode)
+            {
+                StartLineBlit(bltsize);
+                return;
+            }
+
+            _widthWords = bltsize & 0x3F;
+            if (_widthWords == 0)
+            {
+                _widthWords = 64;
+            }
+
+            _height = (bltsize >> 6) & 0x03FF;
+            if (_height == 0)
+            {
+                _height = 1024;
+            }
+
+            _wordX = 0;
+            _rowY = 0;
+            _descending = (_bltcon1 & Bltcon1Descending) != 0;
+            _step = _descending ? -2 : 2;
+            _workSourceA = GetEffectiveBlitterAddress(_sourceA);
+            _workSourceB = GetEffectiveBlitterAddress(_sourceB);
+            _workSourceC = GetEffectiveBlitterAddress(_sourceC);
+            _workDestinationD = GetEffectiveBlitterAddress(_destinationD);
+            _previousA = _useA ? (ushort)0 : _dataA;
+            _previousB = _useB ? (ushort)0 : _dataB;
+            _fillEnabled = (_bltcon1 & (Bltcon1InclusiveFill | Bltcon1ExclusiveFill)) != 0;
+            _fillExclusive = (_bltcon1 & Bltcon1ExclusiveFill) != 0;
+            _fillCarryInitial = (_bltcon1 & Bltcon1FillCarryIn) != 0;
+            _fillCarry = _fillCarryInitial;
+        }
+
+        private void DecodeCommonRegisters()
+        {
+            _useA = (_bltcon0 & 0x0800) != 0;
+            _useB = (_bltcon0 & 0x0400) != 0;
+            _useC = (_bltcon0 & 0x0200) != 0;
+            _useD = (_bltcon0 & 0x0100) != 0;
+            _minterm = (byte)(_bltcon0 & 0x00FF);
+            _shiftA = (_bltcon0 >> 12) & 0x0F;
+            _shiftB = (_bltcon1 >> 12) & 0x0F;
+        }
+
+        private void StartLineBlit(ushort bltsize)
+        {
+            _widthWords = bltsize & 0x3F;
+            if (_widthWords == 0)
+            {
+                _widthWords = 64;
+            }
+
+            _height = (bltsize >> 6) & 0x03FF;
+            if (_height == 0)
+            {
+                _height = 1024;
+            }
+
+            _lineLength = _height;
+            _lineIndex = 0;
+            _wordX = 0;
+            _rowY = 0;
+            _lineBit = _shiftA & 0x0F;
+            _lineY = 0;
+            _lineLastDrawnY = int.MinValue;
+            _lineSingleDot = (_bltcon1 & Bltcon1SingleDot) != 0;
+            _lineSud = (_bltcon1 & Bltcon1LineSud) != 0;
+            _lineSul = (_bltcon1 & Bltcon1LineSul) != 0;
+            _lineAul = (_bltcon1 & Bltcon1LineAul) != 0;
+            _lineSign = (_bltcon1 & Bltcon1LineSign) != 0;
+            _lineError = unchecked((short)_sourceA);
+            _lineSourceRowStride = _sourceCModulo & ~1;
+            _lineDestinationRowStride = _destinationDModulo & ~1;
+            _workSourceC = GetEffectiveBlitterAddress(_sourceC);
+            _workDestinationD = GetEffectiveBlitterAddress(_destinationD);
+        }
+
+        private void StepAreaWord()
+        {
+            var stepStart = _currentCycle;
+            var nextCycle = _currentCycle;
+            var mask = 0xFFFF;
+            if (_wordX == 0)
+            {
+                mask &= _firstWordMask;
+            }
+
+            if (_wordX == _widthWords - 1)
+            {
+                mask &= _lastWordMask;
+            }
+
+            var rawA = _dataA;
+            if (_useA)
+            {
+                var read = ReadAndStep(ref _workSourceA, _step, nextCycle);
+                rawA = read.Value;
+                nextCycle = read.BusAccess.CompletedCycle + 1;
+            }
+
+            var rawB = _dataB;
+            if (_useB)
+            {
+                var read = ReadAndStep(ref _workSourceB, _step, nextCycle);
+                rawB = read.Value;
+                nextCycle = read.BusAccess.CompletedCycle + 1;
+            }
+
+            var rawC = _dataC;
+            if (_useC)
+            {
+                var read = ReadAndStep(ref _workSourceC, _step, nextCycle);
+                rawC = read.Value;
+                _dataC = rawC;
+                nextCycle = read.BusAccess.CompletedCycle + 1;
+            }
+
+            rawA = (ushort)(rawA & mask);
+            var a = ShiftSource(rawA, ref _previousA, _shiftA, _descending);
+            var b = ShiftSource(rawB, ref _previousB, _shiftB, _descending);
+            var output = ApplyMinterm(_minterm, a, b, rawC);
+            if (_fillEnabled)
+            {
+                output = ApplyFill(output);
+            }
+
+            if (output != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            if (_useD)
+            {
+                var write = WriteAndStep(ref _workDestinationD, _step, output, nextCycle);
+                nextCycle = write.CompletedCycle + 1;
+            }
+
+            _currentCycle = Math.Max(nextCycle, stepStart + GetAreaWordCycles());
+            AdvanceAreaPosition();
+        }
+
+        private void AdvanceAreaPosition()
+        {
+            _wordX++;
+            if (_wordX < _widthWords)
+            {
+                return;
+            }
+
+            _wordX = 0;
+            _rowY++;
+            if (_rowY >= _height)
+            {
+                CompleteBlit();
+                return;
+            }
+
+            if (_useA)
+            {
+                _workSourceA = AddModulo(_workSourceA, _sourceAModulo, _descending);
+            }
+
+            if (_useB)
+            {
+                _workSourceB = AddModulo(_workSourceB, _sourceBModulo, _descending);
+            }
+
+            if (_useC)
+            {
+                _workSourceC = AddModulo(_workSourceC, _sourceCModulo, _descending);
+            }
+
+            if (_useD)
+            {
+                _workDestinationD = AddModulo(_workDestinationD, _destinationDModulo, _descending);
+            }
+
+            _fillCarry = _fillCarryInitial;
+        }
+
+        private void StepLinePixel()
+        {
+            var stepStart = _currentCycle;
+            var nextCycle = _currentCycle;
+            if (!_lineSingleDot || _lineY != _lineLastDrawnY)
+            {
+                var read = _bus.ReadChipWordForDeviceWithResult(
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    _workSourceC,
+                    nextCycle);
+                nextCycle = read.BusAccess.CompletedCycle + 1;
+                var lineMask = RotateRight(_dataA, _lineBit);
+                var textureBit = (_dataB & (0x8000 >> ((_shiftB + _lineIndex) & 0x0F))) != 0;
+                var texture = textureBit ? (ushort)0xFFFF : (ushort)0;
+                var output = ApplyMinterm(_minterm, lineMask, texture, read.Value);
+                if (output != 0)
+                {
+                    _zeroFlag = false;
+                }
+
+                var write = _bus.WriteChipWordForDeviceWithResult(
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    _workDestinationD,
+                    output,
+                    nextCycle);
+                nextCycle = write.CompletedCycle + 1;
+                _lineLastDrawnY = _lineY;
+            }
+
+            _currentCycle = Math.Max(nextCycle, stepStart + 2);
+            _lineIndex++;
+            _rowY = _lineIndex;
+            if (_lineIndex >= _lineLength)
+            {
+                CompleteBlit();
+                return;
+            }
+
+            StepLineAddress();
+        }
+
+        private void StepLineAddress()
+        {
+            if (_lineSign)
+            {
+                _lineError = unchecked(_lineError + _sourceBModulo);
+            }
+            else
+            {
+                _lineError = unchecked(_lineError + _sourceAModulo);
+                MoveLineMinorAxis();
+            }
+
+            MoveLineMajorAxis();
+            _lineSign = _lineError < 0;
+        }
+
+        private void MoveLineMajorAxis()
+        {
+            if (_lineSud)
+            {
+                MoveLineX(_lineAul ? -1 : 1);
+            }
+            else
+            {
+                MoveLineY(_lineAul ? -1 : 1);
+            }
+        }
+
+        private void MoveLineMinorAxis()
+        {
+            if (_lineSud)
+            {
+                MoveLineY(_lineSul ? -1 : 1);
+            }
+            else
+            {
+                MoveLineX(_lineSul ? -1 : 1);
+            }
+        }
+
+        private void MoveLineX(int direction)
         {
             if (direction >= 0)
             {
-                bit++;
-                if (bit <= 15)
+                _lineBit++;
+                if (_lineBit <= 15)
                 {
                     return;
                 }
 
-                bit = 0;
-                sourceAddress += 2;
-                destinationAddress += 2;
+                _lineBit = 0;
+                _workSourceC += 2;
+                _workDestinationD += 2;
                 return;
             }
 
-            bit--;
-            if (bit >= 0)
+            _lineBit--;
+            if (_lineBit >= 0)
             {
                 return;
             }
 
-            bit = 15;
-            sourceAddress -= 2;
-            destinationAddress -= 2;
+            _lineBit = 15;
+            _workSourceC -= 2;
+            _workDestinationD -= 2;
         }
 
-        private static void MoveLineY(ref uint address, int rowStride, int direction)
+        private void MoveLineY(int direction)
         {
-            address = unchecked((uint)((int)address + (direction >= 0 ? rowStride : -rowStride)));
+            _workSourceC = unchecked((uint)((int)_workSourceC + (direction >= 0 ? _lineSourceRowStride : -_lineSourceRowStride)));
+            _workDestinationD = unchecked((uint)((int)_workDestinationD + (direction >= 0 ? _lineDestinationRowStride : -_lineDestinationRowStride)));
+            _lineY += direction;
         }
 
-        private static ushort RotateRight(ushort value, int bits)
+        private void CompleteBlit()
         {
-            bits &= 0x0F;
-            return bits == 0
-                ? value
-                : (ushort)((value >> bits) | (value << (16 - bits)));
+            if (!_lineMode)
+            {
+                if (_useA)
+                {
+                    _sourceA = _workSourceA;
+                    _dataA = _previousA;
+                }
+
+                if (_useB)
+                {
+                    _sourceB = _workSourceB;
+                    _dataB = _previousB;
+                }
+
+                if (_useC)
+                {
+                    _sourceC = _workSourceC;
+                }
+
+                if (_useD)
+                {
+                    _destinationD = _workDestinationD;
+                }
+            }
+            else
+            {
+                _sourceA = (uint)(ushort)_lineError;
+                _sourceC = _workSourceC;
+                _destinationD = _workDestinationD;
+            }
+
+            _busy = false;
+            _bus.WriteDeviceWord(
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.CustomRegister,
+                0x00DFF09C,
+                (ushort)(0x8000 | AmigaConstants.IntreqBlitter),
+                _currentCycle);
         }
 
-        private ushort ReadAndStep(ref uint pointer, int step, long cycle)
+        private bool IsBlitterDmaEnabled()
         {
-            var value = _bus.ReadChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, GetEffectiveBlitterAddress(pointer), cycle);
+            return (_bus.Paula.Dmacon & (DmaMasterEnable | DmaBlitterEnable)) == (DmaMasterEnable | DmaBlitterEnable);
+        }
+
+        private bool ShouldStallCpu()
+        {
+            return _busy && IsBlitterDmaEnabled() && (_bus.Paula.Dmacon & DmaBlitterNasty) != 0;
+        }
+
+        private int GetAreaWordCycles()
+        {
+            return 1;
+        }
+
+        private ushort ApplyFill(ushort value)
+        {
+            ushort output = 0;
+            for (var bit = 0; bit < 16; bit++)
+            {
+                var mask = (ushort)(1 << bit);
+                var input = (value & mask) != 0;
+                if (_fillExclusive)
+                {
+                    if (_fillCarry)
+                    {
+                        output |= mask;
+                    }
+
+                    if (input)
+                    {
+                        _fillCarry = !_fillCarry;
+                    }
+
+                    continue;
+                }
+
+                if (_fillCarry || input)
+                {
+                    output |= mask;
+                }
+
+                if (input)
+                {
+                    _fillCarry = !_fillCarry;
+                }
+            }
+
+            return output;
+        }
+
+        private AmigaDeviceWordReadResult ReadAndStep(ref uint pointer, int step, long cycle)
+        {
+            var value = _bus.ReadChipWordForDeviceWithResult(
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                GetEffectiveBlitterAddress(pointer),
+                cycle);
             pointer = unchecked((uint)((int)pointer + step));
             return value;
         }
 
-        private void WriteAndStep(ref uint pointer, int step, ushort value, long cycle)
+        private AmigaBusAccessResult WriteAndStep(ref uint pointer, int step, ushort value, long cycle)
         {
-            _bus.WriteChipWordForDevice(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, GetEffectiveBlitterAddress(pointer), value, cycle);
+            var access = _bus.WriteChipWordForDeviceWithResult(
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                GetEffectiveBlitterAddress(pointer),
+                value,
+                cycle);
             pointer = unchecked((uint)((int)pointer + step));
+            return access;
         }
 
         private static uint AddModulo(uint pointer, short modulo, bool descending)
@@ -1864,6 +2263,14 @@ namespace CopperMod.Amiga
         private static uint GetEffectiveBlitterAddress(uint pointer)
         {
             return pointer & 0xFFFF_FFFEu;
+        }
+
+        private static ushort RotateRight(ushort value, int bits)
+        {
+            bits &= 0x0F;
+            return bits == 0
+                ? value
+                : (ushort)((value >> bits) | (value << (16 - bits)));
         }
 
         private static ushort ShiftSource(ushort current, ref ushort previous, int shift, bool descending)

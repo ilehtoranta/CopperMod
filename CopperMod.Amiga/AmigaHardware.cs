@@ -254,6 +254,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawByte(address);
             cycle = access.CompletedCycle;
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister) && cia == CiaA && ciaRegister == 0x0C)
@@ -274,6 +275,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: true);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawByte(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -288,6 +290,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: true);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawWord(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -303,6 +306,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawWord(address);
             cycle = access.CompletedCycle;
             return value;
@@ -319,6 +323,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: false);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             var value = ReadRawLong(address);
             cycle = access.CompletedCycle;
             return value;
@@ -339,6 +344,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: true);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
             WriteRawLong(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -426,17 +432,37 @@ namespace CopperMod.Amiga
 
         public ushort ReadChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, long requestedCycle)
         {
+            return ReadChipWordForDeviceWithResult(requester, kind, address, requestedCycle).Value;
+        }
+
+        public AmigaDeviceWordReadResult ReadChipWordForDeviceWithResult(
+            AmigaBusRequester requester,
+            AmigaBusAccessKind kind,
+            uint address,
+            long requestedCycle)
+        {
             address = NormalizeAddress(address);
             var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: false);
-            return ReadRawWord(address);
+            return new AmigaDeviceWordReadResult(ReadRawWord(address), access);
         }
 
         public void WriteChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
+        {
+            _ = WriteChipWordForDeviceWithResult(requester, kind, address, value, requestedCycle);
+        }
+
+        public AmigaBusAccessResult WriteChipWordForDeviceWithResult(
+            AmigaBusRequester requester,
+            AmigaBusAccessKind kind,
+            uint address,
+            ushort value,
+            long requestedCycle)
         {
             address = NormalizeAddress(address);
             var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
             WriteRawByte(address, (byte)(value >> 8), access.GrantedCycle);
             WriteRawByte(address + 1, (byte)value, access.GrantedCycle);
+            return access;
         }
 
         public void WriteDeviceWord(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
@@ -497,6 +523,21 @@ namespace CopperMod.Amiga
             Disk.AdvanceTo(targetCycle);
             CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
             CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+        }
+
+        public void AdvanceDmaTo(long targetCycle)
+        {
+            Paula.AdvanceTo(targetCycle);
+            Blitter.AdvanceTo(targetCycle);
+            Paula.AdvanceTo(targetCycle);
+        }
+
+        private void AdvanceDmaBeforeCpuChipAccess(AmigaBusAccessTarget target, long grantedCycle)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam || target == AmigaBusAccessTarget.CustomRegisters)
+            {
+                AdvanceDmaTo(grantedCycle);
+            }
         }
 
         public long? GetNextCiaInterruptCycle(long maxCycle)
@@ -564,6 +605,12 @@ namespace CopperMod.Amiga
             long requestedCycle,
             bool isWrite)
         {
+            if (requester == AmigaBusRequester.Cpu &&
+                (target == AmigaBusAccessTarget.ChipRam || target == AmigaBusAccessTarget.CustomRegisters))
+            {
+                requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
+            }
+
             var request = new AmigaBusAccessRequest(
                 requester,
                 kind,
@@ -1207,12 +1254,12 @@ namespace CopperMod.Amiga
 
             if (offset == 0x002)
             {
-                return (byte)(_dmacon >> 8);
+                return (byte)((_dmacon | _bus.Blitter.DmaconStatusBits) >> 8);
             }
 
             if (offset == 0x003)
             {
-                return (byte)_dmacon;
+                return (byte)(_dmacon | _bus.Blitter.DmaconStatusBits);
             }
 
             if (offset == 0x006)

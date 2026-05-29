@@ -282,7 +282,7 @@ namespace CopperMod.Amiga
             if (_bus.TryInvokeHost(directHostAddress, State))
             {
                 AddCycles(16);
-                if (State.ProgramCounter == directHostAddress)
+                if (!State.Halted && State.ProgramCounter == directHostAddress)
                 {
                     State.ProgramCounter = PullLong();
                 }

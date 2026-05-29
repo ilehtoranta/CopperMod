@@ -66,6 +66,7 @@ namespace CopperMod.Amiga
         private const uint BootChipPublicLowerAddress = 0x0000_0400;
         private const uint BootSupervisorStackTopAddress = 0x0000_0400;
         private const uint DosProgramReturnAddress = 0x00FF_FFFC;
+        private const uint SafeInterruptReturnAddress = 0x00F0_7F00;
         private const uint TaskTrapDispatcherBaseAddress = 0x00F0_8000;
         private const uint DefaultTaskTrapCodeAddress = 0x00F0_8100;
         private const uint BootPseudoFastMetadataSize = 0x0000_0200;
@@ -339,6 +340,7 @@ namespace CopperMod.Amiga
         {
             var bus = _machine.Bus;
             _machine.Kickstart.Install(bus, CreateHostTrapTable());
+            InstallSafeAutovectors(bus);
             for (var displacement = -6; displacement >= -600; displacement -= 6)
             {
                 var captured = displacement;
@@ -386,6 +388,20 @@ namespace CopperMod.Amiga
             bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
             bus.RegisterHostCallback(DosResidentInitAddress, HostInitResident);
             InstallKickstartMemoryList();
+        }
+
+        private static void InstallSafeAutovectors(AmigaBus bus)
+        {
+            ReadOnlySpan<byte> clearIntreqAndReturn =
+            [
+                0x33, 0xFC, 0x7F, 0xFF, 0x00, 0xDF, 0xF0, 0x9C,
+                0x4E, 0x73
+            ];
+            bus.MapReadOnlyMemory(SafeInterruptReturnAddress, clearIntreqAndReturn);
+            for (var level = 1; level <= 7; level++)
+            {
+                bus.WriteLong((uint)((24 + level) * 4), SafeInterruptReturnAddress);
+            }
         }
 
         private AmigaKickstartTrapTable CreateHostTrapTable()
@@ -461,7 +477,7 @@ namespace CopperMod.Amiga
                     beforeDeviceAdvance?.Invoke(previousCycle, _machine.Cpu.State.Cycles);
                     _machine.Bus.AdvanceRasterTo(_machine.Cpu.State.Cycles);
                     _machine.Bus.AdvanceCiasTo(_machine.Cpu.State.Cycles);
-                    _machine.Bus.Paula.AdvanceTo(_machine.Cpu.State.Cycles);
+                    _machine.Bus.AdvanceDmaTo(_machine.Cpu.State.Cycles);
                     _machine.DispatchPendingHardwareInterrupt();
                     instructions++;
                     if (_bootDiskReadCompleted && runMode == AmigaBootRunMode.StopAfterBootDiskRead)
@@ -1867,8 +1883,22 @@ namespace CopperMod.Amiga
 
         private void HostNullCallback(M68kCpuState state)
         {
-            _ = state;
-            _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_NULL_HOST_CALLBACK", "Boot program called a null host callback; treating it as a no-op."));
+            var returnAddress = _machine.Bus.IsMappedMemoryRange(state.A[7], 4)
+                ? _machine.Bus.ReadLong(state.A[7])
+                : 0u;
+            var nullPc = state.ProgramCounter == 0 && returnAddress == 0;
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                nullPc ? "AMIGA_BOOT_NULL_PC" : "AMIGA_BOOT_NULL_HOST_CALLBACK",
+                (nullPc
+                    ? "Boot program returned or jumped to address zero."
+                    : "Boot program called a null host callback; treating it as a no-op.") + " " +
+                $"PC=0x{state.ProgramCounter:X8}, lastPC=0x{state.LastInstructionProgramCounter:X8}, " +
+                $"lastOpcode=0x{state.LastOpcode:X4}, SP=0x{state.A[7]:X8}, return=0x{returnAddress:X8}, " +
+                $"D0=0x{state.D[0]:X8}, A0=0x{state.A[0]:X8}, A1=0x{state.A[1]:X8}, A6=0x{state.A[6]:X8}."));
+            if (nullPc)
+            {
+                state.Halted = true;
+            }
         }
 
         private static void HostOk(M68kCpuState state)
@@ -2027,6 +2057,7 @@ namespace CopperMod.Amiga
             _machine.Cpu.State.D[0] = (uint)startupArguments.Length;
             _machine.Cpu.State.A[0] = startupAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
+            EnableWorkbenchProgramInterrupts();
             result = new AmigaProgramLaunchResult(
                 program.EntryAddress,
                 request.ExecutablePath,
@@ -2036,6 +2067,13 @@ namespace CopperMod.Amiga
                 "AMIGA_BOOT_COPPERBENCH_LAUNCH",
                 $"Started {request.ExecutablePath}."));
             return true;
+        }
+
+        private void EnableWorkbenchProgramInterrupts()
+        {
+            var cycle = _machine.Cpu.State.Cycles;
+            _machine.Bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqVerticalBlank), cycle);
+            _machine.Bus.Paula.AdvanceTo(cycle);
         }
 
         private void ApplyWorkbenchLanguageSelectionIfNeeded()
