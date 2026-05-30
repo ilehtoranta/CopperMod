@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace CopperScreen;
 
-internal sealed class WaveOutAudioOutput : IDisposable
+internal sealed class WaveOutAudioOutput : ICopperScreenAudioOutput
 {
 	private const int WaveMapper = -1;
 	private const int WaveFormatPcm = 1;

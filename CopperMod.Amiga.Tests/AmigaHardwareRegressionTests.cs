@@ -44,7 +44,7 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteWord(0x00DFF0A4, 0x0001, 0);
 		bus.WriteWord(0x00DFF0A6, 0x0001, 0);
 		bus.WriteByte(0x00DFF0A8, 0x20, 0);
-		bus.WriteWord(0x00DFF096, 0x8001, 0);
+		bus.WriteWord(0x00DFF096, 0x8201, 0);
 		var buffer = new float[2];
 
 		bus.Paula.RenderSample(4, buffer, 0, 2);
@@ -64,7 +64,7 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteWord(0x6CDFF0A4, 0x0001, 0);
 		bus.WriteWord(0x6CDFF0A6, 0x0001, 0);
 		bus.WriteWord(0x6CDFF0A8, 0x0020, 0);
-		bus.WriteWord(0x6CDFF096, 0x8001, 0);
+		bus.WriteWord(0x6CDFF096, 0x8201, 0);
 		var buffer = new float[2];
 
 		bus.Paula.RenderSample(4, buffer, 0, 2);

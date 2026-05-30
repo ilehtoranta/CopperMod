@@ -5,9 +5,17 @@ namespace CopperScreen;
 
 internal sealed class CopperBenchViewModel
 {
-	private readonly CopperScreenEmulator _emulator;
+	private readonly CopperScreenEmulator? _emulator;
 	private readonly object _emulatorSync;
 	private readonly List<CopperBenchEntry> _entries = new List<CopperBenchEntry>();
+
+	public CopperBenchViewModel()
+	{
+		_emulatorSync = new object();
+		IsToolbarVisible = true;
+		CurrentPath = string.Empty;
+		StatusMessage = "CopperBench ready";
+	}
 
 	public CopperBenchViewModel(CopperScreenEmulator emulator, object? emulatorSync = null)
 	{
@@ -28,7 +36,7 @@ internal sealed class CopperBenchViewModel
 		{
 			lock (_emulatorSync)
 			{
-				return _emulator.IsPaused;
+				return _emulator?.IsPaused ?? false;
 			}
 		}
 	}
@@ -106,18 +114,20 @@ internal sealed class CopperBenchViewModel
 
 	public void TogglePause()
 	{
+		var emulator = RequireEmulator();
 		lock (_emulatorSync)
 		{
-			_emulator.TogglePaused();
-			StatusMessage = _emulator.IsPaused ? "Paused" : "Running";
+			emulator.TogglePaused();
+			StatusMessage = emulator.IsPaused ? "Paused" : "Running";
 		}
 	}
 
 	public void Reset()
 	{
+		var emulator = RequireEmulator();
 		lock (_emulatorSync)
 		{
-			_emulator.Reset();
+			emulator.Reset();
 		}
 
 		Refresh();
@@ -126,9 +136,10 @@ internal sealed class CopperBenchViewModel
 
 	public void PulseFire()
 	{
+		var emulator = RequireEmulator();
 		lock (_emulatorSync)
 		{
-			_emulator.PulsePrimaryFire();
+			emulator.PulsePrimaryFire();
 		}
 
 		StatusMessage = "Fire";
@@ -136,14 +147,15 @@ internal sealed class CopperBenchViewModel
 
 	public void InsertDisk(string diskPath)
 	{
+		var emulator = RequireEmulator();
 		var inserted = false;
 		string diskName;
 		string statusText;
 		lock (_emulatorSync)
 		{
-			inserted = _emulator.InsertDisk(diskPath);
-			diskName = _emulator.DiskName;
-			statusText = _emulator.StatusText;
+			inserted = emulator.InsertDisk(diskPath);
+			diskName = emulator.DiskName;
+			statusText = emulator.StatusText;
 		}
 
 		if (inserted)
@@ -161,14 +173,15 @@ internal sealed class CopperBenchViewModel
 
 	public void InsertNextDisk()
 	{
+		var emulator = RequireEmulator();
 		var inserted = false;
 		string diskName;
 		string statusText;
 		lock (_emulatorSync)
 		{
-			inserted = _emulator.InsertNextDisk();
-			diskName = _emulator.DiskName;
-			statusText = _emulator.StatusText;
+			inserted = emulator.InsertNextDisk();
+			diskName = emulator.DiskName;
+			statusText = emulator.StatusText;
 		}
 
 		if (inserted)
@@ -186,14 +199,15 @@ internal sealed class CopperBenchViewModel
 
 	public void InsertPreviousDisk()
 	{
+		var emulator = RequireEmulator();
 		var inserted = false;
 		string diskName;
 		string statusText;
 		lock (_emulatorSync)
 		{
-			inserted = _emulator.InsertPreviousDisk();
-			diskName = _emulator.DiskName;
-			statusText = _emulator.StatusText;
+			inserted = emulator.InsertPreviousDisk();
+			diskName = emulator.DiskName;
+			statusText = emulator.StatusText;
 		}
 
 		if (inserted)
@@ -211,47 +225,59 @@ internal sealed class CopperBenchViewModel
 
 	public void Refresh()
 	{
+		var emulator = RequireEmulator();
 		_entries.Clear();
 		SelectedIndex = -1;
 		string? diskPath;
 		lock (_emulatorSync)
 		{
-			diskPath = _emulator.DiskPath;
+			diskPath = emulator.DiskPath;
 		}
 
-		if (diskPath == null)
+		LoadEntries(diskPath, CurrentPath, _entries, out var status);
+		StatusMessage = status;
+	}
+
+	public async Task RefreshAsync(string? diskPath)
+	{
+		var path = CurrentPath;
+		var result = await Task.Run(() =>
 		{
-			StatusMessage = "No disk image";
+			var entries = new List<CopperBenchEntry>();
+			LoadEntries(diskPath, path, entries, out var status);
+			return (entries, status);
+		}).ConfigureAwait(true);
+
+		_entries.Clear();
+		_entries.AddRange(result.entries);
+		SelectedIndex = -1;
+		StatusMessage = result.status;
+	}
+
+	public async Task ToggleOverlayAsync(string? diskPath)
+	{
+		IsOverlayVisible = !IsOverlayVisible;
+		if (IsOverlayVisible)
+		{
+			await RefreshAsync(diskPath).ConfigureAwait(true);
+		}
+	}
+
+	public async Task ShowOverlayAsync(string? diskPath)
+	{
+		IsOverlayVisible = true;
+		await RefreshAsync(diskPath).ConfigureAwait(true);
+	}
+
+	public async Task GoUpAsync(string? diskPath)
+	{
+		if (CurrentPath.Length == 0)
+		{
 			return;
 		}
 
-		try
-		{
-			var disk = AmigaDiskImage.Load(diskPath);
-			if (!AmigaDosFileSystem.IsSupported(disk))
-			{
-				StatusMessage = "DF0: is not a supported OFS DOS\\0 disk";
-				return;
-			}
-
-			var fileSystem = new AmigaDosFileSystem(disk);
-			foreach (var entry in fileSystem.ListDirectory(CurrentPath))
-			{
-				if (entry.Name.EndsWith(".info", StringComparison.OrdinalIgnoreCase))
-				{
-					continue;
-				}
-
-				var path = AmigaDosFileSystem.CombinePath(CurrentPath, entry.Name);
-				_entries.Add(CreateEntry(fileSystem, entry, path));
-			}
-
-			StatusMessage = _entries.Count == 0 ? "Empty drawer" : $"{_entries.Count} item(s)";
-		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
-		{
-			StatusMessage = ex.Message;
-		}
+		CurrentPath = AmigaDosFileSystem.GetDirectoryName(CurrentPath);
+		await RefreshAsync(diskPath).ConfigureAwait(true);
 	}
 
 	public void SelectIndex(int index)
@@ -290,6 +316,7 @@ internal sealed class CopperBenchViewModel
 
 	public bool LaunchSelected()
 	{
+		var emulator = RequireEmulator();
 		var selected = SelectedEntry;
 		if (selected == null)
 		{
@@ -307,7 +334,7 @@ internal sealed class CopperBenchViewModel
 		bool launched;
 		lock (_emulatorSync)
 		{
-			launched = _emulator.LaunchCopperBenchPath(selected.Path, out message);
+			launched = emulator.LaunchCopperBenchPath(selected.Path, out message);
 		}
 
 		if (!launched)
@@ -319,6 +346,89 @@ internal sealed class CopperBenchViewModel
 		StatusMessage = message;
 		IsOverlayVisible = false;
 		return true;
+	}
+
+	public async Task<bool> ActivateSelectedAsync(string? diskPath, Func<string, Task<CopperScreenCommandResult>> launchAsync)
+	{
+		var selected = SelectedEntry;
+		if (selected == null)
+		{
+			StatusMessage = "No entry selected";
+			return false;
+		}
+
+		if (selected.Kind == CopperBenchEntryKind.Drawer)
+		{
+			CurrentPath = selected.Path;
+			await RefreshAsync(diskPath).ConfigureAwait(true);
+			return true;
+		}
+
+		if (selected.Kind == CopperBenchEntryKind.File)
+		{
+			StatusMessage = "Select a tool or project";
+			return false;
+		}
+
+		var result = await launchAsync(selected.Path).ConfigureAwait(true);
+		StatusMessage = result.Message;
+		if (result.Success)
+		{
+			IsOverlayVisible = false;
+		}
+
+		return result.Success;
+	}
+
+	public void SetStatusMessage(string message)
+	{
+		StatusMessage = message;
+	}
+
+	public void ResetPath()
+	{
+		CurrentPath = string.Empty;
+	}
+
+	private CopperScreenEmulator RequireEmulator()
+		=> _emulator ?? throw new InvalidOperationException("This CopperBench view model is not attached to a direct emulator instance.");
+
+	private static void LoadEntries(string? diskPath, string currentPath, List<CopperBenchEntry> entries, out string status)
+	{
+		entries.Clear();
+		if (diskPath == null)
+		{
+			status = "No disk image";
+			return;
+		}
+
+		try
+		{
+			var disk = AmigaDiskImage.Load(diskPath);
+			if (!AmigaDosFileSystem.IsSupported(disk))
+			{
+				status = "DF0: is not a supported OFS DOS\\0 disk";
+				return;
+			}
+
+			var fileSystem = new AmigaDosFileSystem(disk);
+			foreach (var entry in fileSystem.ListDirectory(currentPath))
+			{
+				if (entry.Name.EndsWith(".info", StringComparison.OrdinalIgnoreCase))
+				{
+					continue;
+				}
+
+				var path = AmigaDosFileSystem.CombinePath(currentPath, entry.Name);
+				entries.Add(CreateEntry(fileSystem, entry, path));
+			}
+
+			status = entries.Count == 0 ? "Empty drawer" : $"{entries.Count} item(s)";
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		{
+			status = ex.Message;
+		}
 	}
 
 	private static CopperBenchEntry CreateEntry(AmigaDosFileSystem fileSystem, AmigaDosDirectoryEntry entry, string path)

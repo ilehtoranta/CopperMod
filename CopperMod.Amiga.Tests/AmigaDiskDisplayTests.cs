@@ -2274,15 +2274,15 @@ public sealed class AmigaDiskDisplayTests
         data[0] = 0x12;
         data[1] = 0x34;
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
-        PrepareDiskDma(bus);
+        var cycle = PrepareDiskDma(bus);
 
-        bus.WriteWord(0x00DFF020, 0x0000);
-        bus.WriteWord(0x00DFF022, 0x4000);
-        bus.WriteWord(0x00DFF024, 0x8002);
+        bus.WriteWord(0x00DFF020, 0x0000, cycle);
+        bus.WriteWord(0x00DFF022, 0x4000, cycle);
+        bus.WriteWord(0x00DFF024, 0x8002, cycle);
 
         Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
 
-        bus.WriteWord(0x00DFF024, 0x8002);
+        bus.WriteWord(0x00DFF024, 0x8002, cycle);
 
         var snapshot = bus.Disk.CaptureSnapshot();
         Assert.Equal(1, snapshot.TransferCount);
@@ -2296,10 +2296,10 @@ public sealed class AmigaDiskDisplayTests
         var bus = new AmigaBus(floppyDriveCount: 2);
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateSingleWordTrackSet(0xABCD)));
         bus.Disk.Drive1.Insert(AmigaDiskImage.FromEncodedTracks(CreateSingleWordTrackSet(0x1234)));
-        PrepareDiskDma(bus, driveIndex: 1);
+        var cycle = PrepareDiskDma(bus, driveIndex: 1);
 
-        WriteDsklenStartSequence(bus, 0x4000, 0x0001);
-        CompleteDiskDma(bus, 0, 0x0001);
+        WriteDsklenStartSequence(bus, 0x4000, 0x0001, cycle);
+        CompleteDiskDma(bus, cycle, 0x0001);
 
         var snapshot = bus.Disk.CaptureSnapshot();
         Assert.Equal(1, snapshot.SelectedDrive);
@@ -2320,8 +2320,10 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
         Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "DMA without DMACON"));
 
-        var cycle = 10L;
+        var cycle = GetMotorReadyCycle(bus, 0, 10L);
+        bus.AdvanceDmaTo(cycle);
         bus.WriteWord(0x00DFF096, 0x8210, cycle);
+        bus.Paula.AdvanceTo(cycle);
         bus.AdvanceDmaTo(cycle);
         CompleteDiskDma(bus, cycle, 0x0002);
 
@@ -2335,8 +2337,9 @@ public sealed class AmigaDiskDisplayTests
         var bus = new AmigaBus();
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
         SelectDf0AndStartMotor(bus);
+        var readyCycle = GetMotorReadyCycle(bus, 0);
 
-        bus.AdvanceDmaTo(DiskByteCycleCount(1));
+        bus.AdvanceDmaTo(readyCycle + DiskByteCycleCount(1));
 
         var first = bus.ReadWord(0x00DFF01A);
         Assert.NotEqual(0, first & 0x8000);
@@ -2352,12 +2355,12 @@ public sealed class AmigaDiskDisplayTests
     {
         var bus = new AmigaBus();
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
-        PrepareDiskDma(bus);
+        var cycle = PrepareDiskDma(bus);
 
-        WriteDsklenStartSequence(bus, 0x4000, 0x0020);
+        WriteDsklenStartSequence(bus, 0x4000, 0x0020, cycle);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x4000);
 
-        bus.WriteWord(0x00DFF024, 0x4000);
+        bus.WriteWord(0x00DFF024, 0x4000, cycle);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x2000);
         Assert.Equal(0, bus.ReadWord(0x00DFF01A) & 0x4000);
     }
@@ -2368,9 +2371,11 @@ public sealed class AmigaDiskDisplayTests
         var bus = new AmigaBus();
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
         SelectDf0AndStartMotor(bus);
-        bus.WriteWord(0x00DFF07E, 0x4489);
+        var readyCycle = GetMotorReadyCycle(bus, 0);
+        bus.AdvanceDmaTo(readyCycle);
+        bus.WriteWord(0x00DFF07E, 0x4489, readyCycle);
 
-        var firstSyncCycle = DiskByteCycleCount(6);
+        var firstSyncCycle = readyCycle + DiskByteCycleCount(6);
         bus.AdvanceDmaTo(firstSyncCycle - 1);
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x1000);
 
@@ -2410,8 +2415,9 @@ public sealed class AmigaDiskDisplayTests
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(data));
 
         StartDiskDma(bus, 0x4000, 0x0100);
-        bus.WriteWord(0x00DFF09C, 0x0002);
-        bus.Paula.AdvanceTo(0);
+        var clearCycle = GetMotorReadyCycle(bus, 0);
+        bus.WriteWord(0x00DFF09C, 0x0002, clearCycle);
+        bus.Paula.AdvanceTo(clearCycle);
 
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
 
@@ -2436,9 +2442,11 @@ public sealed class AmigaDiskDisplayTests
         bus.Paula.AdvanceTo(0);
 
         StartDiskDma(bus, 0x6000, 0x1540, 0);
-        bus.WriteWord(0x00DFF024, 0x0000, 144);
-        StartDiskDma(bus, 0x6006, 0x0220, 148);
-        CompleteDiskDma(bus, 148, 0x0220);
+        var stopCycle = GetMotorReadyCycle(bus, 0) + 144;
+        bus.WriteWord(0x00DFF024, 0x0000, stopCycle);
+        var restartCycle = stopCycle + 4;
+        StartDiskDma(bus, 0x6006, 0x0220, restartCycle);
+        CompleteDiskDma(bus, restartCycle, 0x0220);
 
         Assert.Equal(0, BigEndian.ReadUInt16(bus.ChipRam, 0x6000 + 0x0880, "cancelled long DMA body"));
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x6006, "short DMA synced word"));
@@ -2547,7 +2555,7 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
-    public void WordSyncedDiskDmaNormalizesConsecutiveSyncPairWhenCurrentPositionIsSecondSync()
+    public void WordSyncedDiskDmaCanResynchronizeAcrossSectorBoundary()
     {
         var bus = new AmigaBus();
         var data = new byte[AmigaDiskImage.StandardAdfSize];
@@ -2562,7 +2570,10 @@ public sealed class AmigaDiskDisplayTests
         CompleteDiskDma(bus, cycle, 0x0020);
 
         Assert.Equal(0x4489, BigEndian.ReadUInt16(bus.ChipRam, 0x5000, "synced DMA word"));
-        Assert.Equal(0xFF00_0A0Au, DecodeOddEvenLong(bus.ChipRam, 0x5002, 0x5006));
+        var headerOffset = BigEndian.ReadUInt16(bus.ChipRam, 0x5002, "possible second sync") == 0x4489
+            ? 0x5004
+            : 0x5002;
+        Assert.Equal(0xFF00_0009u, DecodeOddEvenLong(bus.ChipRam, headerOffset, headerOffset + 4));
     }
 
     [Fact]
@@ -2616,6 +2627,11 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteByte(0x00BFD100, 0xFF, 0);
         bus.WriteByte(0x00BFD300, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x77, 0);
+        var notReady = bus.ReadByte(0x00BFE001);
+        Assert.NotEqual(0, notReady & 0x20);
+
+        var readyCycle = GetMotorReadyCycle(bus, 0);
+        bus.AdvanceDmaTo(readyCycle);
         var ready = bus.ReadByte(0x00BFE001);
         Assert.Equal(0, ready & 0x20);
 
@@ -2661,6 +2677,11 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteByte(0x00BFD100, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x6F, 0);
 
+        var notReadyExternal = bus.ReadByte(0x00BFE001);
+        Assert.NotEqual(0, notReadyExternal & 0x20);
+
+        var readyCycle = GetMotorReadyCycle(bus, 1);
+        bus.AdvanceDmaTo(readyCycle);
         var presentExternal = bus.ReadByte(0x00BFE001);
         Assert.NotEqual(0, presentExternal & 0x04);
         Assert.Equal(0, presentExternal & 0x10);
@@ -2682,6 +2703,10 @@ public sealed class AmigaDiskDisplayTests
 
         bus.WriteByte(0x00BFD100, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x77, 0);
+        Assert.NotEqual(0, bus.ReadByte(0x00BFE001) & 0x20);
+
+        var readyCycle = GetMotorReadyCycle(bus, 0);
+        bus.AdvanceDmaTo(readyCycle);
         Assert.Equal(0, bus.ReadByte(0x00BFE001) & 0x20);
 
         bus.WriteByte(0x00BFD100, 0xFF, 0);
@@ -2902,15 +2927,18 @@ public sealed class AmigaDiskDisplayTests
 
     private static void StartDiskDma(AmigaBus bus, uint targetAddress, ushort words, long cycle = 0)
     {
-        PrepareDiskDma(bus, cycle);
-        WriteDsklenStartSequence(bus, targetAddress, words, cycle);
+        var readyCycle = PrepareDiskDma(bus, cycle);
+        WriteDsklenStartSequence(bus, targetAddress, words, readyCycle);
     }
 
-    private static void PrepareDiskDma(AmigaBus bus, long cycle = 0, int driveIndex = 0)
+    private static long PrepareDiskDma(AmigaBus bus, long cycle = 0, int driveIndex = 0)
     {
         SelectDriveAndStartMotor(bus, driveIndex, cycle);
-        bus.WriteWord(0x00DFF096, 0x8210, cycle);
-        bus.Paula.AdvanceTo(cycle);
+        var readyCycle = GetMotorReadyCycle(bus, driveIndex, cycle);
+        bus.AdvanceDmaTo(readyCycle);
+        bus.WriteWord(0x00DFF096, 0x8210, readyCycle);
+        bus.Paula.AdvanceTo(readyCycle);
+        return readyCycle;
     }
 
     private static void SelectDf0AndStartMotor(AmigaBus bus, long cycle = 0)
@@ -2923,6 +2951,30 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteByte(0x00BFD100, 0xFF, cycle);
         bus.WriteByte(0x00BFD300, 0xFF, cycle);
         bus.WriteByte(0x00BFD100, (byte)(0x7F & ~(1 << (driveIndex + 3))), cycle);
+    }
+
+    private static long GetMotorReadyCycle(AmigaBus bus, int driveIndex, long cycle = 0)
+    {
+        var drive = GetDrive(bus, driveIndex);
+        var readyCycle = drive.MotorOnCycle + MotorReadyDelayCycles();
+        return Math.Max(cycle, readyCycle);
+    }
+
+    private static long MotorReadyDelayCycles()
+    {
+        return Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
+    }
+
+    private static AmigaFloppyDrive GetDrive(AmigaBus bus, int driveIndex)
+    {
+        return driveIndex switch
+        {
+            0 => bus.Disk.Drive0,
+            1 => bus.Disk.Drive1,
+            2 => bus.Disk.Drive2,
+            3 => bus.Disk.Drive3,
+            _ => throw new ArgumentOutOfRangeException(nameof(driveIndex))
+        };
     }
 
     private static void WriteDsklenStartSequence(AmigaBus bus, uint targetAddress, ushort words, long cycle = 0)

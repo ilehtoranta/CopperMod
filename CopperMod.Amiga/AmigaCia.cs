@@ -37,8 +37,8 @@ namespace CopperMod.Amiga
             (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalCiaClockHz));
 
         private readonly byte[] _registers = new byte[16];
-        private readonly CiaTimer _timerA = new CiaTimer();
-        private readonly CiaTimer _timerB = new CiaTimer();
+        private readonly CiaTimer _timerA = new CiaTimer(isTimerB: false);
+        private readonly CiaTimer _timerB = new CiaTimer(isTimerB: true);
         private int _todCounter;
         private int _todAlarm;
         private byte _icrMask;
@@ -212,14 +212,30 @@ namespace CopperMod.Amiga
         {
             long? result = null;
             result = MinCycle(result, _timerA.GetNextUnderflowCycle(maxCycle));
-            result = MinCycle(result, _timerB.GetNextUnderflowCycle(maxCycle));
+            result = MinCycle(
+                result,
+                _timerB.CountsTimerAUnderflows
+                    ? _timerA.GetUnderflowCycleAfterEvents(_timerB.Counter, maxCycle)
+                    : _timerB.GetNextUnderflowCycle(maxCycle));
             return result;
         }
 
         public void AdvanceTo(long targetCycle, IList<AmigaCiaInterruptEvent> interruptEvents)
         {
-            _timerA.AdvanceTo(targetCycle, cycle => SetPending(TimerAInterruptMask, cycle, interruptEvents));
-            _timerB.AdvanceTo(targetCycle, cycle => SetPending(TimerBInterruptMask, cycle, interruptEvents));
+            _timerA.AdvanceTo(
+                targetCycle,
+                cycle =>
+                {
+                    SetPending(TimerAInterruptMask, cycle, interruptEvents);
+                    if (_timerB.CountsTimerAUnderflows)
+                    {
+                        _timerB.CountExternalEvent(cycle, timerBCycle => SetPending(TimerBInterruptMask, timerBCycle, interruptEvents));
+                    }
+                });
+            if (!_timerB.CountsTimerAUnderflows)
+            {
+                _timerB.AdvanceTo(targetCycle, cycle => SetPending(TimerBInterruptMask, cycle, interruptEvents));
+            }
         }
 
         private byte UpdateInterruptMask(byte value, long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
@@ -285,7 +301,10 @@ namespace CopperMod.Amiga
 
             _icrPending = (byte)(_icrPending | bits);
             var active = (byte)(bits & _icrMask);
-            interruptEvents.Add(new AmigaCiaInterruptEvent(Id, active != 0 ? active : bits, cycle));
+            if (active != 0)
+            {
+                interruptEvents.Add(new AmigaCiaInterruptEvent(Id, active, cycle));
+            }
         }
 
         private static long? MinCycle(long? left, long? right)
@@ -305,7 +324,13 @@ namespace CopperMod.Amiga
 
         private sealed class CiaTimer
         {
+            private readonly bool _isTimerB;
             private long _nextTickCycle;
+
+            public CiaTimer(bool isTimerB)
+            {
+                _isTimerB = isTimerB;
+            }
 
             public ushort Latch { get; private set; }
 
@@ -316,6 +341,12 @@ namespace CopperMod.Amiga
             private bool Running => (Control & 0x01) != 0;
 
             private bool OneShot => (Control & 0x08) != 0;
+
+            public bool CountsTimerAUnderflows => _isTimerB && (Control & 0x60) == 0x40;
+
+            private bool CountsCpu => _isTimerB
+                ? (Control & 0x60) == 0
+                : (Control & 0x20) == 0;
 
             public void Reset()
             {
@@ -370,7 +401,7 @@ namespace CopperMod.Amiga
 
             public long? GetNextUnderflowCycle(long maxCycle)
             {
-                if (!Running || Counter <= 0)
+                if (!Running || !CountsCpu || Counter <= 0)
                 {
                     return null;
                 }
@@ -379,9 +410,26 @@ namespace CopperMod.Amiga
                 return cycle <= maxCycle ? cycle : null;
             }
 
+            public long? GetUnderflowCycleAfterEvents(int eventCount, long maxCycle)
+            {
+                if (!Running || !CountsCpu || Counter <= 0 || eventCount <= 0)
+                {
+                    return null;
+                }
+
+                if (OneShot && eventCount > 1)
+                {
+                    return null;
+                }
+
+                var first = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
+                var cycle = first + ((long)eventCount - 1L) * LatchTicks * CpuCyclesPerCiaTick;
+                return cycle <= maxCycle ? cycle : null;
+            }
+
             public void AdvanceTo(long targetCycle, Action<long> underflow)
             {
-                if (!Running || targetCycle < _nextTickCycle)
+                if (!Running || !CountsCpu || targetCycle < _nextTickCycle)
                 {
                     return;
                 }
@@ -412,6 +460,28 @@ namespace CopperMod.Amiga
                 var ticks = (int)(((targetCycle - _nextTickCycle) / CpuCyclesPerCiaTick) + 1);
                 Counter = Math.Max(0, Counter - ticks);
                 _nextTickCycle += ticks * CpuCyclesPerCiaTick;
+            }
+
+            public void CountExternalEvent(long cycle, Action<long> underflow)
+            {
+                if (!Running || Counter <= 0)
+                {
+                    return;
+                }
+
+                Counter--;
+                if (Counter > 0)
+                {
+                    return;
+                }
+
+                underflow(cycle);
+                Counter = LatchTicks;
+                _nextTickCycle = NextCiaTickAfter(cycle);
+                if (OneShot)
+                {
+                    Control = (byte)(Control & ~0x01);
+                }
             }
 
             private int LatchTicks => Latch == 0 ? 65_536 : Latch;

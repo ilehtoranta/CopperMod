@@ -403,20 +403,26 @@ namespace CopperMod.Amiga
 
         public bool MotorOn { get; private set; }
 
+        public long MotorOnCycle { get; private set; }
+
         public bool Selected { get; private set; }
 
         public bool DiskChanged { get; private set; }
 
-        public void Insert(AmigaDiskImage disk, bool markChanged = false)
+        public bool WriteProtected { get; private set; }
+
+        public void Insert(AmigaDiskImage disk, bool markChanged = false, bool writeProtected = false)
         {
             Disk = disk ?? throw new ArgumentNullException(nameof(disk));
             DiskChanged = markChanged;
+            WriteProtected = writeProtected;
         }
 
         public void Eject()
         {
             Disk = null;
             DiskChanged = true;
+            WriteProtected = false;
         }
 
         public void ResetPosition()
@@ -424,6 +430,7 @@ namespace CopperMod.Amiga
             Cylinder = 0;
             Head = 0;
             MotorOn = false;
+            MotorOnCycle = 0;
             Selected = false;
         }
 
@@ -434,12 +441,28 @@ namespace CopperMod.Amiga
 
         public void SetMotorOn(bool motorOn)
         {
+            SetMotorOn(motorOn, 0);
+        }
+
+        public void SetMotorOn(bool motorOn, long cycle)
+        {
+            if (MotorOn == motorOn)
+            {
+                return;
+            }
+
             MotorOn = motorOn;
+            MotorOnCycle = motorOn ? cycle : 0;
         }
 
         public void SetSelected(bool selected)
         {
             Selected = selected;
+        }
+
+        public void SetWriteProtected(bool writeProtected)
+        {
+            WriteProtected = writeProtected;
         }
 
         public void Step(int delta)
@@ -475,10 +498,12 @@ namespace CopperMod.Amiga
     internal sealed class AmigaDiskController
     {
         private const int MaxFloppyDriveCount = 4;
+        private const ushort DskDatr = 0x008;
         private const ushort DskBytr = 0x01A;
         private const ushort DskPth = 0x020;
         private const ushort DskPtl = 0x022;
         private const ushort DskLen = 0x024;
+        private const ushort DskDat = 0x026;
         private const ushort DskSync = 0x07E;
         private const ushort DskBlkInterrupt = 0x0002;
         private const ushort DskSynInterrupt = 0x1000;
@@ -498,13 +523,18 @@ namespace CopperMod.Amiga
         private static readonly long DiskIndexPulseCycles = Math.Max(
             1,
             (long)Math.Round(AmigaConstants.A500PalCpuClockHz / DiskRevolutionsPerSecond));
+        private static readonly long DiskMotorReadyDelayCycles = Math.Max(
+            1,
+            (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
 
         private readonly AmigaBus _bus;
         private readonly AmigaFloppyDrive[] _drives;
+        private long _currentCycle;
         private ushort _dsklen;
         private ushort _dsksync = 0x4489;
         private uint _diskPointer;
         private byte _ciabPortB = 0xFF;
+        private ushort _diskDataRegister;
         private byte _dskbytrData;
         private bool _dskbytrByteReady;
         private long _dskbytrWordEqualUntilCycle;
@@ -521,7 +551,9 @@ namespace CopperMod.Amiga
         private bool _activeDma;
         private int _activeDmaDrive;
         private uint _activeDmaTargetAddress;
-        private int _activeDmaSourceStartBit;
+        private int _activeDmaNextSourceBit;
+        private long _activeDmaNextWordStartCycle;
+        private bool _activeDmaWordSyncEnabled;
         private ushort _activeDmaRequestedWords;
         private int _activeDmaTransferredWords;
         private int _activeDmaCylinder;
@@ -529,7 +561,6 @@ namespace CopperMod.Amiga
         private int _activeDmaTrackBitLength;
         private double _activeDmaStreamStartPosition;
         private long _activeDmaStartCycle;
-        private long _activeDmaDataStartCycle;
         private long _activeDmaCompletionCycle;
         private double _activeDmaCyclesPerBit;
 
@@ -592,10 +623,12 @@ namespace CopperMod.Amiga
 
         public void Reset()
         {
+            _currentCycle = 0;
             _dsklen = 0;
             _dsksync = 0x4489;
             _diskPointer = 0;
             _ciabPortB = 0xFF;
+            _diskDataRegister = 0;
             _dskbytrData = 0;
             _dskbytrByteReady = false;
             _dskbytrWordEqualUntilCycle = 0;
@@ -622,6 +655,12 @@ namespace CopperMod.Amiga
 
         public void AdvanceTo(long targetCycle)
         {
+            if (targetCycle < _currentCycle)
+            {
+                return;
+            }
+
+            _currentCycle = targetCycle;
             if (_activeDma && targetCycle > _activeDmaCompletionCycle)
             {
                 AdvanceDiskInputTo(_activeDmaCompletionCycle);
@@ -663,9 +702,9 @@ namespace CopperMod.Amiga
 
             var drive = driveIndex >= 0 ? _drives[driveIndex] : Drive0;
             value = SetActiveLow(value, 2, drive.DiskChanged || drive.Disk == null);
-            value = SetActiveLow(value, 3, false);
+            value = SetActiveLow(value, 3, drive.Disk != null && drive.WriteProtected);
             value = SetActiveLow(value, 4, drive.Disk != null && drive.Cylinder == 0);
-            value = SetActiveLow(value, 5, drive.Disk != null && drive.MotorOn);
+            value = SetActiveLow(value, 5, IsDriveReady(drive, _currentCycle));
             return value;
         }
 
@@ -693,6 +732,7 @@ namespace CopperMod.Amiga
             offset = (ushort)(offset & 0x01FE);
             return offset switch
             {
+                DskDatr => _diskDataRegister,
                 DskBytr => ReadDskbytr(),
                 DskPth => (ushort)((_diskPointer >> 16) & (_bus.ChipDmaAddressMask >> 16)),
                 DskPtl => (ushort)(_diskPointer & 0xFFFE),
@@ -704,9 +744,13 @@ namespace CopperMod.Amiga
 
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
+            _currentCycle = Math.Max(_currentCycle, cycle);
             offset = (ushort)(offset & 0x01FE);
             switch (offset)
             {
+                case DskDat:
+                    _diskDataRegister = value;
+                    break;
                 case DskPth:
                     _diskPointer = _bus.WriteChipDmaPointerHigh(_diskPointer, value);
                     break;
@@ -751,6 +795,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            _currentCycle = Math.Max(_currentCycle, cycle);
             var previous = _ciabPortB;
             AdvanceDiskInputTo(cycle);
 
@@ -771,7 +816,7 @@ namespace CopperMod.Amiga
                 var previousMotorOn = drive.MotorOn;
                 if (selected && !previousSelected)
                 {
-                    drive.SetMotorOn((value & 0x80) == 0);
+                    drive.SetMotorOn((value & 0x80) == 0, cycle);
                     if (drive.MotorOn != previousMotorOn)
                     {
                         _streams[driveIndex].Cycle = cycle;
@@ -807,7 +852,7 @@ namespace CopperMod.Amiga
 
         private static bool IsDiskRegister(ushort offset)
         {
-            return offset is DskBytr or DskPth or DskPtl or DskLen or DskSync;
+            return offset is DskDatr or DskBytr or DskPth or DskPtl or DskLen or DskSync;
         }
 
         private ushort ReadDskbytr()
@@ -848,7 +893,7 @@ namespace CopperMod.Amiga
             for (var driveIndex = 0; driveIndex < _drives.Length; driveIndex++)
             {
                 var drive = _drives[driveIndex];
-                if (IsDriveConnected(driveIndex) && drive.Selected && drive.Disk != null && drive.MotorOn)
+                if (IsDriveConnected(driveIndex) && drive.Selected && IsDriveReady(drive, _currentCycle))
                 {
                     return driveIndex;
                 }
@@ -908,6 +953,18 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        private static bool IsDriveReady(AmigaFloppyDrive drive, long cycle)
+        {
+            return drive.Disk != null &&
+                drive.MotorOn &&
+                cycle >= drive.MotorOnCycle + DiskMotorReadyDelayCycles;
+        }
+
+        private static long GetDriveReadyCycle(AmigaFloppyDrive drive)
+        {
+            return drive.MotorOnCycle + DiskMotorReadyDelayCycles;
+        }
+
         private DiskStreamState GetActiveDmaStream()
         {
             return (uint)_activeDmaDrive < (uint)_streams.Length ? _streams[_activeDmaDrive] : _streams[0];
@@ -948,6 +1005,7 @@ namespace CopperMod.Amiga
 
         private bool StartReadDma(ushort requestedWords, long cycle)
         {
+            _currentCycle = Math.Max(_currentCycle, cycle);
             var driveIndex = GetReadDmaDriveIndex();
             if (requestedWords == 0 || driveIndex < 0 || !IsDiskDmaControlEnabled())
             {
@@ -965,7 +1023,8 @@ namespace CopperMod.Amiga
 
             var sourceStartBit = stream.Offset;
             var syncWaitBits = 0;
-            if ((_bus.Paula.Adkcon & 0x0400) != 0)
+            var wordSyncEnabled = (_bus.Paula.Adkcon & 0x0400) != 0;
+            if (wordSyncEnabled)
             {
                 var syncOffset = FindSyncOffset(track, _dsksync, stream.Offset);
                 if (syncOffset < 0)
@@ -984,13 +1043,14 @@ namespace CopperMod.Amiga
             _lastTransferCylinder = drive.Cylinder;
             _lastTransferHead = drive.Head;
             _lastTransferAddress = targetAddress;
-            var transferBits = requestedWords * 16;
             var dataStartCycle = cycle + CyclesForBits(syncWaitBits, cyclesPerBit);
-            var completionCycle = dataStartCycle + CyclesForBits(transferBits, cyclesPerBit);
+            var completionCycle = PredictReadDmaCompletionCycle(track, _dsksync, sourceStartBit, dataStartCycle, requestedWords, cyclesPerBit, wordSyncEnabled);
             _activeDma = true;
             _activeDmaDrive = driveIndex;
             _activeDmaTargetAddress = targetAddress;
-            _activeDmaSourceStartBit = sourceStartBit;
+            _activeDmaNextSourceBit = sourceStartBit;
+            _activeDmaNextWordStartCycle = dataStartCycle;
+            _activeDmaWordSyncEnabled = wordSyncEnabled;
             _activeDmaRequestedWords = requestedWords;
             _activeDmaTransferredWords = 0;
             _activeDmaCylinder = drive.Cylinder;
@@ -998,7 +1058,6 @@ namespace CopperMod.Amiga
             _activeDmaTrackBitLength = track.BitLength;
             _activeDmaStreamStartPosition = stream.Position;
             _activeDmaStartCycle = cycle;
-            _activeDmaDataStartCycle = dataStartCycle;
             _activeDmaCompletionCycle = completionCycle;
             _activeDmaCyclesPerBit = cyclesPerBit;
             AdvanceActiveDmaTo(cycle);
@@ -1031,26 +1090,39 @@ namespace CopperMod.Amiga
             }
 
             var advanceCycle = Math.Min(targetCycle, _activeDmaCompletionCycle);
-            var targetWords = GetActiveDmaTransferredWordsAt(advanceCycle);
-            if (targetWords > _activeDmaTransferredWords)
+            if (_activeDmaTransferredWords < _activeDmaRequestedWords)
             {
                 var track = activeDrive.ReadEncodedTrack(_activeDmaCylinder, _activeDmaHead);
-                for (var word = _activeDmaTransferredWords; word < targetWords; word++)
+                while (_activeDmaTransferredWords < _activeDmaRequestedWords)
                 {
-                    var sourceOffset = (_activeDmaSourceStartBit + (word * 16)) % _activeDmaTrackBitLength;
-                    var value = track.ReadUInt16(sourceOffset);
-                    var wordCycle = GetActiveDmaWordCycle(word);
+                    var word = _activeDmaTransferredWords;
+                    var plan = GetReadDmaWordPlan(
+                        track,
+                        _dsksync,
+                        word,
+                        _activeDmaNextSourceBit,
+                        _activeDmaNextWordStartCycle,
+                        _activeDmaCyclesPerBit,
+                        _activeDmaWordSyncEnabled);
+                    if (plan.CompletionCycle > advanceCycle)
+                    {
+                        break;
+                    }
+
+                    var value = track.ReadUInt16(plan.SourceBit);
+                    _diskDataRegister = value;
                     _bus.WriteChipWordForDevice(
                         AmigaBusRequester.Disk,
                         AmigaBusAccessKind.DiskDma,
                         _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2),
                         value,
-                        wordCycle);
+                        plan.CompletionCycle);
+                    _activeDmaNextSourceBit = plan.NextSourceBit;
+                    _activeDmaNextWordStartCycle = plan.NextWordStartCycle;
+                    _activeDmaTransferredWords++;
+                    UpdateActiveDmaPointer();
+                    UpdateActiveDmaLength();
                 }
-
-                _activeDmaTransferredWords = targetWords;
-                UpdateActiveDmaPointer();
-                UpdateActiveDmaLength();
             }
 
             if (targetCycle < _activeDmaCompletionCycle)
@@ -1061,29 +1133,14 @@ namespace CopperMod.Amiga
             CompleteActiveDma();
         }
 
-        private int GetActiveDmaTransferredWordsAt(long cycle)
-        {
-            var words = _activeDmaTransferredWords;
-            while (words < _activeDmaRequestedWords && GetActiveDmaWordCycle(words) <= cycle)
-            {
-                words++;
-            }
-
-            return words;
-        }
-
-        private long GetActiveDmaWordCycle(int word)
-        {
-            return _activeDmaDataStartCycle + CyclesForBits((word + 1) * 16, _activeDmaCyclesPerBit);
-        }
-
         private void CompleteActiveDma()
         {
-            var transferBits = _activeDmaRequestedWords * 16;
             _activeDmaTransferredWords = _activeDmaRequestedWords;
             UpdateActiveDmaPointer();
             UpdateActiveDmaLength();
-            SetStreamPosition(GetActiveDmaStream(), (_activeDmaSourceStartBit + transferBits) % _activeDmaTrackBitLength, _activeDmaCompletionCycle);
+            var elapsedCycles = Math.Max(0, _activeDmaCompletionCycle - _activeDmaStartCycle);
+            var position = (_activeDmaStreamStartPosition + (elapsedCycles / _activeDmaCyclesPerBit)) % _activeDmaTrackBitLength;
+            SetStreamPosition(GetActiveDmaStream(), position, _activeDmaCompletionCycle);
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
@@ -1127,7 +1184,9 @@ namespace CopperMod.Amiga
             _activeDma = false;
             _activeDmaDrive = -1;
             _activeDmaTargetAddress = 0;
-            _activeDmaSourceStartBit = 0;
+            _activeDmaNextSourceBit = 0;
+            _activeDmaNextWordStartCycle = 0;
+            _activeDmaWordSyncEnabled = false;
             _activeDmaRequestedWords = 0;
             _activeDmaTransferredWords = 0;
             _activeDmaCylinder = 0;
@@ -1135,7 +1194,6 @@ namespace CopperMod.Amiga
             _activeDmaTrackBitLength = 0;
             _activeDmaStreamStartPosition = 0;
             _activeDmaStartCycle = 0;
-            _activeDmaDataStartCycle = 0;
             _activeDmaCompletionCycle = 0;
             _activeDmaCyclesPerBit = 0;
         }
@@ -1220,8 +1278,20 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
+                var readyCycle = GetDriveReadyCycle(drive);
+                if (cycle < readyCycle)
+                {
+                    stream.Cycle = cycle;
+                    continue;
+                }
+
+                if (stream.Cycle < readyCycle)
+                {
+                    SetStreamPosition(stream, stream.Position, readyCycle);
+                }
+
                 var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
-                ResetStreamIfTrackChanged(drive, stream, cycle);
+                ResetStreamIfTrackChanged(drive, stream, stream.Cycle);
                 AdvanceInputStreamTo(drive, stream, track, GetDiskDmaCyclesPerBit(track.BitLength), cycle, drive.Selected);
             }
         }
@@ -1263,6 +1333,12 @@ namespace CopperMod.Amiga
 
             var byteStartBit = Mod((int)((completedAfter - 1) * 8), track.BitLength);
             _dskbytrData = track.ReadByte(byteStartBit);
+            if (completedAfter >= 2)
+            {
+                var wordStartBit = Mod((int)((completedAfter - 2) * 8), track.BitLength);
+                _diskDataRegister = track.ReadUInt16(wordStartBit);
+            }
+
             _dskbytrByteReady = true;
         }
 
@@ -1340,6 +1416,81 @@ namespace CopperMod.Amiga
         private static long CyclesForBits(double bitCount, double cyclesPerBit)
         {
             return Math.Max(0, (long)Math.Ceiling(bitCount * cyclesPerBit));
+        }
+
+        private static long PredictReadDmaCompletionCycle(
+            AmigaEncodedTrack track,
+            ushort sync,
+            int sourceStartBit,
+            long dataStartCycle,
+            ushort requestedWords,
+            double cyclesPerBit,
+            bool wordSyncEnabled)
+        {
+            var sourceBit = sourceStartBit;
+            var wordStartCycle = dataStartCycle;
+            var completionCycle = dataStartCycle;
+            for (var word = 0; word < requestedWords; word++)
+            {
+                var plan = GetReadDmaWordPlan(track, sync, word, sourceBit, wordStartCycle, cyclesPerBit, wordSyncEnabled);
+                sourceBit = plan.NextSourceBit;
+                wordStartCycle = plan.NextWordStartCycle;
+                completionCycle = plan.CompletionCycle;
+            }
+
+            return completionCycle;
+        }
+
+        private static ActiveDmaWordPlan GetReadDmaWordPlan(
+            AmigaEncodedTrack track,
+            ushort sync,
+            int wordIndex,
+            int sourceBit,
+            long wordStartCycle,
+            double cyclesPerBit,
+            bool wordSyncEnabled)
+        {
+            var nextSourceBit = (sourceBit + 16) % track.BitLength;
+            var bitsUntilNextWord = 16;
+            if (wordSyncEnabled &&
+                wordIndex > 0 &&
+                TryFindSyncWithinNextWord(track, sync, sourceBit, out var syncDistance, out var syncOffset))
+            {
+                nextSourceBit = (syncOffset + 16) % track.BitLength;
+                bitsUntilNextWord = syncDistance + 16;
+            }
+
+            var completionCycle = wordStartCycle + CyclesForBits(16, cyclesPerBit);
+            return new ActiveDmaWordPlan(
+                sourceBit,
+                nextSourceBit,
+                completionCycle,
+                wordStartCycle + CyclesForBits(bitsUntilNextWord, cyclesPerBit));
+        }
+
+        private static bool TryFindSyncWithinNextWord(AmigaEncodedTrack track, ushort sync, int sourceBit, out int distance, out int syncOffset)
+        {
+            if (track.BitLength < 16)
+            {
+                distance = 0;
+                syncOffset = -1;
+                return false;
+            }
+
+            for (var bitDistance = 1; bitDistance < 16; bitDistance++)
+            {
+                var offset = (sourceBit + bitDistance) % track.BitLength;
+                if (track.ReadUInt16(offset) == sync)
+                {
+                    distance = bitDistance;
+                    syncOffset = offset;
+                    return true;
+                }
+            }
+
+            distance = 0;
+            syncOffset = -1;
+            return false;
         }
 
         private void SetStreamPosition(DiskStreamState stream, double position, long cycle)
@@ -1440,6 +1591,12 @@ namespace CopperMod.Amiga
                 SyncCacheOffsets = Array.Empty<int>();
             }
         }
+
+        private readonly record struct ActiveDmaWordPlan(
+            int SourceBit,
+            int NextSourceBit,
+            long CompletionCycle,
+            long NextWordStartCycle);
     }
 
     internal readonly struct AmigaDiskControllerSnapshot

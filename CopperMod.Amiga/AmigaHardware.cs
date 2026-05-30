@@ -651,6 +651,12 @@ namespace CopperMod.Amiga
             if (target == AmigaBusAccessTarget.ChipRam || target == AmigaBusAccessTarget.CustomRegisters)
             {
                 AdvanceDmaTo(grantedCycle);
+                return;
+            }
+
+            if (target == AmigaBusAccessTarget.Cia)
+            {
+                Disk.AdvanceTo(grantedCycle);
             }
         }
 
@@ -1738,8 +1744,8 @@ namespace CopperMod.Amiga
                 for (var i = 0; i < _channels.Length; i++)
                 {
                     var bit = (ushort)(1 << i);
-                    var wasEnabled = (old & bit) != 0;
-                    var enabled = (_dmacon & bit) != 0;
+                    var wasEnabled = IsAudioDmaEnabled(old, bit);
+                    var enabled = IsAudioDmaEnabled(_dmacon, bit);
                     if (enabled && !wasEnabled)
                     {
                         _channels[i].SetDmaEnabled(true, _lastCycle, _bus, this);
@@ -1833,6 +1839,11 @@ namespace CopperMod.Amiga
             var channel = (offset - 0x0A0) / 0x10;
             var register = (offset - 0x0A0) % 0x10;
             return channel < AmigaConstants.PaulaChannelCount && register <= 0x0A ? channel : -1;
+        }
+
+        private static bool IsAudioDmaEnabled(ushort dmacon, ushort channelBit)
+        {
+            return (dmacon & 0x0200) != 0 && (dmacon & channelBit) != 0;
         }
 
         private void RequestAudioInterrupt(int channel, long cycle)

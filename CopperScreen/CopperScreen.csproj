@@ -9,6 +9,7 @@
     <Title>CopperScreen</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Slim Amiga 500 PAL emulator front-end backed by CopperMod.Amiga.</Description>
+    <ApplicationIcon>Assets\CopperScreen.ico</ApplicationIcon>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
@@ -32,6 +33,7 @@
 
   <ItemGroup>
     <None Include="Profiles\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <AvaloniaResource Include="Assets\CopperScreen.ico" />
   </ItemGroup>
 
   <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">

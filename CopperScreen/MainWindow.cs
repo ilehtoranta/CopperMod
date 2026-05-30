@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
@@ -12,20 +13,12 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
-	private const int AudioSampleRate = 44_100;
-	private const int AudioChannels = 2;
-	private const int AudioOutputBufferCount = 8;
-	private const int TargetQueuedAudioBuffers = 5;
-	private const int MaxFramesPerTick = 5;
 	private const int DisplayTimerIntervalMilliseconds = 20;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private long _presentedFrames;
-	private readonly CopperScreenEmulator _emulator;
-	private readonly object _emulatorSync = new object();
-	private readonly object _presentationSync = new object();
+	private readonly CopperScreenRuntime _runtime;
 	private readonly CopperBenchViewModel _bench;
 	private readonly FramebufferPresenter _presenter;
-	private readonly int[] _latestFramebuffer;
 	private readonly int[] _presentationFramebuffer;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
@@ -40,15 +33,9 @@ internal sealed class MainWindow : Window
 	private readonly Button _overscanButton;
 	private readonly StackPanel _entryList;
 	private readonly DispatcherTimer _timer;
-	private readonly WaveOutAudioOutput? _audio;
-	private readonly float[] _audioBuffer;
-	private Thread? _emulationThread;
-	private volatile bool _emulationThreadRunning;
-	private long _latestFrameNumber;
-	private long _displayedFrameNumber;
+	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
-	private bool _pendingCopperBenchRequest;
-	private CopperScreenUiState _latestUiState;
+	private CopperScreenState _latestState;
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
@@ -59,21 +46,16 @@ internal sealed class MainWindow : Window
 	public MainWindow(string[] args)
 	{
 		Title = "CopperScreen";
+		Icon = LoadWindowIcon();
 		Width = 960;
 		Height = 768;
 		Focusable = true;
-		_emulator = CopperScreenEmulator.Create(args, AppContext.BaseDirectory);
-		_bench = new CopperBenchViewModel(_emulator, _emulatorSync);
-		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(AudioSampleRate) * AudioChannels];
-		_audio = WaveOutAudioOutput.TryCreate(AudioSampleRate, AudioChannels, _audioBuffer.Length / AudioChannels, AudioOutputBufferCount);
-		_latestFramebuffer = new int[_emulator.Framebuffer.Length];
-		_presentationFramebuffer = new int[_emulator.Framebuffer.Length];
-		lock (_emulatorSync)
-		{
-			PublishCurrentFrameLocked(framesRendered: 0);
-		}
+		_runtime = CopperScreenRuntime.Create(args, AppContext.BaseDirectory);
+		_latestState = _runtime.CurrentState;
+		_bench = new CopperBenchViewModel();
+		_presentationFramebuffer = new int[_runtime.Width * _runtime.Height];
 
-		_presenter = new FramebufferPresenter(_emulator.Width, _emulator.Height)
+		_presenter = new FramebufferPresenter(_runtime.Width, _runtime.Height)
 		{
 			Focusable = true,
 			Cursor = new Cursor(StandardCursorType.None),
@@ -103,7 +85,7 @@ internal sealed class MainWindow : Window
 		Opened += (_, _) =>
 		{
 			_presenter.Focus();
-			StartEmulationThread();
+			_runtime.Start();
 			PresentLatestFrame(forceStatus: true);
 			_timer.Start();
 		};
@@ -132,9 +114,14 @@ internal sealed class MainWindow : Window
 		Closed += (_, _) =>
 		{
 			_timer.Stop();
-			StopEmulationThread();
-			_audio?.Dispose();
+			_runtime.Dispose();
 		};
+	}
+
+	private static WindowIcon LoadWindowIcon()
+	{
+		using var stream = AssetLoader.Open(new Uri("avares://CopperScreen/Assets/CopperScreen.ico"));
+		return new WindowIcon(stream);
 	}
 
 	private void PresentFrame(bool catchUpAudio = true)
@@ -143,162 +130,24 @@ internal sealed class MainWindow : Window
 		PresentLatestFrame(forceStatus: true);
 	}
 
-	private void StartEmulationThread()
+	private void PresentLatestFrame(bool forceStatus = false)
 	{
-		if (_emulationThreadRunning)
+		if (!_runtime.TryCopyLatestFrame(_presentationFramebuffer, ref _lastSeenFrameNumber, out var state, forceStatus))
 		{
 			return;
 		}
 
-		_emulationThreadRunning = true;
-		_emulationThread = new Thread(RunEmulationLoop)
-		{
-			IsBackground = true,
-			Name = "CopperScreen emulation"
-		};
-		_emulationThread.Start();
-	}
-
-	private void StopEmulationThread()
-	{
-		_emulationThreadRunning = false;
-		var thread = _emulationThread;
-		if (thread != null && thread.IsAlive)
-		{
-			thread.Join(TimeSpan.FromSeconds(1));
-		}
-	}
-
-	private void RunEmulationLoop()
-	{
-		var nextSilentFrameTime = Environment.TickCount64;
-		while (_emulationThreadRunning)
-		{
-			var paused = false;
-			lock (_emulatorSync)
-			{
-				if (_emulator.IsPaused)
-				{
-					PublishCurrentFrameLocked(framesRendered: 0);
-					paused = true;
-				}
-			}
-
-			if (paused)
-			{
-				Thread.Sleep(10);
-				continue;
-			}
-
-			if (_audio == null)
-			{
-				var now = Environment.TickCount64;
-				if (now < nextSilentFrameTime)
-				{
-					Thread.Sleep((int)Math.Min(5, nextSilentFrameTime - now));
-					continue;
-				}
-
-				RenderFramesOnEmulationThread(1);
-				nextSilentFrameTime += DisplayTimerIntervalMilliseconds;
-				if (nextSilentFrameTime < now - DisplayTimerIntervalMilliseconds)
-				{
-					nextSilentFrameTime = now + DisplayTimerIntervalMilliseconds;
-				}
-
-				continue;
-			}
-
-			var framesToRender = CalculateFramesToRender(_audio.QueuedBufferCount, catchUpAudio: true);
-			if (framesToRender <= 0)
-			{
-				Thread.Sleep(1);
-				continue;
-			}
-
-			RenderFramesOnEmulationThread(framesToRender);
-		}
-	}
-
-	private void RenderFramesOnEmulationThread(int framesToRender)
-	{
-		for (var frame = 0; frame < framesToRender && _emulationThreadRunning; frame++)
-		{
-			int audioFrames;
-			lock (_emulatorSync)
-			{
-				if (_emulator.IsPaused)
-				{
-					PublishCurrentFrameLocked(framesRendered: 0);
-					break;
-				}
-
-				_emulator.RenderNextFrame();
-				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
-				PublishCurrentFrameLocked(framesRendered: 1);
-			}
-
-			_audio?.Submit(_audioBuffer.AsSpan(0, audioFrames * AudioChannels));
-		}
-	}
-
-	private void PublishCurrentFrameLocked(int framesRendered)
-	{
-		_pendingCopperBenchRequest |= _emulator.ConsumeCopperBenchRequest();
-		var state = CaptureUiStateLocked(framesRendered, _pendingCopperBenchRequest);
-		lock (_presentationSync)
-		{
-			_emulator.Framebuffer.AsSpan().CopyTo(_latestFramebuffer);
-			_latestUiState = state;
-			_latestFrameNumber++;
-		}
-	}
-
-	private CopperScreenUiState CaptureUiStateLocked(int framesRendered, bool copperBenchRequestPending = false)
-	{
-		return new CopperScreenUiState(
-			_emulator.ProfileName,
-			_emulator.DiskName,
-			_emulator.DriveStatusText,
-			_emulator.ProgramCounterText,
-			_emulator.StatusText,
-			_emulator.IsPaused,
-			framesRendered,
-			copperBenchRequestPending);
-	}
-
-	private void PresentLatestFrame(bool forceStatus = false)
-	{
-		CopperScreenUiState state;
-		long frameNumber;
-		lock (_presentationSync)
-		{
-			frameNumber = _latestFrameNumber;
-			if (!forceStatus && frameNumber == _displayedFrameNumber)
-			{
-				return;
-			}
-
-			_latestFramebuffer.AsSpan().CopyTo(_presentationFramebuffer);
-			state = _latestUiState;
-			_displayedFrameNumber = frameNumber;
-		}
-
-		if (frameNumber != _presentedFrames)
+		_latestState = state;
+		if (state.FrameNumber != _presentedFrames)
 		{
 			_presenter.Update(_presentationFramebuffer);
-			_presentedFrames = frameNumber;
+			_presentedFrames = state.FrameNumber;
 		}
 
 		if (state.CopperBenchRequestPending)
 		{
-			lock (_emulatorSync)
-			{
-				_pendingCopperBenchRequest = false;
-				PublishCurrentFrameLocked(framesRendered: 0);
-			}
-
-			_bench.ShowOverlay();
+			_runtime.ConsumeCopperBenchRequest();
+			_ = ShowCopperBenchAsync();
 			RefreshCopperBenchUi();
 		}
 
@@ -314,9 +163,9 @@ internal sealed class MainWindow : Window
 		}
 	}
 
-	private string BuildCrashLogState(CopperScreenUiState state)
+	private string BuildCrashLogState(CopperScreenState state)
 	{
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", {state.ProgramCounterText}, status=\"{state.StatusText}\", framebuffer={_emulator.Width}x{_emulator.Height}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", {state.ProgramCounterText}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)
@@ -330,10 +179,7 @@ internal sealed class MainWindow : Window
 				var deltaY = (int)Math.Round(framebufferPoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
-					lock (_emulatorSync)
-					{
-						_emulator.MoveMousePort(deltaX, deltaY);
-					}
+					_runtime.MoveMousePort(deltaX, deltaY);
 				}
 			}
 
@@ -347,13 +193,10 @@ internal sealed class MainWindow : Window
 		}
 
 		var properties = args.GetCurrentPoint(_presenter).Properties;
-		lock (_emulatorSync)
-		{
-			_emulator.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
-		}
+		_runtime.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
 	}
 
-	private void OnKeyDown(object? sender, KeyEventArgs args)
+	private async void OnKeyDown(object? sender, KeyEventArgs args)
 	{
 		if (args.Key == Key.F11 || args.PhysicalKey == PhysicalKey.F11)
 		{
@@ -375,16 +218,14 @@ internal sealed class MainWindow : Window
 		{
 			if ((args.KeyModifiers & KeyModifiers.Shift) != 0)
 			{
-				_bench.InsertPreviousDisk();
+				await InsertPreviousDiskAsync().ConfigureAwait(true);
 			}
 			else
 			{
-				_bench.InsertNextDisk();
+				await InsertNextDiskAsync().ConfigureAwait(true);
 			}
 
-			RefreshCopperBenchUi();
 			args.Handled = true;
-			PresentFrame(catchUpAudio: false);
 			return;
 		}
 
@@ -398,9 +239,7 @@ internal sealed class MainWindow : Window
 		if ((args.Key == Key.Enter || args.Key == Key.Return || args.PhysicalKey == PhysicalKey.Enter || args.PhysicalKey == PhysicalKey.NumPadEnter) &&
 			_bench.IsOverlayVisible)
 		{
-			_bench.ActivateSelected();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			await ActivateCopperBenchSelectedAsync().ConfigureAwait(true);
 			args.Handled = true;
 			return;
 		}
@@ -426,11 +265,7 @@ internal sealed class MainWindow : Window
 		{
 			if (_pressedAmigaKeys.Add(rawKey))
 			{
-				lock (_emulatorSync)
-				{
-					_emulator.KeyDown(rawKey);
-				}
-
+				_runtime.KeyDown(rawKey);
 				PresentFrame(catchUpAudio: false);
 			}
 
@@ -459,11 +294,7 @@ internal sealed class MainWindow : Window
 		{
 			if (_pressedAmigaKeys.Remove(rawKey))
 			{
-				lock (_emulatorSync)
-				{
-					_emulator.KeyUp(rawKey);
-				}
-
+				_runtime.KeyUp(rawKey);
 				PresentFrame(catchUpAudio: false);
 			}
 
@@ -479,10 +310,7 @@ internal sealed class MainWindow : Window
 		var right = IsPressed(JoystickKeys.NumPad6 | JoystickKeys.NumPad9 | JoystickKeys.NumPad3);
 		var primaryFire = IsPressed(JoystickKeys.NumPad5);
 		var secondFire = IsPressed(JoystickKeys.Decimal | JoystickKeys.Delete);
-		lock (_emulatorSync)
-		{
-			_emulator.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
-		}
+		_runtime.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
 	}
 
 	private bool IsPressed(JoystickKeys keys)
@@ -542,27 +370,21 @@ internal sealed class MainWindow : Window
 	{
 		foreach (var rawKey in _pressedAmigaKeys)
 		{
-			lock (_emulatorSync)
-			{
-				_emulator.KeyUp(rawKey);
-			}
+			_runtime.KeyUp(rawKey);
 		}
 
 		_pressedAmigaKeys.Clear();
 		_pressedJoystickKeys = JoystickKeys.None;
 		_lastMouseX = null;
 		_lastMouseY = null;
-		lock (_emulatorSync)
-		{
-			_emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
-			_emulator.SetJoystickPort(
-				up: false,
-				down: false,
-				left: false,
-				right: false,
-				primaryFirePressed: false,
-				secondFirePressed: false);
-		}
+		_runtime.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+		_runtime.SetJoystickPort(
+			up: false,
+			down: false,
+			left: false,
+			right: false,
+			primaryFirePressed: false,
+			secondFirePressed: false);
 	}
 
 	private Border CreateToolbar()
@@ -581,27 +403,21 @@ internal sealed class MainWindow : Window
 		};
 		bar.Children.Add(_benchToggleButton);
 		bar.Children.Add(_pauseButton);
-		bar.Children.Add(CreateToolbarButton("Reset", () =>
+		bar.Children.Add(CreateToolbarButton("Reset", async () =>
 		{
-			_bench.Reset();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			await ResetRuntimeAsync().ConfigureAwait(true);
 		}));
 		bar.Children.Add(_fullscreenButton);
 		bar.Children.Add(_overscanButton);
 		bar.Children.Add(_numpadModeButton);
 		bar.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
-		bar.Children.Add(CreateToolbarButton("Prev", () =>
+		bar.Children.Add(CreateToolbarButton("Prev", async () =>
 		{
-			_bench.InsertPreviousDisk();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			await InsertPreviousDiskAsync().ConfigureAwait(true);
 		}));
-		bar.Children.Add(CreateToolbarButton("Next", () =>
+		bar.Children.Add(CreateToolbarButton("Next", async () =>
 		{
-			_bench.InsertNextDisk();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			await InsertNextDiskAsync().ConfigureAwait(true);
 		}));
 
 		var layout = new StackPanel
@@ -654,14 +470,14 @@ internal sealed class MainWindow : Window
 			Spacing = 6,
 			Margin = new Thickness(0, 0, 0, 8)
 		};
-		navigation.Children.Add(CreatePanelButton("Up", () =>
+		navigation.Children.Add(CreatePanelButton("Up", async () =>
 		{
-			_bench.GoUp();
+			await _bench.GoUpAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 			RefreshCopperBenchUi();
 		}));
-		navigation.Children.Add(CreatePanelButton("Refresh", () =>
+		navigation.Children.Add(CreatePanelButton("Refresh", async () =>
 		{
-			_bench.Refresh();
+			await _bench.RefreshAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 			RefreshCopperBenchUi();
 		}));
 		_benchPath.Foreground = Brushes.White;
@@ -722,9 +538,7 @@ internal sealed class MainWindow : Window
 		};
 		commands.Children.Add(CreatePanelButton("Open/Run", () =>
 		{
-			_bench.ActivateSelected();
-			RefreshCopperBenchUi();
-			PresentFrame(catchUpAudio: false);
+			_ = ActivateCopperBenchSelectedAsync();
 		}));
 		commands.Children.Add(CreatePanelButton("Hide", () =>
 		{
@@ -778,17 +592,15 @@ internal sealed class MainWindow : Window
 		return button;
 	}
 
-	private void ToggleCopperBench()
+	private async void ToggleCopperBench()
 	{
-		_bench.ToggleOverlay();
+		await _bench.ToggleOverlayAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 		RefreshCopperBenchUi();
 	}
 
-	private void TogglePause()
+	private async void TogglePause()
 	{
-		_bench.TogglePause();
-		RefreshCopperBenchUi();
-		PresentFrame(catchUpAudio: false);
+		await ToggleRuntimePauseAsync().ConfigureAwait(true);
 	}
 
 	private void ToggleFullscreen()
@@ -810,7 +622,7 @@ internal sealed class MainWindow : Window
 	{
 		if (_showFullOverscan)
 		{
-			_presenter.SetSourceViewport(0, 0, _emulator.Width, _emulator.Height);
+			_presenter.SetSourceViewport(0, 0, _runtime.Width, _runtime.Height);
 		}
 		else
 		{
@@ -861,7 +673,73 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		_bench.InsertDisk(path);
+		await InsertDiskAsync(path).ConfigureAwait(true);
+	}
+
+	private async Task ShowCopperBenchAsync()
+	{
+		await _bench.ShowOverlayAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
+		RefreshCopperBenchUi();
+	}
+
+	private async Task ToggleRuntimePauseAsync()
+	{
+		var result = await _runtime.TogglePausedAsync().ConfigureAwait(true);
+		_latestState = result.State;
+		_bench.SetStatusMessage(result.Message);
+		RefreshCopperBenchUi();
+		PresentFrame(catchUpAudio: false);
+	}
+
+	private async Task ResetRuntimeAsync()
+	{
+		var result = await _runtime.ResetAsync().ConfigureAwait(true);
+		_latestState = result.State;
+		_bench.ResetPath();
+		if (_bench.IsOverlayVisible)
+		{
+			await _bench.RefreshAsync(result.State.DiskPath).ConfigureAwait(true);
+		}
+
+		_bench.SetStatusMessage(result.Message);
+		RefreshCopperBenchUi();
+		PresentFrame(catchUpAudio: false);
+	}
+
+	private Task InsertDiskAsync(string path)
+		=> CompleteDiskCommandAsync(_runtime.InsertDiskAsync(path));
+
+	private Task InsertNextDiskAsync()
+		=> CompleteDiskCommandAsync(_runtime.InsertNextDiskAsync());
+
+	private Task InsertPreviousDiskAsync()
+		=> CompleteDiskCommandAsync(_runtime.InsertPreviousDiskAsync());
+
+	private async Task CompleteDiskCommandAsync(Task<CopperScreenCommandResult> command)
+	{
+		var result = await command.ConfigureAwait(true);
+		_latestState = result.State;
+		if (result.Success)
+		{
+			_bench.ResetPath();
+		}
+
+		if (_bench.IsOverlayVisible)
+		{
+			await _bench.RefreshAsync(result.State.DiskPath).ConfigureAwait(true);
+		}
+
+		_bench.SetStatusMessage(result.Message);
+		RefreshCopperBenchUi();
+		PresentFrame(catchUpAudio: false);
+	}
+
+	private async Task ActivateCopperBenchSelectedAsync()
+	{
+		await _bench.ActivateSelectedAsync(
+			_runtime.CurrentState.DiskPath,
+			path => _runtime.LaunchCopperBenchPathAsync(path)).ConfigureAwait(true);
+		_latestState = _runtime.CurrentState;
 		RefreshCopperBenchUi();
 		PresentFrame(catchUpAudio: false);
 	}
@@ -871,7 +749,7 @@ internal sealed class MainWindow : Window
 		_toolbar.IsVisible = _bench.IsToolbarVisible;
 		_benchPanel.IsVisible = _bench.IsOverlayVisible;
 		_benchToggleButton.Content = _bench.IsOverlayVisible ? "Hide" : "Bench";
-		_pauseButton.Content = _bench.IsPaused ? "Run" : "Pause";
+		_pauseButton.Content = _latestState.IsPaused ? "Run" : "Pause";
 		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "Numpad: Joy" : "Numpad: Keys";
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
 		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
@@ -913,12 +791,10 @@ internal sealed class MainWindow : Window
 				_bench.SelectIndex(index);
 				RefreshCopperBenchUi();
 			};
-			button.DoubleTapped += (_, _) =>
+			button.DoubleTapped += async (_, _) =>
 			{
 				_bench.SelectIndex(index);
-				_bench.ActivateSelected();
-				RefreshCopperBenchUi();
-				PresentFrame(catchUpAudio: false);
+				await ActivateCopperBenchSelectedAsync().ConfigureAwait(true);
 			};
 			_entryList.Children.Add(button);
 		}
@@ -931,31 +807,15 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus()
 	{
-		CopperScreenUiState state;
-		lock (_presentationSync)
-		{
-			state = _latestUiState;
-		}
-
-		UpdateToolbarStatus(state);
+		UpdateToolbarStatus(_latestState);
 	}
 
-	private void UpdateToolbarStatus(CopperScreenUiState state)
+	private void UpdateToolbarStatus(CopperScreenState state)
 	{
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
 		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
 		_toolbarStatus.Text = $"{state.ProfileName} | {state.DiskName} | {state.DriveStatusText} | {state.ProgramCounterText} | {state.StatusText}";
 	}
-
-	private readonly record struct CopperScreenUiState(
-		string ProfileName,
-		string DiskName,
-		string DriveStatusText,
-		string ProgramCounterText,
-		string StatusText,
-		bool IsPaused,
-		int FramesRendered,
-		bool CopperBenchRequestPending);
 
 	[Flags]
 	internal enum JoystickKeys
@@ -975,29 +835,5 @@ internal sealed class MainWindow : Window
 	}
 
 	internal static int CalculateFramesToRender(int? queuedAudioBuffers, bool catchUpAudio)
-	{
-		if (!queuedAudioBuffers.HasValue)
-		{
-			return 1;
-		}
-
-		var queued = queuedAudioBuffers.Value;
-		if (queued >= AudioOutputBufferCount)
-		{
-			return 0;
-		}
-
-		if (!catchUpAudio)
-		{
-			return 1;
-		}
-
-		if (queued >= TargetQueuedAudioBuffers)
-		{
-			return 0;
-		}
-
-		var availableBuffers = AudioOutputBufferCount - queued;
-		return Math.Clamp(TargetQueuedAudioBuffers - queued, 1, Math.Min(MaxFramesPerTick, availableBuffers));
-	}
+		=> CopperScreenRuntime.CalculateFramesToRender(queuedAudioBuffers, catchUpAudio);
 }

@@ -230,6 +230,12 @@ internal sealed class CopperScreenEmulator
 			return false;
 		}
 
+		return InsertLoadedDisk(fullPath, disk, markChanged);
+	}
+
+	internal bool InsertLoadedDisk(string fullPath, AmigaDiskImage disk, bool markChanged = true)
+	{
+		fullPath = Path.GetFullPath(fullPath);
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		DiskPath = fullPath;
@@ -253,6 +259,11 @@ internal sealed class CopperScreenEmulator
 
 		StatusText = "inserted " + Path.GetFileName(fullPath);
 		return true;
+	}
+
+	internal void SetStatusText(string statusText)
+	{
+		StatusText = statusText;
 	}
 
 	private static string? ResolveAdjacentDiskPath(string? currentDiskPath, int delta)
@@ -616,6 +627,23 @@ internal sealed class CopperScreenEmulator
 		}
 
 		return frames;
+	}
+
+	internal CopperScreenPresentationFrame PreparePresentationFrame(long frameNumber)
+	{
+		var bgra = new int[Framebuffer.Length];
+		Framebuffer.AsSpan().CopyTo(bgra);
+		return new CopperScreenPresentationFrame(Width, Height, frameNumber, bgra, DisplaySnapshot);
+	}
+
+	internal static void RenderPresentationFrame(CopperScreenPresentationFrame frame, Span<int> destination)
+	{
+		if (destination.Length < frame.Bgra.Length)
+		{
+			throw new ArgumentException("Destination framebuffer is too small.", nameof(destination));
+		}
+
+		frame.Bgra.AsSpan().CopyTo(destination);
 	}
 
 	private void BeginFrameAudio(long targetCycle)

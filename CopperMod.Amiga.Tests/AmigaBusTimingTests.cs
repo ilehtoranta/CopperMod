@@ -113,7 +113,7 @@ public sealed class AmigaBusTimingTests
 		bus.WriteWord(0x00DFF0A2, 0x1000, 0);
 		bus.WriteWord(0x00DFF0A4, 0x0001, 0);
 		bus.WriteWord(0x00DFF0A6, 0x0002, 0);
-		bus.WriteWord(0x00DFF096, 0x8001, 0);
+		bus.WriteWord(0x00DFF096, 0x8201, 0);
 
 		bus.Paula.AdvanceTo(0);
 
