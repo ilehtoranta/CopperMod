@@ -51,7 +51,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		{
 			yield return new object[] { new PositionRow("even horizontal start", 24, 32, 1) };
 			yield return new object[] { new PositionRow("odd horizontal start from SPRxCTL bit 0", 25, 33, 1) };
-			yield return new object[] { new PositionRow("VSTART and VSTOP high bits from SPRxCTL", 24, 230, 4) };
+			yield return new object[] { new PositionRow("VSTART high bit from SPRxCTL", 24, 230, 4) };
 			yield return new object[] { new PositionRow("last visible standard PAL display row", 24, AmigaConstants.PalLowResOverscanBorderY + AmigaConstants.PalLowResStandardHeight - 1, 1) };
 		}
 	}
@@ -699,7 +699,8 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	private static long RowCycle(int row)
 	{
 		var lineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
-		return (long)Math.Round(lineCycles * row);
+		var displayRow = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
+		return (long)Math.Round(lineCycles * displayRow);
 	}
 
 	private static long FrameCycles()

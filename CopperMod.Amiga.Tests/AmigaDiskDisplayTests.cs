@@ -286,7 +286,7 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
-    public void DisplayStopsAtInferredContiguousPlanarBitmapHeight()
+    public void DisplayContinuesBitplaneFetchesPastAdjacentPlanePointers()
     {
         var bus = new AmigaBus();
         bus.WriteWord(0x00DFF180, 0x0000);
@@ -308,7 +308,7 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY + 1));
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY + 2));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY + 2));
     }
 
     [Fact]
@@ -779,6 +779,41 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void CopperPointerWritesWhileBitplanesDisabledSetBaseForLaterEnable()
+    {
+        var bus = new AmigaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1100, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0182);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x0F00);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0x0184);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0x0186);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0x0FF0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2410, 0x00E0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2412, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2414, 0x00E2);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2416, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2418, 0x00E4);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241A, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241C, 0x00E6);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241E, 0x1100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2420, 0x0100);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2422, 0x2000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2424, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2426, 0xFFFE);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFFFF00u, Pixel(frame, StandardX, StandardY));
+    }
+
+    [Fact]
     public void CopperModuloChangeAppliesFromCurrentRasterRowForward()
     {
         var bus = new AmigaBus();
@@ -1189,6 +1224,44 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame);
 
         Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 128, StandardY + 65));
+    }
+
+    [Fact]
+    public void HardwareSpriteIsClippedByDisplayWindowLeftEdge()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        bus.WriteWord(0x00DFF08E, 0x2C91);
+        bus.WriteWord(0x00DFF090, 0x2CC1);
+        var (pos, ctl) = EncodeSpritePosition(StandardX + 8, StandardY, 1);
+        bus.WriteWord(0x00DFF140, pos);
+        bus.WriteWord(0x00DFF142, ctl);
+        bus.WriteWord(0x00DFF144, 0xFFFF);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 8, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
+    }
+
+    [Fact]
+    public void HardwareSpriteIsClippedByDisplayWindowRightEdge()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        var (pos, ctl) = EncodeSpritePosition(StandardX + 312, StandardY, 1);
+        bus.WriteWord(0x00DFF140, pos);
+        bus.WriteWord(0x00DFF142, ctl);
+        bus.WriteWord(0x00DFF144, 0xFFFF);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 319, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 320, StandardY));
     }
 
     [Fact]

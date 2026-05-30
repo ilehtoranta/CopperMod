@@ -541,10 +541,11 @@ namespace CopperMod.Amiga
             }
 
             var colors = new uint[_convertedColors.Length];
+            var window = GetDisplayWindow();
             Array.Copy(_convertedColors, colors, colors.Length);
             for (var row = rowStart; row < rowStop; row++)
             {
-            _paletteFrameSpans.Add(new PaletteFrameSpan(row, xStart, xStop, colors, _bplcon2));
+                _paletteFrameSpans.Add(new PaletteFrameSpan(row, xStart, xStop, colors, _bplcon0, _bplcon2, window));
             }
         }
 
@@ -732,10 +733,7 @@ namespace CopperMod.Amiga
                         _bitplanePointers[plane] = WriteDmaPointerLow(_bitplanePointers[plane], value);
                     }
 
-                    if (!_renderingCopperFrame || ((_bplcon0 >> 12) & 0x7) != 0)
-                    {
-                        _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
-                    }
+                    _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
                 }
 
                 return;
@@ -905,20 +903,25 @@ namespace CopperMod.Amiga
                 switch (register)
                 {
                     case 0:
+                        StopManualSpriteFrameCommands(sprite);
                         _sprites[sprite].Pos = value;
                         CaptureManualSpriteFrameCommandIfArmed(sprite);
                         break;
                     case 2:
+                        StopManualSpriteFrameCommands(sprite);
                         _sprites[sprite].Ctl = value;
                         _sprites[sprite].ManualArmed = false;
                         break;
                     case 4:
+                        StopManualSpriteFrameCommands(sprite);
                         _sprites[sprite].DataA = value;
                         _sprites[sprite].ManualArmed = true;
                         CaptureManualSpriteFrameCommandIfArmed(sprite);
                         break;
                     case 6:
+                        StopManualSpriteFrameCommands(sprite);
                         _sprites[sprite].DataB = value;
+                        CaptureManualSpriteFrameCommandIfArmed(sprite);
                         break;
                 }
             }
@@ -1005,7 +1008,6 @@ namespace CopperMod.Amiga
             var renderHighHeight = IsRenderingHighResolutionHeight();
             var renderInterlace = InterlaceEnabled;
             var renderInterlaceField = _renderInterlaceField;
-            var inferredBitmapRows = GetInferredContiguousBitmapRows(planeCount, fetchWords);
             for (var y = rowStart; y < rowStop; y++)
             {
                 _lastBitplaneRows++;
@@ -1015,7 +1017,7 @@ namespace CopperMod.Amiga
                     var rowStride = (fetchWords * 2) + mod;
                     var displaySourceY = y - _bitplaneBaseRows[plane];
                     var planeSourceY = displaySourceY;
-                    planeHasRow[plane] = displaySourceY >= 0 && displaySourceY < inferredBitmapRows;
+                    planeHasRow[plane] = displaySourceY >= 0;
                     var rowAddress = unchecked(_bitplanePointers[plane] + (uint)(planeSourceY * rowStride));
                     for (var word = 0; word < fetchWords; word++)
                     {
@@ -1158,43 +1160,6 @@ namespace CopperMod.Amiga
                         renderInterlaceField);
                 }
             }
-        }
-
-        private int GetInferredContiguousBitmapRows(int planeCount, int fetchWords)
-        {
-            var rowLimit = int.MaxValue;
-            for (var plane = 0; plane < planeCount; plane++)
-            {
-                var pointer = _bitplanePointers[plane];
-                if (pointer == 0)
-                {
-                    continue;
-                }
-
-                var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
-                var rowStride = (fetchWords * 2) + mod;
-                if (rowStride <= 0)
-                {
-                    continue;
-                }
-
-                for (var otherPlane = 0; otherPlane < planeCount; otherPlane++)
-                {
-                    var otherPointer = _bitplanePointers[otherPlane];
-                    if (otherPlane == plane || otherPointer <= pointer)
-                    {
-                        continue;
-                    }
-
-                    var gap = otherPointer - pointer;
-                    if (gap >= rowStride)
-                    {
-                        rowLimit = Math.Min(rowLimit, (int)(gap / rowStride));
-                    }
-                }
-            }
-
-            return rowLimit == int.MaxValue ? int.MaxValue : Math.Max(1, rowLimit);
         }
 
         private int GetBitplaneColorIndex(ushort[,] planeWords, bool[] planeHasRow, int planeCount, int x, int originX, int fetchPixels, int hiresSubPixel = -1)
@@ -1411,14 +1376,14 @@ namespace CopperMod.Amiga
 
                     evenAttached[evenIndex] = true;
                     oddAttached[oddIndex] = true;
-                    RenderAttachedSpritePair(bgra, spriteIndex, evenSprites[evenIndex].Descriptor, oddSprite.Descriptor);
+                    RenderAttachedSpritePair(bgra, spriteIndex, evenSprites[evenIndex], oddSprite);
                 }
 
                 for (var i = 0; i < oddSprites.Count; i++)
                 {
                     if (!oddAttached[i] && !oddSprites[i].Descriptor.Attached)
                     {
-                        RenderSprite(bgra, spriteIndex + 1, oddSprites[i].Descriptor);
+                        RenderSprite(bgra, spriteIndex + 1, oddSprites[i]);
                     }
                 }
 
@@ -1426,7 +1391,7 @@ namespace CopperMod.Amiga
                 {
                     if (!evenAttached[i])
                     {
-                        RenderSprite(bgra, spriteIndex, evenSprites[i].Descriptor);
+                        RenderSprite(bgra, spriteIndex, evenSprites[i]);
                     }
                 }
             }
@@ -1453,7 +1418,7 @@ namespace CopperMod.Amiga
             {
                 AppendUniqueSpriteFrameCommand(
                     commands,
-                    new SpriteFrameCommand(spriteIndex, LowResOutputHeight, descriptor));
+                    new SpriteFrameCommand(spriteIndex, 0, descriptor));
             }
 
             return commands;
@@ -1511,7 +1476,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            descriptor = CreateSpriteDescriptor(sprite.Pos, sprite.Ctl, 0, isDma: false, sprite.DataA, sprite.DataB);
+            descriptor = CreateManualSpriteDescriptor(sprite);
             return true;
         }
 
@@ -1549,9 +1514,54 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            AddSpriteFrameCommand(
-                spriteIndex,
-                CreateSpriteDescriptor(sprite.Pos, sprite.Ctl, 0, isDma: false, sprite.DataA, sprite.DataB));
+            AddSpriteFrameCommand(spriteIndex, CreateManualSpriteDescriptor(sprite));
+        }
+
+        private static SpriteDescriptor CreateManualSpriteDescriptor(SpriteState sprite)
+        {
+            var baseDescriptor = CreateSpriteDescriptor(sprite.Pos, sprite.Ctl, 0, isDma: false, sprite.DataA, sprite.DataB);
+            return new SpriteDescriptor(
+                baseDescriptor.X,
+                baseDescriptor.YStart,
+                LowResOutputHeight,
+                baseDescriptor.Attached,
+                baseDescriptor.DataAddress,
+                baseDescriptor.IsDma,
+                baseDescriptor.ManualDataA,
+                baseDescriptor.ManualDataB);
+        }
+
+        private void StopManualSpriteFrameCommands(int spriteIndex)
+        {
+            if (!_captureSpriteFrameCommands)
+            {
+                return;
+            }
+
+            if (!TryGetCurrentOutputRow(out var row))
+            {
+                row = 0;
+            }
+
+            for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+            {
+                var command = _spriteFrameCommands[i];
+                if (command.SpriteIndex != spriteIndex || command.Descriptor.IsDma)
+                {
+                    continue;
+                }
+
+                if (command.Descriptor.YStop <= row)
+                {
+                    continue;
+                }
+
+                var yStop = Math.Max(command.Descriptor.YStart, row);
+                _spriteFrameCommands[i] = new SpriteFrameCommand(
+                    command.SpriteIndex,
+                    command.Row,
+                    command.Descriptor.WithYStop(yStop));
+            }
         }
 
         private void AddSpriteFrameCommand(int spriteIndex, SpriteDescriptor descriptor)
@@ -1643,11 +1653,18 @@ namespace CopperMod.Amiga
                 manualDataB);
         }
 
-        private void RenderSprite(Span<uint> bgra, int spriteIndex, SpriteDescriptor sprite)
+        private void RenderSprite(Span<uint> bgra, int spriteIndex, SpriteFrameCommand command)
         {
+            var sprite = command.Descriptor;
             if (!sprite.IsDma)
             {
-                RenderSpriteLine(bgra, spriteIndex, sprite.X, sprite.YStart, sprite.ManualDataA, sprite.ManualDataB, pixel => GetSpriteColorIndex(spriteIndex, pixel));
+                var yStart = Math.Max(sprite.YStart, command.Row);
+                var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
+                for (var y = yStart; y < yStop; y++)
+                {
+                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, sprite.ManualDataA, sprite.ManualDataB, pixel => GetSpriteColorIndex(spriteIndex, pixel));
+                }
+
                 return;
             }
 
@@ -1661,21 +1678,24 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void RenderAttachedSpritePair(Span<uint> bgra, int spriteIndex, SpriteDescriptor evenSprite, SpriteDescriptor oddSprite)
+        private void RenderAttachedSpritePair(Span<uint> bgra, int spriteIndex, SpriteFrameCommand evenCommand, SpriteFrameCommand oddCommand)
         {
+            var evenSprite = evenCommand.Descriptor;
+            var oddSprite = oddCommand.Descriptor;
             var yStart = Math.Min(evenSprite.YStart, oddSprite.YStart);
             var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
             for (var y = yStart; y < yStop; y++)
             {
-                var evenData = ReadSpriteLine(evenSprite, y);
-                var oddData = ReadSpriteLine(oddSprite, y);
+                var evenData = ReadSpriteLine(evenCommand, y);
+                var oddData = ReadSpriteLine(oddCommand, y);
                 RenderAttachedSpriteLine(bgra, spriteIndex, evenSprite.X, y, evenData.DataA, evenData.DataB, oddData.DataA, oddData.DataB);
             }
         }
 
-        private (ushort DataA, ushort DataB) ReadSpriteLine(SpriteDescriptor sprite, int y)
+        private (ushort DataA, ushort DataB) ReadSpriteLine(SpriteFrameCommand command, int y)
         {
-            if (y < sprite.YStart || y >= sprite.YStop)
+            var sprite = command.Descriptor;
+            if (y < Math.Max(sprite.YStart, command.Row) || y >= sprite.YStop)
             {
                 return ((ushort)0, (ushort)0);
             }
@@ -1779,6 +1799,11 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (!IsSpritePixelInsideDisplayWindow(x, y))
+            {
+                return false;
+            }
+
             var mask = _playfieldPriorityMasks[(y * AmigaConstants.PalLowResWidth) + x];
             if (mask == 0)
             {
@@ -1805,6 +1830,29 @@ namespace CopperMod.Amiga
             }
 
             return true;
+        }
+
+        private bool IsSpritePixelInsideDisplayWindow(int x, int y)
+        {
+            var window = GetSpriteDisplayWindow(x, y);
+            return x >= window.X &&
+                x < window.X + window.Width &&
+                y >= window.Y &&
+                y < window.Y + window.Height;
+        }
+
+        private DisplayWindow GetSpriteDisplayWindow(int x, int y)
+        {
+            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _paletteFrameSpans[i];
+                if (span.Contains(x, y))
+                {
+                    return span.Window;
+                }
+            }
+
+            return GetDisplayWindow();
         }
 
         private ushort GetSpritePriorityRegister(int x, int y)
@@ -2162,13 +2210,15 @@ namespace CopperMod.Amiga
 
         private readonly struct PaletteFrameSpan
         {
-            public PaletteFrameSpan(int row, int xStart, int xStop, uint[] colors, ushort bplcon2)
+            public PaletteFrameSpan(int row, int xStart, int xStop, uint[] colors, ushort bplcon0, ushort bplcon2, DisplayWindow window)
             {
                 Row = row;
                 XStart = xStart;
                 XStop = xStop;
                 Colors = colors;
+                Bplcon0 = bplcon0;
                 Bplcon2 = bplcon2;
+                Window = window;
             }
 
             public int Row { get; }
@@ -2179,7 +2229,11 @@ namespace CopperMod.Amiga
 
             public uint[] Colors { get; }
 
+            public ushort Bplcon0 { get; }
+
             public ushort Bplcon2 { get; }
+
+            public DisplayWindow Window { get; }
 
             public bool Contains(int x, int y)
             {
@@ -2272,6 +2326,11 @@ namespace CopperMod.Amiga
                     ManualDataA == other.ManualDataA &&
                     ManualDataB == other.ManualDataB;
             }
+
+            public SpriteDescriptor WithYStop(int yStop)
+            {
+                return new SpriteDescriptor(X, YStart, yStop, Attached, DataAddress, IsDma, ManualDataA, ManualDataB);
+            }
         }
 
         private readonly struct SpriteFrameCommand
@@ -2291,7 +2350,9 @@ namespace CopperMod.Amiga
 
             public bool HasSameRenderingAs(SpriteFrameCommand other)
             {
-                return SpriteIndex == other.SpriteIndex && Descriptor.HasSameRenderingAs(other.Descriptor);
+                return SpriteIndex == other.SpriteIndex &&
+                    Row == other.Row &&
+                    Descriptor.HasSameRenderingAs(other.Descriptor);
             }
         }
 
