@@ -1,0 +1,808 @@
+using CopperMod.Amiga;
+
+namespace CopperMod.Amiga.Tests;
+
+public sealed class AmigaDiskControllerConformanceMatrixTests
+{
+	private const uint DmaBase = 0x4000;
+	private const ushort SyncWord = 0x4489;
+
+	public static IEnumerable<object[]> PointerRows
+	{
+		get
+		{
+			yield return new object[] { new PointerRow(0x000000, 0x000000) };
+			yield return new object[] { new PointerRow(0x004000, 0x004000) };
+			yield return new object[] { new PointerRow(0x004001, 0x004000) };
+			yield return new object[] { new PointerRow(0x01FFFE, 0x01FFFE) };
+		}
+	}
+
+	public static IEnumerable<object[]> DmaGateRows
+	{
+		get
+		{
+			yield return new object[] { new DmaGateRow("no DMACON bits", 0x0000, false) };
+			yield return new object[] { new DmaGateRow("master only", 0x8200, false) };
+			yield return new object[] { new DmaGateRow("disk only", 0x8010, false) };
+			yield return new object[] { new DmaGateRow("master and disk", 0x8210, true) };
+		}
+	}
+
+	public static IEnumerable<object[]> DsklenRows
+	{
+		get
+		{
+			yield return new object[] { new DsklenRow("one word", 0x0001) };
+			yield return new object[] { new DsklenRow("two words", 0x0002) };
+			yield return new object[] { new DsklenRow("track-sized request", 0x1900) };
+			yield return new object[] { new DsklenRow("maximum count field", 0x3FFF) };
+		}
+	}
+
+	public static IEnumerable<object[]> DriveSelectRows =>
+		Enumerable.Range(0, 4).Select(drive => new object[] { new DriveRow(drive) });
+
+	public static IEnumerable<object[]> StepRows
+	{
+		get
+		{
+			yield return new object[] { new StepRow("inward", DirectionBitSet: false, ExpectedDelta: 1) };
+			yield return new object[] { new StepRow("outward", DirectionBitSet: true, ExpectedDelta: -1) };
+		}
+	}
+
+	public static IEnumerable<object[]> WordSyncRows
+	{
+		get
+		{
+			yield return new object[] { new WordSyncRow("default sync", 0x4489, 0xABCD) };
+			yield return new object[] { new WordSyncRow("custom sync", 0xA1A1, 0x1357) };
+		}
+	}
+
+	public static IEnumerable<object[]> RawBitOffsetRows =>
+		new[] { 0, 1, 3, 7, 15 }.Select(shift => new object[] { new RawBitOffsetRow(shift) });
+
+	private static IEnumerable<DiskConformanceRow> MatrixRows
+	{
+		get
+		{
+			foreach (var row in PointerRows)
+			{
+				yield return DiskConformanceRow.Executable("registers", $"DSKPTH/PTL pointer 0x{((PointerRow)row[0]).Address:X6}");
+			}
+
+			foreach (var row in DmaGateRows)
+			{
+				yield return DiskConformanceRow.Executable("dma-control", ((DmaGateRow)row[0]).Name);
+			}
+
+			foreach (var row in DsklenRows)
+			{
+				yield return DiskConformanceRow.Executable("dsklen", ((DsklenRow)row[0]).Name);
+			}
+
+			foreach (var row in DriveSelectRows)
+			{
+				yield return DiskConformanceRow.Executable("cia-drive-lines", $"drive {((DriveRow)row[0]).Drive}");
+			}
+
+			foreach (var row in StepRows)
+			{
+				yield return DiskConformanceRow.Executable("cia-step-lines", ((StepRow)row[0]).Name);
+			}
+
+			foreach (var row in WordSyncRows)
+			{
+				yield return DiskConformanceRow.Executable("wordsync", ((WordSyncRow)row[0]).Name);
+			}
+
+			foreach (var row in RawBitOffsetRows)
+			{
+				yield return DiskConformanceRow.Executable("raw-bitstream", $"bit offset {((RawBitOffsetRow)row[0]).ShiftBits}");
+			}
+
+			yield return DiskConformanceRow.Executable("registers", "DSKSYNC default and writable value");
+			yield return DiskConformanceRow.Executable("dsklen", "two matching DMAEN writes required");
+			yield return DiskConformanceRow.Executable("dsklen", "mismatched second DMAEN write rearms but does not start");
+			yield return DiskConformanceRow.Executable("dsklen", "WRITE bit prevents read DMA and reports DISKWRITE");
+			yield return DiskConformanceRow.Executable("dsklen", "zero length cancels pending DMA");
+			yield return DiskConformanceRow.Executable("dma-control", "DMA stop cancels active transfer");
+			yield return DiskConformanceRow.Executable("dma-control", "DSKPT advances and DSKLEN counts down at completion");
+			yield return DiskConformanceRow.Executable("dskbytr", "byte ready and clear on read");
+			yield return DiskConformanceRow.Executable("dskbytr", "DMAON status during active DMA");
+			yield return DiskConformanceRow.Executable("dskbytr", "WORDEQUAL status and DSKSYNC interrupt");
+			yield return DiskConformanceRow.Executable("interrupts", "DSKBLK interrupt on DMA completion");
+			yield return DiskConformanceRow.Executable("interrupts", "index pulse reaches CIA-B flag");
+			yield return DiskConformanceRow.Executable("cia-drive-lines", "CIA-A reports change, track zero and ready");
+			yield return DiskConformanceRow.Executable("cia-drive-lines", "unconnected selected drive is ignored");
+			yield return DiskConformanceRow.Executable("media-routing", "selected external drive supplies DMA data");
+			yield return DiskConformanceRow.Executable("media-routing", "selected head/cylinder supplies DMA data");
+			yield return DiskConformanceRow.Executable("raw-bitstream", "DMA without WORDSYNC starts at current stream position");
+			yield return DiskConformanceRow.Pending("write-dma", "DSKDAT write path and magnetic write DMA", "The controller currently models read DMA only.");
+			yield return DiskConformanceRow.Pending("registers", "DSKDATR early disk data read dummy address", "DSKDATR/DSKDAT data buffer side effects are not exposed yet.");
+			yield return DiskConformanceRow.Pending("wordsync", "MSBSYNC/GCR byte sync mode", "ADKCON MSBSYNC is recorded by Paula but not implemented by disk input.");
+			yield return DiskConformanceRow.Pending("wordsync", "resynchronize active read DMA on every DSKSYNC match", "Current read DMA syncs the start of the transfer only.");
+			yield return DiskConformanceRow.Pending("timing", "ADKCON FAST two-microsecond bit-cell mode", "The drive stream currently derives timing from encoded track length and 300 RPM.");
+			yield return DiskConformanceRow.Pending("write-dma", "MFM/GCR precompensation and write splice edge cases", "Precompensation bits are not consumed without a write path.");
+			yield return DiskConformanceRow.Pending("hardware-bugs", "last three write bits and possible missing final read word", "Documented floppy hardware quirks are not modeled.");
+			yield return DiskConformanceRow.Pending("cia-drive-lines", "write-protect sensor", "AmigaFloppyDrive does not currently expose write-protect media state.");
+			yield return DiskConformanceRow.Pending("cia-drive-lines", "500ms motor spin-up delay before DSKRDY", "The controller reports ready immediately when a disk is inserted and the motor is on.");
+		}
+	}
+
+	[Fact]
+	public void DiskControllerConformanceMatrixCoversHrmFeatureGroups()
+	{
+		// Reference: CopperMod.Amiga/References/Commodore_Amiga_Hardware_Reference_Manual_2nd.pdf,
+		// Chapter 8 "Interface Hardware", "Floppy Disk Controller", Tables 8-5 through 8-8.
+		var rows = MatrixRows.ToArray();
+		var groups = rows.Select(row => row.Group).Distinct().OrderBy(group => group).ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"cia-drive-lines",
+				"cia-step-lines",
+				"dma-control",
+				"dskbytr",
+				"dsklen",
+				"hardware-bugs",
+				"interrupts",
+				"media-routing",
+				"raw-bitstream",
+				"registers",
+				"timing",
+				"wordsync",
+				"write-dma",
+			},
+			groups);
+		Assert.Equal(4, PointerRows.Count());
+		Assert.Equal(4, DmaGateRows.Count());
+		Assert.Equal(4, DsklenRows.Count());
+		Assert.Equal(4, DriveSelectRows.Count());
+		Assert.Equal(2, StepRows.Count());
+		Assert.Equal(2, WordSyncRows.Count());
+		Assert.Equal(5, RawBitOffsetRows.Count());
+		Assert.True(rows.Count(row => row.Status == DiskRowStatus.Executable) >= 35);
+	}
+
+	[Fact]
+	public void DiskControllerPendingRowsAreDocumented()
+	{
+		var pendingRows = MatrixRows.Where(row => row.Status == DiskRowStatus.Pending).ToArray();
+
+		Assert.NotEmpty(pendingRows);
+		Assert.All(pendingRows, row => Assert.False(string.IsNullOrWhiteSpace(row.Reason)));
+		Assert.Contains(pendingRows, row => row.Group == "write-dma");
+		Assert.Contains(pendingRows, row => row.Group == "wordsync" && row.Name.Contains("MSBSYNC", StringComparison.Ordinal));
+		Assert.Contains(pendingRows, row => row.Group == "hardware-bugs");
+	}
+
+	[Fact]
+	public void DiskRegistersResetToHrmDefaults()
+	{
+		var bus = new AmigaBus();
+		var snapshot = bus.Disk.CaptureSnapshot();
+
+		Assert.Equal(0u, snapshot.DiskPointer);
+		Assert.Equal(0, snapshot.Dsklen);
+		Assert.Equal(SyncWord, snapshot.Dsksync);
+		Assert.Equal(0, snapshot.TransferCount);
+	}
+
+	[Theory]
+	[MemberData(nameof(PointerRows))]
+	public void DiskPointerRegistersMaskWordAddressAndStayInChipDmaSpace(object rowObject)
+	{
+		var row = Assert.IsType<PointerRow>(rowObject);
+		var bus = new AmigaBus();
+
+		SetDiskPointer(bus, row.Address);
+
+		Assert.Equal(row.Expected, bus.Disk.CaptureSnapshot().DiskPointer);
+		Assert.Equal((ushort)(row.Expected >> 16), bus.ReadWord(0x00DFF020));
+		Assert.Equal((ushort)(row.Expected & 0xFFFE), bus.ReadWord(0x00DFF022));
+	}
+
+	[Fact]
+	public void DskSyncDefaultsToMagicMfmSyncAndCanBeChanged()
+	{
+		var bus = new AmigaBus();
+
+		Assert.Equal(SyncWord, bus.ReadWord(0x00DFF07E));
+
+		bus.WriteWord(0x00DFF07E, 0xA1A1);
+
+		Assert.Equal(0xA1A1, bus.Disk.CaptureSnapshot().Dsksync);
+		Assert.Equal(0xA1A1, bus.ReadWord(0x00DFF07E));
+	}
+
+	[Fact]
+	public void DiskDmaRequiresTwoMatchingDsklenDmaenWrites()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		bus.WriteWord(0x00DFF024, 0x8002);
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+
+		bus.WriteWord(0x00DFF024, 0x8002);
+
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.Equal(1, snapshot.TransferCount);
+		Assert.Equal(2, snapshot.LastTransferWords);
+		Assert.Equal(DmaBase, snapshot.LastTransferAddress);
+	}
+
+	[Fact]
+	public void MismatchedSecondDsklenWriteRearmsWithoutStartingDma()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		bus.WriteWord(0x00DFF024, 0x8001);
+		bus.WriteWord(0x00DFF024, 0x8002);
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+
+		bus.WriteWord(0x00DFF024, 0x8002);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+	}
+
+	[Theory]
+	[MemberData(nameof(DsklenRows))]
+	public void DsklenLengthFieldSelectsRequestedWordCount(object rowObject)
+	{
+		var row = Assert.IsType<DsklenRow>(rowObject);
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		WriteDsklenStartSequence(bus, row.Words);
+
+		Assert.Equal(row.Words, bus.Disk.CaptureSnapshot().LastTransferWords);
+		Assert.Equal((ushort)(0x8000 | row.Words), bus.Disk.CaptureSnapshot().Dsklen);
+	}
+
+	[Fact]
+	public void DsklenWriteBitPreventsReadDmaAndReportsDiskWriteStatus()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		bus.WriteWord(0x00DFF024, 0xC001);
+		bus.WriteWord(0x00DFF024, 0xC001);
+
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x2000);
+	}
+
+	[Fact]
+	public void DsklenZeroLengthCancelsPendingDma()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		bus.WriteWord(0x00DFF024, 0x8001);
+		bus.WriteWord(0x00DFF024, 0x8000);
+		bus.WriteWord(0x00DFF024, 0x8001);
+
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+	}
+
+	[Theory]
+	[MemberData(nameof(DmaGateRows))]
+	public void DiskDmaRequiresDmaconMasterAndDiskEnableBits(object rowObject)
+	{
+		var row = Assert.IsType<DmaGateRow>(rowObject);
+		var bus = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		bus.WriteWord(0x00DFF096, row.Dmacon);
+		bus.Paula.AdvanceTo(0);
+		SetDiskPointer(bus, DmaBase);
+
+		WriteDsklenStartSequence(bus, words: 1);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(row.ExpectedStarts ? 1 : 0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(row.ExpectedStarts ? 0x1234 : 0, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void StoppingDsklenCancelsActiveTransferBeforeCompletion()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
+		PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase);
+
+		WriteDsklenStartSequence(bus, words: 4);
+		bus.AdvanceDmaTo(bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle - 1);
+		bus.WriteWord(0x00DFF024, 0x0000, bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle - 1);
+
+		Assert.False(bus.Disk.CaptureSnapshot().ActiveDma);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+	}
+
+	[Fact]
+	public void DiskPointerAdvancesAndDsklenCountsDownWhenDmaCompletes()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333);
+
+		StartDiskDma(bus, DmaBase, words: 3);
+		CompleteDiskDma(bus);
+
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.Equal(DmaBase + 6, snapshot.DiskPointer);
+		Assert.Equal(0x8000, snapshot.Dsklen);
+		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x3333, ReadChipWord(bus, DmaBase + 4));
+	}
+
+	[Fact]
+	public void DskbytrReportsByteReadyDataAndClearsReadyOnRead()
+	{
+		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+
+		bus.AdvanceDmaTo(DiskByteCycleCount(trackBytes.Length, 1));
+
+		var first = bus.ReadWord(0x00DFF01A);
+		var second = bus.ReadWord(0x00DFF01A);
+		Assert.NotEqual(0, first & 0x8000);
+		Assert.Equal(0x12, first & 0x00FF);
+		Assert.Equal(0, second & 0x8000);
+		Assert.Equal(0x12, second & 0x00FF);
+	}
+
+	[Fact]
+	public void DskbytrReportsDmaOnWhileReadDmaIsActive()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
+
+		StartDiskDma(bus, DmaBase, words: 4);
+
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x4000);
+		CompleteDiskDma(bus);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01A) & 0x4000);
+	}
+
+	[Theory]
+	[MemberData(nameof(WordSyncRows))]
+	public void WordSyncDmaStartsWithWordAfterMatchingDskSync(object rowObject)
+	{
+		var row = Assert.IsType<WordSyncRow>(rowObject);
+		var bus = CreateBusWithTrack(0x9999, row.Sync, row.Payload, 0x2468);
+		bus.WriteWord(0x00DFF07E, row.Sync);
+		bus.WriteWord(0x00DFF09E, 0x8400);
+		bus.Paula.AdvanceTo(0);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(row.Payload, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x2468, ReadChipWord(bus, DmaBase + 2));
+	}
+
+	[Fact]
+	public void DmaWithoutWordSyncStartsAtCurrentRawStreamPosition()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x2222, ReadChipWord(bus, DmaBase + 2));
+	}
+
+	[Theory]
+	[MemberData(nameof(RawBitOffsetRows))]
+	public void WordSyncedDmaReadsNonByteAlignedRawBitstreams(object rowObject)
+	{
+		var row = Assert.IsType<RawBitOffsetRow>(rowObject);
+		var track = WordsToBytes(SyncWord, 0xABCD, 0x1357);
+		var tracks = CreateEncodedTrackSet();
+		tracks[0] = ShiftTrackBits(track, row.ShiftBits);
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
+		bus.WriteWord(0x00DFF09E, 0x8400);
+		bus.Paula.AdvanceTo(0);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(0xABCD, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x1357, ReadChipWord(bus, DmaBase + 2));
+	}
+
+	[Fact]
+	public void DskSyncInterruptAndWordEqualStatusAreIndependentOfWordSyncEnable()
+	{
+		var trackBytes = WordsToBytes(SyncWord, 0xABCD);
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		bus.WriteWord(0x00DFF07E, SyncWord);
+
+		bus.AdvanceDmaTo(DiskByteCycleCount(trackBytes.Length, 2));
+
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x1000);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x1000);
+	}
+
+	[Fact]
+	public void DiskBlockInterruptIsRaisedWhenReadDmaCompletes()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		bus.Paula.AdvanceTo(completionCycle - 1);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+
+		CompleteDiskDma(bus);
+
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+	}
+
+	[Theory]
+	[MemberData(nameof(DriveSelectRows))]
+	public void CiaBSelectBitsChooseOneOfFourConnectedDrives(object rowObject)
+	{
+		var row = Assert.IsType<DriveRow>(rowObject);
+		var bus = new AmigaBus(floppyDriveCount: 4);
+		for (var drive = 0; drive < 4; drive++)
+		{
+			GetDrive(bus, drive).Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords((ushort)(0x1000 + drive))));
+		}
+
+		SelectDriveAndStartMotor(bus, row.Drive);
+
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.Equal(row.Drive, snapshot.SelectedDrive);
+		for (var drive = 0; drive < 4; drive++)
+		{
+			Assert.Equal(drive == row.Drive, GetDrive(bus, drive).Selected);
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(StepRows))]
+	public void CiaBStepPulseMovesSelectedDriveInRequestedDirection(object rowObject)
+	{
+		var row = Assert.IsType<StepRow>(rowObject);
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
+		bus.Disk.Drive0.Step(2);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var baseValue = (byte)(0x77 | (row.DirectionBitSet ? 0x02 : 0x00));
+		if (!row.DirectionBitSet)
+		{
+			baseValue = (byte)(baseValue & ~0x02);
+		}
+
+		bus.WriteByte(0x00BFD100, baseValue, 0);
+		bus.WriteByte(0x00BFD100, (byte)(baseValue & ~0x01), 0);
+
+		Assert.Equal(2 + row.ExpectedDelta, bus.Disk.CaptureSnapshot().Cylinder);
+	}
+
+	[Fact]
+	public void CiaBHeadSelectChoosesEncodedTrackHead()
+	{
+		var tracks = CreateEncodedTrackSet();
+		tracks[0] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x1111));
+		tracks[1] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x2222));
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
+
+		SelectDriveAndStartMotor(bus, drive: 0, head: 1);
+		bus.WriteWord(0x00DFF096, 0x8210);
+		bus.Paula.AdvanceTo(0);
+		StartDiskDmaWithoutSelecting(bus, DmaBase, words: 1);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().LastTransferHead);
+		Assert.Equal(0x2222, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void SelectedCylinderChoosesEncodedTrackCylinder()
+	{
+		var tracks = CreateEncodedTrackSet();
+		tracks[0] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x1111));
+		tracks[2] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x3333));
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
+		bus.Disk.Drive0.Step(1);
+
+		StartDiskDma(bus, DmaBase, words: 1);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().LastTransferCylinder);
+		Assert.Equal(0x3333, ReadChipWord(bus, DmaBase));
+	}
+
+	[Theory]
+	[MemberData(nameof(DriveSelectRows))]
+	public void DiskDmaReadsFromSelectedExternalDrive(object rowObject)
+	{
+		var row = Assert.IsType<DriveRow>(rowObject);
+		var bus = new AmigaBus(floppyDriveCount: 4);
+		for (var drive = 0; drive < 4; drive++)
+		{
+			GetDrive(bus, drive).Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords((ushort)(0xA000 + drive))));
+		}
+
+		StartDiskDma(bus, DmaBase, words: 1, drive: row.Drive);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(row.Drive, bus.Disk.CaptureSnapshot().LastTransferDrive);
+		Assert.Equal((ushort)(0xA000 + row.Drive), ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void CiaAReportsDiskChangeTrackZeroAndReadyLinesAsActiveLow()
+	{
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)), markChanged: true);
+
+		var changedAtTrackZero = bus.ReadByte(0x00BFE001);
+		Assert.Equal(0, changedAtTrackZero & 0x04);
+		Assert.Equal(0, changedAtTrackZero & 0x10);
+		Assert.NotEqual(0, changedAtTrackZero & 0x20);
+
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var ready = bus.ReadByte(0x00BFE001);
+		Assert.Equal(0, ready & 0x20);
+
+		bus.Disk.Drive0.Step(1);
+		var afterStep = bus.ReadByte(0x00BFE001);
+		Assert.NotEqual(0, afterStep & 0x04);
+		Assert.NotEqual(0, afterStep & 0x10);
+	}
+
+	[Fact]
+	public void SelectingUnconnectedDriveDoesNotAliasDf0()
+	{
+		var bus = new AmigaBus(floppyDriveCount: 1);
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
+
+		SelectDriveAndStartMotor(bus, drive: 1);
+		bus.WriteWord(0x00DFF096, 0x8210);
+		bus.Paula.AdvanceTo(0);
+		StartDiskDmaWithoutSelecting(bus, DmaBase, words: 1);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(-1, bus.Disk.CaptureSnapshot().SelectedDrive);
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(0, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void FloppyIndexPulseSetsCiaBFlagWhenMotorIsOn()
+	{
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
+		bus.AbleCiaInterrupts(AmigaCiaId.B, 0x80 | AmigaCia.FlagInterruptMask, 0);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var indexCycle = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 5);
+
+		bus.AdvanceCiasTo(indexCycle - 1);
+		Assert.Empty(bus.DrainCiaInterrupts());
+
+		bus.AdvanceCiasTo(indexCycle);
+
+		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(AmigaCiaId.B, interruptEvent.Cia);
+		Assert.Equal(AmigaCia.FlagInterruptMask, interruptEvent.IcrBits);
+	}
+
+	private static AmigaBus CreateBusWithTrack(params ushort[] words)
+	{
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(words)));
+		return bus;
+	}
+
+	private static AmigaBus CreateBusWithTrackBytes(params byte[] bytes)
+	{
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithBytes(bytes)));
+		return bus;
+	}
+
+	private static void StartDiskDma(AmigaBus bus, uint targetAddress, ushort words, int drive = 0, long cycle = 0)
+	{
+		PrepareDiskDma(bus, cycle, drive);
+		StartDiskDmaWithoutSelecting(bus, targetAddress, words, cycle);
+	}
+
+	private static void StartDiskDmaWithoutSelecting(AmigaBus bus, uint targetAddress, ushort words, long cycle = 0)
+	{
+		SetDiskPointer(bus, targetAddress, cycle);
+		WriteDsklenStartSequence(bus, words, cycle);
+	}
+
+	private static void PrepareDiskDma(AmigaBus bus, long cycle = 0, int drive = 0)
+	{
+		SelectDriveAndStartMotor(bus, drive, cycle);
+		bus.WriteWord(0x00DFF096, 0x8210, cycle);
+		bus.Paula.AdvanceTo(cycle);
+	}
+
+	private static void SelectDriveAndStartMotor(AmigaBus bus, int drive, long cycle = 0, int head = 0)
+	{
+		bus.WriteByte(0x00BFD100, 0xFF, cycle);
+		bus.WriteByte(0x00BFD300, 0xFF, cycle);
+		var value = (byte)(0x7F & ~(1 << (drive + 3)));
+		if (head != 0)
+		{
+			value = (byte)(value & ~0x04);
+		}
+
+		bus.WriteByte(0x00BFD100, value, cycle);
+	}
+
+	private static void SetDiskPointer(AmigaBus bus, uint targetAddress, long cycle = 0)
+	{
+		bus.WriteWord(0x00DFF020, (ushort)(targetAddress >> 16), cycle);
+		bus.WriteWord(0x00DFF022, (ushort)targetAddress, cycle);
+	}
+
+	private static void WriteDsklenStartSequence(AmigaBus bus, ushort words, long cycle = 0)
+	{
+		var dsklen = (ushort)(0x8000 | words);
+		bus.WriteWord(0x00DFF024, dsklen, cycle);
+		bus.WriteWord(0x00DFF024, dsklen, cycle);
+	}
+
+	private static long CompleteDiskDma(AmigaBus bus)
+	{
+		var snapshot = bus.Disk.CaptureSnapshot();
+		if (!snapshot.ActiveDma)
+		{
+			return 0;
+		}
+
+		var completionCycle = snapshot.ActiveDmaCompletionCycle;
+		bus.AdvanceCiasTo(completionCycle);
+		bus.Paula.AdvanceTo(completionCycle);
+		return completionCycle;
+	}
+
+	private static ushort ReadChipWord(AmigaBus bus, uint address)
+	{
+		return BigEndian.ReadUInt16(bus.ChipRam, checked((int)address), "disk DMA word");
+	}
+
+	private static long DiskByteCycleCount(int byteCount)
+	{
+		return DiskByteCycleCount(AmigaDosTrackEncoder.EncodedTrackBytes, byteCount);
+	}
+
+	private static long DiskByteCycleCount(int trackByteLength, int byteCount)
+	{
+		return (long)Math.Ceiling(
+			AmigaConstants.A500PalCpuClockHz / (trackByteLength * 5.0) * byteCount);
+	}
+
+	private static AmigaFloppyDrive GetDrive(AmigaBus bus, int drive)
+	{
+		return drive switch
+		{
+			0 => bus.Disk.Drive0,
+			1 => bus.Disk.Drive1,
+			2 => bus.Disk.Drive2,
+			3 => bus.Disk.Drive3,
+			_ => throw new ArgumentOutOfRangeException(nameof(drive))
+		};
+	}
+
+	private static AmigaEncodedTrack[] CreateTrackSetWithWords(params ushort[] words)
+	{
+		return CreateTrackSetWithBytes(WordsToBytes(words));
+	}
+
+	private static AmigaEncodedTrack[] CreateTrackSetWithBytes(params byte[] bytes)
+	{
+		var tracks = CreateEncodedTrackSet();
+		if (bytes.Length == 0)
+		{
+			bytes = WordsToBytes(0xAAAA);
+		}
+
+		tracks[0] = AmigaEncodedTrack.FromBytes(bytes);
+		return tracks;
+	}
+
+	private static AmigaEncodedTrack[] CreateEncodedTrackSet()
+	{
+		var tracks = new AmigaEncodedTrack[AmigaDiskImage.TrackCount];
+		var blankTrack = AmigaEncodedTrack.FromBytes(WordsToBytes(0xAAAA));
+		for (var trackIndex = 0; trackIndex < tracks.Length; trackIndex++)
+		{
+			tracks[trackIndex] = blankTrack;
+		}
+
+		return tracks;
+	}
+
+	private static byte[] WordsToBytes(params ushort[] words)
+	{
+		var data = new byte[Math.Max(1, words.Length) * 2];
+		for (var i = 0; i < words.Length; i++)
+		{
+			BigEndian.WriteUInt16(data, i * 2, words[i]);
+		}
+
+		return data;
+	}
+
+	private static AmigaEncodedTrack ShiftTrackBits(byte[] source, int shiftBits)
+	{
+		var bitLength = source.Length * 8;
+		var shifted = new byte[source.Length];
+		shiftBits = AmigaEncodedTrack.Mod(shiftBits, bitLength);
+		for (var bit = 0; bit < bitLength; bit++)
+		{
+			if (!ReadBit(source, bit))
+			{
+				continue;
+			}
+
+			WriteBit(shifted, (bit + shiftBits) % bitLength);
+		}
+
+		return new AmigaEncodedTrack(shifted, bitLength);
+	}
+
+	private static bool ReadBit(ReadOnlySpan<byte> data, int bitOffset)
+	{
+		return ((data[bitOffset >> 3] >> (7 - (bitOffset & 7))) & 1) != 0;
+	}
+
+	private static void WriteBit(Span<byte> data, int bitOffset)
+	{
+		data[bitOffset >> 3] = (byte)(data[bitOffset >> 3] | (1 << (7 - (bitOffset & 7))));
+	}
+
+	private sealed record DiskConformanceRow(string Group, string Name, DiskRowStatus Status, string Reason)
+	{
+		public static DiskConformanceRow Executable(string group, string name)
+		{
+			return new DiskConformanceRow(group, name, DiskRowStatus.Executable, string.Empty);
+		}
+
+		public static DiskConformanceRow Pending(string group, string name, string reason)
+		{
+			return new DiskConformanceRow(group, name, DiskRowStatus.Pending, reason);
+		}
+	}
+
+	private enum DiskRowStatus
+	{
+		Executable,
+		Pending
+	}
+
+	private sealed record PointerRow(uint Address, uint Expected);
+
+	private sealed record DmaGateRow(string Name, ushort Dmacon, bool ExpectedStarts);
+
+	private sealed record DsklenRow(string Name, ushort Words);
+
+	private sealed record DriveRow(int Drive);
+
+	private sealed record StepRow(string Name, bool DirectionBitSet, int ExpectedDelta);
+
+	private sealed record WordSyncRow(string Name, ushort Sync, ushort Payload);
+
+	private sealed record RawBitOffsetRow(int ShiftBits);
+}
