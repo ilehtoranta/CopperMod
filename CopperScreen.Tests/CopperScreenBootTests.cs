@@ -57,6 +57,111 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void ShadowOfTheBeastIpfDiskTwoParallaxSceneRendersAfterFireWaitsWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip");
+		if (diskPath == null || CopperScreenEmulator.ResolveNextDiskPath(diskPath) == null)
+		{
+			return;
+		}
+
+		const int MaxFrames = 7_000;
+		const int IdleFramesBeforeFire = 45;
+		const int FirePulseFrames = 20;
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskPath }, AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var frame = 0;
+		var renderedFrame = 0;
+		var firePulses = 0;
+		var idleFrames = 0;
+		var previousTransferCount = -1;
+		var swappedToDiskTwo = false;
+		var sawPostSwapTransfer = false;
+		var transferCountAtSwap = 0;
+		var swapFrame = 0;
+		var diskTwoChecksumChanges = 0;
+		uint? previousDiskTwoChecksum = null;
+		var visual = default(FrameVisualMetrics);
+		var reachedDiskTwoScene = false;
+
+		for (frame = 1; frame <= MaxFrames; frame++)
+		{
+			renderedFrame = frame;
+			emulator.RenderNextFrame();
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			var display = emulator.DisplaySnapshot;
+
+			idleFrames = previousTransferCount == disk.TransferCount && !disk.ActiveDma
+				? idleFrames + 1
+				: 0;
+			previousTransferCount = disk.TransferCount;
+
+			if (!swappedToDiskTwo && disk.LastTransferCylinder >= 69 && idleFrames >= IdleFramesBeforeFire)
+			{
+				Assert.True(emulator.InsertNextDisk(), "Expected Shadow of the Beast disk 2 to be available for DF0 swap.");
+				swappedToDiskTwo = true;
+				swapFrame = frame;
+				transferCountAtSwap = disk.TransferCount;
+				idleFrames = 0;
+				continue;
+			}
+
+			sawPostSwapTransfer |= swappedToDiskTwo && disk.TransferCount > transferCountAtSwap;
+			if (swappedToDiskTwo)
+			{
+				visual = MeasureFrame(emulator.Framebuffer);
+			}
+
+			if (sawPostSwapTransfer)
+			{
+				if (previousDiskTwoChecksum.HasValue && previousDiskTwoChecksum.Value != visual.Checksum)
+				{
+					diskTwoChecksumChanges++;
+				}
+
+				previousDiskTwoChecksum = visual.Checksum;
+			}
+
+			if (!sawPostSwapTransfer && idleFrames >= IdleFramesBeforeFire)
+			{
+				firePulses++;
+				emulator.PulsePrimaryFire(FirePulseFrames);
+				idleFrames = 0;
+			}
+
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				break;
+			}
+
+			if (sawPostSwapTransfer &&
+				IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, display, visual, diskTwoChecksumChanges))
+			{
+				reachedDiskTwoScene = true;
+				break;
+			}
+		}
+
+		Assert.True(
+			reachedDiskTwoScene,
+			BuildShadowOfTheBeastDiskTwoDiagnostic(
+				emulator,
+				machine,
+				renderedFrame,
+				firePulses,
+				idleFrames,
+				swappedToDiskTwo,
+				sawPostSwapTransfer,
+				swapFrame,
+				transferCountAtSwap,
+				diskTwoChecksumChanges,
+				visual));
+	}
+
+	[Fact]
 	public void OperationThunderboltIpfDoesNotHitEarlyRawLoaderFaultWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile(
@@ -1515,6 +1620,105 @@ public sealed class CopperScreenBootTests
 		}
 
 		return count;
+	}
+
+	private static bool ContainsFatalBootStatus(string statusText)
+	{
+		return statusText.Contains("AMIGA_BOOT_UNSUPPORTED_OPCODE", StringComparison.Ordinal) ||
+			statusText.Contains("AMIGA_BOOT_FAULT", StringComparison.Ordinal);
+	}
+
+	private static bool IsShadowOfTheBeastDiskTwoVisualScene(
+		string statusText,
+		OcsDisplaySnapshot display,
+		FrameVisualMetrics visual,
+		int diskTwoChecksumChanges)
+	{
+		return statusText.StartsWith("boot program running:", StringComparison.Ordinal) &&
+			!ContainsFatalBootStatus(statusText) &&
+			display.LastBitplaneNonZeroPixels > 40_000 &&
+			display.LastBitplaneMinX <= 40 &&
+			display.LastBitplaneMaxX >= 300 &&
+			display.LastBitplaneMaxY >= 200 &&
+			display.LastSpriteNonZeroPixels > 16 &&
+			visual.NonBlackPixels > 40_000 &&
+			visual.DistinctColors >= 32 &&
+			diskTwoChecksumChanges >= 5;
+	}
+
+	private static string BuildShadowOfTheBeastDiskTwoDiagnostic(
+		CopperScreenEmulator emulator,
+		AmigaMachine machine,
+		int frame,
+		int firePulses,
+		int idleFrames,
+		bool swappedToDiskTwo,
+		bool sawPostSwapTransfer,
+		int swapFrame,
+		int transferCountAtSwap,
+		int diskTwoChecksumChanges,
+		FrameVisualMetrics visual)
+	{
+		var disk = machine.Bus.Disk.CaptureSnapshot();
+		var display = emulator.DisplaySnapshot;
+		var diagnosticVisual = visual.NonBlackPixels == 0 && visual.DistinctColors == 0
+			? MeasureFrame(emulator.Framebuffer)
+			: visual;
+		return
+			"Expected Shadow of the Beast IPF to swap DF0 to disk 2 and reach the animated parallax scene. " +
+			$"frame={frame}, firePulses={firePulses}, idleFrames={idleFrames}, swappedToDiskTwo={swappedToDiskTwo}, " +
+			$"sawPostSwapTransfer={sawPostSwapTransfer}, swapFrame={swapFrame}, transferCountAtSwap={transferCountAtSwap}, " +
+			$"status='{emulator.StatusText}', transfers={disk.TransferCount}, lastDrive={disk.LastTransferDrive}, " +
+			$"last={disk.LastTransferCylinder}.{disk.LastTransferHead}@0x{disk.LastTransferAddress:X6}, " +
+			$"selectedDrive={disk.SelectedDrive}, activeDma={disk.ActiveDma}, dsklen=0x{disk.Dsklen:X4}, " +
+			$"dskbytr=0x{disk.Dskbytr:X4}, ciab=0x{disk.CiabPortB:X2}, bplcon0=0x{display.Bplcon0:X4}, " +
+			$"bitplanePixels={display.LastBitplaneNonZeroPixels}, " +
+			$"bitplaneBox={display.LastBitplaneMinX},{display.LastBitplaneMinY}-{display.LastBitplaneMaxX},{display.LastBitplaneMaxY}, " +
+			$"spritePixels={display.LastSpriteNonZeroPixels}, " +
+			$"spriteBox={display.LastSpriteMinX},{display.LastSpriteMinY}-{display.LastSpriteMaxX},{display.LastSpriteMaxY}, " +
+			$"nonBlack={diagnosticVisual.NonBlackPixels}, colors={diagnosticVisual.DistinctColors}, checksumChangesAfterDisk2={diskTwoChecksumChanges}, " +
+			$"checksum=0x{diagnosticVisual.Checksum:X8}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, " +
+			$"adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.";
+	}
+
+	private static FrameVisualMetrics MeasureFrame(IReadOnlyList<int> framebuffer)
+	{
+		const int Black = unchecked((int)0xFF000000);
+		const int ColorLimit = 1024;
+		var checksum = 2166136261u;
+		var nonBlack = 0;
+		var colors = new HashSet<int>();
+		foreach (var pixel in framebuffer)
+		{
+			checksum = (checksum ^ unchecked((uint)pixel)) * 16777619u;
+			if (pixel != Black)
+			{
+				nonBlack++;
+			}
+
+			if (colors.Count < ColorLimit)
+			{
+				colors.Add(pixel);
+			}
+		}
+
+		return new FrameVisualMetrics(nonBlack, colors.Count, checksum);
+	}
+
+	private readonly struct FrameVisualMetrics
+	{
+		public FrameVisualMetrics(int nonBlackPixels, int distinctColors, uint checksum)
+		{
+			NonBlackPixels = nonBlackPixels;
+			DistinctColors = distinctColors;
+			Checksum = checksum;
+		}
+
+		public int NonBlackPixels { get; }
+
+		public int DistinctColors { get; }
+
+		public uint Checksum { get; }
 	}
 
 	private static byte[] CreateBranchToSelfBootDisk()

@@ -104,7 +104,7 @@ public sealed class AmigaCustomChipPointerTests
 
     private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height)
     {
-        var hStart = x + (0x81 - AmigaConstants.PalLowResOverscanBorderX);
+        var hStart = x + 64 - AmigaConstants.PalLowResOverscanBorderX;
         var vStart = y + (0x2C - AmigaConstants.PalLowResOverscanBorderY);
         var vStop = vStart + height;
         var pos = (ushort)(((vStart & 0xFF) << 8) | ((hStart >> 1) & 0xFF));
