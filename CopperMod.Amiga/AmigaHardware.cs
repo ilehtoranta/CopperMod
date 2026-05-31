@@ -38,7 +38,7 @@ namespace CopperMod.Amiga
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly uint _chipRamDecodeSize;
         private readonly long _palFrameCycles;
-        private readonly double _palLineCycles;
+        private readonly long _palLineCycles;
         private MappedMemoryRegion? _romOverlayRegion;
         private bool _romOverlayEnabled = true;
         private long _nextVerticalBlankCycle;
@@ -91,8 +91,8 @@ namespace CopperMod.Amiga
             CiaA = new AmigaCia(AmigaCiaId.A);
             CiaB = new AmigaCia(AmigaCiaId.B);
             Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
-            _palFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
-            _palLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
+            _palFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+            _palLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
             _nextVerticalBlankCycle = _palFrameCycles;
             ResetHorizontalSyncCounter();
             CiaA.Reset(0x02);
@@ -610,7 +610,7 @@ namespace CopperMod.Amiga
                 _nextHorizontalSyncIndex++;
                 _nextHorizontalSyncCycle = Math.Max(
                     _nextHorizontalSyncCycle + 1,
-                    (long)Math.Round(_nextHorizontalSyncIndex * _palLineCycles));
+                    _nextHorizontalSyncIndex * _palLineCycles);
             }
 
             if (targetCycle < _nextVerticalBlankCycle)
@@ -635,8 +635,8 @@ namespace CopperMod.Amiga
         {
             var cycleInFrame = Math.Max(0, targetCycle) % _palFrameCycles;
             var line = Math.Clamp((int)(cycleInFrame / _palLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
-            var lineCycle = cycleInFrame - (long)(line * _palLineCycles);
-            var horizontal = Math.Clamp((int)(lineCycle * 0xE2 / _palLineCycles), 0, 0xE2);
+            var lineCycle = cycleInFrame - (line * _palLineCycles);
+            var horizontal = Math.Clamp((int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock), 0, 0xE2);
             var frame = Math.Max(0, targetCycle) / _palFrameCycles;
             Paula.SetBeamPosition(line, horizontal, (frame & 1) != 0);
         }
@@ -644,7 +644,7 @@ namespace CopperMod.Amiga
         private void ResetHorizontalSyncCounter()
         {
             _nextHorizontalSyncIndex = 1;
-            _nextHorizontalSyncCycle = Math.Max(1, (long)Math.Round(_palLineCycles));
+            _nextHorizontalSyncCycle = Math.Max(1, _palLineCycles);
         }
 
         public void AdvanceCiasTo(long targetCycle)
@@ -1379,7 +1379,6 @@ namespace CopperMod.Amiga
         private const ushort AudioInterruptMask = 0x0780;
         private const float VoiceScale = 0.25f;
         private const int MaxCapturedWrites = 65536;
-        private static readonly double CpuCyclesPerPaulaTick = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalPaulaClockHz;
         private readonly AmigaBus _bus;
         private readonly PaulaChannel[] _channels = new PaulaChannel[AmigaConstants.PaulaChannelCount];
         private readonly List<PendingWrite> _pendingWrites = new List<PendingWrite>();
@@ -1972,9 +1971,9 @@ namespace CopperMod.Amiga
             return Math.Max(1, (int)value);
         }
 
-        private static double GetPeriodCycles(int period)
+        private static long GetPeriodCycles(int period)
         {
-            return Math.Max(1, period) * CpuCyclesPerPaulaTick;
+            return (long)Math.Max(1, period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
         private void CompactPendingWrites()
@@ -2022,7 +2021,7 @@ namespace CopperMod.Amiga
             private ushort _dataWord;
             private bool _hasDataWord;
             private bool _nextByteIsLow;
-            private double _nextSampleCycle;
+            private long _nextSampleCycle;
             private uint _currentAddress;
             private int _remainingWords;
 
@@ -2109,7 +2108,7 @@ namespace CopperMod.Amiga
 
                     if (DmaEnabled)
                     {
-                        FetchDmaWord(bus, (long)Math.Round(_nextSampleCycle), paula, forceInterrupt: false);
+                        FetchDmaWord(bus, _nextSampleCycle, paula, forceInterrupt: false);
                         _nextSampleCycle += GetPeriodCycles(Period);
                     }
                     else
@@ -2134,7 +2133,8 @@ namespace CopperMod.Amiga
                     DmaEnabled,
                     _dataWord,
                     _hasDataWord,
-                    _nextByteIsLow);
+                    _nextByteIsLow,
+                    _nextSampleCycle);
             }
 
             private void FetchDmaWord(AmigaBus bus, long cycle, Paula paula, bool forceInterrupt)
@@ -2193,7 +2193,8 @@ namespace CopperMod.Amiga
             bool dmaEnabled,
             ushort dataWord,
             bool hasDataWord,
-            bool nextByteIsLow)
+            bool nextByteIsLow,
+            long nextSampleCycle)
         {
             Index = index;
             Location = location;
@@ -2207,6 +2208,7 @@ namespace CopperMod.Amiga
             DataWord = dataWord;
             HasDataWord = hasDataWord;
             NextByteIsLow = nextByteIsLow;
+            NextSampleCycle = nextSampleCycle;
         }
 
         public int Index { get; }
@@ -2232,6 +2234,8 @@ namespace CopperMod.Amiga
         public bool HasDataWord { get; }
 
         public bool NextByteIsLow { get; }
+
+        public long NextSampleCycle { get; }
     }
 
     internal sealed class ChipPresentationWriteHistory

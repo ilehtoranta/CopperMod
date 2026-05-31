@@ -49,7 +49,7 @@ internal sealed class MainWindow : Window
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
-	private bool _showFullOverscan;
+	private bool _showFullOverscan = true;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
@@ -81,11 +81,11 @@ internal sealed class MainWindow : Window
 		_perfStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_benchPath = new TextBlock();
 		_benchDetails = new TextBlock();
-		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench);
-		_pauseButton = CreateToolbarButton("Pause", TogglePause);
-		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode);
-		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen);
-		_overscanButton = CreateToolbarButton("Scan", ToggleOverscan);
+		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench, "Show or hide the CopperBench overlay");
+		_pauseButton = CreateToolbarButton("Pause", TogglePause, "Pause or resume emulation");
+		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode, "Toggle numpad between joystick emulation and Amiga numpad keys");
+		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen, "Toggle fullscreen mode");
+		_overscanButton = CreateToolbarButton("Crop", ToggleOverscan, "Toggle between full overscan and cropped display");
 		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
 		_root = new Grid
 		{
@@ -461,21 +461,21 @@ internal sealed class MainWindow : Window
 		controls.Children.Add(CreateToolbarButton("Reset", async () =>
 		{
 			await ResetRuntimeAsync().ConfigureAwait(true);
-		}));
+		}, "Reset the emulated Amiga"));
 		controls.Children.Add(_fullscreenButton);
 		controls.Children.Add(_overscanButton);
 		controls.Children.Add(_numpadModeButton);
-		controls.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
+		controls.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker, "Insert or change the DF0 disk image"));
 		controls.Children.Add(CreateToolbarButton("Prev", async () =>
 		{
 			await InsertPreviousDiskAsync().ConfigureAwait(true);
-		}));
+		}, "Insert the previous disk image in the set"));
 		controls.Children.Add(CreateToolbarButton("Next", async () =>
 		{
 			await InsertNextDiskAsync().ConfigureAwait(true);
-		}));
+		}, "Insert the next disk image in the set"));
 
-		_ledFilterBox = CreateIndicatorBox(_ledFilterStatus, 64);
+		_ledFilterBox = CreateIndicatorBox(_ledFilterStatus, 64, "Power LED and audio filter state");
 		var topRow = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -483,11 +483,11 @@ internal sealed class MainWindow : Window
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		topRow.Children.Add(controls);
-		topRow.Children.Add(CreateIndicatorBox(_diskStatus, 180));
+		topRow.Children.Add(CreateIndicatorBox(_diskStatus, 180, "Current disk image"));
 		topRow.Children.Add(_ledFilterBox);
-		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76));
-		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76));
-		topRow.Children.Add(CreateIndicatorBox(_perfStatus, 76));
+		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
+		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
+		topRow.Children.Add(CreateIndicatorBox(_perfStatus, 76, "Emulation speed and frame timing"));
 
 		var drives = new StackPanel
 		{
@@ -498,7 +498,7 @@ internal sealed class MainWindow : Window
 		for (var driveIndex = 0; driveIndex < _driveStatusTexts.Length; driveIndex++)
 		{
 			var text = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
-			var box = CreateIndicatorBox(text, 66);
+			var box = CreateIndicatorBox(text, 66, $"DF{driveIndex}: drive status");
 			_driveStatusTexts[driveIndex] = text;
 			_driveStatusBoxes[driveIndex] = box;
 			drives.Children.Add(box);
@@ -516,6 +516,7 @@ internal sealed class MainWindow : Window
 		Grid.SetColumn(drives, 0);
 		bottomRow.Children.Add(drives);
 		Grid.SetColumn(_toolbarStatus, 1);
+		ToolTip.SetTip(_toolbarStatus, "Current emulator status and latest diagnostic");
 		bottomRow.Children.Add(_toolbarStatus);
 
 		var layout = new StackPanel
@@ -661,7 +662,7 @@ internal sealed class MainWindow : Window
 		};
 	}
 
-	private static Button CreateToolbarButton(string text, Action action)
+	private static Button CreateToolbarButton(string text, Action action, string tooltip)
 	{
 		var button = new Button
 		{
@@ -673,6 +674,7 @@ internal sealed class MainWindow : Window
 			Padding = new Thickness(6, 2),
 			MinWidth = 0
 		};
+		ToolTip.SetTip(button, tooltip);
 		button.Click += (_, _) => action();
 		return button;
 	}
@@ -691,9 +693,9 @@ internal sealed class MainWindow : Window
 		};
 	}
 
-	private static Border CreateIndicatorBox(TextBlock text, double width)
+	private static Border CreateIndicatorBox(TextBlock text, double width, string tooltip)
 	{
-		return new Border
+		var border = new Border
 		{
 			Width = width,
 			Height = 21,
@@ -704,6 +706,8 @@ internal sealed class MainWindow : Window
 			Padding = new Thickness(4, 1),
 			Child = text
 		};
+		ToolTip.SetTip(border, tooltip);
+		return border;
 	}
 
 	private static Button CreatePanelButton(string text, Action action)

@@ -7,11 +7,10 @@ namespace CopperScreen;
 
 internal sealed class CopperScreenEmulator
 {
-	private const int AppFrameRate = 50;
 	private const int DefaultAudioSampleRate = 44_100;
 	private const int DefaultAudioChannels = 2;
 	private const int DiskSwapEjectFrames = 25;
-	private static readonly long PalFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
+	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 	private readonly AmigaMachine _machine;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
@@ -33,8 +32,11 @@ internal sealed class CopperScreenEmulator
 	private long _frameAudioStartCycle;
 	private long _frameAudioEndCycle;
 	private long _frameAudioNextSampleCycle;
+	private long _defaultAudioFrameRemainder;
+	private long _outputAudioFrameRemainder;
 	private int _frameAudioSampleIndex;
 	private int _frameAudioSampleCount;
+	private int _outputAudioFrameSampleRate;
 	private bool _mousePrimaryFirePressed;
 	private bool _mouseSecondFirePressed;
 	private bool _joystickUp;
@@ -114,7 +116,14 @@ internal sealed class CopperScreenEmulator
 
 	public int AudioFramesPerAppFrame(int sampleRate)
 	{
-		return Math.Max(1, sampleRate / AppFrameRate);
+		if (sampleRate <= 0)
+		{
+			return 0;
+		}
+
+		return Math.Max(1, (int)CeilingDiv(
+			(long)sampleRate * AmigaConstants.A500PalCpuCyclesPerFrame,
+			AmigaConstants.A500PalCpuCyclesPerSecond));
 	}
 
 	public CopperScreenDriveState[] CaptureDriveStates()
@@ -628,7 +637,10 @@ internal sealed class CopperScreenEmulator
 			return 0;
 		}
 
-		var frames = Math.Min(AudioFramesPerAppFrame(sampleRate), destination.Length / channels);
+		var frameCapacity = Math.Min(AudioFramesPerAppFrame(sampleRate), destination.Length / channels);
+		var frames = Math.Min(frameCapacity, sampleRate == DefaultAudioSampleRate && channels == DefaultAudioChannels && _bootAttempted && DiskPath != null && !IsPaused
+			? _frameAudioSampleCount
+			: ConsumeOutputAudioFrameCount(sampleRate));
 		var span = destination.Slice(0, frames * channels);
 		span.Clear();
 		if (!_bootAttempted || DiskPath == null || IsPaused)
@@ -638,14 +650,19 @@ internal sealed class CopperScreenEmulator
 
 		if (sampleRate == DefaultAudioSampleRate && channels == DefaultAudioChannels)
 		{
-			_frameAudio.AsSpan(0, Math.Min(span.Length, _frameAudio.Length)).CopyTo(span);
+			_frameAudio.AsSpan(0, Math.Min(span.Length, _frameAudioSampleCount * DefaultAudioChannels)).CopyTo(span);
 			return frames;
 		}
 
-		var sourceFrames = _frameAudio.Length / DefaultAudioChannels;
+		var sourceFrames = _frameAudioSampleCount;
+		if (sourceFrames <= 0)
+		{
+			return frames;
+		}
+
 		for (var frame = 0; frame < frames; frame++)
 		{
-			var sourceFrame = Math.Min(sourceFrames - 1, (int)Math.Round(frame * (sourceFrames - 1) / Math.Max(1.0, frames - 1.0)));
+			var sourceFrame = MapOutputFrameToSourceFrame(frame, frames, sourceFrames);
 			var left = _frameAudio[sourceFrame * DefaultAudioChannels];
 			var right = _frameAudio[(sourceFrame * DefaultAudioChannels) + 1];
 			var offset = frame * channels;
@@ -690,7 +707,9 @@ internal sealed class CopperScreenEmulator
 		_frameAudioStartCycle = _audioCycle;
 		_frameAudioEndCycle = Math.Max(_frameAudioStartCycle, targetCycle);
 		_frameAudioSampleIndex = 0;
-		_frameAudioSampleCount = _frameAudio.Length / DefaultAudioChannels;
+		_frameAudioSampleCount = Math.Min(
+			_frameAudio.Length / DefaultAudioChannels,
+			ConsumeExactAudioFrameCount(DefaultAudioSampleRate, ref _defaultAudioFrameRemainder));
 		_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(0);
 	}
 
@@ -728,6 +747,51 @@ internal sealed class CopperScreenEmulator
 	{
 		RenderFrameAudioUntil(_machine.Cpu.State.Cycles, _frameAudioEndCycle);
 		_audioCycle = _frameAudioEndCycle;
+	}
+
+	internal static int MapOutputFrameToSourceFrame(int frame, int outputFrames, int sourceFrames)
+	{
+		if (sourceFrames <= 1 || outputFrames <= 1)
+		{
+			return 0;
+		}
+
+		return Math.Min(sourceFrames - 1, (int)(((long)frame * sourceFrames) / outputFrames));
+	}
+
+	private int ConsumeOutputAudioFrameCount(int sampleRate)
+	{
+		if (_outputAudioFrameSampleRate != sampleRate)
+		{
+			_outputAudioFrameSampleRate = sampleRate;
+			_outputAudioFrameRemainder = 0;
+		}
+
+		return ConsumeExactAudioFrameCount(sampleRate, ref _outputAudioFrameRemainder);
+	}
+
+	private static int ConsumeExactAudioFrameCount(int sampleRate, ref long remainder)
+	{
+		if (sampleRate <= 0)
+		{
+			remainder = 0;
+			return 0;
+		}
+
+		var numerator = ((long)sampleRate * AmigaConstants.A500PalCpuCyclesPerFrame) + remainder;
+		var frames = numerator / AmigaConstants.A500PalCpuCyclesPerSecond;
+		remainder = numerator % AmigaConstants.A500PalCpuCyclesPerSecond;
+		return (int)frames;
+	}
+
+	private static long CeilingDiv(long numerator, long denominator)
+	{
+		if (denominator <= 0)
+		{
+			throw new ArgumentOutOfRangeException(nameof(denominator), "Denominator must be positive.");
+		}
+
+		return numerator <= 0 ? 0 : ((numerator - 1) / denominator) + 1;
 	}
 
 	private void AdvancePendingDiskInsert()

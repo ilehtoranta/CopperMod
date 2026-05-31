@@ -266,7 +266,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
         SetCopperPointer(bus, 1, CopperList);
         _ = RenderLowResFrame(bus);
-        bus.Paula.AdvanceTo(0);
+        bus.Paula.AdvanceTo(10);
 
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
         Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());

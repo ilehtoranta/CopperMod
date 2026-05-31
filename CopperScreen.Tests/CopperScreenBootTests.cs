@@ -652,6 +652,76 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void AudioFramesPerAppFrameUsesExactPalCapacity()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var expectedCapacity = (int)((((long)44_100 * AmigaConstants.A500PalCpuCyclesPerFrame) - 1) /
+			AmigaConstants.A500PalCpuCyclesPerSecond) + 1;
+
+		Assert.Equal(881, expectedCapacity);
+		Assert.Equal(expectedCapacity, emulator.AudioFramesPerAppFrame(44_100));
+		Assert.NotEqual(882, emulator.AudioFramesPerAppFrame(44_100));
+	}
+
+	[Fact]
+	public void AudioSilenceUsesExactVariablePalFrameCounts()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var audio = new float[emulator.AudioFramesPerAppFrame(44_100) * 2];
+		var counts = new HashSet<int>();
+		var totalFrames = 0L;
+		const int renderedFrames = 1000;
+
+		for (var frame = 0; frame < renderedFrames; frame++)
+		{
+			var frames = emulator.RenderAudio(audio, 44_100, 2);
+			counts.Add(frames);
+			totalFrames += frames;
+			Assert.All(audio.AsSpan(0, frames * 2).ToArray(), sample => Assert.Equal(0.0f, sample));
+		}
+
+		var expectedTotal = ((long)44_100 * AmigaConstants.A500PalCpuCyclesPerFrame * renderedFrames) /
+			AmigaConstants.A500PalCpuCyclesPerSecond;
+		Assert.Equal(expectedTotal, totalFrames);
+		Assert.Contains(880, counts);
+		Assert.Contains(881, counts);
+	}
+
+	[Fact]
+	public void AudioSilenceCanReturnZeroFramesAtVeryLowSampleRates()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var audio = new float[emulator.AudioFramesPerAppFrame(1) * 2];
+		var totalFrames = 0;
+		var sawZeroFrame = false;
+		const int renderedFrames = 51;
+
+		for (var frame = 0; frame < renderedFrames; frame++)
+		{
+			var frames = emulator.RenderAudio(audio, 1, 2);
+			sawZeroFrame |= frames == 0;
+			totalFrames += frames;
+		}
+
+		var expectedTotal = (int)(((long)AmigaConstants.A500PalCpuCyclesPerFrame * renderedFrames) /
+			AmigaConstants.A500PalCpuCyclesPerSecond);
+		Assert.True(sawZeroFrame);
+		Assert.Equal(expectedTotal, totalFrames);
+	}
+
+	[Fact]
+	public void AudioIntegerResamplingMapsSourceFramesDeterministically()
+	{
+		Assert.Equal(0, CopperScreenEmulator.MapOutputFrameToSourceFrame(0, 5, 7));
+		Assert.Equal(1, CopperScreenEmulator.MapOutputFrameToSourceFrame(1, 5, 7));
+		Assert.Equal(2, CopperScreenEmulator.MapOutputFrameToSourceFrame(2, 5, 7));
+		Assert.Equal(4, CopperScreenEmulator.MapOutputFrameToSourceFrame(3, 5, 7));
+		Assert.Equal(5, CopperScreenEmulator.MapOutputFrameToSourceFrame(4, 5, 7));
+		Assert.Equal(0, CopperScreenEmulator.MapOutputFrameToSourceFrame(0, 1, 7));
+		Assert.Equal(0, CopperScreenEmulator.MapOutputFrameToSourceFrame(3, 8, 1));
+	}
+
+	[Fact]
 	public void CrackedDiskIntroPatchesTextFontFromKickstartShimWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip");

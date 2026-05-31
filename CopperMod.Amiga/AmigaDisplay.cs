@@ -25,13 +25,14 @@ namespace CopperMod.Amiga
         private const int LowResOutputHeight = AmigaConstants.PalLowResHeight;
         private const int LastCopperHorizontal = 0xE2;
         private const int CopperHorizontalUnitsPerLine = 227;
+        private const int CopperInstructionDataHpUnits = 2;
         private const int CopperMoveHpUnits = 4;
         private const int CopperSkipHpUnits = 4;
         private const int CopperWaitWakeHpUnits = 6;
         private const ushort CopconCopperDanger = 0x0002;
-        private static readonly long PalFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
-        private static readonly double PalLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
-        private static readonly double CopperHpCycles = PalLineCycles / CopperHorizontalUnitsPerLine;
+        private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        private const int PalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private readonly AmigaBus _bus;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>();
         private readonly ushort[] _colors = new ushort[32];
@@ -479,8 +480,10 @@ namespace CopperMod.Amiga
             ref CopperPresentationState copper)
         {
             var fetchCycle = Math.Min(copper.Cycle, frameStopCycle);
+            var dataCycle = fetchCycle + CopperHpToCpuCycles(CopperInstructionDataHpUnits);
+            var instructionStopCycle = fetchCycle + CopperHpToCpuCycles(CopperMoveHpUnits);
             var first = ReadChipWordForPresentationAtCycle(copper.Pc, fetchCycle);
-            var second = ReadChipWordForPresentationAtCycle(AddDmaPointerOffset(copper.Pc, 2), fetchCycle);
+            var second = ReadChipWordForPresentationAtCycle(AddDmaPointerOffset(copper.Pc, 2), dataCycle);
             copper.Pc = AddDmaPointerOffset(copper.Pc, 4);
 
             if (first == 0xFFFF && second == 0xFFFE)
@@ -492,23 +495,26 @@ namespace CopperMod.Amiga
             if ((first & 1) == 0)
             {
                 var register = (ushort)(first & 0x01FE);
-                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, fetchCycle, useTimedWrites);
-                renderCursorCycle = Math.Max(renderCursorCycle, fetchCycle);
-                _currentCopperRow = GetOutputRowForCycle(frameStartCycle, fetchCycle);
-                if (CanCopperWriteRegister(register))
+                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, Math.Min(dataCycle, frameStopCycle), useTimedWrites);
+                renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(dataCycle, frameStopCycle));
+                if (dataCycle <= frameStopCycle)
                 {
-                    ApplyCopperMove(register, second, fetchCycle);
-                    if (register == 0x088)
+                    _currentCopperRow = GetOutputRowForCycle(frameStartCycle, dataCycle);
+                    if (CanCopperWriteRegister(register))
                     {
-                        copper.JumpTo(_copperListPointer, fetchCycle);
-                    }
-                    else if (register == 0x08A)
-                    {
-                        copper.JumpTo(_copperListPointer2, fetchCycle);
+                        ApplyCopperMove(register, second, dataCycle);
+                        if (register == 0x088)
+                        {
+                            copper.JumpTo(_copperListPointer, dataCycle);
+                        }
+                        else if (register == 0x08A)
+                        {
+                            copper.JumpTo(_copperListPointer2, dataCycle);
+                        }
                     }
                 }
 
-                copper.Cycle = fetchCycle + CopperHpToCpuCycles(CopperMoveHpUnits);
+                copper.Cycle = instructionStopCycle;
                 return;
             }
 
@@ -683,17 +689,17 @@ namespace CopperMod.Amiga
 
         private static long CopperHpToCpuCycles(int hpUnits)
         {
-            return Math.Max(1, (long)Math.Round(hpUnits * CopperHpCycles));
+            return Math.Max(1, hpUnits * CopperHpCycles);
         }
 
         private static long GetLineStartCycle(long frameStartCycle, int line)
         {
-            return frameStartCycle + (long)Math.Round(line * PalLineCycles);
+            return frameStartCycle + ((long)line * PalLineCycles);
         }
 
         private static long GetCycleForCopperBeam(long frameStartCycle, int line, int horizontal)
         {
-            return GetLineStartCycle(frameStartCycle, line) + (long)Math.Round(horizontal * CopperHpCycles);
+            return GetLineStartCycle(frameStartCycle, line) + ((long)horizontal * CopperHpCycles);
         }
 
         private static int GetBeamLineForCycle(long frameStartCycle, long cycle)
@@ -721,7 +727,7 @@ namespace CopperMod.Amiga
         {
             var line = GetBeamLineForCycle(frameStartCycle, cycle);
             var lineStart = GetLineStartCycle(frameStartCycle, line);
-            var horizontal = (int)Math.Floor(Math.Max(0, cycle - lineStart) / CopperHpCycles);
+            var horizontal = (int)(Math.Max(0, cycle - lineStart) / CopperHpCycles);
             return Math.Clamp(horizontal, 0, LastCopperHorizontal);
         }
 
