@@ -97,6 +97,11 @@ dotnet run --project .\CopperScreen -- --profile ".\CopperScreen\Profiles\expand
 The ROM-backed profiles are still an emulator bring-up path; CopperStart remains
 the default for day-to-day disk testing.
 
+## Website
+
+The static project website lives in `docs`. GitHub Pages deploys it through
+`.github/workflows/pages.yml` on pushes to `main` and manual workflow runs.
+
 ## Export
 
 `CopperMod.Tools` renders supported modules to files without opening the player:

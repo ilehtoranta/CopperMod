@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CopperScreen is an AI-assisted C# Amiga 500 PAL emulator and CopperMod spin-off.">
+  <title>CopperScreen</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header" aria-label="Site header">
+    <a class="brand" href="#top" aria-label="CopperScreen home">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span>CopperScreen</span>
+    </a>
+    <nav aria-label="Page sections">
+      <a href="#status">Status</a>
+      <a href="#features">Hardware</a>
+      <a href="#run">Run</a>
+      <a href="https://github.com/ilehtoranta/CopperMod">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <img class="hero-image" src="assets/copperscreen-icon.png" alt="">
+      <div class="hero-copy">
+        <p class="eyebrow">Amiga 500 PAL emulator</p>
+        <h1 id="hero-title">CopperScreen</h1>
+        <p class="lede">
+          A work-in-progress C# emulator built alongside CopperMod, focused on
+          cycle-aware Amiga 500 behavior, custom chips, floppy loading, and the
+          tiny CopperStart Kickstart-compatible boot path.
+        </p>
+        <div class="hero-actions" aria-label="Primary links">
+          <a class="button primary" href="https://github.com/ilehtoranta/CopperMod">View Source</a>
+          <a class="button" href="#run">Run Locally</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="status" class="status-band" aria-labelledby="status-title">
+      <div>
+        <p class="eyebrow">Current shape</p>
+        <h2 id="status-title">Experimental, but already doing real Amiga work.</h2>
+      </div>
+      <p>
+        CopperScreen can boot ADF and IPF disk images, render OCS graphics,
+        play Paula audio, exercise CIA timing, and test either CopperStart or a
+        local Kickstart 1.3 ROM. Compatibility is still improving game by game.
+      </p>
+    </section>
+
+    <section id="features" class="feature-grid" aria-label="Hardware coverage">
+      <article>
+        <h2>OCS Custom Chips</h2>
+        <p>Copper, bitplanes, sprites, blitter, Paula audio, and disk DMA are tested through focused conformance matrices.</p>
+      </article>
+      <article>
+        <h2>CopperStart</h2>
+        <p>A compact Kickstart-like implementation targets the boot path needed by many disk images without bundling ROM files.</p>
+      </article>
+      <article>
+        <h2>Disk Images</h2>
+        <p>ADF, ZIP-wrapped ADF, and managed IPF decoding feed the raw floppy-controller path for loader and protection testing.</p>
+      </article>
+      <article>
+        <h2>Profiles</h2>
+        <p>Vanilla and expanded A500 profiles switch between CopperStart and local real Kickstart 1.3 ROM experiments.</p>
+      </article>
+    </section>
+
+    <section id="run" class="run-section" aria-labelledby="run-title">
+      <div>
+        <p class="eyebrow">Try it</p>
+        <h2 id="run-title">Run CopperScreen from the repository.</h2>
+        <p>
+          ROMs and commercial disk images are not included. Use your own legal
+          images when testing the emulator.
+        </p>
+      </div>
+      <pre><code>dotnet run --project .\CopperScreen -- "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- --profile expanded-copperstart "path\to\disk.zip"</code></pre>
+    </section>
+  </main>
+
+  <footer>
+    <span>CopperScreen is part of the CopperMod repository.</span>
+    <a href="https://github.com/ilehtoranta/CopperMod">github.com/ilehtoranta/CopperMod</a>
+  </footer>
+</body>
+</html>
