@@ -13,6 +13,8 @@ namespace CopperMod.Cust
         private const long MaxHostInterruptCycleBudget = 120_000;
         private const int MaxCiaInterruptsPerDispatch = 512;
         private const int MaxPaulaInterruptsPerDispatch = 512;
+        private const uint DmaconAddress = 0x00DFF096;
+        private const ushort DmaconSetMasterDma = 0x8200;
         private readonly HunkFile _hunk;
         private readonly DeliTagTable _rawTags;
         private readonly ModuleLoadContext? _loadContext;
@@ -132,6 +134,7 @@ namespace CopperMod.Cust
             _fallbackPcmPosition = 0;
             _renderedQuanta = 0;
             Machine.ResetHardware();
+            EnableHostDmaMaster();
             AllocateSegments();
             LoadSegments();
             ApplyRelocations();
@@ -151,6 +154,17 @@ namespace CopperMod.Cust
                 });
 
             AdvanceTimedHardwareTo(Cpu.State.Cycles);
+        }
+
+        private void EnableHostDmaMaster()
+        {
+            Bus.WriteDeviceWord(
+                AmigaBusRequester.Host,
+                AmigaBusAccessKind.CustomRegister,
+                DmaconAddress,
+                DmaconSetMasterDma,
+                0);
+            Bus.Paula.AdvanceTo(0);
         }
 
         public void SelectSubSong(int index)
