@@ -4,6 +4,15 @@ namespace CopperMod.Sid.Tests;
 
 public sealed class SidRenderTests
 {
+	public static TheoryData<string, int, string[]> MixerFilterWorkloads { get; } = new()
+	{
+		{ "Commando #1", 0, new[] { "TestTunes", "SID", "Tough", "Commando.sid" } },
+		{ "Great Giana Sisters #5", 4, new[] { "TestTunes", "SID", "Tough", "Great_Giana_Sisters.sid" } },
+		{ "Spijkerhoek #1", 0, new[] { "TestTunes", "SID", "Tough", "Spijkerhoek.sid" } },
+		{ "Flimbo intro #1", 0, new[] { "TestTunes", "SID", "Tough", "Flimbos_Quest_intro.sid" } },
+		{ "Tetris RSID #1", 0, new[] { "TestTunes", "SID", "Wally Beben", "Tetris.sid" } },
+	};
+
 	[Fact]
 	public void RenderProducesFiniteNonZeroPcmAndAdvancesPosition()
 	{
@@ -114,6 +123,41 @@ public sealed class SidRenderTests
 		song.RenderTick(buffer, options);
 
 		Assert.Equal(SidIntegerMath.DivRoundNearest(SidConstants.PalCpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz), GetCpuCycle(song));
+	}
+
+	[Theory]
+	[MemberData(nameof(MixerFilterWorkloads))]
+	public void RealMixerFilterWorkloadsRemainFiniteAndAudibleWhenPresent(string name, int subSongIndex, string[] pathParts)
+	{
+		var path = FindWorkspaceFile(pathParts);
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = new SidFormat().Load(File.ReadAllBytes(path));
+		if (subSongIndex != 0)
+		{
+			var selector = (IModuleSubSongSelector)song;
+			if (subSongIndex >= selector.SubSongCount)
+			{
+				return;
+			}
+
+			selector.SelectSubSong(subSongIndex);
+		}
+
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var peakRange = 0.0f;
+		var ticks = name.Contains("Tetris", StringComparison.Ordinal) ? 180 : 48;
+		for (var tick = 0; tick < ticks; tick++)
+		{
+			var buffer = RenderNextTick(song, options);
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			peakRange = Math.Max(peakRange, buffer.Max() - buffer.Min());
+		}
+
+		Assert.True(peakRange > 0.001f, $"{name} should stay audible after mixer/filter hot-path changes, peak range was {peakRange:0.000000}.");
 	}
 
 	[Fact]

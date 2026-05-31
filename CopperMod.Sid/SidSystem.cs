@@ -278,12 +278,28 @@ namespace CopperMod.Sid
                 return;
             }
 
+            if (CanUseSingleChipBatchAccumulation())
+            {
+                _sampleAccumulator += Chips[0].RenderAndSumFast(_lastCycle + 1, cycles);
+                _sampleCycles += cycles;
+                _lastCycle += cycles;
+                return;
+            }
+
             for (var i = 0; i < cycles; i++)
             {
                 AccumulateOneCycle(_lastCycle + i + 1);
             }
 
             _lastCycle += cycles;
+        }
+
+        [HotPath]
+        private bool CanUseSingleChipBatchAccumulation()
+        {
+            return Chips.Length == 1 &&
+                _captureSamples == null &&
+                _trace == null;
         }
 
         [HotPath]

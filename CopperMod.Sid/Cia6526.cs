@@ -74,6 +74,8 @@ namespace CopperMod.Sid
 
         public byte EffectivePortA => ReadPort(_portA, _ddrA);
 
+        public ushort TimerALatch => _timerALatch;
+
         public void Reset(bool defaultTimerA60Hz, int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond)
         {
             _portA = 0xFF;

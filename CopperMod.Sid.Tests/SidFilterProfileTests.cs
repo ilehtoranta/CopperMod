@@ -90,6 +90,96 @@ public sealed class SidFilterProfileTests
 	}
 
 	[Fact]
+	public void MixerFilterPipelineMatchesPinnedCurrentOutput()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidConstants.DefaultSidBaseAddress);
+		WriteVoice(chip, voice: 0, frequency: 0x1234, control: 0x41, pulseWidth: 0x0830, attackDecay: 0x00, sustainRelease: 0xF0);
+		WriteVoice(chip, voice: 1, frequency: 0x0711, control: 0x21, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
+		WriteVoice(chip, voice: 2, frequency: 0x0D55, control: 0x11, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
+		chip.Write(0x15, 0x03);
+		chip.Write(0x16, 0x60);
+		chip.Write(0x17, 0xF3);
+		chip.Write(0x18, 0x7F);
+		var checkpoints = new[]
+		{
+			0, 1, 2, 3, 4, 5, 31, 63, 127, 255, 383, 384, 511, 767, 768,
+			895, 1023, 1151, 1152, 1279, 1535, 1536, 1791, 1792, 2047,
+			2303, 2559, 3071, 4095
+		};
+		var expected = new[]
+		{
+			0.017298175441452127,
+			0.0323319792231036,
+			0.045397822896049086,
+			0.05675331704545432,
+			0.0666223504278281,
+			0.07519950423733535,
+			0.12492814676847076,
+			0.11724430094994959,
+			0.09825887427718794,
+			0.06475300746591524,
+			0.03721252381840548,
+			0.0365815906026363,
+			0.007285910767749346,
+			-0.040962353300401086,
+			-0.04066838230439219,
+			-0.05646858834318402,
+			-0.07190295420889999,
+			-0.08533071286395066,
+			-0.10161137102641625,
+			-0.21798602155958965,
+			-0.2291155604587863,
+			-0.19923589031104413,
+			-0.010130804993097662,
+			-0.03416532733853054,
+			0.41672193340966746,
+			0.43773843383793354,
+			0.5159890924615952,
+			0.7648882786571707,
+			-0.01729801729840872
+		};
+
+		var checkpointIndex = 0;
+		for (var cycle = 0; cycle <= 4095; cycle++)
+		{
+			if (cycle == 384)
+			{
+				chip.Write(0x17, 0xF5);
+			}
+
+			if (cycle == 768)
+			{
+				chip.Write(0x18, 0x9F);
+			}
+
+			if (cycle == 1152)
+			{
+				chip.Write(0x16, 0x20);
+			}
+
+			if (cycle == 1536)
+			{
+				chip.Write(0x18, 0x0F);
+			}
+
+			if (cycle == 1792)
+			{
+				chip.Write(0x18, 0x5F);
+			}
+
+			var sample = chip.Render(1);
+			if (checkpointIndex < checkpoints.Length && cycle == checkpoints[checkpointIndex])
+			{
+				var delta = Math.Abs(sample - expected[checkpointIndex]);
+				Assert.True(delta <= 1e-12, $"Cycle {cycle} expected {expected[checkpointIndex]:R}, got {sample:R}, delta {delta:R}.");
+				checkpointIndex++;
+			}
+		}
+
+		Assert.Equal(expected.Length, checkpointIndex);
+	}
+
+	[Fact]
 	public void FilterRoutingWorksIndependentlyPerVoice()
 	{
 		var voice1 = MeasureRange(CollectSamples(CreateSingleRoutedVoice(voice: 0), warmupCycles: 10000, measuredCycles: 12000));
@@ -252,6 +342,25 @@ public sealed class SidFilterProfileTests
 		var offset = voice * 7;
 		chip.Write((byte)(offset + 0), (byte)(frequency & 0xFF));
 		chip.Write((byte)(offset + 1), (byte)(frequency >> 8));
+		chip.Write((byte)(offset + 4), control);
+	}
+
+	private static void WriteVoice(
+		SidChip chip,
+		int voice,
+		ushort frequency,
+		byte control,
+		ushort pulseWidth,
+		byte attackDecay,
+		byte sustainRelease)
+	{
+		var offset = voice * 7;
+		chip.Write((byte)(offset + 0), (byte)(frequency & 0xFF));
+		chip.Write((byte)(offset + 1), (byte)(frequency >> 8));
+		chip.Write((byte)(offset + 2), (byte)(pulseWidth & 0xFF));
+		chip.Write((byte)(offset + 3), (byte)(pulseWidth >> 8));
+		chip.Write((byte)(offset + 5), attackDecay);
+		chip.Write((byte)(offset + 6), sustainRelease);
 		chip.Write((byte)(offset + 4), control);
 	}
 

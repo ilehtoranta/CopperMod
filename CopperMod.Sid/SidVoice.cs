@@ -226,7 +226,7 @@ namespace CopperMod.Sid
 
         public double RenderOutputFast(SidVoice? syncSource, SidChipModel model)
         {
-            var waveform = RenderWaveform(syncSource, model, captureTrace: false, out _);
+            var waveform = RenderWaveformFast(syncSource, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -414,6 +414,74 @@ namespace CopperMod.Sid
                     triangleInverted,
                     noiseUsesPostShiftRegister: false)
                 : default;
+            return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
+                SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+        }
+
+        private double RenderWaveformFast(SidVoice? syncSource, SidChipModel model)
+        {
+            var waveformMask = _control & 0xF0;
+            switch (waveformMask)
+            {
+                case 0:
+                    return 0;
+                case 0x10:
+                    return SidAnalog.ConvertWaveformDac12(GetTriangleDac(syncSource, out _, out _, out _), model);
+                case 0x20:
+                    return SidAnalog.ConvertWaveformDac12(GetSawDac(), model);
+                case 0x40:
+                    return SidAnalog.ConvertWaveformDac12(GetPulseDac(), model);
+                case 0x50 when model == SidChipModel.Mos6581:
+                    return RenderMos6581TrianglePulseFast(syncSource);
+                case 0x80:
+                    return SidAnalog.ConvertWaveformDac12(GetNoiseDac(), model);
+            }
+
+            var outputs = 0;
+            uint combinedDac = 0x0FFF;
+            if ((waveformMask & 0x10) != 0)
+            {
+                combinedDac &= GetTriangleDac(syncSource, out _, out _, out _);
+                outputs++;
+            }
+
+            if ((waveformMask & 0x20) != 0)
+            {
+                combinedDac &= GetSawDac();
+                outputs++;
+            }
+
+            if ((waveformMask & 0x40) != 0)
+            {
+                combinedDac &= GetPulseDac();
+                outputs++;
+            }
+
+            if ((waveformMask & 0x80) != 0)
+            {
+                combinedDac &= GetNoiseDac();
+                outputs++;
+            }
+
+            return outputs == 0
+                ? 0
+                : SidAnalog.ConvertWaveformDac12(combinedDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
+        }
+
+        private double RenderMos6581TrianglePulseFast(SidVoice? syncSource)
+        {
+            var pulseDac = GetPulseDac();
+            if (pulseDac == 0)
+            {
+                return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
+                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
+            }
+
+            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
+            var saw = GetSawDac();
+            var contentionMask = (_phase >> 10) & 0x0FFF;
+            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
+            const double mos6581TrianglePulseBias = -1.4;
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
         }

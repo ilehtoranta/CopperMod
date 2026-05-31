@@ -84,6 +84,63 @@ public sealed class SidChipTests
 		Assert.True(max - min > 0.5, $"Expected Arkanoid pulse register set to toggle over one frame, got {max - min:0.000}.");
 	}
 
+	[Theory]
+	[InlineData("unfiltered")]
+	[InlineData("filtered")]
+	[InlineData("muted")]
+	public void BatchRenderMatchesOneCyclePath(string scenario)
+	{
+		var expected = CreateBatchEquivalenceChip(scenario);
+		var actual = CreateBatchEquivalenceChip(scenario);
+
+		var expectedSum = RenderOneCycleSum(expected, firstCycle: 1, cycles: 1024);
+		var actualSum = actual.RenderAndSumFast(firstCycle: 1, cycles: 1024);
+
+		AssertClose(expectedSum, actualSum);
+		AssertDebugStateEqual(expected.DebugState, actual.DebugState);
+	}
+
+	[Fact]
+	public void BatchRenderMatchesOneCyclePathAcrossRegisterBoundary()
+	{
+		var expected = CreateBatchEquivalenceChip("filtered");
+		var actual = CreateBatchEquivalenceChip("filtered");
+		var expectedSum = RenderOneCycleSum(expected, firstCycle: 1, cycles: 128);
+		var actualSum = actual.RenderAndSumFast(firstCycle: 1, cycles: 128);
+
+		expected.Write(0x16, 0x20);
+		actual.Write(0x16, 0x20);
+		expected.Write(0x04, 0x40);
+		actual.Write(0x04, 0x40);
+
+		expectedSum += RenderOneCycleSum(expected, firstCycle: 129, cycles: 384);
+		actualSum += actual.RenderAndSumFast(firstCycle: 129, cycles: 384);
+
+		AssertClose(expectedSum, actualSum);
+		AssertDebugStateEqual(expected.DebugState, actual.DebugState);
+	}
+
+	[Fact]
+	public void SidSystemBatchPathMatchesTracedSampleBoundaries()
+	{
+		var fast = CreateBatchEquivalenceSid(trace: false);
+		var traced = CreateBatchEquivalenceSid(trace: true);
+		Assert.True(fast.TryWrite(0xD416, 0x20, 100));
+		Assert.True(traced.TryWrite(0xD416, 0x20, 100));
+
+		var fastAtBoundary = fast.RenderSample(100);
+		var tracedAtBoundary = traced.RenderSample(100);
+		var fastAfterBoundary = fast.RenderSample(101);
+		var tracedAfterBoundary = traced.RenderSample(101);
+		var fastLater = fast.RenderSample(240);
+		var tracedLater = traced.RenderSample(240);
+
+		Assert.Equal(tracedAtBoundary, fastAtBoundary);
+		Assert.Equal(tracedAfterBoundary, fastAfterBoundary);
+		Assert.Equal(tracedLater, fastLater);
+		AssertDebugStateEqual(traced.Chips[0].DebugState, fast.Chips[0].DebugState);
+	}
+
 	[Fact]
 	public void ResonantFilteredPulseDoesNotPlateauAtInternalClamp()
 	{
@@ -585,6 +642,97 @@ public sealed class SidChipTests
 		chip.Write(0x17, 0x81);
 		chip.Write(0x18, 0x1F);
 		return chip;
+	}
+
+	private static SidChip CreateBatchEquivalenceChip(string scenario)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		WriteVoice(chip, voice: 0, frequency: 0x1234, control: 0x41);
+		chip.Write(0x02, 0x30);
+		chip.Write(0x03, 0x08);
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		WriteVoice(chip, voice: 1, frequency: 0x0711, control: 0x21);
+		chip.Write(0x0C, 0x00);
+		chip.Write(0x0D, 0xF0);
+		WriteVoice(chip, voice: 2, frequency: 0x0D55, control: 0x11);
+		chip.Write(0x13, 0x00);
+		chip.Write(0x14, 0xF0);
+		chip.Write(0x15, 0x03);
+		chip.Write(0x16, 0x60);
+		chip.Write(0x17, scenario == "unfiltered" ? (byte)0x00 : (byte)0xF3);
+		chip.Write(0x18, (byte)((scenario == "filtered" ? 0x70 : 0x10) | (scenario == "muted" ? 0x80 : 0x00) | 0x0F));
+		if (scenario == "muted")
+		{
+			chip.MutedVoicesMask = 0x02;
+		}
+
+		return chip;
+	}
+
+	private static SidSystem CreateBatchEquivalenceSid(bool trace)
+	{
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+		Assert.True(sid.TryWrite(0xD400, 0x34, 0));
+		Assert.True(sid.TryWrite(0xD401, 0x12, 0));
+		Assert.True(sid.TryWrite(0xD402, 0x30, 0));
+		Assert.True(sid.TryWrite(0xD403, 0x08, 0));
+		Assert.True(sid.TryWrite(0xD405, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD406, 0xF0, 0));
+		Assert.True(sid.TryWrite(0xD404, 0x41, 0));
+		Assert.True(sid.TryWrite(0xD415, 0x03, 0));
+		Assert.True(sid.TryWrite(0xD416, 0x60, 0));
+		Assert.True(sid.TryWrite(0xD417, 0xF1, 0));
+		Assert.True(sid.TryWrite(0xD418, 0x1F, 0));
+		if (trace)
+		{
+			sid.Trace = new SidCycleTrace();
+		}
+
+		return sid;
+	}
+
+	private static double RenderOneCycleSum(SidChip chip, long firstCycle, long cycles)
+	{
+		var voiceOutputs = new double[3];
+		var sum = 0.0;
+		for (var i = 0L; i < cycles; i++)
+		{
+			sum += chip.RenderOneCycle(firstCycle + i, voiceOutputs);
+		}
+
+		return sum;
+	}
+
+	private static void AssertDebugStateEqual(SidChipDebugState expected, SidChipDebugState actual)
+	{
+		Assert.Equal(expected.ForwardedRegisters, actual.ForwardedRegisters);
+		Assert.Equal(expected.FilterProfile, actual.FilterProfile);
+		Assert.Equal(expected.FilterCutoffRegister, actual.FilterCutoffRegister);
+		AssertClose(expected.FilterCutoffHz, actual.FilterCutoffHz);
+		Assert.Equal(expected.FilterResonanceNibble, actual.FilterResonanceNibble);
+		Assert.Equal(expected.FilterMode, actual.FilterMode);
+		AssertClose(expected.FilterDamping, actual.FilterDamping);
+		AssertClose(expected.LowPassOutput, actual.LowPassOutput);
+		AssertClose(expected.BandPassOutput, actual.BandPassOutput);
+		AssertClose(expected.HighPassOutput, actual.HighPassOutput);
+		for (var i = 0; i < expected.Voices.Length; i++)
+		{
+			Assert.Equal(expected.Voices[i].Accumulator, actual.Voices[i].Accumulator);
+			Assert.Equal(expected.Voices[i].NoiseShiftRegister, actual.Voices[i].NoiseShiftRegister);
+			Assert.Equal(expected.Voices[i].NoiseDac, actual.Voices[i].NoiseDac);
+			Assert.Equal(expected.Voices[i].EnvelopeCounter, actual.Voices[i].EnvelopeCounter);
+			Assert.Equal(expected.Voices[i].RateCounter, actual.Voices[i].RateCounter);
+			Assert.Equal(expected.Voices[i].ExponentialCounter, actual.Voices[i].ExponentialCounter);
+			Assert.Equal(expected.Voices[i].EnvelopeState, actual.Voices[i].EnvelopeState);
+			Assert.Equal(expected.Voices[i].Control, actual.Voices[i].Control);
+		}
+	}
+
+	private static void AssertClose(double expected, double actual)
+	{
+		var delta = Math.Abs(expected - actual);
+		Assert.True(delta <= 1e-12, $"Expected {expected:R}, got {actual:R}, delta {delta:R}.");
 	}
 
 	private static double[] CollectSamples(SidChip chip, int warmupCycles, int measuredCycles)

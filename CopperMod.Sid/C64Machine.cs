@@ -42,6 +42,7 @@ namespace CopperMod.Sid
         private bool _psidCiaTimerATouched;
         private long _pendingCpuStallCycles;
         private bool _cpuInstructionActive;
+        private int _vicBankBase;
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
@@ -51,6 +52,7 @@ namespace CopperMod.Sid
             _readVicMemory = ReadVicMemory;
             Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile);
             Cpu = new Mos6510(this);
+            UpdateVicBankBase();
             InstallMinimalRoms();
         }
 
@@ -100,6 +102,7 @@ namespace CopperMod.Sid
             _cpuInstructionActive = false;
             _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuCyclesPerSecond);
             _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuCyclesPerSecond);
+            UpdateVicBankBase();
             _vic.Reset();
             Sid.Reset();
             LoadPayload();
@@ -339,7 +342,7 @@ namespace CopperMod.Sid
                 return;
             }
 
-            _psidCiaTimerAIntervalCycles = Math.Max(1L, _cia1.DebugState.TimerALatch);
+            _psidCiaTimerAIntervalCycles = Math.Max(1L, _cia1.TimerALatch);
             _psidCiaTimerATouched = false;
         }
 
@@ -639,7 +642,7 @@ namespace CopperMod.Sid
             {
                 _hardwareCycle++;
                 var cia1Irq = _cia1.Tick();
-                var vicIrq = _vic.Tick(_readVicMemory, GetVicBankBase());
+                var vicIrq = _vic.Tick(_readVicMemory, _vicBankBase);
                 var cia2NmiLine = _cia2.Tick();
                 _irqLine = cia1Irq || vicIrq;
                 if (cia2NmiLine && !_cia2NmiLine)
@@ -808,7 +811,7 @@ namespace CopperMod.Sid
                     return;
                 }
 
-                _lastInterruptSource = _vic.DebugState.IrqLine
+                _lastInterruptSource = _vic.IrqLine
                     ? C64InterruptSource.Vic
                     : C64InterruptSource.Cia1;
                 AdvanceHardwareTo(Cpu.Cycles);
@@ -845,9 +848,9 @@ namespace CopperMod.Sid
         private byte ProcessorPortEffectiveValue => (byte)((_processorPortValue & _processorPortDirection) | (~_processorPortDirection & 0xFF));
 
         [HotPath]
-        private int GetVicBankBase()
+        private void UpdateVicBankBase()
         {
-            return ((~_cia2.EffectivePortA) & 0x03) * 0x4000;
+            _vicBankBase = ((~_cia2.EffectivePortA) & 0x03) * 0x4000;
         }
 
         [HotPath]
@@ -941,7 +944,13 @@ namespace CopperMod.Sid
 
             if (address >= 0xDD00 && address <= 0xDDFF)
             {
+                var register = address & 0x0F;
                 _cia2.Write((byte)address, value);
+                if (register == 0x00 || register == 0x02)
+                {
+                    UpdateVicBankBase();
+                }
+
                 RefreshInterruptLines();
                 return;
             }

@@ -12,12 +12,19 @@ namespace CopperMod.Sid
         private readonly SidFilterProfileDefinition _filterProfile;
         private readonly int _cpuCyclesPerSecond;
         private readonly double _outputLowPassAlpha;
+        private readonly double _filterInputGain;
+        private readonly double _voiceMixGain;
+        private readonly double _filterLowPassGain;
+        private readonly double _filterBandPassGain;
+        private readonly double _filterHighPassGain;
         private uint _pendingRegisterBits;
         private double _filterIntegrator1;
         private double _filterIntegrator2;
         private double _filterG;
         private double _filterDamping;
         private double _filterDenominator = 1.0;
+        private double _filterOutputGain;
+        private int _filterRouting;
         private int _filterMode;
         private int _filterCutoffRegister;
         private int _filterResonanceNibble;
@@ -26,6 +33,7 @@ namespace CopperMod.Sid
         private double _lastBandPass;
         private double _lastHighPass;
         private bool _filterCoefficientsDirty = true;
+        private bool _voice3Muted;
         private double _masterVolume;
         private double _volumeOffset;
         private double _outputLowPassState;
@@ -44,6 +52,12 @@ namespace CopperMod.Sid
             _cpuCyclesPerSecond = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
             _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile);
             _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model) / _cpuCyclesPerSecond);
+            _filterInputGain = _filterProfile.FilterInputGain;
+            _voiceMixGain = SidAnalog.VoiceMixGain(Model);
+            _filterLowPassGain = _filterProfile.LowPassGain;
+            _filterBandPassGain = _filterProfile.BandPassGain;
+            _filterHighPassGain = _filterProfile.HighPassGain;
+            _filterOutputGain = _filterProfile.MapFilterOutputGain(0, 0);
         }
 
         public SidChipModel Model { get; }
@@ -76,6 +90,8 @@ namespace CopperMod.Sid
             _filterG = 0;
             _filterDamping = 0;
             _filterDenominator = 1.0;
+            _filterOutputGain = _filterProfile.MapFilterOutputGain(0, 0);
+            _filterRouting = 0;
             _filterMode = 0;
             _filterCutoffRegister = 0;
             _filterResonanceNibble = 0;
@@ -84,6 +100,7 @@ namespace CopperMod.Sid
             _lastBandPass = 0;
             _lastHighPass = 0;
             _filterCoefficientsDirty = true;
+            _voice3Muted = false;
             _masterVolume = SidAnalog.ConvertVolume(0, Model);
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
             _outputLowPassState = 0;
@@ -119,6 +136,17 @@ namespace CopperMod.Sid
         [HotPath]
         public double Render(long cycles, double[]? voiceOutputs = null, int voiceOffset = 0)
         {
+            if (voiceOutputs == null && Trace == null)
+            {
+                for (var i = 0L; i < cycles; i++)
+                {
+                    _cycle++;
+                    _lastOutput = ClockOneCycleFast();
+                }
+
+                return _lastOutput;
+            }
+
             var voice1 = 0.0;
             var voice2 = 0.0;
             var voice3 = 0.0;
@@ -155,6 +183,12 @@ namespace CopperMod.Sid
                 _cycle = cycle;
             }
 
+            if (voiceOutputs == null && Trace == null)
+            {
+                _lastOutput = ClockOneCycleFast();
+                return _lastOutput;
+            }
+
             _lastOutput = ClockOneCycle(cycle, out var voice1, out var voice2, out var voice3);
             if (voiceOutputs != null)
             {
@@ -164,6 +198,20 @@ namespace CopperMod.Sid
             }
 
             return _lastOutput;
+        }
+
+        [HotPath]
+        public double RenderAndSumFast(long firstCycle, long cycles)
+        {
+            var sum = 0.0;
+            for (var i = 0L; i < cycles; i++)
+            {
+                _cycle = firstCycle + i;
+                _lastOutput = ClockOneCycleFast();
+                sum += _lastOutput;
+            }
+
+            return sum;
         }
 
         [HotPath]
@@ -246,10 +294,63 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
+        private double ClockOneCycleFast()
+        {
+            var chipVoice1 = _voices[0];
+            var chipVoice2 = _voices[1];
+            var chipVoice3 = _voices[2];
+
+            CommitPendingRegisters();
+
+            chipVoice1.ClockEnvelope();
+            chipVoice2.ClockEnvelope();
+            chipVoice3.ClockEnvelope();
+
+            var previousPhase1 = chipVoice1.Phase;
+            var previousPhase2 = chipVoice2.Phase;
+            var previousPhase3 = chipVoice3.Phase;
+            chipVoice1.ClockOscillator();
+            chipVoice2.ClockOscillator();
+            chipVoice3.ClockOscillator();
+
+            var advancedPhase1 = chipVoice1.Phase;
+            var advancedPhase2 = chipVoice2.Phase;
+            var advancedPhase3 = chipVoice3.Phase;
+            var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
+            var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
+            var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
+            if (chipVoice1.SyncEnabled && voice3MsbRising)
+            {
+                chipVoice1.ResetOscillator();
+            }
+
+            if (chipVoice2.SyncEnabled && voice1MsbRising)
+            {
+                chipVoice2.ResetOscillator();
+            }
+
+            if (chipVoice3.SyncEnabled && voice2MsbRising)
+            {
+                chipVoice3.ResetOscillator();
+            }
+
+            chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
+            chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
+            chipVoice3.ClockNoise(SidVoice.NoiseClockRising(previousPhase3, chipVoice3.Phase));
+
+            var model = Model;
+            var voice1 = chipVoice1.RenderOutputFast(chipVoice3, model);
+            var voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
+            var voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
+            return Mix(voice1, voice2, voice3);
+        }
+
+        [HotPath]
         private void CommitPendingRegisters()
         {
             var pending = _pendingRegisterBits;
             _pendingRegisterBits = 0;
+            var filterCoefficientsDirty = false;
             while (pending != 0)
             {
                 var register = BitOperations.TrailingZeroCount(pending);
@@ -264,14 +365,29 @@ namespace CopperMod.Sid
                 }
                 else if (register >= 0x15 && register <= 0x18)
                 {
-                    _filterCoefficientsDirty = true;
-                    if (register == 0x18)
+                    if (register == 0x15 || register == 0x16)
+                    {
+                        filterCoefficientsDirty = true;
+                    }
+                    else if (register == 0x17)
+                    {
+                        _filterRouting = value & 0x07;
+                        filterCoefficientsDirty = true;
+                    }
+                    else
                     {
                         var volume = value & 0x0F;
                         _masterVolume = SidAnalog.ConvertVolume(volume, Model);
                         _volumeOffset = SidAnalog.VolumeOffset(volume, Model);
+                        _voice3Muted = (value & 0x80) != 0;
+                        filterCoefficientsDirty |= _filterMode != (value & 0x70);
                     }
                 }
+            }
+
+            if (filterCoefficientsDirty)
+            {
+                UpdateFilterCoefficients();
             }
         }
 
@@ -332,24 +448,38 @@ namespace CopperMod.Sid
                 voice3 = 0;
             }
 
-            var mixer = _forwardedRegisters[0x18];
-            var filterRouting = _forwardedRegisters[0x17] & 0x0F;
-            var voice3Muted = (mixer & 0x80) != 0;
+            var filterRouting = _filterRouting;
             var direct = 0.0;
             var filtered = 0.0;
-            RouteVoice(voice1, filtered: (filterRouting & 0x01) != 0, ref direct, ref filtered);
-            RouteVoice(voice2, filtered: (filterRouting & 0x02) != 0, ref direct, ref filtered);
-            if ((filterRouting & 0x04) != 0)
+            if ((filterRouting & 0x01) != 0)
             {
-                RouteVoice(voice3, filtered: true, ref direct, ref filtered);
+                filtered += voice1;
             }
-            else if (!voice3Muted)
+            else
             {
-                RouteVoice(voice3, filtered: false, ref direct, ref filtered);
+                direct += voice1;
             }
 
-            var voiceSignal = (direct + ApplyFilter(filtered * _filterProfile.FilterInputGain)) *
-                SidAnalog.VoiceMixGain(Model) *
+            if ((filterRouting & 0x02) != 0)
+            {
+                filtered += voice2;
+            }
+            else
+            {
+                direct += voice2;
+            }
+
+            if ((filterRouting & 0x04) != 0)
+            {
+                filtered += voice3;
+            }
+            else if (!_voice3Muted)
+            {
+                direct += voice3;
+            }
+
+            var voiceSignal = (direct + ApplyFilter(filtered * _filterInputGain)) *
+                _voiceMixGain *
                 _masterVolume;
             var output = SidAnalog.SoftClip(voiceSignal + _volumeOffset);
             _outputLowPassState += (output - _outputLowPassState) * _outputLowPassAlpha;
@@ -357,26 +487,8 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private static void RouteVoice(double voice, bool filtered, ref double direct, ref double filterInput)
-        {
-            if (filtered)
-            {
-                filterInput += voice;
-            }
-            else
-            {
-                direct += voice;
-            }
-        }
-
-        [HotPath]
         private double ApplyFilter(double input)
         {
-            if (_filterCoefficientsDirty)
-            {
-                UpdateFilterCoefficients();
-            }
-
             if (_filterMode == 0)
             {
                 _lastLowPass = 0;
@@ -394,23 +506,19 @@ namespace CopperMod.Sid
             _lastBandPass = band;
             _lastHighPass = high;
 
-            var output = 0.0;
-            if ((_filterMode & 0x10) != 0)
+            var output = _filterMode switch
             {
-                output += low * _filterProfile.LowPassGain;
-            }
+                0x10 => low * _filterLowPassGain,
+                0x20 => band * _filterBandPassGain,
+                0x30 => (low * _filterLowPassGain) + (band * _filterBandPassGain),
+                0x40 => high * _filterHighPassGain,
+                0x50 => (low * _filterLowPassGain) + (high * _filterHighPassGain),
+                0x60 => (band * _filterBandPassGain) + (high * _filterHighPassGain),
+                0x70 => ((low * _filterLowPassGain) + (band * _filterBandPassGain)) + (high * _filterHighPassGain),
+                _ => 0.0
+            };
 
-            if ((_filterMode & 0x20) != 0)
-            {
-                output += band * _filterProfile.BandPassGain;
-            }
-
-            if ((_filterMode & 0x40) != 0)
-            {
-                output += high * _filterProfile.HighPassGain;
-            }
-
-            return output * _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
+            return output * _filterOutputGain;
         }
 
         [HotPath]
@@ -425,6 +533,7 @@ namespace CopperMod.Sid
                 _filterDamping = 0;
                 _filterDenominator = 1.0;
                 _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
+                _filterOutputGain = _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
                 _filterCoefficientsDirty = false;
                 return;
             }
@@ -433,6 +542,7 @@ namespace CopperMod.Sid
             _filterG = Math.Tan(Math.PI * _filterCutoffHz / _cpuCyclesPerSecond);
             _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble, _filterCutoffRegister);
             _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
+            _filterOutputGain = _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
             _filterCoefficientsDirty = false;
         }
 
