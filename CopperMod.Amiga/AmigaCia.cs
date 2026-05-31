@@ -32,9 +32,7 @@ namespace CopperMod.Amiga
         public const byte TodInterruptMask = 0x04;
         public const byte SerialInterruptMask = 0x08;
         public const byte FlagInterruptMask = 0x10;
-        public static readonly long CpuCyclesPerCiaTick = Math.Max(
-            1,
-            (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalCiaClockHz));
+        public const long CpuCyclesPerCiaTick = AmigaConstants.A500PalCpuCyclesPerCiaTick;
 
         private readonly byte[] _registers = new byte[16];
         private readonly CiaTimer _timerA = new CiaTimer(isTimerB: false);
@@ -59,7 +57,7 @@ namespace CopperMod.Amiga
 
         public ushort TimerBLatch => _timerB.Latch;
 
-        public long TimerAIntervalCycles => _timerA.Latch == 0 ? 0 : _timerA.Latch * CpuCyclesPerCiaTick;
+        public long TimerAIntervalCycles => _timerA.LatchTicks * CpuCyclesPerCiaTick;
 
         public void Reset(byte initialPortA = 0)
         {
@@ -484,7 +482,7 @@ namespace CopperMod.Amiga
                 }
             }
 
-            private int LatchTicks => Latch == 0 ? 65_536 : Latch;
+            public int LatchTicks => Latch == 0 ? 65_536 : Latch;
 
             private void Load(long cycle)
             {

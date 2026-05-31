@@ -148,9 +148,9 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("dma-list", "zero height control block terminates");
 			yield return SpriteConformanceRow.Executable("dma-list", "multiple control blocks reuse a channel");
 			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPTL bit 0 ignored");
-			yield return SpriteConformanceRow.Pending("dma-timing", "extra-wide playfield fetches can consume late sprite DMA slots", "Current display renderer does not model sprite DMA slot starvation from DDFSTRT/DDFSTOP.");
+			yield return SpriteConformanceRow.Executable("dma-timing", "extra-wide playfield fetches can consume late sprite DMA slots");
+			yield return SpriteConformanceRow.Executable("attached-colors", "odd attached sprite with transparent or missing even partner");
 			yield return SpriteConformanceRow.Pending("dma-list", "hardware one-line gap requirement between reused sprite images", "Current DMA list renderer records legal control blocks but does not reject adjacent reuse.");
-			yield return SpriteConformanceRow.Pending("attached-colors", "odd attached sprite with transparent or missing even partner", "Current attachment renderer requires a vertically overlapping even sprite command.");
 		}
 	}
 
@@ -188,7 +188,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(4, DmaEnableRows.Count());
 		Assert.Equal(4, DmaHeightRows.Count());
 		Assert.Equal(28, SpritePriorityRows.Count());
-		Assert.True(rows.Count(row => row.Status == SpriteRowStatus.Executable) >= 160);
+		Assert.True(rows.Count(row => row.Status == SpriteRowStatus.Executable) >= 162);
 	}
 
 	[Fact]
@@ -198,8 +198,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 
 		Assert.NotEmpty(pendingRows);
 		Assert.All(pendingRows, row => Assert.False(string.IsNullOrWhiteSpace(row.Reason)));
-		Assert.Contains(pendingRows, row => row.Group == "dma-timing");
-		Assert.Contains(pendingRows, row => row.Group == "attached-colors");
+		Assert.Contains(pendingRows, row => row.Group == "dma-list");
 	}
 
 	[Theory]
@@ -297,6 +296,45 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(color), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void AttachedOddSpriteWithoutEvenPartnerUsesHighColorBits()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, 20, 0x0F00);
+		WriteManualSprite(bus, sprite: 1, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void AttachedOddSpriteWithTransparentEvenPartnerUsesHighColorBits()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, 20, 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x0000, 0x0000);
+		WriteManualSprite(bus, sprite: 1, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void HorizontallySeparatedAttachedSpritesUseTheirOwnPixelPositions()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, 17, 0x0F00);
+		SetColor(bus, 20, 0x00F0);
+		SetColor(bus, 21, 0x000F);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		WriteManualSprite(bus, sprite: 1, StandardX + 8, StandardY, 1, 0x8000, 0x0000, attached: true);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x00F0), Pixel(frame, StandardX + 8, StandardY));
+		Assert.NotEqual(ToBgra(0x000F), Pixel(frame, StandardX, StandardY));
 	}
 
 	[Theory]
@@ -563,6 +601,55 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
 		bus.WriteWord(0x00DFF120, (ushort)(SpriteListBase >> 16));
 		bus.WriteWord(0x00DFF122, (ushort)(SpriteListBase | 1));
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void ExtraWidePlayfieldFetchStealsLateSpriteDmaSlots()
+	{
+		var bus = new AmigaBus();
+		EnableSpriteDma(bus, 0x8220);
+		bus.WriteWord(0x00DFF092, 0x0030);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		SetColor(bus, SingleSpriteColorIndex(6, 1), 0x0F00);
+		WriteSpriteDmaBlock(bus, SpriteListBase + 0x180, StandardX + 40, StandardY, 1, 0x8000, 0x0000);
+		WriteSpriteDmaBlock(bus, SpriteListBase + 0x1C0, StandardX + 60, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 6, SpriteListBase + 0x180);
+		SetSpritePointer(bus, sprite: 7, SpriteListBase + 0x1C0);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX + 40, StandardY));
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX + 60, StandardY));
+	}
+
+	[Fact]
+	public void EarliestPlayfieldFetchStealsAllSpriteDmaSlots()
+	{
+		var bus = new AmigaBus();
+		EnableSpriteDma(bus, 0x8220);
+		bus.WriteWord(0x00DFF092, 0x0018);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void EarlyPlayfieldFetchDoesNotHideManualSpriteRegisters()
+	{
+		var bus = new AmigaBus();
+		bus.WriteWord(0x00DFF092, 0x0030);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		SetColor(bus, SingleSpriteColorIndex(7, 1), 0x0F00);
+		WriteManualSprite(bus, sprite: 7, StandardX, StandardY, 1, 0x8000, 0x0000);
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));

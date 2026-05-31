@@ -5,6 +5,13 @@ namespace CopperMod.Amiga.Tests;
 public sealed class AmigaCiaTests
 {
 	[Fact]
+	public void CiaClockUsesIntegerCpuCycleGrid()
+	{
+		Assert.Equal(10, AmigaCia.CpuCyclesPerCiaTick);
+		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerCiaTick, AmigaCia.CpuCyclesPerCiaTick);
+	}
+
+	[Fact]
 	public void TimerAUnderflowIsScheduledOnTheGlobalCpuTimebase()
 	{
 		var bus = new AmigaBus();
@@ -25,6 +32,57 @@ public sealed class AmigaCiaTests
 		Assert.Equal(AmigaCia.TimerAInterruptMask, interruptEvent.IcrBits);
 		Assert.Equal(30, interruptEvent.Cycle);
 		Assert.Equal(60, bus.GetNextCiaInterruptCycle(100));
+	}
+
+	[Fact]
+	public void TimerAZeroLatchUnderflowsAfterFullSixteenBitInterval()
+	{
+		var bus = new AmigaBus();
+		var expectedCycle = 65_536L * AmigaCia.CpuCyclesPerCiaTick;
+
+		bus.WriteByte(0x00BFD400, 0x00, 0);
+		bus.WriteByte(0x00BFD500, 0x00, 0);
+		bus.WriteByte(0x00BFDD00, 0x81, 0);
+		bus.WriteByte(0x00BFDE00, 0x11, 0);
+
+		Assert.Null(bus.GetNextCiaInterruptCycle(expectedCycle - 1));
+		Assert.Equal(expectedCycle, bus.GetNextCiaInterruptCycle(expectedCycle));
+
+		bus.AdvanceCiasTo(expectedCycle - 1);
+		Assert.Empty(bus.DrainCiaInterrupts());
+
+		bus.AdvanceCiasTo(expectedCycle);
+		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(expectedCycle, interruptEvent.Cycle);
+	}
+
+	[Fact]
+	public void CpuReadAdvancesCiaTimerToAccessCycle()
+	{
+		var bus = new AmigaBus();
+		bus.WriteByte(0x00BFD400, 0x03, 0);
+		bus.WriteByte(0x00BFD500, 0x00, 0);
+		bus.WriteByte(0x00BFDE00, 0x11, 0);
+
+		var cycle = 19L;
+		Assert.Equal(0x02, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+
+		cycle = 20L;
+		Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+	}
+
+	[Fact]
+	public void CpuIcrReadObservesTimerUnderflowAtSameAccessCycle()
+	{
+		var bus = new AmigaBus();
+		bus.WriteByte(0x00BFD400, 0x01, 0);
+		bus.WriteByte(0x00BFD500, 0x00, 0);
+		bus.WriteByte(0x00BFDD00, 0x81, 0);
+		bus.WriteByte(0x00BFDE00, 0x11, 0);
+
+		var cycle = 10L;
+		Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BFDD00));
 	}
 
 	[Fact]
@@ -138,7 +196,7 @@ public sealed class AmigaCiaTests
 	public void CiaATodLowTicksOnPalVerticalBlank()
 	{
 		var bus = new AmigaBus();
-		var frameCycles = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 
 		Assert.Equal(0x00, bus.ReadByte(0x00BFE801));
 
@@ -151,10 +209,7 @@ public sealed class AmigaCiaTests
 	public void CiaBTodLowTicksOnPalHorizontalSync()
 	{
 		var bus = new AmigaBus();
-		var lineCycles = (long)Math.Round(
-			AmigaConstants.A500PalCpuClockHz /
-			AmigaConstants.A500PalVBlankHz /
-			AmigaConstants.A500PalRasterLines);
+		var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
 
 		Assert.Equal(0x00, bus.ReadByte(0x00BFD800));
 

@@ -61,6 +61,9 @@ public sealed class AmigaCiaConformanceMatrixTests
             case "Timer A continuous underflow":
                 TimerAContinuousUnderflow();
                 break;
+            case "CPU reads advance CIA to access cycle":
+                CpuReadsAdvanceCiaToAccessCycle();
+                break;
             case "Timer A one-shot stops":
                 TimerAOneShotStops();
                 break;
@@ -109,6 +112,7 @@ public sealed class AmigaCiaConformanceMatrixTests
         Executable("disk-port", "CIA-B port B drives disk control pins"),
         Executable("icr", "ICR masks, reports, and clears pending bits"),
         Executable("timer-a", "Timer A continuous underflow"),
+        Executable("timer-a", "CPU reads advance CIA to access cycle"),
         Executable("timer-a", "Timer A one-shot stops"),
         Executable("timer-a", "force load reloads timer counter"),
         Executable("timer-b", "Timer B CPU-cycle mode underflows"),
@@ -214,6 +218,21 @@ public sealed class AmigaCiaConformanceMatrixTests
         Assert.Equal(60, bus.GetNextCiaInterruptCycle(100));
     }
 
+    private static void CpuReadsAdvanceCiaToAccessCycle()
+    {
+        var bus = new AmigaBus();
+        bus.WriteByte(0x00BFD400, 0x03, 0);
+        bus.WriteByte(0x00BFD500, 0x00, 0);
+        bus.WriteByte(0x00BFDD00, 0x81, 0);
+        bus.WriteByte(0x00BFDE00, 0x11, 0);
+
+        var cycle = 20L;
+        Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+
+        cycle = 30L;
+        Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+    }
+
     private static void TimerAOneShotStops()
     {
         var bus = new AmigaBus();
@@ -285,7 +304,7 @@ public sealed class AmigaCiaConformanceMatrixTests
     {
         var bus = new AmigaBus();
         var frameCycles = FrameCycles();
-        var lineCycles = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines);
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
 
         bus.AdvanceRasterTo(lineCycles);
         Assert.Equal(0x01, bus.ReadByte(0x00BFD800));
@@ -344,7 +363,7 @@ public sealed class AmigaCiaConformanceMatrixTests
 
     private static long FrameCycles()
     {
-        return (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+        return AmigaConstants.A500PalCpuCyclesPerFrame;
     }
 
     private static MatrixRow Executable(string group, string name)

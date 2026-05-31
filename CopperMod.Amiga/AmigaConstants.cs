@@ -4,10 +4,11 @@ namespace CopperMod.Amiga
     {
         public const int A500PalPaulaTicksPerSecond = 3_546_895;
         public const int A500PalCpuCyclesPerColorClock = 2;
+        public const int A500PalCpuCyclesPerCiaTick = A500PalCpuCyclesPerColorClock * 5;
         public const int A500PalCpuCyclesPerSecond = A500PalPaulaTicksPerSecond * A500PalCpuCyclesPerColorClock;
         public const double A500PalPaulaClockHz = A500PalPaulaTicksPerSecond;
         public const double A500PalCpuClockHz = A500PalCpuCyclesPerSecond;
-        public const double A500PalCiaClockHz = A500PalCpuClockHz / 10.0;
+        public const double A500PalCiaClockHz = A500PalCpuClockHz / A500PalCpuCyclesPerCiaTick;
         public const int A500PalColorClocksPerRasterLine = 227;
         public const int A500PalRasterLines = 312;
         public const int A500PalCpuCyclesPerRasterLine = A500PalCpuCyclesPerColorClock * A500PalColorClocksPerRasterLine;

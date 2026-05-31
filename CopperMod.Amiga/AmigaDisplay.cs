@@ -1802,6 +1802,8 @@ namespace CopperMod.Amiga
                     var evenIndex = FindAttachedEvenSprite(evenSprites, evenAttached, oddSprite);
                     if (evenIndex < 0)
                     {
+                        oddAttached[oddIndex] = true;
+                        RenderAttachedOddSpriteWithoutEvenPartner(bgra, spriteIndex, oddSprite);
                         continue;
                     }
 
@@ -1843,7 +1845,10 @@ namespace CopperMod.Amiga
             var sprite = _sprites[spriteIndex];
             if (commands.Count == 0 && IsSpriteDmaEnabled() && sprite.Pointer != 0)
             {
-                AppendDmaSpriteFrameCommands(commands, spriteIndex, sprite.Pointer, 0);
+                if (IsSpriteDmaChannelAvailable(spriteIndex))
+                {
+                    AppendDmaSpriteFrameCommands(commands, spriteIndex, sprite.Pointer, 0);
+                }
             }
             else if (TryGetManualSpriteDescriptor(spriteIndex, out var descriptor))
             {
@@ -1913,7 +1918,7 @@ namespace CopperMod.Amiga
 
         private void CaptureDmaSpriteFrameCommand(int spriteIndex)
         {
-            if (!_captureSpriteFrameCommands || !IsSpriteDmaEnabled())
+            if (!_captureSpriteFrameCommands || !IsSpriteDmaEnabled() || !IsSpriteDmaChannelAvailable(spriteIndex))
             {
                 return;
             }
@@ -2056,6 +2061,43 @@ namespace CopperMod.Amiga
             return (_dmacon & (DmaconMasterEnable | DmaconSpriteEnable)) == (DmaconMasterEnable | DmaconSpriteEnable);
         }
 
+        private bool IsSpriteDmaChannelAvailable(int spriteIndex)
+        {
+            return spriteIndex < GetUsableSpriteDmaChannelCount();
+        }
+
+        private int GetUsableSpriteDmaChannelCount()
+        {
+            if (((_bplcon0 >> 12) & 0x7) == 0 || !IsBitplaneDmaEnabledForRendering())
+            {
+                return _sprites.Length;
+            }
+
+            var ddfStart = GetDataFetchStartValue();
+            var standardStart = IsHighResolutionEnabled() ? DefaultHighResDdfStart : DefaultDdfStart;
+            if (ddfStart >= standardStart)
+            {
+                return _sprites.Length;
+            }
+
+            if (ddfStart <= 0x0018)
+            {
+                return 0;
+            }
+
+            if (ddfStart <= 0x001C)
+            {
+                return 1;
+            }
+
+            if (ddfStart >= 0x0030)
+            {
+                return 7;
+            }
+
+            return Math.Clamp(((ddfStart - 0x001C) / 4) + 1, 1, 7);
+        }
+
         private bool IsBitplaneDmaEnabledForRendering()
         {
             return !_enforceDmaForFrame || IsBitplaneDmaEnabled(_dmacon);
@@ -2124,7 +2166,35 @@ namespace CopperMod.Amiga
             {
                 var evenData = ReadSpriteLine(evenCommand, y);
                 var oddData = ReadSpriteLine(oddCommand, y);
-                RenderAttachedSpriteLine(bgra, spriteIndex, evenSprite.X, y, evenData.DataA, evenData.DataB, oddData.DataA, oddData.DataB);
+                RenderAttachedSpriteLine(
+                    bgra,
+                    spriteIndex,
+                    evenSprite.X,
+                    oddSprite.X,
+                    y,
+                    evenData.DataA,
+                    evenData.DataB,
+                    oddData.DataA,
+                    oddData.DataB);
+            }
+        }
+
+        private void RenderAttachedOddSpriteWithoutEvenPartner(Span<uint> bgra, int spriteIndex, SpriteFrameCommand oddCommand)
+        {
+            var oddSprite = oddCommand.Descriptor;
+            for (var y = oddSprite.YStart; y < oddSprite.YStop; y++)
+            {
+                var oddData = ReadSpriteLine(oddCommand, y);
+                RenderAttachedSpriteLine(
+                    bgra,
+                    spriteIndex,
+                    oddSprite.X,
+                    oddSprite.X,
+                    y,
+                    0,
+                    0,
+                    oddData.DataA,
+                    oddData.DataB);
             }
         }
 
@@ -2181,7 +2251,8 @@ namespace CopperMod.Amiga
         private void RenderAttachedSpriteLine(
             Span<uint> bgra,
             int spriteIndex,
-            int x,
+            int evenX,
+            int oddX,
             int y,
             ushort evenDataA,
             ushort evenDataB,
@@ -2193,17 +2264,18 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            for (var bit = 15; bit >= 0; bit--)
+            var xStart = Math.Min(evenX, oddX);
+            var xStop = Math.Max(evenX, oddX) + 16;
+            for (var px = xStart; px < xStop; px++)
             {
-                var evenPixel = (((evenDataB >> bit) & 1) << 1) | ((evenDataA >> bit) & 1);
-                var oddPixel = (((oddDataB >> bit) & 1) << 1) | ((oddDataA >> bit) & 1);
+                var evenPixel = GetSpritePixelAt(evenDataA, evenDataB, px - evenX);
+                var oddPixel = GetSpritePixelAt(oddDataA, oddDataB, px - oddX);
                 var pixel = (oddPixel << 2) | evenPixel;
                 if (pixel == 0)
                 {
                     continue;
                 }
 
-                var px = x + (15 - bit);
                 if (px < 0 || px >= AmigaConstants.PalLowResWidth)
                 {
                     continue;
@@ -2216,6 +2288,17 @@ namespace CopperMod.Amiga
 
                 WriteSpritePixel(bgra, px, y, ConvertSpriteColorIndex(16 + pixel, px, y));
             }
+        }
+
+        private static int GetSpritePixelAt(ushort dataA, ushort dataB, int offset)
+        {
+            if ((uint)offset >= 16)
+            {
+                return 0;
+            }
+
+            var bit = 15 - offset;
+            return (((dataB >> bit) & 1) << 1) | ((dataA >> bit) & 1);
         }
 
         private void WriteSpritePixel(Span<uint> bgra, int x, int y, uint pixel)

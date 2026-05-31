@@ -672,7 +672,7 @@ namespace CopperMod.Amiga
 
             if (target == AmigaBusAccessTarget.Cia)
             {
-                Disk.AdvanceTo(grantedCycle);
+                AdvanceCiasTo(grantedCycle);
             }
         }
 
