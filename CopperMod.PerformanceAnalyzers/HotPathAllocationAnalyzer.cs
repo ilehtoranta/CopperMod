@@ -64,6 +64,14 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
         context.RegisterSyntaxNodeAction(AnalyzeMethod, SyntaxKind.MethodDeclaration, SyntaxKind.ConstructorDeclaration);
+        context.RegisterSyntaxNodeAction(AnalyzeProperty, SyntaxKind.PropertyDeclaration);
+        context.RegisterSyntaxNodeAction(
+            AnalyzeAccessor,
+            SyntaxKind.GetAccessorDeclaration,
+            SyntaxKind.SetAccessorDeclaration,
+            SyntaxKind.InitAccessorDeclaration,
+            SyntaxKind.AddAccessorDeclaration,
+            SyntaxKind.RemoveAccessorDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeAllocationAllowance, SyntaxKind.Attribute);
     }
 
@@ -95,6 +103,41 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    private static void AnalyzeProperty(SyntaxNodeAnalysisContext context)
+    {
+        var property = (PropertyDeclarationSyntax)context.Node;
+        var symbol = context.SemanticModel.GetDeclaredSymbol(property, context.CancellationToken);
+        if (symbol == null || !IsHotPath(symbol) || IsAllocationAllowed(symbol))
+        {
+            return;
+        }
+
+        if (property.ExpressionBody != null)
+        {
+            AnalyzeNodeTree(context, property.ExpressionBody.Expression);
+        }
+    }
+
+    private static void AnalyzeAccessor(SyntaxNodeAnalysisContext context)
+    {
+        var accessor = (AccessorDeclarationSyntax)context.Node;
+        var symbol = context.SemanticModel.GetDeclaredSymbol(accessor, context.CancellationToken);
+        if (symbol == null || !IsHotPath(symbol) || IsAllocationAllowed(symbol))
+        {
+            return;
+        }
+
+        if (accessor.ExpressionBody != null)
+        {
+            AnalyzeNodeTree(context, accessor.ExpressionBody.Expression);
+        }
+
+        if (accessor.Body != null)
+        {
+            AnalyzeNodeTree(context, accessor.Body);
+        }
+    }
+
     private static void AnalyzeNodeTree(SyntaxNodeAnalysisContext context, SyntaxNode root)
     {
         foreach (var node in root.DescendantNodesAndSelf())
@@ -104,11 +147,17 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
                 case ObjectCreationExpressionSyntax objectCreation:
                     AnalyzeObjectCreation(context, objectCreation);
                     break;
+                case ImplicitObjectCreationExpressionSyntax objectCreation:
+                    AnalyzeObjectCreation(context, objectCreation);
+                    break;
                 case ArrayCreationExpressionSyntax arrayCreation:
                     Report(context, AllocationRule, arrayCreation.GetLocation(), "array creation");
                     break;
                 case ImplicitArrayCreationExpressionSyntax arrayCreation:
                     Report(context, AllocationRule, arrayCreation.GetLocation(), "array creation");
+                    break;
+                case CollectionExpressionSyntax collectionExpression:
+                    Report(context, AllocationRule, collectionExpression.GetLocation(), "collection expression");
                     break;
                 case AnonymousObjectCreationExpressionSyntax anonymousObject:
                     Report(context, AllocationRule, anonymousObject.GetLocation(), "anonymous object creation");
@@ -138,9 +187,14 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static void AnalyzeObjectCreation(SyntaxNodeAnalysisContext context, ObjectCreationExpressionSyntax node)
+    private static void AnalyzeObjectCreation(SyntaxNodeAnalysisContext context, BaseObjectCreationExpressionSyntax node)
     {
         if (node.FirstAncestorOrSelf<ThrowStatementSyntax>() != null)
+        {
+            return;
+        }
+
+        if (node.FirstAncestorOrSelf<ThrowExpressionSyntax>() != null)
         {
             return;
         }
@@ -174,6 +228,12 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeBoxing(SyntaxNodeAnalysisContext context, ExpressionSyntax node)
     {
+        if (node.FirstAncestorOrSelf<ThrowStatementSyntax>() != null ||
+            node.FirstAncestorOrSelf<ThrowExpressionSyntax>() != null)
+        {
+            return;
+        }
+
         if (node is LiteralExpressionSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax)
         {
             var conversion = context.SemanticModel.GetConversion(node, context.CancellationToken);
@@ -207,6 +267,12 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
 
     private static bool IsHotPath(ISymbol symbol)
     {
+        if (symbol is IMethodSymbol { AssociatedSymbol: { } associatedSymbol } &&
+            HasAttribute(associatedSymbol, "HotPathAttribute"))
+        {
+            return true;
+        }
+
         for (var current = symbol; current != null; current = current.ContainingType)
         {
             if (HasAttribute(current, "HotPathAttribute"))
@@ -219,7 +285,15 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
     }
 
     private static bool IsAllocationAllowed(ISymbol symbol)
-        => HasAttribute(symbol, "HotPathAllocationAllowedAttribute");
+    {
+        if (symbol is IMethodSymbol { AssociatedSymbol: { } associatedSymbol } &&
+            HasAttribute(associatedSymbol, "HotPathAllocationAllowedAttribute"))
+        {
+            return true;
+        }
+
+        return HasAttribute(symbol, "HotPathAllocationAllowedAttribute");
+    }
 
     private static bool HasAttribute(ISymbol symbol, string metadataName)
         => symbol.GetAttributes().Any(attribute => IsAttributeNamed(attribute.AttributeClass, metadataName));

@@ -18,6 +18,7 @@ namespace CopperMod.Sid
         private readonly IReadOnlyList<ModuleSubSongMetadata> _subSongs;
         private TimeSpan _position;
         private SidSampleClock? _sampleClock;
+        private long[] _sampleTargetCycles = Array.Empty<long>();
         private int _currentSubSongIndex;
         private bool _channelWaveformCaptureEnabled;
 
@@ -169,25 +170,23 @@ namespace CopperMod.Sid
             options ??= AudioRenderOptions.Default;
             var sampleClock = GetSampleClock(options);
             var tickCycles = GetCurrentTickCycleCount();
-            var sampleTargetCycles = sampleClock.PeekSampleTargets(_machine.Cycle, tickCycles);
-            var frames = sampleTargetCycles.Length;
+            var frames = sampleClock.PeekFrameCount(_machine.Cycle, tickCycles);
             var samples = options.GetSampleCount(frames);
             if (destination.Length < samples)
             {
                 throw new ArgumentException("Destination is too small for one SID tick render.", nameof(destination));
             }
 
+            EnsureSampleTargetCapacity(frames);
+            var sampleTargetCycles = _sampleTargetCycles.AsSpan(0, frames);
+            _ = sampleClock.FillSampleTargets(_machine.Cycle, tickCycles, sampleTargetCycles);
             var slice = destination.Slice(0, samples);
             if (ChannelWaveformCaptureEnabled)
             {
                 _machine.Sid.BeginChannelCapture(frames, options.SampleRate);
             }
 
-            _machine.RenderFrame(
-                slice,
-                new AudioRenderOptionsAdapter(options.SampleRate, options.ChannelCount),
-                sampleTargetCycles,
-                tickCycles);
+            RenderPreparedTick(slice, new AudioRenderOptionsAdapter(options.SampleRate, options.ChannelCount), sampleTargetCycles, tickCycles);
             LastChannelWaveform = ChannelWaveformCaptureEnabled
                 ? _machine.Sid.FinishChannelCapture()
                 : null;
@@ -250,6 +249,27 @@ namespace CopperMod.Sid
             }
 
             return _sampleClock;
+        }
+
+        private void EnsureSampleTargetCapacity(int frames)
+        {
+            if (_sampleTargetCycles.Length >= frames)
+            {
+                return;
+            }
+
+            var capacity = Math.Max(frames, Math.Max(1, _sampleTargetCycles.Length * 2));
+            _sampleTargetCycles = new long[capacity];
+        }
+
+        [HotPath]
+        private void RenderPreparedTick(
+            Span<float> destination,
+            AudioRenderOptionsAdapter options,
+            ReadOnlySpan<long> sampleTargetCycles,
+            long tickCycles)
+        {
+            _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles);
         }
 
         private static bool UsesCiaTiming(SidModule module, int subSongIndex)

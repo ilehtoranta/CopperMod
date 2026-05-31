@@ -154,11 +154,174 @@ public sealed class Mos6510Tests
 		var cycles = cpu.ExecuteInstruction();
 
 		Assert.Equal(testCase.TotalCycles, cycles);
-		var targetRead = Assert.Single(bus.Reads.Where(read => read.Address == testCase.TargetAddress));
+		var targetRead = Assert.Single(bus.BusFrames.Where(frame =>
+			frame.Address == testCase.TargetAddress &&
+			frame.Kind == CpuBusAccessKind.Read));
 		Assert.Equal(testCase.TotalCycles - 3, targetRead.CycleOffset);
 		Assert.Equal(2, bus.Writes.Count);
 		Assert.Equal((testCase.TargetAddress, testCase.OriginalValue, testCase.TotalCycles - 2), bus.Writes[0]);
 		Assert.Equal((testCase.TargetAddress, testCase.FinalValue, testCase.TotalCycles - 1), bus.Writes[1]);
+	}
+
+	[Fact]
+	public void BusTraceRecordsOpcodeOperandAndIdleCycles()
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, [0x18]); // CLC
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Collection(
+			bus.BusFrames,
+			frame =>
+			{
+				Assert.Equal(CpuBusAccessKind.OpcodeFetch, frame.Kind);
+				Assert.Equal(0, frame.CycleOffset);
+				Assert.Equal(0x1000, frame.Address);
+				Assert.Equal((byte)0x18, frame.Value.GetValueOrDefault());
+			},
+			frame =>
+			{
+				Assert.Equal(CpuBusAccessKind.Idle, frame.Kind);
+				Assert.Equal(1, frame.CycleOffset);
+			});
+	}
+
+	[Fact]
+	public void AbsoluteIndexedPageCrossLoadEmitsDummyReadBeforeFinalRead()
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, Absolute(0xBD, 0xD3FF)); // LDA $D3FF,X
+		bus.Memory[0xD41C] = 0x5A;
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+		cpu.X = 0x1D;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Contains(bus.BusFrames, frame =>
+			frame.Kind == CpuBusAccessKind.DummyRead &&
+			frame.CycleOffset == 3 &&
+			frame.Address == 0xD31C);
+		Assert.Contains(bus.BusFrames, frame =>
+			frame.Kind == CpuBusAccessKind.Read &&
+			frame.CycleOffset == 4 &&
+			frame.Address == 0xD41C &&
+			frame.Value == 0x5A);
+	}
+
+	[Fact]
+	public void AbsoluteIndexedStoreEmitsDummyReadBeforeFinalWrite()
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, AbsoluteX(0x9D, 0xD418, 0x0C)); // STA $D40C,X
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+		cpu.A = 0x77;
+		cpu.X = 0x0C;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Contains(bus.BusFrames, frame =>
+			frame.Kind == CpuBusAccessKind.DummyRead &&
+			frame.CycleOffset == 3 &&
+			frame.Address == 0xD418);
+		Assert.Contains(bus.BusFrames, frame =>
+			frame.Kind == CpuBusAccessKind.Write &&
+			frame.CycleOffset == 4 &&
+			frame.Address == 0xD418 &&
+			frame.Value == 0x77);
+	}
+
+	[Fact]
+	public void BranchPageCrossTraceIncludesTwoIdleCycles()
+	{
+		var bus = new TestBus();
+		bus.Memory[0x10FD] = 0xD0; // BNE +2
+		bus.Memory[0x10FE] = 0x02;
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x10FD);
+		cpu.Status &= 0xFD;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1101, cpu.ProgramCounter);
+		Assert.Contains(bus.BusFrames, frame => frame.Kind == CpuBusAccessKind.OperandFetch && frame.CycleOffset == 1);
+		Assert.Contains(bus.BusFrames, frame => frame.Kind == CpuBusAccessKind.Idle && frame.CycleOffset == 2);
+		Assert.Contains(bus.BusFrames, frame => frame.Kind == CpuBusAccessKind.Idle && frame.CycleOffset == 3);
+	}
+
+	[Fact]
+	public void JsrTraceOrdersOperandIdleStackWritesAndHighOperandFetch()
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, [0x20, 0x56, 0x34]); // JSR $3456
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x3456, cpu.ProgramCounter);
+		Assert.Collection(
+			bus.BusFrames.Select(frame => (frame.Kind, frame.CycleOffset)).ToArray(),
+			item => Assert.Equal((CpuBusAccessKind.OpcodeFetch, 0), item),
+			item => Assert.Equal((CpuBusAccessKind.OperandFetch, 1), item),
+			item => Assert.Equal((CpuBusAccessKind.Idle, 2), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 3), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 4), item),
+			item => Assert.Equal((CpuBusAccessKind.OperandFetch, 5), item));
+		Assert.Equal(0x10, bus.Memory[0x01FD]);
+		Assert.Equal(0x02, bus.Memory[0x01FC]);
+	}
+
+	[Fact]
+	public void BrkTraceOrdersSignatureStackWritesAndVectorReads()
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, [0x00, 0xEA]);
+		bus.Memory[0xFFFE] = 0x34;
+		bus.Memory[0xFFFF] = 0x12;
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234, cpu.ProgramCounter);
+		Assert.Collection(
+			bus.BusFrames.Select(frame => (frame.Kind, frame.CycleOffset)).ToArray(),
+			item => Assert.Equal((CpuBusAccessKind.OpcodeFetch, 0), item),
+			item => Assert.Equal((CpuBusAccessKind.OperandFetch, 1), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 2), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 3), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 4), item),
+			item => Assert.Equal((CpuBusAccessKind.VectorRead, 5), item),
+			item => Assert.Equal((CpuBusAccessKind.VectorRead, 6), item));
+	}
+
+	[Fact]
+	public void IrqTraceOrdersIdleStackWritesAndVectorReads()
+	{
+		var bus = new TestBus();
+		bus.Memory[0xFFFE] = 0x78;
+		bus.Memory[0xFFFF] = 0x56;
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x2345);
+		cpu.Status &= 0xFB;
+
+		Assert.True(cpu.TryRequestIrq());
+
+		Assert.Equal(0x5678, cpu.ProgramCounter);
+		Assert.Collection(
+			bus.BusFrames.Select(frame => (frame.Kind, frame.CycleOffset)).ToArray(),
+			item => Assert.Equal((CpuBusAccessKind.Idle, 0), item),
+			item => Assert.Equal((CpuBusAccessKind.Idle, 1), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 2), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 3), item),
+			item => Assert.Equal((CpuBusAccessKind.StackWrite, 4), item),
+			item => Assert.Equal((CpuBusAccessKind.VectorRead, 5), item),
+			item => Assert.Equal((CpuBusAccessKind.VectorRead, 6), item));
 	}
 
 	public static IEnumerable<object[]> StoreWriteCases()
@@ -223,25 +386,35 @@ public sealed class Mos6510Tests
 
 		public List<(ushort Address, int CycleOffset)> Reads { get; } = new();
 
+		public List<CpuBusTraceFrame> BusFrames { get; } = new();
+
 		public ushort LastWriteAddress { get; private set; }
 
 		public byte LastWriteValue { get; private set; }
 
 		public long LastWriteCycle { get; private set; }
 
-		public byte Read(ushort address, int cycleOffset = 0)
+		public byte Read(ushort address, int cycleOffset = 0, CpuBusAccessKind kind = CpuBusAccessKind.Read)
 		{
 			Reads.Add((address, cycleOffset));
-			return Memory[address];
+			var value = Memory[address];
+			BusFrames.Add(new CpuBusTraceFrame(cycleOffset, cycleOffset, cycleOffset, value, address, value, kind, delayedByVic: false));
+			return value;
 		}
 
-		public void Write(ushort address, byte value, int cycleOffset)
+		public void Write(ushort address, byte value, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Write)
 		{
 			Memory[address] = value;
 			Writes.Add((address, value, cycleOffset));
+			BusFrames.Add(new CpuBusTraceFrame(cycleOffset, cycleOffset, cycleOffset, 0, address, value, kind, delayedByVic: false));
 			LastWriteAddress = address;
 			LastWriteValue = value;
 			LastWriteCycle = cycleOffset;
+		}
+
+		public void Idle(ushort address, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Idle)
+		{
+			BusFrames.Add(new CpuBusTraceFrame(cycleOffset, cycleOffset, cycleOffset, 0, address, null, kind, delayedByVic: false));
 		}
 	}
 

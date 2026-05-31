@@ -396,6 +396,446 @@ public sealed class C64MachineTests
 	}
 
 	[Fact]
+	public void CpuSidWriteWhoseFetchHitsBadlineIsDelayedToFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x21, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 15, dataCycleOffset: 3);
+		var expectedWriteCycle = targetWriteCycle + 43;
+		var trace = new SidCycleTrace();
+		var cpuTrace = new CpuBusTrace();
+		machine.Sid.Trace = trace;
+		machine.CpuBusTrace = cpuTrace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(expectedWriteCycle, write.Cycle);
+		Assert.Equal(0x04, write.Register);
+		Assert.Equal(0x21, write.Value);
+		Assert.Equal(expectedWriteCycle + 1, machine.Cpu.Cycles);
+		Assert.Equal(43, write.Cycle - targetWriteCycle);
+		var opcodeFetch = Assert.Single(cpuTrace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		Assert.True(opcodeFetch.DelayedByVic);
+		Assert.Equal(43, opcodeFetch.DelayCycles);
+		Assert.Contains(trace.Frames, frame =>
+			frame.Cycle == expectedWriteCycle + 1 &&
+			frame.VoiceIndex == 0 &&
+			frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+	}
+
+	[Fact]
+	public void CpuSidWriteOnBadlineTransitionCycleCompletesWithoutStall()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x22, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 3);
+		var expectedEndCycle = machine.Cpu.Cycles + 4;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(targetWriteCycle, write.Cycle);
+		Assert.Equal(expectedEndCycle, machine.Cpu.Cycles);
+	}
+
+	[Fact]
+	public void CpuOperandFetchOnBadlineTransitionCycleStallsToFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetOperandCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 1);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		Assert.Equal(targetOperandCycle, operand.RequestedCycle);
+		Assert.Equal(targetOperandCycle + 43, operand.Cycle);
+		Assert.True(operand.DelayedByVic);
+		Assert.Equal(targetOperandCycle + 44, machine.Cpu.Cycles);
+	}
+
+	[Fact]
+	public void CpuSidReadOnBadlineTransitionCycleStallsToFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xAD, 0x1B, 0xD4 }, a: 0, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetReadCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 3);
+		var expectedReadCycle = targetReadCycle + 43;
+		var expectedEndCycle = machine.Cpu.Cycles + 4 + (expectedReadCycle - targetReadCycle);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(4);
+
+		Assert.Equal(expectedEndCycle, machine.Cpu.Cycles);
+		Assert.Equal(43, expectedReadCycle - targetReadCycle);
+		var read = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Read && frame.Address == 0xD41B);
+		Assert.True(read.DelayedByVic);
+		Assert.Equal(expectedReadCycle, read.Cycle);
+	}
+
+	[Fact]
+	public void CpuStackReadOnBadlineTransitionCycleStallsToFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x68 }, a: 0, x: 0, y: 0); // PLA
+		machine.Write(0xD011, 0x10, 0);
+		var targetStackReadCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 3);
+		machine.Ram[0x01FE] = 0x7A;
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(4);
+
+		var stackReads = trace.Frames
+			.Where(frame => frame.Kind == CpuBusAccessKind.StackRead)
+			.ToArray();
+		Assert.Contains(stackReads, frame =>
+			frame.RequestedCycle == targetStackReadCycle &&
+			frame.Cycle == targetStackReadCycle + 43 &&
+			frame.DelayedByVic);
+		Assert.Equal(0x7A, machine.Cpu.A);
+	}
+
+	[Fact]
+	public void CpuSidWriteOutsideBadlineKeepsOriginalCycleTiming()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x23, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x31, publicCycle: 15, dataCycleOffset: 3);
+		var expectedEndCycle = machine.Cpu.Cycles + 4;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(targetWriteCycle, write.Cycle);
+		Assert.Equal(expectedEndCycle, machine.Cpu.Cycles);
+	}
+
+	[Fact]
+	public void RenderFrameSampleTargetsPreserveBadlineDelayedSidForwardingBoundary()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x24, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 15, dataCycleOffset: 3);
+		var expectedWriteCycle = targetWriteCycle + 43;
+		var sidTrace = new SidCycleTrace();
+		machine.Sid.Trace = sidTrace;
+
+		var buffer = new float[2];
+		machine.RenderFrame(
+			buffer,
+			new AudioRenderOptionsAdapter(sampleRate: 44100, channelCount: 1),
+			[expectedWriteCycle, expectedWriteCycle + 1],
+			cycleCount: expectedWriteCycle + 1 - machine.Cpu.Cycles);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(expectedWriteCycle, write.Cycle);
+		var forwardedCycles = sidTrace.Frames
+			.Where(frame => frame.VoiceIndex == 0 && frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite))
+			.Select(frame => frame.Cycle)
+			.ToArray();
+		Assert.Equal([expectedWriteCycle + 1], forwardedCycles);
+	}
+
+	[Fact]
+	public void CpuD011WriteAtPublicCycleFourteenCreatesArtificialBadline()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x11, 0xD0 }, a: 0x10, x: 0, y: 0);
+		machine.Write(0xD011, 0x11, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 14, dataCycleOffset: 3);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Write && frame.Address == 0xD011);
+		Assert.Equal(targetWriteCycle, write.Cycle);
+		Assert.False(write.DelayedByVic);
+		Assert.True(machine.DebugState.Vic.BadlineActive);
+		Assert.True(machine.DebugState.Vic.BadlineArtificial);
+		Assert.True(machine.DebugState.Vic.AecLow);
+		Assert.Equal(0, machine.DebugState.Vic.BadlineFetchIndex);
+	}
+
+	[Fact]
+	public void CpuD011WriteAtPublicCycleTwelveCancelsPendingBadlineBeforeAec()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x11, 0xD0 }, a: 0x11, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 3);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(4);
+		machine.AdvanceNativeCycles(2);
+
+		var write = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Write && frame.Address == 0xD011);
+		Assert.Equal(targetWriteCycle, write.Cycle);
+		Assert.False(write.DelayedByVic);
+		Assert.False(machine.DebugState.Vic.BadlineActive);
+		Assert.False(machine.DebugState.Vic.AecLow);
+	}
+
+	[Fact]
+	public void DynamicArtificialBadlineStallsOpcodeFetchToFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		CreateArtificialBadlineAtPublicCycleFifteen(machine);
+		var targetFetchCycle = machine.Cpu.Cycles;
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		Assert.Equal(targetFetchCycle, opcode.RequestedCycle);
+		Assert.Equal(targetFetchCycle + 40, opcode.Cycle);
+		Assert.True(opcode.DelayedByVic);
+		Assert.Equal(0x42, machine.Cpu.A);
+	}
+
+	[Fact]
+	public void DynamicArtificialBadlineDelayedSidWriteStillForwardsOnFollowingSidCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x27, x: 0, y: 0);
+		CreateArtificialBadlineAtPublicCycleFifteen(machine);
+		var targetFetchCycle = machine.Cpu.Cycles;
+		var sidTrace = new SidCycleTrace();
+		machine.Sid.Trace = sidTrace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(targetFetchCycle + 43, write.Cycle);
+		Assert.Contains(sidTrace.Frames, frame =>
+			frame.Cycle == write.Cycle + 1 &&
+			frame.VoiceIndex == 0 &&
+			frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+	}
+
+	[Fact]
+	public void SpriteDmaStallsOpcodeFetchUntilFirstFreeBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		EnableSprite(machine, sprite: 3, y: 0x30);
+		var targetFetchCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 1, dataCycleOffset: 0);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		Assert.Equal(targetFetchCycle, opcode.RequestedCycle);
+		Assert.Equal(targetFetchCycle + 3, opcode.Cycle);
+		Assert.True(opcode.DelayedByVic);
+		Assert.Equal(0x42, machine.Cpu.A);
+	}
+
+	[Fact]
+	public void SpriteDmaStallsOperandFetchDuringBaTransition()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		EnableSprite(machine, sprite: 5, y: 0x30);
+		var targetOperandCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 4, dataCycleOffset: 1);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		Assert.Equal(targetOperandCycle, operand.RequestedCycle);
+		Assert.Equal(targetOperandCycle + 6, operand.Cycle);
+		Assert.True(operand.DelayedByVic);
+		Assert.Equal(0x42, machine.Cpu.A);
+	}
+
+	[Fact]
+	public void SpriteDmaStallsDataAndStackReads()
+	{
+		var dataRead = CreateInstructionMachine(new byte[] { 0xAD, 0x1B, 0xD4 }, a: 0, x: 0, y: 0);
+		EnableSprite(dataRead, sprite: 5, y: 0x30);
+		var dataTargetCycle = PositionCpuForDataBusCycle(dataRead, rasterLine: 0x30, publicCycle: 4, dataCycleOffset: 3);
+		var dataTrace = new CpuBusTrace();
+		dataRead.CpuBusTrace = dataTrace;
+
+		dataRead.RunCycles(4);
+
+		Assert.Contains(dataTrace.Frames, frame =>
+			frame.Kind == CpuBusAccessKind.Read &&
+			frame.Address == 0xD41B &&
+			frame.RequestedCycle >= dataTargetCycle &&
+			frame.DelayedByVic);
+
+		var stackRead = CreateInstructionMachine(new byte[] { 0x68 }, a: 0, x: 0, y: 0);
+		stackRead.Ram[0x01FE] = 0x6A;
+		EnableSprite(stackRead, sprite: 5, y: 0x30);
+		var stackTargetCycle = PositionCpuForDataBusCycle(stackRead, rasterLine: 0x30, publicCycle: 4, dataCycleOffset: 3);
+		var stackTrace = new CpuBusTrace();
+		stackRead.CpuBusTrace = stackTrace;
+
+		stackRead.RunCycles(4);
+
+		Assert.Contains(stackTrace.Frames, frame =>
+			frame.Kind == CpuBusAccessKind.StackRead &&
+			frame.RequestedCycle >= stackTargetCycle &&
+			frame.DelayedByVic);
+		Assert.Equal(0x6A, stackRead.Cpu.A);
+	}
+
+	[Fact]
+	public void SpriteTransitionAllowsWriteAlreadyInProgressButStallsReads()
+	{
+		var write = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x25, x: 0, y: 0);
+		EnableSprite(write, sprite: 5, y: 0x30);
+		var writeCycle = PositionCpuForDataBusCycle(write, rasterLine: 0x30, publicCycle: 4, dataCycleOffset: 3);
+
+		write.RunCycles(4);
+
+		Assert.Equal(writeCycle, Assert.Single(write.SidWrites).Cycle);
+
+		var read = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		EnableSprite(read, sprite: 5, y: 0x30);
+		var readCycle = PositionCpuForDataBusCycle(read, rasterLine: 0x30, publicCycle: 4, dataCycleOffset: 1);
+		var trace = new CpuBusTrace();
+		read.CpuBusTrace = trace;
+
+		read.RunCycles(2);
+
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		Assert.Equal(readCycle + 6, operand.Cycle);
+	}
+
+	[Fact]
+	public void OverlappingBadlineAndSpriteDmaDoNotReleaseCpuBeforeBadlineEnds()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		EnableSprite(machine, sprite: 7, y: 0x30);
+		var targetFetchCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 13, dataCycleOffset: 0);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		Assert.Equal(targetFetchCycle + 42, opcode.Cycle);
+		Assert.True(opcode.DelayedByVic);
+	}
+
+	[Fact]
+	public void SpriteDmaDelayedSidWriteStillForwardsOnFollowingSidCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x26, x: 0, y: 0);
+		EnableSprite(machine, sprite: 3, y: 0x30);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 1, dataCycleOffset: 3);
+		var sidTrace = new SidCycleTrace();
+		machine.Sid.Trace = sidTrace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(targetWriteCycle + 6, write.Cycle);
+		Assert.Contains(sidTrace.Frames, frame =>
+			frame.Cycle == write.Cycle + 1 &&
+			frame.VoiceIndex == 0 &&
+			frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+	}
+
+	[Fact]
+	public void VicSpriteMemoryUsesCia2BankD018ScreenBaseAndCharacterRomHoles()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		machine.Write(0xDD02, 0x03, 0);
+		machine.Write(0xDD00, 0x03, 0); // CIA2 bank 0, VIC absolute base $0000.
+		machine.Write(0xD018, 0x10, 0); // Screen matrix at $0400 within the VIC bank.
+		EnableSprite(machine, sprite: 3, y: 0x30);
+		machine.Ram[0x0400 + 0x03F8 + 3] = 0x40;
+		machine.Ram[0x1001] = 0x12;
+
+		AdvanceToVicPublicCycle(machine, rasterLine: 0x30, publicCycle: 1);
+
+		Assert.Equal(VicMemoryAccessKind.SpritePointer, machine.DebugState.Vic.MemoryAccessKind);
+		Assert.Equal(0x07FB, machine.DebugState.Vic.MemoryAddress);
+		Assert.Equal(0x40, machine.DebugState.Vic.MemoryValue);
+
+		machine.AdvanceNativeCycles(1);
+
+		Assert.Equal(VicMemoryAccessKind.SpriteData, machine.DebugState.Vic.MemoryAccessKind);
+		Assert.Equal(0x1001, machine.DebugState.Vic.MemoryAddress);
+		Assert.Equal(0x81, machine.DebugState.Vic.MemoryValue);
+	}
+
+	[Fact]
+	public void VicSpritePointerAddressFollowsCia2BankSelection()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		machine.Write(0xDD02, 0x03, 0);
+		machine.Write(0xDD00, 0x02, 0); // CIA2 bank 1, VIC absolute base $4000.
+		EnableSprite(machine, sprite: 3, y: 0x30);
+		machine.Ram[0x4000 + 0x03F8 + 3] = 0x22;
+
+		AdvanceToVicPublicCycle(machine, rasterLine: 0x30, publicCycle: 1);
+
+		Assert.Equal(VicMemoryAccessKind.SpritePointer, machine.DebugState.Vic.MemoryAccessKind);
+		Assert.Equal(0x43FB, machine.DebugState.Vic.MemoryAddress);
+		Assert.Equal(0x22, machine.DebugState.Vic.MemoryValue);
+	}
+
+	[Fact]
+	public void VicBadlineMemoryUsesCia2BankD018AndCharacterRomHoles()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		machine.Write(0xDD02, 0x03, 0);
+		machine.Write(0xDD00, 0x03, 0); // CIA2 bank 0, VIC absolute base $0000.
+		machine.Write(0xD018, 0x14, 0); // Screen matrix at $0400, character data at $1000.
+		machine.Write(0xD011, 0x10, 0);
+		machine.Ram[0x0400] = 0x00;
+		machine.Ram[0x1000] = 0x44;
+
+		AdvanceToVicPublicCycle(machine, rasterLine: 0x30, publicCycle: 15);
+
+		Assert.Equal(VicMemoryAccessKind.BadlineScreen, machine.DebugState.Vic.BadlineMemoryAccessKind);
+		Assert.Equal(0, machine.DebugState.Vic.BadlineFetchIndex);
+		Assert.Equal(0x0400, machine.DebugState.Vic.BadlineMatrixAddress);
+		Assert.Equal(0x1000, machine.DebugState.Vic.BadlineGraphicsAddress);
+		Assert.Equal(0x00, machine.DebugState.Vic.BadlineMatrixValue);
+		Assert.Equal(0x80, machine.DebugState.Vic.BadlineGraphicsValue);
+	}
+
+	[Fact]
+	public void ColorRamReadWriteKeepsOnlyLowNibbleForIoReads()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+
+		machine.Write(0xD800, 0xA5, 0);
+
+		Assert.Equal(0xF5, machine.Read(0xD800));
+		machine.Write(0xD800, 0x0C, 0);
+		Assert.Equal(0xFC, machine.Read(0xD800));
+	}
+
+	[Fact]
+	public void OverlappingSpriteDmaAndDynamicBadlineDoNotReleaseCpuBeforeBadlineEnds()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		EnableSprite(machine, sprite: 7, y: 0x30);
+		CreateArtificialBadlineAtPublicCycleFifteen(machine);
+		var targetFetchCycle = machine.Cpu.Cycles;
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		Assert.Equal(targetFetchCycle + 40, opcode.Cycle);
+		Assert.True(opcode.DelayedByVic);
+		Assert.Equal(0x42, machine.Cpu.A);
+	}
+
+	[Fact]
 	public void BankingRsidFixtureOnlyWritesSidWhenIoIsVisible()
 	{
 		var module = SidParser.Parse(SidFixtureBuilder.CreateRsid(BankingProgram()));
@@ -506,6 +946,44 @@ public sealed class C64MachineTests
 	{
 		memory[location] = (byte)(target & 0xFF);
 		memory[(byte)(location + 1)] = (byte)(target >> 8);
+	}
+
+	private static long PositionCpuForDataBusCycle(C64Machine machine, int rasterLine, int publicCycle, int dataCycleOffset)
+	{
+		var busCycle = machine.Cpu.Cycles + GetCyclesUntilVicPublicCycle(machine, rasterLine, publicCycle);
+		var startCycle = busCycle - dataCycleOffset;
+		var delta = startCycle - machine.Cpu.Cycles;
+		Assert.True(delta >= 0, "Cannot position CPU backwards in the current test helper.");
+		machine.AdvanceNativeCycles(delta);
+		return busCycle;
+	}
+
+	private static void AdvanceToVicPublicCycle(C64Machine machine, int rasterLine, int publicCycle)
+	{
+		machine.AdvanceNativeCycles(GetCyclesUntilVicPublicCycle(machine, rasterLine, publicCycle));
+	}
+
+	private static void CreateArtificialBadlineAtPublicCycleFifteen(C64Machine machine)
+	{
+		machine.Write(0xD011, 0x11, 0);
+		AdvanceToVicPublicCycle(machine, rasterLine: 0x30, publicCycle: 14);
+		machine.Write(0xD011, 0x10, 0);
+		machine.AdvanceNativeCycles(1);
+	}
+
+	private static long GetCyclesUntilVicPublicCycle(C64Machine machine, int rasterLine, int publicCycle)
+	{
+		var current = machine.DebugState.Vic;
+		var currentFrameCycle = current.RasterLine * machine.Clock.CyclesPerRasterLine + current.RasterCycle;
+		var targetFrameCycle = rasterLine * machine.Clock.CyclesPerRasterLine + publicCycle - 1;
+		var delta = targetFrameCycle - currentFrameCycle;
+		return delta >= 0 ? delta : delta + machine.Clock.CyclesPerFrame;
+	}
+
+	private static void EnableSprite(C64Machine machine, int sprite, int y)
+	{
+		machine.Write((ushort)(0xD001 + (sprite * 2)), (byte)y, 0);
+		machine.Write(0xD015, (byte)(machine.Read(0xD015) | (1 << sprite)), 0);
 	}
 
 	public sealed record CpuSidWriteCase(

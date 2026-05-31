@@ -109,6 +109,68 @@ public sealed class HotPathAllocationAnalyzerTests
     }
 
     [Fact]
+    public async Task ReportsTargetTypedNewAndCollectionExpressionsInHotPath()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using System;
+            using System.Collections.Generic;
+
+            namespace TestCode;
+
+            [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Constructor)]
+            internal sealed class HotPathAttribute : Attribute { }
+
+            [HotPath]
+            internal sealed class Runtime
+            {
+                public void Frame()
+                {
+                    List<int> values = new();
+                    int[] copy = [1, 2, 3];
+                }
+            }
+            """);
+
+        Assert.Contains(diagnostics, diagnostic =>
+            diagnostic.Id == HotPathAllocationAnalyzer.AllocationDiagnosticId &&
+            diagnostic.GetMessage().Contains("new List<int>", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, diagnostic =>
+            diagnostic.Id == HotPathAllocationAnalyzer.AllocationDiagnosticId &&
+            diagnostic.GetMessage().Contains("collection expression", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReportsAllocationsInHotPathPropertiesAndAccessors()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using System;
+
+            namespace TestCode;
+
+            [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.Property)]
+            internal sealed class HotPathAttribute : Attribute { }
+
+            [HotPath]
+            internal sealed class Runtime
+            {
+                public object ExpressionProperty => new object();
+
+                public object AccessorProperty
+                {
+                    get
+                    {
+                        return new object();
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            diagnostics.Count(diagnostic => diagnostic.Id == HotPathAllocationAnalyzer.AllocationDiagnosticId) >= 2,
+            "Expected both expression-bodied properties and accessor bodies to be analyzed.");
+    }
+
+    [Fact]
     public async Task RequiresAllocationAllowanceReason()
     {
         var diagnostics = await AnalyzeAsync("""

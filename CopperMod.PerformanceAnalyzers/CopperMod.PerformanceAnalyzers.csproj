@@ -4,6 +4,8 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <NoWarn>$(NoWarn);NU1900;RS2008</NoWarn>
     <IsPackable>false</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>

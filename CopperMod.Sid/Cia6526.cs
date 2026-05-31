@@ -2,6 +2,7 @@ using System;
 
 namespace CopperMod.Sid
 {
+    [HotPath]
     internal sealed class Cia6526
     {
         private const byte InterruptTimerA = 0x01;
@@ -68,6 +69,10 @@ namespace CopperMod.Sid
             _todSeconds,
             _todMinutes,
             _todHours);
+
+        public bool InterruptLine => InterruptLineAsserted;
+
+        public byte EffectivePortA => ReadPort(_portA, _ddrA);
 
         public void Reset(bool defaultTimerA60Hz, int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond)
         {

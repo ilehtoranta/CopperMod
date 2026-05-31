@@ -8,7 +8,7 @@ namespace CopperMod.Sid
     {
         private const int MaxCapturedWrites = 65536;
         private readonly BoundedSidWriteLog _writes = new BoundedSidWriteLog(MaxCapturedWrites);
-        private readonly List<PendingSidWrite> _pendingWrites = new List<PendingSidWrite>();
+        private readonly List<PendingSidWrite> _pendingWrites = new List<PendingSidWrite>(4096);
         private readonly int _channelCount;
         private long _lastCycle;
         private double _sampleAccumulator;
@@ -109,6 +109,7 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         public bool TryWrite(ushort address, byte value, long cycle)
         {
             var chipIndex = TryMapRegister(address, out var register);
@@ -130,11 +131,13 @@ namespace CopperMod.Sid
             return true;
         }
 
+        [HotPath]
         public bool TryRead(ushort address, out byte value)
         {
             return TryRead(address, _lastCycle, out value);
         }
 
+        [HotPath]
         public bool TryRead(ushort address, long cycle, out byte value)
         {
             var chipIndex = TryMapRegister(address, out var register);
@@ -153,6 +156,7 @@ namespace CopperMod.Sid
             return true;
         }
 
+        [HotPath]
         private int TryMapRegister(ushort address, out byte register)
         {
             for (var i = 0; i < Chips.Length; i++)
@@ -182,11 +186,13 @@ namespace CopperMod.Sid
             return -1;
         }
 
+        [HotPath]
         private void CaptureWrite(SidRegisterWrite write)
         {
             _writes.Add(write);
         }
 
+        [HotPath]
         public float RenderSample(long cycle)
         {
             AdvanceTo(cycle);
@@ -245,6 +251,7 @@ namespace CopperMod.Sid
             return result;
         }
 
+        [HotPath]
         public void AdvanceTo(long targetCycle)
         {
             if (targetCycle <= _lastCycle)
@@ -263,6 +270,7 @@ namespace CopperMod.Sid
             CompactPendingWrites();
         }
 
+        [HotPath]
         private void AccumulateCycles(long cycles)
         {
             if (cycles <= 0)
@@ -278,6 +286,7 @@ namespace CopperMod.Sid
             _lastCycle += cycles;
         }
 
+        [HotPath]
         private void CompactPendingWrites()
         {
             if (_pendingWriteIndex < 64 || _pendingWriteIndex * 2 < _pendingWrites.Count)
@@ -289,34 +298,33 @@ namespace CopperMod.Sid
             _pendingWriteIndex = 0;
         }
 
+        [HotPath]
         private void AccumulateOneCycle(long cycle)
         {
             var sample = 0.0;
             var captureChannels = _captureSamples != null;
-            if (captureChannels)
-            {
-                _channelScratch ??= new double[_channelCount];
-                _channelAccumulator ??= new double[_channelCount];
-            }
+            var channelScratch = captureChannels ? _channelScratch : null;
+            var channelAccumulator = captureChannels ? _channelAccumulator : null;
 
             for (var i = 0; i < Chips.Length; i++)
             {
                 var offset = i * 3;
-                sample += Chips[i].RenderOneCycle(cycle, captureChannels ? _channelScratch : null, offset);
-                if (!captureChannels || _channelScratch == null || _channelAccumulator == null)
+                sample += Chips[i].RenderOneCycle(cycle, channelScratch, offset);
+                if (!captureChannels || channelScratch == null || channelAccumulator == null)
                 {
                     continue;
                 }
 
-                _channelAccumulator[offset] += _channelScratch[offset];
-                _channelAccumulator[offset + 1] += _channelScratch[offset + 1];
-                _channelAccumulator[offset + 2] += _channelScratch[offset + 2];
+                channelAccumulator[offset] += channelScratch[offset];
+                channelAccumulator[offset + 1] += channelScratch[offset + 1];
+                channelAccumulator[offset + 2] += channelScratch[offset + 2];
             }
 
             _sampleAccumulator += sample / Chips.Length;
             _sampleCycles++;
         }
 
+        [HotPath]
         private void CaptureChannelSample()
         {
             if (_captureSamples == null || _channelAccumulator == null || _sampleCycles == 0)

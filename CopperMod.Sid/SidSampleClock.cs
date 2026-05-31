@@ -65,11 +65,7 @@ namespace CopperMod.Sid
         {
             var count = PeekFrameCount(currentCycle, cycleCount);
             var targets = new long[count];
-            for (var i = 0; i < targets.Length; i++)
-            {
-                targets[i] = GetSampleTargetCycle(_nextSampleIndex + i);
-            }
-
+            _ = FillSampleTargets(currentCycle, cycleCount, targets);
             return targets;
         }
 
@@ -78,6 +74,23 @@ namespace CopperMod.Sid
             var targets = PeekSampleTargets(currentCycle, cycleCount);
             AdvanceFrames(targets.Length);
             return targets;
+        }
+
+        [HotPath]
+        public int FillSampleTargets(long currentCycle, long cycleCount, Span<long> targets)
+        {
+            var count = PeekFrameCount(currentCycle, cycleCount);
+            if (targets.Length < count)
+            {
+                throw new ArgumentException("Sample target buffer is too small for this tick.", nameof(targets));
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                targets[i] = GetSampleTargetCycle(_nextSampleIndex + i);
+            }
+
+            return count;
         }
 
         public void AdvanceFrames(int frameCount)

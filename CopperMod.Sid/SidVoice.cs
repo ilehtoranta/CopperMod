@@ -2,6 +2,7 @@ using System;
 
 namespace CopperMod.Sid
 {
+    [HotPath]
     internal sealed class SidVoice
     {
         private const int Attack = 0;
@@ -208,25 +209,31 @@ namespace CopperMod.Sid
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model)
         {
-            return RenderOutput(syncSource, model, out _);
+            return RenderOutputFast(syncSource, model);
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform)
         {
-            return RenderOutput(syncSource, model, out waveform, out _);
+            waveform = RenderWaveform(syncSource, model, captureTrace: false, out _);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform, out SidWaveformTrace trace)
         {
-            waveform = RenderWaveform(syncSource, model);
-            trace = _lastWaveformTrace;
+            waveform = RenderWaveform(syncSource, model, captureTrace: true, out trace);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
+        }
+
+        public double RenderOutputFast(SidVoice? syncSource, SidChipModel model)
+        {
+            var waveform = RenderWaveform(syncSource, model, captureTrace: false, out _);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
         public byte ReadOscillator(SidVoice? syncSource, SidChipModel model)
         {
-            _ = RenderWaveform(syncSource, model);
-            return (byte)(_lastWaveformTrace.WaveformDac >> 4);
+            _ = RenderWaveform(syncSource, model, captureTrace: true, out var trace);
+            return (byte)(trace.WaveformDac >> 4);
         }
 
         public SidVoiceDebugState GetDebugState()
@@ -275,9 +282,11 @@ namespace CopperMod.Sid
             }
         }
 
-        private SidWaveformTrace _lastWaveformTrace;
-
-        private double RenderWaveform(SidVoice? syncSource, SidChipModel model)
+        private double RenderWaveform(
+            SidVoice? syncSource,
+            SidChipModel model,
+            bool captureTrace,
+            out SidWaveformTrace trace)
         {
             var waveformMask = _control & 0xF0;
             var pulseDac = GetPulseDac();
@@ -289,13 +298,15 @@ namespace CopperMod.Sid
                 out var triangleInverted);
             if (waveformMask == 0)
             {
-                _lastWaveformTrace = new SidWaveformTrace(
-                    0,
-                    pulseHigh,
-                    syncSourceMsb,
-                    ringModInverted,
-                    triangleInverted,
-                    noiseUsesPostShiftRegister: false);
+                trace = captureTrace
+                    ? new SidWaveformTrace(
+                        0,
+                        pulseHigh,
+                        syncSourceMsb,
+                        ringModInverted,
+                        triangleInverted,
+                        noiseUsesPostShiftRegister: false)
+                    : default;
                 return 0;
             }
 
@@ -307,7 +318,9 @@ namespace CopperMod.Sid
                     pulseHigh,
                     syncSourceMsb,
                     ringModInverted,
-                    triangleInverted);
+                    triangleInverted,
+                    captureTrace,
+                    out trace);
             }
 
             var outputs = 0;
@@ -339,23 +352,27 @@ namespace CopperMod.Sid
 
             if (outputs == 0)
             {
-                _lastWaveformTrace = new SidWaveformTrace(
-                    0,
+                trace = captureTrace
+                    ? new SidWaveformTrace(
+                        0,
+                        pulseHigh,
+                        syncSourceMsb,
+                        ringModInverted,
+                        triangleInverted,
+                        noiseUsesPostShiftRegister: false)
+                    : default;
+                return 0;
+            }
+
+            trace = captureTrace
+                ? new SidWaveformTrace(
+                    combinedDac,
                     pulseHigh,
                     syncSourceMsb,
                     ringModInverted,
                     triangleInverted,
-                    noiseUsesPostShiftRegister: false);
-                return 0;
-            }
-
-            _lastWaveformTrace = new SidWaveformTrace(
-                combinedDac,
-                pulseHigh,
-                syncSourceMsb,
-                ringModInverted,
-                triangleInverted,
-                noiseSelected);
+                    noiseSelected)
+                : default;
             return SidAnalog.ConvertWaveformDac12(combinedDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
@@ -365,17 +382,21 @@ namespace CopperMod.Sid
             bool pulseHigh,
             bool syncSourceMsb,
             bool ringModInverted,
-            bool triangleInverted)
+            bool triangleInverted,
+            bool captureTrace,
+            out SidWaveformTrace trace)
         {
             if (pulseDac == 0)
             {
-                _lastWaveformTrace = new SidWaveformTrace(
-                    0,
-                    pulseHigh,
-                    syncSourceMsb,
-                    ringModInverted,
-                    triangleInverted,
-                    noiseUsesPostShiftRegister: false);
+                trace = captureTrace
+                    ? new SidWaveformTrace(
+                        0,
+                        pulseHigh,
+                        syncSourceMsb,
+                        ringModInverted,
+                        triangleInverted,
+                        noiseUsesPostShiftRegister: false)
+                    : default;
                 return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
                     SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
             }
@@ -384,13 +405,15 @@ namespace CopperMod.Sid
             var contentionMask = (_phase >> 10) & 0x0FFF;
             var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
             const double mos6581TrianglePulseBias = -1.4;
-            _lastWaveformTrace = new SidWaveformTrace(
-                contentionDac,
-                pulseHigh,
-                syncSourceMsb,
-                ringModInverted,
-                triangleInverted,
-                noiseUsesPostShiftRegister: false);
+            trace = captureTrace
+                ? new SidWaveformTrace(
+                    contentionDac,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false)
+                : default;
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
         }

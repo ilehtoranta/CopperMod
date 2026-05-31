@@ -160,7 +160,36 @@ namespace CopperMod.Sid
 
     internal readonly struct VicDebugState
     {
-        public VicDebugState(int rasterLine, int rasterCycle, ushort rasterCompare, byte irqFlags, byte irqMask, bool irqLine)
+        public VicDebugState(
+            int rasterLine,
+            int rasterCycle,
+            ushort rasterCompare,
+            byte irqFlags,
+            byte irqMask,
+            bool irqLine,
+            bool badlineCandidate,
+            bool baLow,
+            bool aecLow,
+            bool transitionWriteAllowed,
+            bool spriteBaLow,
+            bool spriteAecLow,
+            int activeSpriteMask,
+            int currentSpriteIndex,
+            VicMemoryAccessKind memoryAccessKind,
+            ushort memoryAddress,
+            byte memoryValue,
+            bool badlineActive,
+            bool badlineArtificial,
+            int badlineFetchIndex,
+            int badlineRc,
+            int badlineVc,
+            int badlineVcBase,
+            int badlineFliBugColumns,
+            VicMemoryAccessKind badlineMemoryAccessKind,
+            ushort badlineMatrixAddress,
+            ushort badlineGraphicsAddress,
+            byte badlineMatrixValue,
+            byte badlineGraphicsValue)
         {
             RasterLine = rasterLine;
             RasterCycle = rasterCycle;
@@ -168,6 +197,29 @@ namespace CopperMod.Sid
             IrqFlags = irqFlags;
             IrqMask = irqMask;
             IrqLine = irqLine;
+            BadlineCandidate = badlineCandidate;
+            BaLow = baLow;
+            AecLow = aecLow;
+            TransitionWriteAllowed = transitionWriteAllowed;
+            SpriteBaLow = spriteBaLow;
+            SpriteAecLow = spriteAecLow;
+            ActiveSpriteMask = activeSpriteMask;
+            CurrentSpriteIndex = currentSpriteIndex;
+            MemoryAccessKind = memoryAccessKind;
+            MemoryAddress = memoryAddress;
+            MemoryValue = memoryValue;
+            BadlineActive = badlineActive;
+            BadlineArtificial = badlineArtificial;
+            BadlineFetchIndex = badlineFetchIndex;
+            BadlineRc = badlineRc;
+            BadlineVc = badlineVc;
+            BadlineVcBase = badlineVcBase;
+            BadlineFliBugColumns = badlineFliBugColumns;
+            BadlineMemoryAccessKind = badlineMemoryAccessKind;
+            BadlineMatrixAddress = badlineMatrixAddress;
+            BadlineGraphicsAddress = badlineGraphicsAddress;
+            BadlineMatrixValue = badlineMatrixValue;
+            BadlineGraphicsValue = badlineGraphicsValue;
         }
 
         public int RasterLine { get; }
@@ -181,6 +233,52 @@ namespace CopperMod.Sid
         public byte IrqMask { get; }
 
         public bool IrqLine { get; }
+
+        public bool BadlineCandidate { get; }
+
+        public bool BaLow { get; }
+
+        public bool AecLow { get; }
+
+        public bool TransitionWriteAllowed { get; }
+
+        public bool SpriteBaLow { get; }
+
+        public bool SpriteAecLow { get; }
+
+        public int ActiveSpriteMask { get; }
+
+        public int CurrentSpriteIndex { get; }
+
+        public VicMemoryAccessKind MemoryAccessKind { get; }
+
+        public ushort MemoryAddress { get; }
+
+        public byte MemoryValue { get; }
+
+        public bool BadlineActive { get; }
+
+        public bool BadlineArtificial { get; }
+
+        public int BadlineFetchIndex { get; }
+
+        public int BadlineRc { get; }
+
+        public int BadlineVc { get; }
+
+        public int BadlineVcBase { get; }
+
+        public int BadlineFliBugColumns { get; }
+
+        public VicMemoryAccessKind BadlineMemoryAccessKind { get; }
+
+        public ushort BadlineMatrixAddress { get; }
+
+        public ushort BadlineGraphicsAddress { get; }
+
+        public byte BadlineMatrixValue { get; }
+
+        public byte BadlineGraphicsValue { get; }
     }
 
     internal readonly struct BasicRsidDebugState

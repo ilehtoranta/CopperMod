@@ -116,6 +116,7 @@ namespace CopperMod.Sid
             return value;
         }
 
+        [HotPath]
         public double Render(long cycles, double[]? voiceOutputs = null, int voiceOffset = 0)
         {
             var voice1 = 0.0;
@@ -136,11 +137,13 @@ namespace CopperMod.Sid
             return _lastOutput;
         }
 
+        [HotPath]
         public double RenderOneCycle(double[]? voiceOutputs = null, int voiceOffset = 0)
         {
             return RenderOneCycle(-1, voiceOutputs, voiceOffset);
         }
 
+        [HotPath]
         public double RenderOneCycle(long cycle, double[]? voiceOutputs = null, int voiceOffset = 0)
         {
             if (cycle < 0)
@@ -163,71 +166,86 @@ namespace CopperMod.Sid
             return _lastOutput;
         }
 
+        [HotPath]
         private double ClockOneCycle(long cycle, out double voice1, out double voice2, out double voice3)
         {
-            for (var i = 0; i < _voices.Length; i++)
-            {
-                _voices[i].BeginCycleTrace();
-            }
-
+            var chipVoice1 = _voices[0];
+            var chipVoice2 = _voices[1];
+            var chipVoice3 = _voices[2];
             var trace = Trace;
-            var before1 = trace != null ? _voices[0].GetDebugState() : default;
-            var before2 = trace != null ? _voices[1].GetDebugState() : default;
-            var before3 = trace != null ? _voices[2].GetDebugState() : default;
+            var tracing = trace != null;
+            var before1 = default(SidVoiceDebugState);
+            var before2 = default(SidVoiceDebugState);
+            var before3 = default(SidVoiceDebugState);
+            if (tracing)
+            {
+                chipVoice1.BeginCycleTrace();
+                chipVoice2.BeginCycleTrace();
+                chipVoice3.BeginCycleTrace();
+                before1 = chipVoice1.GetDebugState();
+                before2 = chipVoice2.GetDebugState();
+                before3 = chipVoice3.GetDebugState();
+            }
 
             CommitPendingRegisters();
 
-            for (var i = 0; i < _voices.Length; i++)
-            {
-                _voices[i].ClockEnvelope();
-            }
+            chipVoice1.ClockEnvelope();
+            chipVoice2.ClockEnvelope();
+            chipVoice3.ClockEnvelope();
 
-            var previousPhase1 = _voices[0].Phase;
-            var previousPhase2 = _voices[1].Phase;
-            var previousPhase3 = _voices[2].Phase;
-            for (var i = 0; i < _voices.Length; i++)
-            {
-                _voices[i].ClockOscillator();
-            }
+            var previousPhase1 = chipVoice1.Phase;
+            var previousPhase2 = chipVoice2.Phase;
+            var previousPhase3 = chipVoice3.Phase;
+            chipVoice1.ClockOscillator();
+            chipVoice2.ClockOscillator();
+            chipVoice3.ClockOscillator();
 
-            var advancedPhase1 = _voices[0].Phase;
-            var advancedPhase2 = _voices[1].Phase;
-            var advancedPhase3 = _voices[2].Phase;
+            var advancedPhase1 = chipVoice1.Phase;
+            var advancedPhase2 = chipVoice2.Phase;
+            var advancedPhase3 = chipVoice3.Phase;
             var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
             var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
             var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
-            if (_voices[0].SyncEnabled && voice3MsbRising)
+            if (chipVoice1.SyncEnabled && voice3MsbRising)
             {
-                _voices[0].ResetOscillator();
+                chipVoice1.ResetOscillator();
             }
 
-            if (_voices[1].SyncEnabled && voice1MsbRising)
+            if (chipVoice2.SyncEnabled && voice1MsbRising)
             {
-                _voices[1].ResetOscillator();
+                chipVoice2.ResetOscillator();
             }
 
-            if (_voices[2].SyncEnabled && voice2MsbRising)
+            if (chipVoice3.SyncEnabled && voice2MsbRising)
             {
-                _voices[2].ResetOscillator();
+                chipVoice3.ResetOscillator();
             }
 
-            _voices[0].ClockNoise(SidVoice.NoiseClockRising(previousPhase1, _voices[0].Phase));
-            _voices[1].ClockNoise(SidVoice.NoiseClockRising(previousPhase2, _voices[1].Phase));
-            _voices[2].ClockNoise(SidVoice.NoiseClockRising(previousPhase3, _voices[2].Phase));
+            chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
+            chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
+            chipVoice3.ClockNoise(SidVoice.NoiseClockRising(previousPhase3, chipVoice3.Phase));
 
-            voice1 = _voices[0].RenderOutput(_voices[2], Model, out var waveform1, out var waveformTrace1);
-            voice2 = _voices[1].RenderOutput(_voices[0], Model, out var waveform2, out var waveformTrace2);
-            voice3 = _voices[2].RenderOutput(_voices[1], Model, out var waveform3, out var waveformTrace3);
-            if (trace != null)
+            var model = Model;
+            if (tracing)
             {
+                voice1 = chipVoice1.RenderOutput(chipVoice3, model, out var waveform1, out var waveformTrace1);
+                voice2 = chipVoice2.RenderOutput(chipVoice1, model, out var waveform2, out var waveformTrace2);
+                voice3 = chipVoice3.RenderOutput(chipVoice2, model, out var waveform3, out var waveformTrace3);
                 TraceVoice(cycle, 0, before1, waveformTrace1, waveform1, voice1);
                 TraceVoice(cycle, 1, before2, waveformTrace2, waveform2, voice2);
                 TraceVoice(cycle, 2, before3, waveformTrace3, waveform3, voice3);
+            }
+            else
+            {
+                voice1 = chipVoice1.RenderOutputFast(chipVoice3, model);
+                voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
+                voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
             }
 
             return Mix(voice1, voice2, voice3);
         }
 
+        [HotPath]
         private void CommitPendingRegisters()
         {
             var pending = _pendingRegisterBits;
@@ -257,6 +275,7 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         private void TraceVoice(
             long cycle,
             int voiceIndex,
@@ -295,6 +314,7 @@ namespace CopperMod.Sid
                 voiceOutput));
         }
 
+        [HotPath]
         private double Mix(double voice1, double voice2, double voice3)
         {
             if ((MutedVoicesMask & 0x01) != 0)
@@ -336,6 +356,7 @@ namespace CopperMod.Sid
             return _outputLowPassState;
         }
 
+        [HotPath]
         private static void RouteVoice(double voice, bool filtered, ref double direct, ref double filterInput)
         {
             if (filtered)
@@ -348,6 +369,7 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         private double ApplyFilter(double input)
         {
             if (_filterCoefficientsDirty)
@@ -391,6 +413,7 @@ namespace CopperMod.Sid
             return output * _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
         }
 
+        [HotPath]
         private void UpdateFilterCoefficients()
         {
             _filterCutoffRegister = (_forwardedRegisters[0x16] << 3) | (_forwardedRegisters[0x15] & 0x07);

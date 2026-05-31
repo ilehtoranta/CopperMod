@@ -6,6 +6,7 @@ namespace CopperMod.Sid
     internal sealed class C64Machine : ICpuBus
     {
         private readonly byte[] _ram = new byte[65536];
+        private readonly byte[] _colorRam = new byte[0x400];
         private readonly byte[] _kernalRom = new byte[0x2000];
         private readonly byte[] _basicRom = new byte[0x2000];
         private readonly byte[] _characterRom = new byte[0x1000];
@@ -14,6 +15,7 @@ namespace CopperMod.Sid
         private readonly Cia6526 _cia1 = new Cia6526();
         private readonly Cia6526 _cia2 = new Cia6526();
         private readonly VicII _vic;
+        private readonly VicMemoryReader _readVicMemory;
         private const ushort KernalRomStart = 0xE000;
         private const ushort BasicRomStart = 0xA000;
         private const ushort RamIrqVector = 0x0314;
@@ -38,12 +40,15 @@ namespace CopperMod.Sid
         private BasicRsidRunner? _basicRunner;
         private long _psidCiaTimerAIntervalCycles;
         private bool _psidCiaTimerATouched;
+        private long _pendingCpuStallCycles;
+        private bool _cpuInstructionActive;
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
             _module = module ?? throw new ArgumentNullException(nameof(module));
             _clock = C64ClockProfile.FromSidClock(module.Clock);
             _vic = new VicII(_clock);
+            _readVicMemory = ReadVicMemory;
             Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile);
             Cpu = new Mos6510(this);
             InstallMinimalRoms();
@@ -60,6 +65,8 @@ namespace CopperMod.Sid
         public byte[] Ram => _ram;
 
         public IReadOnlyList<SidRegisterWrite> SidWrites => Sid.Writes;
+
+        internal CpuBusTrace? CpuBusTrace { get; set; }
 
         public long PsidCiaTimerAIntervalCycles => _psidCiaTimerAIntervalCycles;
 
@@ -78,6 +85,7 @@ namespace CopperMod.Sid
         public void Reset(int subSongIndex)
         {
             Array.Clear(_ram);
+            Array.Clear(_colorRam);
             _processorPortDirection = 0x2F;
             _processorPortValue = (byte)SidConstants.DefaultBankRegister;
             _hardwareCycle = 0;
@@ -88,6 +96,8 @@ namespace CopperMod.Sid
             _basicRunner = null;
             _psidCiaTimerAIntervalCycles = GetDefaultPsidCiaTimerAIntervalCycles();
             _psidCiaTimerATouched = false;
+            _pendingCpuStallCycles = 0;
+            _cpuInstructionActive = false;
             _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuCyclesPerSecond);
             _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuCyclesPerSecond);
             _vic.Reset();
@@ -120,12 +130,14 @@ namespace CopperMod.Sid
             RefreshInterruptLines();
         }
 
+        [HotPath]
         public void RunFrame()
         {
             BeginFrame();
             RunCycles(_clock.CyclesPerFrame);
         }
 
+        [HotPath]
         public void BeginFrame()
         {
             if (_module.IsRsid)
@@ -141,21 +153,34 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         public void RunCycles(long cycleCount)
+        {
+            RunCycles(cycleCount, advanceSidToFinalCycle: true);
+        }
+
+        [HotPath]
+        private void RunCycles(long cycleCount, bool advanceSidToFinalCycle)
         {
             var target = Cpu.Cycles + cycleCount;
             if (_basicRunner != null)
             {
                 _basicRunner.RunUntil(target);
                 AdvanceHardwareTo(target);
-                Sid.AdvanceTo(target);
+                if (advanceSidToFinalCycle)
+                {
+                    Sid.AdvanceTo(target);
+                }
+
                 return;
             }
 
             while (Cpu.Cycles < target && !Cpu.Halted)
             {
                 var before = Cpu.Cycles;
+                BeginCpuInstruction();
                 var executed = Cpu.ExecuteInstruction();
+                CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
                 ServicePendingInterrupts();
                 if (Cpu.Cycles == before)
@@ -166,21 +191,29 @@ namespace CopperMod.Sid
                 }
             }
 
-            AdvanceHardwareTo(target);
-            Sid.AdvanceTo(target);
+            var finalCycle = Math.Max(target, Cpu.Cycles);
+            AdvanceHardwareTo(finalCycle);
+            if (advanceSidToFinalCycle)
+            {
+                Sid.AdvanceTo(finalCycle);
+            }
         }
 
+        [HotPath]
         public void RunUntilSubroutineReturn(long maxCycles)
         {
             var target = Cpu.Cycles + maxCycles;
             while (Cpu.Cycles < target && !Cpu.Halted && Cpu.ProgramCounter != 0xFFFF)
             {
+                BeginCpuInstruction();
                 var executed = Cpu.ExecuteInstruction();
+                CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
                 ServicePendingInterrupts();
             }
         }
 
+        [HotPath]
         public void RenderFrame(
             Span<float> destination,
             AudioRenderOptionsAdapter options,
@@ -213,7 +246,7 @@ namespace CopperMod.Sid
 
                 if (_module.IsRsid)
                 {
-                    RunCycles(Math.Max(0, targetCycle - Cpu.Cycles));
+                    RunCycles(Math.Max(0, targetCycle - Cpu.Cycles), advanceSidToFinalCycle: false);
                 }
                 else if (psidPlayActive)
                 {
@@ -236,7 +269,7 @@ namespace CopperMod.Sid
             {
                 if (_module.IsRsid)
                 {
-                    RunCycles(frameEndCycle - Cpu.Cycles);
+                    RunCycles(frameEndCycle - Cpu.Cycles, advanceSidToFinalCycle: false);
                 }
                 else if (psidPlayActive)
                 {
@@ -256,8 +289,11 @@ namespace CopperMod.Sid
             {
                 FinishPsidPlayRoutine();
             }
+
+            Sid.AdvanceTo(frameEndCycle);
         }
 
+        [HotPath]
         private void RenderBasicFrame(
             Span<float> destination,
             AudioRenderOptionsAdapter options,
@@ -282,6 +318,7 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         private bool BeginPsidFrame()
         {
             if (_module.IsRsid || _module.PlayAddress == 0)
@@ -294,6 +331,7 @@ namespace CopperMod.Sid
             return true;
         }
 
+        [HotPath]
         private void FinishPsidPlayRoutine()
         {
             if (_module.IsRsid || !_psidCiaTimerATouched)
@@ -305,12 +343,15 @@ namespace CopperMod.Sid
             _psidCiaTimerATouched = false;
         }
 
+        [HotPath]
         private void RunPsidPlayUntil(long targetCycle, ref bool active)
         {
             while (active && Cpu.Cycles < targetCycle && !Cpu.Halted && Cpu.ProgramCounter != 0xFFFF)
             {
                 var before = Cpu.Cycles;
+                BeginCpuInstruction();
                 var executed = Cpu.ExecuteInstruction();
+                CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
                 ServicePendingInterrupts();
                 if (Cpu.Cycles == before)
@@ -326,6 +367,7 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         private void AdvanceSidOnly(long cycleCount)
         {
             if (cycleCount <= 0)
@@ -338,52 +380,73 @@ namespace CopperMod.Sid
             Cpu.AdvanceCycles(cycleCount);
         }
 
+        [HotPath]
         public byte Read(ushort address)
         {
-            return Read(address, cycleOffset: 0);
+            return Read(address, cycleOffset: 0, CpuBusAccessKind.Read);
         }
 
-        public byte Read(ushort address, int cycleOffset = 0)
+        [HotPath]
+        public byte Read(ushort address, int cycleOffset = 0, CpuBusAccessKind kind = CpuBusAccessKind.Read)
         {
-            var readCycle = Cpu.Cycles + Math.Max(0, cycleOffset);
+            var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
+            var readCycle = busCycle.Cycle;
             AdvanceHardwareTo(readCycle);
+            byte value;
             if (address == 0x0000)
             {
-                return _processorPortDirection;
+                value = _processorPortDirection;
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
             if (address == 0x0001)
             {
-                return ProcessorPortEffectiveValue;
+                value = ProcessorPortEffectiveValue;
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
             if (IsIoVisible() && address >= 0xD000 && address <= 0xDFFF)
             {
-                return ReadIo(address, readCycle);
+                value = ReadIo(address, readCycle);
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
             if (IsCharacterRomVisible() && address >= 0xD000 && address <= 0xDFFF)
             {
-                return _characterRom[address - 0xD000];
+                value = _characterRom[address - 0xD000];
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
             if (_module.IsRsid && IsBasicVisible() && address >= 0xA000 && address <= 0xBFFF)
             {
-                return _basicRom[address - BasicRomStart];
+                value = _basicRom[address - BasicRomStart];
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
             if (_module.IsRsid && IsKernalVisible() && address >= 0xE000)
             {
-                return _kernalRom[address - KernalRomStart];
+                value = _kernalRom[address - KernalRomStart];
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
             }
 
-            return _ram[address];
+            value = _ram[address];
+            CaptureCpuBusRead(busCycle, address, value, kind);
+            return value;
         }
 
-        public void Write(ushort address, byte value, int cycleOffset)
+        [HotPath]
+        public void Write(ushort address, byte value, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Write)
         {
-            var writeCycle = Cpu.Cycles + Math.Max(0, cycleOffset);
+            var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
+            var writeCycle = busCycle.Cycle;
             AdvanceHardwareTo(writeCycle);
+            CaptureCpuBusWrite(busCycle, address, value, kind);
             if (address == 0x0000)
             {
                 _processorPortDirection = value;
@@ -406,16 +469,27 @@ namespace CopperMod.Sid
             _ram[address] = value;
         }
 
+        [HotPath]
+        public void Idle(ushort address, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Idle)
+        {
+            var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
+            AdvanceHardwareTo(busCycle.Cycle);
+            CaptureCpuBusIdle(busCycle, address, kind);
+        }
+
+        [HotPath]
         internal byte NativeRead(ushort address)
         {
             return Read(address, cycleOffset: 0);
         }
 
+        [HotPath]
         internal void NativeWrite(ushort address, byte value)
         {
             Write(address, value, cycleOffset: 0);
         }
 
+        [HotPath]
         internal void AdvanceNativeCycles(long cycles)
         {
             if (cycles <= 0)
@@ -553,6 +627,7 @@ namespace CopperMod.Sid
             _ram[(ushort)(address + 1)] = (byte)(value >> 8);
         }
 
+        [HotPath]
         private void AdvanceHardwareTo(long targetCycle)
         {
             if (targetCycle <= _hardwareCycle)
@@ -564,7 +639,7 @@ namespace CopperMod.Sid
             {
                 _hardwareCycle++;
                 var cia1Irq = _cia1.Tick();
-                var vicIrq = _vic.Tick();
+                var vicIrq = _vic.Tick(_readVicMemory, GetVicBankBase());
                 var cia2NmiLine = _cia2.Tick();
                 _irqLine = cia1Irq || vicIrq;
                 if (cia2NmiLine && !_cia2NmiLine)
@@ -576,10 +651,129 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
+        private void BeginCpuInstruction()
+        {
+            _pendingCpuStallCycles = 0;
+            _cpuInstructionActive = true;
+        }
+
+        [HotPath]
+        private void CompleteCpuInstruction()
+        {
+            if (_pendingCpuStallCycles <= 0)
+            {
+                _cpuInstructionActive = false;
+                return;
+            }
+
+            Cpu.AdvanceCycles(_pendingCpuStallCycles);
+            _pendingCpuStallCycles = 0;
+            _cpuInstructionActive = false;
+        }
+
+        [HotPath]
+        private CpuBusCycleResolution ResolveCpuBusCycle(int cycleOffset, CpuBusAccessKind kind)
+        {
+            var offset = Math.Max(0, cycleOffset);
+            var requestedCycle = Cpu.Cycles + offset + _pendingCpuStallCycles;
+            if (!_cpuInstructionActive || !_module.IsRsid)
+            {
+                return new CpuBusCycleResolution(requestedCycle, requestedCycle, offset);
+            }
+
+            var actualCycle = requestedCycle;
+            while (true)
+            {
+                AdvanceHardwareTo(actualCycle);
+                var blocked = IsCpuBusWrite(kind)
+                    ? _vic.IsCpuWriteBlocked()
+                    : _vic.IsCpuReadBlocked();
+                if (!blocked)
+                {
+                    break;
+                }
+
+                actualCycle++;
+            }
+
+            _pendingCpuStallCycles += actualCycle - requestedCycle;
+            return new CpuBusCycleResolution(requestedCycle, actualCycle, offset);
+        }
+
+        [HotPath]
+        private void CaptureCpuBusRead(CpuBusCycleResolution busCycle, ushort address, byte value, CpuBusAccessKind kind)
+        {
+            CpuBusTrace?.Add(new CpuBusTraceFrame(
+                busCycle.RequestedCycle,
+                busCycle.Cycle,
+                busCycle.CycleOffset,
+                kind == CpuBusAccessKind.OpcodeFetch ? value : Cpu.LastOpcode,
+                address,
+                value,
+                kind,
+                busCycle.DelayedByVic));
+        }
+
+        [HotPath]
+        private void CaptureCpuBusWrite(CpuBusCycleResolution busCycle, ushort address, byte value, CpuBusAccessKind kind)
+        {
+            CpuBusTrace?.Add(new CpuBusTraceFrame(
+                busCycle.RequestedCycle,
+                busCycle.Cycle,
+                busCycle.CycleOffset,
+                Cpu.LastOpcode,
+                address,
+                value,
+                kind,
+                busCycle.DelayedByVic));
+        }
+
+        [HotPath]
+        private void CaptureCpuBusIdle(CpuBusCycleResolution busCycle, ushort address, CpuBusAccessKind kind)
+        {
+            CpuBusTrace?.Add(new CpuBusTraceFrame(
+                busCycle.RequestedCycle,
+                busCycle.Cycle,
+                busCycle.CycleOffset,
+                Cpu.LastOpcode,
+                address,
+                null,
+                kind,
+                busCycle.DelayedByVic));
+        }
+
+        [HotPath]
+        private static bool IsCpuBusWrite(CpuBusAccessKind kind)
+        {
+            return kind == CpuBusAccessKind.Write ||
+                kind == CpuBusAccessKind.DummyWrite ||
+                kind == CpuBusAccessKind.StackWrite;
+        }
+
+        private readonly struct CpuBusCycleResolution
+        {
+            public CpuBusCycleResolution(long requestedCycle, long cycle, int cycleOffset)
+            {
+                RequestedCycle = requestedCycle;
+                Cycle = cycle;
+                CycleOffset = cycleOffset;
+            }
+
+            public long RequestedCycle { get; }
+
+            public long Cycle { get; }
+
+            public int CycleOffset { get; }
+
+            public bool DelayedByVic => Cycle != RequestedCycle;
+        }
+
+        [HotPath]
         private void RefreshInterruptLines()
         {
-            _irqLine = _cia1.DebugState.InterruptLine || _vic.DebugState.IrqLine;
-            var cia2Line = _cia2.DebugState.InterruptLine;
+            _irqLine = _cia1.InterruptLine || _vic.IrqLine;
+            var cia2Line = _cia2.InterruptLine;
             if (cia2Line && !_cia2NmiLine)
             {
                 _nmiPending = true;
@@ -588,6 +782,7 @@ namespace CopperMod.Sid
             _cia2NmiLine = cia2Line;
         }
 
+        [HotPath]
         private void ServicePendingInterrupts()
         {
             RefreshInterruptLines();
@@ -595,14 +790,24 @@ namespace CopperMod.Sid
             {
                 _nmiPending = false;
                 _lastInterruptSource = C64InterruptSource.Cia2;
+                BeginCpuInstruction();
                 Cpu.TryRequestNmi();
+                CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
                 RefreshInterruptLines();
                 return;
             }
 
-            if (_irqLine && Cpu.TryRequestIrq())
+            if (_irqLine)
             {
+                BeginCpuInstruction();
+                var serviced = Cpu.TryRequestIrq();
+                CompleteCpuInstruction();
+                if (!serviced)
+                {
+                    return;
+                }
+
                 _lastInterruptSource = _vic.DebugState.IrqLine
                     ? C64InterruptSource.Vic
                     : C64InterruptSource.Cia1;
@@ -611,22 +816,26 @@ namespace CopperMod.Sid
             }
         }
 
+        [HotPath]
         private bool IsIoVisible()
         {
             var value = ProcessorPortEffectiveValue;
             return (value & 0x04) != 0 && (value & 0x03) != 0;
         }
 
+        [HotPath]
         private bool IsKernalVisible()
         {
             return _module.IsRsid && (ProcessorPortEffectiveValue & 0x02) != 0;
         }
 
+        [HotPath]
         private bool IsBasicVisible()
         {
             return _module.IsRsid && (ProcessorPortEffectiveValue & 0x03) == 0x03;
         }
 
+        [HotPath]
         private bool IsCharacterRomVisible()
         {
             var value = ProcessorPortEffectiveValue;
@@ -634,6 +843,24 @@ namespace CopperMod.Sid
         }
 
         private byte ProcessorPortEffectiveValue => (byte)((_processorPortValue & _processorPortDirection) | (~_processorPortDirection & 0xFF));
+
+        [HotPath]
+        private int GetVicBankBase()
+        {
+            return ((~_cia2.EffectivePortA) & 0x03) * 0x4000;
+        }
+
+        [HotPath]
+        private byte ReadVicMemory(ushort address)
+        {
+            if ((address >= 0x1000 && address <= 0x1FFF) ||
+                (address >= 0x9000 && address <= 0x9FFF))
+            {
+                return _characterRom[address & 0x0FFF];
+            }
+
+            return _ram[address];
+        }
 
         private C64MemoryBankState CreateMemoryBankState()
         {
@@ -647,6 +874,7 @@ namespace CopperMod.Sid
                 IsCharacterRomVisible());
         }
 
+        [HotPath]
         private byte ReadIo(ushort address, long readCycle)
         {
             if (address >= 0xD000 && address <= 0xD3FF)
@@ -675,9 +903,15 @@ namespace CopperMod.Sid
                 return value;
             }
 
+            if (address >= 0xD800 && address <= 0xDBFF)
+            {
+                return (byte)(0xF0 | _colorRam[address & 0x03FF]);
+            }
+
             return 0;
         }
 
+        [HotPath]
         private void WriteIo(ushort address, byte value, long writeCycle)
         {
             if (address >= 0xD000 && address <= 0xD3FF)
@@ -709,14 +943,22 @@ namespace CopperMod.Sid
             {
                 _cia2.Write((byte)address, value);
                 RefreshInterruptLines();
+                return;
+            }
+
+            if (address >= 0xD800 && address <= 0xDBFF)
+            {
+                _colorRam[address & 0x03FF] = (byte)(value & 0x0F);
             }
         }
 
+        [HotPath]
         private long GetDefaultPsidCiaTimerAIntervalCycles()
         {
             return Math.Max(1, SidIntegerMath.DivRoundNearest(_clock.CpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz));
         }
 
+        [HotPath]
         private static void WriteOutputFrame(Span<float> destination, int channelCount, int outputFrame, float sample)
         {
             var offset = outputFrame * channelCount;

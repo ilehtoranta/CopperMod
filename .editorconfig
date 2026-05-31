@@ -1,0 +1,8 @@
+root = true
+
+[*.cs]
+dotnet_diagnostic.CMPERF001.severity = error
+dotnet_diagnostic.CMPERF002.severity = error
+dotnet_diagnostic.CMPERF003.severity = error
+dotnet_diagnostic.CMPERF004.severity = error
+dotnet_diagnostic.CMPERF005.severity = error
