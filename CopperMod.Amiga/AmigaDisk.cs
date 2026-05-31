@@ -1488,8 +1488,10 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            foreach (var offset in GetSyncOffsets(drive, stream, track, length))
+            var syncOffsetCount = GetSyncOffsets(drive, stream, track, length);
+            for (var syncOffsetIndex = 0; syncOffsetIndex < syncOffsetCount; syncOffsetIndex++)
             {
+                var offset = stream.SyncCacheOffsets[syncOffsetIndex];
                 var completionPosition = GetFirstCompletionAfter(offset + 16, length, startPosition);
                 while (completionPosition <= endPositionAbsolute)
                 {
@@ -1506,22 +1508,25 @@ namespace CopperMod.Amiga
             }
         }
 
-        private int[] GetSyncOffsets(AmigaFloppyDrive drive, DiskStreamState stream, AmigaEncodedTrack track, int length)
+        private int GetSyncOffsets(AmigaFloppyDrive drive, DiskStreamState stream, AmigaEncodedTrack track, int length)
         {
             if (stream.SyncCacheWord == _dsksync &&
                 stream.SyncCacheCylinder == drive.Cylinder &&
                 stream.SyncCacheHead == drive.Head &&
                 stream.SyncCacheTrackLength == length)
             {
-                return stream.SyncCacheOffsets;
+                return stream.SyncCacheOffsetCount;
             }
 
-            var offsets = new List<int>();
+            var offsetCount = 0;
             for (var offset = 0; offset < length; offset++)
             {
                 if (track.ReadUInt16(offset) == _dsksync)
                 {
-                    offsets.Add(offset);
+                    if (offsetCount < stream.SyncCacheOffsets.Length)
+                    {
+                        stream.SyncCacheOffsets[offsetCount++] = offset;
+                    }
                 }
             }
 
@@ -1529,8 +1534,8 @@ namespace CopperMod.Amiga
             stream.SyncCacheCylinder = drive.Cylinder;
             stream.SyncCacheHead = drive.Head;
             stream.SyncCacheTrackLength = length;
-            stream.SyncCacheOffsets = offsets.ToArray();
-            return stream.SyncCacheOffsets;
+            stream.SyncCacheOffsetCount = offsetCount;
+            return stream.SyncCacheOffsetCount;
         }
 
         private static double GetFirstCompletionAfter(double completionPosition, int trackLength, double startPosition)
@@ -1683,6 +1688,8 @@ namespace CopperMod.Amiga
 
         private sealed class DiskStreamState
         {
+            private const int MaxSyncCacheOffsets = 16384;
+
             public int Cylinder { get; set; }
 
             public int Head { get; set; }
@@ -1701,7 +1708,9 @@ namespace CopperMod.Amiga
 
             public int SyncCacheTrackLength { get; set; }
 
-            public int[] SyncCacheOffsets { get; set; } = Array.Empty<int>();
+            public int[] SyncCacheOffsets { get; } = new int[MaxSyncCacheOffsets];
+
+            public int SyncCacheOffsetCount { get; set; }
 
             public void Reset()
             {
@@ -1719,7 +1728,7 @@ namespace CopperMod.Amiga
                 SyncCacheCylinder = -1;
                 SyncCacheHead = -1;
                 SyncCacheTrackLength = 0;
-                SyncCacheOffsets = Array.Empty<int>();
+                SyncCacheOffsetCount = 0;
             }
         }
 

@@ -218,21 +218,18 @@ namespace CopperMod.Amiga
             return result;
         }
 
+        [HotPath]
         public void AdvanceTo(long targetCycle, IList<AmigaCiaInterruptEvent> interruptEvents)
         {
             _timerA.AdvanceTo(
                 targetCycle,
-                cycle =>
-                {
-                    SetPending(TimerAInterruptMask, cycle, interruptEvents);
-                    if (_timerB.CountsTimerAUnderflows)
-                    {
-                        _timerB.CountExternalEvent(cycle, timerBCycle => SetPending(TimerBInterruptMask, timerBCycle, interruptEvents));
-                    }
-                });
+                this,
+                TimerAInterruptMask,
+                interruptEvents,
+                _timerB.CountsTimerAUnderflows ? _timerB : null);
             if (!_timerB.CountsTimerAUnderflows)
             {
-                _timerB.AdvanceTo(targetCycle, cycle => SetPending(TimerBInterruptMask, cycle, interruptEvents));
+                _timerB.AdvanceTo(targetCycle, this, TimerBInterruptMask, interruptEvents, null);
             }
         }
 
@@ -425,7 +422,12 @@ namespace CopperMod.Amiga
                 return cycle <= maxCycle ? cycle : null;
             }
 
-            public void AdvanceTo(long targetCycle, Action<long> underflow)
+            public void AdvanceTo(
+                long targetCycle,
+                AmigaCia cia,
+                byte interruptMask,
+                IList<AmigaCiaInterruptEvent> interruptEvents,
+                CiaTimer? timerBUnderflowCounter)
             {
                 if (!Running || !CountsCpu || targetCycle < _nextTickCycle)
                 {
@@ -440,7 +442,8 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    underflow(underflowCycle);
+                    cia.SetPending(interruptMask, underflowCycle, interruptEvents);
+                    timerBUnderflowCounter?.CountExternalEvent(underflowCycle, cia, TimerBInterruptMask, interruptEvents);
                     Counter = LatchTicks;
                     _nextTickCycle = underflowCycle + CpuCyclesPerCiaTick;
                     if (OneShot)
@@ -460,7 +463,11 @@ namespace CopperMod.Amiga
                 _nextTickCycle += ticks * CpuCyclesPerCiaTick;
             }
 
-            public void CountExternalEvent(long cycle, Action<long> underflow)
+            public void CountExternalEvent(
+                long cycle,
+                AmigaCia cia,
+                byte interruptMask,
+                IList<AmigaCiaInterruptEvent> interruptEvents)
             {
                 if (!Running || Counter <= 0)
                 {
@@ -473,7 +480,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                underflow(cycle);
+                cia.SetPending(interruptMask, cycle, interruptEvents);
                 Counter = LatchTicks;
                 _nextTickCycle = NextCiaTickAfter(cycle);
                 if (OneShot)

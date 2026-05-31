@@ -501,7 +501,7 @@ namespace CopperMod.Amiga
                     beforeDeviceAdvance?.Invoke(previousCycle, _machine.Cpu.State.Cycles);
                     _machine.Bus.AdvanceRasterTo(_machine.Cpu.State.Cycles);
                     _machine.Bus.AdvanceCiasTo(_machine.Cpu.State.Cycles);
-                    _machine.Bus.AdvanceDmaTo(_machine.Cpu.State.Cycles);
+                    _machine.Bus.AdvanceDmaTo(_machine.Cpu.State.Cycles, advanceLiveAgnus: false);
                     _machine.DispatchPendingHardwareInterrupt();
                     instructions++;
                     if (_bootDiskReadCompleted && runMode == AmigaBootRunMode.StopAfterBootDiskRead)
@@ -536,7 +536,7 @@ namespace CopperMod.Amiga
                 _machine.Cpu.State.ProgramCounter,
                 instructions,
                 completed,
-                _diagnostics.ToArray());
+                _diagnostics);
         }
 
         private void SkipDosBootBlockHeaderIfNeeded()

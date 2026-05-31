@@ -144,7 +144,7 @@ public sealed class CopperScreenBootTests
 			}
 
 			if (sawPostSwapTransfer &&
-				IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, display, visual, diskTwoChecksumChanges))
+				IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, display, visual, diskTwoChecksumChanges, emulator.Framebuffer))
 			{
 				reachedDiskTwoScene = true;
 				break;
@@ -1752,8 +1752,10 @@ public sealed class CopperScreenBootTests
 		string statusText,
 		OcsDisplaySnapshot display,
 		FrameVisualMetrics visual,
-		int diskTwoChecksumChanges)
+		int diskTwoChecksumChanges,
+		IReadOnlyList<int> framebuffer)
 	{
+		var edge = MeasureShadowEdgeStrips(framebuffer);
 		return statusText.StartsWith("boot program running:", StringComparison.Ordinal) &&
 			!ContainsFatalBootStatus(statusText) &&
 			display.LastBitplaneNonZeroPixels > 40_000 &&
@@ -1763,7 +1765,10 @@ public sealed class CopperScreenBootTests
 			display.LastSpriteNonZeroPixels > 16 &&
 			visual.NonBlackPixels > 40_000 &&
 			visual.DistinctColors >= 32 &&
-			diskTwoChecksumChanges >= 5;
+			diskTwoChecksumChanges >= 5 &&
+			edge.LeftOuterNonBlackPixels <= 128 &&
+			edge.RightOuterNonBlackPixels <= 128 &&
+			edge.RightInnerBlackPixels <= 8_000;
 	}
 
 	private static string BuildShadowOfTheBeastDiskTwoDiagnostic(
@@ -1785,6 +1790,7 @@ public sealed class CopperScreenBootTests
 		var diagnosticVisual = visual.NonBlackPixels == 0 && visual.DistinctColors == 0
 			? MeasureFrame(emulator.Framebuffer)
 			: visual;
+		var edge = MeasureShadowEdgeStrips(emulator.Framebuffer);
 		return
 			"Expected Shadow of the Beast IPF to swap DF0 to disk 2 and reach the animated parallax scene. " +
 			$"frame={frame}, firePulses={firePulses}, idleFrames={idleFrames}, swappedToDiskTwo={swappedToDiskTwo}, " +
@@ -1806,6 +1812,9 @@ public sealed class CopperScreenBootTests
 			$"colorIndexes=[{BuildBitplaneColorDiagnostic(display)}], " +
 			$"spritePixels={display.LastSpriteNonZeroPixels}, " +
 			$"spriteBox={display.LastSpriteMinX},{display.LastSpriteMinY}-{display.LastSpriteMaxX},{display.LastSpriteMaxY}, " +
+			$"displayDma={display.LastBitplaneDmaFetches}/{display.LastSpriteDmaFetches}, missedSpriteSlots={display.LastMissedSpriteDmaSlots}, " +
+			$"displayDmaCycles={display.LastFirstDisplayDmaCycle}-{display.LastLastDisplayDmaCycle}, " +
+			$"edgeLeft={edge.LeftOuterNonBlackPixels}, edgeRight={edge.RightOuterNonBlackPixels}, rightInnerBlack={edge.RightInnerBlackPixels}, " +
 			$"nonBlack={diagnosticVisual.NonBlackPixels}, colors={diagnosticVisual.DistinctColors}, checksumChangesAfterDisk2={diskTwoChecksumChanges}, " +
 			$"checksum=0x{diagnosticVisual.Checksum:X8}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, " +
 			$"adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}. " +
@@ -1929,7 +1938,7 @@ public sealed class CopperScreenBootTests
 				}
 
 				previousChecksum = visual.Checksum;
-				if (IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, emulator.DisplaySnapshot, visual, checksumChanges))
+				if (IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, emulator.DisplaySnapshot, visual, checksumChanges, emulator.Framebuffer))
 				{
 					reachedScene = true;
 					break;
@@ -2078,6 +2087,45 @@ public sealed class CopperScreenBootTests
 		return new FrameVisualMetrics(nonBlack, colors.Count, checksum);
 	}
 
+	private static ShadowEdgeMetrics MeasureShadowEdgeStrips(IReadOnlyList<int> framebuffer)
+	{
+		const int Black = unchecked((int)0xFF000000);
+		const int Width = AmigaConstants.PalLowResWidth;
+		const int Height = AmigaConstants.PalLowResHeight;
+		const int OuterStrip = 8;
+		const int RightInnerStart = Width - 32;
+		const int RightInnerStop = Width - OuterStrip;
+		var leftOuter = 0;
+		var rightOuter = 0;
+		var rightInnerBlack = 0;
+		for (var y = 0; y < Height; y++)
+		{
+			var row = y * Width;
+			for (var x = 0; x < OuterStrip; x++)
+			{
+				if (framebuffer[row + x] != Black)
+				{
+					leftOuter++;
+				}
+
+				if (framebuffer[row + Width - OuterStrip + x] != Black)
+				{
+					rightOuter++;
+				}
+			}
+
+			for (var x = RightInnerStart; x < RightInnerStop; x++)
+			{
+				if (framebuffer[row + x] == Black)
+				{
+					rightInnerBlack++;
+				}
+			}
+		}
+
+		return new ShadowEdgeMetrics(leftOuter, rightOuter, rightInnerBlack);
+	}
+
 	private readonly struct FrameVisualMetrics
 	{
 		public FrameVisualMetrics(int nonBlackPixels, int distinctColors, uint checksum)
@@ -2092,6 +2140,22 @@ public sealed class CopperScreenBootTests
 		public int DistinctColors { get; }
 
 		public uint Checksum { get; }
+	}
+
+	private readonly struct ShadowEdgeMetrics
+	{
+		public ShadowEdgeMetrics(int leftOuterNonBlackPixels, int rightOuterNonBlackPixels, int rightInnerBlackPixels)
+		{
+			LeftOuterNonBlackPixels = leftOuterNonBlackPixels;
+			RightOuterNonBlackPixels = rightOuterNonBlackPixels;
+			RightInnerBlackPixels = rightInnerBlackPixels;
+		}
+
+		public int LeftOuterNonBlackPixels { get; }
+
+		public int RightOuterNonBlackPixels { get; }
+
+		public int RightInnerBlackPixels { get; }
 	}
 
 	private readonly struct ShadowDiskTraceFrameEntry

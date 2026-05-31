@@ -74,6 +74,7 @@ internal sealed class CopperScreenProfile
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
 			.WithFloppyDriveCount(FloppyDriveCount)
+			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
 	}
 

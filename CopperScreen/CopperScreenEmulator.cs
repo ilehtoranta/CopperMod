@@ -11,6 +11,7 @@ internal sealed class CopperScreenEmulator
 	private const int DefaultAudioChannels = 2;
 	private const int DiskSwapEjectFrames = 25;
 	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+	private const string RunningStatusText = "boot program running:";
 	private readonly AmigaMachine _machine;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
@@ -45,6 +46,7 @@ internal sealed class CopperScreenEmulator
 	private bool _joystickRight;
 	private bool _joystickPrimaryFirePressed;
 	private bool _joystickSecondFirePressed;
+	private string _diskName;
 
 	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
 	{
@@ -60,8 +62,9 @@ internal sealed class CopperScreenEmulator
 		_previousInterlaceFrame = new int[Framebuffer.Length];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DiskPath;
+		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
 		_initialDiskImageOverride = initialDiskImageOverride;
-		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : Path.GetFileName(DiskPath));
+		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
 	}
 
 	public int Width { get; }
@@ -91,7 +94,7 @@ internal sealed class CopperScreenEmulator
 		_machine.Cpu.State.LastInstructionProgramCounter,
 		_machine.Cpu.State.StatusRegister);
 
-	public string DiskName => DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
+	public string DiskName => _diskName;
 
 	public string ProfileName => _profile.DisplayName;
 
@@ -128,8 +131,14 @@ internal sealed class CopperScreenEmulator
 
 	public CopperScreenDriveState[] CaptureDriveStates()
 	{
-		var disk = _machine.Bus.Disk.CaptureSnapshot();
 		var drives = new CopperScreenDriveState[4];
+		CaptureDriveStates(drives);
+		return drives;
+	}
+
+	public void CaptureDriveStates(Span<CopperScreenDriveState> drives)
+	{
+		var disk = _machine.Bus.Disk.CaptureSnapshot();
 		for (var driveIndex = 0; driveIndex < drives.Length; driveIndex++)
 		{
 			var drive = GetDrive(driveIndex);
@@ -144,8 +153,6 @@ internal sealed class CopperScreenEmulator
 				connected && drive.Selected,
 				connected && disk.ActiveDma && disk.ActiveDmaDrive == driveIndex);
 		}
-
-		return drives;
 	}
 
 	public static CopperScreenEmulator Create(string[] args, string baseDirectory)
@@ -285,13 +292,14 @@ internal sealed class CopperScreenEmulator
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		DiskPath = fullPath;
+		_diskName = Path.GetFileName(fullPath);
 		if (_bootAttempted && markChanged)
 		{
 			_pendingDiskImage = disk;
 			_pendingDiskPath = fullPath;
 			_pendingDiskInsertFrames = DiskSwapEjectFrames;
 			EjectAllDrives();
-			StatusText = "changing disk to " + Path.GetFileName(fullPath);
+			StatusText = "changing disk to " + _diskName;
 			return true;
 		}
 
@@ -303,7 +311,7 @@ internal sealed class CopperScreenEmulator
 			InsertDiskSet(disk, fullPath, markChanged);
 		}
 
-		StatusText = "inserted " + Path.GetFileName(fullPath);
+		StatusText = "inserted " + _diskName;
 		return true;
 	}
 
@@ -414,7 +422,7 @@ internal sealed class CopperScreenEmulator
 		_frameAudio.AsSpan().Clear();
 		_machine.ResetHardware();
 		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
-		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : Path.GetFileName(DiskPath));
+		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
 	}
 
 	public bool TogglePaused()
@@ -544,6 +552,7 @@ internal sealed class CopperScreenEmulator
 		_machine.Bus.Keyboard.KeyUp(key, _machine.Cpu.State.Cycles);
 	}
 
+	[HotPath]
 	public void RenderNextFrame()
 	{
 		ApplyInputState();
@@ -609,7 +618,25 @@ internal sealed class CopperScreenEmulator
 
 		_targetCycle += PalFrameCycles;
 		BeginFrameAudio(_targetCycle);
-		var result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
+		var useLiveAgnusForPresentation = _machine.Bus.LiveAgnusDmaEnabled;
+		if (useLiveAgnusForPresentation)
+		{
+			_machine.Bus.SetLiveAgnusDmaEnabled(false);
+		}
+
+		AmigaBootResult result;
+		try
+		{
+			result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
+		}
+		finally
+		{
+			if (useLiveAgnusForPresentation)
+			{
+				_machine.Bus.SetLiveAgnusDmaEnabled(true);
+			}
+		}
+
 		FinishFrameAudio();
 		if (HandleBootResult(result))
 		{
@@ -629,6 +656,7 @@ internal sealed class CopperScreenEmulator
 		AdvanceInputPulse();
 	}
 
+	[HotPath]
 	public int RenderAudio(Span<float> destination, int sampleRate, int channels)
 	{
 		if (sampleRate <= 0 || channels <= 0)
@@ -684,6 +712,7 @@ internal sealed class CopperScreenEmulator
 		return frames;
 	}
 
+	[HotPathAllocationAllowed("Presentation snapshots allocate a copied framebuffer for UI handoff outside the emulator frame hot path.")]
 	internal CopperScreenPresentationFrame PreparePresentationFrame(long frameNumber)
 	{
 		var bgra = new int[Framebuffer.Length];
@@ -811,9 +840,10 @@ internal sealed class CopperScreenEmulator
 		InsertDiskSet(_pendingDiskImage, insertedPath, markChanged: true);
 		_pendingDiskImage = null;
 		_pendingDiskPath = null;
+		_diskName = insertedPath == null ? "No disk" : Path.GetFileName(insertedPath);
 		StatusText = insertedPath == null
 			? "inserted disk"
-			: "inserted " + Path.GetFileName(insertedPath);
+			: "inserted " + _diskName;
 	}
 
 	private void StabilizeInterlaceFrame()
@@ -882,7 +912,7 @@ internal sealed class CopperScreenEmulator
 
 		var fatalStatus = BuildFatalStatus(result.Diagnostics);
 		StatusText = fatalStatus == null
-			? $"boot program running: PC=${result.FinalProgramCounter:X6}"
+			? RunningStatusText
 			: fatalStatus;
 		if (fatalStatus == null)
 		{

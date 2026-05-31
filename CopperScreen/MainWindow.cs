@@ -216,7 +216,24 @@ internal sealed class MainWindow : Window
 
 	private string BuildCrashLogState(CopperScreenState state)
 	{
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
+		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
+	}
+
+	private static string FormatDriveStatus(CopperScreenDriveState drive)
+	{
+		if (!drive.Connected)
+		{
+			return $"DF{drive.Index} disconnected";
+		}
+
+		if (!drive.HasDisk)
+		{
+			return $"DF{drive.Index} empty";
+		}
+
+		var flags = string.Concat(drive.ActiveDma ? 'D' : drive.MotorOn ? 'M' : '-', drive.Selected ? 'S' : '-');
+		return $"DF{drive.Index} cyl {drive.Cylinder:00}.{drive.Head} {flags}";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)

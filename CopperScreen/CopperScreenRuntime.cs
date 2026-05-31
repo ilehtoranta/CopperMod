@@ -32,8 +32,6 @@ internal readonly record struct CopperScreenState(
 	string ProfileName,
 	string DiskName,
 	string? DiskPath,
-	string DriveStatusText,
-	string ProgramCounterText,
 	CopperScreenCpuState Cpu,
 	CopperScreenDriveState[] Drives,
 	string StatusText,
@@ -62,6 +60,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private readonly ICopperScreenAudioOutput? _audio;
 	private readonly bool _disposeAudio;
 	private readonly float[] _audioBuffer;
+	private readonly CopperScreenDriveState[] _driveStates = new CopperScreenDriveState[4];
 	private readonly ConcurrentQueue<CopperScreenCommand> _commands = new ConcurrentQueue<CopperScreenCommand>();
 	private readonly AutoResetEvent _wake = new AutoResetEvent(false);
 	private readonly object _presentationSync = new object();
@@ -433,11 +432,10 @@ internal sealed class CopperScreenRuntime : IDisposable
 					return;
 				}
 
-			var stopwatch = Stopwatch.StartNew();
+			var startTimestamp = Stopwatch.GetTimestamp();
 			_emulator.RenderNextFrame();
 			var audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
-			stopwatch.Stop();
-			_lastEmulationFrameMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
+			_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
 			if (_audio != null && !_audio.Submit(_audioBuffer.AsSpan(0, audioFrames * AudioChannels)))
 			{
 				_audioSubmitFailures++;
@@ -470,10 +468,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_emulator.ProfileName,
 			_emulator.DiskName,
 			_emulator.DiskPath,
-			_emulator.DriveStatusText,
-			_emulator.ProgramCounterText,
 			_emulator.CpuState,
-			_emulator.CaptureDriveStates(),
+			CaptureDriveStates(),
 			_emulator.StatusText,
 			_emulator.IsPaused,
 			_emulator.IsWorkbenchHandoffPending,
@@ -487,6 +483,12 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_droppedFrames,
 			_audioSubmitFailures,
 			_lastEmulationFrameMilliseconds);
+	}
+
+	private CopperScreenDriveState[] CaptureDriveStates()
+	{
+		_emulator.CaptureDriveStates(_driveStates);
+		return _driveStates;
 	}
 
 	private sealed class CopperScreenCommand

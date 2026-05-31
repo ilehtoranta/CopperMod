@@ -335,6 +335,51 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void TimedDisplayReadsBitplaneMemoryAtDataFetchSlotWithinRow()
+    {
+        var lineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
+        var fetchCycle = CycleForOutputRowHorizontal(StandardY, 0x38, lineCycles);
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+
+        var beforeFetchBus = CreateOneBitplaneFetchRaceBus();
+        beforeFetchBus.WriteChipWordForDeviceWithResult(
+            AmigaBusRequester.Blitter,
+            AmigaBusAccessKind.Blitter,
+            0x1000,
+            0x8000,
+            fetchCycle - AgnusChipSlotScheduler.SlotCycles);
+        var beforeFetchFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        beforeFetchBus.Display.RenderFrame(beforeFetchFrame, 0, frameCycles);
+        Assert.Equal(0xFFFF0000u, Pixel(beforeFetchFrame, StandardX, StandardY));
+
+        var afterFetchBus = CreateOneBitplaneFetchRaceBus();
+        afterFetchBus.WriteChipWordForDeviceWithResult(
+            AmigaBusRequester.Blitter,
+            AmigaBusAccessKind.Blitter,
+            0x1000,
+            0x8000,
+            fetchCycle + AgnusChipSlotScheduler.SlotCycles);
+        var afterFetchFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        afterFetchBus.Display.RenderFrame(afterFetchFrame, 0, frameCycles);
+        Assert.Equal(0xFF000000u, Pixel(afterFetchFrame, StandardX, StandardY));
+
+        static AmigaBus CreateOneBitplaneFetchRaceBus()
+        {
+            var bus = new AmigaBus();
+            bus.WriteWord(0x00DFF180, 0x0000);
+            bus.WriteWord(0x00DFF182, 0x0F00);
+            bus.WriteWord(0x00DFF096, 0x8300);
+            bus.WriteWord(0x00DFF092, 0x0038);
+            bus.WriteWord(0x00DFF094, 0x0038);
+            bus.WriteWord(0x00DFF0E0, 0x0000);
+            bus.WriteWord(0x00DFF0E2, 0x1000);
+            bus.WriteWord(0x00DFF100, 0x1000);
+            BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+            return bus;
+        }
+    }
+
+    [Fact]
     public void DisplayHonorsDisplayWindowPosition()
     {
         var bus = new AmigaBus();
@@ -2116,7 +2161,9 @@ public sealed class AmigaDiskDisplayTests
     [Fact]
     public void BlitterRequestsLevelThreeInterruptOnCompletion()
     {
-        var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+        var machine = new AmigaMachine(AmigaMachineOptions
+            .ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+            .WithLiveAgnusDma(false));
         var bus = machine.Bus;
         BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
         machine.Bus.WriteLong(0x6C, 0x0000_2000);
@@ -2215,7 +2262,7 @@ public sealed class AmigaDiskDisplayTests
 
         var normalCycle = 0L;
         _ = normalBus.ReadWord(0x00001000, ref normalCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.Equal(0, normalCycle);
+        Assert.Equal(AgnusChipSlotScheduler.SlotCycles, normalCycle);
         Assert.True(normalBus.Blitter.CaptureSnapshot().Busy);
     }
 
@@ -2996,7 +3043,9 @@ public sealed class AmigaDiskDisplayTests
     [Fact]
     public void EnabledDiskBlockInterruptDispatchesLevelOneAutovector()
     {
-        var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+        var machine = new AmigaMachine(AmigaMachineOptions
+            .ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+            .WithLiveAgnusDma(false));
         machine.Bus.WriteLong(0x64, 0x0000_2000);
         machine.Cpu.Reset(0x1000, 0x3000);
 

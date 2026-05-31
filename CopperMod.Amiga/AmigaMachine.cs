@@ -31,6 +31,8 @@ namespace CopperMod.Amiga
 
         public bool CaptureBusAccesses { get; private set; } = true;
 
+        public bool LiveAgnusDma { get; private set; }
+
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
@@ -76,6 +78,12 @@ namespace CopperMod.Amiga
         public AmigaMachineOptions WithBusAccessLogging(bool enabled)
         {
             CaptureBusAccesses = enabled;
+            return this;
+        }
+
+        public AmigaMachineOptions WithLiveAgnusDma(bool enabled)
+        {
+            LiveAgnusDma = enabled;
             return this;
         }
 
@@ -140,7 +148,8 @@ namespace CopperMod.Amiga
                 options.ExpansionRamSize,
                 options.ExpansionRamBase,
                 options.FloppyDriveCount,
-                options.CaptureBusAccesses);
+                options.CaptureBusAccesses,
+                options.LiveAgnusDma);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }

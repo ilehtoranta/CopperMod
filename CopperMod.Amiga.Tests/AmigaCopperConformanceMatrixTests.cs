@@ -26,7 +26,8 @@ public sealed class AmigaCopperConformanceMatrixTests
             "blitter-wait",
             "interrupts",
             "register-masking",
-            "restricted-registers"
+            "restricted-registers",
+            "undocumented-ocs"
         };
 
         var groups = Rows.Select(row => row.Group).Distinct().ToArray();
@@ -67,8 +68,17 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "WAIT masks beam bits":
                 WaitMasksBeamBits();
                 break;
+            case "WAIT full-mask resolves exact beam target":
+                WaitFullMaskResolvesExactBeamTarget();
+                break;
             case "SKIP suppresses the following instruction":
                 SkipSuppressesFollowingInstruction();
+                break;
+            case "SKIP does not skip WAIT instructions":
+                SkipDoesNotSkipWaitInstructions();
+                break;
+            case "SKIP-suppressed dangerous MOVE stops Copper":
+                SkipSuppressedDangerousMoveStopsCopper();
                 break;
             case "BFD set ignores blitter busy":
                 BfdSetIgnoresBlitterBusy();
@@ -81,6 +91,12 @@ public sealed class AmigaCopperConformanceMatrixTests
                 break;
             case "Copper danger register protection via COPCON":
                 CopperDangerRegisterProtectionViaCopcon();
+                break;
+            case "BFD clear waits for live blitter completion cycle":
+                BfdClearWaitsForLiveBlitterCompletionCycle();
+                break;
+            case "cycle slot contention with bitplane and sprite DMA":
+                CopperContendsWithBitplaneDmaSlots();
                 break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for copper row '{row.Name}'.");
@@ -107,13 +123,17 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("dma-control", "DMAEN and COPEN gate timed copper execution"),
         Executable("beam-compare", "horizontal compare is greater-or-equal"),
         Executable("wait", "WAIT masks beam bits"),
+        Executable("wait", "WAIT full-mask resolves exact beam target"),
         Executable("skip", "SKIP suppresses the following instruction"),
+        Executable("undocumented-ocs", "SKIP does not skip WAIT instructions"),
+        Executable("undocumented-ocs", "SKIP-suppressed dangerous MOVE stops Copper"),
         Executable("blitter-wait", "BFD set ignores blitter busy"),
         Executable("interrupts", "Copper MOVE can request INTREQ"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
         Executable("restricted-registers", "Copper danger register protection via COPCON"),
-        Pending("blitter-wait", "BFD clear waits for live blitter completion cycle", "Needs shared copper/blitter DMA slot timing."),
-        Pending("dma-control", "cycle slot contention with bitplane and sprite DMA", "Full DMA slot scheduler coverage lives outside the current display renderer.")
+        Executable("blitter-wait", "BFD clear waits for live blitter completion cycle"),
+        Executable("dma-control", "cycle slot contention with bitplane and sprite DMA"),
+        Pending("undocumented-ocs", "COPJMP 3-stage wait-wakeup and refresh-slot behavior", "Thread-derived behavior needs a fuller Copper/Agnus bus state-machine model.")
     };
 
     private static void MoveWritesCustomRegisters()
@@ -224,6 +244,28 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.Equal(0xFF00FF00u, Pixel(frame, 0, triggerY));
     }
 
+    private static void WaitFullMaskResolvesExactBeamTarget()
+    {
+        var bus = new AmigaBus();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0180, 0x0F00),
+            (0x2F41, 0xFFFE),
+            (0x0180, 0x00F0),
+            (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, 1, CopperList);
+
+        var frame = RenderLowResFrame(bus);
+        var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
+        var triggerX = (0x40 - 0x38) * 2;
+        var settledX = triggerX + 64;
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, triggerX, triggerY - 1));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, triggerX, triggerY));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, settledX, triggerY));
+    }
+
     private static void SkipSuppressesFollowingInstruction()
     {
         var bus = new AmigaBus();
@@ -239,6 +281,43 @@ public sealed class AmigaCopperConformanceMatrixTests
         var frame = RenderLowResFrame(bus);
 
         Assert.Equal(0xFF0000FFu, Pixel(frame, 0, 0));
+    }
+
+    private static void SkipDoesNotSkipWaitInstructions()
+    {
+        var bus = new AmigaBus();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0001, 0x00FF),
+            (0x2F01, 0xFFFE),
+            (0x0180, 0x0F00),
+            (0x0180, 0x000F),
+            (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, 1, CopperList);
+
+        var frame = RenderLowResFrame(bus);
+        var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, triggerY - 1));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 0, triggerY));
+    }
+
+    private static void SkipSuppressedDangerousMoveStopsCopper()
+    {
+        var bus = new AmigaBus();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0001, 0x00FF),
+            (0x0010, 0x2222),
+            (0x0180, 0x0F00),
+            (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, 1, CopperList);
+
+        var frame = RenderLowResFrame(bus);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, 0));
     }
 
     private static void BfdSetIgnoresBlitterBusy()
@@ -300,9 +379,73 @@ public sealed class AmigaCopperConformanceMatrixTests
         new AmigaCopper().ExecuteList(bus, CopperList, onMove: (offset, _) => moves.Add(offset));
 
         Assert.DoesNotContain((ushort)0x000E, moves);
+        Assert.DoesNotContain((ushort)0x002E, moves);
+        Assert.DoesNotContain((ushort)0x0010, moves);
+        Assert.Empty(moves);
+
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x002E, 0x0002),
+            (0x0010, 0x3333),
+            (0xFFFF, 0xFFFE));
+
+        new AmigaCopper().ExecuteList(bus, CopperList, onMove: (offset, _) => moves.Add(offset));
+
         Assert.Contains((ushort)0x002E, moves);
         Assert.Contains((ushort)0x0010, moves);
         Assert.Equal(2, moves.Count);
+    }
+
+    private static void BfdClearWaitsForLiveBlitterCompletionCycle()
+    {
+        var bus = new AmigaBus();
+        StartLongBlit(bus);
+        var expectedReadyCycle = bus.Blitter.GetPredictedCompletionCycle();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0001, 0x00FE),
+            (0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+            (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, 1, CopperList);
+        bus.WriteWord(0x00DFF096, 0x8280);
+
+        _ = RenderLowResFrame(bus, 0, FrameCycles());
+
+        var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+            write.Address == 0x09C &&
+            (write.Value & AmigaConstants.IntreqCopper) != 0);
+        Assert.True(intreqWrite.Cycle >= expectedReadyCycle);
+    }
+
+    private static void CopperContendsWithBitplaneDmaSlots()
+    {
+        var bus = new AmigaBus();
+        var sharedCycle = (0x2C * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
+            (0x38 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+
+        Assert.True(bus.TryReadDisplayDmaWord(
+            AmigaBusRequester.Bitplane,
+            AmigaBusAccessKind.Bitplane,
+            0x1000,
+            sharedCycle,
+            out _,
+            out var bitplane));
+        Assert.False(bus.TryReadDisplayDmaWord(
+            AmigaBusRequester.Sprite,
+            AmigaBusAccessKind.Sprite,
+            0x1000,
+            sharedCycle,
+            out _,
+            out _));
+
+        _ = bus.ReadLiveCopperDmaWord(CopperList, sharedCycle, out var copper);
+
+        Assert.Equal(sharedCycle, bitplane.GrantedCycle);
+        Assert.Equal(sharedCycle + AgnusChipSlotScheduler.SlotCycles, copper.GrantedCycle);
+        Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastDeniedFixedSlot?.Owner);
     }
 
     private static void StartLongBlit(AmigaBus bus)

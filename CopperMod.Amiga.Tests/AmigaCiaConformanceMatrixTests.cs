@@ -123,6 +123,7 @@ public sealed class AmigaCiaConformanceMatrixTests
         Executable("flag", "FLAG pin queues interrupt when enabled"),
         Pending("timer-a", "Timer A CNT external pulse mode", "External CNT pin modelling is outside current keyboard/game/demo inputs."),
         Pending("timer-b", "Timer B CNT and Timer-A-with-CNT modes", "CNT pin level and pulse source are not modelled yet."),
+        Pending("tod", "undocumented CIA TICK debounce delays TOD alarm interrupt", "Thread-derived 14-16 E-clock delay needs exact phase modelling before implementation."),
         Pending("keyboard-serial", "full CIA serial output shifter", "A500 keyboard input path is implemented; peripheral serial output is out of scope."),
         Pending("ports", "parallel printer/peripheral handshake breadth", "Out of scope for game/demo-relevant A500 PAL OCS.")
     };
