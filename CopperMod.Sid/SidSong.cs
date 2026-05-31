@@ -17,6 +17,7 @@ namespace CopperMod.Sid
         private readonly ModulePlaybackCapabilities _capabilities;
         private readonly IReadOnlyList<ModuleSubSongMetadata> _subSongs;
         private TimeSpan _position;
+        private SidSampleClock? _sampleClock;
         private int _currentSubSongIndex;
         private bool _channelWaveformCaptureEnabled;
 
@@ -89,14 +90,14 @@ namespace CopperMod.Sid
         public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
         {
             options ??= AudioRenderOptions.Default;
-            var clock = C64ClockProfile.FromSidClock(_module.Clock);
-            var cycles = GetCurrentTickCycleCount(clock);
-            return Math.Max(1, (int)Math.Round(cycles / clock.CpuClockHz * options.SampleRate));
+            var sampleClock = GetSampleClock(options);
+            return sampleClock.PeekFrameCount(_machine.Cycle, GetCurrentTickCycleCount());
         }
 
         public void Reset()
         {
             _position = TimeSpan.Zero;
+            _sampleClock = null;
             LastChannelWaveform = null;
             _machine.Reset(_currentSubSongIndex);
         }
@@ -115,10 +116,11 @@ namespace CopperMod.Sid
             }
 
             var options = AudioRenderOptions.Default;
-            var frames = GetCurrentTickFrameCount(options);
-            var buffer = new float[options.GetSampleCount(frames)];
-            while (_position + TimeSpan.FromSeconds(frames / (double)options.SampleRate) < position)
+            var targetCycle = SidIntegerMath.TimeSpanToCycles(position, _machine.Clock.CpuCyclesPerSecond);
+            while (_machine.Cycle + GetCurrentTickCycleCount() < targetCycle)
             {
+                var frames = GetCurrentTickFrameCount(options);
+                var buffer = new float[options.GetSampleCount(frames)];
                 RenderTick(buffer, options);
             }
         }
@@ -165,7 +167,10 @@ namespace CopperMod.Sid
         public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
         {
             options ??= AudioRenderOptions.Default;
-            var frames = GetCurrentTickFrameCount(options);
+            var sampleClock = GetSampleClock(options);
+            var tickCycles = GetCurrentTickCycleCount();
+            var sampleTargetCycles = sampleClock.PeekSampleTargets(_machine.Cycle, tickCycles);
+            var frames = sampleTargetCycles.Length;
             var samples = options.GetSampleCount(frames);
             if (destination.Length < samples)
             {
@@ -178,11 +183,16 @@ namespace CopperMod.Sid
                 _machine.Sid.BeginChannelCapture(frames, options.SampleRate);
             }
 
-            _machine.RenderFrame(slice, new AudioRenderOptionsAdapter(options.SampleRate, options.ChannelCount), GetCurrentTickCycleCount());
+            _machine.RenderFrame(
+                slice,
+                new AudioRenderOptionsAdapter(options.SampleRate, options.ChannelCount),
+                sampleTargetCycles,
+                tickCycles);
             LastChannelWaveform = ChannelWaveformCaptureEnabled
                 ? _machine.Sid.FinishChannelCapture()
                 : null;
-            _position += TimeSpan.FromSeconds(frames / (double)options.SampleRate);
+            sampleClock.AdvanceFrames(frames);
+            _position = SidIntegerMath.CyclesToTimeSpan(_machine.Cycle, _machine.Clock.CpuCyclesPerSecond);
             return new RenderResult(frames, samples, Position, false);
         }
 
@@ -226,14 +236,20 @@ namespace CopperMod.Sid
 
         private long GetCurrentTickCycleCount()
         {
-            return GetCurrentTickCycleCount(C64ClockProfile.FromSidClock(_module.Clock));
-        }
-
-        private long GetCurrentTickCycleCount(C64ClockProfile clock)
-        {
             return UsesCiaTiming(_module, _currentSubSongIndex)
                 ? Math.Max(1, _machine.PsidCiaTimerAIntervalCycles)
-                : clock.CyclesPerFrame;
+                : _machine.Clock.CyclesPerFrame;
+        }
+
+        private SidSampleClock GetSampleClock(AudioRenderOptions options)
+        {
+            var cpuCyclesPerSecond = _machine.Clock.CpuCyclesPerSecond;
+            if (_sampleClock == null || !_sampleClock.Matches(cpuCyclesPerSecond, options.SampleRate))
+            {
+                _sampleClock = new SidSampleClock(cpuCyclesPerSecond, options.SampleRate, _machine.Cycle);
+            }
+
+            return _sampleClock;
         }
 
         private static bool UsesCiaTiming(SidModule module, int subSongIndex)

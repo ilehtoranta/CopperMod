@@ -54,6 +54,12 @@ namespace CopperMod.Sid
             int rateCounter,
             int exponentialCounter,
             int envelopeState,
+            uint waveformDac,
+            bool pulseHigh,
+            bool syncSourceMsb,
+            bool ringModInverted,
+            bool triangleInverted,
+            bool noiseUsesPostShiftRegister,
             double waveformOutput,
             double voiceOutput)
         {
@@ -74,6 +80,12 @@ namespace CopperMod.Sid
             RateCounter = rateCounter;
             ExponentialCounter = exponentialCounter;
             EnvelopeState = envelopeState;
+            WaveformDac = waveformDac;
+            PulseHigh = pulseHigh;
+            SyncSourceMsb = syncSourceMsb;
+            RingModInverted = ringModInverted;
+            TriangleInverted = triangleInverted;
+            NoiseUsesPostShiftRegister = noiseUsesPostShiftRegister;
             WaveformOutput = waveformOutput;
             VoiceOutput = voiceOutput;
         }
@@ -114,8 +126,51 @@ namespace CopperMod.Sid
 
         public int EnvelopeState { get; }
 
+        public uint WaveformDac { get; }
+
+        public bool PulseHigh { get; }
+
+        public bool SyncSourceMsb { get; }
+
+        public bool RingModInverted { get; }
+
+        public bool TriangleInverted { get; }
+
+        public bool NoiseUsesPostShiftRegister { get; }
+
         public double WaveformOutput { get; }
 
         public double VoiceOutput { get; }
+    }
+
+    internal readonly struct SidWaveformTrace
+    {
+        public SidWaveformTrace(
+            uint waveformDac,
+            bool pulseHigh,
+            bool syncSourceMsb,
+            bool ringModInverted,
+            bool triangleInverted,
+            bool noiseUsesPostShiftRegister)
+        {
+            WaveformDac = waveformDac;
+            PulseHigh = pulseHigh;
+            SyncSourceMsb = syncSourceMsb;
+            RingModInverted = ringModInverted;
+            TriangleInverted = triangleInverted;
+            NoiseUsesPostShiftRegister = noiseUsesPostShiftRegister;
+        }
+
+        public uint WaveformDac { get; }
+
+        public bool PulseHigh { get; }
+
+        public bool SyncSourceMsb { get; }
+
+        public bool RingModInverted { get; }
+
+        public bool TriangleInverted { get; }
+
+        public bool NoiseUsesPostShiftRegister { get; }
     }
 }

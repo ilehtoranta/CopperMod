@@ -10,8 +10,10 @@ namespace CopperMod.Sid
         public const int MaxSidChips = 3;
         public const ushort DefaultSidBaseAddress = 0xD400;
         public const ushort DefaultBankRegister = 0x0037;
-        public const double PalCpuClock = 985248.0;
-        public const double NtscCpuClock = 1022727.0;
+        public const int PalCpuCyclesPerSecond = 985248;
+        public const int NtscCpuCyclesPerSecond = 1022727;
+        public const int PalCpuClock = PalCpuCyclesPerSecond;
+        public const int NtscCpuClock = NtscCpuCyclesPerSecond;
         public const int PalCyclesPerFrame = 19656;
         public const int NtscCyclesPerFrame = 17095;
         public const int PalRefreshHz = 50;

@@ -205,7 +205,13 @@ namespace CopperMod.Sid
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform)
         {
+            return RenderOutput(syncSource, model, out waveform, out _);
+        }
+
+        public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform, out SidWaveformTrace trace)
+        {
             waveform = RenderWaveform(syncSource, model);
+            trace = _lastWaveformTrace;
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -255,24 +261,46 @@ namespace CopperMod.Sid
             }
         }
 
+        private SidWaveformTrace _lastWaveformTrace;
+
         private double RenderWaveform(SidVoice? syncSource, SidChipModel model)
         {
             var waveformMask = _control & 0xF0;
+            var pulseDac = GetPulseDac();
+            var pulseHigh = pulseDac != 0;
+            var triangleDac = GetTriangleDac(
+                syncSource,
+                out var syncSourceMsb,
+                out var ringModInverted,
+                out var triangleInverted);
             if (waveformMask == 0)
             {
+                _lastWaveformTrace = new SidWaveformTrace(
+                    0,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false);
                 return 0;
             }
 
             if (model == SidChipModel.Mos6581 && waveformMask == 0x50)
             {
-                return RenderMos6581TrianglePulse(syncSource);
+                return RenderMos6581TrianglePulse(
+                    triangleDac,
+                    pulseDac,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted);
             }
 
             var outputs = 0;
             uint combinedDac = 0x0FFF;
             if ((waveformMask & 0x10) != 0)
             {
-                combinedDac &= GetTriangleDac(syncSource);
+                combinedDac &= triangleDac;
                 outputs++;
             }
 
@@ -284,10 +312,11 @@ namespace CopperMod.Sid
 
             if ((waveformMask & 0x40) != 0)
             {
-                combinedDac &= GetPulseDac();
+                combinedDac &= pulseDac;
                 outputs++;
             }
 
+            var noiseSelected = (waveformMask & 0x80) != 0;
             if ((waveformMask & 0x80) != 0)
             {
                 combinedDac &= GetNoiseDac();
@@ -296,39 +325,78 @@ namespace CopperMod.Sid
 
             if (outputs == 0)
             {
+                _lastWaveformTrace = new SidWaveformTrace(
+                    0,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false);
                 return 0;
             }
 
+            _lastWaveformTrace = new SidWaveformTrace(
+                combinedDac,
+                pulseHigh,
+                syncSourceMsb,
+                ringModInverted,
+                triangleInverted,
+                noiseSelected);
             return SidAnalog.ConvertWaveformDac12(combinedDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
-        private double RenderMos6581TrianglePulse(SidVoice? syncSource)
+        private double RenderMos6581TrianglePulse(
+            uint triangleDac,
+            uint pulseDac,
+            bool pulseHigh,
+            bool syncSourceMsb,
+            bool ringModInverted,
+            bool triangleInverted)
         {
-            var pulseDac = GetPulseDac();
             if (pulseDac == 0)
             {
+                _lastWaveformTrace = new SidWaveformTrace(
+                    0,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false);
                 return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
                     SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
             }
 
-            var triangle = GetTriangleDac(syncSource);
             var saw = GetSawDac();
             var contentionMask = (_phase >> 10) & 0x0FFF;
-            var contentionDac = (triangle & contentionMask) | ((triangle & saw) >> 1);
+            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
             const double mos6581TrianglePulseBias = -1.4;
+            _lastWaveformTrace = new SidWaveformTrace(
+                contentionDac,
+                pulseHigh,
+                syncSourceMsb,
+                ringModInverted,
+                triangleInverted,
+                noiseUsesPostShiftRegister: false);
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
         }
 
-        private uint GetTriangleDac(SidVoice? syncSource)
+        private uint GetTriangleDac(
+            SidVoice? syncSource,
+            out bool syncSourceMsb,
+            out bool ringModInverted,
+            out bool triangleInverted)
         {
             var phase = (_phase >> 11) & 0x0FFF;
             var invert = (_phase & PhaseMsb) != 0;
-            if ((_control & 0x04) != 0 && syncSource != null && (syncSource._phase & PhaseMsb) != 0)
+            syncSourceMsb = syncSource != null && (syncSource._phase & PhaseMsb) != 0;
+            ringModInverted = (_control & 0x04) != 0 && syncSourceMsb;
+            if (ringModInverted)
             {
                 invert = !invert;
             }
 
+            triangleInverted = invert;
             return invert ? phase ^ 0x0FFFu : phase;
         }
 

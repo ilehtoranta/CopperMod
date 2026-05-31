@@ -57,8 +57,8 @@ public sealed class SidFilterProfileTests
 	[Fact]
 	public void PalAndNtscClockedFiltersStayFinite()
 	{
-		var pal = CreateFilteredPulse(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, SidConstants.PalCpuClock);
-		var ntsc = CreateFilteredPulse(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, SidConstants.NtscCpuClock);
+		var pal = CreateFilteredPulse(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, SidConstants.PalCpuCyclesPerSecond);
+		var ntsc = CreateFilteredPulse(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, SidConstants.NtscCpuCyclesPerSecond);
 
 		var palSamples = CollectSamples(pal, warmupCycles: 4000, measuredCycles: 2000);
 		var ntscSamples = CollectSamples(ntsc, warmupCycles: 4000, measuredCycles: 2000);
@@ -228,13 +228,13 @@ public sealed class SidFilterProfileTests
 	private static SidChip CreateFilteredPulse(
 		SidChipModel model,
 		SidFilterProfileId profile,
-		double cpuClockHz = SidConstants.PalCpuClock,
+		int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
 		byte cutoffHigh = 0x90,
 		byte resonance = 0x80,
 		byte mode = 0x10,
 		ushort frequency = 0x05E8)
 	{
-		var chip = new SidChip(model, SidConstants.DefaultSidBaseAddress, cpuClockHz, profile);
+		var chip = new SidChip(model, SidConstants.DefaultSidBaseAddress, cpuCyclesPerSecond, profile);
 		WriteVoice(chip, voice: 0, frequency, control: 0x41);
 		chip.Write(0x02, 0x32);
 		chip.Write(0x03, 0x08);

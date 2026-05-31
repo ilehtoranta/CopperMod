@@ -81,6 +81,22 @@ public sealed class SidRenderTests
 
 		selector.SelectSubSong(1);
 
+		Assert.Equal(879, song.GetCurrentTickFrameCount(options));
+	}
+
+	[Fact]
+	public void GetCurrentTickFrameCountPeeksWithoutAdvancingSampleClock()
+	{
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram()));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+
+		Assert.Equal(879, song.GetCurrentTickFrameCount(options));
+		Assert.Equal(879, song.GetCurrentTickFrameCount(options));
+
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var result = song.RenderTick(buffer, options);
+
+		Assert.Equal(879, result.FramesWritten);
 		Assert.Equal(880, song.GetCurrentTickFrameCount(options));
 	}
 
@@ -97,7 +113,7 @@ public sealed class SidRenderTests
 
 		song.RenderTick(buffer, options);
 
-		Assert.Equal((long)Math.Round(SidConstants.PalCpuClock / SidConstants.CiaTimerRefreshHz), GetCpuCycle(song));
+		Assert.Equal(SidIntegerMath.DivRoundNearest(SidConstants.PalCpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz), GetCpuCycle(song));
 	}
 
 	[Fact]
@@ -124,7 +140,7 @@ public sealed class SidRenderTests
 
 		song.RenderTick(buffer, options);
 
-		var expectedFrames = (int)Math.Round(0x0BCB / SidConstants.PalCpuClock * options.SampleRate);
+		const int expectedFrames = 135;
 		Assert.Equal(735, firstFrames);
 		Assert.Equal(expectedFrames, song.GetCurrentTickFrameCount(options));
 	}
@@ -188,10 +204,9 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		for (var frame = 0; frame < 80; frame++)
 		{
-			song.RenderTick(buffer, options);
+			_ = RenderNextTick(song, options);
 		}
 
 		var writes = song.SidWrites;
@@ -210,11 +225,10 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var largestRange = 0.0f;
 		for (var frame = 0; frame < 371; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			if (frame < 330)
 			{
 				continue;
@@ -238,14 +252,14 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+		var lastBuffer = Array.Empty<float>();
 		for (var frame = 0; frame < 20; frame++)
 		{
-			song.RenderTick(buffer, options);
+			lastBuffer = RenderNextTick(song, options);
 		}
 
 		Assert.Equal(0xFFFF, GetCpuProgramCounter(song));
-		Assert.True(buffer.Max() - buffer.Min() > 0.005f);
+		Assert.True(lastBuffer.Max() - lastBuffer.Min() > 0.005f);
 	}
 
 	[Fact]
@@ -259,11 +273,10 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var peakRms = 0.0;
 		for (var frame = 0; frame < 96; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
 			Assert.All(buffer, sample => Assert.InRange(sample, -0.999f, 0.999f));
 			if (frame >= 8)
@@ -293,11 +306,10 @@ public sealed class SidRenderTests
 
 		selector.SelectSubSong(9);
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var quietestRms = double.MaxValue;
 		for (var frame = 0; frame < 32; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			if (frame >= 12)
 			{
 				quietestRms = Math.Min(quietestRms, Rms(buffer));
@@ -333,10 +345,9 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		for (var frame = 0; frame < 80; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			Assert.All(buffer, sample => Assert.InRange(sample, -0.999f, 0.999f));
 		}
 	}
@@ -354,11 +365,10 @@ public sealed class SidRenderTests
 		var selector = (IModuleSubSongSelector)song;
 		Assert.Equal(3, selector.CurrentSubSongIndex);
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var peakRms = 0.0;
 		for (var frame = 0; frame < 1200; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
 			Assert.All(buffer, sample => Assert.InRange(sample, -0.999f, 0.999f));
 			if (frame >= 16)
@@ -414,11 +424,10 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var peakRange = 0.0f;
 		for (var frame = 0; frame < 200; frame++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			Assert.False(GetCpuHalted(song));
 			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
 			peakRange = Math.Max(peakRange, buffer.Max() - buffer.Min());
@@ -439,14 +448,13 @@ public sealed class SidRenderTests
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
-		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
 		var frameIndex = 0L;
 		var largestDigiSectionJump = 0.0f;
 		var previous = 0.0f;
 		var hasPrevious = false;
 		for (var tick = 0; tick < 1100; tick++)
 		{
-			song.RenderTick(buffer, options);
+			var buffer = RenderNextTick(song, options);
 			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
 			for (var i = 0; i < buffer.Length; i += options.ChannelCount)
 			{
@@ -484,6 +492,14 @@ public sealed class SidRenderTests
 			.GetValue(song)!;
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (long)cpu.GetType().GetProperty("Cycles")!.GetValue(cpu)!;
+	}
+
+	private static float[] RenderNextTick(IModuleSong song, AudioRenderOptions options)
+	{
+		var frames = song.GetCurrentTickFrameCount(options);
+		var buffer = new float[options.GetSampleCount(frames)];
+		song.RenderTick(buffer, options);
+		return buffer;
 	}
 
 	private static bool GetCpuHalted(SidSong song)

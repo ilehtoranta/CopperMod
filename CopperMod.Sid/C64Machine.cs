@@ -44,7 +44,7 @@ namespace CopperMod.Sid
             _module = module ?? throw new ArgumentNullException(nameof(module));
             _clock = C64ClockProfile.FromSidClock(module.Clock);
             _vic = new VicII(_clock);
-            Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuClockHz, filterProfile);
+            Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile);
             Cpu = new Mos6510(this);
             InstallMinimalRoms();
         }
@@ -88,8 +88,8 @@ namespace CopperMod.Sid
             _basicRunner = null;
             _psidCiaTimerAIntervalCycles = GetDefaultPsidCiaTimerAIntervalCycles();
             _psidCiaTimerATouched = false;
-            _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuClockHz);
-            _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuClockHz);
+            _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuCyclesPerSecond);
+            _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuCyclesPerSecond);
             _vic.Reset();
             Sid.Reset();
             LoadPayload();
@@ -181,25 +181,36 @@ namespace CopperMod.Sid
             }
         }
 
-        public void RenderFrame(Span<float> destination, AudioRenderOptionsAdapter options, long? cycleCount = null)
+        public void RenderFrame(
+            Span<float> destination,
+            AudioRenderOptionsAdapter options,
+            ReadOnlySpan<long> sampleTargetCycles,
+            long cycleCount)
         {
             var frames = destination.Length / options.ChannelCount;
-            var tickCycles = Math.Max(1, cycleCount ?? _clock.CyclesPerFrame);
+            if (frames != sampleTargetCycles.Length)
+            {
+                throw new ArgumentException("Destination frame count must match the sample target cycle count.", nameof(destination));
+            }
+
+            var tickCycles = Math.Max(1, cycleCount);
             if (_basicRunner != null)
             {
-                RenderBasicFrame(destination, options, frames, tickCycles);
+                RenderBasicFrame(destination, options, sampleTargetCycles, tickCycles);
                 return;
             }
 
-            var frameStartCycle = Cpu.Cycles;
-            var frameEndCycle = frameStartCycle + tickCycles;
-            var cyclesPerOutputFrame = tickCycles / (double)frames;
+            var frameEndCycle = Cpu.Cycles + tickCycles;
             var psidPlayActive = BeginPsidFrame();
             var psidPlayStarted = psidPlayActive;
-            var outputFrame = 0;
-            while (outputFrame < frames)
+            for (var outputFrame = 0; outputFrame < sampleTargetCycles.Length; outputFrame++)
             {
-                var targetCycle = frameStartCycle + (long)Math.Round((outputFrame + 1) * cyclesPerOutputFrame);
+                var targetCycle = sampleTargetCycles[outputFrame];
+                if (targetCycle > frameEndCycle)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(sampleTargetCycles), targetCycle, "Sample target cycle cannot be after the rendered cycle range.");
+                }
+
                 if (_module.IsRsid)
                 {
                     RunCycles(Math.Max(0, targetCycle - Cpu.Cycles));
@@ -218,22 +229,7 @@ namespace CopperMod.Sid
                 }
 
                 var sample = Sid.RenderSample(targetCycle);
-                var offset = outputFrame * options.ChannelCount;
-                if (options.ChannelCount == 1)
-                {
-                    destination[offset] = sample;
-                }
-                else
-                {
-                    destination[offset] = sample;
-                    destination[offset + 1] = sample;
-                    for (var channel = 2; channel < options.ChannelCount; channel++)
-                    {
-                        destination[offset + channel] = sample;
-                    }
-                }
-
-                outputFrame++;
+                WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
 
             if (Cpu.Cycles < frameEndCycle)
@@ -262,32 +258,27 @@ namespace CopperMod.Sid
             }
         }
 
-        private void RenderBasicFrame(Span<float> destination, AudioRenderOptionsAdapter options, int frames, long tickCycles)
+        private void RenderBasicFrame(
+            Span<float> destination,
+            AudioRenderOptionsAdapter options,
+            ReadOnlySpan<long> sampleTargetCycles,
+            long tickCycles)
         {
             var frameStartCycle = Cpu.Cycles;
             var frameEndCycle = frameStartCycle + tickCycles;
-            var cyclesPerOutputFrame = tickCycles / (double)frames;
             _basicRunner!.RunUntil(frameEndCycle);
             AdvanceHardwareTo(frameEndCycle);
 
-            for (var outputFrame = 0; outputFrame < frames; outputFrame++)
+            for (var outputFrame = 0; outputFrame < sampleTargetCycles.Length; outputFrame++)
             {
-                var targetCycle = frameStartCycle + (long)Math.Round((outputFrame + 1) * cyclesPerOutputFrame);
+                var targetCycle = sampleTargetCycles[outputFrame];
+                if (targetCycle > frameEndCycle)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(sampleTargetCycles), targetCycle, "Sample target cycle cannot be after the rendered cycle range.");
+                }
+
                 var sample = Sid.RenderSample(targetCycle);
-                var offset = outputFrame * options.ChannelCount;
-                if (options.ChannelCount == 1)
-                {
-                    destination[offset] = sample;
-                }
-                else
-                {
-                    destination[offset] = sample;
-                    destination[offset + 1] = sample;
-                    for (var channel = 2; channel < options.ChannelCount; channel++)
-                    {
-                        destination[offset + channel] = sample;
-                    }
-                }
+                WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
         }
 
@@ -713,7 +704,24 @@ namespace CopperMod.Sid
 
         private long GetDefaultPsidCiaTimerAIntervalCycles()
         {
-            return Math.Max(1, (long)Math.Round(_clock.CpuClockHz / SidConstants.CiaTimerRefreshHz));
+            return Math.Max(1, SidIntegerMath.DivRoundNearest(_clock.CpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz));
+        }
+
+        private static void WriteOutputFrame(Span<float> destination, int channelCount, int outputFrame, float sample)
+        {
+            var offset = outputFrame * channelCount;
+            if (channelCount == 1)
+            {
+                destination[offset] = sample;
+                return;
+            }
+
+            destination[offset] = sample;
+            destination[offset + 1] = sample;
+            for (var channel = 2; channel < channelCount; channel++)
+            {
+                destination[offset + channel] = sample;
+            }
         }
     }
 

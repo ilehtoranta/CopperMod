@@ -141,11 +141,11 @@ public sealed class BasicRsidRunnerTests
 		{
 			var song = new SidFormat().Load(File.ReadAllBytes(file));
 			Assert.Contains(song.Diagnostics, diagnostic => diagnostic.Code == "SID_RSID_BASIC_NATIVE_RUNNER");
-			var frames = song.GetCurrentTickFrameCount(options);
-			var buffer = new float[options.GetSampleCount(frames)];
 			var peakRange = 0.0f;
 			for (var tick = 0; tick < 300; tick++)
 			{
+				var frames = song.GetCurrentTickFrameCount(options);
+				var buffer = new float[options.GetSampleCount(frames)];
 				song.RenderTick(buffer, options);
 				Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
 				peakRange = Math.Max(peakRange, buffer.Max() - buffer.Min());

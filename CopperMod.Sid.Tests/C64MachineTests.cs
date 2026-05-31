@@ -71,7 +71,7 @@ public sealed class C64MachineTests
 	public void CiaTodAlarmAndSerialInterruptsUseIcrSemantics()
 	{
 		var cia = new Cia6526();
-		cia.Reset(defaultTimerA60Hz: false, SidConstants.PalCpuClock);
+		cia.Reset(defaultTimerA60Hz: false, SidConstants.PalCpuCyclesPerSecond);
 		cia.Write(0x0F, 0x80);
 		cia.Write(0x08, 0x01);
 		cia.Write(0x09, 0x00);
@@ -80,7 +80,7 @@ public sealed class C64MachineTests
 		cia.Write(0x0F, 0x00);
 		cia.Write(0x0D, 0x84);
 
-		for (var i = 0; i < (int)Math.Round(SidConstants.PalCpuClock / 10.0); i++)
+		for (var i = 0; i < SidIntegerMath.DivRoundNearest(SidConstants.PalCpuCyclesPerSecond, 10); i++)
 		{
 			cia.Tick();
 		}
@@ -238,6 +238,28 @@ public sealed class C64MachineTests
 			.Select(frame => frame.Cycle)
 			.ToArray();
 		Assert.Equal([5L, 6L], forwardedCycles);
+	}
+
+	[Fact]
+	public void RenderFrameSampleTargetsPreserveSidForwardingBoundary()
+	{
+		var machine = CreateRsidMachine(new byte[] { 0x60 });
+		var trace = new SidCycleTrace();
+		machine.Sid.Trace = trace;
+		Assert.True(machine.Sid.TryWrite(0xD404, 0x21, 100));
+
+		var buffer = new float[2];
+		machine.RenderFrame(
+			buffer,
+			new AudioRenderOptionsAdapter(sampleRate: 44100, channelCount: 1),
+			[100L, 101L],
+			cycleCount: 101);
+
+		var forwarded = trace.Frames
+			.Where(frame => frame.VoiceIndex == 0 && frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite))
+			.Select(frame => frame.Cycle)
+			.ToArray();
+		Assert.Equal([101L], forwarded);
 	}
 
 	public static IEnumerable<object[]> CpuSidWriteCases()

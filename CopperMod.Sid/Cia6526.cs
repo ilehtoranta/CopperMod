@@ -58,7 +58,7 @@ namespace CopperMod.Sid
             _todMinutes,
             _todHours);
 
-        public void Reset(bool defaultTimerA60Hz, double cpuClockHz = SidConstants.PalCpuClock)
+        public void Reset(bool defaultTimerA60Hz, int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond)
         {
             _portA = 0xFF;
             _portB = 0xFF;
@@ -82,7 +82,7 @@ namespace CopperMod.Sid
             _latchedHours = 0;
             _todLatched = false;
             _todCycleAccumulator = 0;
-            _todCyclesPerTenth = Math.Max(1, (int)Math.Round(cpuClockHz / 10.0));
+            _todCyclesPerTenth = Math.Max(1, (int)SidIntegerMath.DivRoundNearest(cpuCyclesPerSecond, 10));
             _serialData = 0;
             _controlA = defaultTimerA60Hz ? (byte)0x11 : (byte)0x00;
             _controlB = 0;

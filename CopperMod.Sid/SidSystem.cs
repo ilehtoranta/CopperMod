@@ -25,7 +25,7 @@ namespace CopperMod.Sid
         public SidSystem(
             IReadOnlyList<SidChipPlacement> placements,
             SidChipModel model,
-            double cpuClockHz = SidConstants.PalCpuClock,
+            int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
             SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
             if (placements is null || placements.Count == 0)
@@ -36,7 +36,7 @@ namespace CopperMod.Sid
             Chips = new SidChip[placements.Count];
             for (var i = 0; i < placements.Count; i++)
             {
-                Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuClockHz, filterProfile);
+                Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile);
                 Chips[i].TraceChipIndex = i;
             }
 

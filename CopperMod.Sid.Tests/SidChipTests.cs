@@ -394,7 +394,7 @@ public sealed class SidChipTests
 		var chip = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xFA);
 		RenderCycles(chip, 10000);
 		chip.Write(0x04, 0x40);
-		RenderCycles(chip, (int)(SidConstants.PalCpuClock * 0.75));
+		RenderCycles(chip, (SidConstants.PalCpuCyclesPerSecond * 3) / 4);
 
 		var range = MeasureRange(chip, warmupCycles: 0, measuredCycles: 24000);
 
@@ -455,7 +455,7 @@ public sealed class SidChipTests
 		var rendered = new double[samples];
 		for (var i = 0; i < rendered.Length; i++)
 		{
-			var cycle = (long)Math.Round((i + 1) * SidConstants.PalCpuClock / sampleRate);
+			var cycle = SidIntegerMath.MulDivRoundNearest(i + 1, SidConstants.PalCpuCyclesPerSecond, sampleRate);
 			rendered[i] = sid.RenderSample(cycle);
 		}
 
