@@ -76,9 +76,10 @@ namespace CopperMod.Amiga
         private const uint BootChipOnlyMemHeaderOffset = 0x0000_0100;
         private const uint BootChipOnlyMemNameOffset = 0x0000_0180;
         private const ushort Kickstart13SoftVer = 34;
-        private const int ViewViewPortOffset = 0x08;
-        private const int ViewLofCprListOffset = 0x0C;
-        private const int ViewShfCprListOffset = 0x10;
+        private const int ViewViewPortOffset = 0x00;
+        private const int ViewLofCprListOffset = 0x04;
+        private const int ViewShfCprListOffset = 0x08;
+        private const int ViewStructSize = 0x12;
         private const int CprListStartOffset = 0x04;
         private const int ScreenFirstWindowOffset = 0x04;
         private const int ScreenViewPortOffset = 0x2C;
@@ -1205,12 +1206,12 @@ namespace CopperMod.Amiga
         private void HostGraphicsInitView(M68kCpuState state)
         {
             var view = state.A[1];
-            if (view == 0 || !_machine.Bus.IsMappedMemoryRange(view, 0x16))
+            if (view == 0 || !_machine.Bus.IsMappedMemoryRange(view, ViewStructSize))
             {
                 return;
             }
 
-            _machine.Bus.ClearMemory(view, 0x16);
+            _machine.Bus.ClearMemory(view, ViewStructSize);
         }
 
         private void HostGraphicsInitVPort(M68kCpuState state)

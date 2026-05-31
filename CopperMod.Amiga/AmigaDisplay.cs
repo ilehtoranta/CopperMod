@@ -24,11 +24,16 @@ namespace CopperMod.Amiga
         private const byte NormalPlayfieldPriorityMask = 0x04;
         private const int LowResOutputHeight = AmigaConstants.PalLowResHeight;
         private const int LastCopperHorizontal = 0xE2;
+        private const int CopperHorizontalUnitsPerLine = 227;
+        private const int CopperMoveHpUnits = 4;
+        private const int CopperSkipHpUnits = 4;
+        private const int CopperWaitWakeHpUnits = 6;
+        private const ushort CopconCopperDanger = 0x0002;
         private static readonly long PalFrameCycles = Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz));
         private static readonly double PalLineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
+        private static readonly double CopperHpCycles = PalLineCycles / CopperHorizontalUnitsPerLine;
         private readonly AmigaBus _bus;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>();
-        private readonly List<PendingCustomWrite> _deferredCopperLocationWrites = new List<PendingCustomWrite>();
         private readonly ushort[] _colors = new ushort[32];
         private readonly uint[] _convertedColors = new uint[64];
         private readonly uint[] _bitplanePointers = new uint[6];
@@ -49,6 +54,7 @@ namespace CopperMod.Amiga
         private ushort _bplcon0;
         private ushort _bplcon1;
         private ushort _bplcon2;
+        private ushort _copcon;
         private ushort _dmacon;
         private short _bpl1mod;
         private short _bpl2mod;
@@ -62,17 +68,34 @@ namespace CopperMod.Amiga
         private int _lastBitplaneMinY;
         private int _lastBitplaneMaxX;
         private int _lastBitplaneMaxY;
+        private int _lastNormalPlayfieldNonZeroPixels;
+        private int _lastNormalPlayfieldMinX;
+        private int _lastNormalPlayfieldMinY;
+        private int _lastNormalPlayfieldMaxX;
+        private int _lastNormalPlayfieldMaxY;
+        private int _lastPlayfield1NonZeroPixels;
+        private int _lastPlayfield1MinX;
+        private int _lastPlayfield1MinY;
+        private int _lastPlayfield1MaxX;
+        private int _lastPlayfield1MaxY;
+        private int _lastPlayfield2NonZeroPixels;
+        private int _lastPlayfield2MinX;
+        private int _lastPlayfield2MinY;
+        private int _lastPlayfield2MaxX;
+        private int _lastPlayfield2MaxY;
+        private readonly int[] _lastBitplaneColorCounts = new int[64];
         private int _lastSpriteNonZeroPixels;
         private int _lastSpriteMinX;
         private int _lastSpriteMinY;
         private int _lastSpriteMaxX;
         private int _lastSpriteMaxY;
         private bool _renderingCopperFrame;
-        private bool _deferCopperLocationWrites;
         private bool _captureSpriteFrameCommands;
         private bool _enforceDmaForFrame;
+        private bool _useTimedPresentationReads;
         private int _currentCopperRow;
         private int _currentRenderRow;
+        private long _renderFrameStartCycle;
 
         public OcsDisplay(AmigaBus bus)
         {
@@ -95,10 +118,16 @@ namespace CopperMod.Amiga
         {
             var bitplanePointers = new uint[_bitplanePointers.Length];
             Array.Copy(_bitplanePointers, bitplanePointers, bitplanePointers.Length);
+            var bitplaneBaseRows = new int[_bitplaneBaseRows.Length];
+            Array.Copy(_bitplaneBaseRows, bitplaneBaseRows, bitplaneBaseRows.Length);
             var colors = new ushort[_colors.Length];
             Array.Copy(_colors, colors, colors.Length);
+            var colorCounts = new int[_lastBitplaneColorCounts.Length];
+            Array.Copy(_lastBitplaneColorCounts, colorCounts, colorCounts.Length);
             return new OcsDisplaySnapshot(
                 _bplcon0,
+                _bplcon1,
+                _bplcon2,
                 _diwStart,
                 _diwStop,
                 _ddfStart,
@@ -112,13 +141,30 @@ namespace CopperMod.Amiga
                 _lastBitplaneMinY,
                 _lastBitplaneMaxX,
                 _lastBitplaneMaxY,
+                _lastNormalPlayfieldNonZeroPixels,
+                _lastNormalPlayfieldMinX,
+                _lastNormalPlayfieldMinY,
+                _lastNormalPlayfieldMaxX,
+                _lastNormalPlayfieldMaxY,
+                _lastPlayfield1NonZeroPixels,
+                _lastPlayfield1MinX,
+                _lastPlayfield1MinY,
+                _lastPlayfield1MaxX,
+                _lastPlayfield1MaxY,
+                _lastPlayfield2NonZeroPixels,
+                _lastPlayfield2MinX,
+                _lastPlayfield2MinY,
+                _lastPlayfield2MaxX,
+                _lastPlayfield2MaxY,
                 _lastSpriteNonZeroPixels,
                 _lastSpriteMinX,
                 _lastSpriteMinY,
                 _lastSpriteMaxX,
                 _lastSpriteMaxY,
                 bitplanePointers,
-                colors);
+                bitplaneBaseRows,
+                colors,
+                colorCounts);
         }
 
         public void Reset()
@@ -136,6 +182,7 @@ namespace CopperMod.Amiga
             _bplcon0 = 0;
             _bplcon1 = 0;
             _bplcon2 = 0;
+            _copcon = 0;
             _dmacon = 0;
             _bpl1mod = 0;
             _bpl2mod = 0;
@@ -162,7 +209,14 @@ namespace CopperMod.Amiga
                 _pendingIndex = Math.Max(0, _pendingIndex - (MaxPendingWrites / 2));
             }
 
-            _pendingWrites.Add(new PendingCustomWrite(cycle, offset, value));
+            var pending = new PendingCustomWrite(cycle, offset, value);
+            var insertIndex = _pendingWrites.Count;
+            while (insertIndex > _pendingIndex && _pendingWrites[insertIndex - 1].Cycle > cycle)
+            {
+                insertIndex--;
+            }
+
+            _pendingWrites.Insert(insertIndex, pending);
         }
 
         public void RenderFrame(Span<uint> bgra)
@@ -206,20 +260,21 @@ namespace CopperMod.Amiga
             _spriteFrameCommands.Clear();
             _paletteFrameSpans.Clear();
             _enforceDmaForFrame = useTimedWrites;
+            _useTimedPresentationReads = useTimedWrites;
+            _renderFrameStartCycle = frameStartCycle;
             bgra = bgra.Slice(0, _renderWidth * _renderHeight);
-            if (useTimedWrites)
-            {
-                // COPxLC writes from the CPU latch the next list; the currently running Copper list still finishes its frame.
-                _deferCopperLocationWrites = true;
-                _deferredCopperLocationWrites.Clear();
-            }
 
             _captureSpriteFrameCommands = useTimedWrites || _copperListPointer != 0;
             try
             {
-                if (_copperListPointer != 0 && IsCopperDmaEnabled())
+                if (useTimedWrites)
                 {
-                    RenderCopperFrame(bgra, frameStartCycle, useTimedWrites);
+                    var frameStopCycle = GetPresentationFrameStopCycle(frameStartCycle, frameEndCycle);
+                    RenderTimedPresentationFrame(bgra, frameStartCycle, frameStopCycle);
+                }
+                else if (_copperListPointer != 0 && IsCopperDmaEnabled())
+                {
+                    RenderCopperFrame(bgra, frameStartCycle, frameStartCycle + PalFrameCycles, useTimedWrites);
                 }
                 else
                 {
@@ -234,86 +289,86 @@ namespace CopperMod.Amiga
 
             if (useTimedWrites)
             {
-                _deferCopperLocationWrites = false;
-                ApplyDeferredCopperLocationWrites();
                 ApplyPendingWrites(frameEndCycle);
             }
 
-            RenderSprites(bgra);
-        }
-
-        private void RenderCopperFrame(Span<uint> bgra, long frameStartCycle, bool useTimedWrites)
-        {
-            _renderingCopperFrame = true;
-            _currentCopperRow = 0;
-            var currentRow = 0;
-            var currentBeamHorizontal = 0;
             try
             {
-                var pc = _copperListPointer;
-                for (var instruction = 0; instruction < 4096; instruction++)
+                RenderSprites(bgra);
+            }
+            finally
+            {
+                _useTimedPresentationReads = false;
+                _bus.ClearPresentationWriteHistory();
+            }
+        }
+
+        private static long GetPresentationFrameStopCycle(long frameStartCycle, long frameEndCycle)
+        {
+            var naturalFrameStop = frameStartCycle + PalFrameCycles;
+            if (frameEndCycle <= frameStartCycle)
+            {
+                return naturalFrameStop;
+            }
+
+            return Math.Min(frameEndCycle, naturalFrameStop);
+        }
+
+        private void RenderTimedPresentationFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
+        {
+            RenderCopperFrame(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
+        }
+
+        private void RenderCopperFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle, bool useTimedWrites)
+        {
+            _renderingCopperFrame = true;
+            _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
+            var renderCursorCycle = frameStartCycle;
+            var copper = new CopperPresentationState(_copperListPointer, frameStartCycle);
+            var safetyRemaining = GetCopperFrameInstructionLimit(frameStartCycle, frameStopCycle);
+
+            try
+            {
+                while (copper.Cycle < frameStopCycle)
                 {
-                    if (!IsCopperDmaEnabled())
+                    if (TryPeekPendingWrite(out var pending) && pending.Cycle <= copper.Cycle)
                     {
-                        break;
-                    }
-
-                    var first = _bus.ReadChipWordForPresentation(pc);
-                    var second = _bus.ReadChipWordForPresentation(pc + 2);
-                    pc += 4;
-                    if (first == 0xFFFF && second == 0xFFFE)
-                    {
-                        break;
-                    }
-
-                    if ((first & 1) == 0)
-                    {
-                        _currentCopperRow = currentRow;
-                        var register = (ushort)(first & 0x01FE);
-                        ApplyCopperMove(register, second, GetCopperMoveCycle(frameStartCycle, currentRow, useTimedWrites));
-                        currentBeamHorizontal = AdvanceCopperBeamHorizontal(currentBeamHorizontal);
-                        if (register == 0x088)
-                        {
-                            pc = _copperListPointer;
-                        }
-                        else if (register == 0x08A)
-                        {
-                            pc = _copperListPointer2;
-                        }
-
+                        RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+                        renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+                        ApplyTimedPendingWrite(ref copper);
                         continue;
                     }
 
-                    if ((second & 1) == 0)
+                    if (copper.Stopped || !IsCopperDmaEnabled())
                     {
-                        if (!TryGetCopperWaitOutputPosition(
-                            first,
-                            second,
-                            currentRow,
-                            currentBeamHorizontal,
-                            IsCopperBlitterFinishedForWait(second),
-                            out var wait))
+                        if (!TryAdvanceCopperToNextPendingWrite(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper))
                         {
                             break;
                         }
 
-                        RenderCopperWaitSpan(bgra, frameStartCycle, useTimedWrites, ref currentRow, ref currentBeamHorizontal, wait);
-                        currentBeamHorizontal = wait.Horizontal;
                         continue;
                     }
 
-                    if (ShouldCopperSkipNextInstruction(
-                        first,
-                        second,
-                        currentRow,
-                        currentBeamHorizontal,
-                        IsCopperBlitterFinishedForWait(second)))
+                    if (copper.Waiting)
                     {
-                        pc += 4;
+                        if (!TryAdvanceCopperWait(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper))
+                        {
+                            break;
+                        }
+
+                        continue;
                     }
+
+                    if (safetyRemaining-- <= 0)
+                    {
+                        break;
+                    }
+
+                    StepCopperInstruction(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper);
                 }
 
-                RenderCopperTail(bgra, frameStartCycle, useTimedWrites, currentRow, currentBeamHorizontal);
+                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, frameStopCycle, useTimedWrites);
+                RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites);
             }
             finally
             {
@@ -322,58 +377,362 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void RenderCopperWaitSpan(
-            Span<uint> bgra,
-            long frameStartCycle,
-            bool useTimedWrites,
-            ref int currentRow,
-            ref int currentHorizontal,
-            CopperWaitPosition wait)
+        private void RenderPresentationTrailingRows(Span<uint> bgra, long frameStartCycle, long frameStopCycle, bool useTimedWrites)
         {
-            var waitRow = Math.Min(wait.Row, LowResOutputHeight);
-            var currentX = GetCopperOutputX(currentHorizontal);
-            var waitX = GetCopperOutputX(wait.Horizontal);
-            if (waitRow == currentRow)
+            var finalLine = GetBeamLineForCycle(frameStartCycle, Math.Max(frameStartCycle, frameStopCycle - 1));
+            var firstTrailingRow = Math.Clamp(finalLine - StandardVStart + 1, 0, LowResOutputHeight);
+            if (firstTrailingRow >= LowResOutputHeight)
             {
-                if (waitX > currentX)
-                {
-                    RenderRows(bgra, currentRow, currentRow + 1, frameStartCycle, useTimedWrites, currentX, waitX);
-                }
-
                 return;
             }
 
-            if (currentRow < LowResOutputHeight)
-            {
-                RenderRows(bgra, currentRow, currentRow + 1, frameStartCycle, useTimedWrites, currentX, AmigaConstants.PalLowResWidth);
-            }
-
-            if (waitRow > currentRow + 1)
-            {
-                RenderRows(bgra, currentRow + 1, waitRow, frameStartCycle, useTimedWrites);
-            }
-
-            if (waitRow < LowResOutputHeight && waitX > 0)
-            {
-                RenderRows(bgra, waitRow, waitRow + 1, frameStartCycle, useTimedWrites, 0, waitX);
-            }
-
-            currentRow = waitRow;
+            RenderRows(
+                bgra,
+                firstTrailingRow,
+                LowResOutputHeight,
+                frameStartCycle,
+                useTimedWrites,
+                applyPendingWrites: false);
         }
 
-        private void RenderCopperTail(Span<uint> bgra, long frameStartCycle, bool useTimedWrites, int currentRow, int currentHorizontal)
+        private static int GetCopperFrameInstructionLimit(long frameStartCycle, long frameStopCycle)
         {
-            if (currentRow >= LowResOutputHeight)
+            var frameCycles = Math.Max(1, frameStopCycle - frameStartCycle);
+            var minimumInstructionCycles = Math.Max(1, CopperHpToCpuCycles(CopperMoveHpUnits));
+            return (int)Math.Min(int.MaxValue, (frameCycles / minimumInstructionCycles) + 1024);
+        }
+
+        private bool TryAdvanceCopperToNextPendingWrite(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool useTimedWrites,
+            ref long renderCursorCycle,
+            ref CopperPresentationState copper)
+        {
+            if (!TryPeekPendingWrite(out var pending) || pending.Cycle >= frameStopCycle)
+            {
+                return false;
+            }
+
+            RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+            renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+            copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
+            ApplyTimedPendingWrite(ref copper);
+            return true;
+        }
+
+        private bool TryAdvanceCopperWait(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool useTimedWrites,
+            ref long renderCursorCycle,
+            ref CopperPresentationState copper)
+        {
+            if (!IsCopperDmaEnabled())
+            {
+                return TryAdvanceCopperToNextPendingWrite(
+                    bgra,
+                    frameStartCycle,
+                    frameStopCycle,
+                    useTimedWrites,
+                    ref renderCursorCycle,
+                    ref copper);
+            }
+
+            if (!TryGetCopperWaitCycle(
+                copper.WaitFirst,
+                copper.WaitSecond,
+                frameStartCycle,
+                copper.Cycle,
+                frameStopCycle,
+                IsCopperBlitterFinishedForWait(copper.WaitSecond),
+                out var waitCycle))
+            {
+                return false;
+            }
+
+            if (TryPeekPendingWrite(out var pending) && pending.Cycle < waitCycle)
+            {
+                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+                renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+                copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
+                ApplyTimedPendingWrite(ref copper);
+                return true;
+            }
+
+            var resumeCycle = waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits);
+            RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, Math.Min(resumeCycle, frameStopCycle), useTimedWrites);
+            renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(resumeCycle, frameStopCycle));
+            copper.Cycle = Math.Max(copper.Cycle, resumeCycle);
+            copper.Waiting = false;
+            return copper.Cycle < frameStopCycle;
+        }
+
+        private void StepCopperInstruction(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool useTimedWrites,
+            ref long renderCursorCycle,
+            ref CopperPresentationState copper)
+        {
+            var fetchCycle = Math.Min(copper.Cycle, frameStopCycle);
+            var first = ReadChipWordForPresentationAtCycle(copper.Pc, fetchCycle);
+            var second = ReadChipWordForPresentationAtCycle(AddDmaPointerOffset(copper.Pc, 2), fetchCycle);
+            copper.Pc = AddDmaPointerOffset(copper.Pc, 4);
+
+            if (first == 0xFFFF && second == 0xFFFE)
+            {
+                copper.Stopped = true;
+                return;
+            }
+
+            if ((first & 1) == 0)
+            {
+                var register = (ushort)(first & 0x01FE);
+                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, fetchCycle, useTimedWrites);
+                renderCursorCycle = Math.Max(renderCursorCycle, fetchCycle);
+                _currentCopperRow = GetOutputRowForCycle(frameStartCycle, fetchCycle);
+                if (CanCopperWriteRegister(register))
+                {
+                    ApplyCopperMove(register, second, fetchCycle);
+                    if (register == 0x088)
+                    {
+                        copper.JumpTo(_copperListPointer, fetchCycle);
+                    }
+                    else if (register == 0x08A)
+                    {
+                        copper.JumpTo(_copperListPointer2, fetchCycle);
+                    }
+                }
+
+                copper.Cycle = fetchCycle + CopperHpToCpuCycles(CopperMoveHpUnits);
+                return;
+            }
+
+            if ((second & 1) == 0)
+            {
+                copper.Wait(first, second);
+                return;
+            }
+
+            if (IsCopperComparisonSatisfied(
+                first,
+                second,
+                frameStartCycle,
+                fetchCycle,
+                IsCopperBlitterFinishedForWait(second)))
+            {
+                copper.Pc = AddDmaPointerOffset(copper.Pc, 4);
+            }
+
+            copper.Cycle = fetchCycle + CopperHpToCpuCycles(CopperSkipHpUnits);
+        }
+
+        private bool TryPeekPendingWrite(out PendingCustomWrite write)
+        {
+            if (_pendingIndex < _pendingWrites.Count)
+            {
+                write = _pendingWrites[_pendingIndex];
+                return true;
+            }
+
+            write = default;
+            return false;
+        }
+
+        private void ApplyTimedPendingWrite(ref CopperPresentationState copper)
+        {
+            if (_pendingIndex >= _pendingWrites.Count)
             {
                 return;
             }
 
-            var currentX = GetCopperOutputX(currentHorizontal);
-            RenderRows(bgra, currentRow, currentRow + 1, frameStartCycle, useTimedWrites, currentX, AmigaConstants.PalLowResWidth);
-            if (currentRow + 1 < LowResOutputHeight)
+            var write = _pendingWrites[_pendingIndex++];
+            _currentCopperRow = GetOutputRowForCycle(_renderFrameStartCycle, write.Cycle);
+            ApplyWrite(write.Offset, write.Value);
+            if (write.Offset == 0x088)
             {
-                RenderRows(bgra, currentRow + 1, LowResOutputHeight, frameStartCycle, useTimedWrites);
+                copper.JumpTo(_copperListPointer, write.Cycle);
             }
+            else if (write.Offset == 0x08A)
+            {
+                copper.JumpTo(_copperListPointer2, write.Cycle);
+            }
+
+            CompactPendingWrites();
+        }
+
+        private void CompactPendingWrites()
+        {
+            if (_pendingIndex > 1024 && _pendingIndex * 2 > _pendingWrites.Count)
+            {
+                _pendingWrites.RemoveRange(0, _pendingIndex);
+                _pendingIndex = 0;
+            }
+        }
+
+        private void RenderPresentationSpan(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long fromCycle,
+            long toCycle,
+            bool useTimedWrites)
+        {
+            if (toCycle <= fromCycle)
+            {
+                return;
+            }
+
+            var visibleStartCycle = GetLineStartCycle(frameStartCycle, StandardVStart);
+            var visibleStopCycle = GetLineStartCycle(frameStartCycle, StandardVStart + LowResOutputHeight);
+            var clippedStart = Math.Max(fromCycle, visibleStartCycle);
+            var clippedStop = Math.Min(toCycle, visibleStopCycle);
+            if (clippedStop <= clippedStart)
+            {
+                return;
+            }
+
+            var firstLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStart), StandardVStart, StandardVStart + LowResOutputHeight - 1);
+            var lastLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStop - 1), StandardVStart, StandardVStart + LowResOutputHeight - 1);
+            for (var line = firstLine; line <= lastLine; line++)
+            {
+                var lineStart = GetLineStartCycle(frameStartCycle, line);
+                var lineStop = GetLineStartCycle(frameStartCycle, line + 1);
+                var segmentStart = Math.Max(clippedStart, lineStart);
+                var segmentStop = Math.Min(clippedStop, lineStop);
+                if (segmentStop <= segmentStart)
+                {
+                    continue;
+                }
+
+                var row = line - StandardVStart;
+                var xStart = GetOutputXForCycle(frameStartCycle, segmentStart);
+                var xStop = segmentStop >= lineStop
+                    ? AmigaConstants.PalLowResWidth
+                    : GetOutputXForCycle(frameStartCycle, segmentStop);
+                if (xStop <= xStart)
+                {
+                    continue;
+                }
+
+                RenderRows(bgra, row, row + 1, frameStartCycle, useTimedWrites, xStart, xStop, applyPendingWrites: false);
+            }
+        }
+
+        private bool TryGetCopperWaitCycle(
+            ushort first,
+            ushort second,
+            long frameStartCycle,
+            long currentCycle,
+            long frameStopCycle,
+            bool blitterFinished,
+            out long waitCycle)
+        {
+            if (!blitterFinished)
+            {
+                waitCycle = 0;
+                return false;
+            }
+
+            var startLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, currentCycle), 0, AmigaConstants.A500PalRasterLines - 1);
+            var startHorizontal = GetCopperHorizontalForCycle(frameStartCycle, currentCycle) & 0xFE;
+            if (startHorizontal > LastCopperHorizontal)
+            {
+                startLine++;
+                startHorizontal = 0;
+            }
+
+            for (var line = startLine; line < AmigaConstants.A500PalRasterLines; line++)
+            {
+                var horizontalStart = line == startLine ? startHorizontal : 0;
+                for (var horizontal = horizontalStart; horizontal <= LastCopperHorizontal; horizontal += 2)
+                {
+                    if (!IsCopperComparisonSatisfied(first, second, line - StandardVStart, horizontal, blitterFinished))
+                    {
+                        continue;
+                    }
+
+                    waitCycle = GetCycleForCopperBeam(frameStartCycle, line, horizontal);
+                    if (waitCycle < currentCycle)
+                    {
+                        waitCycle = currentCycle;
+                    }
+
+                    return waitCycle < frameStopCycle;
+                }
+            }
+
+            waitCycle = 0;
+            return false;
+        }
+
+        private static bool IsCopperComparisonSatisfied(
+            ushort first,
+            ushort second,
+            long frameStartCycle,
+            long cycle,
+            bool blitterFinished)
+        {
+            var line = GetBeamLineForCycle(frameStartCycle, cycle);
+            var horizontal = GetCopperHorizontalForCycle(frameStartCycle, cycle);
+            return IsCopperComparisonSatisfied(first, second, line - StandardVStart, horizontal, blitterFinished);
+        }
+
+        private static long CopperHpToCpuCycles(int hpUnits)
+        {
+            return Math.Max(1, (long)Math.Round(hpUnits * CopperHpCycles));
+        }
+
+        private static long GetLineStartCycle(long frameStartCycle, int line)
+        {
+            return frameStartCycle + (long)Math.Round(line * PalLineCycles);
+        }
+
+        private static long GetCycleForCopperBeam(long frameStartCycle, int line, int horizontal)
+        {
+            return GetLineStartCycle(frameStartCycle, line) + (long)Math.Round(horizontal * CopperHpCycles);
+        }
+
+        private static int GetBeamLineForCycle(long frameStartCycle, long cycle)
+        {
+            if (cycle <= frameStartCycle)
+            {
+                return 0;
+            }
+
+            var line = Math.Clamp((int)((cycle - frameStartCycle) / PalLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
+            while (line + 1 < AmigaConstants.A500PalRasterLines && GetLineStartCycle(frameStartCycle, line + 1) <= cycle)
+            {
+                line++;
+            }
+
+            while (line > 0 && GetLineStartCycle(frameStartCycle, line) > cycle)
+            {
+                line--;
+            }
+
+            return line;
+        }
+
+        private static int GetCopperHorizontalForCycle(long frameStartCycle, long cycle)
+        {
+            var line = GetBeamLineForCycle(frameStartCycle, cycle);
+            var lineStart = GetLineStartCycle(frameStartCycle, line);
+            var horizontal = (int)Math.Floor(Math.Max(0, cycle - lineStart) / CopperHpCycles);
+            return Math.Clamp(horizontal, 0, LastCopperHorizontal);
+        }
+
+        private static int GetOutputRowForCycle(long frameStartCycle, long cycle)
+        {
+            return GetBeamLineForCycle(frameStartCycle, cycle) - StandardVStart;
+        }
+
+        private static int GetOutputXForCycle(long frameStartCycle, long cycle)
+        {
+            return GetCopperOutputX(GetCopperHorizontalForCycle(frameStartCycle, cycle));
         }
 
         private static int GetCopperOutputX(int horizontal)
@@ -382,48 +741,6 @@ namespace CopperMod.Amiga
                 ? horizontal + 0x100
                 : horizontal;
             return Math.Clamp((expandedHorizontal - DefaultDdfStart) * 2, 0, AmigaConstants.PalLowResWidth);
-        }
-
-        private static int AdvanceCopperBeamHorizontal(int currentHorizontal)
-        {
-            return Math.Min(0x1FE, currentHorizontal + 4);
-        }
-
-        private static bool TryGetCopperWaitOutputPosition(
-            ushort first,
-            ushort second,
-            int currentRow,
-            int currentHorizontal,
-            bool blitterFinished,
-            out CopperWaitPosition wait)
-        {
-            currentRow = Math.Clamp(currentRow, 0, LowResOutputHeight);
-            currentHorizontal = Math.Clamp(currentHorizontal & 0x1FE, 0, LastCopperHorizontal);
-            for (var row = currentRow; row < LowResOutputHeight; row++)
-            {
-                var startHorizontal = row == currentRow ? currentHorizontal : 0;
-                for (var horizontal = startHorizontal & 0xFE; horizontal <= LastCopperHorizontal; horizontal += 2)
-                {
-                    if (IsCopperComparisonSatisfied(first, second, row, horizontal, blitterFinished))
-                    {
-                        wait = new CopperWaitPosition(row, horizontal);
-                        return true;
-                    }
-                }
-            }
-
-            wait = default;
-            return false;
-        }
-
-        private static bool ShouldCopperSkipNextInstruction(
-            ushort first,
-            ushort second,
-            int currentRow,
-            int currentHorizontal,
-            bool blitterFinished)
-        {
-            return IsCopperComparisonSatisfied(first, second, currentRow, currentHorizontal, blitterFinished);
         }
 
         private bool IsCopperBlitterFinishedForWait(ushort second)
@@ -460,7 +777,15 @@ namespace CopperMod.Amiga
             return (ushort)((vertical << 8) | (horizontal & 0xFE));
         }
 
-        private void RenderRows(Span<uint> bgra, int rowStart, int rowStop, long frameStartCycle, bool useTimedWrites, int xStart = 0, int xStop = -1)
+        private void RenderRows(
+            Span<uint> bgra,
+            int rowStart,
+            int rowStop,
+            long frameStartCycle,
+            bool useTimedWrites,
+            int xStart = 0,
+            int xStop = -1,
+            bool applyPendingWrites = true)
         {
             if (xStop < 0)
             {
@@ -482,7 +807,11 @@ namespace CopperMod.Amiga
             for (var row = rowStart; row < rowStop; row++)
             {
                 _currentRenderRow = row;
-                ApplyPendingWrites(GetOutputRowStartCycle(frameStartCycle, row));
+                if (applyPendingWrites)
+                {
+                    ApplyPendingWrites(GetOutputRowStartCycle(frameStartCycle, row));
+                }
+
                 CapturePaletteFrameSpans(row, row + 1, xStart, xStop);
                 FillRows(bgra, row, row + 1, xStart, xStop);
                 RenderBitplanes(bgra, row, row + 1, xStart, xStop);
@@ -493,12 +822,25 @@ namespace CopperMod.Amiga
 
         private static long GetOutputRowStartCycle(long frameStartCycle, int row)
         {
-            return frameStartCycle + (long)Math.Round((StandardVStart + row) * PalLineCycles);
+            return GetLineStartCycle(frameStartCycle, StandardVStart + row);
         }
 
-        private static long GetCopperMoveCycle(long frameStartCycle, int row, bool useTimedWrites)
+        private ushort ReadChipWordForPresentation(uint address, int row)
         {
-            return useTimedWrites ? GetOutputRowStartCycle(frameStartCycle, row) : 0;
+            if (!_useTimedPresentationReads)
+            {
+                return _bus.ReadChipWordForPresentation(address);
+            }
+
+            row = Math.Clamp(row, 0, LowResOutputHeight - 1);
+            return ReadChipWordForPresentationAtCycle(address, GetOutputRowStartCycle(_renderFrameStartCycle, row));
+        }
+
+        private ushort ReadChipWordForPresentationAtCycle(uint address, long cycle)
+        {
+            return _useTimedPresentationReads
+                ? _bus.ReadChipWordForPresentation(address, cycle)
+                : _bus.ReadChipWordForPresentation(address);
         }
 
         private void FillRows(Span<uint> bgra, int rowStart, int rowStop, int xStart = 0, int xStop = -1)
@@ -554,41 +896,10 @@ namespace CopperMod.Amiga
             while (_pendingIndex < _pendingWrites.Count && _pendingWrites[_pendingIndex].Cycle <= cycle)
             {
                 var write = _pendingWrites[_pendingIndex++];
-                if (_deferCopperLocationWrites && IsCopperLocationOffset(write.Offset))
-                {
-                    _deferredCopperLocationWrites.Add(write);
-                    continue;
-                }
-
                 ApplyWrite(write.Offset, write.Value);
             }
 
-            if (_pendingIndex > 1024 && _pendingIndex * 2 > _pendingWrites.Count)
-            {
-                _pendingWrites.RemoveRange(0, _pendingIndex);
-                _pendingIndex = 0;
-            }
-        }
-
-        private void ApplyDeferredCopperLocationWrites()
-        {
-            if (_deferredCopperLocationWrites.Count == 0)
-            {
-                return;
-            }
-
-            for (var i = 0; i < _deferredCopperLocationWrites.Count; i++)
-            {
-                var write = _deferredCopperLocationWrites[i];
-                ApplyWrite(write.Offset, write.Value);
-            }
-
-            _deferredCopperLocationWrites.Clear();
-        }
-
-        private static bool IsCopperLocationOffset(ushort offset)
-        {
-            return offset is 0x080 or 0x082 or 0x084 or 0x086;
+            CompactPendingWrites();
         }
 
         private static void ApplySetClear(ref ushort register, ushort value)
@@ -604,11 +915,41 @@ namespace CopperMod.Amiga
             }
         }
 
+        private static ushort ApplySetClearPreview(ushort register, ushort value)
+        {
+            var mask = (ushort)(value & 0x7FFF);
+            return (value & 0x8000) != 0
+                ? (ushort)(register | mask)
+                : (ushort)(register & (ushort)~mask);
+        }
+
+        private static bool IsBitplaneDmaEnabled(ushort dmacon)
+        {
+            return (dmacon & (DmaconMasterEnable | DmaconBitplaneEnable)) == (DmaconMasterEnable | DmaconBitplaneEnable);
+        }
+
+        private static bool IsBitplaneDmaEnabledAfterSetClear(ushort dmacon, ushort value)
+        {
+            return IsBitplaneDmaEnabled(ApplySetClearPreview(dmacon, value));
+        }
+
         private void ApplyWrite(ushort offset, ushort value)
         {
             if (offset == 0x096)
             {
+                var bitplaneDmaWasEnabled = IsBitplaneDmaEnabled(_dmacon);
+                if (bitplaneDmaWasEnabled && !IsBitplaneDmaEnabledAfterSetClear(_dmacon, value))
+                {
+                    AnchorActiveBitplanePointersToCurrentRow();
+                }
+
                 ApplySetClear(ref _dmacon, value);
+                if (!bitplaneDmaWasEnabled && IsBitplaneDmaEnabled(_dmacon))
+                {
+                    var planeCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
+                    SetBitplaneBaseRows(0, planeCount, GetCurrentBitplaneBaseRow());
+                }
+
                 return;
             }
 
@@ -618,7 +959,7 @@ namespace CopperMod.Amiga
                 var newPlaneCount = Math.Min((value >> 12) & 0x7, _bitplaneBaseRows.Length);
                 AnchorActiveBitplanePointersToCurrentRow(oldPlaneCount);
                 _bplcon0 = value;
-                if (newPlaneCount > oldPlaneCount)
+                if (newPlaneCount > oldPlaneCount && IsBitplaneDmaEnabledForRendering())
                 {
                     SetBitplaneBaseRows(oldPlaneCount, newPlaneCount, GetCurrentBitplaneBaseRow());
                 }
@@ -635,6 +976,12 @@ namespace CopperMod.Amiga
             if (offset == 0x104)
             {
                 _bplcon2 = value;
+                return;
+            }
+
+            if (offset == 0x02E)
+            {
+                _copcon = value;
                 return;
             }
 
@@ -761,6 +1108,16 @@ namespace CopperMod.Amiga
                 cycle);
         }
 
+        private bool CanCopperWriteRegister(ushort offset)
+        {
+            if (offset < 0x010)
+            {
+                return false;
+            }
+
+            return offset >= 0x020 || (_copcon & CopconCopperDanger) != 0;
+        }
+
         private static bool HasCopperHardwareSideEffect(ushort offset)
         {
             return offset is 0x096 or 0x09A or 0x09C or 0x09E ||
@@ -795,6 +1152,11 @@ namespace CopperMod.Amiga
         {
             planeCount = Math.Clamp(planeCount, 0, _bitplaneBaseRows.Length);
             if (planeCount == 0)
+            {
+                return;
+            }
+
+            if (!IsBitplaneDmaEnabledForRendering())
             {
                 return;
             }
@@ -936,6 +1298,22 @@ namespace CopperMod.Amiga
             _lastBitplaneMinY = LowResOutputHeight;
             _lastBitplaneMaxX = -1;
             _lastBitplaneMaxY = -1;
+            _lastNormalPlayfieldNonZeroPixels = 0;
+            _lastNormalPlayfieldMinX = AmigaConstants.PalLowResWidth;
+            _lastNormalPlayfieldMinY = LowResOutputHeight;
+            _lastNormalPlayfieldMaxX = -1;
+            _lastNormalPlayfieldMaxY = -1;
+            _lastPlayfield1NonZeroPixels = 0;
+            _lastPlayfield1MinX = AmigaConstants.PalLowResWidth;
+            _lastPlayfield1MinY = LowResOutputHeight;
+            _lastPlayfield1MaxX = -1;
+            _lastPlayfield1MaxY = -1;
+            _lastPlayfield2NonZeroPixels = 0;
+            _lastPlayfield2MinX = AmigaConstants.PalLowResWidth;
+            _lastPlayfield2MinY = LowResOutputHeight;
+            _lastPlayfield2MaxX = -1;
+            _lastPlayfield2MaxY = -1;
+            Array.Clear(_lastBitplaneColorCounts);
             _lastSpriteNonZeroPixels = 0;
             _lastSpriteMinX = AmigaConstants.PalLowResWidth;
             _lastSpriteMinY = LowResOutputHeight;
@@ -1028,7 +1406,7 @@ namespace CopperMod.Amiga
                         }
 
                         var address = unchecked(rowAddress + (uint)(word * 2));
-                        planeWords[plane, word] = _bus.ReadChipWordForPresentation(address);
+                        planeWords[plane, word] = ReadChipWordForPresentation(address, y);
                         _lastBitplaneWords++;
                     }
                 }
@@ -1064,11 +1442,7 @@ namespace CopperMod.Amiga
 
                         if (colorIndex != 0)
                         {
-                            _lastBitplaneNonZeroPixels++;
-                            _lastBitplaneMinX = Math.Min(_lastBitplaneMinX, x);
-                            _lastBitplaneMinY = Math.Min(_lastBitplaneMinY, y);
-                            _lastBitplaneMaxX = Math.Max(_lastBitplaneMaxX, x);
-                            _lastBitplaneMaxY = Math.Max(_lastBitplaneMaxY, y);
+                            RecordBitplanePixel(colorIndex, NormalPlayfieldPriorityMask, x, y);
                         }
 
                         SetPlayfieldPriorityMask(
@@ -1101,11 +1475,11 @@ namespace CopperMod.Amiga
                             (leftColorIndex | rightColorIndex) == 0 ? (byte)0 : NormalPlayfieldPriorityMask);
                         if ((leftColorIndex | rightColorIndex) != 0)
                         {
-                            _lastBitplaneNonZeroPixels++;
-                            _lastBitplaneMinX = Math.Min(_lastBitplaneMinX, x);
-                            _lastBitplaneMinY = Math.Min(_lastBitplaneMinY, y);
-                            _lastBitplaneMaxX = Math.Max(_lastBitplaneMaxX, x);
-                            _lastBitplaneMaxY = Math.Max(_lastBitplaneMaxY, y);
+                            RecordBitplanePixel(
+                                leftColorIndex != 0 ? leftColorIndex : rightColorIndex,
+                                NormalPlayfieldPriorityMask,
+                                x,
+                                y);
                         }
 
                         WriteHighResolutionOutputPixelPair(
@@ -1139,11 +1513,7 @@ namespace CopperMod.Amiga
                     SetPlayfieldPriorityMask(x, y, playfieldPriorityMask);
                     if (colorIndex != 0)
                     {
-                        _lastBitplaneNonZeroPixels++;
-                        _lastBitplaneMinX = Math.Min(_lastBitplaneMinX, x);
-                        _lastBitplaneMinY = Math.Min(_lastBitplaneMinY, y);
-                        _lastBitplaneMaxX = Math.Max(_lastBitplaneMaxX, x);
-                        _lastBitplaneMaxY = Math.Max(_lastBitplaneMaxY, y);
+                        RecordBitplanePixel(colorIndex, playfieldPriorityMask, x, y);
                     }
 
                     var pixel = holdAndModify
@@ -1160,6 +1530,61 @@ namespace CopperMod.Amiga
                         renderInterlaceField);
                 }
             }
+        }
+
+        private void RecordBitplanePixel(int colorIndex, byte playfieldPriorityMask, int x, int y)
+        {
+            _lastBitplaneNonZeroPixels++;
+            _lastBitplaneMinX = Math.Min(_lastBitplaneMinX, x);
+            _lastBitplaneMinY = Math.Min(_lastBitplaneMinY, y);
+            _lastBitplaneMaxX = Math.Max(_lastBitplaneMaxX, x);
+            _lastBitplaneMaxY = Math.Max(_lastBitplaneMaxY, y);
+            if ((uint)colorIndex < (uint)_lastBitplaneColorCounts.Length)
+            {
+                _lastBitplaneColorCounts[colorIndex]++;
+            }
+
+            if ((playfieldPriorityMask & NormalPlayfieldPriorityMask) != 0)
+            {
+                RecordNormalPlayfieldPixel(x, y);
+            }
+
+            if ((playfieldPriorityMask & Playfield1PriorityMask) != 0)
+            {
+                RecordPlayfield1Pixel(x, y);
+            }
+
+            if ((playfieldPriorityMask & Playfield2PriorityMask) != 0)
+            {
+                RecordPlayfield2Pixel(x, y);
+            }
+        }
+
+        private void RecordNormalPlayfieldPixel(int x, int y)
+        {
+            _lastNormalPlayfieldNonZeroPixels++;
+            _lastNormalPlayfieldMinX = Math.Min(_lastNormalPlayfieldMinX, x);
+            _lastNormalPlayfieldMinY = Math.Min(_lastNormalPlayfieldMinY, y);
+            _lastNormalPlayfieldMaxX = Math.Max(_lastNormalPlayfieldMaxX, x);
+            _lastNormalPlayfieldMaxY = Math.Max(_lastNormalPlayfieldMaxY, y);
+        }
+
+        private void RecordPlayfield1Pixel(int x, int y)
+        {
+            _lastPlayfield1NonZeroPixels++;
+            _lastPlayfield1MinX = Math.Min(_lastPlayfield1MinX, x);
+            _lastPlayfield1MinY = Math.Min(_lastPlayfield1MinY, y);
+            _lastPlayfield1MaxX = Math.Max(_lastPlayfield1MaxX, x);
+            _lastPlayfield1MaxY = Math.Max(_lastPlayfield1MaxY, y);
+        }
+
+        private void RecordPlayfield2Pixel(int x, int y)
+        {
+            _lastPlayfield2NonZeroPixels++;
+            _lastPlayfield2MinX = Math.Min(_lastPlayfield2MinX, x);
+            _lastPlayfield2MinY = Math.Min(_lastPlayfield2MinY, y);
+            _lastPlayfield2MaxX = Math.Max(_lastPlayfield2MaxX, x);
+            _lastPlayfield2MaxY = Math.Max(_lastPlayfield2MaxY, y);
         }
 
         private int GetBitplaneColorIndex(ushort[,] planeWords, bool[] planeHasRow, int planeCount, int x, int originX, int fetchPixels, int hiresSubPixel = -1)
@@ -1590,8 +2015,8 @@ namespace CopperMod.Amiga
             var controlAddress = pointer;
             for (var controlBlock = 0; controlBlock < 128; controlBlock++)
             {
-                var pos = _bus.ReadChipWordForPresentation(controlAddress);
-                var ctl = _bus.ReadChipWordForPresentation(AddDmaPointerOffset(controlAddress, 2));
+                var pos = ReadChipWordForPresentation(controlAddress, row);
+                var ctl = ReadChipWordForPresentation(AddDmaPointerOffset(controlAddress, 2), row);
                 if ((pos | ctl) == 0)
                 {
                     return;
@@ -1623,6 +2048,11 @@ namespace CopperMod.Amiga
         private bool IsSpriteDmaEnabled()
         {
             return (_dmacon & (DmaconMasterEnable | DmaconSpriteEnable)) == (DmaconMasterEnable | DmaconSpriteEnable);
+        }
+
+        private bool IsBitplaneDmaEnabledForRendering()
+        {
+            return !_enforceDmaForFrame || IsBitplaneDmaEnabled(_dmacon);
         }
 
         private bool IsCopperDmaEnabled()
@@ -1671,8 +2101,8 @@ namespace CopperMod.Amiga
             var address = sprite.DataAddress;
             for (var y = sprite.YStart; y < sprite.YStop; y++)
             {
-                var dataA = _bus.ReadChipWordForPresentation(address);
-                var dataB = _bus.ReadChipWordForPresentation(AddDmaPointerOffset(address, 2));
+                var dataA = ReadChipWordForPresentation(address, y);
+                var dataB = ReadChipWordForPresentation(AddDmaPointerOffset(address, 2), y);
                 RenderSpriteLine(bgra, spriteIndex, sprite.X, y, dataA, dataB, pixel => GetSpriteColorIndex(spriteIndex, pixel));
                 address = AddDmaPointerOffset(address, 4);
             }
@@ -1708,8 +2138,8 @@ namespace CopperMod.Amiga
             var address = AddDmaPointerOffset(sprite.DataAddress, (y - sprite.YStart) * 4);
 
             return (
-                _bus.ReadChipWordForPresentation(address),
-                _bus.ReadChipWordForPresentation(AddDmaPointerOffset(address, 2)));
+                ReadChipWordForPresentation(address, y),
+                ReadChipWordForPresentation(AddDmaPointerOffset(address, 2), y));
         }
 
         private void RenderSpriteLine(Span<uint> bgra, int spriteIndex, int x, int y, ushort dataA, ushort dataB, Func<int, int> mapColor)
@@ -2130,19 +2560,6 @@ namespace CopperMod.Amiga
             return ConvertColor(previousColor);
         }
 
-        private readonly struct CopperWaitPosition
-        {
-            public CopperWaitPosition(int row, int horizontal)
-            {
-                Row = row;
-                Horizontal = horizontal;
-            }
-
-            public int Row { get; }
-
-            public int Horizontal { get; }
-        }
-
         private readonly struct DualPlayfieldPixel
         {
             public DualPlayfieldPixel(int colorIndex, byte priorityMask)
@@ -2259,6 +2676,46 @@ namespace CopperMod.Amiga
 
             public int Height { get; }
 
+        }
+
+        private struct CopperPresentationState
+        {
+            public CopperPresentationState(uint pc, long cycle)
+            {
+                Pc = pc;
+                Cycle = cycle;
+                Stopped = false;
+                Waiting = false;
+                WaitFirst = 0;
+                WaitSecond = 0;
+            }
+
+            public uint Pc;
+
+            public long Cycle;
+
+            public bool Stopped;
+
+            public bool Waiting;
+
+            public ushort WaitFirst;
+
+            public ushort WaitSecond;
+
+            public void Wait(ushort first, ushort second)
+            {
+                Waiting = true;
+                WaitFirst = first;
+                WaitSecond = second;
+            }
+
+            public void JumpTo(uint pc, long cycle)
+            {
+                Pc = pc;
+                Cycle = cycle;
+                Stopped = false;
+                Waiting = false;
+            }
         }
 
         private readonly struct PendingCustomWrite
@@ -2384,9 +2841,51 @@ namespace CopperMod.Amiga
 
     internal readonly struct OcsDisplaySnapshot
     {
-        public OcsDisplaySnapshot(ushort bplcon0, ushort diwStart, ushort diwStop, ushort ddfStart, ushort ddfStop, short bpl1mod, short bpl2mod, int lastBitplaneNonZeroPixels, int lastBitplaneRows, int lastBitplaneWords, int lastBitplaneMinX, int lastBitplaneMinY, int lastBitplaneMaxX, int lastBitplaneMaxY, int lastSpriteNonZeroPixels, int lastSpriteMinX, int lastSpriteMinY, int lastSpriteMaxX, int lastSpriteMaxY, uint[] bitplanePointers, ushort[] colors)
+        public OcsDisplaySnapshot(
+            ushort bplcon0,
+            ushort bplcon1,
+            ushort bplcon2,
+            ushort diwStart,
+            ushort diwStop,
+            ushort ddfStart,
+            ushort ddfStop,
+            short bpl1mod,
+            short bpl2mod,
+            int lastBitplaneNonZeroPixels,
+            int lastBitplaneRows,
+            int lastBitplaneWords,
+            int lastBitplaneMinX,
+            int lastBitplaneMinY,
+            int lastBitplaneMaxX,
+            int lastBitplaneMaxY,
+            int lastNormalPlayfieldNonZeroPixels,
+            int lastNormalPlayfieldMinX,
+            int lastNormalPlayfieldMinY,
+            int lastNormalPlayfieldMaxX,
+            int lastNormalPlayfieldMaxY,
+            int lastPlayfield1NonZeroPixels,
+            int lastPlayfield1MinX,
+            int lastPlayfield1MinY,
+            int lastPlayfield1MaxX,
+            int lastPlayfield1MaxY,
+            int lastPlayfield2NonZeroPixels,
+            int lastPlayfield2MinX,
+            int lastPlayfield2MinY,
+            int lastPlayfield2MaxX,
+            int lastPlayfield2MaxY,
+            int lastSpriteNonZeroPixels,
+            int lastSpriteMinX,
+            int lastSpriteMinY,
+            int lastSpriteMaxX,
+            int lastSpriteMaxY,
+            uint[] bitplanePointers,
+            int[] bitplaneBaseRows,
+            ushort[] colors,
+            int[] bitplaneColorCounts)
         {
             Bplcon0 = bplcon0;
+            Bplcon1 = bplcon1;
+            Bplcon2 = bplcon2;
             DiwStart = diwStart;
             DiwStop = diwStop;
             DdfStart = ddfStart;
@@ -2400,16 +2899,37 @@ namespace CopperMod.Amiga
             LastBitplaneMinY = lastBitplaneMinY;
             LastBitplaneMaxX = lastBitplaneMaxX;
             LastBitplaneMaxY = lastBitplaneMaxY;
+            LastNormalPlayfieldNonZeroPixels = lastNormalPlayfieldNonZeroPixels;
+            LastNormalPlayfieldMinX = lastNormalPlayfieldMinX;
+            LastNormalPlayfieldMinY = lastNormalPlayfieldMinY;
+            LastNormalPlayfieldMaxX = lastNormalPlayfieldMaxX;
+            LastNormalPlayfieldMaxY = lastNormalPlayfieldMaxY;
+            LastPlayfield1NonZeroPixels = lastPlayfield1NonZeroPixels;
+            LastPlayfield1MinX = lastPlayfield1MinX;
+            LastPlayfield1MinY = lastPlayfield1MinY;
+            LastPlayfield1MaxX = lastPlayfield1MaxX;
+            LastPlayfield1MaxY = lastPlayfield1MaxY;
+            LastPlayfield2NonZeroPixels = lastPlayfield2NonZeroPixels;
+            LastPlayfield2MinX = lastPlayfield2MinX;
+            LastPlayfield2MinY = lastPlayfield2MinY;
+            LastPlayfield2MaxX = lastPlayfield2MaxX;
+            LastPlayfield2MaxY = lastPlayfield2MaxY;
             LastSpriteNonZeroPixels = lastSpriteNonZeroPixels;
             LastSpriteMinX = lastSpriteMinX;
             LastSpriteMinY = lastSpriteMinY;
             LastSpriteMaxX = lastSpriteMaxX;
             LastSpriteMaxY = lastSpriteMaxY;
             BitplanePointers = bitplanePointers;
+            BitplaneBaseRows = bitplaneBaseRows;
             Colors = colors;
+            BitplaneColorCounts = bitplaneColorCounts;
         }
 
         public ushort Bplcon0 { get; }
+
+        public ushort Bplcon1 { get; }
+
+        public ushort Bplcon2 { get; }
 
         public ushort DiwStart { get; }
 
@@ -2437,6 +2957,36 @@ namespace CopperMod.Amiga
 
         public int LastBitplaneMaxY { get; }
 
+        public int LastNormalPlayfieldNonZeroPixels { get; }
+
+        public int LastNormalPlayfieldMinX { get; }
+
+        public int LastNormalPlayfieldMinY { get; }
+
+        public int LastNormalPlayfieldMaxX { get; }
+
+        public int LastNormalPlayfieldMaxY { get; }
+
+        public int LastPlayfield1NonZeroPixels { get; }
+
+        public int LastPlayfield1MinX { get; }
+
+        public int LastPlayfield1MinY { get; }
+
+        public int LastPlayfield1MaxX { get; }
+
+        public int LastPlayfield1MaxY { get; }
+
+        public int LastPlayfield2NonZeroPixels { get; }
+
+        public int LastPlayfield2MinX { get; }
+
+        public int LastPlayfield2MinY { get; }
+
+        public int LastPlayfield2MaxX { get; }
+
+        public int LastPlayfield2MaxY { get; }
+
         public int LastSpriteNonZeroPixels { get; }
 
         public int LastSpriteMinX { get; }
@@ -2449,15 +2999,22 @@ namespace CopperMod.Amiga
 
         public uint[] BitplanePointers { get; }
 
+        public int[] BitplaneBaseRows { get; }
+
         public ushort[] Colors { get; }
+
+        public int[] BitplaneColorCounts { get; }
     }
 
     internal sealed class AmigaCopper
     {
+        private const ushort CopconCopperDanger = 0x0002;
+
         public void ExecuteList(AmigaBus bus, uint listAddress, int maxInstructions = 1024, Action<ushort, ushort>? onMove = null)
         {
             ArgumentNullException.ThrowIfNull(bus);
             var pc = listAddress;
+            ushort copcon = 0;
             for (var i = 0; i < maxInstructions; i++)
             {
                 var first = bus.ReadChipWordForDevice(AmigaBusRequester.Copper, AmigaBusAccessKind.Copper, pc, 0);
@@ -2471,6 +3028,16 @@ namespace CopperMod.Amiga
                 if ((first & 1) == 0)
                 {
                     var register = (ushort)(first & 0x01FE);
+                    if (!CanCopperWriteRegister(register, copcon))
+                    {
+                        continue;
+                    }
+
+                    if (register == 0x02E)
+                    {
+                        copcon = second;
+                    }
+
                     onMove?.Invoke(register, second);
                     bus.WriteDeviceWord(AmigaBusRequester.Copper, AmigaBusAccessKind.Copper, 0x00DFF000u + register, second, 0);
                     continue;
@@ -2481,6 +3048,16 @@ namespace CopperMod.Amiga
                     continue;
                 }
             }
+        }
+
+        private static bool CanCopperWriteRegister(ushort offset, ushort copcon)
+        {
+            if (offset < 0x010)
+            {
+                return false;
+            }
+
+            return offset >= 0x020 || (copcon & CopconCopperDanger) != 0;
         }
     }
 

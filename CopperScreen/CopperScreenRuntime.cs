@@ -13,17 +13,35 @@ internal interface ICopperScreenAudioOutput : IDisposable
 
 internal readonly record struct CopperScreenCommandResult(bool Success, string Message, CopperScreenState State);
 
+internal readonly record struct CopperScreenCpuState(
+	uint ProgramCounter,
+	uint LastInstructionProgramCounter,
+	ushort StatusRegister);
+
+internal readonly record struct CopperScreenDriveState(
+	int Index,
+	bool Connected,
+	bool HasDisk,
+	int Cylinder,
+	int Head,
+	bool MotorOn,
+	bool Selected,
+	bool ActiveDma);
+
 internal readonly record struct CopperScreenState(
 	string ProfileName,
 	string DiskName,
 	string? DiskPath,
 	string DriveStatusText,
 	string ProgramCounterText,
+	CopperScreenCpuState Cpu,
+	CopperScreenDriveState[] Drives,
 	string StatusText,
 	bool IsPaused,
 	bool IsWorkbenchHandoffPending,
 	bool IsDiskSwapPending,
 	bool IsPrimaryFirePressed,
+	bool AudioFilterEnabled,
 	bool CopperBenchRequestPending,
 	int FramesRendered,
 	int QueuedAudioBuffers,
@@ -80,6 +98,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public int Width => _emulator.Width;
 
 	public int Height => _emulator.Height;
+
+	public event Action? FramePublished;
 
 	public CopperScreenState CurrentState
 	{
@@ -440,6 +460,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_latestFrameNumber++;
 			_latestState = state with { FrameNumber = _latestFrameNumber };
 		}
+
+		FramePublished?.Invoke();
 	}
 
 	private CopperScreenState CaptureState(int framesRendered, int queuedAudioBuffers)
@@ -450,11 +472,14 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_emulator.DiskPath,
 			_emulator.DriveStatusText,
 			_emulator.ProgramCounterText,
+			_emulator.CpuState,
+			_emulator.CaptureDriveStates(),
 			_emulator.StatusText,
 			_emulator.IsPaused,
 			_emulator.IsWorkbenchHandoffPending,
 			_emulator.IsDiskSwapPending,
 			_emulator.IsPrimaryFirePressed,
+			_emulator.AudioFilterEnabled,
 			_pendingCopperBenchRequest,
 			framesRendered,
 			queuedAudioBuffers,

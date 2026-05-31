@@ -79,6 +79,9 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "COPxLC high word masks unused DMA bits":
                 CopperLocationHighWordMasksUnusedDmaBits();
                 break;
+            case "Copper danger register protection via COPCON":
+                CopperDangerRegisterProtectionViaCopcon();
+                break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for copper row '{row.Name}'.");
         }
@@ -108,8 +111,8 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("blitter-wait", "BFD set ignores blitter busy"),
         Executable("interrupts", "Copper MOVE can request INTREQ"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
+        Executable("restricted-registers", "Copper danger register protection via COPCON"),
         Pending("blitter-wait", "BFD clear waits for live blitter completion cycle", "Needs shared copper/blitter DMA slot timing."),
-        Pending("restricted-registers", "Copper danger register protection via COPCON", "Copper register write restrictions are not modelled yet."),
         Pending("dma-control", "cycle slot contention with bitplane and sprite DMA", "Full DMA slot scheduler coverage lives outside the current display renderer.")
     };
 
@@ -279,6 +282,27 @@ public sealed class AmigaCopperConformanceMatrixTests
         var frame = RenderLowResFrame(bus);
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+    }
+
+    private static void CopperDangerRegisterProtectionViaCopcon()
+    {
+        var bus = new AmigaBus();
+        var moves = new List<ushort>();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x000E, 0x1111),
+            (0x0010, 0x2222),
+            (0x002E, 0x0002),
+            (0x0010, 0x3333),
+            (0xFFFF, 0xFFFE));
+
+        new AmigaCopper().ExecuteList(bus, CopperList, onMove: (offset, _) => moves.Add(offset));
+
+        Assert.DoesNotContain((ushort)0x000E, moves);
+        Assert.Contains((ushort)0x002E, moves);
+        Assert.Contains((ushort)0x0010, moves);
+        Assert.Equal(2, moves.Count);
     }
 
     private static void StartLongBlit(AmigaBus bus)

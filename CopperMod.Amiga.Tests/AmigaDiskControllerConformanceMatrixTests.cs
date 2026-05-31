@@ -125,6 +125,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("cia-drive-lines", "write-protect sensor");
 			yield return DiskConformanceRow.Executable("cia-drive-lines", "500ms motor spin-up delay before DSKRDY");
 			yield return DiskConformanceRow.Executable("dsklen", "pending read DMA starts when motor becomes ready");
+			yield return DiskConformanceRow.Executable("diagnostics", "bounded disk DMA trace records start/completion/cancel/sync-miss state");
 			yield return DiskConformanceRow.Pending("write-dma", "DSKDAT write path and magnetic write DMA", "The controller currently models read DMA only.");
 			yield return DiskConformanceRow.Pending("wordsync", "MSBSYNC/GCR byte sync mode", "ADKCON MSBSYNC is recorded by Paula but not implemented by disk input.");
 			yield return DiskConformanceRow.Pending("timing", "ADKCON FAST two-microsecond bit-cell mode", "The drive stream currently derives timing from encoded track length and 300 RPM.");
@@ -146,6 +147,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			{
 				"cia-drive-lines",
 				"cia-step-lines",
+				"diagnostics",
 				"dma-control",
 				"dskbytr",
 				"dsklen",
@@ -692,6 +694,102 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		Assert.Equal(0x2222, ReadChipWord(bus, DmaBase + 2));
 		Assert.Equal(0xAA24, ReadChipWord(bus, DmaBase + 4));
 		Assert.Equal(0x3333, ReadChipWord(bus, DmaBase + 6));
+	}
+
+	[Fact]
+	public void DmaTraceRecordsReadDmaStartAndCompletionState()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace());
+		Assert.Equal(AmigaDiskDmaTraceKind.Started, started.Kind);
+		Assert.Equal(1, started.TransferCount);
+		Assert.Equal(0, started.Drive);
+		Assert.Equal(0, started.Cylinder);
+		Assert.Equal(0, started.Head);
+		Assert.Equal(DmaBase, started.TargetAddress);
+		Assert.Equal(2, started.RequestedWords);
+		Assert.Equal(0, started.TransferredWords);
+		Assert.Equal(0, started.SourceBit);
+		Assert.Equal(0, started.SyncWaitBits);
+		Assert.Equal(32, started.TrackBitLength);
+		Assert.False(started.WordSyncEnabled);
+		Assert.Equal(0x8002, started.Dsklen);
+		Assert.Equal(SyncWord, started.Dsksync);
+
+		CompleteDiskDma(bus);
+
+		var trace = bus.Disk.CaptureDmaTrace();
+		var completed = Assert.Single(trace.Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Completed));
+		Assert.Equal(1, completed.TransferCount);
+		Assert.Equal(2, completed.RequestedWords);
+		Assert.Equal(2, completed.TransferredWords);
+		Assert.Equal(0x2222, completed.Dskdatr);
+		Assert.Equal(0x8000, completed.Dsklen);
+		Assert.True(completed.Cycle >= started.Cycle);
+		Assert.Equal(started.CompletionCycle, completed.Cycle);
+	}
+
+	[Fact]
+	public void DmaTraceRecordsCancellationReasonAndPartialCountdown()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
+
+		StartDiskDma(bus, DmaBase, words: 4);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		var cancelCycle = completionCycle - 1;
+		bus.AdvanceDmaTo(cancelCycle);
+		bus.WriteWord(0x00DFF024, 0x0000, cancelCycle);
+
+		var cancelled = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Cancelled));
+		Assert.Equal(4, cancelled.RequestedWords);
+		Assert.InRange(cancelled.TransferredWords, 0, 3);
+		Assert.Equal(cancelCycle, cancelled.Cycle);
+		Assert.Equal(0, cancelled.Dsklen & 0xC000);
+		Assert.Equal(4 - cancelled.TransferredWords, cancelled.Dsklen & 0x3FFF);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
+	}
+
+	[Fact]
+	public void DmaTraceRecordsWordSyncStartBitAndSyncWait()
+	{
+		const int ShiftBits = 5;
+		var tracks = CreateEncodedTrackSet();
+		tracks[0] = ShiftTrackBits(WordsToBytes(SyncWord, 0xABCD), ShiftBits);
+		var bus = new AmigaBus();
+		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
+		bus.WriteWord(0x00DFF09E, 0x8400);
+		bus.Paula.AdvanceTo(0);
+
+		StartDiskDma(bus, DmaBase, words: 1);
+
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace());
+		Assert.Equal(AmigaDiskDmaTraceKind.Started, started.Kind);
+		Assert.True(started.WordSyncEnabled);
+		Assert.Equal(ShiftBits + 16, started.SourceBit);
+		Assert.Equal(ShiftBits + 16, started.SyncWaitBits);
+		Assert.Equal(32, started.TrackBitLength);
+	}
+
+	[Fact]
+	public void DmaTraceRecordsWordSyncMissWithoutStartingTransfer()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222);
+		var cycle = PrepareDiskDma(bus);
+		bus.WriteWord(0x00DFF09E, 0x8400, cycle);
+		bus.Paula.AdvanceTo(cycle);
+
+		StartDiskDmaWithoutSelecting(bus, DmaBase, words: 1, cycle);
+
+		Assert.False(bus.Disk.CaptureSnapshot().ActiveDma);
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		var missed = Assert.Single(bus.Disk.CaptureDmaTrace());
+		Assert.Equal(AmigaDiskDmaTraceKind.SyncMissing, missed.Kind);
+		Assert.True(missed.WordSyncEnabled);
+		Assert.Equal(0, missed.SourceBit);
+		Assert.Equal(-1, missed.SyncWaitBits);
+		Assert.Equal(1, missed.RequestedWords);
 	}
 
 	[Fact]

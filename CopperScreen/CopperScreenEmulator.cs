@@ -24,6 +24,7 @@ internal sealed class CopperScreenEmulator
 	private bool _workbenchHandoffPending;
 	private bool _copperBenchRequestPending;
 	private AmigaDiskImage? _pendingDiskImage;
+	private AmigaDiskImage? _initialDiskImageOverride;
 	private string? _pendingDiskPath;
 	private int _pendingDiskInsertFrames;
 	private int _firePulseFrames;
@@ -43,7 +44,7 @@ internal sealed class CopperScreenEmulator
 	private bool _joystickPrimaryFirePressed;
 	private bool _joystickSecondFirePressed;
 
-	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions)
+	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
 	{
 		var machineOptions = CreateMachineOptions(startupOptions, out _startupError);
 		Width = AmigaConstants.PalLowResWidth;
@@ -57,6 +58,7 @@ internal sealed class CopperScreenEmulator
 		_previousInterlaceFrame = new int[Framebuffer.Length];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DiskPath;
+		_initialDiskImageOverride = initialDiskImageOverride;
 		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : Path.GetFileName(DiskPath));
 	}
 
@@ -79,6 +81,13 @@ internal sealed class CopperScreenEmulator
 	public bool IsDiskSwapPending => _pendingDiskImage != null;
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
+
+	public bool AudioFilterEnabled => _machine.Bus.AudioFilterEnabled;
+
+	public CopperScreenCpuState CpuState => new CopperScreenCpuState(
+		_machine.Cpu.State.ProgramCounter,
+		_machine.Cpu.State.LastInstructionProgramCounter,
+		_machine.Cpu.State.StatusRegister);
 
 	public string DiskName => DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
 
@@ -108,9 +117,37 @@ internal sealed class CopperScreenEmulator
 		return Math.Max(1, sampleRate / AppFrameRate);
 	}
 
+	public CopperScreenDriveState[] CaptureDriveStates()
+	{
+		var disk = _machine.Bus.Disk.CaptureSnapshot();
+		var drives = new CopperScreenDriveState[4];
+		for (var driveIndex = 0; driveIndex < drives.Length; driveIndex++)
+		{
+			var drive = GetDrive(driveIndex);
+			var connected = driveIndex < disk.ConnectedDriveCount;
+			drives[driveIndex] = new CopperScreenDriveState(
+				driveIndex,
+				connected,
+				connected && drive.HasDisk,
+				drive.Cylinder,
+				drive.Head,
+				connected && drive.MotorOn,
+				connected && drive.Selected,
+				connected && disk.ActiveDma && disk.ActiveDmaDrive == driveIndex);
+		}
+
+		return drives;
+	}
+
 	public static CopperScreenEmulator Create(string[] args, string baseDirectory)
 	{
 		return new CopperScreenEmulator(CopperScreenStartupOptions.Parse(args, baseDirectory));
+	}
+
+	internal static CopperScreenEmulator CreateWithLoadedDisk(string[] args, string baseDirectory, AmigaDiskImage disk)
+	{
+		ArgumentNullException.ThrowIfNull(disk);
+		return new CopperScreenEmulator(CopperScreenStartupOptions.Parse(args, baseDirectory), disk);
 	}
 
 	public static CopperScreenEmulator CreateWithoutDisk()
@@ -534,7 +571,8 @@ internal sealed class CopperScreenEmulator
 			try
 			{
 				_bootAttempted = true;
-				var disk = AmigaDiskImage.Load(DiskPath);
+				var disk = _initialDiskImageOverride ?? AmigaDiskImage.Load(DiskPath);
+				_initialDiskImageOverride = null;
 				if (_profile.UsesKickstartRom)
 				{
 					_boot.StartKickstartRomBoot(disk);

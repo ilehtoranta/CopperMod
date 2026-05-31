@@ -516,6 +516,7 @@ namespace CopperMod.Amiga
         private const ushort DskDmaEnable = 0x8000;
         private const ushort DskWriteMode = 0x4000;
         private const ushort DskLengthMask = 0x3FFF;
+        private const int MaxDmaTraceEntries = 4096;
         private const int DiskRevolutionsPerSecond = 5;
         private static readonly long DiskWordEqualHoldCycles = Math.Max(
             1,
@@ -529,6 +530,7 @@ namespace CopperMod.Amiga
 
         private readonly AmigaBus _bus;
         private readonly AmigaFloppyDrive[] _drives;
+        private readonly List<AmigaDiskDmaTraceEntry> _dmaTrace = new List<AmigaDiskDmaTraceEntry>();
         private long _currentCycle;
         private ushort _dsklen;
         private ushort _dsksync = 0x4489;
@@ -618,7 +620,18 @@ namespace CopperMod.Amiga
                 _activeDmaDrive,
                 _activeDma,
                 _activeDmaCompletionCycle,
+                _diskDataRegister,
                 ConnectedDriveCount);
+        }
+
+        public AmigaDiskDmaTraceEntry[] CaptureDmaTrace()
+        {
+            return _dmaTrace.ToArray();
+        }
+
+        public void ClearDmaTrace()
+        {
+            _dmaTrace.Clear();
         }
 
         public void Reset()
@@ -633,6 +646,7 @@ namespace CopperMod.Amiga
             _dskbytrByteReady = false;
             _dskbytrWordEqualUntilCycle = 0;
             _transferCount = 0;
+            _dmaTrace.Clear();
             _lastTransferWords = 0;
             _lastTransferDrive = -1;
             _lastTransferCylinder = 0;
@@ -1029,6 +1043,20 @@ namespace CopperMod.Amiga
                 var syncOffset = FindSyncOffset(track, _dsksync, stream.Offset);
                 if (syncOffset < 0)
                 {
+                    AppendDmaTrace(
+                        AmigaDiskDmaTraceKind.SyncMissing,
+                        cycle,
+                        driveIndex,
+                        drive.Cylinder,
+                        drive.Head,
+                        targetAddress: _bus.MaskChipDmaAddress(_diskPointer),
+                        requestedWords,
+                        transferredWords: 0,
+                        sourceBit: stream.Offset,
+                        syncWaitBits: -1,
+                        track.BitLength,
+                        wordSyncEnabled,
+                        completionCycle: 0);
                     return false;
                 }
 
@@ -1060,6 +1088,20 @@ namespace CopperMod.Amiga
             _activeDmaStartCycle = cycle;
             _activeDmaCompletionCycle = completionCycle;
             _activeDmaCyclesPerBit = cyclesPerBit;
+            AppendDmaTrace(
+                AmigaDiskDmaTraceKind.Started,
+                cycle,
+                driveIndex,
+                drive.Cylinder,
+                drive.Head,
+                targetAddress,
+                requestedWords,
+                transferredWords: 0,
+                sourceStartBit,
+                syncWaitBits,
+                track.BitLength,
+                wordSyncEnabled,
+                completionCycle);
             AdvanceActiveDmaTo(cycle);
             return true;
         }
@@ -1141,6 +1183,20 @@ namespace CopperMod.Amiga
             var elapsedCycles = Math.Max(0, _activeDmaCompletionCycle - _activeDmaStartCycle);
             var position = (_activeDmaStreamStartPosition + (elapsedCycles / _activeDmaCyclesPerBit)) % _activeDmaTrackBitLength;
             SetStreamPosition(GetActiveDmaStream(), position, _activeDmaCompletionCycle);
+            AppendDmaTrace(
+                AmigaDiskDmaTraceKind.Completed,
+                _activeDmaCompletionCycle,
+                _activeDmaDrive,
+                _activeDmaCylinder,
+                _activeDmaHead,
+                _activeDmaTargetAddress,
+                _activeDmaRequestedWords,
+                _activeDmaTransferredWords,
+                GetActiveDmaStream().Offset,
+                syncWaitBits: 0,
+                _activeDmaTrackBitLength,
+                _activeDmaWordSyncEnabled,
+                _activeDmaCompletionCycle);
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
@@ -1157,7 +1213,11 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            AdvanceActiveDmaTo(cycle);
+            if (IsDiskDmaControlEnabled())
+            {
+                AdvanceActiveDmaTo(cycle);
+            }
+
             if (!_activeDma)
             {
                 return;
@@ -1167,6 +1227,20 @@ namespace CopperMod.Amiga
             var position = (_activeDmaStreamStartPosition + (elapsedCycles / _activeDmaCyclesPerBit)) % _activeDmaTrackBitLength;
             SetStreamPosition(GetActiveDmaStream(), position, cycle);
             UpdateActiveDmaLength();
+            AppendDmaTrace(
+                AmigaDiskDmaTraceKind.Cancelled,
+                cycle,
+                _activeDmaDrive,
+                _activeDmaCylinder,
+                _activeDmaHead,
+                _activeDmaTargetAddress,
+                _activeDmaRequestedWords,
+                _activeDmaTransferredWords,
+                GetActiveDmaStream().Offset,
+                syncWaitBits: 0,
+                _activeDmaTrackBitLength,
+                _activeDmaWordSyncEnabled,
+                _activeDmaCompletionCycle);
             ClearActiveDma();
         }
 
@@ -1176,7 +1250,64 @@ namespace CopperMod.Amiga
             var position = (_activeDmaStreamStartPosition + (elapsedCycles / _activeDmaCyclesPerBit)) % _activeDmaTrackBitLength;
             SetStreamPosition(GetActiveDmaStream(), position, cycle);
             UpdateActiveDmaLength();
+            AppendDmaTrace(
+                AmigaDiskDmaTraceKind.Stopped,
+                cycle,
+                _activeDmaDrive,
+                _activeDmaCylinder,
+                _activeDmaHead,
+                _activeDmaTargetAddress,
+                _activeDmaRequestedWords,
+                _activeDmaTransferredWords,
+                GetActiveDmaStream().Offset,
+                syncWaitBits: 0,
+                _activeDmaTrackBitLength,
+                _activeDmaWordSyncEnabled,
+                _activeDmaCompletionCycle);
             ClearActiveDma();
+        }
+
+        private void AppendDmaTrace(
+            AmigaDiskDmaTraceKind kind,
+            long cycle,
+            int drive,
+            int cylinder,
+            int head,
+            uint targetAddress,
+            int requestedWords,
+            int transferredWords,
+            int sourceBit,
+            int syncWaitBits,
+            int trackBitLength,
+            bool wordSyncEnabled,
+            long completionCycle)
+        {
+            if (_dmaTrace.Count == MaxDmaTraceEntries)
+            {
+                _dmaTrace.RemoveAt(0);
+            }
+
+            _dmaTrace.Add(new AmigaDiskDmaTraceEntry(
+                kind,
+                _transferCount,
+                cycle,
+                drive,
+                cylinder,
+                head,
+                GetSelectedDriveIndex(),
+                _dsklen,
+                _dsksync,
+                _bus.Paula.Adkcon,
+                PeekDskbytr(),
+                _diskDataRegister,
+                targetAddress,
+                requestedWords,
+                transferredWords,
+                sourceBit,
+                syncWaitBits,
+                trackBitLength,
+                wordSyncEnabled,
+                completionCycle));
         }
 
         private void ClearActiveDma()
@@ -1621,6 +1752,7 @@ namespace CopperMod.Amiga
             int activeDmaDrive,
             bool activeDma,
             long activeDmaCompletionCycle,
+            ushort dskdatr,
             int connectedDriveCount)
         {
             DiskPointer = diskPointer;
@@ -1642,6 +1774,7 @@ namespace CopperMod.Amiga
             ActiveDmaDrive = activeDmaDrive;
             ActiveDma = activeDma;
             ActiveDmaCompletionCycle = activeDmaCompletionCycle;
+            Dskdatr = dskdatr;
             ConnectedDriveCount = connectedDriveCount;
         }
 
@@ -1683,7 +1816,105 @@ namespace CopperMod.Amiga
 
         public long ActiveDmaCompletionCycle { get; }
 
+        public ushort Dskdatr { get; }
+
         public int ConnectedDriveCount { get; }
+    }
+
+    internal enum AmigaDiskDmaTraceKind
+    {
+        Started,
+        Completed,
+        Cancelled,
+        Stopped,
+        SyncMissing
+    }
+
+    internal readonly struct AmigaDiskDmaTraceEntry
+    {
+        public AmigaDiskDmaTraceEntry(
+            AmigaDiskDmaTraceKind kind,
+            int transferCount,
+            long cycle,
+            int drive,
+            int cylinder,
+            int head,
+            int selectedDrive,
+            ushort dsklen,
+            ushort dsksync,
+            ushort adkcon,
+            ushort dskbytr,
+            ushort dskdatr,
+            uint targetAddress,
+            int requestedWords,
+            int transferredWords,
+            int sourceBit,
+            int syncWaitBits,
+            int trackBitLength,
+            bool wordSyncEnabled,
+            long completionCycle)
+        {
+            Kind = kind;
+            TransferCount = transferCount;
+            Cycle = cycle;
+            Drive = drive;
+            Cylinder = cylinder;
+            Head = head;
+            SelectedDrive = selectedDrive;
+            Dsklen = dsklen;
+            Dsksync = dsksync;
+            Adkcon = adkcon;
+            Dskbytr = dskbytr;
+            Dskdatr = dskdatr;
+            TargetAddress = targetAddress;
+            RequestedWords = requestedWords;
+            TransferredWords = transferredWords;
+            SourceBit = sourceBit;
+            SyncWaitBits = syncWaitBits;
+            TrackBitLength = trackBitLength;
+            WordSyncEnabled = wordSyncEnabled;
+            CompletionCycle = completionCycle;
+        }
+
+        public AmigaDiskDmaTraceKind Kind { get; }
+
+        public int TransferCount { get; }
+
+        public long Cycle { get; }
+
+        public int Drive { get; }
+
+        public int Cylinder { get; }
+
+        public int Head { get; }
+
+        public int SelectedDrive { get; }
+
+        public ushort Dsklen { get; }
+
+        public ushort Dsksync { get; }
+
+        public ushort Adkcon { get; }
+
+        public ushort Dskbytr { get; }
+
+        public ushort Dskdatr { get; }
+
+        public uint TargetAddress { get; }
+
+        public int RequestedWords { get; }
+
+        public int TransferredWords { get; }
+
+        public int SourceBit { get; }
+
+        public int SyncWaitBits { get; }
+
+        public int TrackBitLength { get; }
+
+        public bool WordSyncEnabled { get; }
+
+        public long CompletionCycle { get; }
     }
 
     internal static class AmigaDosTrackEncoder

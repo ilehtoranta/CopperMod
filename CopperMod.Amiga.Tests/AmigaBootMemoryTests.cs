@@ -41,6 +41,12 @@ public sealed class AmigaBootMemoryTests
 	private const int TaskTrapAllocOffset = 0x22;
 	private const int TaskTrapAbleOffset = 0x24;
 	private const int TaskTrapCodeOffset = 0x32;
+	private const int ViewViewPortOffset = 0x00;
+	private const int ViewLofCprListOffset = 0x04;
+	private const int ViewShfCprListOffset = 0x08;
+	private const int ViewStructSize = 0x12;
+	private const int CprListStartOffset = 0x04;
+	private const int ViewPortDspInsOffset = 0x08;
 	private const uint MemfPublic = 0x0000_0001;
 	private const uint MemfChip = 0x0000_0002;
 	private const uint MemfFast = 0x0000_0004;
@@ -349,7 +355,7 @@ public sealed class AmigaBootMemoryTests
 		WriteCopperColorList(bus, 0x2400, 0x0F00);
 		WriteCopperColorList(bus, 0x2600, 0x00F0);
 		bus.WriteLong(0x2304, 0x2400);
-		bus.WriteLong(0x220C, 0x2300);
+		bus.WriteLong(0x2200 + ViewLofCprListOffset, 0x2300);
 		var state = new M68kCpuState();
 		state.A[1] = 0x2200;
 
@@ -360,6 +366,84 @@ public sealed class AmigaBootMemoryTests
 		bus.Display.RenderFrame(frame);
 
 		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+	}
+
+	[Fact]
+	public void LoadViewPublishesCopperListFromKickstartViewOffsets()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint lofCprList = 0x2300;
+		const uint shfCprList = 0x2320;
+		WriteCopperColorList(bus, 0x2400, 0x0F00);
+		WriteCopperColorList(bus, 0x2600, 0x00F0);
+		bus.WriteLong(lofCprList + CprListStartOffset, 0x2400);
+		bus.WriteLong(shfCprList + CprListStartOffset, 0x2600);
+		bus.WriteLong(view + ViewLofCprListOffset, lofCprList);
+		bus.WriteLong(view + ViewShfCprListOffset, shfCprList);
+		var state = new M68kCpuState();
+		state.A[1] = view;
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		bus.Display.RenderFrame(frame);
+		Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+
+		bus.WriteLong(view + ViewLofCprListOffset, 0);
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		bus.Display.RenderFrame(frame);
+		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+	}
+
+	[Fact]
+	public void MakeVPortWritesCprListsToKickstartViewOffsets()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		bus.WriteLong(view + 0x0C, 0xDEAD_BEEFu);
+		bus.WriteLong(view + 0x10, 0xCAFE_BABEu);
+		WriteMinimalViewPort(bus, viewPort);
+		var state = new M68kCpuState();
+		state.A[0] = view;
+		state.A[1] = viewPort;
+
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		var lofCprList = bus.ReadLong(view + ViewLofCprListOffset);
+		var shfCprList = bus.ReadLong(view + ViewShfCprListOffset);
+		Assert.Equal(viewPort, bus.ReadLong(view + ViewViewPortOffset));
+		Assert.NotEqual(0u, lofCprList);
+		Assert.Equal(lofCprList, shfCprList);
+		Assert.Equal(0xDEAD_BEEFu, bus.ReadLong(view + 0x0C));
+		Assert.Equal(0xCAFE_BABEu, bus.ReadLong(view + 0x10));
+		Assert.Equal(bus.ReadLong(lofCprList + CprListStartOffset), bus.ReadLong(viewPort + ViewPortDspInsOffset));
+	}
+
+	[Fact]
+	public void InitViewClearsKickstartViewHeaderOnly()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		for (var offset = 0; offset < 0x20; offset++)
+		{
+			bus.WriteByte(view + (uint)offset, 0xAA, 0);
+		}
+
+		var state = new M68kCpuState();
+		state.A[1] = view;
+
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0x168), state));
+		for (var offset = 0; offset < ViewStructSize; offset++)
+		{
+			Assert.Equal((byte)0, bus.ReadByte(view + (uint)offset));
+		}
+
+		Assert.Equal((byte)0xAA, bus.ReadByte(view + ViewStructSize));
+		Assert.Equal((byte)0xAA, bus.ReadByte(view + 0x15));
 	}
 
 	private static AmigaMachine StartBootShim(AmigaMachineProfile profile)
@@ -590,6 +674,22 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(address + 2, color);
 		bus.WriteWord(address + 4, 0xFFFF);
 		bus.WriteWord(address + 6, 0xFFFE);
+	}
+
+	private static void WriteMinimalViewPort(AmigaBus bus, uint viewPort)
+	{
+		const uint rasInfo = 0x2380;
+		const uint bitMap = 0x23A0;
+		const uint plane = 0x23C0;
+		bus.WriteWord(viewPort + 0x18, 16);
+		bus.WriteWord(viewPort + 0x1A, 1);
+		bus.WriteLong(viewPort + 0x24, rasInfo);
+		bus.WriteLong(rasInfo + 0x04, bitMap);
+		bus.WriteWord(bitMap + 0x00, 2);
+		bus.WriteWord(bitMap + 0x02, 1);
+		bus.WriteByte(bitMap + 0x05, 1, 0);
+		bus.WriteLong(bitMap + 0x08, plane);
+		bus.WriteWord(plane, 0x8000);
 	}
 
 	private static uint Pixel(uint[] frame, int x, int y)

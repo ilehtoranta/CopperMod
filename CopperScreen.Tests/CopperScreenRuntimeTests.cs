@@ -62,6 +62,37 @@ public sealed class CopperScreenRuntimeTests
 		Assert.InRange(audio.SubmitCount, 5, 8);
 	}
 
+	[Fact]
+	public void StateIncludesCompactToolbarIndicatorsForAllDrives()
+	{
+		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk());
+
+		var state = runtime.CurrentState;
+
+		Assert.Equal(4, state.Drives.Length);
+		Assert.Equal(new[] { 0, 1, 2, 3 }, state.Drives.Select(drive => drive.Index).ToArray());
+		Assert.True(state.Drives[0].Connected);
+		Assert.True(state.Drives[1].Connected);
+		Assert.False(state.Drives[2].Connected);
+		Assert.False(state.Drives[3].Connected);
+		_ = state.AudioFilterEnabled;
+		_ = state.Cpu.ProgramCounter;
+		_ = state.Cpu.LastInstructionProgramCounter;
+	}
+
+	[Fact]
+	public async Task FramePublishedNotifiesPresentationLoop()
+	{
+		using var audio = new FakeAudioOutput();
+		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
+		var framePublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		runtime.FramePublished += () => framePublished.TrySetResult();
+
+		runtime.Start();
+
+		await framePublished.Task.WaitAsync(TimeSpan.FromSeconds(1));
+	}
+
 	private sealed class FakeAudioOutput : ICopperScreenAudioOutput
 	{
 		private int _queued;

@@ -13,7 +13,7 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
-	private const int DisplayTimerIntervalMilliseconds = 20;
+	private const int DisplayTimerIntervalMilliseconds = 16;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private long _presentedFrames;
 	private readonly CopperScreenRuntime _runtime;
@@ -24,6 +24,14 @@ internal sealed class MainWindow : Window
 	private readonly Border _toolbar;
 	private readonly Border _benchPanel;
 	private readonly TextBlock _toolbarStatus;
+	private readonly TextBlock _diskStatus;
+	private readonly TextBlock _ledFilterStatus;
+	private readonly TextBlock _cpuPcStatus;
+	private readonly TextBlock _lastPcStatus;
+	private readonly TextBlock _perfStatus;
+	private readonly TextBlock[] _driveStatusTexts = new TextBlock[4];
+	private readonly Border[] _driveStatusBoxes = new Border[4];
+	private Border _ledFilterBox = null!;
 	private readonly TextBlock _benchPath;
 	private readonly TextBlock _benchDetails;
 	private readonly Button _benchToggleButton;
@@ -36,10 +44,12 @@ internal sealed class MainWindow : Window
 	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
 	private CopperScreenState _latestState;
+	private int _presentationQueued;
+	private volatile bool _closed;
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
-	private bool _showFullOverscan = true;
+	private bool _showFullOverscan;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 
@@ -64,24 +74,37 @@ internal sealed class MainWindow : Window
 		};
 		ApplyPresenterViewport();
 		_toolbarStatus = new TextBlock();
+		_diskStatus = CreateToolbarTextBlock(fontSize: 11);
+		_ledFilterStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
+		_cpuPcStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
+		_lastPcStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
+		_perfStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_benchPath = new TextBlock();
 		_benchDetails = new TextBlock();
 		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench);
 		_pauseButton = CreateToolbarButton("Pause", TogglePause);
-		_numpadModeButton = CreateToolbarButton("Numpad: Joy", ToggleNumpadMode);
+		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode);
 		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen);
-		_overscanButton = CreateToolbarButton("Overscan", ToggleOverscan);
+		_overscanButton = CreateToolbarButton("Scan", ToggleOverscan);
 		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
-		_root = new Grid();
+		_root = new Grid
+		{
+			RowDefinitions =
+			{
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(new GridLength(1, GridUnitType.Star))
+			}
+		};
 		_benchPanel = CreateCopperBenchPanel();
 		_toolbar = CreateToolbar();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
 		_root.Children.Add(_toolbar);
 		Content = _root;
+		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
-		_timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds) };
-		_timer.Tick += (_, _) => PresentLatestFrame();
+		_runtime.FramePublished += QueuePresentation;
+		_timer = new DispatcherTimer(TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds), DispatcherPriority.Render, (_, _) => PresentLatestFrame());
 		Opened += (_, _) =>
 		{
 			_presenter.Focus();
@@ -110,10 +133,19 @@ internal sealed class MainWindow : Window
 		};
 		KeyDown += OnKeyDown;
 		KeyUp += OnKeyUp;
+		PropertyChanged += (_, args) =>
+		{
+			if (args.Property == WindowStateProperty)
+			{
+				RefreshCopperBenchUi();
+			}
+		};
 		Deactivated += (_, _) => ReleaseInteractiveInput();
 		Closed += (_, _) =>
 		{
+			_closed = true;
 			_timer.Stop();
+			_runtime.FramePublished -= QueuePresentation;
 			_runtime.Dispose();
 		};
 	}
@@ -128,6 +160,25 @@ internal sealed class MainWindow : Window
 	{
 		_ = catchUpAudio;
 		PresentLatestFrame(forceStatus: true);
+	}
+
+	private void QueuePresentation()
+	{
+		if (_closed || Interlocked.Exchange(ref _presentationQueued, 1) != 0)
+		{
+			return;
+		}
+
+		Dispatcher.UIThread.Post(
+			() =>
+			{
+				Interlocked.Exchange(ref _presentationQueued, 0);
+				if (!_closed)
+				{
+					PresentLatestFrame();
+				}
+			},
+			DispatcherPriority.Render);
 	}
 
 	private void PresentLatestFrame(bool forceStatus = false)
@@ -158,14 +209,14 @@ internal sealed class MainWindow : Window
 		{
 			_lastStatusUpdateTick = now;
 			UpdateToolbarStatus(state);
-			Title = "CopperScreen - " + state.ProfileName + " - " + state.StatusText + " - F11 toolbar, Alt+Enter fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
+			Title = "CopperScreen - " + state.ProfileName + " - Alt+Enter fullscreen, F11 toolbar in fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
 			CopperScreenCrashLog.Heartbeat(() => BuildCrashLogState(state));
 		}
 	}
 
 	private string BuildCrashLogState(CopperScreenState state)
 	{
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", {state.ProgramCounterText}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{state.DriveStatusText}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
 	}
 
 	private void UpdateMousePort(PointerEventArgs args)
@@ -200,7 +251,11 @@ internal sealed class MainWindow : Window
 	{
 		if (args.Key == Key.F11 || args.PhysicalKey == PhysicalKey.F11)
 		{
-			_bench.ToggleToolbar();
+			if (WindowState == WindowState.FullScreen)
+			{
+				_bench.ToggleToolbar();
+			}
+
 			RefreshCopperBenchUi();
 			args.Handled = true;
 			return;
@@ -390,50 +445,93 @@ internal sealed class MainWindow : Window
 	private Border CreateToolbar()
 	{
 		_toolbarStatus.Foreground = Brushes.White;
-		_toolbarStatus.FontSize = 12;
+		_toolbarStatus.FontSize = 11;
 		_toolbarStatus.TextWrapping = TextWrapping.NoWrap;
 		_toolbarStatus.TextTrimming = TextTrimming.CharacterEllipsis;
 
-		var bar = new StackPanel
+		var controls = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
-			Spacing = 6,
+			Spacing = 4,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Left
 		};
-		bar.Children.Add(_benchToggleButton);
-		bar.Children.Add(_pauseButton);
-		bar.Children.Add(CreateToolbarButton("Reset", async () =>
+		controls.Children.Add(_benchToggleButton);
+		controls.Children.Add(_pauseButton);
+		controls.Children.Add(CreateToolbarButton("Reset", async () =>
 		{
 			await ResetRuntimeAsync().ConfigureAwait(true);
 		}));
-		bar.Children.Add(_fullscreenButton);
-		bar.Children.Add(_overscanButton);
-		bar.Children.Add(_numpadModeButton);
-		bar.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
-		bar.Children.Add(CreateToolbarButton("Prev", async () =>
+		controls.Children.Add(_fullscreenButton);
+		controls.Children.Add(_overscanButton);
+		controls.Children.Add(_numpadModeButton);
+		controls.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker));
+		controls.Children.Add(CreateToolbarButton("Prev", async () =>
 		{
 			await InsertPreviousDiskAsync().ConfigureAwait(true);
 		}));
-		bar.Children.Add(CreateToolbarButton("Next", async () =>
+		controls.Children.Add(CreateToolbarButton("Next", async () =>
 		{
 			await InsertNextDiskAsync().ConfigureAwait(true);
 		}));
 
+		_ledFilterBox = CreateIndicatorBox(_ledFilterStatus, 64);
+		var topRow = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 5,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		topRow.Children.Add(controls);
+		topRow.Children.Add(CreateIndicatorBox(_diskStatus, 180));
+		topRow.Children.Add(_ledFilterBox);
+		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76));
+		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76));
+		topRow.Children.Add(CreateIndicatorBox(_perfStatus, 76));
+
+		var drives = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 4,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		for (var driveIndex = 0; driveIndex < _driveStatusTexts.Length; driveIndex++)
+		{
+			var text = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
+			var box = CreateIndicatorBox(text, 66);
+			_driveStatusTexts[driveIndex] = text;
+			_driveStatusBoxes[driveIndex] = box;
+			drives.Children.Add(box);
+		}
+
+		var bottomRow = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(GridLength.Auto),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			},
+			ColumnSpacing = 8
+		};
+		Grid.SetColumn(drives, 0);
+		bottomRow.Children.Add(drives);
+		Grid.SetColumn(_toolbarStatus, 1);
+		bottomRow.Children.Add(_toolbarStatus);
+
 		var layout = new StackPanel
 		{
 			Orientation = Orientation.Vertical,
-			Spacing = 5
+			Spacing = 4
 		};
-		layout.Children.Add(_toolbarStatus);
-		layout.Children.Add(bar);
+		layout.Children.Add(topRow);
+		layout.Children.Add(bottomRow);
 
 		return new Border
 		{
 			Background = new SolidColorBrush(Color.FromArgb(220, 18, 22, 28)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(70, 78, 92)),
 			BorderThickness = new Thickness(0, 0, 0, 1),
-			Padding = new Thickness(8, 5),
+			Padding = new Thickness(6, 4),
 			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Top,
 			Child = layout
@@ -571,11 +669,41 @@ internal sealed class MainWindow : Window
 			Foreground = Brushes.White,
 			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
-			Padding = new Thickness(8, 3),
-			MinWidth = 54
+			FontSize = 11,
+			Padding = new Thickness(6, 2),
+			MinWidth = 0
 		};
 		button.Click += (_, _) => action();
 		return button;
+	}
+
+	private static TextBlock CreateToolbarTextBlock(double fontSize, TextAlignment textAlignment = TextAlignment.Left)
+	{
+		return new TextBlock
+		{
+			Foreground = Brushes.White,
+			FontFamily = FontFamily.Parse("Consolas"),
+			FontSize = fontSize,
+			TextAlignment = textAlignment,
+			TextWrapping = TextWrapping.NoWrap,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+	}
+
+	private static Border CreateIndicatorBox(TextBlock text, double width)
+	{
+		return new Border
+		{
+			Width = width,
+			Height = 21,
+			Background = new SolidColorBrush(Color.FromRgb(24, 29, 36)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(58, 67, 80)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(3),
+			Padding = new Thickness(4, 1),
+			Child = text
+		};
 	}
 
 	private static Button CreatePanelButton(string text, Action action)
@@ -609,6 +737,31 @@ internal sealed class MainWindow : Window
 			? WindowState.Normal
 			: WindowState.FullScreen;
 		RefreshCopperBenchUi();
+	}
+
+	private void ApplyWindowPresentationMode()
+	{
+		var fullscreen = WindowState == WindowState.FullScreen;
+		_toolbar.IsVisible = !fullscreen || _bench.IsToolbarVisible;
+
+		Grid.SetRow(_toolbar, 0);
+		Grid.SetRowSpan(_toolbar, 1);
+
+		if (fullscreen)
+		{
+			Grid.SetRow(_presenter, 0);
+			Grid.SetRowSpan(_presenter, 2);
+			Grid.SetRow(_benchPanel, 0);
+			Grid.SetRowSpan(_benchPanel, 2);
+			_benchPanel.Margin = new Thickness(12, 78, 0, 12);
+			return;
+		}
+
+		Grid.SetRow(_presenter, 1);
+		Grid.SetRowSpan(_presenter, 1);
+		Grid.SetRow(_benchPanel, 1);
+		Grid.SetRowSpan(_benchPanel, 1);
+		_benchPanel.Margin = new Thickness(12, 12, 0, 12);
 	}
 
 	private void ToggleOverscan()
@@ -746,13 +899,13 @@ internal sealed class MainWindow : Window
 
 	private void RefreshCopperBenchUi()
 	{
-		_toolbar.IsVisible = _bench.IsToolbarVisible;
+		ApplyWindowPresentationMode();
 		_benchPanel.IsVisible = _bench.IsOverlayVisible;
 		_benchToggleButton.Content = _bench.IsOverlayVisible ? "Hide" : "Bench";
 		_pauseButton.Content = _latestState.IsPaused ? "Run" : "Pause";
-		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "Numpad: Joy" : "Numpad: Keys";
-		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
-		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
+		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "N:Joy" : "N:Key";
+		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Win" : "Full";
+		_overscanButton.Content = _showFullOverscan ? "Crop" : "Scan";
 		_benchPath.Text = _bench.DisplayPath;
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
@@ -812,9 +965,93 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus(CopperScreenState state)
 	{
-		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Window" : "Full";
-		_overscanButton.Content = _showFullOverscan ? "Crop" : "Overscan";
-		_toolbarStatus.Text = $"{state.ProfileName} | {state.DiskName} | {state.DriveStatusText} | {state.ProgramCounterText} | {state.StatusText}";
+		_pauseButton.Content = state.IsPaused ? "Run" : "Pause";
+		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "N:Joy" : "N:Key";
+		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Win" : "Full";
+		_overscanButton.Content = _showFullOverscan ? "Crop" : "Scan";
+		SetText(_diskStatus, state.DiskName);
+		SetText(_ledFilterStatus, state.AudioFilterEnabled ? "LED/F ON" : "LED/F OFF");
+		StyleIndicator(
+			_ledFilterBox,
+			state.AudioFilterEnabled ? Color.FromRgb(28, 72, 45) : Color.FromRgb(34, 36, 40),
+			state.AudioFilterEnabled ? Color.FromRgb(91, 160, 103) : Color.FromRgb(66, 70, 78),
+			state.AudioFilterEnabled ? Color.FromRgb(210, 255, 218) : Color.FromRgb(148, 154, 164));
+		SetText(_cpuPcStatus, $"PC {state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}");
+		SetText(_lastPcStatus, $"LP {state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}");
+		SetText(_perfStatus, $"Q{state.QueuedAudioBuffers} D{state.DroppedFrames}");
+
+		for (var driveIndex = 0; driveIndex < _driveStatusTexts.Length; driveIndex++)
+		{
+			var drive = driveIndex < state.Drives.Length
+				? state.Drives[driveIndex]
+				: new CopperScreenDriveState(driveIndex, false, false, 0, 0, false, false, false);
+			UpdateDriveStatus(drive, state.IsDiskSwapPending && driveIndex == 0);
+		}
+
+		SetText(_toolbarStatus, $"{state.ProfileName} | {state.StatusText}");
+	}
+
+	private void UpdateDriveStatus(CopperScreenDriveState drive, bool swapping)
+	{
+		var text = _driveStatusTexts[drive.Index];
+		var box = _driveStatusBoxes[drive.Index];
+		if (swapping)
+		{
+			SetText(text, $"DF{drive.Index} swap");
+			StyleIndicator(box, Color.FromRgb(74, 58, 26), Color.FromRgb(152, 118, 52), Color.FromRgb(255, 226, 162));
+			return;
+		}
+
+		if (!drive.Connected)
+		{
+			SetText(text, $"DF{drive.Index} --.- NC");
+			StyleIndicator(box, Color.FromRgb(24, 25, 27), Color.FromRgb(48, 50, 54), Color.FromRgb(106, 112, 120));
+			return;
+		}
+
+		if (!drive.HasDisk)
+		{
+			SetText(text, $"DF{drive.Index} --.- --");
+			StyleIndicator(box, Color.FromRgb(29, 33, 38), Color.FromRgb(58, 64, 72), Color.FromRgb(145, 152, 162));
+			return;
+		}
+
+		var flags = string.Concat(drive.ActiveDma ? 'D' : drive.MotorOn ? 'M' : '-', drive.Selected ? 'S' : '-');
+		SetText(text, $"DF{drive.Index} {drive.Cylinder:00}.{drive.Head} {flags}");
+		if (drive.ActiveDma)
+		{
+			StyleIndicator(box, Color.FromRgb(76, 35, 28), Color.FromRgb(182, 93, 66), Color.FromRgb(255, 220, 202));
+		}
+		else if (drive.MotorOn)
+		{
+			StyleIndicator(box, Color.FromRgb(70, 58, 25), Color.FromRgb(160, 128, 48), Color.FromRgb(255, 234, 170));
+		}
+		else if (drive.Selected)
+		{
+			StyleIndicator(box, Color.FromRgb(28, 57, 75), Color.FromRgb(72, 139, 178), Color.FromRgb(207, 239, 255));
+		}
+		else
+		{
+			StyleIndicator(box, Color.FromRgb(28, 39, 35), Color.FromRgb(62, 88, 77), Color.FromRgb(184, 218, 202));
+		}
+	}
+
+	private static void SetText(TextBlock text, string value)
+	{
+		if (!string.Equals(text.Text, value, StringComparison.Ordinal))
+		{
+			text.Text = value;
+		}
+	}
+
+	private static void StyleIndicator(Border box, Color background, Color border, Color foreground)
+	{
+		box.Background = new SolidColorBrush(background);
+		box.BorderBrush = new SolidColorBrush(border);
+		if (box.Child is TextBlock text)
+		{
+			text.Foreground = new SolidColorBrush(foreground);
+		}
 	}
 
 	[Flags]

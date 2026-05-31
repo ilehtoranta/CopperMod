@@ -1,7 +1,9 @@
 using System.Reflection;
+using System.IO.Compression;
 using System.Text.RegularExpressions;
 using Avalonia.Input;
 using CopperMod.Amiga;
+using CopperMod.Ipf;
 using CopperScreen;
 
 namespace CopperScreen.Tests;
@@ -86,6 +88,9 @@ public sealed class CopperScreenBootTests
 		uint? previousDiskTwoChecksum = null;
 		var visual = default(FrameVisualMetrics);
 		var reachedDiskTwoScene = false;
+		var diskTrace = new List<ShadowDiskTraceFrameEntry>();
+		var observedTraceEntries = 0;
+		machine.Bus.Disk.ClearDmaTrace();
 
 		for (frame = 1; frame <= MaxFrames; frame++)
 		{
@@ -93,6 +98,7 @@ public sealed class CopperScreenBootTests
 			emulator.RenderNextFrame();
 			var disk = machine.Bus.Disk.CaptureSnapshot();
 			var display = emulator.DisplaySnapshot;
+			AppendNewDiskTraceEntries(machine.Bus.Disk, ref observedTraceEntries, frame, diskTrace);
 
 			idleFrames = previousTransferCount == disk.TransferCount && !disk.ActiveDma
 				? idleFrames + 1
@@ -158,7 +164,51 @@ public sealed class CopperScreenBootTests
 				swapFrame,
 				transferCountAtSwap,
 				diskTwoChecksumChanges,
-				visual));
+				visual,
+				diskTrace));
+		Assert.Contains(
+			diskTrace,
+			entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.Started && entry.Trace.TransferCount > transferCountAtSwap);
+		Assert.DoesNotContain(
+			diskTrace,
+			entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.SyncMissing && entry.Trace.TransferCount > transferCountAtSwap);
+	}
+
+	[Fact]
+	public void ShadowOfTheBeastIpfDiskTwoOrientationDiagnosticsWhenEnabled()
+	{
+		if (!string.Equals(
+			Environment.GetEnvironmentVariable("COPPERSCREEN_SHADOW_IPF_ORIENTATION_DIAGNOSTICS"),
+			"1",
+			StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		var diskOnePath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip");
+		if (diskOnePath == null)
+		{
+			return;
+		}
+
+		var diskTwoPath = CopperScreenEmulator.ResolveNextDiskPath(diskOnePath);
+		if (diskTwoPath == null)
+		{
+			return;
+		}
+
+		var results = Enum.GetValues<ShadowIpfOrientationVariant>()
+			.Select(variant => RunShadowOrientationDiagnostic(diskOnePath, diskTwoPath, variant))
+			.ToArray();
+		var production = Assert.Single(results.Where(result => result.Variant == ShadowIpfOrientationVariant.Production));
+		var diagnostic = string.Join(Environment.NewLine, results.Select(result => result.ToDiagnosticString()));
+
+		Assert.False(ContainsFatalBootStatus(production.StatusText), diagnostic);
+		Assert.True(production.SawPostSwapTransfer, diagnostic);
+		Assert.True(production.ReachedDiskTwoScene, diagnostic);
 	}
 
 	[Fact]
@@ -1657,7 +1707,8 @@ public sealed class CopperScreenBootTests
 		int swapFrame,
 		int transferCountAtSwap,
 		int diskTwoChecksumChanges,
-		FrameVisualMetrics visual)
+		FrameVisualMetrics visual,
+		IReadOnlyList<ShadowDiskTraceFrameEntry> diskTrace)
 	{
 		var disk = machine.Bus.Disk.CaptureSnapshot();
 		var display = emulator.DisplaySnapshot;
@@ -1671,14 +1722,266 @@ public sealed class CopperScreenBootTests
 			$"status='{emulator.StatusText}', transfers={disk.TransferCount}, lastDrive={disk.LastTransferDrive}, " +
 			$"last={disk.LastTransferCylinder}.{disk.LastTransferHead}@0x{disk.LastTransferAddress:X6}, " +
 			$"selectedDrive={disk.SelectedDrive}, activeDma={disk.ActiveDma}, dsklen=0x{disk.Dsklen:X4}, " +
-			$"dskbytr=0x{disk.Dskbytr:X4}, ciab=0x{disk.CiabPortB:X2}, bplcon0=0x{display.Bplcon0:X4}, " +
+			$"dskbytr=0x{disk.Dskbytr:X4}, ciab=0x{disk.CiabPortB:X2}, " +
+			$"bplcon0=0x{display.Bplcon0:X4}, bplcon1=0x{display.Bplcon1:X4}, bplcon2=0x{display.Bplcon2:X4}, " +
 			$"bitplanePixels={display.LastBitplaneNonZeroPixels}, " +
 			$"bitplaneBox={display.LastBitplaneMinX},{display.LastBitplaneMinY}-{display.LastBitplaneMaxX},{display.LastBitplaneMaxY}, " +
+			$"normalPf={display.LastNormalPlayfieldNonZeroPixels} " +
+			$"{display.LastNormalPlayfieldMinX},{display.LastNormalPlayfieldMinY}-{display.LastNormalPlayfieldMaxX},{display.LastNormalPlayfieldMaxY}, " +
+			$"pf1={display.LastPlayfield1NonZeroPixels} " +
+			$"{display.LastPlayfield1MinX},{display.LastPlayfield1MinY}-{display.LastPlayfield1MaxX},{display.LastPlayfield1MaxY}, " +
+			$"pf2={display.LastPlayfield2NonZeroPixels} " +
+			$"{display.LastPlayfield2MinX},{display.LastPlayfield2MinY}-{display.LastPlayfield2MaxX},{display.LastPlayfield2MaxY}, " +
+			$"baseRows=[{string.Join(',', display.BitplaneBaseRows)}], " +
+			$"colorIndexes=[{BuildBitplaneColorDiagnostic(display)}], " +
 			$"spritePixels={display.LastSpriteNonZeroPixels}, " +
 			$"spriteBox={display.LastSpriteMinX},{display.LastSpriteMinY}-{display.LastSpriteMaxX},{display.LastSpriteMaxY}, " +
 			$"nonBlack={diagnosticVisual.NonBlackPixels}, colors={diagnosticVisual.DistinctColors}, checksumChangesAfterDisk2={diskTwoChecksumChanges}, " +
 			$"checksum=0x{diagnosticVisual.Checksum:X8}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, " +
-			$"adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.";
+			$"adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}. " +
+			BuildShadowDiskTraceDiagnostic(diskTrace, transferCountAtSwap);
+	}
+
+	private static string BuildBitplaneColorDiagnostic(OcsDisplaySnapshot display)
+	{
+		return string.Join(
+			",",
+			display.BitplaneColorCounts
+				.Select((count, index) => (count, index))
+				.Where(entry => entry.count > 0)
+				.OrderByDescending(entry => entry.count)
+				.Take(12)
+				.Select(entry => $"{entry.index}:{entry.count}"));
+	}
+
+	private static void AppendNewDiskTraceEntries(
+		AmigaDiskController disk,
+		ref int observedTraceEntries,
+		int frame,
+		List<ShadowDiskTraceFrameEntry> destination)
+	{
+		var trace = disk.CaptureDmaTrace();
+		if (trace.Length < observedTraceEntries)
+		{
+			observedTraceEntries = 0;
+		}
+
+		for (var index = observedTraceEntries; index < trace.Length; index++)
+		{
+			destination.Add(new ShadowDiskTraceFrameEntry(frame, trace[index]));
+		}
+
+		observedTraceEntries = trace.Length;
+	}
+
+	private static string BuildShadowDiskTraceDiagnostic(
+		IReadOnlyList<ShadowDiskTraceFrameEntry> trace,
+		int transferCountAtSwap)
+	{
+		if (trace.Count == 0)
+		{
+			return "diskTrace=empty.";
+		}
+
+		var started = trace.Count(entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.Started);
+		var completed = trace.Count(entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.Completed);
+		var cancelled = trace.Count(entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.Cancelled || entry.Trace.Kind == AmigaDiskDmaTraceKind.Stopped);
+		var syncMisses = trace.Count(entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.SyncMissing);
+		var postSwapStarts = trace.Count(entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.Started && entry.Trace.TransferCount > transferCountAtSwap);
+		var lastEntries = string.Join(
+			" | ",
+			trace.TakeLast(8).Select(entry =>
+				$"f{entry.Frame}:{entry.Trace.Kind}#{entry.Trace.TransferCount} c={entry.Trace.Cycle} " +
+				$"d{entry.Trace.Drive} {entry.Trace.Cylinder}.{entry.Trace.Head} " +
+				$"src={entry.Trace.SourceBit}/{entry.Trace.TrackBitLength} wait={entry.Trace.SyncWaitBits} " +
+				$"words={entry.Trace.TransferredWords}/{entry.Trace.RequestedWords} " +
+				$"len=0x{entry.Trace.Dsklen:X4} sync=0x{entry.Trace.Dsksync:X4} " +
+				$"adk=0x{entry.Trace.Adkcon:X4} bytr=0x{entry.Trace.Dskbytr:X4} datr=0x{entry.Trace.Dskdatr:X4}"));
+		return
+			$"diskTrace entries={trace.Count}, started={started}, completed={completed}, cancelled={cancelled}, " +
+			$"syncMisses={syncMisses}, postSwapStarts={postSwapStarts}, last=[{lastEntries}].";
+	}
+
+	private static ShadowOrientationDiagnosticResult RunShadowOrientationDiagnostic(
+		string diskOnePath,
+		string diskTwoPath,
+		ShadowIpfOrientationVariant variant)
+	{
+		const int MaxFrames = 7_000;
+		const int IdleFramesBeforeFire = 45;
+		const int FirePulseFrames = 20;
+		var diskOne = LoadIpfOrientationVariant(diskOnePath, variant);
+		var diskTwo = LoadIpfOrientationVariant(diskTwoPath, variant);
+		var emulator = CopperScreenEmulator.CreateWithLoadedDisk(
+			new[] { "--profile", "expanded-copperstart", diskOnePath },
+			AppContext.BaseDirectory,
+			diskOne);
+		var machine = GetMachine(emulator);
+		var diskTrace = new List<ShadowDiskTraceFrameEntry>();
+		var observedTraceEntries = 0;
+		var idleFrames = 0;
+		var previousTransferCount = -1;
+		var swappedToDiskTwo = false;
+		var sawPostSwapTransfer = false;
+		var transferCountAtSwap = 0;
+		var checksumChanges = 0;
+		uint? previousChecksum = null;
+		var reachedScene = false;
+		var frame = 0;
+		machine.Bus.Disk.ClearDmaTrace();
+
+		for (frame = 1; frame <= MaxFrames; frame++)
+		{
+			emulator.RenderNextFrame();
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			AppendNewDiskTraceEntries(machine.Bus.Disk, ref observedTraceEntries, frame, diskTrace);
+			idleFrames = previousTransferCount == disk.TransferCount && !disk.ActiveDma
+				? idleFrames + 1
+				: 0;
+			previousTransferCount = disk.TransferCount;
+
+			if (!swappedToDiskTwo && disk.LastTransferCylinder >= 69 && idleFrames >= IdleFramesBeforeFire)
+			{
+				Assert.True(emulator.InsertLoadedDisk(diskTwoPath, diskTwo, markChanged: true));
+				swappedToDiskTwo = true;
+				transferCountAtSwap = disk.TransferCount;
+				idleFrames = 0;
+				continue;
+			}
+
+			sawPostSwapTransfer |= swappedToDiskTwo && disk.TransferCount > transferCountAtSwap;
+			if (sawPostSwapTransfer)
+			{
+				var visual = MeasureFrame(emulator.Framebuffer);
+				if (previousChecksum.HasValue && previousChecksum.Value != visual.Checksum)
+				{
+					checksumChanges++;
+				}
+
+				previousChecksum = visual.Checksum;
+				if (IsShadowOfTheBeastDiskTwoVisualScene(emulator.StatusText, emulator.DisplaySnapshot, visual, checksumChanges))
+				{
+					reachedScene = true;
+					break;
+				}
+			}
+
+			if (!sawPostSwapTransfer && idleFrames >= IdleFramesBeforeFire)
+			{
+				emulator.PulsePrimaryFire(FirePulseFrames);
+				idleFrames = 0;
+			}
+
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				break;
+			}
+		}
+
+		return new ShadowOrientationDiagnosticResult(
+			variant,
+			frame,
+			swappedToDiskTwo,
+			sawPostSwapTransfer,
+			reachedScene,
+			emulator.StatusText,
+			BuildShadowTraceSignature(diskTrace, transferCountAtSwap),
+			BuildShadowDiskTraceDiagnostic(diskTrace, transferCountAtSwap));
+	}
+
+	private static string BuildShadowTraceSignature(IReadOnlyList<ShadowDiskTraceFrameEntry> trace, int transferCountAtSwap)
+	{
+		return string.Join(
+			",",
+			trace
+				.Where(entry => entry.Trace.Kind is AmigaDiskDmaTraceKind.Started or AmigaDiskDmaTraceKind.Completed)
+				.Where(entry => entry.Trace.TransferCount >= transferCountAtSwap)
+				.TakeLast(32)
+				.Select(entry =>
+					$"{entry.Trace.Kind}:{entry.Trace.TransferCount}:{entry.Trace.Drive}:{entry.Trace.Cylinder}.{entry.Trace.Head}:" +
+					$"{entry.Trace.RequestedWords}:{entry.Trace.SourceBit}:{entry.Trace.SyncWaitBits}:{entry.Trace.CompletionCycle - entry.Trace.Cycle}"));
+	}
+
+	private static AmigaDiskImage LoadIpfOrientationVariant(string path, ShadowIpfOrientationVariant variant)
+	{
+		if (variant == ShadowIpfOrientationVariant.Production)
+		{
+			return AmigaDiskImage.Load(path);
+		}
+
+		var image = ReadIpfImageBytes(path);
+		var options = variant == ShadowIpfOrientationVariant.DataRelative
+			? new IpfDecodeOptions { StartAtIndex = false }
+			: IpfDecodeOptions.Default;
+		var ipf = IpfDecoder.Decode(image, options);
+		var tracks = new AmigaEncodedTrack[AmigaDiskImage.TrackCount];
+		foreach (var track in ipf.Tracks)
+		{
+			if ((uint)track.Cylinder >= AmigaDiskImage.CylinderCount ||
+				(uint)track.Head >= AmigaDiskImage.HeadCount)
+			{
+				continue;
+			}
+
+			var data = variant switch
+			{
+				ShadowIpfOrientationVariant.RotateForward => RotateTrackBits(track.Data, track.BitLength, track.StartBit),
+				ShadowIpfOrientationVariant.RotateBackward => RotateTrackBits(track.Data, track.BitLength, -track.StartBit),
+				_ => track.Data
+			};
+			tracks[(track.Cylinder * AmigaDiskImage.HeadCount) + track.Head] = new AmigaEncodedTrack(data, track.BitLength);
+		}
+
+		for (var index = 0; index < tracks.Length; index++)
+		{
+			if (tracks[index].BitLength == 0)
+			{
+				tracks[index] = AmigaEncodedTrack.FromBytes(AmigaDosTrackEncoder.CreateUnformattedTrack());
+			}
+		}
+
+		return AmigaDiskImage.FromEncodedTracks(tracks, $"{Path.GetFileName(path)}:{variant}");
+	}
+
+	private static byte[] ReadIpfImageBytes(string path)
+	{
+		if (Path.GetExtension(path).Equals(".ipf", StringComparison.OrdinalIgnoreCase))
+		{
+			return File.ReadAllBytes(path);
+		}
+
+		using var archive = ZipFile.OpenRead(path);
+		var entry = archive.Entries.Single(entry =>
+			!string.IsNullOrEmpty(entry.Name) &&
+			entry.Name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase));
+		using var input = entry.Open();
+		using var output = new MemoryStream();
+		input.CopyTo(output);
+		return output.ToArray();
+	}
+
+	private static byte[] RotateTrackBits(byte[] source, int bitLength, int shiftBits)
+	{
+		var rotated = new byte[(bitLength + 7) / 8];
+		shiftBits = Mod(shiftBits, bitLength);
+		for (var bit = 0; bit < bitLength; bit++)
+		{
+			if (((source[bit >> 3] >> (7 - (bit & 7))) & 1) == 0)
+			{
+				continue;
+			}
+
+			var targetBit = (bit + shiftBits) % bitLength;
+			rotated[targetBit >> 3] = (byte)(rotated[targetBit >> 3] | (1 << (7 - (targetBit & 7))));
+		}
+
+		return rotated;
+	}
+
+	private static int Mod(int value, int modulus)
+	{
+		var result = value % modulus;
+		return result < 0 ? result + modulus : result;
 	}
 
 	private static FrameVisualMetrics MeasureFrame(IReadOnlyList<int> framebuffer)
@@ -1719,6 +2022,73 @@ public sealed class CopperScreenBootTests
 		public int DistinctColors { get; }
 
 		public uint Checksum { get; }
+	}
+
+	private readonly struct ShadowDiskTraceFrameEntry
+	{
+		public ShadowDiskTraceFrameEntry(int frame, AmigaDiskDmaTraceEntry trace)
+		{
+			Frame = frame;
+			Trace = trace;
+		}
+
+		public int Frame { get; }
+
+		public AmigaDiskDmaTraceEntry Trace { get; }
+	}
+
+	private enum ShadowIpfOrientationVariant
+	{
+		Production,
+		DataRelative,
+		RotateForward,
+		RotateBackward
+	}
+
+	private readonly struct ShadowOrientationDiagnosticResult
+	{
+		public ShadowOrientationDiagnosticResult(
+			ShadowIpfOrientationVariant variant,
+			int frame,
+			bool swappedToDiskTwo,
+			bool sawPostSwapTransfer,
+			bool reachedDiskTwoScene,
+			string statusText,
+			string traceSignature,
+			string traceDiagnostic)
+		{
+			Variant = variant;
+			Frame = frame;
+			SwappedToDiskTwo = swappedToDiskTwo;
+			SawPostSwapTransfer = sawPostSwapTransfer;
+			ReachedDiskTwoScene = reachedDiskTwoScene;
+			StatusText = statusText;
+			TraceSignature = traceSignature;
+			TraceDiagnostic = traceDiagnostic;
+		}
+
+		public ShadowIpfOrientationVariant Variant { get; }
+
+		public int Frame { get; }
+
+		public bool SwappedToDiskTwo { get; }
+
+		public bool SawPostSwapTransfer { get; }
+
+		public bool ReachedDiskTwoScene { get; }
+
+		public string StatusText { get; }
+
+		public string TraceSignature { get; }
+
+		public string TraceDiagnostic { get; }
+
+		public string ToDiagnosticString()
+		{
+			return
+				$"{Variant}: frame={Frame}, swapped={SwappedToDiskTwo}, postSwap={SawPostSwapTransfer}, " +
+				$"scene={ReachedDiskTwoScene}, status='{StatusText}', signature='{TraceSignature}', {TraceDiagnostic}";
+		}
 	}
 
 	private static byte[] CreateBranchToSelfBootDisk()

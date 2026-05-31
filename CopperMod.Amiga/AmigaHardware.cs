@@ -30,6 +30,7 @@ namespace CopperMod.Amiga
         private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
+        private readonly ChipPresentationWriteHistory _presentationWriteHistory = new ChipPresentationWriteHistory();
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
@@ -549,6 +550,21 @@ namespace CopperMod.Amiga
             return ReadChipDmaWord(address);
         }
 
+        public ushort ReadChipWordForPresentation(uint address, long cycle)
+        {
+            address = MaskChipDmaAddress(address);
+            var offset = (int)(address & (uint)(_chipRam.Length - 1));
+            var nextOffset = (offset + 1) & (_chipRam.Length - 1);
+            var high = _presentationWriteHistory.ReadByte(_chipRam, offset, cycle);
+            var low = _presentationWriteHistory.ReadByte(_chipRam, nextOffset, cycle);
+            return (ushort)((high << 8) | low);
+        }
+
+        public void ClearPresentationWriteHistory()
+        {
+            _presentationWriteHistory.Clear();
+        }
+
         public AmigaDeviceWordReadResult ReadChipWordForDeviceWithResult(
             AmigaBusRequester requester,
             AmigaBusAccessKind kind,
@@ -574,7 +590,7 @@ namespace CopperMod.Amiga
         {
             address = MaskChipDmaAddress(address);
             var access = Arbitrate(requester, kind, AmigaBusAccessTarget.ChipRam, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
-            WriteChipDmaWord(address, value);
+            WriteChipDmaWord(address, value, access.GrantedCycle);
             return access;
         }
 
@@ -878,10 +894,12 @@ namespace CopperMod.Amiga
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void WriteChipDmaWord(uint address, ushort value)
+        private void WriteChipDmaWord(uint address, ushort value, long grantedCycle)
         {
             var offset = (int)(address & ChipDmaAddressMask);
             var nextOffset = (offset + 1) & (_chipRam.Length - 1);
+            _presentationWriteHistory.RecordByte(offset, _chipRam[offset], (byte)(value >> 8), grantedCycle);
+            _presentationWriteHistory.RecordByte(nextOffset, _chipRam[nextOffset], (byte)value, grantedCycle);
             _chipRam[offset] = (byte)(value >> 8);
             _chipRam[nextOffset] = (byte)value;
         }
@@ -914,6 +932,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             if (TryGetChipRamOffset(address, out var chipOffset))
             {
+                _presentationWriteHistory.RecordByte(chipOffset, _chipRam[chipOffset], value, grantedCycle);
                 _chipRam[chipOffset] = value;
                 return;
             }
@@ -971,6 +990,8 @@ namespace CopperMod.Amiga
             if (TryGetChipRamOffset(address, out var chipOffset))
             {
                 var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
+                _presentationWriteHistory.RecordByte(chipOffset, _chipRam[chipOffset], (byte)(value >> 8), grantedCycle);
+                _presentationWriteHistory.RecordByte(nextOffset, _chipRam[nextOffset], (byte)value, grantedCycle);
                 _chipRam[chipOffset] = (byte)(value >> 8);
                 _chipRam[nextOffset] = (byte)value;
                 return;
@@ -2211,6 +2232,78 @@ namespace CopperMod.Amiga
         public bool HasDataWord { get; }
 
         public bool NextByteIsLow { get; }
+    }
+
+    internal sealed class ChipPresentationWriteHistory
+    {
+        private readonly Dictionary<int, List<ChipByteWrite>> _writesByOffset = new Dictionary<int, List<ChipByteWrite>>();
+
+        public void RecordByte(int offset, byte oldValue, byte newValue, long cycle)
+        {
+            if (oldValue == newValue)
+            {
+                return;
+            }
+
+            if (!_writesByOffset.TryGetValue(offset, out var writes))
+            {
+                writes = new List<ChipByteWrite>(1);
+                _writesByOffset[offset] = writes;
+            }
+
+            writes.Add(new ChipByteWrite(cycle, oldValue));
+        }
+
+        public byte ReadByte(byte[] currentMemory, int offset, long cycle)
+        {
+            if (!_writesByOffset.TryGetValue(offset, out var writes) || writes.Count == 0)
+            {
+                return currentMemory[offset];
+            }
+
+            var index = FindFirstWriteAfter(writes, cycle);
+            return index < writes.Count
+                ? writes[index].OldValue
+                : currentMemory[offset];
+        }
+
+        public void Clear()
+        {
+            _writesByOffset.Clear();
+        }
+
+        private static int FindFirstWriteAfter(IReadOnlyList<ChipByteWrite> writes, long cycle)
+        {
+            var low = 0;
+            var high = writes.Count;
+            while (low < high)
+            {
+                var middle = low + ((high - low) / 2);
+                if (writes[middle].Cycle <= cycle)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            return low;
+        }
+
+        private readonly struct ChipByteWrite
+        {
+            public ChipByteWrite(long cycle, byte oldValue)
+            {
+                Cycle = cycle;
+                OldValue = oldValue;
+            }
+
+            public long Cycle { get; }
+
+            public byte OldValue { get; }
+        }
     }
 
     internal sealed class BoundedWriteLog : IReadOnlyList<CustomRegisterWrite>
