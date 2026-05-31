@@ -44,8 +44,8 @@ public sealed class SidAnalogTests
 		var nightdawnStyleRange = SidAnalog.VolumeOffset(15, SidChipModel.Mos6581) -
 			SidAnalog.VolumeOffset(4, SidChipModel.Mos6581);
 
-		Assert.True(mos6581Range > 0.32, $"Expected strong 6581 D418 digi range, got {mos6581Range:0.000}.");
-		Assert.True(nightdawnStyleRange > 0.26, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
+		Assert.True(mos6581Range > 0.28, $"Expected strong 6581 D418 digi range, got {mos6581Range:0.000}.");
+		Assert.True(nightdawnStyleRange > 0.22, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
 		Assert.True(mos8580Range < mos6581Range * 0.10, $"Expected 8580 volume digis to remain much weaker, 8580 {mos8580Range:0.000}, 6581 {mos6581Range:0.000}.");
 	}
 }

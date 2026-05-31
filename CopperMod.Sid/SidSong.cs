@@ -9,7 +9,7 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController
     {
         private readonly SidModule _module;
         private readonly C64Machine _machine;
@@ -64,6 +64,12 @@ namespace CopperMod.Sid
         public IReadOnlyList<ModuleSubSongMetadata> SubSongs => _subSongs;
 
         internal IReadOnlyList<SidRegisterWrite> SidWrites => _machine.SidWrites;
+
+        public int MutedVoicesMask
+        {
+            get => _machine.Sid.MutedVoicesMask;
+            set => _machine.Sid.MutedVoicesMask = value;
+        }
 
         public bool ChannelWaveformCaptureEnabled
         {

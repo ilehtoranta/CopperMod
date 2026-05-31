@@ -2,10 +2,13 @@ namespace CopperMod.Rendering;
 
 public sealed class C64OutputStage
 {
-	private const double DcBlockCutoffHz = 12.0;
+	private const double DcBlockCutoffHz = 1.0;
 	private const double OutputLowPassCutoffHz = 14000.0;
-	private const float OutputHeadroom = 0.90f;
+	private const float EdgeEmphasis = 0.8f;
+	private const float OutputHeadroom = 0.47f;
 	private float[] _lowPassState = Array.Empty<float>();
+	private bool[] _edgeInitialized = Array.Empty<bool>();
+	private float[] _edgePreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousOutput = Array.Empty<float>();
 
@@ -19,6 +22,8 @@ public sealed class C64OutputStage
 	public void Reset()
 	{
 		Array.Clear(_lowPassState);
+		Array.Clear(_edgeInitialized);
+		Array.Clear(_edgePreviousInput);
 		Array.Clear(_dcPreviousInput);
 		Array.Clear(_dcPreviousOutput);
 	}
@@ -49,6 +54,7 @@ public sealed class C64OutputStage
 			var sample = samples[i];
 			sample = OnePoleLowPass(sample, channel, lowPassAlpha);
 			sample = DcBlock(sample, channel, highPassAlpha);
+			sample = EmphasizeEdges(sample, channel);
 			samples[i] = Math.Clamp(sample * OutputHeadroom, -1.0f, 1.0f);
 		}
 	}
@@ -61,6 +67,8 @@ public sealed class C64OutputStage
 		}
 
 		_lowPassState = new float[channels];
+		_edgeInitialized = new bool[channels];
+		_edgePreviousInput = new float[channels];
 		_dcPreviousInput = new float[channels];
 		_dcPreviousOutput = new float[channels];
 	}
@@ -78,6 +86,20 @@ public sealed class C64OutputStage
 		_dcPreviousInput[channel] = sample;
 		_dcPreviousOutput[channel] = output;
 		return output;
+	}
+
+	private float EmphasizeEdges(float sample, int channel)
+	{
+		if (!_edgeInitialized[channel])
+		{
+			_edgeInitialized[channel] = true;
+			_edgePreviousInput[channel] = sample;
+			return sample;
+		}
+
+		var edge = sample - _edgePreviousInput[channel];
+		_edgePreviousInput[channel] = sample;
+		return sample + (edge * EdgeEmphasis);
 	}
 
 	private static double GetLowPassAlpha(double cutoffHz, int sampleRate)

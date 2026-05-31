@@ -12,6 +12,7 @@ internal static class Usage
 		  --subsong <number>         Select a 1-based subtune.
 		  --sample-rate <hz>         Default: 44100.
 		  --channels <count>         Default: 2.
+		  --sid-solo <1|2|3>         Render only one SID voice.
 		  --output raw|player        Default: raw.
 		  --amiga-profile clean|a500|led
 		  --c64-profile clean|c64

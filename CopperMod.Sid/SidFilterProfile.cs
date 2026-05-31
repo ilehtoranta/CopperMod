@@ -77,8 +77,25 @@ namespace CopperMod.Sid
 
         public double MapDamping(int resonanceNibble)
         {
+            return MapDamping(resonanceNibble, 2047);
+        }
+
+        public double MapDamping(int resonanceNibble, int cutoffRegister)
+        {
             var resonance = Math.Clamp(resonanceNibble, 0, 15) / 15.0;
             return Math.Clamp(BaseDamping - (resonance * ResonanceDamping), MinDamping, MaxDamping);
+        }
+
+        public double MapFilterOutputGain(int resonanceNibble, int cutoffRegister)
+        {
+            if (Id != SidFilterProfileId.Mos6581Balanced)
+            {
+                return FilterOutputGain;
+            }
+
+            var resonance = Math.Clamp(resonanceNibble, 0, 15) / 15.0;
+            var lowCutoffWeight = 1.0 - Math.Clamp((Math.Clamp(cutoffRegister, 0, 2047) - 640.0) / 128.0, 0.0, 1.0);
+            return FilterOutputGain * (1.0 + (Math.Pow(resonance, 2.0) * lowCutoffWeight * 1.20));
         }
 
         public static SidFilterProfileDefinition Resolve(SidChipModel model, SidFilterProfileId requested)

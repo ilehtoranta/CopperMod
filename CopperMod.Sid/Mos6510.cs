@@ -262,7 +262,7 @@ namespace CopperMod.Sid
                 case 0x7E: RorMemory(AbsoluteX(out _), 7); break;
                 case 0x7F: Rra(AbsoluteX(out _), 7); break;
                 case 0x80: Nop(FetchByte(), 2); break;
-                case 0x81: Write(IndirectX(), (byte)(A & X), 6); break;
+                case 0x81: Write(IndirectX(), A, 6); break;
                 case 0x82: Nop(FetchByte(), 2); break;
                 case 0x83: Write(IndirectX(), (byte)(A & X), 6); break;
                 case 0x84: Write(ZeroPage(), Y, 3); break;

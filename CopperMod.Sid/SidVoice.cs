@@ -25,6 +25,7 @@ namespace CopperMod.Sid
         private int _envelopeState = Release;
         private bool _previousGate;
         private byte _control;
+        private SidCycleTraceEvents _cycleEvents;
 
         public ushort Frequency { get; private set; }
 
@@ -52,6 +53,8 @@ namespace CopperMod.Sid
 
         public bool TestEnabled => (_control & 0x08) != 0;
 
+        public SidCycleTraceEvents CycleEvents => _cycleEvents;
+
         public void Reset()
         {
             _phase = 0;
@@ -62,10 +65,21 @@ namespace CopperMod.Sid
             _envelopeState = Release;
             _previousGate = false;
             _control = 0;
+            _cycleEvents = SidCycleTraceEvents.None;
             Frequency = 0;
             PulseWidth = 0;
             AttackDecay = 0;
             SustainRelease = 0;
+        }
+
+        public void BeginCycleTrace()
+        {
+            _cycleEvents = SidCycleTraceEvents.None;
+        }
+
+        public void MarkForwardedWrite()
+        {
+            _cycleEvents |= SidCycleTraceEvents.ForwardedWrite;
         }
 
         public void Write(int offset, byte value)
@@ -116,6 +130,7 @@ namespace CopperMod.Sid
                     if (_envelopeCounter < 0xFF)
                     {
                         _envelopeCounter++;
+                        _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
                     }
 
                     if (_envelopeCounter >= 0xFF)
@@ -131,6 +146,7 @@ namespace CopperMod.Sid
                     if (_envelopeCounter > sustain && ClockExponentialCounter())
                     {
                         _envelopeCounter--;
+                        _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
                     }
 
                     if (_envelopeCounter <= sustain)
@@ -145,6 +161,7 @@ namespace CopperMod.Sid
                     if (_envelopeCounter > 0 && ClockExponentialCounter())
                     {
                         _envelopeCounter--;
+                        _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
                     }
 
                     break;
@@ -155,6 +172,7 @@ namespace CopperMod.Sid
         {
             if (TestEnabled)
             {
+                _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
                 _phase = 0;
                 return;
             }
@@ -165,6 +183,7 @@ namespace CopperMod.Sid
         public void ResetOscillator()
         {
             _phase = 0;
+            _cycleEvents |= SidCycleTraceEvents.SyncReset;
         }
 
         public void ClockNoise(bool oscillatorBit19Rising)
@@ -176,11 +195,17 @@ namespace CopperMod.Sid
 
             var feedback = ((_noise >> 22) ^ (_noise >> 17)) & 1;
             _noise = ((_noise << 1) | feedback) & 0x7FFFFF;
+            _cycleEvents |= SidCycleTraceEvents.NoiseShift;
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model)
         {
-            var waveform = RenderWaveform(syncSource, model);
+            return RenderOutput(syncSource, model, out _);
+        }
+
+        public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform)
+        {
+            waveform = RenderWaveform(syncSource, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -213,16 +238,19 @@ namespace CopperMod.Sid
             if (gate && !_previousGate)
             {
                 _envelopeState = Attack;
+                _cycleEvents |= SidCycleTraceEvents.GateRising;
             }
             else if (!gate && _previousGate)
             {
                 _envelopeState = Release;
+                _cycleEvents |= SidCycleTraceEvents.GateFalling;
             }
 
             _previousGate = gate;
             _control = value;
             if (TestEnabled)
             {
+                _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
                 _phase = 0;
             }
         }
@@ -235,35 +263,28 @@ namespace CopperMod.Sid
                 return 0;
             }
 
+            if (model == SidChipModel.Mos6581 && waveformMask == 0x50)
+            {
+                return RenderMos6581TrianglePulse(syncSource);
+            }
+
             var outputs = 0;
             uint combinedDac = 0x0FFF;
             if ((waveformMask & 0x10) != 0)
             {
-                var phase = (_phase >> 11) & 0x0FFF;
-                var invert = (_phase & PhaseMsb) != 0;
-                if ((_control & 0x04) != 0 && syncSource != null && (syncSource._phase & PhaseMsb) != 0)
-                {
-                    invert = !invert;
-                }
-
-                if (invert)
-                {
-                    phase ^= 0x0FFF;
-                }
-
-                combinedDac &= phase;
+                combinedDac &= GetTriangleDac(syncSource);
                 outputs++;
             }
 
             if ((waveformMask & 0x20) != 0)
             {
-                combinedDac &= (_phase >> 12) & 0x0FFF;
+                combinedDac &= GetSawDac();
                 outputs++;
             }
 
             if ((waveformMask & 0x40) != 0)
             {
-                combinedDac &= ((_phase >> 12) & 0x0FFF) >= (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
+                combinedDac &= GetPulseDac();
                 outputs++;
             }
 
@@ -281,17 +302,57 @@ namespace CopperMod.Sid
             return SidAnalog.ConvertWaveformDac12(combinedDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
+        private double RenderMos6581TrianglePulse(SidVoice? syncSource)
+        {
+            var pulseDac = GetPulseDac();
+            if (pulseDac == 0)
+            {
+                return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
+                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
+            }
+
+            var triangle = GetTriangleDac(syncSource);
+            var saw = GetSawDac();
+            var contentionMask = (_phase >> 10) & 0x0FFF;
+            var contentionDac = (triangle & contentionMask) | ((triangle & saw) >> 1);
+            const double mos6581TrianglePulseBias = -1.4;
+            return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
+                SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+        }
+
+        private uint GetTriangleDac(SidVoice? syncSource)
+        {
+            var phase = (_phase >> 11) & 0x0FFF;
+            var invert = (_phase & PhaseMsb) != 0;
+            if ((_control & 0x04) != 0 && syncSource != null && (syncSource._phase & PhaseMsb) != 0)
+            {
+                invert = !invert;
+            }
+
+            return invert ? phase ^ 0x0FFFu : phase;
+        }
+
+        private uint GetSawDac()
+        {
+            return (_phase >> 12) & 0x0FFF;
+        }
+
+        private uint GetPulseDac()
+        {
+            return ((_phase >> 12) & 0x0FFF) >= (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
+        }
+
         private uint GetNoiseDac()
         {
             var dac = 0u;
-            dac |= ((_noise >> 20) & 1u) << 11;
-            dac |= ((_noise >> 18) & 1u) << 10;
-            dac |= ((_noise >> 14) & 1u) << 9;
-            dac |= ((_noise >> 11) & 1u) << 8;
-            dac |= ((_noise >> 9) & 1u) << 7;
-            dac |= ((_noise >> 5) & 1u) << 6;
-            dac |= ((_noise >> 2) & 1u) << 5;
-            dac |= (_noise & 1u) << 4;
+            dac |= ((_noise >> 22) & 1u) << 11;
+            dac |= ((_noise >> 20) & 1u) << 10;
+            dac |= ((_noise >> 16) & 1u) << 9;
+            dac |= ((_noise >> 13) & 1u) << 8;
+            dac |= ((_noise >> 11) & 1u) << 7;
+            dac |= ((_noise >> 7) & 1u) << 6;
+            dac |= ((_noise >> 4) & 1u) << 5;
+            dac |= ((_noise >> 2) & 1u) << 4;
             return dac;
         }
 

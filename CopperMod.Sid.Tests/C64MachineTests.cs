@@ -188,6 +188,97 @@ public sealed class C64MachineTests
 		Assert.Equal(0x0F, machine.SidWrites[0].Value);
 	}
 
+	[Theory]
+	[MemberData(nameof(CpuSidWriteCases))]
+	public void CpuWritesReachSidOnExpectedBusCycleAndForwardOnNextSidCycle(CpuSidWriteCase testCase)
+	{
+		var machine = CreateInstructionMachine(testCase.Program, testCase.A, testCase.X, testCase.Y);
+		if (testCase.PointerLocation.HasValue && testCase.PointerTarget.HasValue)
+		{
+			WriteZeroPagePointer(machine.Ram, testCase.PointerLocation.Value, testCase.PointerTarget.Value);
+		}
+
+		var trace = new SidCycleTrace();
+		machine.Sid.Trace = trace;
+
+		machine.RunCycles(testCase.TotalCycles);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(testCase.ExpectedWriteCycle, write.Cycle);
+		Assert.Equal(0, write.ChipIndex);
+		Assert.Equal(testCase.ExpectedRegister, write.Register);
+		Assert.Equal(testCase.ExpectedValue, write.Value);
+
+		var forwarded = Assert.Single(trace.Frames, frame =>
+			frame.Cycle == testCase.ExpectedWriteCycle + 1 &&
+			frame.VoiceIndex == testCase.ExpectedRegister / 7 &&
+			frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+		Assert.Equal(testCase.ExpectedWriteCycle + 1, forwarded.Cycle);
+	}
+
+	[Fact]
+	public void CpuReadModifyWriteSidRegisterForwardsDummyAndFinalWritesOnFollowingCycles()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x0E, 0x00, 0xD4 }, a: 0, x: 0, y: 0);
+		var trace = new SidCycleTrace();
+		machine.Sid.Trace = trace;
+
+		machine.RunCycles(6);
+
+		Assert.Equal(2, machine.SidWrites.Count);
+		Assert.Equal(4, machine.SidWrites[0].Cycle);
+		Assert.Equal(0x00, machine.SidWrites[0].Register);
+		Assert.Equal(0x00, machine.SidWrites[0].Value);
+		Assert.Equal(5, machine.SidWrites[1].Cycle);
+		Assert.Equal(0x00, machine.SidWrites[1].Register);
+		Assert.Equal(0x00, machine.SidWrites[1].Value);
+
+		var forwardedCycles = trace.Frames
+			.Where(frame => frame.VoiceIndex == 0 && frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite))
+			.Select(frame => frame.Cycle)
+			.ToArray();
+		Assert.Equal([5L, 6L], forwardedCycles);
+	}
+
+	public static IEnumerable<object[]> CpuSidWriteCases()
+	{
+		yield return CpuSidWrite(
+			"STA abs",
+			[0x8D, 0x04, 0xD4],
+			totalCycles: 4,
+			expectedWriteCycle: 3,
+			expectedRegister: 0x04,
+			expectedValue: 0x21,
+			a: 0x21);
+		yield return CpuSidWrite(
+			"STA abs,X",
+			[0x9D, 0x04, 0xD4],
+			totalCycles: 5,
+			expectedWriteCycle: 4,
+			expectedRegister: 0x04,
+			expectedValue: 0x22,
+			a: 0x22);
+		yield return CpuSidWrite(
+			"STA (zpg),Y",
+			[0x91, 0x20],
+			totalCycles: 6,
+			expectedWriteCycle: 5,
+			expectedRegister: 0x04,
+			expectedValue: 0x23,
+			a: 0x23,
+			pointerLocation: 0x20,
+			pointerTarget: 0xD404);
+		yield return CpuSidWrite(
+			"SAX abs",
+			[0x8F, 0x00, 0xD4],
+			totalCycles: 4,
+			expectedWriteCycle: 3,
+			expectedRegister: 0x00,
+			expectedValue: 0xD5,
+			a: 0xF7,
+			x: 0xD5);
+	}
+
 	[Fact]
 	public void IrqIsIgnoredUntilInterruptDisableFlagIsCleared()
 	{
@@ -288,6 +379,60 @@ public sealed class C64MachineTests
 		var machine = new C64Machine(module);
 		machine.Reset(0);
 		return machine;
+	}
+
+	private static C64Machine CreateInstructionMachine(byte[] program, byte a, byte x, byte y)
+	{
+		var machine = CreateRsidMachine(new byte[] { 0x60 });
+		machine.Sid.Reset();
+		machine.Cpu.Reset(0x2000);
+		machine.Cpu.A = a;
+		machine.Cpu.X = x;
+		machine.Cpu.Y = y;
+		for (var i = 0; i < program.Length; i++)
+		{
+			machine.Ram[0x2000 + i] = program[i];
+		}
+
+		return machine;
+	}
+
+	private static object[] CpuSidWrite(
+		string name,
+		byte[] program,
+		int totalCycles,
+		long expectedWriteCycle,
+		byte expectedRegister,
+		byte expectedValue,
+		byte a,
+		byte x = 0,
+		byte y = 0,
+		byte? pointerLocation = null,
+		ushort? pointerTarget = null)
+	{
+		return [new CpuSidWriteCase(name, program, totalCycles, expectedWriteCycle, expectedRegister, expectedValue, a, x, y, pointerLocation, pointerTarget)];
+	}
+
+	private static void WriteZeroPagePointer(byte[] memory, byte location, ushort target)
+	{
+		memory[location] = (byte)(target & 0xFF);
+		memory[(byte)(location + 1)] = (byte)(target >> 8);
+	}
+
+	public sealed record CpuSidWriteCase(
+		string Name,
+		byte[] Program,
+		int TotalCycles,
+		long ExpectedWriteCycle,
+		byte ExpectedRegister,
+		byte ExpectedValue,
+		byte A,
+		byte X,
+		byte Y,
+		byte? PointerLocation,
+		ushort? PointerTarget)
+	{
+		public override string ToString() => Name;
 	}
 
 	private static byte[] IrqTimerProgram()

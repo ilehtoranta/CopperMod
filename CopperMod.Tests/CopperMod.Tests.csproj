@@ -26,6 +26,7 @@
     <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
     <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
     <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
+    <ProjectReference Include="..\CopperMod.Tools\CopperMod.Tools.csproj" />
   </ItemGroup>
 
 </Project>

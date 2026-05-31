@@ -49,7 +49,7 @@ namespace CopperMod.Sid
 
             return model == SidChipModel.Mos8580
                 ? Math.Pow(0.82, activeWaveforms - 1)
-                : Math.Pow(0.58, activeWaveforms - 1);
+                : Math.Pow(0.34, activeWaveforms - 1);
         }
 
         public static double SoftClip(double sample)
@@ -60,7 +60,7 @@ namespace CopperMod.Sid
 
         public static double OutputLowPassCutoffHz(SidChipModel model)
         {
-            return model == SidChipModel.Mos8580 ? 14_000.0 : 9_500.0;
+            return model == SidChipModel.Mos8580 ? 14_000.0 : 22_000.0;
         }
 
         private static double[] GetWaveformDac(SidChipModel model)
@@ -162,7 +162,7 @@ namespace CopperMod.Sid
                 var normalized = value / 15.0;
                 table[value] = model == SidChipModel.Mos8580
                     ? (normalized - 0.5) * 0.018
-                    : ((Math.Pow(normalized, 1.25) - 0.5) * 0.38) - 0.02;
+                    : ((Math.Pow(normalized, 1.25) - 0.5) * 0.30) - 0.015;
             }
 
             return table;

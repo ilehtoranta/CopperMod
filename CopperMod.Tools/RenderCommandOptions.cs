@@ -13,6 +13,7 @@ internal sealed class RenderCommandOptions
 		int? subSong,
 		int sampleRate,
 		int channelCount,
+		int? sidSoloVoice,
 		ModuleRenderOutputMode outputMode,
 		AmigaOutputProfile amigaProfile,
 		C64OutputProfile c64Profile,
@@ -26,6 +27,7 @@ internal sealed class RenderCommandOptions
 		SubSong = subSong;
 		SampleRate = sampleRate;
 		ChannelCount = channelCount;
+		SidSoloVoice = sidSoloVoice;
 		OutputMode = outputMode;
 		AmigaProfile = amigaProfile;
 		C64Profile = c64Profile;
@@ -46,6 +48,8 @@ internal sealed class RenderCommandOptions
 	public int SampleRate { get; }
 
 	public int ChannelCount { get; }
+
+	public int? SidSoloVoice { get; }
 
 	public ModuleRenderOutputMode OutputMode { get; }
 
@@ -88,6 +92,7 @@ internal sealed class RenderCommandOptions
 		int? subSong = null;
 		var sampleRate = 44100;
 		var channelCount = 2;
+		int? sidSoloVoice = null;
 		var outputMode = ModuleRenderOutputMode.Raw;
 		var amigaProfile = AmigaOutputProfile.A500;
 		var c64Profile = C64OutputProfile.C64;
@@ -124,6 +129,9 @@ internal sealed class RenderCommandOptions
 					break;
 				case "--channels":
 					channelCount = ParsePositiveInt(RequireValue(args, ref i, arg), arg);
+					break;
+				case "--sid-solo":
+					sidSoloVoice = ParseSidVoice(RequireValue(args, ref i, arg), arg);
 					break;
 				case "--output":
 					outputMode = ParseOutputMode(RequireValue(args, ref i, arg));
@@ -174,6 +182,7 @@ internal sealed class RenderCommandOptions
 			subSong,
 			sampleRate,
 			channelCount,
+			sidSoloVoice,
 			outputMode,
 			amigaProfile,
 			c64Profile,
@@ -266,6 +275,17 @@ internal sealed class RenderCommandOptions
 		if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) || result <= 0)
 		{
 			throw new CommandLineException(option + " must be a positive number.");
+		}
+
+		return result;
+	}
+
+	private static int ParseSidVoice(string value, string option)
+	{
+		var result = ParsePositiveInt(value, option);
+		if (result is < 1 or > 3)
+		{
+			throw new CommandLineException(option + " must be 1, 2, or 3.");
 		}
 
 		return result;

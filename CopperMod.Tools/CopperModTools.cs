@@ -1,5 +1,6 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Sid;
 using NAudio.MediaFoundation;
 using NAudio.Wave;
 
@@ -80,6 +81,16 @@ internal static class CopperModTools
 			}
 
 			selector.SelectSubSong(index);
+		}
+
+		if (options.SidSoloVoice.HasValue)
+		{
+			if (song is not ISidVoiceMuteController sidVoiceMuteController)
+			{
+				throw new CommandLineException("The loaded module does not support SID voice muting.");
+			}
+
+			sidVoiceMuteController.MutedVoicesMask = 0x07 & ~(1 << (options.SidSoloVoice.Value - 1));
 		}
 	}
 

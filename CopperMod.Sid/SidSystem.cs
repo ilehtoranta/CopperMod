@@ -19,6 +19,8 @@ namespace CopperMod.Sid
         private float[][]? _captureSamples;
         private int _captureFrameIndex;
         private int _captureSampleRate;
+        private int _mutedVoicesMask;
+        private SidCycleTrace? _trace;
 
         public SidSystem(
             IReadOnlyList<SidChipPlacement> placements,
@@ -35,6 +37,7 @@ namespace CopperMod.Sid
             for (var i = 0; i < placements.Count; i++)
             {
                 Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuClockHz, filterProfile);
+                Chips[i].TraceChipIndex = i;
             }
 
             _channelCount = Chips.Length * 3;
@@ -43,6 +46,32 @@ namespace CopperMod.Sid
         public SidChip[] Chips { get; }
 
         public IReadOnlyList<SidRegisterWrite> Writes => _writes;
+
+        public SidCycleTrace? Trace
+        {
+            get => _trace;
+            set
+            {
+                _trace = value;
+                foreach (var chip in Chips)
+                {
+                    chip.Trace = value;
+                }
+            }
+        }
+
+        public int MutedVoicesMask
+        {
+            get => _mutedVoicesMask;
+            set
+            {
+                _mutedVoicesMask = value & 0x07;
+                foreach (var chip in Chips)
+                {
+                    chip.MutedVoicesMask = _mutedVoicesMask;
+                }
+            }
+        }
 
         public void Reset()
         {
@@ -60,6 +89,7 @@ namespace CopperMod.Sid
             foreach (var chip in Chips)
             {
                 chip.Reset();
+                chip.MutedVoicesMask = _mutedVoicesMask;
             }
         }
 
@@ -152,7 +182,7 @@ namespace CopperMod.Sid
             AdvanceTo(cycle);
             if (_sampleCycles == 0)
             {
-                AccumulateOneCycle();
+                AccumulateOneCycle(_lastCycle + 1);
             }
 
             var sample = _sampleAccumulator / _sampleCycles;
@@ -232,7 +262,7 @@ namespace CopperMod.Sid
 
             for (var i = 0; i < cycles; i++)
             {
-                AccumulateOneCycle();
+                AccumulateOneCycle(_lastCycle + i + 1);
             }
 
             _lastCycle += cycles;
@@ -249,7 +279,7 @@ namespace CopperMod.Sid
             _pendingWriteIndex = 0;
         }
 
-        private void AccumulateOneCycle()
+        private void AccumulateOneCycle(long cycle)
         {
             var sample = 0.0;
             var captureChannels = _captureSamples != null;
@@ -262,7 +292,7 @@ namespace CopperMod.Sid
             for (var i = 0; i < Chips.Length; i++)
             {
                 var offset = i * 3;
-                sample += Chips[i].RenderOneCycle(captureChannels ? _channelScratch : null, offset);
+                sample += Chips[i].RenderOneCycle(cycle, captureChannels ? _channelScratch : null, offset);
                 if (!captureChannels || _channelScratch == null || _channelAccumulator == null)
                 {
                     continue;

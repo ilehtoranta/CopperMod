@@ -114,8 +114,8 @@ public sealed class SidChipTests
 			Assert.True(samples[i] > samples[i - 1], $"Expected D418 volume step {i} to be greater than {i - 1}.");
 		}
 
-		Assert.True(samples[^1] - samples[0] > 0.30, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
-		Assert.True(samples[^1] - samples[4] > 0.24, $"Expected offset-biased 4-bit digi playback to stay prominent, got {samples[^1] - samples[4]:0.000}.");
+		Assert.True(samples[^1] - samples[0] > 0.28, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
+		Assert.True(samples[^1] - samples[4] > 0.22, $"Expected offset-biased 4-bit digi playback to stay prominent, got {samples[^1] - samples[4]:0.000}.");
 	}
 
 	[Fact]
@@ -376,6 +376,19 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void Mos6581TrianglePulseCombinationAddsContentionEdges()
+	{
+		var triangleSamples = RenderAudioSamples(control: 0x11);
+		var combinedSamples = RenderAudioSamples(control: 0x51);
+
+		var triangleCrossingRate = ZeroCrossingRate(triangleSamples);
+		var combinedCrossingRate = ZeroCrossingRate(combinedSamples);
+
+		Assert.True(combinedCrossingRate > triangleCrossingRate * 2.5, $"Expected 6581 triangle+pulse contention to add edge detail, triangle {triangleCrossingRate:0.000}, combined {combinedCrossingRate:0.000}.");
+		Assert.True(MeasureRange(combinedSamples) > 0.02, "Expected 6581 triangle+pulse combination to remain audible.");
+	}
+
+	[Fact]
 	public void ReleaseNibbleAStaysAudiblePastHalfSecond()
 	{
 		var chip = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xFA);
@@ -423,6 +436,30 @@ public sealed class SidChipTests
 		chip.Write(0x04, 0x11);
 		chip.Write(0x18, 0x0F);
 		return chip;
+	}
+
+	private static double[] RenderAudioSamples(byte control)
+	{
+		const int sampleRate = 48000;
+		const int samples = sampleRate / 2;
+		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+		Assert.True(sid.TryWrite(0xD400, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD401, 0x10, 0));
+		Assert.True(sid.TryWrite(0xD402, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD403, 0x01, 0));
+		Assert.True(sid.TryWrite(0xD405, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD406, 0xF0, 0));
+		Assert.True(sid.TryWrite(0xD404, control, 0));
+		Assert.True(sid.TryWrite(0xD418, 0x0F, 0));
+
+		var rendered = new double[samples];
+		for (var i = 0; i < rendered.Length; i++)
+		{
+			var cycle = (long)Math.Round((i + 1) * SidConstants.PalCpuClock / sampleRate);
+			rendered[i] = sid.RenderSample(cycle);
+		}
+
+		return rendered;
 	}
 
 	private static SidChip CreateTwoSawVoices()
@@ -522,14 +559,14 @@ public sealed class SidChipTests
 	private static uint ExpectedNoiseDac(uint value)
 	{
 		var dac = 0u;
-		dac |= ((value >> 20) & 1u) << 11;
-		dac |= ((value >> 18) & 1u) << 10;
-		dac |= ((value >> 14) & 1u) << 9;
-		dac |= ((value >> 11) & 1u) << 8;
-		dac |= ((value >> 9) & 1u) << 7;
-		dac |= ((value >> 5) & 1u) << 6;
-		dac |= ((value >> 2) & 1u) << 5;
-		dac |= (value & 1u) << 4;
+		dac |= ((value >> 22) & 1u) << 11;
+		dac |= ((value >> 20) & 1u) << 10;
+		dac |= ((value >> 16) & 1u) << 9;
+		dac |= ((value >> 13) & 1u) << 8;
+		dac |= ((value >> 11) & 1u) << 7;
+		dac |= ((value >> 7) & 1u) << 6;
+		dac |= ((value >> 4) & 1u) << 5;
+		dac |= ((value >> 2) & 1u) << 4;
 		return dac;
 	}
 
@@ -572,6 +609,29 @@ public sealed class SidChipTests
 		}
 
 		return largest;
+	}
+
+	private static double ZeroCrossingRate(IReadOnlyList<double> samples)
+	{
+		var mean = samples.Average();
+		var crossings = 0;
+		for (var i = 1; i < samples.Count; i++)
+		{
+			var previous = samples[i - 1] - mean;
+			var current = samples[i] - mean;
+			if ((previous < 0 && current >= 0) ||
+				(previous >= 0 && current < 0))
+			{
+				crossings++;
+			}
+		}
+
+		return crossings / (double)Math.Max(1, samples.Count - 1);
+	}
+
+	private static double MeasureRange(IReadOnlyList<double> samples)
+	{
+		return samples.Max() - samples.Min();
 	}
 
 	private static double MeasureRange(SidChip chip, int warmupCycles, int measuredCycles)

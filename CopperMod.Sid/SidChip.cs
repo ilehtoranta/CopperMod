@@ -30,6 +30,7 @@ namespace CopperMod.Sid
         private double _volumeOffset;
         private double _outputLowPassState;
         private double _lastOutput;
+        private long _cycle;
 
         public SidChip(
             SidChipModel model,
@@ -51,6 +52,12 @@ namespace CopperMod.Sid
         public byte[] Registers => _registers;
 
         public SidChipDebugState DebugState => CreateDebugState();
+
+        public int MutedVoicesMask { get; set; }
+
+        public int TraceChipIndex { get; set; }
+
+        public SidCycleTrace? Trace { get; set; }
 
         public void Reset()
         {
@@ -80,6 +87,7 @@ namespace CopperMod.Sid
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
             _outputLowPassState = 0;
             _lastOutput = 0;
+            _cycle = 0;
         }
 
         public void Write(byte register, byte value)
@@ -98,7 +106,7 @@ namespace CopperMod.Sid
             var voice3 = 0.0;
             for (var i = 0; i < wholeCycles; i++)
             {
-                _lastOutput = ClockOneCycle(out voice1, out voice2, out voice3);
+                _lastOutput = ClockOneCycle(++_cycle, out voice1, out voice2, out voice3);
             }
 
             if (voiceOutputs != null)
@@ -113,7 +121,21 @@ namespace CopperMod.Sid
 
         public double RenderOneCycle(double[]? voiceOutputs = null, int voiceOffset = 0)
         {
-            _lastOutput = ClockOneCycle(out var voice1, out var voice2, out var voice3);
+            return RenderOneCycle(-1, voiceOutputs, voiceOffset);
+        }
+
+        public double RenderOneCycle(long cycle, double[]? voiceOutputs = null, int voiceOffset = 0)
+        {
+            if (cycle < 0)
+            {
+                cycle = ++_cycle;
+            }
+            else
+            {
+                _cycle = cycle;
+            }
+
+            _lastOutput = ClockOneCycle(cycle, out var voice1, out var voice2, out var voice3);
             if (voiceOutputs != null)
             {
                 voiceOutputs[voiceOffset] = voice1;
@@ -124,8 +146,18 @@ namespace CopperMod.Sid
             return _lastOutput;
         }
 
-        private double ClockOneCycle(out double voice1, out double voice2, out double voice3)
+        private double ClockOneCycle(long cycle, out double voice1, out double voice2, out double voice3)
         {
+            for (var i = 0; i < _voices.Length; i++)
+            {
+                _voices[i].BeginCycleTrace();
+            }
+
+            var trace = Trace;
+            var before1 = trace != null ? _voices[0].GetDebugState() : default;
+            var before2 = trace != null ? _voices[1].GetDebugState() : default;
+            var before3 = trace != null ? _voices[2].GetDebugState() : default;
+
             CommitPendingRegisters();
 
             for (var i = 0; i < _voices.Length; i++)
@@ -166,9 +198,16 @@ namespace CopperMod.Sid
             _voices[1].ClockNoise(SidVoice.NoiseClockRising(previousPhase2, _voices[1].Phase));
             _voices[2].ClockNoise(SidVoice.NoiseClockRising(previousPhase3, _voices[2].Phase));
 
-            voice1 = _voices[0].RenderOutput(_voices[2], Model);
-            voice2 = _voices[1].RenderOutput(_voices[0], Model);
-            voice3 = _voices[2].RenderOutput(_voices[1], Model);
+            voice1 = _voices[0].RenderOutput(_voices[2], Model, out var waveform1);
+            voice2 = _voices[1].RenderOutput(_voices[0], Model, out var waveform2);
+            voice3 = _voices[2].RenderOutput(_voices[1], Model, out var waveform3);
+            if (trace != null)
+            {
+                TraceVoice(cycle, 0, before1, waveform1, voice1);
+                TraceVoice(cycle, 1, before2, waveform2, voice2);
+                TraceVoice(cycle, 2, before3, waveform3, voice3);
+            }
+
             return Mix(voice1, voice2, voice3);
         }
 
@@ -184,7 +223,9 @@ namespace CopperMod.Sid
                 _forwardedRegisters[register] = value;
                 if (register < 21)
                 {
-                    _voices[register / 7].Write(register % 7, value);
+                    var voice = _voices[register / 7];
+                    voice.MarkForwardedWrite();
+                    voice.Write(register % 7, value);
                 }
                 else if (register >= 0x15 && register <= 0x18)
                 {
@@ -199,8 +240,54 @@ namespace CopperMod.Sid
             }
         }
 
+        private void TraceVoice(
+            long cycle,
+            int voiceIndex,
+            SidVoiceDebugState before,
+            double waveformOutput,
+            double voiceOutput)
+        {
+            var voice = _voices[voiceIndex];
+            var after = voice.GetDebugState();
+            Trace?.Add(new SidCycleTraceFrame(
+                cycle,
+                TraceChipIndex,
+                voiceIndex,
+                voice.CycleEvents,
+                voice.Frequency,
+                voice.PulseWidth,
+                after.Control,
+                before.Accumulator,
+                after.Accumulator,
+                before.NoiseShiftRegister,
+                after.NoiseShiftRegister,
+                after.NoiseDac,
+                before.EnvelopeCounter,
+                after.EnvelopeCounter,
+                after.RateCounter,
+                after.ExponentialCounter,
+                after.EnvelopeState,
+                waveformOutput,
+                voiceOutput));
+        }
+
         private double Mix(double voice1, double voice2, double voice3)
         {
+            if ((MutedVoicesMask & 0x01) != 0)
+            {
+                voice1 = 0;
+            }
+
+            if ((MutedVoicesMask & 0x02) != 0)
+            {
+                voice2 = 0;
+            }
+
+            if ((MutedVoicesMask & 0x04) != 0)
+            {
+                voice3 = 0;
+            }
+
             var mixer = _forwardedRegisters[0x18];
             var filterRouting = _forwardedRegisters[0x17] & 0x0F;
             var voice3Muted = (mixer & 0x80) != 0;
@@ -277,7 +364,7 @@ namespace CopperMod.Sid
                 output += high * _filterProfile.HighPassGain;
             }
 
-            return output * _filterProfile.FilterOutputGain;
+            return output * _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
         }
 
         private void UpdateFilterCoefficients()
@@ -297,7 +384,7 @@ namespace CopperMod.Sid
 
             _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
             _filterG = Math.Tan(Math.PI * _filterCutoffHz / _cpuClockHz);
-            _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble);
+            _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble, _filterCutoffRegister);
             _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
             _filterCoefficientsDirty = false;
         }
