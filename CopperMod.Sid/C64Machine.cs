@@ -345,7 +345,8 @@ namespace CopperMod.Sid
 
         public byte Read(ushort address, int cycleOffset = 0)
         {
-            AdvanceHardwareTo(Cpu.Cycles + Math.Max(0, cycleOffset));
+            var readCycle = Cpu.Cycles + Math.Max(0, cycleOffset);
+            AdvanceHardwareTo(readCycle);
             if (address == 0x0000)
             {
                 return _processorPortDirection;
@@ -358,7 +359,7 @@ namespace CopperMod.Sid
 
             if (IsIoVisible() && address >= 0xD000 && address <= 0xDFFF)
             {
-                return ReadIo(address);
+                return ReadIo(address, readCycle);
             }
 
             if (IsCharacterRomVisible() && address >= 0xD000 && address <= 0xDFFF)
@@ -646,26 +647,32 @@ namespace CopperMod.Sid
                 IsCharacterRomVisible());
         }
 
-        private byte ReadIo(ushort address)
+        private byte ReadIo(ushort address, long readCycle)
         {
             if (address >= 0xD000 && address <= 0xD3FF)
             {
-                return _vic.Read((byte)address);
+                var value = _vic.Read((byte)address);
+                RefreshInterruptLines();
+                return value;
             }
 
-            if (Sid.TryRead(address, out var sidValue))
+            if (Sid.TryRead(address, readCycle, out var sidValue))
             {
                 return sidValue;
             }
 
             if (address >= 0xDC00 && address <= 0xDCFF)
             {
-                return _cia1.Read((byte)address);
+                var value = _cia1.Read((byte)address);
+                RefreshInterruptLines();
+                return value;
             }
 
             if (address >= 0xDD00 && address <= 0xDDFF)
             {
-                return _cia2.Read((byte)address);
+                var value = _cia2.Read((byte)address);
+                RefreshInterruptLines();
+                return value;
             }
 
             return 0;
@@ -676,6 +683,7 @@ namespace CopperMod.Sid
             if (address >= 0xD000 && address <= 0xD3FF)
             {
                 _vic.Write((byte)address, value);
+                RefreshInterruptLines();
                 return;
             }
 
@@ -693,12 +701,14 @@ namespace CopperMod.Sid
                 }
 
                 _cia1.Write((byte)address, value);
+                RefreshInterruptLines();
                 return;
             }
 
             if (address >= 0xDD00 && address <= 0xDDFF)
             {
                 _cia2.Write((byte)address, value);
+                RefreshInterruptLines();
             }
         }
 

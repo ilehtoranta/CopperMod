@@ -8,6 +8,7 @@ namespace CopperMod.Sid
         private const int Decay = 1;
         private const int Sustain = 2;
         private const int Release = 3;
+        private const int RateCounterMask = 0x7FFF;
         private const uint PhaseMask = 0x00FFFFFF;
         private const uint PhaseMsb = 0x00800000;
         private const uint NoiseClockBit = 0x00080000;
@@ -112,13 +113,8 @@ namespace CopperMod.Sid
 
         public void ClockEnvelope()
         {
-            if (_envelopeState == Sustain)
-            {
-                return;
-            }
-
-            _rateCounter++;
-            if (_rateCounter < GetRatePeriod())
+            _rateCounter = (_rateCounter + 1) & RateCounterMask;
+            if (_rateCounter != GetRatePeriod())
             {
                 return;
             }
@@ -142,20 +138,8 @@ namespace CopperMod.Sid
 
                     break;
                 case Decay:
-                    var sustain = GetSustainLevel();
-                    if (_envelopeCounter > sustain && ClockExponentialCounter())
-                    {
-                        _envelopeCounter--;
-                        _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
-                    }
-
-                    if (_envelopeCounter <= sustain)
-                    {
-                        _envelopeCounter = sustain;
-                        _exponentialCounter = 0;
-                        _envelopeState = Sustain;
-                    }
-
+                case Sustain:
+                    ClockDecaySustain();
                     break;
                 case Release:
                     if (_envelopeCounter > 0 && ClockExponentialCounter())
@@ -165,6 +149,30 @@ namespace CopperMod.Sid
                     }
 
                     break;
+            }
+        }
+
+        private void ClockDecaySustain()
+        {
+            var sustain = GetSustainLevel();
+            if (_envelopeCounter <= sustain)
+            {
+                _envelopeState = Sustain;
+                return;
+            }
+
+            _envelopeState = Decay;
+            if (ClockExponentialCounter())
+            {
+                _envelopeCounter--;
+                _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
+            }
+
+            if (_envelopeCounter <= sustain)
+            {
+                _envelopeCounter = sustain;
+                _exponentialCounter = 0;
+                _envelopeState = Sustain;
             }
         }
 
@@ -213,6 +221,12 @@ namespace CopperMod.Sid
             waveform = RenderWaveform(syncSource, model);
             trace = _lastWaveformTrace;
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
+        }
+
+        public byte ReadOscillator(SidVoice? syncSource, SidChipModel model)
+        {
+            _ = RenderWaveform(syncSource, model);
+            return (byte)(_lastWaveformTrace.WaveformDac >> 4);
         }
 
         public SidVoiceDebugState GetDebugState()
@@ -430,6 +444,7 @@ namespace CopperMod.Sid
             {
                 Attack => RatePeriods[(AttackDecay >> 4) & 0x0F],
                 Decay => RatePeriods[AttackDecay & 0x0F],
+                Sustain => RatePeriods[AttackDecay & 0x0F],
                 Release => RatePeriods[SustainRelease & 0x0F],
                 _ => int.MaxValue
             };

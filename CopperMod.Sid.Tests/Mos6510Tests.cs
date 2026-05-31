@@ -105,6 +105,31 @@ public sealed class Mos6510Tests
 	}
 
 	[Theory]
+	[MemberData(nameof(LoadReadCases))]
+	public void LoadInstructionsReadDataOnFinalBusCycle(LoadReadCase testCase)
+	{
+		var bus = new TestBus();
+		LoadProgram(bus, testCase.Program);
+		bus.Memory[testCase.TargetAddress] = 0x5A;
+		if (testCase.PointerLocation.HasValue && testCase.PointerTarget.HasValue)
+		{
+			WriteZeroPagePointer(bus, testCase.PointerLocation.Value, testCase.PointerTarget.Value);
+		}
+
+		var cpu = new Mos6510(bus);
+		cpu.Reset(0x1000);
+		cpu.X = testCase.X;
+		cpu.Y = testCase.Y;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(testCase.TotalCycles, cycles);
+		Assert.Equal(0x5A, cpu.A);
+		var targetRead = Assert.Single(bus.Reads.Where(read => read.Address == testCase.TargetAddress));
+		Assert.Equal(testCase.TotalCycles - 1, targetRead.CycleOffset);
+	}
+
+	[Theory]
 	[MemberData(nameof(ReadModifyWriteCases))]
 	public void ReadModifyWriteInstructionsPerformDummyAndFinalWritesOnLastTwoCycles(ReadModifyWriteCase testCase)
 	{
@@ -129,6 +154,8 @@ public sealed class Mos6510Tests
 		var cycles = cpu.ExecuteInstruction();
 
 		Assert.Equal(testCase.TotalCycles, cycles);
+		var targetRead = Assert.Single(bus.Reads.Where(read => read.Address == testCase.TargetAddress));
+		Assert.Equal(testCase.TotalCycles - 3, targetRead.CycleOffset);
 		Assert.Equal(2, bus.Writes.Count);
 		Assert.Equal((testCase.TargetAddress, testCase.OriginalValue, testCase.TotalCycles - 2), bus.Writes[0]);
 		Assert.Equal((testCase.TargetAddress, testCase.FinalValue, testCase.TotalCycles - 1), bus.Writes[1]);
@@ -160,6 +187,18 @@ public sealed class Mos6510Tests
 		yield return Store("TAS abs,Y", AbsoluteY(0x9B, 0xD418, StoreY), 5, 0xD418, StoreHighMasked(StoreAAndX, 0xD418));
 	}
 
+	public static IEnumerable<object[]> LoadReadCases()
+	{
+		yield return Load("LDA zpg", [0xA5, 0x20], 3, 0x0020);
+		yield return Load("LDA zpg,X", [0xB5, 0x20], 4, 0x0023, x: 0x03);
+		yield return Load("LDA abs", Absolute(0xAD, 0xD41C), 4, 0xD41C);
+		yield return Load("LDA abs,X", Absolute(0xBD, 0xD419), 4, 0xD41C, x: 0x03);
+		yield return Load("LDA abs,X page cross", Absolute(0xBD, 0xD3FF), 5, 0xD41C, x: 0x1D);
+		yield return Load("LDA (zpg),Y", [0xB1, 0x30], 5, 0xD41C, y: 0x03, pointerLocation: 0x30, pointerTarget: 0xD419);
+		yield return Load("LDA (zpg),Y page cross", [0xB1, 0x30], 6, 0xD41C, y: 0x1D, pointerLocation: 0x30, pointerTarget: 0xD3FF);
+		yield return Load("LAX abs", Absolute(0xAF, 0xD41C), 4, 0xD41C);
+	}
+
 	public static IEnumerable<object[]> ReadModifyWriteCases()
 	{
 		yield return Rmw("ASL abs", Absolute(0x0E, 0xD418), 6, 0xD418, 0x81, 0x02);
@@ -182,6 +221,8 @@ public sealed class Mos6510Tests
 
 		public List<(ushort Address, byte Value, int CycleOffset)> Writes { get; } = new();
 
+		public List<(ushort Address, int CycleOffset)> Reads { get; } = new();
+
 		public ushort LastWriteAddress { get; private set; }
 
 		public byte LastWriteValue { get; private set; }
@@ -190,7 +231,7 @@ public sealed class Mos6510Tests
 
 		public byte Read(ushort address, int cycleOffset = 0)
 		{
-			_ = cycleOffset;
+			Reads.Add((address, cycleOffset));
 			return Memory[address];
 		}
 
@@ -219,6 +260,19 @@ public sealed class Mos6510Tests
 		ushort? pointerTarget = null)
 	{
 		return [new StoreWriteCase(name, program, totalCycles, targetAddress, expectedValue, pointerLocation, pointerTarget)];
+	}
+
+	private static object[] Load(
+		string name,
+		byte[] program,
+		int totalCycles,
+		ushort targetAddress,
+		byte x = 0,
+		byte y = 0,
+		byte? pointerLocation = null,
+		ushort? pointerTarget = null)
+	{
+		return [new LoadReadCase(name, program, totalCycles, targetAddress, x, y, pointerLocation, pointerTarget)];
 	}
 
 	private static object[] Rmw(
@@ -290,6 +344,19 @@ public sealed class Mos6510Tests
 		int TotalCycles,
 		ushort TargetAddress,
 		byte ExpectedValue,
+		byte? PointerLocation,
+		ushort? PointerTarget)
+	{
+		public override string ToString() => Name;
+	}
+
+	public sealed record LoadReadCase(
+		string Name,
+		byte[] Program,
+		int TotalCycles,
+		ushort TargetAddress,
+		byte X,
+		byte Y,
 		byte? PointerLocation,
 		ushort? PointerTarget)
 	{

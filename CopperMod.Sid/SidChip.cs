@@ -30,6 +30,7 @@ namespace CopperMod.Sid
         private double _volumeOffset;
         private double _outputLowPassState;
         private double _lastOutput;
+        private byte _busValue;
         private long _cycle;
 
         public SidChip(
@@ -87,6 +88,7 @@ namespace CopperMod.Sid
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
             _outputLowPassState = 0;
             _lastOutput = 0;
+            _busValue = 0;
             _cycle = 0;
         }
 
@@ -96,6 +98,22 @@ namespace CopperMod.Sid
             _registers[register] = value;
             _pendingRegisters[register] = value;
             _pendingRegisterBits |= 1u << register;
+            _busValue = value;
+        }
+
+        public byte Read(byte register)
+        {
+            register = (byte)(register & 0x1F);
+            var value = register switch
+            {
+                0x19 => (byte)0xFF,
+                0x1A => (byte)0xFF,
+                0x1B => _voices[2].ReadOscillator(_voices[1], Model),
+                0x1C => (byte)_voices[2].EnvelopeCounter,
+                _ => _busValue
+            };
+            _busValue = value;
+            return value;
         }
 
         public double Render(long cycles, double[]? voiceOutputs = null, int voiceOffset = 0)

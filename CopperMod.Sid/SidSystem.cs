@@ -132,6 +132,11 @@ namespace CopperMod.Sid
 
         public bool TryRead(ushort address, out byte value)
         {
+            return TryRead(address, _lastCycle, out value);
+        }
+
+        public bool TryRead(ushort address, long cycle, out byte value)
+        {
             var chipIndex = TryMapRegister(address, out var register);
             if (chipIndex < 0)
             {
@@ -139,7 +144,12 @@ namespace CopperMod.Sid
                 return false;
             }
 
-            value = Chips[chipIndex].Registers[register];
+            if (cycle > _lastCycle)
+            {
+                AdvanceTo(cycle);
+            }
+
+            value = Chips[chipIndex].Read(register);
             return true;
         }
 

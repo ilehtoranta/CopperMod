@@ -262,6 +262,41 @@ public sealed class C64MachineTests
 		Assert.Equal([101L], forwarded);
 	}
 
+	[Fact]
+	public void CpuReadOfSidEnvelopeRegisterSamplesAtExpectedBusCycle()
+	{
+		var machine = CreateInstructionMachine(
+			new byte[] { 0xEA, 0xEA, 0xEA, 0xEA, 0xAD, 0x1C, 0xD4 },
+			a: 0,
+			x: 0,
+			y: 0);
+		var trace = new SidCycleTrace();
+		machine.Sid.Trace = trace;
+		Assert.True(machine.Sid.TryWrite(0xD413, 0x00, 0));
+		Assert.True(machine.Sid.TryWrite(0xD414, 0xF0, 0));
+		Assert.True(machine.Sid.TryWrite(0xD412, 0x11, 0));
+
+		machine.RunCycles(12);
+
+		Assert.Equal(0x01, machine.Cpu.A);
+		Assert.Contains(trace.Frames, frame => frame.Cycle == 11 && frame.VoiceIndex == 2 && frame.EnvelopeCounter == 1);
+		Assert.Equal(3, machine.Sid.Chips[0].DebugState.Voices[2].RateCounter);
+	}
+
+	[Fact]
+	public void CpuReadOfSidOscillatorRegisterSamplesAtExpectedBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xAD, 0x1B, 0xD4 }, a: 0, x: 0, y: 0);
+		Assert.True(machine.Sid.TryWrite(0xD40E, 0x00, 0));
+		Assert.True(machine.Sid.TryWrite(0xD40F, 0x80, 0));
+		Assert.True(machine.Sid.TryWrite(0xD412, 0x20, 0));
+
+		machine.RunCycles(4);
+
+		Assert.Equal(0x01, machine.Cpu.A);
+		Assert.Equal(0x00020000u, machine.Sid.Chips[0].DebugState.Voices[2].Accumulator);
+	}
+
 	public static IEnumerable<object[]> CpuSidWriteCases()
 	{
 		yield return CpuSidWrite(
@@ -326,6 +361,38 @@ public sealed class C64MachineTests
 
 		Assert.Contains(machine.SidWrites, write => write.Register == 0x18 && write.Value == 0x0E);
 		Assert.Equal(C64InterruptSource.Cia2, machine.DebugState.LastInterruptSource);
+	}
+
+	[Fact]
+	public void CiaInterruptRegisterReadRefreshesNmiLineAtReadCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		machine.Write(0xDD04, 0x01, 0);
+		machine.Write(0xDD05, 0x00, 0);
+		machine.Write(0xDD0D, 0x81, 0);
+		machine.Write(0xDD0E, 0x11, 0);
+		machine.AdvanceNativeCycles(2);
+
+		Assert.True(machine.DebugState.Cia2NmiLine);
+
+		var value = machine.Read(0xDD0D, 0);
+
+		Assert.Equal(0x81, value);
+		Assert.False(machine.DebugState.Cia2NmiLine);
+	}
+
+	[Fact]
+	public void CpuReadOfCiaTimerSamplesAtExpectedBusCycle()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xAD, 0x04, 0xDC }, a: 0, x: 0, y: 0);
+		machine.Write(0xDC04, 0x05, 0);
+		machine.Write(0xDC05, 0x00, 0);
+		machine.Write(0xDC0E, 0x11, 0);
+
+		machine.RunCycles(4);
+
+		Assert.Equal(0x02, machine.Cpu.A);
+		Assert.Equal(0x0001, machine.DebugState.Cia1.TimerA);
 	}
 
 	[Fact]
@@ -545,7 +612,7 @@ public sealed class C64MachineTests
 			0x8D, 0x05, 0xDD, // STA $DD05
 			0xA9, 0x81,       // LDA #$81
 			0x8D, 0x0D, 0xDD, // STA $DD0D
-			0xA9, 0x11,       // LDA #$11
+			0xA9, 0x19,       // LDA #$19
 			0x8D, 0x0E, 0xDD, // STA $DD0E
 			0x60,             // RTS
 			0xAD, 0x0D, 0xDD, // nmi: LDA $DD0D

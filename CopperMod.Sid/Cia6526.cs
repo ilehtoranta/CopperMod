@@ -9,6 +9,13 @@ namespace CopperMod.Sid
         private const byte InterruptTod = 0x04;
         private const byte InterruptSerial = 0x08;
         private const byte InterruptFlag = 0x10;
+        private const byte ControlStart = 0x01;
+        private const byte ControlPortOutput = 0x02;
+        private const byte ControlToggleOutput = 0x04;
+        private const byte ControlOneShot = 0x08;
+        private const byte ControlForceLoad = 0x10;
+        private const byte ControlCountCnt = 0x20;
+        private const byte ControlTimerBCountTimerA = 0x40;
 
         private byte _portA = 0xFF;
         private byte _portB = 0xFF;
@@ -38,6 +45,10 @@ namespace CopperMod.Sid
         private byte _controlB;
         private byte _interruptMask;
         private byte _interruptData;
+        private bool _timerAPortOutput;
+        private bool _timerBPortOutput;
+        private bool _timerAPulseActive;
+        private bool _timerBPulseActive;
 
         public CiaDebugState DebugState => new CiaDebugState(
             _portA,
@@ -88,6 +99,10 @@ namespace CopperMod.Sid
             _controlB = 0;
             _interruptMask = defaultTimerA60Hz ? (byte)0x01 : (byte)0x00;
             _interruptData = 0;
+            _timerAPortOutput = false;
+            _timerBPortOutput = false;
+            _timerAPulseActive = false;
+            _timerBPulseActive = false;
         }
 
         public byte Read(byte register)
@@ -180,19 +195,19 @@ namespace CopperMod.Sid
                     break;
                 case 0x0E:
                     _controlA = value;
-                    if ((value & 0x10) != 0)
+                    if ((value & ControlForceLoad) != 0)
                     {
                         _timerA = _timerALatch;
-                        _controlA &= 0xEF;
+                        _controlA &= unchecked((byte)~ControlForceLoad);
                     }
 
                     break;
                 case 0x0F:
                     _controlB = value;
-                    if ((value & 0x10) != 0)
+                    if ((value & ControlForceLoad) != 0)
                     {
                         _timerB = _timerBLatch;
-                        _controlB &= 0xEF;
+                        _controlB &= unchecked((byte)~ControlForceLoad);
                     }
 
                     break;
@@ -201,18 +216,45 @@ namespace CopperMod.Sid
 
         public bool Tick()
         {
-            var timerAUnderflow = TickTimer(ref _timerA, _timerALatch, ref _controlA, InterruptTimerA, pbBit: 0x40);
-            var timerBCountsTimerA = (_controlB & 0x40) != 0;
-            if (timerBCountsTimerA)
+            ClearExpiredTimerPortPulses();
+
+            var timerAUnderflow = false;
+            if ((_controlA & ControlCountCnt) == 0)
             {
-                if (timerAUnderflow)
-                {
-                    _ = TickTimer(ref _timerB, _timerBLatch, ref _controlB, InterruptTimerB, pbBit: 0x80);
-                }
+                timerAUnderflow = TickTimer(
+                    ref _timerA,
+                    _timerALatch,
+                    ref _controlA,
+                    InterruptTimerA,
+                    ref _timerAPortOutput,
+                    ref _timerAPulseActive);
             }
-            else
+
+            var timerBSource = _controlB & (ControlCountCnt | ControlTimerBCountTimerA);
+            switch (timerBSource)
             {
-                _ = TickTimer(ref _timerB, _timerBLatch, ref _controlB, InterruptTimerB, pbBit: 0x80);
+                case 0:
+                    _ = TickTimer(
+                        ref _timerB,
+                        _timerBLatch,
+                        ref _controlB,
+                        InterruptTimerB,
+                        ref _timerBPortOutput,
+                        ref _timerBPulseActive);
+                    break;
+                case ControlTimerBCountTimerA:
+                    if (timerAUnderflow)
+                    {
+                        _ = TickTimer(
+                            ref _timerB,
+                            _timerBLatch,
+                            ref _controlB,
+                            InterruptTimerB,
+                            ref _timerBPortOutput,
+                            ref _timerBPulseActive);
+                    }
+
+                    break;
             }
 
             TickTod();
@@ -229,9 +271,15 @@ namespace CopperMod.Sid
             SetInterrupt(InterruptFlag);
         }
 
-        private bool TickTimer(ref ushort timer, ushort latch, ref byte control, byte interruptBit, byte pbBit)
+        private bool TickTimer(
+            ref ushort timer,
+            ushort latch,
+            ref byte control,
+            byte interruptBit,
+            ref bool portOutput,
+            ref bool pulseActive)
         {
-            if ((control & 0x01) == 0)
+            if ((control & ControlStart) == 0)
             {
                 return false;
             }
@@ -244,29 +292,44 @@ namespace CopperMod.Sid
 
             timer = latch;
             SetInterrupt(interruptBit);
-            UpdateTimerPortBit(ref control, pbBit);
-            if ((control & 0x08) != 0)
+            UpdateTimerPortOutput(control, ref portOutput, ref pulseActive);
+            if ((control & ControlOneShot) != 0)
             {
-                control &= 0xFE;
+                control &= unchecked((byte)~ControlStart);
             }
 
             return true;
         }
 
-        private void UpdateTimerPortBit(ref byte control, byte pbBit)
+        private static void UpdateTimerPortOutput(byte control, ref bool portOutput, ref bool pulseActive)
         {
-            if ((control & 0x02) == 0)
+            if ((control & ControlPortOutput) == 0)
             {
                 return;
             }
 
-            if ((control & 0x04) != 0)
+            if ((control & ControlToggleOutput) != 0)
             {
-                _portB |= pbBit;
+                portOutput = !portOutput;
+                return;
             }
-            else
+
+            portOutput = true;
+            pulseActive = true;
+        }
+
+        private void ClearExpiredTimerPortPulses()
+        {
+            if (_timerAPulseActive)
             {
-                _portB ^= pbBit;
+                _timerAPortOutput = false;
+                _timerAPulseActive = false;
+            }
+
+            if (_timerBPulseActive)
+            {
+                _timerBPortOutput = false;
+                _timerBPulseActive = false;
             }
         }
 
@@ -359,8 +422,9 @@ namespace CopperMod.Sid
 
         private byte ReadTodTenths()
         {
+            var value = _todLatched ? _latchedTenths : _todTenths;
             _todLatched = false;
-            return _todTenths;
+            return value;
         }
 
         private byte ReadTodSeconds()
@@ -391,7 +455,25 @@ namespace CopperMod.Sid
 
         private byte ReadPortBOutput()
         {
-            return _portB;
+            var value = _portB;
+            if ((_controlA & ControlPortOutput) != 0)
+            {
+                value = SetBit(value, 0x40, _timerAPortOutput);
+            }
+
+            if ((_controlB & ControlPortOutput) != 0)
+            {
+                value = SetBit(value, 0x80, _timerBPortOutput);
+            }
+
+            return value;
+        }
+
+        private static byte SetBit(byte value, byte mask, bool enabled)
+        {
+            return enabled
+                ? (byte)(value | mask)
+                : (byte)(value & ~mask);
         }
 
         private byte ReadInterruptData()
