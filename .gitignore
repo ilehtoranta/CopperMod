@@ -496,5 +496,6 @@ CopperMod.Amiga/References
 *.csx
 *.bin
 *.png
+!docs/assets/*.png
 *.bgra
 *.rom

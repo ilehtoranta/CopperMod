@@ -135,11 +135,18 @@ h2 {
 }
 
 h1 {
-  font-size: clamp(3rem, 10vw, 8.8rem);
+  font-size: 6.75rem;
 }
 
 h2 {
-  font-size: clamp(1.55rem, 3vw, 2.6rem);
+  font-size: 2.35rem;
+}
+
+h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.15;
+  letter-spacing: 0;
 }
 
 .lede {
@@ -174,6 +181,7 @@ h2 {
 }
 
 .status-band,
+.download-section,
 .run-section {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -187,6 +195,7 @@ h2 {
 }
 
 .status-band p,
+.download-section p,
 .run-section p,
 .feature-grid p {
   margin: 0;
@@ -234,6 +243,71 @@ h2 {
   background: var(--panel-strong);
 }
 
+.download-section {
+  align-items: start;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.5fr);
+  background: #0c0f12;
+}
+
+.section-copy p:not(.eyebrow) {
+  margin-top: 18px;
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.product-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+
+.download-grid article {
+  min-height: 420px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.download-grid article:first-child {
+  border-top: 4px solid var(--cyan);
+}
+
+.download-grid article:last-child {
+  border-top: 4px solid var(--gold);
+}
+
+.product-shot {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  object-position: center;
+  border-bottom: 1px solid var(--line);
+  background: #050607;
+}
+
+.product-copy {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.download-grid p {
+  margin-top: 14px;
+}
+
+.download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: auto;
+  padding-top: 26px;
+}
+
 pre {
   overflow-x: auto;
   margin: 0;
@@ -262,6 +336,12 @@ footer a {
   text-decoration: none;
 }
 
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
 @media (max-width: 900px) {
   .site-header,
   footer {
@@ -273,14 +353,35 @@ footer a {
     flex-wrap: wrap;
   }
 
+  h1 {
+    font-size: 5.4rem;
+  }
+
+  h2 {
+    font-size: 2.05rem;
+  }
+
   .status-band,
+  .download-section,
   .run-section,
   .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .download-grid {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
+  h1 {
+    font-size: 3.25rem;
+  }
+
+  h2 {
+    font-size: 1.65rem;
+  }
+
   .hero {
     min-height: 88vh;
     padding-top: 150px;

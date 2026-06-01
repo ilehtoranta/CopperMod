@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google-site-verification" content="CfXWjKh0M3_gUDMuwQEspuhz3ADtuhMzggYlm2iTULY">
   <meta name="description" content="CopperScreen is an AI-assisted C# Amiga 500 PAL emulator and CopperMod spin-off.">
   <title>CopperScreen</title>
   <link rel="stylesheet" href="styles.css">
@@ -16,8 +17,9 @@
     <nav aria-label="Page sections">
       <a href="#status">Status</a>
       <a href="#features">Hardware</a>
+      <a href="#downloads">Downloads</a>
       <a href="#run">Run</a>
-      <a href="https://github.com/ilehtoranta/CopperMod">GitHub</a>
+      <a href="https://github.com/ilehtoranta/CopperMod">Repository</a>
     </nav>
   </header>
 
@@ -33,7 +35,8 @@
           tiny CopperStart Kickstart-compatible boot path.
         </p>
         <div class="hero-actions" aria-label="Primary links">
-          <a class="button primary" href="https://github.com/ilehtoranta/CopperMod">View Source</a>
+          <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-win-x64-self-contained.zip">Download CopperScreen</a>
+          <a class="button" href="https://github.com/ilehtoranta/CopperMod">Main Repository</a>
           <a class="button" href="#run">Run Locally</a>
         </div>
       </div>
@@ -70,6 +73,43 @@
       </article>
     </section>
 
+    <section id="downloads" class="download-section" aria-labelledby="downloads-title">
+      <div class="section-copy">
+        <p class="eyebrow">Downloads</p>
+        <h2 id="downloads-title">Release builds for the emulator and player.</h2>
+        <p>
+          Windows x64 self-contained builds include the runtime. Portable .NET
+          builds are smaller and require a local .NET 10 runtime.
+        </p>
+      </div>
+      <div class="download-grid">
+        <article class="product-card">
+          <img class="product-shot" src="assets/copperscreen-full-contact.png" alt="CopperScreen running the Full Contact intro screen">
+          <div class="product-copy">
+            <h3>CopperScreen</h3>
+            <p>Amiga 500 PAL emulator front-end for ADF, IPF, and ZIP-wrapped disk images.</p>
+            <div class="download-actions" aria-label="CopperScreen downloads">
+              <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-win-x64-self-contained.zip">Windows x64</a>
+              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-dotnet.zip">Portable .NET</a>
+              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/tag/copperscreen-v1.0.0">Release Notes</a>
+            </div>
+          </div>
+        </article>
+        <article class="product-card">
+          <img class="product-shot" src="assets/coppermod-arkanoid.png" alt="CopperMod playing the Arkanoid SID tune">
+          <div class="product-copy">
+            <h3>CopperMod</h3>
+            <p>Terminal music player for MED, ProTracker MOD, SID/RSID, and Amiga CUST playback.</p>
+            <div class="download-actions" aria-label="CopperMod downloads">
+              <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-win-x64-self-contained.zip">Windows x64</a>
+              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-dotnet.zip">Portable .NET</a>
+              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/tag/coppermod-v1.0.0">Release Notes</a>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section id="run" class="run-section" aria-labelledby="run-title">
       <div>
         <p class="eyebrow">Try it</p>
@@ -86,7 +126,10 @@ dotnet run --project .\CopperScreen -- --profile expanded-copperstart "path\to\d
 
   <footer>
     <span>CopperScreen is part of the CopperMod repository.</span>
-    <a href="https://github.com/ilehtoranta/CopperMod">github.com/ilehtoranta/CopperMod</a>
+    <span class="footer-links">
+      <a href="https://github.com/ilehtoranta/CopperMod">Main repository</a>
+      <a href="https://github.com/ilehtoranta/CopperMod/releases">All releases</a>
+    </span>
   </footer>
 </body>
 </html>
