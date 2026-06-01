@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - docs/**
-      - .github/workflows/pages.yml
+      - .github/workflows/**
   workflow_dispatch:
 
 permissions:
