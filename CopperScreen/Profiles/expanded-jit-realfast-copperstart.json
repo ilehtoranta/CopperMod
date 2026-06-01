@@ -1,0 +1,22 @@
+{
+  "id": "expanded-jit-realfast-copperstart",
+  "displayName": "Expanded A500 + CopperStart + JIT",
+  "description": "A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, 2 MB real fast RAM at $200000, CopperStart Kickstart 1.3 shim, experimental MC68000 CIL JIT.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000",
+    "realFastRamKb": 2048,
+    "realFastBase": "$200000",
+    "floppyDriveCount": 2,
+    "agnusTimingMode": "slot"
+  },
+  "cpu": {
+    "backend": "JitM68000"
+  },
+  "kickstart": {
+    "source": "CopperStart",
+    "version": "1.3"
+  }
+}
