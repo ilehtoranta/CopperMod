@@ -106,7 +106,6 @@ namespace CopperMod.Amiga
         private readonly Dictionary<uint, BootDosHandle> _dosHandles = new Dictionary<uint, BootDosHandle>();
         private readonly Dictionary<uint, AmigaDosDirectoryEntry> _dosLocks = new Dictionary<uint, AmigaDosDirectoryEntry>();
         private bool _bootDiskReadCompleted;
-        private bool _knownProtectionGateInstalled;
         private bool _dosBootContinuationStarted;
         private bool _dosBootBlockHeaderProbeEnabled;
         private int _hostAllocationDiagnosticCount;
@@ -211,7 +210,6 @@ namespace CopperMod.Amiga
 
             ResetBootState(disk, installHostShim: false);
             _machine.Kickstart.Install(_machine.Bus, CreateHostTrapTable());
-            TryInstallKnownBootLoaderTraps();
             var rom = _machine.Kickstart.Configuration.RomImage.Span;
             if (rom.Length < 8)
             {
@@ -244,7 +242,6 @@ namespace CopperMod.Amiga
             _dosHandles.Clear();
             _dosLocks.Clear();
             _bootDiskReadCompleted = false;
-            _knownProtectionGateInstalled = false;
             _dosBootContinuationStarted = false;
             _dosBootBlockHeaderProbeEnabled = true;
             _hostAllocationDiagnosticCount = 0;
@@ -525,7 +522,9 @@ namespace CopperMod.Amiga
                 _diagnostics);
         }
 
-        private sealed class BootInstructionBoundary : IM68kStoppedCpuFastForwardBoundary
+        private sealed class BootInstructionBoundary :
+            IM68kStoppedCpuFastForwardBoundary,
+            IM68kPureCpuTraceBatchBoundary
         {
             private readonly AmigaBootController _owner;
             private AmigaBootRunMode _runMode;
@@ -577,13 +576,44 @@ namespace CopperMod.Amiga
             }
 
             public void AfterInstruction(long previousCycle, long currentCycle)
+                => AfterInstructionBatch(previousCycle, currentCycle, 1);
+
+            public bool TryBeginPureCpuTraceBatch(
+                M68kCpuState state,
+                long targetCycle,
+                out long batchTargetCycle)
             {
+                batchTargetCycle = targetCycle;
+                if (_runMode == AmigaBootRunMode.StopAfterBootDiskRead ||
+                    targetCycle <= state.Cycles ||
+                    !BeforeInstruction())
+                {
+                    return false;
+                }
+
+                batchTargetCycle = _owner._machine.Bus.GetNextCpuBatchWakeCandidateCycle(
+                    state.Cycles,
+                    targetCycle);
+                batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle);
+                return batchTargetCycle > state.Cycles;
+            }
+
+            public void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
+
+            private void AfterInstructionBatch(long previousCycle, long currentCycle, int instructionCount)
+            {
+                if (instructionCount <= 0)
+                {
+                    return;
+                }
+
                 _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
                 _owner._machine.Bus.AdvanceRasterTo(currentCycle);
                 _owner._machine.Bus.AdvanceCiasTo(currentCycle);
                 _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: false);
                 _owner._machine.DispatchPendingHardwareInterrupt();
-                _instructions++;
+                _instructions += instructionCount;
                 if (_owner._bootDiskReadCompleted && _runMode == AmigaBootRunMode.StopAfterBootDiskRead)
                 {
                     Completed = true;
@@ -726,7 +756,6 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteByte(io + IoErrorOffset, 0, state.Cycles);
             _machine.Bus.WriteLong(io + IoActualOffset, length, state.Cycles);
             _bootDiskReadCompleted = true;
-            TryInstallKnownBootLoaderTraps();
             state.D[0] = 0;
         }
 
@@ -772,22 +801,6 @@ namespace CopperMod.Amiga
             }
 
             _machine.Bus.CopyToChipRam(destination, buffer);
-        }
-
-        private void TryInstallKnownBootLoaderTraps()
-        {
-            if (_knownProtectionGateInstalled || Drive0.Disk == null)
-            {
-                return;
-            }
-
-            if (Drive0.Disk.HasPreservedTrackData || !IsFullContactDiskOneBootBlock(Drive0.Disk.BootBlock))
-            {
-                return;
-            }
-
-            _machine.Bus.RegisterHostCallback(0x0007_B000, HostKnownProtectionGate);
-            _knownProtectionGateInstalled = true;
         }
 
         private static bool IsFullContactDiskOneBootBlock(ReadOnlySpan<byte> bootBlock)
@@ -2057,7 +2070,19 @@ namespace CopperMod.Amiga
             }
 
             _dosBootContinuationStarted = true;
-            var fileSystem = EnsureDosFileSystem();
+            AmigaDosFileSystem fileSystem;
+            try
+            {
+                fileSystem = EnsureDosFileSystem();
+            }
+            catch (Exception ex) when (ex is AmigaEmulationException or OverflowException or ArgumentOutOfRangeException)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_FILESYSTEM_UNSUPPORTED",
+                    $"Boot block returned, but the disk is not a supported slim AmigaDOS filesystem: {ex.Message}"));
+                return false;
+            }
+
             AmigaProgramLaunchRequest request;
             string autostartDescription;
             if (fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out var toolTypes) &&
@@ -3061,15 +3086,6 @@ namespace CopperMod.Amiga
             }
 
             return new string(chars, 0, count);
-        }
-
-        private void HostKnownProtectionGate(M68kCpuState state)
-        {
-            _diagnostics.Add(new AmigaBootDiagnostic(
-                "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED",
-                "The boot program entered a known Copylock-style protected loader at 0x0007B000. Standard ADF images do not carry the raw protection data needed to decode this path."));
-            state.Halted = true;
-            state.D[0] = 1;
         }
 
         private static uint Lvo(uint baseAddress, int displacement)

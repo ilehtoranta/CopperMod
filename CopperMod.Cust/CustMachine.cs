@@ -760,8 +760,17 @@ namespace CopperMod.Cust
                 return;
             }
 
+            if (!HasInstalledCiaInterruptServer())
+            {
+                Bus.AdvanceCiasTo(targetCycle);
+                Bus.DrainCiaInterrupts();
+                return;
+            }
+
             var dispatched = 0;
-            while (dispatched < MaxCiaInterruptsPerDispatch)
+            var advanceAttempts = 0;
+            while (dispatched < MaxCiaInterruptsPerDispatch &&
+                advanceAttempts < MaxCiaInterruptsPerDispatch)
             {
                 DispatchPendingCiaInterrupts(targetCycle, ref dispatched);
                 var nextCycle = Bus.GetNextCiaInterruptCycle(targetCycle);
@@ -771,11 +780,13 @@ namespace CopperMod.Cust
                 }
 
                 Bus.AdvanceCiasTo(nextCycle.Value);
+                advanceAttempts++;
             }
 
             Bus.AdvanceCiasTo(targetCycle);
             DispatchPendingCiaInterrupts(targetCycle, ref dispatched);
-            if (dispatched >= MaxCiaInterruptsPerDispatch)
+            if (dispatched >= MaxCiaInterruptsPerDispatch ||
+                advanceAttempts >= MaxCiaInterruptsPerDispatch)
             {
                 AddDiagnostic(
                     ModuleDiagnosticSeverity.Warning,

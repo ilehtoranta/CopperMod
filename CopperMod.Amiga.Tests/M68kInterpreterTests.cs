@@ -323,6 +323,28 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void ImmediateBtstByteAbsoluteLongBranchesOnCiaActiveLowFireInput()
+	{
+		var bus = new AmigaBus();
+		bus.GamePort0FirePressed = true;
+		bus.GamePort1FirePressed = true;
+		Write(bus.ChipRam, 0x1000, 0x08, 0x39, 0x00, 0x06, 0x00, 0xBF, 0xE0, 0x01); // BTST #6,$BFE001.L
+		Write(bus.ChipRam, 0x1008, 0x67, 0x04); // BEQ pressed
+		Write(bus.ChipRam, 0x100A, 0x70, 0x01); // MOVEQ #1,D0
+		Write(bus.ChipRam, 0x100C, 0x60, 0x02); // BRA done
+		Write(bus.ChipRam, 0x100E, 0x70, 0x02); // pressed: MOVEQ #2,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_0002u, cpu.State.D[0]);
+		Assert.Equal(0x1010u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void AddqSubqAddressRegistersUseLongArithmeticAndDoNotChangeFlags()
 	{
 		var bus = new TestBus();
@@ -376,6 +398,45 @@ public sealed class M68kInterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void DivsByZeroVectorsThroughZeroDivideException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x81, 0xFC, 0x00, 0x00); // DIVS.W #0,D0
+		bus.WriteLong(5 * 4, 0x0000_2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(cpu.State.Halted);
+		Assert.Equal(0x0000_2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.Supervisor, (ushort)(BigEndian.ReadUInt16(bus.Memory, 0x2FFA, "saved status register") & M68kCpuState.Supervisor));
+		Assert.Equal(0x0000_1004u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+		Assert.Equal(0x1234_5678u, cpu.State.D[0]);
+	}
+
+	[Fact]
+	public void DivuByZeroVectorsThroughZeroDivideException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x80, 0xFC, 0x00, 0x00); // DIVU.W #0,D0
+		bus.WriteLong(5 * 4, 0x0000_2000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x89AB_CDEF;
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(cpu.State.Halted);
+		Assert.Equal(0x0000_2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x0000_1004u, BigEndian.ReadUInt32(bus.Memory, 0x2FFC, "saved program counter"));
+		Assert.Equal(0x89AB_CDEFu, cpu.State.D[0]);
 	}
 
 	[Fact]

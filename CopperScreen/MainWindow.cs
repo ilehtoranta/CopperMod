@@ -13,7 +13,7 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
-	private const int DisplayTimerIntervalMilliseconds = 16;
+	private const int DisplayTimerIntervalMilliseconds = 20;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private long _presentedFrames;
 	private readonly CopperScreenRuntime _runtime;
@@ -23,7 +23,6 @@ internal sealed class MainWindow : Window
 	private readonly Grid _root;
 	private readonly Border _toolbar;
 	private readonly Border _benchPanel;
-	private readonly TextBlock _toolbarStatus;
 	private readonly TextBlock _diskStatus;
 	private readonly TextBlock _ledFilterStatus;
 	private readonly TextBlock _cpuPcStatus;
@@ -32,6 +31,7 @@ internal sealed class MainWindow : Window
 	private readonly TextBlock _perfStatus;
 	private readonly TextBlock[] _driveStatusTexts = new TextBlock[4];
 	private readonly Border[] _driveStatusBoxes = new Border[4];
+	private readonly Button[] _driveStatusButtons = new Button[4];
 	private Border _ledFilterBox = null!;
 	private readonly TextBlock _benchPath;
 	private readonly TextBlock _benchDetails;
@@ -45,8 +45,6 @@ internal sealed class MainWindow : Window
 	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
 	private CopperScreenState _latestState;
-	private int _presentationQueued;
-	private volatile bool _closed;
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
 	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
@@ -74,7 +72,6 @@ internal sealed class MainWindow : Window
 			VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
 		};
 		ApplyPresenterViewport();
-		_toolbarStatus = new TextBlock();
 		_diskStatus = CreateToolbarTextBlock(fontSize: 11);
 		_ledFilterStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_cpuPcStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
@@ -105,7 +102,6 @@ internal sealed class MainWindow : Window
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
-		_runtime.FramePublished += QueuePresentation;
 		_timer = new DispatcherTimer(TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds), DispatcherPriority.Render, (_, _) => PresentLatestFrame());
 		Opened += (_, _) =>
 		{
@@ -145,9 +141,7 @@ internal sealed class MainWindow : Window
 		Deactivated += (_, _) => ReleaseInteractiveInput();
 		Closed += (_, _) =>
 		{
-			_closed = true;
 			_timer.Stop();
-			_runtime.FramePublished -= QueuePresentation;
 			_runtime.Dispose();
 		};
 	}
@@ -162,25 +156,6 @@ internal sealed class MainWindow : Window
 	{
 		_ = catchUpAudio;
 		PresentLatestFrame(forceStatus: true);
-	}
-
-	private void QueuePresentation()
-	{
-		if (_closed || Interlocked.Exchange(ref _presentationQueued, 1) != 0)
-		{
-			return;
-		}
-
-		Dispatcher.UIThread.Post(
-			() =>
-			{
-				Interlocked.Exchange(ref _presentationQueued, 0);
-				if (!_closed)
-				{
-					PresentLatestFrame();
-				}
-			},
-			DispatcherPriority.Render);
 	}
 
 	private void PresentLatestFrame(bool forceStatus = false)
@@ -463,11 +438,6 @@ internal sealed class MainWindow : Window
 
 	private Border CreateToolbar()
 	{
-		_toolbarStatus.Foreground = Brushes.White;
-		_toolbarStatus.FontSize = 11;
-		_toolbarStatus.TextWrapping = TextWrapping.NoWrap;
-		_toolbarStatus.TextTrimming = TextTrimming.CharacterEllipsis;
-
 		var controls = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -484,7 +454,6 @@ internal sealed class MainWindow : Window
 		controls.Children.Add(_fullscreenButton);
 		controls.Children.Add(_overscanButton);
 		controls.Children.Add(_numpadModeButton);
-		controls.Children.Add(CreateToolbarButton("Disk", OpenDiskPicker, "Insert or change the DF0 disk image"));
 		controls.Children.Add(CreateToolbarButton("Prev", async () =>
 		{
 			await InsertPreviousDiskAsync().ConfigureAwait(true);
@@ -503,7 +472,6 @@ internal sealed class MainWindow : Window
 		};
 		topRow.Children.Add(controls);
 		topRow.Children.Add(CreateIndicatorBox(_diskStatus, 180, "Current disk image"));
-		topRow.Children.Add(_ledFilterBox);
 		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
 		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
 		topRow.Children.Add(CreateIndicatorBox(_frameStatus, 92, "Published emulator frame counter"));
@@ -519,25 +487,21 @@ internal sealed class MainWindow : Window
 		{
 			var text = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 			var box = CreateIndicatorBox(text, 66, $"DF{driveIndex}: drive status");
+			var button = CreateDriveStatusButton(box, driveIndex);
 			_driveStatusTexts[driveIndex] = text;
 			_driveStatusBoxes[driveIndex] = box;
-			drives.Children.Add(box);
+			_driveStatusButtons[driveIndex] = button;
+			drives.Children.Add(button);
 		}
 
-		var bottomRow = new Grid
+		var bottomRow = new StackPanel
 		{
-			ColumnDefinitions =
-			{
-				new ColumnDefinition(GridLength.Auto),
-				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
-			},
-			ColumnSpacing = 8
+			Orientation = Orientation.Horizontal,
+			Spacing = 5,
+			VerticalAlignment = VerticalAlignment.Center
 		};
-		Grid.SetColumn(drives, 0);
 		bottomRow.Children.Add(drives);
-		Grid.SetColumn(_toolbarStatus, 1);
-		ToolTip.SetTip(_toolbarStatus, "Current emulator status and latest diagnostic");
-		bottomRow.Children.Add(_toolbarStatus);
+		bottomRow.Children.Add(_ledFilterBox);
 
 		var layout = new StackPanel
 		{
@@ -730,6 +694,25 @@ internal sealed class MainWindow : Window
 		return border;
 	}
 
+	private Button CreateDriveStatusButton(Border indicator, int driveIndex)
+	{
+		var button = new Button
+		{
+			Content = indicator,
+			Background = Brushes.Transparent,
+			BorderThickness = new Thickness(0),
+			Padding = new Thickness(0),
+			MinWidth = 0,
+			Cursor = new Cursor(StandardCursorType.Hand)
+		};
+		ToolTip.SetTip(button, $"DF{driveIndex}: click to insert or change disk image");
+		button.Click += async (_, _) =>
+		{
+			await OpenDiskPickerAsync(driveIndex).ConfigureAwait(true);
+		};
+		return button;
+	}
+
 	private static Button CreatePanelButton(string text, Action action)
 	{
 		var button = new Button
@@ -824,7 +807,7 @@ internal sealed class MainWindow : Window
 		PresentFrame(catchUpAudio: false);
 	}
 
-	private async void OpenDiskPicker()
+	private async Task OpenDiskPickerAsync(int driveIndex)
 	{
 		var topLevel = TopLevel.GetTopLevel(this);
 		if (topLevel == null)
@@ -834,7 +817,7 @@ internal sealed class MainWindow : Window
 
 		var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
 		{
-			Title = "Insert Amiga disk image",
+			Title = $"Insert Amiga disk image in DF{driveIndex}",
 			AllowMultiple = false,
 			FileTypeFilter = new[]
 			{
@@ -850,7 +833,7 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		await InsertDiskAsync(path).ConfigureAwait(true);
+		await InsertDriveDiskAsync(driveIndex, path).ConfigureAwait(true);
 	}
 
 	private async Task ShowCopperBenchAsync()
@@ -885,6 +868,9 @@ internal sealed class MainWindow : Window
 
 	private Task InsertDiskAsync(string path)
 		=> CompleteDiskCommandAsync(_runtime.InsertDiskAsync(path));
+
+	private Task InsertDriveDiskAsync(int driveIndex, string path)
+		=> CompleteDiskCommandAsync(_runtime.InsertDriveDiskAsync(driveIndex, path));
 
 	private Task InsertNextDiskAsync()
 		=> CompleteDiskCommandAsync(_runtime.InsertNextDiskAsync());
@@ -1009,17 +995,25 @@ internal sealed class MainWindow : Window
 		{
 			var drive = driveIndex < state.Drives.Length
 				? state.Drives[driveIndex]
-				: new CopperScreenDriveState(driveIndex, false, false, 0, 0, false, false, false);
+				: new CopperScreenDriveState(driveIndex, false, false, "No disk", null, 0, 0, false, false, false);
 			UpdateDriveStatus(drive, state.IsDiskSwapPending && driveIndex == 0);
 		}
 
-		SetText(_toolbarStatus, $"{state.ProfileName} | {state.StatusText}");
 	}
 
 	private void UpdateDriveStatus(CopperScreenDriveState drive, bool swapping)
 	{
 		var text = _driveStatusTexts[drive.Index];
 		var box = _driveStatusBoxes[drive.Index];
+		var button = _driveStatusButtons[drive.Index];
+		button.IsEnabled = drive.Connected;
+		button.Cursor = drive.Connected
+			? new Cursor(StandardCursorType.Hand)
+			: new Cursor(StandardCursorType.Arrow);
+		var tooltip = BuildDriveTooltip(drive, swapping);
+		ToolTip.SetTip(button, tooltip);
+		ToolTip.SetTip(box, tooltip);
+
 		if (swapping)
 		{
 			SetText(text, $"DF{drive.Index} swap");
@@ -1059,6 +1053,28 @@ internal sealed class MainWindow : Window
 		{
 			StyleIndicator(box, Color.FromRgb(28, 39, 35), Color.FromRgb(62, 88, 77), Color.FromRgb(184, 218, 202));
 		}
+	}
+
+	private static string BuildDriveTooltip(CopperScreenDriveState drive, bool swapping)
+	{
+		if (!drive.Connected)
+		{
+			return $"DF{drive.Index}: drive not connected";
+		}
+
+		if (swapping)
+		{
+			var pendingDisk = string.IsNullOrWhiteSpace(drive.DiskPath) ? drive.DiskName : drive.DiskPath;
+			return $"DF{drive.Index}: changing disk\n{pendingDisk}";
+		}
+
+		if (!drive.HasDisk)
+		{
+			return $"DF{drive.Index}: empty\nClick to insert a disk image";
+		}
+
+		var insertedDisk = string.IsNullOrWhiteSpace(drive.DiskPath) ? drive.DiskName : drive.DiskPath;
+		return $"DF{drive.Index}: {drive.DiskName}\n{insertedDisk}\nClick to change disk image";
 	}
 
 	private static void SetText(TextBlock text, string value)

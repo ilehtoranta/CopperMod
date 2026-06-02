@@ -1,3 +1,4 @@
+using System.Reflection;
 using CopperScreen;
 
 namespace CopperScreen.Tests;
@@ -91,6 +92,50 @@ public sealed class CopperScreenRuntimeTests
 		runtime.Start();
 
 		await framePublished.Task.WaitAsync(TimeSpan.FromSeconds(1));
+	}
+
+	[Fact]
+	public async Task PublishingDoesNotOverwriteReadableFrameOutsidePresentationLock()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
+		var sync = GetPrivateField<object>(runtime, "_presentationSync");
+		var frameBuffers = GetPrivateField<int[][]>(runtime, "_frameBuffers");
+		var publish = typeof(CopperScreenRuntime).GetMethod("PublishCurrentFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(publish);
+
+		var latestBufferIndex = GetPrivateField<int>(runtime, "_latestBufferIndex");
+		var originalReadablePixel = frameBuffers[latestBufferIndex][0];
+		const int sentinel = unchecked((int)0x55AA33CC);
+		Array.Fill(emulator.Framebuffer, sentinel);
+		using var started = new ManualResetEventSlim();
+		Task publishTask;
+		lock (sync)
+		{
+			publishTask = Task.Run(() =>
+			{
+				started.Set();
+				publish.Invoke(runtime, [1, 0]);
+			});
+			Assert.True(started.Wait(TimeSpan.FromSeconds(1)));
+			Thread.Sleep(50);
+
+			Assert.Equal(originalReadablePixel, frameBuffers[latestBufferIndex][0]);
+		}
+
+		await publishTask.WaitAsync(TimeSpan.FromSeconds(1));
+		var destination = new int[runtime.Width * runtime.Height];
+		var lastSeenFrameNumber = 0L;
+
+		Assert.True(runtime.TryCopyLatestFrame(destination, ref lastSeenFrameNumber, out _, force: true));
+		Assert.Equal(sentinel, destination[0]);
+	}
+
+	private static T GetPrivateField<T>(CopperScreenRuntime runtime, string fieldName)
+	{
+		var field = typeof(CopperScreenRuntime).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		return Assert.IsType<T>(field.GetValue(runtime));
 	}
 
 	private sealed class FakeAudioOutput : ICopperScreenAudioOutput

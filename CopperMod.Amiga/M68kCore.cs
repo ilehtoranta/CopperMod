@@ -53,6 +53,13 @@ namespace CopperMod.Amiga
         bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles);
     }
 
+    internal interface IM68kPureCpuTraceBatchBoundary : IM68kInstructionBoundary
+    {
+        bool TryBeginPureCpuTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
+
+        void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount);
+    }
+
     internal interface IM68kBatchCore : IM68kCore
     {
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
@@ -1108,8 +1115,7 @@ namespace CopperMod.Amiga
                 var divisor = ResolveEa(mode, eaReg, M68kOperandSize.Word).Read() & 0xFFFF;
                 if (divisor == 0)
                 {
-                    State.Halted = true;
-                    AddCycles(38);
+                    RaiseException(5, State.ProgramCounter, 38);
                     return true;
                 }
 

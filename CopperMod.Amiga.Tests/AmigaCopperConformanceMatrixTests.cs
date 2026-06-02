@@ -95,6 +95,9 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "Copper danger register protection via COPCON":
                 CopperDangerRegisterProtectionViaCopcon();
                 break;
+            case "MOVE to always-protected register stops Copper":
+                CopperMoveToAlwaysProtectedRegisterStopsCopper();
+                break;
             case "BFD clear waits for live blitter completion cycle":
                 BfdClearWaitsForLiveBlitterCompletionCycle();
                 break;
@@ -135,6 +138,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("interrupts", "Copper MOVE can request INTREQ"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
         Executable("restricted-registers", "Copper danger register protection via COPCON"),
+        Executable("restricted-registers", "MOVE to always-protected register stops Copper"),
         Executable("blitter-wait", "BFD clear waits for live blitter completion cycle"),
         Executable("dma-control", "cycle slot contention with bitplane and sprite DMA"),
         Pending("undocumented-ocs", "COPJMP 3-stage wait-wakeup and refresh-slot behavior", "Thread-derived behavior needs a fuller Copper/Agnus bus state-machine model.")
@@ -421,6 +425,27 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.Contains((ushort)0x002E, moves);
         Assert.Contains((ushort)0x0010, moves);
         Assert.Equal(2, moves.Count);
+    }
+
+    private static void CopperMoveToAlwaysProtectedRegisterStopsCopper()
+    {
+        var bus = CreateLegacyCopperBus();
+        var moves = new List<ushort>();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0000, 0x0000),
+            (0x0180, 0x0F00),
+            (0xFFFF, 0xFFFE));
+
+        new AmigaCopper().ExecuteList(bus, CopperList, onMove: (offset, _) => moves.Add(offset));
+
+        Assert.Empty(moves);
+
+        SetCopperPointer(bus, 1, CopperList);
+        var frame = RenderLowResFrame(bus);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, 0));
     }
 
     private static void BfdClearWaitsForLiveBlitterCompletionCycle()

@@ -1204,10 +1204,29 @@ namespace CopperMod.Amiga
             var nextDiskInput = _nextDiskInputAdvanceCycle > 0
                 ? _nextDiskInputAdvanceCycle
                 : long.MaxValue;
+            if (_nextDiskInputAdvanceCycle == 0 && HasUnknownSelectedDiskInput(targetCycle))
+            {
+                return false;
+            }
+
             var nextEventCycle = Math.Min(
                 Math.Min(nextDiskInput, GetNextActiveDmaAdvanceCycle()),
                 _nextIndexPulseCycle);
             return targetCycle < nextEventCycle;
+        }
+
+        private bool HasUnknownSelectedDiskInput(long targetCycle)
+        {
+            var driveIndex = GetSelectedDriveIndex();
+            if (driveIndex < 0 || !IsDriveConnected(driveIndex))
+            {
+                return false;
+            }
+
+            var drive = _drives[driveIndex];
+            return drive.Disk != null &&
+                drive.MotorOn &&
+                targetCycle >= GetDriveReadyCycle(drive);
         }
 
         public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)

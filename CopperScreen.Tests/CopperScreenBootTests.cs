@@ -59,6 +59,64 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void ShadowOfTheBeastPnaKickstartBootWaitsForFireThenLeavesCylinderZeroWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Shadow of the Beast (1989)(Psygnosis)(Disk 1 of 2)[cr PNA].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var maxCylinder = 0;
+		for (var frame = 0; frame < 700; frame++)
+		{
+			emulator.RenderNextFrame();
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			maxCylinder = Math.Max(maxCylinder, disk.LastTransferCylinder);
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				break;
+			}
+		}
+
+		var beforeFire = machine.Bus.Disk.CaptureSnapshot();
+		var beforeFireTrace = machine.Bus.Disk.CaptureDmaTrace();
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), emulator.StatusText);
+		Assert.True(
+			beforeFire.TransferCount >= 2,
+			$"Expected the PNA boot to read both sides of cylinder 0 before the crack intro wait; transfers={beforeFire.TransferCount}, last={beforeFire.LastTransferCylinder}.{beforeFire.LastTransferHead}, dsklen=0x{beforeFire.Dsklen:X4}, dskbytr=0x{beforeFire.Dskbytr:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+		Assert.DoesNotContain(
+			beforeFireTrace,
+			entry => entry.Kind == AmigaDiskDmaTraceKind.Cancelled &&
+				entry.Cylinder == 0 &&
+				entry.Head == 1 &&
+				entry.TransferredWords < entry.RequestedWords);
+
+		emulator.PulsePrimaryFire(60);
+		for (var frame = 0; frame < 200 && maxCylinder == 0; frame++)
+		{
+			emulator.RenderNextFrame();
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			maxCylinder = Math.Max(maxCylinder, disk.LastTransferCylinder);
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				break;
+			}
+		}
+
+		var afterFire = machine.Bus.Disk.CaptureSnapshot();
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), emulator.StatusText);
+		Assert.True(
+			maxCylinder > 0,
+			$"Expected fire to release the PNA crack intro wait and continue loading beyond cylinder 0; transfers={afterFire.TransferCount}, maxCylinder={maxCylinder}, last={afterFire.LastTransferCylinder}.{afterFire.LastTransferHead}, dsklen=0x{afterFire.Dsklen:X4}, dskbytr=0x{afterFire.Dskbytr:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+	}
+
+	[Fact]
 	public void ShadowOfTheBeastIpfDiskTwoParallaxSceneReachesCoreSignalsAfterFireWaitsWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile(
@@ -255,24 +313,21 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void DiskOneProtectedLoaderReportsUnsupportedInsteadOfRenderingGarbledFrame()
+	public void DiskOneBootDoesNotInstallSyntheticProtectionGate()
 	{
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
 		var disk = AmigaDiskImage.Load(diskPath);
 		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
-		boot.BootFromDisk(disk, maxInstructions: 25_000);
-		Assert.True(machine.Bus.HasHostCallback(0x0007_B000));
-		machine.Cpu.State.ProgramCounter = 0x0007_B000;
-		var result = boot.ContinueExecution(maxInstructions: 1);
+		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
 
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED");
-		Assert.True(machine.Cpu.State.Halted);
+		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
+		Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED");
 	}
 
 	[Fact]
-	public void DiskOneKickstartRomBootInstallsProtectedLoaderGateWhenAvailable()
+	public void DiskOneKickstartRomBootDoesNotInstallSyntheticProtectionGateWhenAvailable()
 	{
 		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "Kickstart_13.rom");
 		if (romPath == null)
@@ -288,16 +343,12 @@ public sealed class CopperScreenBootTests
 		var boot = new AmigaBootController(machine);
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
-		Assert.True(machine.Bus.HasHostCallback(0x0007_B000));
-		machine.Cpu.State.ProgramCounter = 0x0007_B000;
-		var result = boot.ContinueExecution(maxInstructions: 1);
 
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED");
-		Assert.True(machine.Cpu.State.Halted);
+		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
 	}
 
 	[Fact]
-	public void FullContactIpfDiskOneDoesNotInstallAdfProtectionGateWhenAvailable()
+	public void FullContactIpfDiskOneDoesNotInstallSyntheticProtectionGateWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact v1.2-2.0 (1991)(Team 17)(Disk 1 of 2).zip");
 		if (diskPath == null)
@@ -317,7 +368,7 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void FullContactIpfKickstartRomBootDoesNotInstallAdfProtectionGateWhenAvailable()
+	public void FullContactIpfKickstartRomBootDoesNotInstallSyntheticProtectionGateWhenAvailable()
 	{
 		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "Kickstart_13.rom");
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact v1.2-2.0 (1991)(Team 17)(Disk 1 of 2).zip");
@@ -346,7 +397,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-copperstart", diskPath }, AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-kickstart13", diskPath }, AppContext.BaseDirectory);
 		var fatalFrame = -1;
 		var reachedLoadingScreen = false;
 		for (var frame = 0; frame < 1_200; frame++)
@@ -376,6 +427,46 @@ public sealed class CopperScreenBootTests
 			reachedLoadingScreen,
 			$"Expected Full Contact IPF to reach the protected loading screen; transfers={disk.TransferCount}, nonzero={emulator.DisplaySnapshot.LastBitplaneNonZeroPixels}, PC=0x{machine.Cpu.State.ProgramCounter:X6}, dsklen=0x{disk.Dsklen:X4}, dskbytr=0x{disk.Dskbytr:X4}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, adkcon=0x{machine.Bus.Paula.Adkcon:X4}.{Environment.NewLine}{diagnostics}");
 		Assert.DoesNotContain(trace, entry => entry.Kind == AmigaDiskDmaTraceKind.SyncMissing);
+	}
+
+	[Fact]
+	public void FullContactAdfKickstartRomBootReachesExtendedLoadingScreenWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "Kickstart_13.rom");
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
+		if (romPath == null || diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var fatalFrame = -1;
+		var reachedLoadingScreen = false;
+		for (var frame = 0; frame < 1_400; frame++)
+		{
+			emulator.RenderNextFrame();
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				fatalFrame = frame;
+				break;
+			}
+
+			reachedLoadingScreen |= emulator.DisplaySnapshot.LastBitplaneNonZeroPixels > 40_000 &&
+				machine.Bus.Disk.CaptureSnapshot().TransferCount > 24;
+			if (reachedLoadingScreen)
+			{
+				break;
+			}
+		}
+
+		var snapshot = machine.Bus.Disk.CaptureSnapshot();
+		var diagnostics = string.Join(Environment.NewLine, GetDiagnostics(emulator).Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.Equal(-1, fatalFrame);
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.True(
+			reachedLoadingScreen,
+			$"Expected the exact Full Contact ADF to reach its extended loading screen; transfers={snapshot.TransferCount}, nonzero={emulator.DisplaySnapshot.LastBitplaneNonZeroPixels}, PC=0x{machine.Cpu.State.ProgramCounter:X6}, dsklen=0x{snapshot.Dsklen:X4}, dskbytr=0x{snapshot.Dskbytr:X4}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, adkcon=0x{machine.Bus.Paula.Adkcon:X4}.{Environment.NewLine}{diagnostics}");
 	}
 
 	[Fact]
@@ -582,15 +673,16 @@ public sealed class CopperScreenBootTests
     }
 
 	[Fact]
-	public void ExplicitDiskRenderAdvancesToVisibleBootProgramFrame()
+	public void ExplicitDiskRenderStartsBootProgramWithoutSyntheticProtectionStatus()
 	{
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
 		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
 
 		emulator.RenderNextFrame();
 
-		Assert.Equal("AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED", emulator.StatusText);
-		Assert.True(emulator.Framebuffer.Distinct().Count() > 1);
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.DoesNotContain("AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED", emulator.StatusText);
+		Assert.NotEmpty(emulator.Framebuffer);
 	}
 
 	[Fact]
@@ -1796,6 +1888,102 @@ public sealed class CopperScreenBootTests
 		}
 
 		Assert.True(loadedMain, $"Expected post-fire loader to load the main program from both disk sides; transfers={disk.TransferCount}, last={disk.LastTransferCylinder}.{disk.LastTransferHead}@0x{disk.LastTransferAddress:X6}, selected={disk.Selected}, motor={disk.MotorOn}, ciab=0x{disk.CiabPortB:X2}, dsklen=0x{disk.Dsklen:X4}, dskbytr=0x{disk.Dskbytr:X4}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, adkcon=0x{machine.Bus.Paula.Adkcon:X4}, PC=0x{machine.Cpu.State.ProgramCounter:X6}.{Environment.NewLine}{diagnosticReport}");
+	}
+
+	[Fact]
+	public void DesertStrikeKickstart13BootContinuesPastCylinderTwentyThreeAfterMouseFireWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "Kickstart_13.rom");
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Desert Strike - Return to the Gulf (1993)(Electronic Arts)(Disk 1 of 3).zip");
+		if (romPath == null || diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var maxCylinder = -1;
+		const int TitleMouseFireFrame = 1_800;
+		const int TitleMouseFireFrames = 60;
+		var firstCylinderSeventeenFrame = -1;
+		var firstFireFrame = -1;
+		var lastProgressFrame = 0;
+		var lastProgressTransferCount = 0;
+		string? lastProgress = null;
+
+		for (var frame = 0; frame < 5_000; frame++)
+		{
+			var firePressed = frame is >= TitleMouseFireFrame and < TitleMouseFireFrame + TitleMouseFireFrames;
+			if (firePressed && firstFireFrame < 0)
+			{
+				firstFireFrame = frame;
+			}
+
+			emulator.SetMouseButtons(firePressed, secondFirePressed: false);
+			emulator.SetJoystickPort(
+				up: false,
+				down: false,
+				left: false,
+				right: false,
+				primaryFirePressed: false,
+				secondFirePressed: false);
+			emulator.RenderNextFrame();
+
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			if (disk.LastTransferCylinder > maxCylinder)
+			{
+				maxCylinder = disk.LastTransferCylinder;
+			}
+
+			if (firstCylinderSeventeenFrame < 0 && disk.LastTransferCylinder >= 17)
+			{
+				firstCylinderSeventeenFrame = frame;
+			}
+
+			if (disk.TransferCount != lastProgressTransferCount)
+			{
+				lastProgressFrame = frame;
+				lastProgressTransferCount = disk.TransferCount;
+				lastProgress = $"{disk.LastTransferDrive}:{disk.LastTransferCylinder}.{disk.LastTransferHead}@0x{disk.LastTransferAddress:X6}";
+			}
+
+			if (disk.LastTransferCylinder > 23)
+			{
+				emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+				emulator.SetJoystickPort(
+					up: false,
+					down: false,
+					left: false,
+					right: false,
+					primaryFirePressed: false,
+					secondFirePressed: false);
+				Assert.False(ContainsFatalBootStatus(emulator.StatusText), emulator.StatusText);
+				return;
+			}
+
+			if (ContainsFatalBootStatus(emulator.StatusText))
+			{
+				break;
+			}
+		}
+
+		var finalDisk = machine.Bus.Disk.CaptureSnapshot();
+		var pc = machine.Cpu.State.ProgramCounter & 0x00FF_FFFF;
+		var opcode = machine.Bus.ReadWord(pc);
+		var intreq = machine.Bus.ReadWord(0x00DFF01E);
+		var intena = machine.Bus.ReadWord(0x00DFF01C);
+		var dmaconr = machine.Bus.ReadWord(0x00DFF002);
+		emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+		emulator.SetJoystickPort(
+			up: false,
+			down: false,
+			left: false,
+			right: false,
+			primaryFirePressed: false,
+			secondFirePressed: false);
+		Assert.True(
+			maxCylinder > 23,
+			$"Expected Desert Strike to continue past cylinder 23 after mouse fire at frame 1800; maxCylinder={maxCylinder}, firstFireFrame={firstFireFrame}, firstCylinder17Frame={firstCylinderSeventeenFrame}, lastProgressFrame={lastProgressFrame}, lastProgress={lastProgress}, last={finalDisk.LastTransferDrive}:{finalDisk.LastTransferCylinder}.{finalDisk.LastTransferHead}@0x{finalDisk.LastTransferAddress:X6}, transfers={finalDisk.TransferCount}, selected={finalDisk.SelectedDrive}, active={finalDisk.ActiveDmaDrive}/{finalDisk.ActiveDma}, dsklen=0x{finalDisk.Dsklen:X4}, dskbytr=0x{finalDisk.Dskbytr:X4}, dsksync=0x{finalDisk.Dsksync:X4}, dmacon=0x{machine.Bus.Paula.Dmacon:X4}, dmaconr=0x{dmaconr:X4}, intreq=0x{intreq:X4}, intena=0x{intena:X4}, adkcon=0x{machine.Bus.Paula.Adkcon:X4}, ciab=0x{finalDisk.CiabPortB:X2}, pc=0x{pc:X6}, opcode=0x{opcode:X4}, sr=0x{machine.Cpu.State.StatusRegister:X4}, cycles={machine.Cpu.State.Cycles}, halted={machine.Cpu.State.Halted}, stopped={machine.Cpu.State.Stopped}, status={emulator.StatusText}");
 	}
 
 	private static void BootToCopperBenchAndLaunchWorkbenchDefaultTool(CopperScreenEmulator emulator, string diskPath)

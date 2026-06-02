@@ -37,6 +37,10 @@
     <AvaloniaResource Include="Assets\CopperScreen.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="artifacts\**\*.cs" />
+  </ItemGroup>
+
   <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">
     <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="Low">
       <Output TaskParameter="ConsoleOutput" PropertyName="CopperStartGitSha" />

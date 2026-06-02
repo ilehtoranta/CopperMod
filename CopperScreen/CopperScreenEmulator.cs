@@ -49,6 +49,8 @@ internal sealed class CopperScreenEmulator
 	private bool _joystickRight;
 	private bool _joystickPrimaryFirePressed;
 	private bool _joystickSecondFirePressed;
+	private readonly string?[] _driveDiskPaths = new string?[4];
+	private readonly string[] _driveDiskNames = ["No disk", "No disk", "No disk", "No disk"];
 	private string _diskName;
 
 	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
@@ -67,6 +69,7 @@ internal sealed class CopperScreenEmulator
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DiskPath;
 		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
+		SetDriveDiskMetadata(0, DiskPath);
 		_initialDiskImageOverride = initialDiskImageOverride;
 		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
 	}
@@ -176,10 +179,14 @@ internal sealed class CopperScreenEmulator
 		{
 			var drive = GetDrive(driveIndex);
 			var connected = driveIndex < disk.ConnectedDriveCount;
+			var hasDisk = connected && drive.HasDisk;
+			var changingDrive0 = driveIndex == 0 && _pendingDiskImage != null;
 			drives[driveIndex] = new CopperScreenDriveState(
 				driveIndex,
 				connected,
-				connected && drive.HasDisk,
+				hasDisk,
+				hasDisk ? _driveDiskNames[driveIndex] : changingDrive0 ? _diskName : "No disk",
+				hasDisk ? _driveDiskPaths[driveIndex] : changingDrive0 ? DiskPath : null,
 				drive.Cylinder,
 				drive.Head,
 				connected && drive.MotorOn,
@@ -358,6 +365,31 @@ internal sealed class CopperScreenEmulator
 		return true;
 	}
 
+	internal bool InsertLoadedDisk(int driveIndex, string fullPath, AmigaDiskImage disk, bool markChanged = true)
+	{
+		if (driveIndex == 0)
+		{
+			return InsertLoadedDisk(fullPath, disk, markChanged);
+		}
+
+		if ((uint)driveIndex >= 4)
+		{
+			throw new ArgumentOutOfRangeException(nameof(driveIndex));
+		}
+
+		if (driveIndex >= _machine.Bus.Disk.ConnectedDriveCount)
+		{
+			StatusText = $"DF{driveIndex}: drive is not connected";
+			return false;
+		}
+
+		fullPath = Path.GetFullPath(fullPath);
+		GetDrive(driveIndex).Insert(disk, markChanged);
+		SetDriveDiskMetadata(driveIndex, fullPath);
+		StatusText = $"inserted DF{driveIndex}: {Path.GetFileName(fullPath)}";
+		return true;
+	}
+
 	internal void SetStatusText(string statusText)
 	{
 		StatusText = statusText;
@@ -404,6 +436,7 @@ internal sealed class CopperScreenEmulator
 	private void InsertDiskSet(AmigaDiskImage disk, string? diskPath, bool markChanged)
 	{
 		_boot.Drive0.Insert(disk, markChanged);
+		SetDriveDiskMetadata(0, diskPath);
 		InsertAdjacentExternalDisks(diskPath, markChanged);
 	}
 
@@ -415,17 +448,18 @@ internal sealed class CopperScreenEmulator
 			var adjacentPath = ResolveAdjacentDiskPath(diskPath, driveIndex);
 			if (adjacentPath == null)
 			{
-				drive.Eject();
+				EjectDrive(driveIndex);
 				continue;
 			}
 
 			try
 			{
 				drive.Insert(AmigaDiskImage.Load(adjacentPath), markChanged);
+				SetDriveDiskMetadata(driveIndex, adjacentPath);
 			}
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
 			{
-				drive.Eject();
+				EjectDrive(driveIndex);
 			}
 		}
 	}
@@ -434,8 +468,20 @@ internal sealed class CopperScreenEmulator
 	{
 		for (var driveIndex = 0; driveIndex < 4; driveIndex++)
 		{
-			GetDrive(driveIndex).Eject();
+			EjectDrive(driveIndex);
 		}
+	}
+
+	private void EjectDrive(int driveIndex)
+	{
+		GetDrive(driveIndex).Eject();
+		SetDriveDiskMetadata(driveIndex, null);
+	}
+
+	private void SetDriveDiskMetadata(int driveIndex, string? diskPath)
+	{
+		_driveDiskPaths[driveIndex] = diskPath == null ? null : Path.GetFullPath(diskPath);
+		_driveDiskNames[driveIndex] = diskPath == null ? "No disk" : Path.GetFileName(diskPath);
 	}
 
 	private AmigaFloppyDrive GetDrive(int driveIndex)

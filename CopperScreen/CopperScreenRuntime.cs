@@ -22,6 +22,8 @@ internal readonly record struct CopperScreenDriveState(
 	int Index,
 	bool Connected,
 	bool HasDisk,
+	string DiskName,
+	string? DiskPath,
 	int Cylinder,
 	int Head,
 	bool MotorOn,
@@ -286,6 +288,37 @@ internal sealed class CopperScreenRuntime : IDisposable
 		}).ConfigureAwait(false);
 	}
 
+	public async Task<CopperScreenCommandResult> InsertDriveDiskAsync(int driveIndex, string diskPath, bool markChanged = true)
+	{
+		if (driveIndex == 0)
+		{
+			return await InsertDiskAsync(diskPath, markChanged).ConfigureAwait(false);
+		}
+
+		if (!File.Exists(diskPath))
+		{
+			return await SetStatusAsync("disk image not found").ConfigureAwait(false);
+		}
+
+		var fullPath = Path.GetFullPath(diskPath);
+		AmigaDiskImage disk;
+		try
+		{
+			disk = await Task.Run(() => AmigaDiskImage.Load(fullPath)).ConfigureAwait(false);
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		{
+			return await SetStatusAsync(ex.Message).ConfigureAwait(false);
+		}
+
+		return await EnqueueAsync(emulator =>
+		{
+			var inserted = emulator.InsertLoadedDisk(driveIndex, fullPath, disk, markChanged);
+			var message = inserted ? $"Inserted DF{driveIndex}: {Path.GetFileName(fullPath)}" : emulator.StatusText;
+			return new CopperScreenCommandResult(inserted, message, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
+		}).ConfigureAwait(false);
+	}
+
 	public Task<CopperScreenCommandResult> LaunchCopperBenchPathAsync(string amigaPath)
 		=> EnqueueAsync(emulator =>
 		{
@@ -448,12 +481,17 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private void PublishCurrentFrame(int framesRendered, int queuedAudioBuffers)
 	{
 		_pendingCopperBenchRequest |= _emulator.ConsumeCopperBenchRequest();
-		var nextBuffer = (_writeBufferIndex + 1) % _frameBuffers.Length;
-		_emulator.Framebuffer.AsSpan().CopyTo(_frameBuffers[nextBuffer]);
-		_writeBufferIndex = nextBuffer;
 		var state = CaptureState(framesRendered, queuedAudioBuffers);
+		var nextBuffer = (_writeBufferIndex + 1) % _frameBuffers.Length;
+		if (nextBuffer == Volatile.Read(ref _latestBufferIndex))
+		{
+			nextBuffer = (nextBuffer + 1) % _frameBuffers.Length;
+		}
+
+		_emulator.Framebuffer.AsSpan().CopyTo(_frameBuffers[nextBuffer]);
 		lock (_presentationSync)
 		{
+			_writeBufferIndex = nextBuffer;
 			_latestBufferIndex = nextBuffer;
 			_latestFrameNumber++;
 			_latestState = state with { FrameNumber = _latestFrameNumber };

@@ -156,6 +156,32 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void DmaAudioUsesAudxperBelowRecommendedMinimumForSampleTiming()
+	{
+		var bus = CreateDefaultMinimumPaulaBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		bus.WriteWord(0x00DFF0A0, 0x0000, 0);
+		bus.WriteWord(0x00DFF0A2, 0x1000, 0);
+		bus.WriteWord(0x00DFF0A4, 0x0001, 0);
+		bus.WriteWord(0x00DFF0A6, 0x0071, 0);
+		bus.WriteWord(0x00DFF096, 0x8201, 0);
+		bus.Paula.AdvanceTo(0);
+		var afterEnable = bus.Paula.GetChannelSnapshot(0);
+		var buffer = new float[4];
+
+		bus.Paula.RenderSample(225, buffer, 0, 2);
+		bus.Paula.RenderSample(226, buffer, 1, 2);
+		var afterBoundary = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(113, afterEnable.Period);
+		Assert.Equal(226, afterEnable.NextSampleCycle);
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.Equal(452, afterBoundary.NextSampleCycle);
+	}
+
+	[Fact]
 	public void DmaLengthReloadInterruptsUseExactSampleBoundary()
 	{
 		var bus = CreateLegacyPaulaBus();
@@ -256,5 +282,12 @@ public sealed class PaulaTests
 			enableLiveAgnusDma: false,
 			agnusTimingMode: AgnusTimingMode.LegacyReservation,
 			audioDmaMinimumPeriod: 1);
+	}
+
+	private static AmigaBus CreateDefaultMinimumPaulaBus()
+	{
+		return new AmigaBus(
+			enableLiveAgnusDma: false,
+			agnusTimingMode: AgnusTimingMode.LegacyReservation);
 	}
 }

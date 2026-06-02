@@ -4,6 +4,14 @@ using System.Reflection.Emit;
 
 namespace CopperMod.Amiga
 {
+    internal enum M68kIlInstructionKind
+    {
+        Helper,
+        DirectCpu,
+        DirectMemory,
+        SpecializedHelper
+    }
+
     internal static class M68kEaEmitter
     {
         public static void EmitEaArguments(ILGenerator il, M68kDecodedEa ea)
@@ -25,11 +33,80 @@ namespace CopperMod.Amiga
             M68kCpuState.Carry;
         private const ushort ArithmeticFlags = LogicFlags | M68kCpuState.Extend;
 
-        private static readonly MethodInfo ExecuteDecodedOperation =
-            typeof(M68kJitCore).GetMethod(
-                "ExecuteCompiledDecodedOperation",
-                BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingMethodException(typeof(M68kJitCore).FullName, "ExecuteCompiledDecodedOperation");
+        private static readonly MethodInfo ExecuteDecodedOperation = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledDecodedOperation",
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(uint),
+            typeof(ushort),
+            typeof(ushort),
+            typeof(uint),
+            typeof(int),
+            typeof(int),
+            typeof(uint),
+            typeof(ushort),
+            typeof(ushort),
+            typeof(uint),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(ushort),
+            typeof(uint));
+        private static readonly MethodInfo ExecuteMovem = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledMovem",
+            typeof(int),
+            typeof(int),
+            typeof(uint),
+            typeof(ushort),
+            typeof(ushort),
+            typeof(int),
+            typeof(ushort),
+            typeof(int));
+        private static readonly MethodInfo ExecuteJumpTo = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledJumpTo",
+            typeof(uint),
+            typeof(bool));
+        private static readonly MethodInfo ExecuteRegisterShift = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledRegisterShift",
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int));
+        private static readonly MethodInfo ExecuteMultiplyDivideValue = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledMultiplyDivideValue",
+            typeof(uint),
+            typeof(int),
+            typeof(bool),
+            typeof(bool));
+        private static readonly MethodInfo ReadMemoryValue = RequiredMethod(
+            typeof(M68kJitCore),
+            "ReadMemoryValue",
+            typeof(uint),
+            typeof(M68kOperandSize));
+        private static readonly MethodInfo WriteMemoryValue = RequiredMethod(
+            typeof(M68kJitCore),
+            "WriteMemoryValue",
+            typeof(uint),
+            typeof(uint),
+            typeof(M68kOperandSize));
+        private static readonly MethodInfo SetAddressRegister = RequiredMethod(
+            typeof(M68kJitCore),
+            "SetAddressRegister",
+            typeof(int),
+            typeof(uint));
+        private static readonly MethodInfo PushLong = RequiredMethod(typeof(M68kJitCore), "PushLong", typeof(uint));
+        private static readonly MethodInfo PullLong = RequiredMethod(typeof(M68kJitCore), "PullLong");
+        private static readonly MethodInfo ResolveIndex = RequiredMethod(typeof(M68kJitCore), "ResolveIndex", typeof(ushort));
+
         private static readonly PropertyInfo StateProperty = RequiredProperty(typeof(M68kJitCore), nameof(M68kJitCore.State));
         private static readonly PropertyInfo DataRegistersProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.D));
         private static readonly PropertyInfo AddressRegistersProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.A));
@@ -56,26 +133,64 @@ namespace CopperMod.Amiga
             return new TraceEmitContext(state, dataRegisters, addressRegisters);
         }
 
-        public static bool Emit(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        public static M68kIlInstructionKind Emit(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context)
         {
-            if (TryEmitDirect(il, instruction, context))
+            var kind = GetInstructionKind(instruction);
+            switch (kind)
             {
-                il.Emit(OpCodes.Ldc_I4_1);
-                return true;
+                case M68kIlInstructionKind.DirectCpu:
+                case M68kIlInstructionKind.DirectMemory:
+                    EmitDirect(il, instruction, context);
+                    break;
+                case M68kIlInstructionKind.SpecializedHelper:
+                    EmitSpecializedHelper(il, instruction);
+                    break;
+                default:
+                    EmitHelper(il, instruction);
+                    break;
             }
 
-            EmitHelper(il, instruction);
-            return false;
+            return kind;
         }
 
         public static bool CanEmitDirect(M68kDecodedInstruction instruction)
+            => GetInstructionKind(instruction) != M68kIlInstructionKind.Helper;
+
+        public static bool CanEmitPureCpuBatch(M68kDecodedInstruction instruction)
+            => GetInstructionKind(instruction) == M68kIlInstructionKind.DirectCpu;
+
+        public static M68kIlInstructionKind GetInstructionKind(M68kDecodedInstruction instruction)
+        {
+            if (CanEmitDirectCpu(instruction))
+            {
+                return M68kIlInstructionKind.DirectCpu;
+            }
+
+            if (CanEmitDirectMemory(instruction))
+            {
+                return M68kIlInstructionKind.DirectMemory;
+            }
+
+            if (CanEmitSpecializedHelper(instruction))
+            {
+                return M68kIlInstructionKind.SpecializedHelper;
+            }
+
+            return M68kIlInstructionKind.Helper;
+        }
+
+        private static bool CanEmitDirectCpu(M68kDecodedInstruction instruction)
         {
             return instruction.Operation switch
             {
                 M68kJitOperation.Moveq => true,
                 M68kJitOperation.Move => instruction.Source.Kind == M68kJitEaKind.DataRegister &&
                     instruction.Destination.Kind == M68kJitEaKind.DataRegister,
-                M68kJitOperation.Addq or M68kJitOperation.Subq => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Addq or M68kJitOperation.Subq => instruction.Destination.Kind is
+                    M68kJitEaKind.DataRegister,
                 M68kJitOperation.Tst => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmpi => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmp => instruction.Source.Kind == M68kJitEaKind.DataRegister,
@@ -84,6 +199,63 @@ namespace CopperMod.Amiga
                 _ => false
             };
         }
+
+        private static bool CanEmitDirectMemory(M68kDecodedInstruction instruction)
+        {
+            return instruction.Operation switch
+            {
+                _ => false
+            };
+        }
+
+        private static bool CanEmitSpecializedHelper(M68kDecodedInstruction instruction)
+            => false;
+
+        private static bool IsRegisterArithmetic(M68kDecodedInstruction instruction)
+        {
+            if (instruction.Variant != 0)
+            {
+                return instruction.Destination.Kind == M68kJitEaKind.DataRegister;
+            }
+
+            return IsRegisterOrImmediate(instruction.Source);
+        }
+
+        private static bool IsRegisterLogical(M68kDecodedInstruction instruction)
+        {
+            if (instruction.Operation == M68kJitOperation.Eor || instruction.Variant != 0)
+            {
+                return instruction.Destination.Kind == M68kJitEaKind.DataRegister;
+            }
+
+            return IsRegisterOrImmediate(instruction.Source);
+        }
+
+        private static bool IsSupportedBinaryArithmeticEa(M68kDecodedInstruction instruction)
+        {
+            if (instruction.Operation == M68kJitOperation.Eor || instruction.Variant != 0)
+            {
+                return IsSupportedReadWriteEa(instruction.Destination);
+            }
+
+            return IsSupportedReadEa(instruction.Source);
+        }
+
+        private static bool IsRegisterOrImmediate(M68kDecodedEa ea)
+            => ea.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister or M68kJitEaKind.Immediate;
+
+        private static bool IsSupportedReadEa(M68kDecodedEa ea)
+            => IsRegisterOrImmediate(ea) || IsSupportedAddressEa(ea);
+
+        private static bool IsSupportedWriteEa(M68kDecodedEa ea)
+            => ea.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister ||
+                (IsSupportedAddressEa(ea) && ea.Kind != M68kJitEaKind.PcDisplacement);
+
+        private static bool IsSupportedReadWriteEa(M68kDecodedEa ea)
+            => IsSupportedWriteEa(ea);
+
+        private static bool IsSupportedAddressEa(M68kDecodedEa ea)
+            => ea.IsMemory && ea.Kind is not M68kJitEaKind.AddressIndex and not M68kJitEaKind.PcIndex;
 
         private static void EmitHelper(ILGenerator il, M68kDecodedInstruction instruction)
         {
@@ -102,53 +274,192 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Call, ExecuteDecodedOperation);
         }
 
-        private static bool TryEmitDirect(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        private static void EmitSpecializedHelper(ILGenerator il, M68kDecodedInstruction instruction)
         {
-            if (!CanEmitDirect(instruction))
-            {
-                return false;
-            }
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Source.Kind);
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Register);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.Source.ExtensionAddress));
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Extension0);
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Extension1);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Size);
+            il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
+            il.Emit(OpCodes.Ldc_I4, instruction.Variant);
+            il.Emit(OpCodes.Call, ExecuteMovem);
+        }
 
+        private static void EmitDirect(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
             switch (instruction.Operation)
             {
                 case M68kJitOperation.Moveq:
                     EmitMoveq(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Move:
                     EmitMoveDataRegister(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Movea:
+                    EmitMovea(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Lea:
+                    EmitLea(il, instruction, context);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Addq:
-                    EmitQuickArithmetic(il, instruction, context, add: true);
-                    return true;
+                    EmitQuickDataRegisterArithmetic(il, instruction, context, add: true);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Subq:
-                    EmitQuickArithmetic(il, instruction, context, add: false);
-                    return true;
+                    EmitQuickDataRegisterArithmetic(il, instruction, context, add: false);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Tst:
                     EmitTstDataRegister(il, instruction, context);
-                    return true;
-                case M68kJitOperation.Cmpi:
-                    EmitCompareImmediateDataRegister(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Cmp:
                     EmitCompareDataRegisters(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Cmpi:
+                    EmitCompareImmediateDataRegister(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Cmpa:
+                    EmitAddressArithmetic(il, instruction, context, compareOnly: true, add: false);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Cmpm:
+                    EmitCmpm(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Add:
+                    if (instruction.Variant == 2)
+                    {
+                        EmitAddressArithmetic(il, instruction, context, compareOnly: false, add: true);
+                    }
+                    else
+                    {
+                        EmitBinaryArithmetic(il, instruction, context, add: true);
+                    }
+
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Sub:
+                    if (instruction.Variant == 2)
+                    {
+                        EmitAddressArithmetic(il, instruction, context, compareOnly: false, add: false);
+                    }
+                    else
+                    {
+                        EmitBinaryArithmetic(il, instruction, context, add: false);
+                    }
+
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Addi:
+                    EmitImmediateArithmetic(il, instruction, context, add: true, logicalOperation: 0);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Subi:
+                    EmitImmediateArithmetic(il, instruction, context, add: false, logicalOperation: 0);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.And:
+                    EmitBinaryLogical(il, instruction, context, operation: 0);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Or:
+                    EmitBinaryLogical(il, instruction, context, operation: 1);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Eor:
+                    EmitBinaryLogical(il, instruction, context, operation: 2);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Andi:
+                    EmitImmediateArithmetic(il, instruction, context, add: false, logicalOperation: 1);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Ori:
+                    EmitImmediateArithmetic(il, instruction, context, add: false, logicalOperation: 2);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Eori:
+                    EmitImmediateArithmetic(il, instruction, context, add: false, logicalOperation: 3);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Not:
                     EmitNotDataRegister(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Neg:
                     EmitNegDataRegister(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.ExtWord:
+                    EmitExt(il, instruction, context, M68kOperandSize.Word);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.ExtLong:
+                    EmitExt(il, instruction, context, M68kOperandSize.Long);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Swap:
+                    EmitSwap(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Exg:
+                    EmitExchange(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.ShiftRegister:
+                    EmitRegisterShift(il, instruction);
+                    return;
+                case M68kJitOperation.Mulu:
+                    EmitMultiplyDivide(il, instruction, context, signed: false, divide: false);
+                    return;
+                case M68kJitOperation.Muls:
+                    EmitMultiplyDivide(il, instruction, context, signed: true, divide: false);
+                    return;
+                case M68kJitOperation.Divu:
+                    EmitMultiplyDivide(il, instruction, context, signed: false, divide: true);
+                    return;
+                case M68kJitOperation.Divs:
+                    EmitMultiplyDivide(il, instruction, context, signed: true, divide: true);
+                    return;
                 case M68kJitOperation.Bra:
                     EmitBra(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Bcc:
                     EmitBcc(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Bsr:
+                    EmitBsr(il, instruction, context);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Dbcc:
                     EmitDbcc(il, instruction, context);
-                    return true;
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Jmp:
+                    EmitJump(il, instruction, context, link: false);
+                    return;
+                case M68kJitOperation.Jsr:
+                    EmitJump(il, instruction, context, link: true);
+                    return;
+                case M68kJitOperation.Rts:
+                    EmitRts(il, context);
+                    EmitTrue(il);
+                    return;
                 default:
-                    return false;
+                    EmitHelper(il, instruction);
+                    return;
             }
         }
 
@@ -172,7 +483,11 @@ namespace CopperMod.Amiga
             EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
         }
 
-        private static void EmitQuickArithmetic(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, bool add)
+        private static void EmitQuickDataRegisterArithmetic(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool add)
         {
             var destination = il.DeclareLocal(typeof(uint));
             var source = il.DeclareLocal(typeof(uint));
@@ -195,7 +510,10 @@ namespace CopperMod.Amiga
             EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
         }
 
-        private static void EmitCompareImmediateDataRegister(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        private static void EmitCompareImmediateDataRegister(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context)
         {
             var destination = il.DeclareLocal(typeof(uint));
             var source = il.DeclareLocal(typeof(uint));
@@ -249,6 +567,382 @@ namespace CopperMod.Amiga
             EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
         }
 
+        private static void EmitMove(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreEaValue(il, context, instruction.Destination, instruction.Size, value);
+            EmitSetLogicFlags(il, context, value, instruction.Size);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitMovea(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            if (instruction.Size == M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Conv_I2);
+                il.Emit(OpCodes.Conv_U4);
+            }
+
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreAddressRegister(il, instruction.Destination.Register, value);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitLea(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var address = il.DeclareLocal(typeof(uint));
+            EmitResolveEaAddress(il, context, instruction.Source, instruction.Size, applySideEffects: false);
+            il.Emit(OpCodes.Stloc, address);
+            EmitStoreAddressRegister(il, instruction.Register, address);
+            EmitAddCycles(il, context, 8);
+        }
+
+        private static void EmitQuickArithmetic(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, bool add)
+        {
+            if (instruction.Destination.Kind == M68kJitEaKind.AddressRegister)
+            {
+                var value = il.DeclareLocal(typeof(uint));
+                EmitLoadAddressRegister(il, context, instruction.Destination.Register);
+                EmitLoadUIntConstant(il, M68kCpuState.SignExtend((uint)instruction.QuickValue, instruction.Size));
+                il.Emit(add ? OpCodes.Add : OpCodes.Sub);
+                il.Emit(OpCodes.Stloc, value);
+                EmitStoreAddressRegister(il, instruction.Destination.Register, value);
+                EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 8 : 6);
+                return;
+            }
+
+            EmitArithmeticReadModifyWrite(
+                il,
+                context,
+                instruction.Destination,
+                instruction.Size,
+                emitSource: () => EmitLoadUIntConstant(il, (uint)instruction.QuickValue),
+                add,
+                setExtend: true,
+                instruction.Size == M68kOperandSize.Long ? 8 : 4);
+        }
+
+        private static void EmitTst(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Destination, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, value);
+            EmitSetLogicFlags(il, context, value, instruction.Size);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitCompare(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadDataRegister(il, context, instruction.Register, instruction.Size);
+            il.Emit(OpCodes.Stloc, destination);
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, source);
+            EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitCompareImmediate(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Destination, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, destination);
+            EmitLoadUIntConstant(il, instruction.Source.Immediate);
+            il.Emit(OpCodes.Stloc, source);
+            EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 16 : 8);
+        }
+
+        private static void EmitAddressArithmetic(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool compareOnly,
+            bool add)
+        {
+            var source = il.DeclareLocal(typeof(uint));
+            var destination = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            if (instruction.Size == M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Conv_I2);
+                il.Emit(OpCodes.Conv_U4);
+            }
+
+            il.Emit(OpCodes.Stloc, source);
+            EmitLoadAddressRegister(il, context, instruction.Register);
+            il.Emit(OpCodes.Stloc, destination);
+            if (compareOnly)
+            {
+                EmitArithmeticFlagsAndResult(il, context, destination, source, result, M68kOperandSize.Long, add: false, setExtend: false);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldloc, destination);
+                il.Emit(OpCodes.Ldloc, source);
+                il.Emit(add ? OpCodes.Add : OpCodes.Sub);
+                il.Emit(OpCodes.Stloc, result);
+                EmitStoreAddressRegister(il, instruction.Register, result);
+            }
+
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 8 : 6);
+        }
+
+        private static void EmitCmpm(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var source = il.DeclareLocal(typeof(uint));
+            var destination = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, source);
+            EmitLoadEaValue(il, context, instruction.Destination, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, destination);
+            EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 20 : 12);
+        }
+
+        private static void EmitBinaryArithmetic(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, bool add)
+        {
+            var regValue = il.DeclareLocal(typeof(uint));
+            EmitLoadDataRegister(il, context, instruction.Register, instruction.Size);
+            il.Emit(OpCodes.Stloc, regValue);
+            if (instruction.Variant != 0)
+            {
+                EmitArithmeticReadModifyWrite(
+                    il,
+                    context,
+                    instruction.Destination,
+                    instruction.Size,
+                    emitSource: () => il.Emit(OpCodes.Ldloc, regValue),
+                    add,
+                    setExtend: true,
+                    instruction.Size == M68kOperandSize.Long ? 12 : 8);
+                return;
+            }
+
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, source);
+            EmitArithmeticFlagsAndResult(il, context, regValue, source, result, instruction.Size, add, setExtend: true);
+            EmitStoreDataRegister(il, context, instruction.Register, result, instruction.Size);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitImmediateArithmetic(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool add,
+            int logicalOperation)
+        {
+            if (logicalOperation != 0)
+            {
+                EmitLogicalReadModifyWrite(
+                    il,
+                    context,
+                    instruction.Destination,
+                    instruction.Size,
+                    emitSource: () => EmitLoadUIntConstant(il, instruction.Source.Immediate),
+                    logicalOperation - 1,
+                    instruction.Size == M68kOperandSize.Long ? 16 : 8);
+                return;
+            }
+
+            EmitArithmeticReadModifyWrite(
+                il,
+                context,
+                instruction.Destination,
+                instruction.Size,
+                emitSource: () => EmitLoadUIntConstant(il, instruction.Source.Immediate),
+                add,
+                setExtend: true,
+                instruction.Size == M68kOperandSize.Long ? 16 : 8);
+        }
+
+        private static void EmitBinaryLogical(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            int operation)
+        {
+            var regValue = il.DeclareLocal(typeof(uint));
+            EmitLoadDataRegister(il, context, instruction.Register, instruction.Size);
+            il.Emit(OpCodes.Stloc, regValue);
+            if (instruction.Variant != 0 || instruction.Operation == M68kJitOperation.Eor)
+            {
+                EmitLogicalReadModifyWrite(
+                    il,
+                    context,
+                    instruction.Destination,
+                    instruction.Size,
+                    emitSource: () => il.Emit(OpCodes.Ldloc, regValue),
+                    operation,
+                    instruction.Size == M68kOperandSize.Long ? 12 : 8);
+                return;
+            }
+
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldloc, regValue);
+            il.Emit(OpCodes.Ldloc, source);
+            il.Emit(operation == 0 ? OpCodes.And : OpCodes.Or);
+            EmitLoadUIntConstant(il, GetMask(instruction.Size));
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, result);
+            EmitStoreDataRegister(il, context, instruction.Register, result, instruction.Size);
+            EmitSetLogicFlags(il, context, result, instruction.Size);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitNot(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitReadForModify(il, context, instruction.Destination, instruction.Size, out var address, out var memory);
+            il.Emit(OpCodes.Stloc, value);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Not);
+            EmitLoadUIntConstant(il, GetMask(instruction.Size));
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, result);
+            EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
+            EmitSetLogicFlags(il, context, result, instruction.Size);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitNeg(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitReadForModify(il, context, instruction.Destination, instruction.Size, out var address, out var memory);
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Stloc, destination);
+            EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: true);
+            EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitExt(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, M68kOperandSize size)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            if (size == M68kOperandSize.Word)
+            {
+                EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Byte);
+                il.Emit(OpCodes.Conv_I1);
+                il.Emit(OpCodes.Conv_U4);
+                EmitLoadUIntConstant(il, 0xFFFF);
+                il.Emit(OpCodes.And);
+            }
+            else
+            {
+                EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Word);
+                il.Emit(OpCodes.Conv_I2);
+                il.Emit(OpCodes.Conv_U4);
+            }
+
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreDataRegister(il, context, instruction.Register, value, size);
+            EmitSetLogicFlags(il, context, value, size);
+            EmitAddCycles(il, context, 4);
+        }
+
+        private static void EmitSwap(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Long);
+            il.Emit(OpCodes.Stloc, value);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Ldc_I4, 16);
+            il.Emit(OpCodes.Shl);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Ldc_I4, 16);
+            il.Emit(OpCodes.Shr_Un);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Or);
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreDataRegister(il, context, instruction.Register, value, M68kOperandSize.Long);
+            EmitSetLogicFlags(il, context, value, M68kOperandSize.Long);
+            EmitAddCycles(il, context, 4);
+        }
+
+        private static void EmitExchange(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var left = il.DeclareLocal(typeof(uint));
+            var right = il.DeclareLocal(typeof(uint));
+            if (instruction.Variant == 0)
+            {
+                EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Long);
+                il.Emit(OpCodes.Stloc, left);
+                EmitLoadDataRegister(il, context, instruction.QuickValue, M68kOperandSize.Long);
+                il.Emit(OpCodes.Stloc, right);
+                EmitStoreDataRegister(il, context, instruction.Register, right, M68kOperandSize.Long);
+                EmitStoreDataRegister(il, context, instruction.QuickValue, left, M68kOperandSize.Long);
+            }
+            else if (instruction.Variant == 1)
+            {
+                EmitLoadAddressRegister(il, context, instruction.Register);
+                il.Emit(OpCodes.Stloc, left);
+                EmitLoadAddressRegister(il, context, instruction.QuickValue);
+                il.Emit(OpCodes.Stloc, right);
+                EmitStoreAddressRegister(il, instruction.Register, right);
+                EmitStoreAddressRegister(il, instruction.QuickValue, left);
+            }
+            else
+            {
+                EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Long);
+                il.Emit(OpCodes.Stloc, left);
+                EmitLoadAddressRegister(il, context, instruction.QuickValue);
+                il.Emit(OpCodes.Stloc, right);
+                EmitStoreDataRegister(il, context, instruction.Register, right, M68kOperandSize.Long);
+                EmitStoreAddressRegister(il, instruction.QuickValue, left);
+            }
+
+            EmitAddCycles(il, context, 6);
+        }
+
+        private static void EmitRegisterShift(ILGenerator il, M68kDecodedInstruction instruction)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+            il.Emit(OpCodes.Ldc_I4, instruction.Variant);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Size);
+            il.Emit(OpCodes.Call, ExecuteRegisterShift);
+        }
+
+        private static void EmitMultiplyDivide(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool signed,
+            bool divide)
+        {
+            var source = il.DeclareLocal(typeof(uint));
+            EmitLoadEaValue(il, context, instruction.Source, M68kOperandSize.Word, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, source);
+            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(divide ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, ExecuteMultiplyDivideValue);
+        }
+
         private static void EmitBra(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
         {
             EmitSetProgramCounter(il, context, GetBranchTarget(instruction));
@@ -267,6 +961,15 @@ namespace CopperMod.Amiga
             il.MarkLabel(notTaken);
             EmitAddCycles(il, context, 8);
             il.MarkLabel(done);
+        }
+
+        private static void EmitBsr(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            EmitLoadProgramCounter(il, context);
+            il.Emit(OpCodes.Call, PushLong);
+            EmitSetProgramCounter(il, context, GetBranchTarget(instruction));
+            EmitAddCycles(il, context, 18);
         }
 
         private static void EmitDbcc(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -303,6 +1006,286 @@ namespace CopperMod.Amiga
             il.MarkLabel(done);
         }
 
+        private static void EmitJump(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool link)
+        {
+            var target = il.DeclareLocal(typeof(uint));
+            EmitResolveEaAddress(il, context, instruction.Source, M68kOperandSize.Long, applySideEffects: false);
+            il.Emit(OpCodes.Stloc, target);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, target);
+            il.Emit(link ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, ExecuteJumpTo);
+        }
+
+        private static void EmitRts(ILGenerator il, TraceEmitContext context)
+        {
+            var target = il.DeclareLocal(typeof(uint));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, PullLong);
+            il.Emit(OpCodes.Stloc, target);
+            EmitSetProgramCounter(il, context, target);
+            EmitAddCycles(il, context, 16);
+        }
+
+        private static void EmitArithmeticReadModifyWrite(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa destinationEa,
+            M68kOperandSize size,
+            Action emitSource,
+            bool add,
+            bool setExtend,
+            int cycles)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitReadForModify(il, context, destinationEa, size, out var address, out var memory);
+            il.Emit(OpCodes.Stloc, destination);
+            emitSource();
+            il.Emit(OpCodes.Stloc, source);
+            EmitArithmeticFlagsAndResult(il, context, destination, source, result, size, add, setExtend);
+            EmitWriteResolvedEa(il, context, destinationEa, size, result, address, memory);
+            EmitAddCycles(il, context, cycles);
+        }
+
+        private static void EmitLogicalReadModifyWrite(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa destinationEa,
+            M68kOperandSize size,
+            Action emitSource,
+            int operation,
+            int cycles)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitReadForModify(il, context, destinationEa, size, out var address, out var memory);
+            il.Emit(OpCodes.Stloc, destination);
+            emitSource();
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldloc, destination);
+            il.Emit(OpCodes.Ldloc, source);
+            il.Emit(operation == 0 ? OpCodes.And : operation == 1 ? OpCodes.Or : OpCodes.Xor);
+            EmitLoadUIntConstant(il, GetMask(size));
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, result);
+            EmitWriteResolvedEa(il, context, destinationEa, size, result, address, memory);
+            EmitSetLogicFlags(il, context, result, size);
+            EmitAddCycles(il, context, cycles);
+        }
+
+        private static void EmitReadForModify(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa ea,
+            M68kOperandSize size,
+            out LocalBuilder? address,
+            out bool memory)
+        {
+            if (ea.Kind == M68kJitEaKind.DataRegister || ea.Kind == M68kJitEaKind.AddressRegister)
+            {
+                address = null;
+                memory = false;
+                EmitLoadEaValue(il, context, ea, size, applySideEffects: true);
+                return;
+            }
+
+            address = il.DeclareLocal(typeof(uint));
+            memory = true;
+            EmitResolveEaAddress(il, context, ea, size, applySideEffects: true);
+            il.Emit(OpCodes.Stloc, address);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, address);
+            il.Emit(OpCodes.Ldc_I4, (int)size);
+            il.Emit(OpCodes.Call, ReadMemoryValue);
+        }
+
+        private static void EmitWriteResolvedEa(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa ea,
+            M68kOperandSize size,
+            LocalBuilder value,
+            LocalBuilder? address,
+            bool memory)
+        {
+            if (!memory)
+            {
+                EmitStoreEaValue(il, context, ea, size, value);
+                return;
+            }
+
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, address!);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Ldc_I4, (int)size);
+            il.Emit(OpCodes.Call, WriteMemoryValue);
+        }
+
+        private static void EmitLoadEaValue(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa ea,
+            M68kOperandSize size,
+            bool applySideEffects)
+        {
+            switch (ea.Kind)
+            {
+                case M68kJitEaKind.DataRegister:
+                    EmitLoadDataRegister(il, context, ea.Register, size);
+                    return;
+                case M68kJitEaKind.AddressRegister:
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    if (size == M68kOperandSize.Word)
+                    {
+                        EmitLoadUIntConstant(il, 0xFFFF);
+                        il.Emit(OpCodes.And);
+                    }
+
+                    return;
+                case M68kJitEaKind.Immediate:
+                    EmitLoadUIntConstant(il, ea.Immediate & GetMask(size));
+                    return;
+                default:
+                    il.Emit(OpCodes.Ldarg_0);
+                    EmitResolveEaAddress(il, context, ea, size, applySideEffects);
+                    il.Emit(OpCodes.Ldc_I4, (int)size);
+                    il.Emit(OpCodes.Call, ReadMemoryValue);
+                    return;
+            }
+        }
+
+        private static void EmitStoreEaValue(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa ea,
+            M68kOperandSize size,
+            LocalBuilder value)
+        {
+            switch (ea.Kind)
+            {
+                case M68kJitEaKind.DataRegister:
+                    EmitStoreDataRegister(il, context, ea.Register, value, size);
+                    return;
+                case M68kJitEaKind.AddressRegister:
+                    if (size == M68kOperandSize.Word)
+                    {
+                        var extended = il.DeclareLocal(typeof(uint));
+                        il.Emit(OpCodes.Ldloc, value);
+                        il.Emit(OpCodes.Conv_I2);
+                        il.Emit(OpCodes.Conv_U4);
+                        il.Emit(OpCodes.Stloc, extended);
+                        EmitStoreAddressRegister(il, ea.Register, extended);
+                    }
+                    else
+                    {
+                        EmitStoreAddressRegister(il, ea.Register, value);
+                    }
+
+                    return;
+                default:
+                    il.Emit(OpCodes.Ldarg_0);
+                    EmitResolveEaAddress(il, context, ea, size, applySideEffects: true);
+                    il.Emit(OpCodes.Ldloc, value);
+                    il.Emit(OpCodes.Ldc_I4, (int)size);
+                    il.Emit(OpCodes.Call, WriteMemoryValue);
+                    return;
+            }
+        }
+
+        private static void EmitResolveEaAddress(
+            ILGenerator il,
+            TraceEmitContext context,
+            M68kDecodedEa ea,
+            M68kOperandSize size,
+            bool applySideEffects)
+        {
+            switch (ea.Kind)
+            {
+                case M68kJitEaKind.AddressIndirect:
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    return;
+                case M68kJitEaKind.AddressPostincrement:
+                {
+                    var address = il.DeclareLocal(typeof(uint));
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    il.Emit(OpCodes.Stloc, address);
+                    if (applySideEffects)
+                    {
+                        var updated = il.DeclareLocal(typeof(uint));
+                        il.Emit(OpCodes.Ldloc, address);
+                        EmitLoadUIntConstant(il, AddressIncrement(ea.Register, size));
+                        il.Emit(OpCodes.Add);
+                        il.Emit(OpCodes.Stloc, updated);
+                        EmitStoreAddressRegister(il, ea.Register, updated);
+                    }
+
+                    il.Emit(OpCodes.Ldloc, address);
+                    return;
+                }
+                case M68kJitEaKind.AddressPredecrement:
+                {
+                    var address = il.DeclareLocal(typeof(uint));
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    if (applySideEffects)
+                    {
+                        EmitLoadUIntConstant(il, AddressIncrement(ea.Register, size));
+                        il.Emit(OpCodes.Sub);
+                        il.Emit(OpCodes.Stloc, address);
+                        EmitStoreAddressRegister(il, ea.Register, address);
+                    }
+                    else
+                    {
+                        il.Emit(OpCodes.Stloc, address);
+                    }
+
+                    il.Emit(OpCodes.Ldloc, address);
+                    return;
+                }
+                case M68kJitEaKind.AddressDisplacement:
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    il.Emit(OpCodes.Ldc_I4, (int)(short)ea.Extension0);
+                    il.Emit(OpCodes.Add);
+                    return;
+                case M68kJitEaKind.AddressIndex:
+                    EmitLoadAddressRegister(il, context, ea.Register);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldc_I4, ea.Extension0);
+                    il.Emit(OpCodes.Call, ResolveIndex);
+                    il.Emit(OpCodes.Add);
+                    il.Emit(OpCodes.Ldc_I4, (sbyte)(ea.Extension0 & 0xFF));
+                    il.Emit(OpCodes.Add);
+                    return;
+                case M68kJitEaKind.AbsoluteWord:
+                    EmitLoadUIntConstant(il, unchecked((uint)(short)ea.Extension0));
+                    return;
+                case M68kJitEaKind.AbsoluteLong:
+                    EmitLoadUIntConstant(il, ((uint)ea.Extension0 << 16) | ea.Extension1);
+                    return;
+                case M68kJitEaKind.PcDisplacement:
+                    EmitLoadUIntConstant(il, unchecked((uint)(ea.ExtensionAddress + (short)ea.Extension0)));
+                    return;
+                case M68kJitEaKind.PcIndex:
+                    EmitLoadUIntConstant(il, ea.ExtensionAddress);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldc_I4, ea.Extension0);
+                    il.Emit(OpCodes.Call, ResolveIndex);
+                    il.Emit(OpCodes.Add);
+                    il.Emit(OpCodes.Ldc_I4, (sbyte)(ea.Extension0 & 0xFF));
+                    il.Emit(OpCodes.Add);
+                    return;
+                default:
+                    EmitLoadUIntConstant(il, 0);
+                    return;
+            }
+        }
+
         private static void EmitLoadDataRegister(
             ILGenerator il,
             TraceEmitContext context,
@@ -318,6 +1301,19 @@ namespace CopperMod.Amiga
                 EmitLoadUIntConstant(il, mask);
                 il.Emit(OpCodes.And);
             }
+        }
+
+        private static void EmitLoadAddressRegister(ILGenerator il, TraceEmitContext context, int register)
+        {
+            il.Emit(OpCodes.Ldloc, context.AddressRegisters);
+            il.Emit(OpCodes.Ldc_I4, register);
+            il.Emit(OpCodes.Ldelem_U4);
+        }
+
+        private static void EmitLoadProgramCounter(ILGenerator il, TraceEmitContext context)
+        {
+            il.Emit(OpCodes.Ldloc, context.State);
+            il.Emit(OpCodes.Call, ProgramCounterProperty.GetMethod!);
         }
 
         private static void EmitStoreDataRegister(
@@ -348,6 +1344,14 @@ namespace CopperMod.Amiga
             }
 
             il.Emit(OpCodes.Stelem_I4);
+        }
+
+        private static void EmitStoreAddressRegister(ILGenerator il, int register, LocalBuilder value)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, register);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Call, SetAddressRegister);
         }
 
         private static void EmitSetLogicFlags(
@@ -640,6 +1644,13 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Call, ProgramCounterProperty.SetMethod!);
         }
 
+        private static void EmitSetProgramCounter(ILGenerator il, TraceEmitContext context, LocalBuilder value)
+        {
+            il.Emit(OpCodes.Ldloc, context.State);
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Call, ProgramCounterProperty.SetMethod!);
+        }
+
         private static void EmitAddCycles(ILGenerator il, TraceEmitContext context, int cycles)
         {
             il.Emit(OpCodes.Ldloc, context.State);
@@ -653,6 +1664,11 @@ namespace CopperMod.Amiga
         private static void EmitLoadUIntConstant(ILGenerator il, uint value)
         {
             il.Emit(OpCodes.Ldc_I4, unchecked((int)value));
+        }
+
+        private static void EmitTrue(ILGenerator il)
+        {
+            il.Emit(OpCodes.Ldc_I4_1);
         }
 
         private static uint GetMask(M68kOperandSize size)
@@ -678,11 +1694,18 @@ namespace CopperMod.Amiga
         private static uint GetBranchTarget(M68kDecodedInstruction instruction)
             => Normalize(instruction.BranchBase + unchecked((uint)instruction.Displacement));
 
+        private static uint AddressIncrement(int register, M68kOperandSize size)
+            => size == M68kOperandSize.Byte && register == 7 ? 2u : (uint)size;
+
         private static uint Normalize(uint address)
             => address & 0x00FF_FFFF;
 
         private static PropertyInfo RequiredProperty(Type type, string name)
             => type.GetProperty(name) ?? throw new MissingMemberException(type.FullName, name);
+
+        private static MethodInfo RequiredMethod(Type type, string name, params Type[] parameterTypes)
+            => type.GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic, parameterTypes) ??
+                throw new MissingMethodException(type.FullName, name);
 
         internal readonly struct TraceEmitContext
         {

@@ -43,6 +43,7 @@ namespace CopperMod.Amiga
         private readonly AgnusChipSlotScheduler _legacyChipSlots = new AgnusChipSlotScheduler();
         private readonly IAgnusChipSlotTiming _diagnosticChipSlots;
         private readonly AgnusSlotEngine? _slotEngine;
+        private readonly AgnusSparseSlotExecutor? _sparseSlotExecutor;
         private readonly AgnusShadowCompareSlotTiming? _shadowCompareSlotTiming;
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
@@ -121,9 +122,6 @@ namespace CopperMod.Amiga
             _shadowCompareSlotTiming = agnusTimingMode == AgnusTimingMode.ShadowCompare
                 ? new AgnusShadowCompareSlotTiming()
                 : null;
-            _diagnosticChipSlots = _slotEngine ??
-                (IAgnusChipSlotTiming?)_shadowCompareSlotTiming ??
-                _legacyChipSlots;
             _presentationWriteHistory = new ChipPresentationWriteHistory(chipRamSize);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
@@ -140,6 +138,12 @@ namespace CopperMod.Amiga
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             Display = new OcsDisplay(this, enableLiveDisplayDma);
+            _sparseSlotExecutor = _slotEngine != null
+                ? new AgnusSparseSlotExecutor(this, _slotEngine)
+                : null;
+            _diagnosticChipSlots = _sparseSlotExecutor ??
+                (IAgnusChipSlotTiming?)_shadowCompareSlotTiming ??
+                _legacyChipSlots;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
             Blitter = new AmigaBlitter(this, enableHardwareSpecialization);
             CiaA = new AmigaCia(AmigaCiaId.A);
@@ -970,11 +974,6 @@ namespace CopperMod.Amiga
             }
             else
             {
-                if (_slotEngine != null && LiveAgnusDmaEnabled)
-                {
-                    Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(requestedCycle);
-                }
-
                 access = ReserveCopperDmaSlot(address, requestedCycle);
             }
 
@@ -1194,6 +1193,9 @@ namespace CopperMod.Amiga
         }
 
         public long GetNextStoppedCpuWakeCandidateCycle(long currentCycle, long targetCycle)
+            => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle);
+
+        public long GetNextCpuBatchWakeCandidateCycle(long currentCycle, long targetCycle)
         {
             currentCycle = Math.Max(0, currentCycle);
             targetCycle = Math.Max(currentCycle, targetCycle);
@@ -1394,9 +1396,9 @@ namespace CopperMod.Amiga
 
         private void ClearChipSlots()
         {
-            if (_slotEngine != null)
+            if (_sparseSlotExecutor != null)
             {
-                _slotEngine.Clear();
+                _sparseSlotExecutor.Clear();
                 return;
             }
 
@@ -1412,26 +1414,9 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private AmigaBusAccessResult ArbitrateChipSlot(AmigaBusAccessRequest request, AmigaBusAccessResult baseResult)
         {
-            if (_slotEngine != null)
+            if (_sparseSlotExecutor != null)
             {
-                if (request.Requester == AmigaBusRequester.Cpu &&
-                    LiveAgnusDmaEnabled &&
-                    (request.Target == AmigaBusAccessTarget.ChipRam ||
-                        request.Target == AmigaBusAccessTarget.ExpansionRam ||
-                        request.Target == AmigaBusAccessTarget.CustomRegisters))
-                {
-                    return ArbitrateSlotEngineCpuAccess(request, baseResult);
-                }
-
-                if (LiveAgnusDmaEnabled &&
-                    Display.HasLiveDisplayWork() &&
-                    request.Size == AmigaBusAccessSize.Word &&
-                    ShouldCaptureLiveDisplayBeforeSlotEngineDeviceAccess(request))
-                {
-                    Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(Math.Max(baseResult.GrantedCycle, request.RequestedCycle));
-                }
-
-                return _slotEngine.Arbitrate(request, baseResult);
+                return _sparseSlotExecutor.Arbitrate(request, baseResult);
             }
 
             if (_shadowCompareSlotTiming != null)
@@ -1440,69 +1425,6 @@ namespace CopperMod.Amiga
             }
 
             return _legacyChipSlots.Arbitrate(request, baseResult);
-        }
-
-        private AmigaBusAccessResult ArbitrateSlotEngineCpuAccess(AmigaBusAccessRequest request, AmigaBusAccessResult baseResult)
-        {
-            var slotCount = request.Size == AmigaBusAccessSize.Long ? 2 : 1;
-            var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle));
-            var hasLiveDisplayWork = Display.HasLiveDisplayWork();
-            while (true)
-            {
-                var lastSlot = candidate + ((slotCount - 1) * AgnusChipSlotScheduler.SlotCycles);
-                if (hasLiveDisplayWork && !Display.HasLiveDmaCapturedThrough(lastSlot))
-                {
-                    AdvanceDmaTo(lastSlot);
-                }
-
-                if (hasLiveDisplayWork)
-                {
-                    Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(candidate);
-                    if (slotCount > 1)
-                    {
-                        Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(lastSlot);
-                    }
-                }
-
-                var available = true;
-                for (var slot = 0; slot < slotCount; slot++)
-                {
-                    if (_slotEngine!.IsReserved(candidate + (slot * AgnusChipSlotScheduler.SlotCycles)))
-                    {
-                        available = false;
-                        break;
-                    }
-                }
-
-                if (available)
-                {
-                    break;
-                }
-
-                candidate += AgnusChipSlotScheduler.SlotCycles;
-            }
-
-            var adjustedBase = new AmigaBusAccessResult(
-                baseResult.Request,
-                candidate,
-                Math.Max(baseResult.CompletedCycle, candidate));
-            return _slotEngine!.Arbitrate(request, adjustedBase);
-        }
-
-        private static bool ShouldCaptureLiveDisplayBeforeSlotEngineDeviceAccess(AmigaBusAccessRequest request)
-        {
-            if (request.Target != AmigaBusAccessTarget.ChipRam &&
-                request.Target != AmigaBusAccessTarget.ExpansionRam &&
-                request.Target != AmigaBusAccessTarget.CustomRegisters)
-            {
-                return false;
-            }
-
-            return request.Requester == AmigaBusRequester.Blitter ||
-                request.Requester == AmigaBusRequester.Copper ||
-                request.Requester == AmigaBusRequester.Paula ||
-                request.Requester == AmigaBusRequester.Disk ||
-                request.Requester == AmigaBusRequester.Host;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1540,9 +1462,9 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private AmigaBusAccessResult ReserveCopperDmaSlot(uint address, long requestedCycle)
         {
-            if (_slotEngine != null)
+            if (_sparseSlotExecutor != null)
             {
-                return _slotEngine.ReserveCopperDmaSlot(address, requestedCycle);
+                return _sparseSlotExecutor.ReserveCopperDmaSlot(address, requestedCycle);
             }
 
             if (_shadowCompareSlotTiming != null)
@@ -3052,9 +2974,9 @@ namespace CopperMod.Amiga
             return (long)Math.Max(1, period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
-        private static long GetDmaPeriodCycles(AmigaBus bus, int period)
+        private static long GetDmaPeriodCycles(int period)
         {
-            return (long)Math.Max(bus.AudioDmaMinimumPeriod, period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
+            return GetPeriodCycles(period);
         }
 
         private static long? MinWakeCandidate(long? candidate, long? eventCycle)
@@ -3181,7 +3103,7 @@ namespace CopperMod.Amiga
                 _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
                 FetchDmaWord(bus, cycle, paula, forceInterrupt: true);
-                _nextSampleCycle = cycle + GetDmaPeriodCycles(bus, Period);
+                _nextSampleCycle = cycle + GetDmaPeriodCycles(Period);
             }
 
             public void WriteData(ushort value, long cycle, Paula paula)
@@ -3208,14 +3130,14 @@ namespace CopperMod.Amiga
                         CurrentSample = unchecked((sbyte)_dataWord);
                         _nextByteIsLow = false;
                         paula.ApplyModulationFrom(Index, _dataWord);
-                        _nextSampleCycle += GetActivePeriodCycles(bus);
+                        _nextSampleCycle += GetActivePeriodCycles();
                         continue;
                     }
 
                     if (DmaEnabled)
                     {
                         FetchDmaWord(bus, _nextSampleCycle, paula, forceInterrupt: false);
-                        _nextSampleCycle += GetDmaPeriodCycles(bus, Period);
+                        _nextSampleCycle += GetDmaPeriodCycles(Period);
                     }
                     else
                     {
@@ -3276,10 +3198,10 @@ namespace CopperMod.Amiga
                 }
             }
 
-            private long GetActivePeriodCycles(AmigaBus bus)
+            private long GetActivePeriodCycles()
             {
                 return DmaEnabled
-                    ? GetDmaPeriodCycles(bus, Period)
+                    ? GetDmaPeriodCycles(Period)
                     : GetPeriodCycles(Period);
             }
 

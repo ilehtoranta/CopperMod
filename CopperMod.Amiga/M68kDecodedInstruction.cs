@@ -16,6 +16,7 @@ namespace CopperMod.Amiga
         Cmp,
         Cmpi,
         Cmpa,
+        Cmpm,
         Add,
         Addi,
         Addq,
@@ -895,8 +896,36 @@ namespace CopperMod.Amiga
 
             if (line == 0xB && (opcode & 0xF138) == 0xB108)
             {
-                reason = M68kJitBailoutReason.UnsupportedOpcode;
-                return false;
+                var cmpmSize = ((opcode >> 6) & 3) switch
+                {
+                    0 => M68kOperandSize.Byte,
+                    1 => M68kOperandSize.Word,
+                    2 => M68kOperandSize.Long,
+                    _ => (M68kOperandSize)0
+                };
+                if (cmpmSize == 0)
+                {
+                    reason = M68kJitBailoutReason.UnsupportedOpcode;
+                    return false;
+                }
+
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.Cmpm,
+                    cmpmSize,
+                    new M68kDecodedEa(M68kJitEaKind.AddressPostincrement, eaReg, 0, 0, 0, 0),
+                    new M68kDecodedEa(M68kJitEaKind.AddressPostincrement, reg, 0, 0, 0, 0),
+                    reg,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: false);
+                return true;
             }
 
             if ((line == 0xC && opmode is 3 or 7) ||

@@ -4,7 +4,7 @@ using System.Numerics;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class OcsDisplay
+    internal sealed class OcsDisplay : IAgnusSparseSlotParticipant
     {
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
@@ -511,6 +511,63 @@ namespace CopperMod.Amiga
                 IsLiveCopperDmaEnabled() ||
                 IsSpriteDmaEnabled() ||
                 TryPeekPendingWrite(out _);
+        }
+
+        bool IAgnusSparseSlotParticipant.TryGetNextChipBusRequest(
+            long currentCycle,
+            long stopCycle,
+            out AgnusSparseChipBusRequest request)
+        {
+            request = default;
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid ||
+                _bus.AgnusTimingMode != AgnusTimingMode.SlotEngine)
+            {
+                return false;
+            }
+
+            var fetchCycle = GetNextKnownLiveBitplaneFetchCycle();
+            if (fetchCycle < currentCycle || fetchCycle > stopCycle)
+            {
+                return false;
+            }
+
+            if ((uint)_liveNextFetchRow >= (uint)LowResOutputHeight ||
+                (uint)_liveNextFetchPlane >= (uint)LiveBitplanePlaneCount ||
+                (uint)_liveNextFetchWord >= (uint)MaxBitplaneFetchWords)
+            {
+                return false;
+            }
+
+            var state = _liveLineStates[_liveNextFetchRow];
+            if (!IsLiveLineValid(_liveNextFetchRow) ||
+                (state.PlaneHasRowMask & (1 << _liveNextFetchPlane)) == 0)
+            {
+                return false;
+            }
+
+            var address = unchecked(state.BitplaneRowAddresses[_liveNextFetchPlane] + (uint)(_liveNextFetchWord * 2));
+            var busRequest = new AmigaBusAccessRequest(
+                AmigaBusRequester.Bitplane,
+                AmigaBusAccessKind.Bitplane,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                fetchCycle,
+                isWrite: false);
+            request = new AgnusSparseChipBusRequest(busRequest, fixedSlot: true);
+            return true;
+        }
+
+        void IAgnusSparseSlotParticipant.CommitChipBusGrant(AgnusSparseChipBusRequest request, AmigaBusAccessResult result)
+        {
+            _ = request;
+            _ = result;
+        }
+
+        void IAgnusSparseSlotParticipant.AdvanceInternalTo(long cycle)
+        {
+            AdvanceLiveDmaTo(cycle);
         }
 
         private void AdvanceIdleLiveDmaTo(long targetCycle)
@@ -3324,7 +3381,12 @@ namespace CopperMod.Amiga
 
         private bool IsCopperDangerStopRegister(ushort offset)
         {
-            return offset >= 0x010 && offset < 0x020 && (_copcon & CopconCopperDanger) == 0;
+            if (offset < 0x010)
+            {
+                return true;
+            }
+
+            return offset < 0x020 && (_copcon & CopconCopperDanger) == 0;
         }
 
         private static bool HasCopperHardwareSideEffect(ushort offset)
@@ -5785,7 +5847,12 @@ namespace CopperMod.Amiga
 
         private static bool IsCopperDangerStopRegister(ushort offset, ushort copcon)
         {
-            return offset >= 0x010 && offset < 0x020 && (copcon & CopconCopperDanger) == 0;
+            if (offset < 0x010)
+            {
+                return true;
+            }
+
+            return offset < 0x020 && (copcon & CopconCopperDanger) == 0;
         }
 
         private static bool IsCopperComparisonSatisfiedAtResetBeam(ushort first, ushort second)

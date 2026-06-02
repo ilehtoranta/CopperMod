@@ -59,6 +59,9 @@ public sealed class PaulaConformanceMatrixTests
             case "audio registers latch pointer length period and volume":
                 AudioRegistersLatchPointerLengthPeriodAndVolume();
                 break;
+            case "AUDxPER below recommended DMA minimum still drives sample timing":
+                AudxperBelowRecommendedDmaMinimumStillDrivesSampleTiming();
+                break;
             case "manual audio plays high then low byte":
                 ManualAudioPlaysHighThenLowByte();
                 break;
@@ -109,6 +112,7 @@ public sealed class PaulaConformanceMatrixTests
         Executable("adkcon", "ADKCON set and clear semantics"),
         Executable("intena-intreq", "INTENA gates INTREQ delivery"),
         Executable("audio-registers", "audio registers latch pointer length period and volume"),
+        Executable("audio-registers", "AUDxPER below recommended DMA minimum still drives sample timing"),
         Executable("manual-audio", "manual audio plays high then low byte"),
         Executable("manual-audio", "manual data can be replaced before low byte"),
         Executable("audio-dma", "audio DMA fetches all four channels"),
@@ -198,6 +202,25 @@ public sealed class PaulaConformanceMatrixTests
         Assert.Equal(3, snapshot.LengthWords);
         Assert.Equal(1, snapshot.Period);
         Assert.Equal(64, snapshot.Volume);
+    }
+
+    private static void AudxperBelowRecommendedDmaMinimumStillDrivesSampleTiming()
+    {
+        var bus = CreateDefaultMinimumPaulaBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+        ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 113, volume: 64);
+        bus.WriteWord(0x00DFF096, 0x8201, 0);
+        bus.Paula.AdvanceTo(0);
+        var afterEnable = bus.Paula.GetChannelSnapshot(0);
+        var buffer = new float[4];
+
+        bus.Paula.RenderSample(225, buffer, 0, 2);
+        bus.Paula.RenderSample(226, buffer, 1, 2);
+
+        Assert.Equal(226, afterEnable.NextSampleCycle);
+        Assert.True(buffer[0] > 0.20f);
+        Assert.True(buffer[2] < -0.20f);
+        Assert.Equal(452, bus.Paula.GetChannelSnapshot(0).NextSampleCycle);
     }
 
     private static void ManualAudioPlaysHighThenLowByte()
@@ -366,6 +389,13 @@ public sealed class PaulaConformanceMatrixTests
             enableLiveAgnusDma: false,
             agnusTimingMode: AgnusTimingMode.LegacyReservation,
             audioDmaMinimumPeriod: 1);
+    }
+
+    private static AmigaBus CreateDefaultMinimumPaulaBus()
+    {
+        return new AmigaBus(
+            enableLiveAgnusDma: false,
+            agnusTimingMode: AgnusTimingMode.LegacyReservation);
     }
 
     private static MatrixRow Executable(string group, string name)

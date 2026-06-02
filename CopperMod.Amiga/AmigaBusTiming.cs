@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
@@ -298,6 +299,219 @@ namespace CopperMod.Amiga
         int BeamHorizontal { get; }
 
         void PruneBefore(long cycle);
+    }
+
+    internal readonly struct AgnusSparseChipBusRequest
+    {
+        public AgnusSparseChipBusRequest(AmigaBusAccessRequest request, bool fixedSlot)
+        {
+            Request = request;
+            FixedSlot = fixedSlot;
+        }
+
+        public AmigaBusAccessRequest Request { get; }
+
+        public bool FixedSlot { get; }
+    }
+
+    internal interface IAgnusSparseSlotParticipant
+    {
+        bool TryGetNextChipBusRequest(long currentCycle, long stopCycle, out AgnusSparseChipBusRequest request);
+
+        void CommitChipBusGrant(AgnusSparseChipBusRequest request, AmigaBusAccessResult result);
+
+        void AdvanceInternalTo(long cycle);
+    }
+
+    internal sealed class AgnusSparseSlotExecutor : IAgnusChipSlotTiming
+    {
+        private readonly AmigaBus _bus;
+        private readonly AgnusSlotEngine _slotEngine;
+
+        public AgnusSparseSlotExecutor(AmigaBus bus, AgnusSlotEngine slotEngine)
+        {
+            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _slotEngine = slotEngine ?? throw new ArgumentNullException(nameof(slotEngine));
+        }
+
+        public void Clear()
+        {
+            _slotEngine.Clear();
+        }
+
+        public void AdvanceTo(long targetCycle)
+        {
+            _slotEngine.AdvanceTo(targetCycle);
+        }
+
+        [HotPath]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public AmigaBusAccessResult Arbitrate(AmigaBusAccessRequest request, AmigaBusAccessResult baseResult)
+        {
+            if (IsCpuSlotRequest(request))
+            {
+                return ArbitrateCpuAccess(request, baseResult);
+            }
+
+            if (_bus.LiveAgnusDmaEnabled &&
+                request.Size == AmigaBusAccessSize.Word &&
+                _bus.Display.HasLiveDisplayWork() &&
+                ShouldPrepareDisplayBeforeDeviceGrant(request))
+            {
+                _bus.Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(Math.Max(baseResult.GrantedCycle, request.RequestedCycle));
+            }
+
+            return _slotEngine.Arbitrate(request, baseResult);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryReserveFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result)
+        {
+            return _slotEngine.TryReserveFixedDmaSlot(request, out result);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
+        {
+            return _slotEngine.ReserveBitplaneDmaSlot(address, requestedCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public AmigaBusAccessResult ReserveCopperDmaSlot(uint address, long requestedCycle)
+        {
+            if (_bus.LiveAgnusDmaEnabled && _bus.Display.HasLiveDisplayWork())
+            {
+                _bus.Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(requestedCycle);
+            }
+
+            return _slotEngine.ReserveCopperDmaSlot(address, requestedCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsReserved(long cycle)
+        {
+            return _slotEngine.IsReserved(cycle);
+        }
+
+        public AmigaBusAccessResult? LastReservation => _slotEngine.LastReservation;
+
+        public AgnusChipSlotSnapshot? LastGrantedSlot => _slotEngine.LastGrantedSlot;
+
+        public AgnusChipSlotSnapshot? LastDeniedFixedSlot => _slotEngine.LastDeniedFixedSlot;
+
+        public AgnusChipSlotSnapshot? LastDeniedFixedSlotBlocker => _slotEngine.LastDeniedFixedSlotBlocker;
+
+        public int DeniedFixedSlotCount => _slotEngine.DeniedFixedSlotCount;
+
+        public int GetDeniedFixedSlotCount(AgnusChipSlotOwner owner)
+            => _slotEngine.GetDeniedFixedSlotCount(owner);
+
+        public int GetDeniedFixedSlotBlockerCount(AgnusChipSlotOwner owner)
+            => _slotEngine.GetDeniedFixedSlotBlockerCount(owner);
+
+        public int DivergenceCount => _slotEngine.DivergenceCount;
+
+        public AgnusSlotDivergenceSnapshot? LastDivergence => _slotEngine.LastDivergence;
+
+        public int ReservationCount => _slotEngine.ReservationCount;
+
+        public int GetReservationCount(AgnusChipSlotOwner owner)
+            => _slotEngine.GetReservationCount(owner);
+
+        public long SlotGrantCount => _slotEngine.SlotGrantCount;
+
+        public long GetSlotGrantCount(AgnusChipSlotOwner owner)
+            => _slotEngine.GetSlotGrantCount(owner);
+
+        public long CurrentCycle => _slotEngine.CurrentCycle;
+
+        public long FrameStartCycle => _slotEngine.FrameStartCycle;
+
+        public int FrameNumber => _slotEngine.FrameNumber;
+
+        public int BeamLine => _slotEngine.BeamLine;
+
+        public int BeamHorizontal => _slotEngine.BeamHorizontal;
+
+        public void PruneBefore(long cycle)
+        {
+            _slotEngine.PruneBefore(cycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private AmigaBusAccessResult ArbitrateCpuAccess(AmigaBusAccessRequest request, AmigaBusAccessResult baseResult)
+        {
+            var slotCount = request.Size == AmigaBusAccessSize.Long ? 2 : 1;
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle));
+            var hasLiveDisplayWork = _bus.Display.HasLiveDisplayWork();
+            while (true)
+            {
+                var lastSlot = candidate + ((slotCount - 1) * AgnusChipSlotScheduler.SlotCycles);
+                if (hasLiveDisplayWork && !_bus.Display.HasLiveDmaCapturedThrough(lastSlot))
+                {
+                    _bus.AdvanceDmaTo(lastSlot);
+                }
+
+                if (hasLiveDisplayWork)
+                {
+                    _bus.Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(candidate);
+                    if (slotCount > 1)
+                    {
+                        _bus.Display.CaptureLiveDisplayDmaBeforeSlotEngineGrant(lastSlot);
+                    }
+                }
+
+                var available = true;
+                for (var slot = 0; slot < slotCount; slot++)
+                {
+                    if (_slotEngine.IsReserved(candidate + (slot * AgnusChipSlotScheduler.SlotCycles)))
+                    {
+                        available = false;
+                        break;
+                    }
+                }
+
+                if (available)
+                {
+                    break;
+                }
+
+                candidate += AgnusChipSlotScheduler.SlotCycles;
+            }
+
+            var adjustedBase = new AmigaBusAccessResult(
+                baseResult.Request,
+                candidate,
+                Math.Max(baseResult.CompletedCycle, candidate));
+            return _slotEngine.Arbitrate(request, adjustedBase);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsCpuSlotRequest(AmigaBusAccessRequest request)
+        {
+            return request.Requester == AmigaBusRequester.Cpu &&
+                (request.Target == AmigaBusAccessTarget.ChipRam ||
+                    request.Target == AmigaBusAccessTarget.ExpansionRam ||
+                    request.Target == AmigaBusAccessTarget.CustomRegisters);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool ShouldPrepareDisplayBeforeDeviceGrant(AmigaBusAccessRequest request)
+        {
+            return request.Requester == AmigaBusRequester.Blitter ||
+                request.Requester == AmigaBusRequester.Copper ||
+                request.Requester == AmigaBusRequester.Paula ||
+                request.Requester == AmigaBusRequester.Disk ||
+                request.Requester == AmigaBusRequester.Host;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool UsesChipSlot(AmigaBusAccessRequest request)
+        {
+            return request.Target == AmigaBusAccessTarget.ChipRam ||
+                request.Target == AmigaBusAccessTarget.ExpansionRam ||
+                request.Target == AmigaBusAccessTarget.CustomRegisters;
+        }
     }
 
     internal readonly struct AgnusPalBeamPosition

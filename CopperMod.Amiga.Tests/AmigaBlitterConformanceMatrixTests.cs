@@ -211,6 +211,48 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void BlitterAreaClearWithDOnlyMintermZeroClearsRectangleAndPreservesModuloGuards(bool enableHardwareSpecialization)
+	{
+		var bus = new AmigaBus(enableHardwareSpecialization: enableHardwareSpecialization);
+		const int widthWords = 3;
+		const int height = 4;
+		const int rowStride = 20;
+		const uint destination = DestinationD + 0x1200;
+		for (var y = -1; y <= height; y++)
+		{
+			for (var word = -1; word <= widthWords; word++)
+			{
+				var address = destination + (uint)(y * rowStride) + (uint)(word * 2);
+				WriteWord(bus, address, (ushort)(0xA000 | ((y + 1) << 8) | (word + 1)));
+			}
+		}
+
+		ConfigureAreaBlit(bus, 0x0100, destinationD: destination);
+		bus.WriteWord(0x00DFF066, rowStride - (widthWords * 2));
+
+		StartBlitAndRun(bus, widthWords, height);
+
+		for (var y = 0; y < height; y++)
+		{
+			for (var word = 0; word < widthWords; word++)
+			{
+				Assert.Equal(0, ReadWord(bus, destination + (uint)(y * rowStride) + (uint)(word * 2)));
+			}
+
+			Assert.NotEqual(0, ReadWord(bus, destination + (uint)(y * rowStride) - 2));
+			Assert.NotEqual(0, ReadWord(bus, destination + (uint)(y * rowStride) + (uint)(widthWords * 2)));
+		}
+
+		for (var word = -1; word <= widthWords; word++)
+		{
+			Assert.NotEqual(0, ReadWord(bus, destination - (uint)rowStride + (uint)(word * 2)));
+			Assert.NotEqual(0, ReadWord(bus, destination + (uint)(height * rowStride) + (uint)(word * 2)));
+		}
+	}
+
+	[Theory]
 	[MemberData(nameof(ShiftRows))]
 	public void BlitterBarrelShiftAndCarryMatchHrmReference(object rowObject)
 	{
