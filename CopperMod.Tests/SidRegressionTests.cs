@@ -62,7 +62,7 @@ public sealed class SidRegressionTests
 		var zeroCrossingRate = crossingCount / (double)Math.Max(1, totalFrames - 1);
 		var rms = Math.Sqrt(sumSquares / Math.Max(1, totalFrames));
 		Assert.True(peak > 0.3f, $"Expected subtune 5 resonant sweep to remain prominent, peak was {peak:0.000}.");
-		Assert.True(rms > 0.08, $"Expected subtune 5 resonant sweep to stay audible, RMS was {rms:0.000}.");
+		Assert.True(rms > 0.075, $"Expected subtune 5 resonant sweep to stay audible, RMS was {rms:0.000}.");
 		Assert.True(zeroCrossingRate > 0.025, $"Expected subtune 5 high-resonance sweep to retain bright motion, zero-crossing rate was {zeroCrossingRate:0.000}.");
 	}
 

@@ -30,6 +30,15 @@ public sealed class CustRenderTests
 		var machine = new CustMachine(hunk, tags);
 
 		Assert.Equal(AmigaMachineProfile.A500PalCustPlayback, machine.Machine.Profile);
+		Assert.Equal(AgnusTimingMode.SlotEngine, machine.Machine.Options.AgnusTimingMode);
+		Assert.Equal(AgnusTimingMode.SlotEngine, machine.Bus.AgnusTimingMode);
+		Assert.True(machine.Machine.Options.LiveAgnusDma);
+		Assert.True(machine.Bus.LiveAgnusDmaEnabled);
+		Assert.False(machine.Machine.Options.LiveDisplayDma);
+		Assert.False(machine.Bus.LiveDisplayDmaEnabled);
+		Assert.Equal(0x0001_0000, machine.Bus.ExpansionRam.Length);
+		Assert.Equal(AmigaConstants.A500PalMinimumAudioDmaPeriod, machine.Machine.Options.AudioDmaMinimumPeriod);
+		Assert.Equal(AmigaConstants.A500PalMinimumAudioDmaPeriod, machine.Bus.AudioDmaMinimumPeriod);
 		Assert.Same(machine.Bus, machine.Machine.Bus);
 		Assert.Same(machine.Cpu, machine.Machine.Cpu);
 	}

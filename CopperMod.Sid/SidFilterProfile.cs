@@ -26,7 +26,9 @@ namespace CopperMod.Sid
             double maxDamping,
             double lowPassGain = 1.0,
             double bandPassGain = 1.0,
-            double highPassGain = 1.0)
+            double highPassGain = 1.0,
+            double lowCutoffResonanceBoost = 0.0,
+            double filterVoiceLeakageGain = 0.0)
         {
             Id = id;
             MinCutoffHz = minCutoffHz;
@@ -41,6 +43,8 @@ namespace CopperMod.Sid
             LowPassGain = lowPassGain;
             BandPassGain = bandPassGain;
             HighPassGain = highPassGain;
+            LowCutoffResonanceBoost = lowCutoffResonanceBoost;
+            FilterVoiceLeakageGain = filterVoiceLeakageGain;
         }
 
         public SidFilterProfileId Id { get; }
@@ -69,6 +73,10 @@ namespace CopperMod.Sid
 
         public double HighPassGain { get; }
 
+        public double LowCutoffResonanceBoost { get; }
+
+        public double FilterVoiceLeakageGain { get; }
+
         public double MapCutoff(int cutoffRegister)
         {
             var normalized = Math.Clamp(cutoffRegister / 2047.0, 0.0, 1.0);
@@ -95,7 +103,18 @@ namespace CopperMod.Sid
 
             var resonance = Math.Clamp(resonanceNibble, 0, 15) / 15.0;
             var lowCutoffWeight = 1.0 - Math.Clamp((Math.Clamp(cutoffRegister, 0, 2047) - 640.0) / 128.0, 0.0, 1.0);
-            return FilterOutputGain * (1.0 + (Math.Pow(resonance, 2.0) * lowCutoffWeight * 1.20));
+            return FilterOutputGain * (1.0 + (Math.Pow(resonance, 2.0) * lowCutoffWeight * LowCutoffResonanceBoost));
+        }
+
+        public double MapFilterVoiceLeakageGain(int cutoffRegister)
+        {
+            if (Id != SidFilterProfileId.Mos6581Balanced)
+            {
+                return FilterVoiceLeakageGain;
+            }
+
+            var highCutoffWeight = Math.Clamp((Math.Clamp(cutoffRegister, 0, 2047) - 768.0) / 384.0, 0.0, 1.0);
+            return FilterVoiceLeakageGain * highCutoffWeight;
         }
 
         public static SidFilterProfileDefinition Resolve(SidChipModel model, SidFilterProfileId requested)
@@ -136,16 +155,18 @@ namespace CopperMod.Sid
 
         private static readonly SidFilterProfileDefinition Mos6581Balanced = new SidFilterProfileDefinition(
             SidFilterProfileId.Mos6581Balanced,
-            minCutoffHz: 25.0,
-            maxCutoffHz: 11000.0,
-            cutoffExponent: 1.55,
+            minCutoffHz: 55.0,
+            maxCutoffHz: 9000.0,
+            cutoffExponent: 0.56,
             filterInputGain: 0.72,
-            filterOutputGain: 0.92,
+            filterOutputGain: 1.025,
             baseDamping: 1.82,
             resonanceDamping: 1.22,
             minDamping: 0.42,
             maxDamping: 1.95,
-            bandPassGain: 0.90);
+            bandPassGain: 0.90,
+            lowCutoffResonanceBoost: 0.50,
+            filterVoiceLeakageGain: 0.02);
 
         private static readonly SidFilterProfileDefinition Mos6581DarkR3 = new SidFilterProfileDefinition(
             SidFilterProfileId.Mos6581DarkR3,

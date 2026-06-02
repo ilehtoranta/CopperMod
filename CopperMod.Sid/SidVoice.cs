@@ -404,7 +404,7 @@ namespace CopperMod.Sid
             var saw = GetSawDac();
             var contentionMask = (_phase >> 10) & 0x0FFF;
             var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
-            const double mos6581TrianglePulseBias = -1.4;
+            var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             trace = captureTrace
                 ? new SidWaveformTrace(
                     contentionDac,
@@ -481,9 +481,14 @@ namespace CopperMod.Sid
             var saw = GetSawDac();
             var contentionMask = (_phase >> 10) & 0x0FFF;
             var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
-            const double mos6581TrianglePulseBias = -1.4;
+            var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+        }
+
+        private double GetMos6581TrianglePulseBias()
+        {
+            return (_control & 0x01) == 0 ? -0.55 : -1.4;
         }
 
         private uint GetTriangleDac(

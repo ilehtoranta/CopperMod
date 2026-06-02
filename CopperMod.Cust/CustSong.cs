@@ -200,7 +200,9 @@ namespace CopperMod.Cust
                 return;
             }
 
-            _machine.End();
+            // CUST end callbacks are guest replay code. Disposal tears down the host-side
+            // song object, so running untrusted shutdown routines is not required and can
+            // stall on players that leave Paula DMA active.
             _disposed = true;
         }
 

@@ -141,16 +141,35 @@ namespace CopperMod.Cust
             _tags = BuildAbsoluteTags();
             InstallHostEnvironment();
             Cpu.Reset(0, CustConstants.StackTopAddress);
-            CallIfPresent(CustConstants.DtpInitPlayer);
+            CallIfPresent(
+                CustConstants.DtpInitPlayer,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false);
             UpdateSubSongRange();
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
-            CallIfPresent(CustConstants.DtpInitSound);
+            CallIfPresent(
+                CustConstants.DtpInitSound,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false);
             CallIfPresent(
                 CustConstants.DtpVolume,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false,
                 prepare: state =>
                 {
                     state.D[0] = 64;
                     state.D[1] = 64;
+                });
+            // Some players expose DtpBalance as a UI adjustment, not startup state.
+            // The host block already carries neutral balance, and invoking the
+            // callback here can collapse players that naturally use Paula stereo.
+            CallIfPresent(
+                CustConstants.DtpVoices,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false,
+                prepare: state =>
+                {
+                    state.D[0] = 0x0F;
                 });
 
             AdvanceTimedHardwareTo(Cpu.State.Cycles);
@@ -179,8 +198,8 @@ namespace CopperMod.Cust
 
         public void End()
         {
-            CallIfPresent(CustConstants.DtpEndSound);
-            CallIfPresent(CustConstants.DtpEndPlayer);
+            CallIfPresent(CustConstants.DtpEndSound, HostInterruptCycleBudget);
+            CallIfPresent(CustConstants.DtpEndPlayer, HostInterruptCycleBudget);
         }
 
         public void RenderQuantum(Span<float> destination, int frames, int channels, int sampleRate, bool captureChannels)
@@ -199,7 +218,11 @@ namespace CopperMod.Cust
 
             if (_tags.ContainsKey(CustConstants.DtpInterrupt))
             {
-                CallIfPresent(CustConstants.DtpInterrupt, QuantumCycleCount, advancePaulaAtEnd: false);
+                CallIfPresent(
+                    CustConstants.DtpInterrupt,
+                    QuantumCycleCount,
+                    advancePaulaAtEnd: false,
+                    advanceTimedHardwareDuringRun: false);
             }
             else
             {
@@ -273,8 +296,8 @@ namespace CopperMod.Cust
                         }
 
                         var address = segmentBase + (uint)offset;
-                        var oldValue = Bus.ReadLong(address);
-                        Bus.WriteLong(address, oldValue + targetBase);
+                        var oldValue = Bus.ReadHostLong(address);
+                        Bus.WriteHostLong(address, oldValue + targetBase);
                     }
                 }
             }
@@ -287,14 +310,14 @@ namespace CopperMod.Cust
             var cursor = baseAddress + (uint)_rawTags.Offset;
             for (var i = 0; i < 64; i++)
             {
-                var tag = Bus.ReadLong(cursor);
+                var tag = Bus.ReadHostLong(cursor);
                 cursor += 4;
                 if (tag == CustConstants.TagDone)
                 {
                     break;
                 }
 
-                var value = Bus.ReadLong(cursor);
+                var value = Bus.ReadHostLong(cursor);
                 cursor += 4;
                 result[tag] = value;
             }
@@ -417,7 +440,7 @@ namespace CopperMod.Cust
             HostAllocMem(state);
             if (state.A[0] != 0 && state.A[0] + 4 <= Bus.ChipRam.Length)
             {
-                Bus.WriteLong(state.A[0], state.D[0], state.Cycles);
+                Bus.WriteHostLong(state.A[0], state.D[0]);
             }
         }
 
@@ -506,8 +529,8 @@ namespace CopperMod.Cust
                 return;
             }
 
-            var data = Bus.ReadLong(interruptAddress + 14);
-            var code = Bus.ReadLong(interruptAddress + 18);
+            var data = Bus.ReadHostLong(interruptAddress + 14);
+            var code = Bus.ReadHostLong(interruptAddress + 18);
             if (code == 0)
             {
                 return;
@@ -542,7 +565,7 @@ namespace CopperMod.Cust
                 return;
             }
 
-            var code = Bus.ReadLong(interruptAddress + 18);
+            var code = Bus.ReadHostLong(interruptAddress + 18);
             _installedInterrupts.RemoveAll(server =>
                 server.Code == code &&
                 (!cia.HasValue || server.Cia == cia) &&
@@ -663,7 +686,11 @@ namespace CopperMod.Cust
                 return;
             }
 
-            RunSubroutine(address, CustConstants.SubroutineCycleBudget);
+            RunSubroutine(
+                address,
+                CustConstants.SubroutineCycleBudget,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false);
             var min = (int)(Cpu.State.D[0] & 0xFFFF);
             var max = (int)(Cpu.State.D[1] & 0xFFFF);
             if (max >= min && max > 0)
@@ -682,6 +709,8 @@ namespace CopperMod.Cust
             uint tag,
             long? budget = null,
             bool advancePaulaAtEnd = true,
+            bool dispatchHostInterrupts = true,
+            bool advanceTimedHardwareDuringRun = true,
             Action<M68kCpuState>? prepare = null)
         {
             if (!_tags.TryGetValue(tag, out var address) || address == 0)
@@ -689,7 +718,13 @@ namespace CopperMod.Cust
                 return;
             }
 
-            RunSubroutine(address, budget ?? CustConstants.SubroutineCycleBudget, advancePaulaAtEnd, prepare);
+            RunSubroutine(
+                address,
+                budget ?? CustConstants.SubroutineCycleBudget,
+                advancePaulaAtEnd,
+                prepare,
+                dispatchHostInterrupts,
+                advanceTimedHardwareDuringRun);
         }
 
         private void CallInstalledInterrupt(long budget)
@@ -911,7 +946,9 @@ namespace CopperMod.Cust
             uint address,
             long maxCycles,
             bool advancePaulaAtEnd = true,
-            Action<M68kCpuState>? prepare = null)
+            Action<M68kCpuState>? prepare = null,
+            bool dispatchHostInterrupts = true,
+            bool advanceTimedHardwareDuringRun = true)
         {
             var startCycles = Cpu.State.Cycles;
             var instructions = 0;
@@ -928,8 +965,11 @@ namespace CopperMod.Cust
                     stopwatch.ElapsedMilliseconds < CustConstants.SubroutineWallClockBudgetMilliseconds)
                 {
                     Cpu.ExecuteInstruction();
-                    AdvanceTimedHardwareTo(Cpu.State.Cycles);
-                    if (!_insideHostInterrupt)
+                    if (advanceTimedHardwareDuringRun)
+                    {
+                        AdvanceTimedHardwareTo(Cpu.State.Cycles);
+                    }
+                    if (!_insideHostInterrupt && dispatchHostInterrupts)
                     {
                         DispatchCiaInterruptsUpTo(Cpu.State.Cycles);
                         DispatchPendingPaulaInterrupts(Cpu.State.Cycles);
@@ -943,7 +983,7 @@ namespace CopperMod.Cust
                     instructions >= CustConstants.SubroutineInstructionBudget ||
                     stopwatch.ElapsedMilliseconds >= CustConstants.SubroutineWallClockBudgetMilliseconds))
                 {
-                    if (!TryRecoverHostInterruptWait())
+                    if (!dispatchHostInterrupts || !TryRecoverHostInterruptWait())
                     {
                         AddDiagnostic(
                             ModuleDiagnosticSeverity.Warning,
@@ -971,7 +1011,7 @@ namespace CopperMod.Cust
             {
                 AdvanceTimedHardwareTo(Cpu.State.Cycles);
             }
-            var timer = Bus.ReadWord(CustConstants.HostBlockAddress + CustConstants.DtgTimerOffset);
+            var timer = Bus.ReadHostWord(CustConstants.HostBlockAddress + CustConstants.DtgTimerOffset);
             if (timer != 0)
             {
                 QuantumCycleCount = Math.Max(1, (long)Math.Round((timer + 1) * 10.0));
@@ -1245,7 +1285,7 @@ namespace CopperMod.Cust
         {
             var address = _nextExternalAllocationAddress;
             _nextExternalAllocationAddress += (uint)Align(size + 1, 2);
-            if (_nextExternalAllocationAddress >= CustConstants.StackTopAddress)
+            if (_nextExternalAllocationAddress >= CustConstants.ExternalAllocationLimitAddress)
             {
                 AddDiagnostic(
                     ModuleDiagnosticSeverity.Warning,
@@ -1268,7 +1308,7 @@ namespace CopperMod.Cust
             var count = 0;
             while (count < chars.Length)
             {
-                var value = Bus.ReadByte(address + (uint)count);
+                var value = Bus.ReadHostByte(address + (uint)count);
                 if (value == 0)
                 {
                     break;
@@ -1285,10 +1325,10 @@ namespace CopperMod.Cust
             var length = Math.Min(Math.Max(0, maxLength - 1), value.Length);
             for (var i = 0; i < length; i++)
             {
-                Bus.WriteByte(address + (uint)i, (byte)value[i], Cpu.State.Cycles);
+                Bus.WriteHostByte(address + (uint)i, (byte)value[i]);
             }
 
-            Bus.WriteByte(address + (uint)length, 0, Cpu.State.Cycles);
+            Bus.WriteHostByte(address + (uint)length, 0);
         }
 
         private static bool LooksLikePathFragment(string value)
@@ -1328,12 +1368,12 @@ namespace CopperMod.Cust
 
         private void WriteHostWord(int offset, ushort value)
         {
-            Bus.WriteWord(CustConstants.HostBlockAddress + (uint)offset, value);
+            Bus.WriteHostWord(CustConstants.HostBlockAddress + (uint)offset, value);
         }
 
         private void WriteHostLong(int offset, uint value)
         {
-            Bus.WriteLong(CustConstants.HostBlockAddress + (uint)offset, value);
+            Bus.WriteHostLong(CustConstants.HostBlockAddress + (uint)offset, value);
         }
 
         private static int Align(int value, int alignment)

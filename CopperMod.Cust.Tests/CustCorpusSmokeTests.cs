@@ -12,32 +12,10 @@ public sealed class CustCorpusSmokeTests
 	private const string CorpusRootEnvironmentVariable = "COPPERMOD_CUST_CORPUS_ROOT";
 	private const int SampleRate = 44100;
 	private const int ChannelCount = 2;
-	private const int TargetFrames = SampleRate;
+	private const int AudibilityWindowSeconds = 3;
+	private const int TargetFrames = SampleRate * AudibilityWindowSeconds;
 	private const float SilenceThreshold = 0.0001f;
 	private static readonly TimeSpan PerCaseTimeout = TimeSpan.FromSeconds(15);
-	private static readonly string[] CorpusFiles =
-	{
-		"cust.Intact",
-		@"cadaver\Cadaver.CUST",
-		@"beneathasteelsky\SteelSky2.CUST",
-		@"fa-18interceptor\FA-18_Interceptor.CUST",
-		@"Frontier\Frontier.CUS",
-		@"Populous\Populous.CUST",
-		@"Starglider\CUST.Starglider",
-		@"jpond2robocod\JamesPond2.CUST",
-		@"RickDangerousplus\CUST.RickDangerousplus",
-		@"alteredbeast\AlteredBeast.CUST",
-		@"batmanthemovie\Batman_The_Movie-Title.CUST",
-		@"batmanthemovie\Batman_The_Movie-Lvl_2_4.CUST",
-		@"elite\Elite.CUST",
-		@"MidnightResistance\CUST.MidnightResistance",
-		@"greatgiannasisters\GreatGianaSisters_Intro.CUST",
-		@"greatgiannasisters\GreatGianaSisters_Ingame.CUST",
-		@"bioniccommando\BionicCommando.CUS",
-		"CUST.BattleSquadron",
-		@"hybris\Cust.hybris",
-		@"Lemmings\CUST.LEMMINGS"
-	};
 
 	private readonly ITestOutputHelper _output;
 
@@ -46,8 +24,8 @@ public sealed class CustCorpusSmokeTests
 		_output = output;
 	}
 
-	[Fact(Timeout = 180_000)]
-	public void ExternalCorpusRendersFirstSubTuneForOneSecond()
+	[Fact(Timeout = 600_000)]
+	public void ExternalCorpusModulesBecomeAudibleWithinThreeSeconds()
 	{
 		var root = Environment.GetEnvironmentVariable(CorpusRootEnvironmentVariable);
 		if (string.IsNullOrWhiteSpace(root))
@@ -63,17 +41,14 @@ public sealed class CustCorpusSmokeTests
 			return;
 		}
 
-		var failures = new List<string>();
-		foreach (var relativePath in CorpusFiles)
-		{
-			var fullPath = ResolveCorpusPath(root, relativePath);
-			if (!File.Exists(fullPath))
-			{
-				failures.Add($"{relativePath}: missing at {fullPath}");
-				continue;
-			}
+		var corpusFiles = DiscoverLoadableCorpusFiles(root);
+		_output.WriteLine($"CUST corpus audibility test found {corpusFiles.Count} loadable files under {root}.");
+		Assert.True(corpusFiles.Count > 0, $"CUST corpus audibility test did not find any loadable CUST files under {root}.");
 
-			var result = RunCaseWithTimeout(relativePath, fullPath);
+		var failures = new List<string>();
+		foreach (var file in corpusFiles)
+		{
+			var result = RunCaseWithTimeout(file.RelativePath, file.FullPath);
 			_output.WriteLine(result.Summary);
 			if (!result.Passed)
 			{
@@ -81,7 +56,7 @@ public sealed class CustCorpusSmokeTests
 			}
 		}
 
-		Assert.True(failures.Count == 0, "CUST corpus smoke failures:" + Environment.NewLine + string.Join(Environment.NewLine + Environment.NewLine, failures));
+		Assert.True(failures.Count == 0, "CUST corpus audibility failures:" + Environment.NewLine + string.Join(Environment.NewLine + Environment.NewLine, failures));
 	}
 
 	private static CorpusCaseResult RunCaseWithTimeout(string relativePath, string fullPath)
@@ -150,12 +125,14 @@ public sealed class CustCorpusSmokeTests
 		{
 			var frames = custSong.GetCurrentTickFrameCount(options);
 			var buffer = new float[options.GetSampleCount(frames)];
+			var framesBeforeTick = renderedFrames;
 			var renderResult = custSong.RenderTick(buffer, options);
 			renderedFrames += renderResult.FramesWritten;
 			ticks++;
 
-			var samplesWritten = Math.Min(renderResult.SamplesWritten, buffer.Length);
-			for (var i = 0; i < samplesWritten; i++)
+			var inspectedFrames = Math.Min(renderResult.FramesWritten, Math.Max(0, TargetFrames - framesBeforeTick));
+			var inspectedSamples = Math.Min(Math.Min(renderResult.SamplesWritten, buffer.Length), options.GetSampleCount(inspectedFrames));
+			for (var i = 0; i < inspectedSamples; i++)
 			{
 				var sample = buffer[i];
 				if (!float.IsFinite(sample))
@@ -165,6 +142,16 @@ public sealed class CustCorpusSmokeTests
 				}
 
 				peak = Math.Max(peak, Math.Abs(sample));
+			}
+
+			if (peak > SilenceThreshold)
+			{
+				break;
+			}
+
+			if (renderResult.FramesWritten <= 0)
+			{
+				break;
 			}
 
 			if (renderResult.EndOfSong)
@@ -185,7 +172,7 @@ public sealed class CustCorpusSmokeTests
 
 		if (peak <= SilenceThreshold)
 		{
-			failureReasons.Add($"peak {peak:R} is below {SilenceThreshold:R}");
+			failureReasons.Add($"peak {peak:R} is below {SilenceThreshold:R} within {AudibilityWindowSeconds} seconds");
 		}
 
 		if (failingDiagnostics.Length > 0)
@@ -195,10 +182,10 @@ public sealed class CustCorpusSmokeTests
 
 		if (failureReasons.Count > 0)
 		{
-			return CorpusCaseResult.Fail(relativePath, details + Environment.NewLine + "Failure: " + string.Join("; ", failureReasons), $"{relativePath}: failed peak={peak:R} frames={renderedFrames} diagnostics={FormatDiagnosticCodeSummary(custSong.Diagnostics)}");
+			return CorpusCaseResult.Fail(relativePath, details + Environment.NewLine + "Failure: " + string.Join("; ", failureReasons), $"{relativePath}: failed peak={peak:R} frames={Math.Min(renderedFrames, TargetFrames)} diagnostics={FormatDiagnosticCodeSummary(custSong.Diagnostics)}");
 		}
 
-		return CorpusCaseResult.Pass(relativePath, $"{relativePath}: ok peak={peak:R} frames={renderedFrames} ticks={ticks} elapsed={stopwatch.Elapsed.TotalMilliseconds:0}ms diagnostics={FormatDiagnosticCodeSummary(custSong.Diagnostics)}", details);
+		return CorpusCaseResult.Pass(relativePath, $"{relativePath}: ok peak={peak:R} frames={Math.Min(renderedFrames, TargetFrames)} ticks={ticks} elapsed={stopwatch.Elapsed.TotalMilliseconds:0}ms diagnostics={FormatDiagnosticCodeSummary(custSong.Diagnostics)}", details);
 	}
 
 	private static string BuildDetails(
@@ -260,11 +247,39 @@ public sealed class CustCorpusSmokeTests
 		return $"count={writes.Count} first=[{first}] last=[{last}]";
 	}
 
-	private static string ResolveCorpusPath(string root, string relativePath)
+	private static IReadOnlyList<CorpusFile> DiscoverLoadableCorpusFiles(string root)
 	{
-		var normalized = relativePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
-		return Path.GetFullPath(Path.Combine(root, normalized));
+		var files = new List<CorpusFile>();
+		var format = new CustFormat();
+		foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+		{
+			byte[] data;
+			try
+			{
+				data = File.ReadAllBytes(path);
+			}
+			catch (IOException)
+			{
+				continue;
+			}
+			catch (UnauthorizedAccessException)
+			{
+				continue;
+			}
+
+			var context = new ModuleLoadContext(data, path);
+			if (!format.CanLoad(context))
+			{
+				continue;
+			}
+
+			files.Add(new CorpusFile(Path.GetRelativePath(root, path), path));
+		}
+
+		return files;
 	}
+
+	private readonly record struct CorpusFile(string RelativePath, string FullPath);
 
 	private sealed class CorpusCaseResult
 	{

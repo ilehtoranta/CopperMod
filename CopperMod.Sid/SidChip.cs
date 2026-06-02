@@ -32,6 +32,7 @@ namespace CopperMod.Sid
         private double _lastLowPass;
         private double _lastBandPass;
         private double _lastHighPass;
+        private double _filterVoiceLeakageGain;
         private bool _filterCoefficientsDirty = true;
         private bool _voice3Muted;
         private double _masterVolume;
@@ -53,6 +54,7 @@ namespace CopperMod.Sid
             _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile);
             _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model) / _cpuCyclesPerSecond);
             _filterInputGain = _filterProfile.FilterInputGain;
+            _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
             _voiceMixGain = SidAnalog.VoiceMixGain(Model);
             _filterLowPassGain = _filterProfile.LowPassGain;
             _filterBandPassGain = _filterProfile.BandPassGain;
@@ -99,6 +101,7 @@ namespace CopperMod.Sid
             _lastLowPass = 0;
             _lastBandPass = 0;
             _lastHighPass = 0;
+            _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
             _filterCoefficientsDirty = true;
             _voice3Muted = false;
             _masterVolume = SidAnalog.ConvertVolume(0, Model);
@@ -478,7 +481,8 @@ namespace CopperMod.Sid
                 direct += voice3;
             }
 
-            var voiceSignal = (direct + ApplyFilter(filtered * _filterInputGain)) *
+            var leaked = _filterMode == 0 ? 0.0 : filtered * _filterVoiceLeakageGain;
+            var voiceSignal = (direct + leaked + ApplyFilter(filtered * _filterInputGain)) *
                 _voiceMixGain *
                 _masterVolume;
             var output = SidAnalog.SoftClip(voiceSignal + _volumeOffset);
@@ -534,6 +538,7 @@ namespace CopperMod.Sid
                 _filterDenominator = 1.0;
                 _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
                 _filterOutputGain = _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
+                _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(_filterCutoffRegister);
                 _filterCoefficientsDirty = false;
                 return;
             }
@@ -543,6 +548,7 @@ namespace CopperMod.Sid
             _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble, _filterCutoffRegister);
             _filterDenominator = 1.0 + (_filterDamping * _filterG) + (_filterG * _filterG);
             _filterOutputGain = _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
+            _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(_filterCutoffRegister);
             _filterCoefficientsDirty = false;
         }
 

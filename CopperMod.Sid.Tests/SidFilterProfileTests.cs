@@ -49,9 +49,9 @@ public sealed class SidFilterProfileTests
 		var darkR3 = ReadCutoff(SidChipModel.Mos6581, SidFilterProfileId.Mos6581DarkR3, cutoffHigh: 0x80);
 		var linear8580 = ReadCutoff(SidChipModel.Mos8580, SidFilterProfileId.Mos8580Linear, cutoffHigh: 0x80);
 
-		Assert.True(dataSheet > balanced, $"Expected datasheet midpoint to be brighter than balanced, data {dataSheet:0.0}, balanced {balanced:0.0}.");
-		Assert.True(balanced > darkR3, $"Expected balanced midpoint to be brighter than dark R3, balanced {balanced:0.0}, dark {darkR3:0.0}.");
-		Assert.True(linear8580 > dataSheet, $"Expected 8580 midpoint to be brighter than 6581 datasheet, 8580 {linear8580:0.0}, data {dataSheet:0.0}.");
+		Assert.True(linear8580 > balanced, $"Expected linear 8580 midpoint to be brighter than balanced 6581, 8580 {linear8580:0.0}, balanced {balanced:0.0}.");
+		Assert.True(balanced > dataSheet, $"Expected balanced 6581 midpoint to be brighter than 6581 datasheet, balanced {balanced:0.0}, data {dataSheet:0.0}.");
+		Assert.True(dataSheet > darkR3, $"Expected datasheet midpoint to be brighter than dark R3, data {dataSheet:0.0}, dark {darkR3:0.0}.");
 	}
 
 	[Fact]
@@ -114,29 +114,29 @@ public sealed class SidFilterProfileTests
 			0.05675331704545432,
 			0.0666223504278281,
 			0.07519950423733535,
-			0.12492814676847076,
-			0.11724430094994959,
-			0.09825887427718794,
-			0.06475300746591524,
-			0.03721252381840548,
-			0.0365815906026363,
-			0.007285910767749346,
-			-0.040962353300401086,
-			-0.04066838230439219,
-			-0.05646858834318402,
-			-0.07190295420889999,
-			-0.08533071286395066,
-			-0.10161137102641625,
-			-0.21798602155958965,
-			-0.2291155604587863,
-			-0.19923589031104413,
-			-0.010130804993097662,
-			-0.03416532733853054,
-			0.41672193340966746,
-			0.43773843383793354,
-			0.5159890924615952,
-			0.7648882786571707,
-			-0.01729801729840872
+			0.1243844848212514,
+			0.1157677686394641,
+			0.09679529693011744,
+			0.06279873679273196,
+			0.03146900696002454,
+			0.030946018989018657,
+			-0.0014866039140786398,
+			-0.050339342638493274,
+			-0.050225119121207536,
+			-0.0676791555249012,
+			-0.08445982790145078,
+			-0.09727164102722322,
+			-0.10494488824176054,
+			-0.16341637237615173,
+			-0.16512678217231083,
+			-0.14362339289809636,
+			-0.010130804993097646,
+			-0.02835793740444221,
+			0.508114447515773,
+			0.5643775029760346,
+			0.6451968685555879,
+			0.5624493459293755,
+			-0.3040944964084109
 		};
 
 		var checkpointIndex = 0;

@@ -216,6 +216,21 @@ public sealed class SidWaveformPipelineTests
 		Assert.Equal(0x00Fu, frame.WaveformDac);
 	}
 
+	[Fact]
+	public void Mos6581TrianglePulseGateOffUsesSofterContentionBias()
+	{
+		var gateOff = CreateTrianglePulseVoice(control: 0x50, out var gateOffTrace);
+		var gateOn = CreateTrianglePulseVoice(control: 0x51, out var gateOnTrace);
+
+		gateOff.Render(1);
+		gateOn.Render(1);
+		var gateOffWaveform = Frame(gateOffTrace, cycle: 1, voice: 0).WaveformOutput;
+		var gateOnWaveform = Frame(gateOnTrace, cycle: 1, voice: 0).WaveformOutput;
+
+		Assert.True(gateOffWaveform > gateOnWaveform);
+		Assert.InRange(gateOffWaveform - gateOnWaveform, 0.84, 0.86);
+	}
+
 	private static SidChip CreateTracedChip(out SidCycleTrace trace)
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
@@ -243,6 +258,20 @@ public sealed class SidWaveformPipelineTests
 		chip.Write((byte)(offset + 0), (byte)(frequency & 0xFF));
 		chip.Write((byte)(offset + 1), (byte)(frequency >> 8));
 		chip.Write((byte)(offset + 4), control);
+	}
+
+	private static SidChip CreateTrianglePulseVoice(byte control, out SidCycleTrace trace)
+	{
+		var chip = CreateTracedChip(out trace);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x70);
+		chip.Write(0x02, 0x00);
+		chip.Write(0x03, 0x00);
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		chip.Write(0x04, control);
+		chip.Write(0x18, 0x0F);
+		return chip;
 	}
 
 	private static uint ExpectedNoiseDac(uint value)

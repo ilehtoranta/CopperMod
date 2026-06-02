@@ -12,7 +12,8 @@ namespace CopperMod.Cust
         public const int DefaultChipRamSize = AmigaConstants.DefaultChipRamSize;
         public const uint DefaultModuleBaseAddress = 0x0004_0000;
         public const uint HostBlockAddress = 0x0000_1000;
-        public const uint StackTopAddress = 0x001F_F000;
+        public const uint ExternalAllocationLimitAddress = 0x001F_F000;
+        public const uint StackTopAddress = AmigaConstants.A500BootPseudoFastRamBase + 0x0001_0000;
         public const uint HostCallbackBaseAddress = 0x00F0_0000;
         public const long SubroutineCycleBudget = 1_000_000;
         public const int SubroutineInstructionBudget = 250_000;
