@@ -781,7 +781,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!IsFullContactDiskOneBootBlock(Drive0.Disk.BootBlock))
+            if (Drive0.Disk.HasPreservedTrackData || !IsFullContactDiskOneBootBlock(Drive0.Disk.BootBlock))
             {
                 return;
             }

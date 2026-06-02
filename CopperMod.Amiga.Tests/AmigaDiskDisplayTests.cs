@@ -19,6 +19,7 @@ public sealed class AmigaDiskDisplayTests
 
         var sector = drive.ReadSector(3, 1, 7);
 
+        Assert.False(drive.Disk!.HasPreservedTrackData);
         Assert.Equal(AmigaDiskImage.SectorSize, sector.Length);
         Assert.Equal(0x42, sector[0]);
         Assert.Equal(0x99, sector[^1]);
@@ -53,6 +54,7 @@ public sealed class AmigaDiskDisplayTests
         var sector = decodedDisk.ReadSector(7, 1, 4);
 
         Assert.True(decodedDisk.HasCompleteSectorData);
+        Assert.True(decodedDisk.HasPreservedTrackData);
         Assert.Equal(0x7A, sector[0]);
         Assert.Equal(0xC3, sector[^1]);
     }
@@ -72,6 +74,7 @@ public sealed class AmigaDiskDisplayTests
         var decodedDisk = AmigaDiskImage.FromEncodedTracks(tracks);
 
         Assert.False(decodedDisk.HasCompleteSectorData);
+        Assert.True(decodedDisk.HasPreservedTrackData);
         Assert.False(AmigaDosFileSystem.IsSupported(decodedDisk));
     }
 
@@ -104,6 +107,7 @@ public sealed class AmigaDiskDisplayTests
         var sector = decodedDisk.ReadSector(0, 0, 1);
 
         Assert.False(decodedDisk.HasCompleteSectorData);
+        Assert.True(decodedDisk.HasPreservedTrackData);
         Assert.Equal((byte)'D', decodedDisk.BootBlock[0]);
         Assert.Equal((byte)'O', decodedDisk.BootBlock[1]);
         Assert.Equal((byte)'S', decodedDisk.BootBlock[2]);
@@ -126,6 +130,7 @@ public sealed class AmigaDiskDisplayTests
         var disk = AmigaDiskImage.Load(path);
 
         var track = disk.ReadEncodedTrack(0, 0);
+        Assert.True(disk.HasPreservedTrackData);
         Assert.True(track.BitLength > 0);
         Assert.True(ContainsWord(track, 0x4489));
     }
@@ -1532,7 +1537,7 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
-    public void LiveDisplayCapturePreservesCopperReusedSpritePointers()
+    public void LiveDisplayCaptureDoesNotRestartSpriteDmaAfterTerminatorWithCopperPointerWrite()
     {
         var bus = new AmigaBus(agnusTimingMode: AgnusTimingMode.SlotEngine);
         var firstY = StandardY + 4;
@@ -1579,7 +1584,45 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame, 0, AmigaConstants.A500PalCpuCyclesPerFrame);
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, firstY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 24, reusedY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 24, reusedY));
+    }
+
+    [Fact]
+    public void LiveSpriteDmaTerminatorPreventsLaterPointerWriteFromStartingSameFieldSprite()
+    {
+        var bus = new AmigaBus(agnusTimingMode: AgnusTimingMode.SlotEngine);
+        var latePointerRow = StandardY + 40;
+        var lateSpriteY = latePointerRow + 8;
+        var (latePos, lateCtl) = EncodeSpritePosition(StandardX, lateSpriteY, 1);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, latePos);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3002, lateCtl);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3004, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3006, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3008, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x300A, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, CopperWaitForOutputRow(latePointerRow));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0120);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0x0122);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0x3000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0xFFFE);
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x0F00);
+        bus.WriteWord(0x00DFF120, 0x0000);
+        bus.WriteWord(0x00DFF122, 0x1000);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        bus.WriteWord(0x00DFF096, 0x82A0);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, AmigaConstants.A500PalCpuCyclesPerFrame);
+
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, lateSpriteY));
+        Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
     }
 
     [Fact]

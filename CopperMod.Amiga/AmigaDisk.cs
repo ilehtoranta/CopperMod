@@ -32,6 +32,8 @@ namespace CopperMod.Amiga
 
         public bool HasCompleteSectorData => _sectorMedia?.HasCompleteSectorData == true;
 
+        public bool HasPreservedTrackData => _media.HasPreservedTrackData;
+
         public ReadOnlySpan<byte> BootBlock => RequireSectorMedia().BootBlock;
 
         public static AmigaDiskImage Load(string path)
@@ -680,6 +682,8 @@ namespace CopperMod.Amiga
     {
         string Name { get; }
 
+        bool HasPreservedTrackData { get; }
+
         AmigaEncodedTrack ReadEncodedTrack(int cylinder, int head);
     }
 
@@ -716,6 +720,8 @@ namespace CopperMod.Amiga
         public byte[] Data { get; }
 
         public string Name { get; }
+
+        public bool HasPreservedTrackData => false;
 
         public bool HasCompleteSectorData => true;
 
@@ -787,6 +793,8 @@ namespace CopperMod.Amiga
         public byte[] Data { get; }
 
         public string Name { get; }
+
+        public bool HasPreservedTrackData => true;
 
         public bool HasCompleteSectorData { get; }
 

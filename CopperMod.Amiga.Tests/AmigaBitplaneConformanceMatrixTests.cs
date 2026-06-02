@@ -7,6 +7,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
     private const uint SpriteListBase = 0x3000;
+    private const uint CopperListBase = 0x4000;
 
     public static IEnumerable<object[]> MatrixRows => Rows.Select(row => new object[] { row });
 
@@ -97,6 +98,9 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "live DMA capture preserves timed palette rows":
                 LiveDmaCapturePreservesTimedPaletteRows();
                 break;
+            case "live DMA capture preserves same-line Copper palette spans":
+                LiveDmaCapturePreservesSameLineCopperPaletteSpans();
+                break;
             case "DMAEN and BPLEN gate timed bitplane fetches":
                 DmaEnableGatesTimedBitplaneFetches();
                 break;
@@ -154,6 +158,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("ehb-ham", "HAM holds and modifies color"),
         Executable("palette", "Copper or CPU palette changes affect later rows"),
         Executable("palette", "live DMA capture preserves timed palette rows"),
+        Executable("palette", "live DMA capture preserves same-line Copper palette spans"),
         Executable("dma-control", "DMAEN and BPLEN gate timed bitplane fetches"),
         Executable("fetch-window", "cycle-exact fetch slot contention at DDF edges"),
         Executable("dma-control", "bitplane DMA starvation of late sprite slots"),
@@ -452,6 +457,26 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.True(liveBus.Display.CaptureSnapshot().LastBitplaneDmaFetches > 0);
     }
 
+    private static void LiveDmaCapturePreservesSameLineCopperPaletteSpans()
+    {
+        var presentationBus = CreateSameLineCopperPaletteBus(enableLiveDma: false);
+        var liveBus = CreateSameLineCopperPaletteBus(enableLiveDma: true);
+        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var actual = new uint[expected.Length];
+        var targetRow = StandardY;
+        var beforeSplitX = StandardX + 16;
+        var afterSplitX = StandardX + 180;
+
+        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+        Assert.Equal(0xFFFF0000u, Pixel(expected, beforeSplitX, targetRow));
+        Assert.Equal(0xFF00FF00u, Pixel(expected, afterSplitX, targetRow));
+        Assert.Equal(Pixel(expected, beforeSplitX, targetRow), Pixel(actual, beforeSplitX, targetRow));
+        Assert.Equal(Pixel(expected, afterSplitX, targetRow), Pixel(actual, afterSplitX, targetRow));
+        Assert.True(liveBus.Display.CaptureSnapshot().LastBitplaneDmaFetches > 0);
+    }
+
     private static AmigaBus CreateTimedPaletteBitplaneBus(bool enableLiveDma)
     {
         var bus = CreateDisplayBus();
@@ -468,6 +493,34 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         }
 
         bus.WriteWord(0x00DFF182, 0x00F0, OutputRowStartCycle(StandardY + 1));
+        return bus;
+    }
+
+    private static AmigaBus CreateSameLineCopperPaletteBus(bool enableLiveDma)
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: enableLiveDma);
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        SetBitplanePointer(bus, 0, 0x1000);
+        for (var word = 0; word < 32; word++)
+        {
+            BigEndian.WriteUInt16(bus.ChipRam, 0x1000 + (word * 2), 0xFFFF);
+        }
+
+        var targetLine = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + StandardY;
+        WriteCopperList(
+            bus,
+            CopperListBase,
+            ((ushort)(((targetLine & 0xFF) << 8) | 0x71), 0xFFFE),
+            (0x0182, 0x00F0),
+            (0xFFFF, 0xFFFE));
+        bus.WriteWord(0x00DFF080, (ushort)(CopperListBase >> 16));
+        bus.WriteWord(0x00DFF082, (ushort)CopperListBase);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF096, 0x8380);
+        bus.WriteWord(0x00DFF100, 0x1000);
+
         return bus;
     }
 
@@ -642,6 +695,15 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         var offset = (uint)(0x00DFF0E0 + (plane * 4));
         bus.WriteWord(offset, (ushort)(address >> 16));
         bus.WriteWord(offset + 2, (ushort)address);
+    }
+
+    private static void WriteCopperList(AmigaBus bus, uint address, params (ushort First, ushort Second)[] instructions)
+    {
+        for (var i = 0; i < instructions.Length; i++)
+        {
+            BigEndian.WriteUInt16(bus.ChipRam, (int)address + (i * 4), instructions[i].First);
+            BigEndian.WriteUInt16(bus.ChipRam, (int)address + (i * 4) + 2, instructions[i].Second);
+        }
     }
 
     private static void SetSpritePointer(AmigaBus bus, int sprite, uint address)
