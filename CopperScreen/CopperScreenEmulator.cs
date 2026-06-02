@@ -10,6 +10,7 @@ internal sealed class CopperScreenEmulator
 	private const int DefaultAudioSampleRate = 44_100;
 	private const int DefaultAudioChannels = 2;
 	private const int DiskSwapEjectFrames = 25;
+	private const int MouseButtonEdgePulseFrames = 2;
 	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 	private const string RunningStatusText = "boot program running:";
 	private readonly AmigaMachine _machine;
@@ -28,6 +29,8 @@ internal sealed class CopperScreenEmulator
 	private string? _pendingDiskPath;
 	private int _pendingDiskInsertFrames;
 	private int _firePulseFrames;
+	private int _mousePrimaryFirePulseFrames;
+	private int _mouseSecondFirePulseFrames;
 	private long _targetCycle;
 	private long _audioCycle;
 	private long _frameAudioStartCycle;
@@ -54,6 +57,7 @@ internal sealed class CopperScreenEmulator
 		Width = AmigaConstants.PalLowResWidth;
 		Height = AmigaConstants.PalLowResHeight;
 		Framebuffer = new int[Width * Height];
+		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
 		_profile = startupOptions.Profile;
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
@@ -81,7 +85,11 @@ internal sealed class CopperScreenEmulator
 
 	public bool IsWorkbenchHandoffPending => _workbenchHandoffPending;
 
-	public bool IsPrimaryFirePressed => _mousePrimaryFirePressed || _joystickPrimaryFirePressed || _firePulseFrames > 0;
+	public bool IsPrimaryFirePressed =>
+		_mousePrimaryFirePressed ||
+		_mousePrimaryFirePulseFrames > 0 ||
+		_joystickPrimaryFirePressed ||
+		_firePulseFrames > 0;
 
 	public bool IsDiskSwapPending => _pendingDiskImage != null;
 
@@ -98,7 +106,32 @@ internal sealed class CopperScreenEmulator
 
 	public string ProfileName => _profile.DisplayName;
 
+	public string CpuBackendName => _machine.Options.CpuBackend.ToString();
+
+	public M68kJitCounters JitCounters => _machine.Cpu is M68kJitCore jit ? jit.Counters : default;
+
+	public M68kInstructionFrequencySnapshot InstructionFrequency =>
+		_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider
+			? frequencyProvider.CaptureInstructionFrequency()
+			: M68kInstructionFrequencySnapshot.Empty;
+
 	public string ProgramCounterText => $"PC=${_machine.Cpu.State.ProgramCounter:X6}";
+
+	public void ResetInstructionFrequency()
+	{
+		if (_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider)
+		{
+			frequencyProvider.ResetInstructionFrequency();
+		}
+	}
+
+	public void SetInstructionFrequencyEnabled(bool enabled)
+	{
+		if (_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider)
+		{
+			frequencyProvider.InstructionFrequencyEnabled = enabled;
+		}
+	}
 
 	public string DriveStatusText
 	{
@@ -180,6 +213,16 @@ internal sealed class CopperScreenEmulator
 	{
 		startupError = startupOptions.Error;
 		var machineOptions = startupOptions.Profile.CreateMachineOptions();
+		if (startupOptions.AgnusTimingModeOverride.HasValue)
+		{
+			machineOptions.WithAgnusTimingMode(startupOptions.AgnusTimingModeOverride.Value);
+		}
+
+		if (startupOptions.CpuBackendOverride.HasValue)
+		{
+			machineOptions.WithCpu(M68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
+		}
+
 		if (!startupOptions.Profile.UsesKickstartRom)
 		{
 			return machineOptions;
@@ -520,6 +563,16 @@ internal sealed class CopperScreenEmulator
 
 	public void SetMouseButtons(bool primaryFirePressed, bool secondFirePressed)
 	{
+		if (primaryFirePressed && !_mousePrimaryFirePressed)
+		{
+			_mousePrimaryFirePulseFrames = Math.Max(_mousePrimaryFirePulseFrames, MouseButtonEdgePulseFrames);
+		}
+
+		if (secondFirePressed && !_mouseSecondFirePressed)
+		{
+			_mouseSecondFirePulseFrames = Math.Max(_mouseSecondFirePulseFrames, MouseButtonEdgePulseFrames);
+		}
+
 		_mousePrimaryFirePressed = primaryFirePressed;
 		_mouseSecondFirePressed = secondFirePressed;
 		ApplyInputState();
@@ -886,15 +939,25 @@ internal sealed class CopperScreenEmulator
 			_firePulseFrames--;
 		}
 
+		if (_mousePrimaryFirePulseFrames > 0)
+		{
+			_mousePrimaryFirePulseFrames--;
+		}
+
+		if (_mouseSecondFirePulseFrames > 0)
+		{
+			_mouseSecondFirePulseFrames--;
+		}
+
 		ApplyInputState();
 	}
 
 	private void ApplyInputState()
 	{
 		var pulsePrimaryFirePressed = _firePulseFrames > 0;
-		_machine.Bus.GamePort0FirePressed = _mousePrimaryFirePressed || pulsePrimaryFirePressed;
+		_machine.Bus.GamePort0FirePressed = _mousePrimaryFirePressed || _mousePrimaryFirePulseFrames > 0 || pulsePrimaryFirePressed;
 		_machine.Bus.GamePort1FirePressed = _joystickPrimaryFirePressed || pulsePrimaryFirePressed;
-		_machine.Bus.GamePort0SecondFirePressed = _mouseSecondFirePressed;
+		_machine.Bus.GamePort0SecondFirePressed = _mouseSecondFirePressed || _mouseSecondFirePulseFrames > 0;
 		_machine.Bus.GamePort1SecondFirePressed = _joystickSecondFirePressed;
 		_machine.Bus.SetGamePortJoystick(1, _joystickUp, _joystickDown, _joystickLeft, _joystickRight);
 	}
@@ -911,9 +974,7 @@ internal sealed class CopperScreenEmulator
 		}
 
 		var fatalStatus = BuildFatalStatus(result.Diagnostics);
-		StatusText = fatalStatus == null
-			? RunningStatusText
-			: fatalStatus;
+		StatusText = fatalStatus ?? RunningStatusText;
 		if (fatalStatus == null)
 		{
 			return false;

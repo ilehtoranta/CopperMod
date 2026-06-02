@@ -41,6 +41,23 @@ namespace CopperMod.Amiga
         void RequestInterrupt(int level, uint vectorAddress);
     }
 
+    internal interface IM68kInstructionBoundary
+    {
+        bool BeforeInstruction();
+
+        void AfterInstruction(long previousCycle, long currentCycle);
+    }
+
+    internal interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
+    {
+        bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles);
+    }
+
+    internal interface IM68kBatchCore : IM68kCore
+    {
+        int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
+    }
+
     internal enum M68kBackendKind
     {
         AccurateM68000,
@@ -63,6 +80,11 @@ namespace CopperMod.Amiga
             if (backend == M68kBackendKind.AccurateM68000)
             {
                 return new M68kInterpreter(bus);
+            }
+
+            if (backend == M68kBackendKind.JitM68000)
+            {
+                return new M68kJitCore(bus);
             }
 
             throw new AmigaEmulationException($"The requested MC68000 backend is not implemented: {backend}.");
@@ -251,17 +273,72 @@ namespace CopperMod.Amiga
         public uint ProgramCounter { get; }
     }
 
-    internal sealed class M68kInterpreter : IM68kCore
+    internal sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
+        private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
 
         public M68kInterpreter(IM68kBus bus)
+            : this(bus, new M68kCpuState())
         {
-            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         }
 
-        public M68kCpuState State { get; } = new M68kCpuState();
+        public M68kInterpreter(IM68kBus bus, M68kCpuState state, M68kInstructionFrequencyMatrix? instructionFrequency = null)
+        {
+            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            State = state ?? throw new ArgumentNullException(nameof(state));
+            _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
+        }
+
+        public M68kCpuState State { get; }
+
+        public bool InstructionFrequencyEnabled
+        {
+            get => _instructionFrequency.Enabled;
+            set => _instructionFrequency.Enabled = value;
+        }
+
+        public M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
+            => _instructionFrequency.CaptureSnapshot();
+
+        public void ResetInstructionFrequency()
+            => _instructionFrequency.Reset();
+
+        public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
+        {
+            ArgumentNullException.ThrowIfNull(boundary);
+            var instructions = 0;
+            while (!State.Halted &&
+                instructions < maxInstructions &&
+                (!targetCycle.HasValue || State.Cycles < targetCycle.Value))
+            {
+                if (State.Stopped &&
+                    targetCycle.HasValue &&
+                    boundary is IM68kStoppedCpuFastForwardBoundary stoppedBoundary)
+                {
+                    if (!stoppedBoundary.TryFastForwardStoppedInstruction(State, targetCycle.Value, out _))
+                    {
+                        break;
+                    }
+
+                    instructions++;
+                    continue;
+                }
+
+                if (!boundary.BeforeInstruction())
+                {
+                    break;
+                }
+
+                var previousCycle = State.Cycles;
+                ExecuteInstruction();
+                boundary.AfterInstruction(previousCycle, State.Cycles);
+                instructions++;
+            }
+
+            return instructions;
+        }
 
         public int ExecuteInstruction()
         {
@@ -294,6 +371,7 @@ namespace CopperMod.Amiga
             var opcode = FetchWord();
             State.LastOpcode = opcode;
             State.LastInstructionProgramCounter = instructionPc;
+            _instructionFrequency.Record(opcode);
 
             var opcodeLine = opcode & 0xF000;
             if ((opcodeLine == 0x1000 || opcodeLine == 0x2000 || opcodeLine == 0x3000) && DecodeMove(opcode))

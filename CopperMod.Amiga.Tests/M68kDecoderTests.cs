@@ -1,0 +1,106 @@
+using CopperMod.Amiga;
+
+namespace CopperMod.Amiga.Tests;
+
+public sealed class M68kDecoderTests
+{
+	[Fact]
+	public void DecodesMoveq()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, 0x1000, 0x7012);
+
+		var decoded = Decode(bus, 0x1000);
+
+		Assert.Equal(M68kJitOperation.Moveq, decoded.Operation);
+		Assert.Equal(M68kOperandSize.Long, decoded.Size);
+		Assert.Equal(0, decoded.Register);
+		Assert.Equal(0x12, decoded.QuickValue);
+		Assert.Equal(2, decoded.Length);
+		Assert.False(decoded.StopsTrace);
+	}
+
+	[Fact]
+	public void DecodesMoveaLongImmediate()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, 0x1000, 0x207C, 0x1234, 0x5678);
+
+		var decoded = Decode(bus, 0x1000);
+
+		Assert.Equal(M68kJitOperation.Movea, decoded.Operation);
+		Assert.Equal(M68kOperandSize.Long, decoded.Size);
+		Assert.Equal(M68kJitEaKind.Immediate, decoded.Source.Kind);
+		Assert.Equal(0x1234_5678u, decoded.Source.Immediate);
+		Assert.Equal(M68kJitEaKind.AddressRegister, decoded.Destination.Kind);
+		Assert.Equal(0, decoded.Destination.Register);
+		Assert.Equal(6, decoded.Length);
+	}
+
+	[Fact]
+	public void DecodesPcRelativeLea()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, 0x1000, 0x41FA, 0x0010);
+
+		var decoded = Decode(bus, 0x1000);
+
+		Assert.Equal(M68kJitOperation.Lea, decoded.Operation);
+		Assert.Equal(M68kJitEaKind.PcDisplacement, decoded.Source.Kind);
+		Assert.Equal(0x1002u, decoded.Source.ExtensionAddress);
+		Assert.Equal(0x0010, decoded.Source.Extension0);
+		Assert.Equal(4, decoded.Length);
+	}
+
+	[Fact]
+	public void DecodesDbccAsTraceStop()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, 0x1000, 0x51C8, 0xFFFC);
+
+		var decoded = Decode(bus, 0x1000);
+
+		Assert.Equal(M68kJitOperation.Dbcc, decoded.Operation);
+		Assert.Equal(1, decoded.Condition);
+		Assert.Equal(-4, decoded.Displacement);
+		Assert.Equal(0x1002u, decoded.BranchBase);
+		Assert.True(decoded.StopsTrace);
+	}
+
+	[Fact]
+	public void KeepsSystemAndExceptionInstructionsOutOfTraces()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, 0x1000, 0x4E72, 0x2700);
+		WriteWords(bus, 0x2000, 0xA000);
+
+		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var stopReason));
+		Assert.Equal(M68kJitBailoutReason.SystemInstruction, stopReason);
+		Assert.False(M68kDecoder.TryDecode(bus, 0x2000, out _, out var lineAReason));
+		Assert.Equal(M68kJitBailoutReason.ExceptionInstruction, lineAReason);
+	}
+
+	[Fact]
+	public void KeepsHostTrapRootsOutOfTraces()
+	{
+		var bus = new AmigaBus();
+		bus.RegisterHostCallback(0x1000, _ => { });
+
+		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var reason));
+		Assert.Equal(M68kJitBailoutReason.HostTrap, reason);
+	}
+
+	private static M68kDecodedInstruction Decode(AmigaBus bus, uint address)
+	{
+		Assert.True(M68kDecoder.TryDecode(bus, address, out var decoded, out var reason), reason.ToString());
+		return decoded;
+	}
+
+	private static void WriteWords(AmigaBus bus, uint address, params ushort[] words)
+	{
+		for (var i = 0; i < words.Length; i++)
+		{
+			bus.WriteWord(address + (uint)(i * 2), words[i]);
+		}
+	}
+}

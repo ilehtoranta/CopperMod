@@ -5,17 +5,21 @@ using System.Reflection.Emit;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class M68kJitCore : IM68kBatchCore
+    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const int CompileThreshold = 64;
         private const int MaxTraceInstructions = 64;
         private const int MaxTraceBytes = 256;
         private const int BlacklistHits = 256;
+        private const int CodeGenerationPageShift = 8;
+        private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
 
         private readonly IM68kBus _bus;
         private readonly AmigaBus? _amigaBus;
         private readonly M68kInterpreter _fallback;
+        private readonly M68kInstructionFrequencyMatrix _instructionFrequency = new M68kInstructionFrequencyMatrix();
         private readonly Dictionary<uint, TraceEntry> _traces = new Dictionary<uint, TraceEntry>();
+        private readonly Dictionary<uint, HashSet<uint>> _traceRootsByPage = new Dictionary<uint, HashSet<uint>>();
         private readonly Dictionary<uint, int> _hotCounters = new Dictionary<uint, int>();
         private readonly Dictionary<uint, int> _blacklist = new Dictionary<uint, int>();
         private M68kJitCounters _counters;
@@ -26,12 +30,28 @@ namespace CopperMod.Amiga
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _amigaBus = bus as AmigaBus;
             State = new M68kCpuState();
-            _fallback = new M68kInterpreter(bus, State);
+            _fallback = new M68kInterpreter(bus, State, _instructionFrequency);
+            if (_amigaBus != null)
+            {
+                _amigaBus.JitEligibleMemoryWritten += InvalidateWrittenCodeRange;
+            }
         }
 
         public M68kCpuState State { get; }
 
         public M68kJitCounters Counters => _counters;
+
+        public bool InstructionFrequencyEnabled
+        {
+            get => _instructionFrequency.Enabled;
+            set => _instructionFrequency.Enabled = value;
+        }
+
+        public M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
+            => _instructionFrequency.CaptureSnapshot();
+
+        public void ResetInstructionFrequency()
+            => _instructionFrequency.Reset();
 
         public int ExecuteInstruction()
         {
@@ -49,6 +69,23 @@ namespace CopperMod.Amiga
                 instructions < maxInstructions &&
                 (!targetCycle.HasValue || State.Cycles < targetCycle.Value))
             {
+                if (State.Stopped)
+                {
+                    if (!ExecuteStoppedInstruction(boundary, targetCycle, out var stoppedFastForwardedCycles))
+                    {
+                        break;
+                    }
+
+                    if (stoppedFastForwardedCycles > 0)
+                    {
+                        _counters.StoppedFastForwards++;
+                        _counters.StoppedFastForwardCycles += Math.Max(0, stoppedFastForwardedCycles - 1);
+                    }
+
+                    instructions++;
+                    continue;
+                }
+
                 var traced = TryExecuteTrace(maxInstructions - instructions, targetCycle, boundary);
                 if (traced > 0)
                 {
@@ -87,18 +124,36 @@ namespace CopperMod.Amiga
         private int TryExecuteTrace(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {
             var pc = Normalize(State.ProgramCounter);
+            if (_amigaBus != null && _amigaBus.IsChipRamAddress(pc))
+            {
+                RemoveTrace(pc);
+                return 0;
+            }
+
             if (!_traces.TryGetValue(pc, out var trace))
             {
                 return 0;
             }
 
             if (_amigaBus != null &&
-                !_amigaBus.CodeRangeGenerationMatches(trace.Root, trace.ByteLength, trace.StartGeneration, trace.EndGeneration))
+                !_amigaBus.CodeRangeGenerationMatches(
+                    trace.Root,
+                    trace.ByteLength,
+                    trace.StartGeneration,
+                    trace.EndGeneration))
             {
-                _traces.Remove(pc);
-                _counters.Invalidations++;
-                _counters.GenerationMismatches++;
-                return 0;
+                if (TraceCodeWordsMatch(trace))
+                {
+                    trace = RefreshTraceGenerations(trace);
+                    _traces[pc] = trace;
+                }
+                else
+                {
+                    RemoveTrace(pc);
+                    _counters.GenerationMismatches++;
+                    _counters.GenerationGuardExits++;
+                    return 0;
+                }
             }
 
             _counters.TraceHits++;
@@ -106,6 +161,10 @@ namespace CopperMod.Amiga
             if (executed == 0)
             {
                 _counters.SideExits++;
+            }
+            else
+            {
+                RecordTraceInstructionKinds(trace, executed);
             }
 
             return executed;
@@ -127,9 +186,36 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        private bool ExecuteStoppedInstruction(
+            IM68kInstructionBoundary boundary,
+            long? targetCycle,
+            out long fastForwardedCycles)
+        {
+            fastForwardedCycles = 0;
+            if (targetCycle.HasValue &&
+                boundary is IM68kStoppedCpuFastForwardBoundary stoppedBoundary)
+            {
+                return stoppedBoundary.TryFastForwardStoppedInstruction(
+                    State,
+                    targetCycle.Value,
+                    out fastForwardedCycles);
+            }
+
+            if (!boundary.BeforeInstruction())
+            {
+                return false;
+            }
+
+            var previousCycle = State.Cycles;
+            State.Cycles++;
+            boundary.AfterInstruction(previousCycle, State.Cycles);
+            _counters.FallbackInstructions++;
+            return true;
+        }
+
         private void ObserveHotRoot(uint pc)
         {
-            if (_amigaBus == null || _traces.ContainsKey(pc))
+            if (_amigaBus == null || _traces.ContainsKey(pc) || _amigaBus.IsChipRamAddress(pc))
             {
                 return;
             }
@@ -165,14 +251,14 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _traces[pc] = trace;
+            AddTrace(trace);
             _counters.CompiledTraces++;
         }
 
         private bool TryCompileTrace(uint root, out TraceEntry trace)
         {
             trace = default;
-            if (_amigaBus == null)
+            if (_amigaBus == null || _amigaBus.IsChipRamAddress(root))
             {
                 return false;
             }
@@ -183,6 +269,11 @@ namespace CopperMod.Amiga
             var byteCount = 0;
             while (count < MaxTraceInstructions && byteCount < MaxTraceBytes)
             {
+                if (_amigaBus.IsChipRamAddress(pc))
+                {
+                    break;
+                }
+
                 if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out var reason))
                 {
                     CountBailout(reason);
@@ -210,13 +301,114 @@ namespace CopperMod.Amiga
             }
 
             var compiled = Compile(root, instructions[..count]);
+            var codeWords = CaptureTraceWords(instructions[..count]);
+            CaptureTraceInstructionKindPrefixes(
+                instructions[..count],
+                out var directInstructionPrefixes,
+                out var helperInstructionPrefixes);
+            var startGeneration = _amigaBus.GetCodePageGeneration(root);
+            var endGeneration = _amigaBus.GetCodePageGeneration(Normalize(root + (uint)byteCount - 1u));
             trace = new TraceEntry(
                 root,
                 byteCount,
-                _amigaBus.GetCodePageGeneration(root),
-                _amigaBus.GetCodePageGeneration(Normalize(root + (uint)Math.Max(0, byteCount - 1))),
+                startGeneration,
+                endGeneration,
+                codeWords,
+                directInstructionPrefixes,
+                helperInstructionPrefixes,
                 compiled);
             return true;
+        }
+
+        private void RecordTraceInstructionKinds(TraceEntry trace, int executed)
+        {
+            executed = Math.Clamp(executed, 0, trace.DirectInstructionPrefixes.Length - 1);
+            _counters.DirectIlInstructions += trace.DirectInstructionPrefixes[executed];
+            _counters.HelperIlInstructions += trace.HelperInstructionPrefixes[executed];
+        }
+
+        private bool TraceCodeWordsMatch(TraceEntry trace)
+        {
+            if (_amigaBus == null)
+            {
+                return true;
+            }
+
+            var address = trace.Root;
+            for (var i = 0; i < trace.CodeWords.Length; i++)
+            {
+                if (_amigaBus.ReadHostWord(address) != trace.CodeWords[i])
+                {
+                    return false;
+                }
+
+                address = Normalize(address + 2);
+            }
+
+            return true;
+        }
+
+        private TraceEntry RefreshTraceGenerations(TraceEntry trace)
+        {
+            if (_amigaBus == null)
+            {
+                return trace;
+            }
+
+            return trace.WithGenerations(
+                _amigaBus.GetCodePageGeneration(trace.Root),
+                _amigaBus.GetCodePageGeneration(Normalize(trace.Root + (uint)trace.ByteLength - 1u)));
+        }
+
+        private static ushort[] CaptureTraceWords(ReadOnlySpan<M68kDecodedInstruction> instructions)
+        {
+            var wordCount = 0;
+            for (var i = 0; i < instructions.Length; i++)
+            {
+                wordCount += 1 + instructions[i].ExtensionCount;
+            }
+
+            var words = new ushort[wordCount];
+            var index = 0;
+            for (var i = 0; i < instructions.Length; i++)
+            {
+                var instruction = instructions[i];
+                words[index++] = instruction.Opcode;
+                for (var extension = 0; extension < instruction.ExtensionCount; extension++)
+                {
+                    words[index++] = extension switch
+                    {
+                        0 => instruction.Extension0,
+                        1 => instruction.Extension1,
+                        2 => instruction.Extension2,
+                        _ => instruction.Extension3
+                    };
+                }
+            }
+
+            return words;
+        }
+
+        private static void CaptureTraceInstructionKindPrefixes(
+            ReadOnlySpan<M68kDecodedInstruction> instructions,
+            out int[] directInstructionPrefixes,
+            out int[] helperInstructionPrefixes)
+        {
+            directInstructionPrefixes = new int[instructions.Length + 1];
+            helperInstructionPrefixes = new int[instructions.Length + 1];
+            for (var i = 0; i < instructions.Length; i++)
+            {
+                directInstructionPrefixes[i + 1] = directInstructionPrefixes[i];
+                helperInstructionPrefixes[i + 1] = helperInstructionPrefixes[i];
+                if (M68kOperationEmitter.CanEmitDirect(instructions[i]))
+                {
+                    directInstructionPrefixes[i + 1]++;
+                }
+                else
+                {
+                    helperInstructionPrefixes[i + 1]++;
+                }
+            }
         }
 
         private void CountBailout(M68kJitBailoutReason reason)
@@ -259,6 +451,7 @@ namespace CopperMod.Amiga
             var canEnter = GetInstanceMethod(nameof(CanEnterCompiledInstruction));
             var begin = GetInstanceMethod(nameof(BeginCompiledInstruction));
             var finish = GetInstanceMethod(nameof(FinishCompiledInstruction));
+            var emitContext = M68kOperationEmitter.EmitTraceLocals(il);
 
             for (var i = 0; i < instructions.Length; i++)
             {
@@ -274,15 +467,11 @@ namespace CopperMod.Amiga
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.ProgramCounter));
                 il.Emit(OpCodes.Ldc_I4, instruction.Opcode);
-                il.Emit(OpCodes.Ldc_I4, instruction.ExtensionCount);
-                il.Emit(OpCodes.Ldc_I4, instruction.Extension0);
-                il.Emit(OpCodes.Ldc_I4, instruction.Extension1);
-                il.Emit(OpCodes.Ldc_I4, instruction.Extension2);
-                il.Emit(OpCodes.Ldc_I4, instruction.Extension3);
+                il.Emit(OpCodes.Ldc_I4, unchecked((int)Normalize(instruction.ProgramCounter + (uint)instruction.Length)));
                 il.Emit(OpCodes.Call, begin);
                 il.Emit(OpCodes.Brfalse, returnLabels[i]);
 
-                M68kOperationEmitter.Emit(il, instruction);
+                _ = M68kOperationEmitter.Emit(il, instruction, emitContext);
                 il.Emit(OpCodes.Brfalse, returnLabels[i]);
 
                 il.Emit(OpCodes.Ldarg_0);
@@ -336,11 +525,7 @@ namespace CopperMod.Amiga
         private bool BeginCompiledInstruction(
             uint programCounter,
             ushort expectedOpcode,
-            int extensionCount,
-            ushort extension0,
-            ushort extension1,
-            ushort extension2,
-            ushort extension3)
+            uint nextProgramCounter)
         {
             programCounter = Normalize(programCounter);
             _compiledInstructionPreviousCycle = State.Cycles;
@@ -351,38 +536,10 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var cycle = State.Cycles;
-            var opcode = _bus.ReadWord(programCounter, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
-            if (opcode != expectedOpcode)
-            {
-                InvalidateSource(programCounter);
-                return false;
-            }
-
-            var cursor = Normalize(programCounter + 2);
-            for (var i = 0; i < extensionCount; i++)
-            {
-                var expected = i switch
-                {
-                    0 => extension0,
-                    1 => extension1,
-                    2 => extension2,
-                    _ => extension3
-                };
-                var actual = _bus.ReadWord(cursor, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
-                if (actual != expected)
-                {
-                    InvalidateSource(programCounter);
-                    return false;
-                }
-
-                cursor = Normalize(cursor + 2);
-            }
-
-            State.Cycles = cycle;
-            State.LastOpcode = opcode;
+            State.LastOpcode = expectedOpcode;
             State.LastInstructionProgramCounter = programCounter;
-            State.ProgramCounter = cursor;
+            State.ProgramCounter = Normalize(nextProgramCounter);
+            _instructionFrequency.Record(expectedOpcode);
             return true;
         }
 
@@ -397,7 +554,52 @@ namespace CopperMod.Amiga
             State.Cycles = _compiledInstructionPreviousCycle;
             _counters.Invalidations++;
             _counters.SelfModifiedCodeExits++;
-            _traces.Remove(Normalize(programCounter));
+            RemoveTrace(Normalize(programCounter));
+        }
+
+        private void InvalidateWrittenCodeRange(uint address, int byteCount)
+        {
+            if (byteCount <= 0 || _traces.Count == 0)
+            {
+                return;
+            }
+
+            address = Normalize(address);
+            HashSet<uint>? rootsToRemove = null;
+            var remaining = byteCount;
+            var current = address;
+            while (remaining > 0)
+            {
+                if (_traceRootsByPage.TryGetValue(GetCodePageKey(current), out var roots))
+                {
+                    foreach (var root in roots)
+                    {
+                        if (!_traces.TryGetValue(root, out var trace) ||
+                            !RangesOverlap(trace.Root, trace.ByteLength, address, byteCount))
+                        {
+                            continue;
+                        }
+
+                        rootsToRemove ??= new HashSet<uint>();
+                        rootsToRemove.Add(root);
+                    }
+                }
+
+                var step = Math.Min(remaining, CodeGenerationPageSize - ((int)current & (CodeGenerationPageSize - 1)));
+                remaining -= step;
+                current = Normalize(current + (uint)step);
+            }
+
+            if (rootsToRemove != null)
+            {
+                foreach (var root in rootsToRemove)
+                {
+                    if (RemoveTrace(root))
+                    {
+                        _counters.Invalidations++;
+                    }
+                }
+            }
         }
 
         private bool ExecuteCompiledDecodedOperation(
@@ -466,6 +668,12 @@ namespace CopperMod.Amiga
                     WriteEaValue(destination, size, 0);
                     SetLogicFlags(0, size);
                     AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+                    return true;
+                case M68kJitOperation.Neg:
+                    ExecuteNeg(destination, size);
+                    return true;
+                case M68kJitOperation.Not:
+                    ExecuteNot(destination, size);
                     return true;
                 case M68kJitOperation.Cmp:
                     _ = Subtract(State.D[register], ReadEaValue(source, size), size, setExtend: false);
@@ -552,6 +760,18 @@ namespace CopperMod.Amiga
                 case M68kJitOperation.Exg:
                     ExecuteExchange(register, quickValue, variant);
                     return true;
+                case M68kJitOperation.Mulu:
+                    ExecuteMultiply(source, register, signed: false);
+                    return true;
+                case M68kJitOperation.Muls:
+                    ExecuteMultiply(source, register, signed: true);
+                    return true;
+                case M68kJitOperation.Divu:
+                    ExecuteDivide(source, register, signed: false);
+                    return true;
+                case M68kJitOperation.Divs:
+                    ExecuteDivide(source, register, signed: true);
+                    return true;
                 case M68kJitOperation.ShiftRegister:
                     ExecuteRegisterShift(register, quickValue, variant, size);
                     return true;
@@ -612,6 +832,23 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        private void ExecuteNeg(M68kDecodedEa destination, M68kOperandSize size)
+        {
+            var value = ReadEaForModify(destination, size, out var resolvedAddress, out var memory);
+            var result = Subtract(0, value, size, setExtend: true);
+            WriteResolvedEa(destination, size, result, resolvedAddress, memory);
+            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private void ExecuteNot(M68kDecodedEa destination, M68kOperandSize size)
+        {
+            var value = ReadEaForModify(destination, size, out var resolvedAddress, out var memory);
+            var result = (~value) & M68kCpuState.Mask(size);
+            WriteResolvedEa(destination, size, result, resolvedAddress, memory);
+            SetLogicFlags(result, size);
+            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+        }
+
         private bool ExecuteBinaryArithmetic(
             bool add,
             bool logical,
@@ -642,6 +879,75 @@ namespace CopperMod.Amiga
 
             AddCycles(size == M68kOperandSize.Long ? 12 : 8);
             return true;
+        }
+
+        private void ExecuteMultiply(M68kDecodedEa source, int register, bool signed)
+        {
+            if (signed)
+            {
+                var sourceValue = unchecked((short)ReadEaValue(source, M68kOperandSize.Word));
+                State.D[register] = unchecked((uint)(unchecked((short)State.D[register]) * sourceValue));
+            }
+            else
+            {
+                var sourceValue = ReadEaValue(source, M68kOperandSize.Word) & 0xFFFF;
+                State.D[register] = (uint)((ushort)State.D[register] * (ushort)sourceValue);
+            }
+
+            SetLogicFlags(State.D[register], M68kOperandSize.Long);
+            AddCycles(70);
+        }
+
+        private void ExecuteDivide(M68kDecodedEa source, int register, bool signed)
+        {
+            var divisor = ReadEaValue(source, M68kOperandSize.Word) & 0xFFFF;
+            if (divisor == 0)
+            {
+                State.Halted = true;
+                AddCycles(38);
+                return;
+            }
+
+            var dividend = State.D[register];
+            if (!signed)
+            {
+                var quotient = dividend / divisor;
+                var remainder = dividend % divisor;
+                if ((quotient & 0xFFFF_0000) != 0)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, true);
+                }
+                else
+                {
+                    State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                    State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                    State.SetFlag(M68kCpuState.Carry, false);
+                }
+
+                AddCycles(140);
+                return;
+            }
+
+            var signedDivisor = unchecked((short)divisor);
+            var signedDividend = unchecked((int)dividend);
+            var signedQuotient = signedDividend / signedDivisor;
+            var signedRemainder = signedDividend % signedDivisor;
+            if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
+            {
+                State.SetFlag(M68kCpuState.Overflow, true);
+            }
+            else
+            {
+                var quotient = unchecked((uint)signedQuotient);
+                var remainder = unchecked((uint)signedRemainder);
+                State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+
+            AddCycles(140);
         }
 
         private bool ExecuteBinaryLogical(
@@ -1344,9 +1650,81 @@ namespace CopperMod.Amiga
             return count;
         }
 
+        private void AddTrace(TraceEntry trace)
+        {
+            RemoveTrace(trace.Root);
+            _traces[trace.Root] = trace;
+            ForEachTracePage(trace, page =>
+            {
+                if (!_traceRootsByPage.TryGetValue(page, out var roots))
+                {
+                    roots = new HashSet<uint>();
+                    _traceRootsByPage[page] = roots;
+                }
+
+                roots.Add(trace.Root);
+            });
+        }
+
+        private bool RemoveTrace(uint root)
+        {
+            root = Normalize(root);
+            if (!_traces.TryGetValue(root, out var trace))
+            {
+                return false;
+            }
+
+            _traces.Remove(root);
+            ForEachTracePage(trace, page =>
+            {
+                if (!_traceRootsByPage.TryGetValue(page, out var roots))
+                {
+                    return;
+                }
+
+                roots.Remove(root);
+                if (roots.Count == 0)
+                {
+                    _traceRootsByPage.Remove(page);
+                }
+            });
+            return true;
+        }
+
+        private static void ForEachTracePage(TraceEntry trace, Action<uint> action)
+        {
+            var remaining = trace.ByteLength;
+            var current = trace.Root;
+            while (remaining > 0)
+            {
+                action(GetCodePageKey(current));
+                var step = Math.Min(remaining, CodeGenerationPageSize - ((int)current & (CodeGenerationPageSize - 1)));
+                remaining -= step;
+                current = Normalize(current + (uint)step);
+            }
+        }
+
+        private static uint GetCodePageKey(uint address)
+            => Normalize(address) & ~(uint)(CodeGenerationPageSize - 1);
+
+        private static bool RangesOverlap(uint leftAddress, int leftByteCount, uint rightAddress, int rightByteCount)
+        {
+            if (leftByteCount <= 0 || rightByteCount <= 0)
+            {
+                return false;
+            }
+
+            var leftStart = Normalize(leftAddress);
+            var rightStart = Normalize(rightAddress);
+            var leftEnd = (ulong)leftStart + (uint)leftByteCount;
+            var rightEnd = (ulong)rightStart + (uint)rightByteCount;
+            return (ulong)leftStart < rightEnd && (ulong)rightStart < leftEnd;
+        }
+
         private void ClearRuntimeState()
         {
             _traces.Clear();
+            _traceRootsByPage.Clear();
             _hotCounters.Clear();
             _blacklist.Clear();
         }
@@ -1360,12 +1738,23 @@ namespace CopperMod.Amiga
 
         private readonly struct TraceEntry
         {
-            public TraceEntry(uint root, int byteLength, uint startGeneration, uint endGeneration, CompiledTrace compiled)
+            public TraceEntry(
+                uint root,
+                int byteLength,
+                uint startGeneration,
+                uint endGeneration,
+                ushort[] codeWords,
+                int[] directInstructionPrefixes,
+                int[] helperInstructionPrefixes,
+                CompiledTrace compiled)
             {
                 Root = root;
                 ByteLength = byteLength;
                 StartGeneration = startGeneration;
                 EndGeneration = endGeneration;
+                CodeWords = codeWords;
+                DirectInstructionPrefixes = directInstructionPrefixes;
+                HelperInstructionPrefixes = helperInstructionPrefixes;
                 Compiled = compiled;
             }
 
@@ -1377,7 +1766,24 @@ namespace CopperMod.Amiga
 
             public uint EndGeneration { get; }
 
+            public ushort[] CodeWords { get; }
+
+            public int[] DirectInstructionPrefixes { get; }
+
+            public int[] HelperInstructionPrefixes { get; }
+
             public CompiledTrace Compiled { get; }
+
+            public TraceEntry WithGenerations(uint startGeneration, uint endGeneration)
+                => new TraceEntry(
+                    Root,
+                    ByteLength,
+                    startGeneration,
+                    endGeneration,
+                    CodeWords,
+                    DirectInstructionPrefixes,
+                    HelperInstructionPrefixes,
+                    Compiled);
         }
 
         private sealed class NoOpBoundary : IM68kInstructionBoundary
@@ -1426,5 +1832,15 @@ namespace CopperMod.Amiga
         public long BoundarySideExits { get; set; }
 
         public long SelfModifiedCodeExits { get; set; }
+
+        public long StoppedFastForwards { get; set; }
+
+        public long StoppedFastForwardCycles { get; set; }
+
+        public long DirectIlInstructions { get; set; }
+
+        public long HelperIlInstructions { get; set; }
+
+        public long GenerationGuardExits { get; set; }
     }
 }

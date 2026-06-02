@@ -20,11 +20,14 @@ namespace CopperMod.Amiga
         public const ushort IntreqBlitter = 0x0040;
         public const ushort IntreqExternal = 0x2000;
         public const int PaulaChannelCount = 4;
+        public const int A500PalMinimumAudioDmaPeriod = 124;
         public const int DefaultChipRamSize = 2 * 1024 * 1024;
         public const int MaxChipRamSize = 8 * 1024 * 1024;
         public const int A500BootChipRamSize = 512 * 1024;
         public const int A500BootPseudoFastRamSize = 512 * 1024;
         public const uint A500BootPseudoFastRamBase = 0x00C0_0000;
+        public const int A500JitRealFastRamSize = 2 * 1024 * 1024;
+        public const uint A500RealFastRamBase = 0x0020_0000;
         public const int PalLowResStandardWidth = 320;
         public const int PalLowResStandardHeight = 256;
         public const int PalLowResOverscanBorderX = 16;

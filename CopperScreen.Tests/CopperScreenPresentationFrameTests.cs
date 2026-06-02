@@ -1,9 +1,20 @@
+using CopperMod.Amiga;
 using CopperScreen;
 
 namespace CopperScreen.Tests;
 
 public sealed class CopperScreenPresentationFrameTests
 {
+	[Fact]
+	public void EmulatorUsesLowResolutionPresentationFramebuffer()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+
+		Assert.Equal(AmigaConstants.PalLowResWidth, emulator.Width);
+		Assert.Equal(AmigaConstants.PalLowResHeight, emulator.Height);
+		Assert.Equal(emulator.Width * emulator.Height, emulator.Framebuffer.Length);
+	}
+
 	[Fact]
 	public void PresentationFrameRenderMatchesPreparedFramebuffer()
 	{

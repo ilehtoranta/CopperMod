@@ -218,6 +218,25 @@ namespace CopperMod.Amiga
             return result;
         }
 
+        public long? GetNextTodInterruptCycle(long targetCycle, long nextTodTickCycle, long todTickIntervalCycles)
+        {
+            if ((_icrMask & TodInterruptMask) == 0 ||
+                todTickIntervalCycles <= 0 ||
+                targetCycle < nextTodTickCycle)
+            {
+                return null;
+            }
+
+            var ticksToAlarm = (_todAlarm - _todCounter) & 0x00FF_FFFF;
+            if (ticksToAlarm == 0)
+            {
+                ticksToAlarm = 0x0100_0000;
+            }
+
+            var cycle = nextTodTickCycle + (((long)ticksToAlarm - 1L) * todTickIntervalCycles);
+            return cycle <= targetCycle ? cycle : null;
+        }
+
         [HotPath]
         public void AdvanceTo(long targetCycle, IList<AmigaCiaInterruptEvent> interruptEvents)
         {
@@ -286,7 +305,11 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        private void SetPending(byte bits, long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
+        private void SetPending(
+            byte bits,
+            long cycle,
+            IList<AmigaCiaInterruptEvent> interruptEvents,
+            bool queueOnlyWhenNew = false)
         {
             bits = (byte)(bits & 0x1F);
             if (bits == 0)
@@ -294,8 +317,9 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            var eventBits = queueOnlyWhenNew ? (byte)(bits & ~_icrPending) : bits;
             _icrPending = (byte)(_icrPending | bits);
-            var active = (byte)(bits & _icrMask);
+            var active = (byte)(eventBits & _icrMask);
             if (active != 0)
             {
                 interruptEvents.Add(new AmigaCiaInterruptEvent(Id, active, cycle));
@@ -434,18 +458,25 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                while (Running)
+                var underflowCycle = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
+                if (underflowCycle <= targetCycle)
                 {
-                    var underflowCycle = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
-                    if (underflowCycle > targetCycle)
-                    {
-                        break;
-                    }
-
-                    cia.SetPending(interruptMask, underflowCycle, interruptEvents);
-                    timerBUnderflowCounter?.CountExternalEvent(underflowCycle, cia, TimerBInterruptMask, interruptEvents);
-                    Counter = LatchTicks;
-                    _nextTickCycle = underflowCycle + CpuCyclesPerCiaTick;
+                    cia.SetPending(interruptMask, underflowCycle, interruptEvents, queueOnlyWhenNew: true);
+                    var latchTicks = LatchTicks;
+                    var intervalCycles = (long)latchTicks * CpuCyclesPerCiaTick;
+                    var underflows = OneShot
+                        ? 1L
+                        : 1L + ((targetCycle - underflowCycle) / intervalCycles);
+                    timerBUnderflowCounter?.CountExternalEvents(
+                        underflowCycle,
+                        intervalCycles,
+                        underflows,
+                        cia,
+                        TimerBInterruptMask,
+                        interruptEvents);
+                    Counter = latchTicks;
+                    var lastUnderflowCycle = underflowCycle + ((underflows - 1L) * intervalCycles);
+                    _nextTickCycle = lastUnderflowCycle + CpuCyclesPerCiaTick;
                     if (OneShot)
                     {
                         Control = (byte)(Control & ~0x01);
@@ -468,24 +499,57 @@ namespace CopperMod.Amiga
                 AmigaCia cia,
                 byte interruptMask,
                 IList<AmigaCiaInterruptEvent> interruptEvents)
+                => CountExternalEvents(cycle, 0, 1, cia, interruptMask, interruptEvents);
+
+            public void CountExternalEvents(
+                long firstCycle,
+                long intervalCycles,
+                long eventCount,
+                AmigaCia cia,
+                byte interruptMask,
+                IList<AmigaCiaInterruptEvent> interruptEvents)
             {
-                if (!Running || Counter <= 0)
+                if (!Running || Counter <= 0 || eventCount <= 0)
                 {
                     return;
                 }
 
-                Counter--;
-                if (Counter > 0)
+                if (eventCount < Counter)
                 {
+                    Counter -= (int)eventCount;
+                    if (intervalCycles > 0)
+                    {
+                        _nextTickCycle = NextCiaTickAfter(firstCycle + ((eventCount - 1L) * intervalCycles));
+                    }
+
                     return;
                 }
 
-                cia.SetPending(interruptMask, cycle, interruptEvents);
-                Counter = LatchTicks;
-                _nextTickCycle = NextCiaTickAfter(cycle);
+                var underflowCycle = firstCycle + ((Counter - 1L) * Math.Max(1, intervalCycles));
+                cia.SetPending(interruptMask, underflowCycle, interruptEvents, queueOnlyWhenNew: true);
+                var latchTicks = LatchTicks;
                 if (OneShot)
                 {
+                    Counter = latchTicks;
+                    _nextTickCycle = NextCiaTickAfter(underflowCycle);
                     Control = (byte)(Control & ~0x01);
+                    return;
+                }
+
+                var remainingEvents = eventCount - Counter;
+                if (remainingEvents == 0)
+                {
+                    Counter = latchTicks;
+                }
+                else
+                {
+                    var remainder = remainingEvents % latchTicks;
+                    Counter = remainder == 0 ? latchTicks : (int)(latchTicks - remainder);
+                }
+
+                if (intervalCycles > 0)
+                {
+                    _nextTickCycle = NextCiaTickAfter(firstCycle + ((eventCount - 1L) * intervalCycles));
                 }
             }
 

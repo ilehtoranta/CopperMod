@@ -494,7 +494,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void ManualSpriteRepeatsFollowingScanLinesUntilCtlDisarmsIt()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyDisplayBus();
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		var (pos, ctl) = EncodeSpritePosition(StandardX, StandardY, 1);
 		var armCycle = RowCycle(StandardY);
@@ -557,6 +557,27 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void LiveSpriteDmaTerminatorSuppressesStaleManualSpriteState()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		var manualFrame = RenderLowResFrame(bus);
+		Assert.Equal(ToBgra(0x0F00), Pixel(manualFrame, StandardX, StandardY));
+
+		WriteChipWord(bus, SpriteListBase, 0);
+		WriteChipWord(bus, SpriteListBase + 2, 0);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		EnableSpriteDma(bus, 0x8220);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
 	}
 
 	[Fact]
@@ -689,7 +710,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void TimedSpriteDmaUsesBusSlotsAndRecordsMissedSlots()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyDisplayBus();
 		EnableSpriteDma(bus, 0x8220);
 		bus.WriteWord(0x00DFF092, 0x0030);
 		bus.WriteWord(0x00DFF094, 0x00D0);
@@ -785,6 +806,13 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 		bus.Display.RenderFrame(frame);
 		return frame;
+	}
+
+	private static AmigaBus CreateLegacyDisplayBus()
+	{
+		return new AmigaBus(
+			enableLiveAgnusDma: false,
+			agnusTimingMode: AgnusTimingMode.LegacyReservation);
 	}
 
 	private static uint Pixel(uint[] frame, int x, int y)

@@ -25,13 +25,25 @@ namespace CopperMod.Amiga
 
         public uint ExpansionRamBase { get; private set; } = AmigaConstants.A500BootPseudoFastRamBase;
 
+        public int RealFastRamSize { get; private set; }
+
+        public uint RealFastRamBase { get; private set; } = AmigaConstants.A500RealFastRamBase;
+
         public int FloppyDriveCount { get; private set; } = 1;
 
         public IAmigaBusArbiter BusArbiter { get; private set; } = new ZeroWaitBusArbiter();
 
         public bool CaptureBusAccesses { get; private set; } = true;
 
-        public bool LiveAgnusDma { get; private set; }
+        public bool LiveAgnusDma { get; private set; } = true;
+
+        public bool LiveDisplayDma { get; private set; } = true;
+
+        public bool HardwareSpecializationEnabled { get; private set; }
+
+        public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
+
+        public AgnusTimingMode AgnusTimingMode { get; private set; } = AgnusTimingMode.SlotEngine;
 
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
 
@@ -42,7 +54,14 @@ namespace CopperMod.Amiga
         public static AmigaMachineOptions ForProfile(AmigaMachineProfile profile)
         {
             var options = new AmigaMachineOptions(profile);
-            if (profile == AmigaMachineProfile.A500Pal512KChipOnlyBoot)
+            if (profile == AmigaMachineProfile.A500PalCustPlayback)
+            {
+                options.CaptureBusAccesses = false;
+                options.LiveDisplayDma = false;
+                options.ExpansionRamSize = 0x0001_0000;
+                options.AudioDmaMinimumPeriod = AmigaConstants.A500PalMinimumAudioDmaPeriod;
+            }
+            else if (profile == AmigaMachineProfile.A500Pal512KChipOnlyBoot)
             {
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
             }
@@ -87,6 +106,35 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithLiveDisplayDma(bool enabled)
+        {
+            LiveDisplayDma = enabled;
+            return this;
+        }
+
+        public AmigaMachineOptions WithHardwareSpecialization(bool enabled)
+        {
+            HardwareSpecializationEnabled = enabled;
+            return this;
+        }
+
+        public AmigaMachineOptions WithAudioDmaMinimumPeriod(int period)
+        {
+            if (period <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(period), period, "Audio DMA minimum period must be positive.");
+            }
+
+            AudioDmaMinimumPeriod = period;
+            return this;
+        }
+
+        public AmigaMachineOptions WithAgnusTimingMode(AgnusTimingMode timingMode)
+        {
+            AgnusTimingMode = timingMode;
+            return this;
+        }
+
         public AmigaMachineOptions WithChipRam(int size)
         {
             if (size <= 0)
@@ -120,6 +168,18 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithRealFastRam(int size, uint baseAddress = AmigaConstants.A500RealFastRamBase)
+        {
+            if (size < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Real fast RAM size cannot be negative.");
+            }
+
+            RealFastRamSize = size;
+            RealFastRamBase = baseAddress;
+            return this;
+        }
+
         public AmigaMachineOptions WithFloppyDriveCount(int count)
         {
             if (count is < 1 or > 4)
@@ -149,7 +209,13 @@ namespace CopperMod.Amiga
                 options.ExpansionRamBase,
                 options.FloppyDriveCount,
                 options.CaptureBusAccesses,
-                options.LiveAgnusDma);
+                options.LiveAgnusDma,
+                options.LiveDisplayDma,
+                options.AudioDmaMinimumPeriod,
+                options.AgnusTimingMode,
+                options.RealFastRamSize,
+                options.RealFastRamBase,
+                options.HardwareSpecializationEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }

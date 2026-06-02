@@ -91,6 +91,8 @@ namespace CopperMod.Amiga
         private const int ViewPortModesOffset = 0x20;
         private const int ViewPortRasInfoOffset = 0x24;
         private const int RasInfoBitMapOffset = 0x04;
+        private const int RasInfoRxOffsetOffset = 0x08;
+        private const int RasInfoRyOffsetOffset = 0x0A;
         private const int BitMapBytesPerRowOffset = 0x00;
         private const int BitMapRowsOffset = 0x02;
         private const int BitMapDepthOffset = 0x05;
@@ -99,6 +101,7 @@ namespace CopperMod.Amiga
 
         private readonly AmigaMachine _machine;
         private readonly IAmigaDiskDmaEngine _diskDma;
+        private readonly BootInstructionBoundary _instructionBoundary;
         private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>();
         private readonly Dictionary<uint, BootDosHandle> _dosHandles = new Dictionary<uint, BootDosHandle>();
         private readonly Dictionary<uint, AmigaDosDirectoryEntry> _dosLocks = new Dictionary<uint, AmigaDosDirectoryEntry>();
@@ -151,6 +154,7 @@ namespace CopperMod.Amiga
         {
             _machine = machine ?? throw new ArgumentNullException(nameof(machine));
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
+            _instructionBoundary = new BootInstructionBoundary(this);
         }
 
         public AmigaFloppyDrive Drive0 => _machine.Bus.Disk.Drive0;
@@ -207,6 +211,7 @@ namespace CopperMod.Amiga
 
             ResetBootState(disk, installHostShim: false);
             _machine.Kickstart.Install(_machine.Bus, CreateHostTrapTable());
+            TryInstallKnownBootLoaderTraps();
             var rom = _machine.Kickstart.Configuration.RomImage.Span;
             if (rom.Length < 8)
             {
@@ -470,44 +475,25 @@ namespace CopperMod.Amiga
             Action<long, long>? beforeDeviceAdvance = null)
         {
             var instructions = 0;
-            var completed = false;
+            var boundary = _instructionBoundary;
+            boundary.Reset(runMode, beforeDeviceAdvance);
             try
             {
-                while (!_machine.Cpu.State.Halted &&
-                    instructions < maxInstructions &&
-                    (!targetCycle.HasValue || _machine.Cpu.State.Cycles < targetCycle.Value))
+                if (_machine.Cpu is IM68kBatchCore batchCore)
                 {
-                    if (_machine.Cpu.State.ProgramCounter == 0 && instructions > 0)
+                    instructions = batchCore.ExecuteInstructions(maxInstructions, targetCycle, boundary);
+                }
+                else
+                {
+                    while (!_machine.Cpu.State.Halted &&
+                        instructions < maxInstructions &&
+                        (!targetCycle.HasValue || _machine.Cpu.State.Cycles < targetCycle.Value) &&
+                        boundary.BeforeInstruction())
                     {
-                        if (TryStartDosBootContinuation())
-                        {
-                            continue;
-                        }
-
-                        completed = true;
-                        break;
-                    }
-
-                    if (_machine.Cpu.State.ProgramCounter == DosProgramReturnAddress && instructions > 0)
-                    {
-                        completed = true;
-                        break;
-                    }
-
-                    SkipDosBootBlockHeaderIfNeeded();
-                    ApplyWorkbenchLanguageSelectionIfNeeded();
-                    var previousCycle = _machine.Cpu.State.Cycles;
-                    _machine.Cpu.ExecuteInstruction();
-                    beforeDeviceAdvance?.Invoke(previousCycle, _machine.Cpu.State.Cycles);
-                    _machine.Bus.AdvanceRasterTo(_machine.Cpu.State.Cycles);
-                    _machine.Bus.AdvanceCiasTo(_machine.Cpu.State.Cycles);
-                    _machine.Bus.AdvanceDmaTo(_machine.Cpu.State.Cycles, advanceLiveAgnus: false);
-                    _machine.DispatchPendingHardwareInterrupt();
-                    instructions++;
-                    if (_bootDiskReadCompleted && runMode == AmigaBootRunMode.StopAfterBootDiskRead)
-                    {
-                        completed = true;
-                        break;
+                        var previousCycle = _machine.Cpu.State.Cycles;
+                        _machine.Cpu.ExecuteInstruction();
+                        boundary.AfterInstruction(previousCycle, _machine.Cpu.State.Cycles);
+                        instructions++;
                     }
                 }
 
@@ -535,8 +521,99 @@ namespace CopperMod.Amiga
                 BootEntryAddress,
                 _machine.Cpu.State.ProgramCounter,
                 instructions,
-                completed,
+                boundary.Completed,
                 _diagnostics);
+        }
+
+        private sealed class BootInstructionBoundary : IM68kStoppedCpuFastForwardBoundary
+        {
+            private readonly AmigaBootController _owner;
+            private AmigaBootRunMode _runMode;
+            private Action<long, long>? _beforeDeviceAdvance;
+            private int _instructions;
+
+            public BootInstructionBoundary(AmigaBootController owner)
+            {
+                _owner = owner;
+            }
+
+            public void Reset(AmigaBootRunMode runMode, Action<long, long>? beforeDeviceAdvance)
+            {
+                _runMode = runMode;
+                _beforeDeviceAdvance = beforeDeviceAdvance;
+                _instructions = 0;
+                Completed = false;
+            }
+
+            public bool Completed { get; private set; }
+
+            public bool BeforeInstruction()
+            {
+                if (Completed)
+                {
+                    return false;
+                }
+
+                if (_owner._machine.Cpu.State.ProgramCounter == 0 && _instructions > 0)
+                {
+                    if (_owner.TryStartDosBootContinuation())
+                    {
+                        return true;
+                    }
+
+                    Completed = true;
+                    return false;
+                }
+
+                if (_owner._machine.Cpu.State.ProgramCounter == DosProgramReturnAddress && _instructions > 0)
+                {
+                    Completed = true;
+                    return false;
+                }
+
+                _owner.SkipDosBootBlockHeaderIfNeeded();
+                _owner.ApplyWorkbenchLanguageSelectionIfNeeded();
+                return true;
+            }
+
+            public void AfterInstruction(long previousCycle, long currentCycle)
+            {
+                _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
+                _owner._machine.Bus.AdvanceRasterTo(currentCycle);
+                _owner._machine.Bus.AdvanceCiasTo(currentCycle);
+                _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: false);
+                _owner._machine.DispatchPendingHardwareInterrupt();
+                _instructions++;
+                if (_owner._bootDiskReadCompleted && _runMode == AmigaBootRunMode.StopAfterBootDiskRead)
+                {
+                    Completed = true;
+                }
+            }
+
+            public bool TryFastForwardStoppedInstruction(
+                M68kCpuState state,
+                long targetCycle,
+                out long advancedCycles)
+            {
+                advancedCycles = 0;
+                if (!BeforeInstruction())
+                {
+                    return false;
+                }
+
+                var previousCycle = state.Cycles;
+                if (targetCycle <= previousCycle)
+                {
+                    return false;
+                }
+
+                var wakeCycle = _owner._machine.Bus.GetNextStoppedCpuWakeCandidateCycle(previousCycle, targetCycle);
+                wakeCycle = Math.Clamp(wakeCycle, previousCycle + 1, targetCycle);
+                advancedCycles = wakeCycle - previousCycle;
+                state.Cycles = wakeCycle;
+                AfterInstruction(previousCycle, wakeCycle);
+                return true;
+            }
         }
 
         private void SkipDosBootBlockHeaderIfNeeded()
@@ -1280,6 +1357,8 @@ namespace CopperMod.Amiga
             var bytesPerRow = Math.Max(2, ((width + 15) / 16) * 2);
             var planes = new uint[6];
             var bitMap = 0u;
+            var sourceX = 0;
+            var sourceY = 0;
             var hasBitmap = TryReadLong(viewPort + ViewPortRasInfoOffset, out var rasInfo) &&
                 rasInfo != 0 &&
                 TryReadLong(rasInfo + RasInfoBitMapOffset, out bitMap) &&
@@ -1289,11 +1368,25 @@ namespace CopperMod.Amiga
             {
                 bytesPerRow = Math.Max(2, ReadPositiveWordOrDefault(bitMap + BitMapBytesPerRowOffset, bytesPerRow));
                 var bitmapRows = ReadPositiveWordOrDefault(bitMap + BitMapRowsOffset, height);
+                sourceX = TryReadWord(rasInfo + RasInfoRxOffsetOffset, out var rxOffsetWord)
+                    ? unchecked((short)rxOffsetWord)
+                    : 0;
+                sourceY = TryReadWord(rasInfo + RasInfoRyOffsetOffset, out var ryOffsetWord)
+                    ? unchecked((short)ryOffsetWord)
+                    : 0;
+                if (sourceY >= 0)
+                {
+                    height = Math.Max(1, Math.Min(height, Math.Max(1, bitmapRows - sourceY)));
+                }
+
                 height = Math.Max(1, Math.Min(height, bitmapRows));
                 depth = Math.Clamp(_machine.Bus.ReadByte(bitMap + BitMapDepthOffset), 1, planes.Length);
+                var sourceByteOffset = (sourceY * bytesPerRow) + ((sourceX / 16) * 2);
                 for (var plane = 0; plane < depth; plane++)
                 {
-                    planes[plane] = _machine.Bus.ReadLong(bitMap + BitMapPlanesOffset + (uint)(plane * 4));
+                    planes[plane] = _machine.Bus.AddChipDmaPointerOffset(
+                        _machine.Bus.ReadLong(bitMap + BitMapPlanesOffset + (uint)(plane * 4)),
+                        sourceByteOffset);
                 }
             }
 

@@ -13,6 +13,7 @@ internal enum CopperScreenKickstartSource
 internal sealed class CopperScreenProfile
 {
 	public const string DefaultProfileId = "expanded-copperstart";
+	private const AgnusTimingMode DefaultAgnusTimingMode = AgnusTimingMode.SlotEngine;
 	private const int Kilobyte = 1024;
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -28,7 +29,11 @@ internal sealed class CopperScreenProfile
 		int chipRamSize,
 		int expansionRamSize,
 		uint expansionRamBase,
+		int realFastRamSize,
+		uint realFastRamBase,
 		int floppyDriveCount,
+		AgnusTimingMode agnusTimingMode,
+		M68kBackendKind cpuBackend,
 		CopperScreenKickstartSource kickstartSource,
 		string? configPath)
 	{
@@ -38,7 +43,11 @@ internal sealed class CopperScreenProfile
 		ChipRamSize = chipRamSize;
 		ExpansionRamSize = expansionRamSize;
 		ExpansionRamBase = expansionRamBase;
+		RealFastRamSize = realFastRamSize;
+		RealFastRamBase = realFastRamBase;
 		FloppyDriveCount = floppyDriveCount;
+		AgnusTimingMode = agnusTimingMode;
+		CpuBackend = cpuBackend;
 		KickstartSource = kickstartSource;
 		ConfigPath = configPath;
 	}
@@ -55,7 +64,15 @@ internal sealed class CopperScreenProfile
 
 	public uint ExpansionRamBase { get; }
 
+	public int RealFastRamSize { get; }
+
+	public uint RealFastRamBase { get; }
+
 	public int FloppyDriveCount { get; }
+
+	public AgnusTimingMode AgnusTimingMode { get; }
+
+	public M68kBackendKind CpuBackend { get; }
 
 	public CopperScreenKickstartSource KickstartSource { get; }
 
@@ -73,7 +90,10 @@ internal sealed class CopperScreenProfile
 			.ForProfile(MachineProfile)
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
+			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
 			.WithFloppyDriveCount(FloppyDriveCount)
+			.WithAgnusTimingMode(AgnusTimingMode)
+			.WithCpu(M68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
 	}
@@ -173,7 +193,11 @@ internal sealed class CopperScreenProfile
 		var chipRamSize = CheckedKilobytes(machine.ChipRamKb, "machine.chipRamKb");
 		var expansionRamSize = CheckedKilobytes(machine.PseudoFastRamKb, "machine.pseudoFastRamKb");
 		var expansionRamBase = ParseAddress(machine.PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase);
+		var realFastRamSize = CheckedKilobytes(machine.RealFastRamKb, "machine.realFastRamKb");
+		var realFastRamBase = ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
+		var agnusTimingMode = ParseAgnusTimingMode(machine.AgnusTimingMode);
+		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -191,7 +215,11 @@ internal sealed class CopperScreenProfile
 			chipRamSize,
 			expansionRamSize,
 			expansionRamBase,
+			realFastRamSize,
+			realFastRamBase,
 			floppyDriveCount,
+			agnusTimingMode,
+			cpuBackend,
 			kickstartSource,
 			Path.GetFullPath(path));
 	}
@@ -291,6 +319,39 @@ internal sealed class CopperScreenProfile
 		};
 	}
 
+	internal static AgnusTimingMode ParseAgnusTimingMode(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return DefaultAgnusTimingMode;
+		}
+
+		var mode = value.Trim().ToLowerInvariant().Replace("-", string.Empty);
+		return mode switch
+		{
+			"legacy" or "legacyreservation" => AgnusTimingMode.LegacyReservation,
+			"slot" or "slotengine" => AgnusTimingMode.SlotEngine,
+			"shadow" or "shadowcompare" => AgnusTimingMode.ShadowCompare,
+			_ => throw new InvalidOperationException($"Unsupported Agnus timing mode '{value}'.")
+		};
+	}
+
+	internal static M68kBackendKind ParseCpuBackend(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return M68kBackendKind.AccurateM68000;
+		}
+
+		var backend = value.Trim().ToLowerInvariant().Replace("-", string.Empty);
+		return backend switch
+		{
+			"interpreter" or "accurate" or "accuratem68000" or "m68000" => M68kBackendKind.AccurateM68000,
+			"jit" or "jitm68000" => M68kBackendKind.JitM68000,
+			_ => throw new InvalidOperationException($"Unsupported CPU backend '{value}'.")
+		};
+	}
+
 	private static CopperScreenProfile CreateFallbackDefault()
 	{
 		return new CopperScreenProfile(
@@ -300,7 +361,11 @@ internal sealed class CopperScreenProfile
 			AmigaConstants.A500BootChipRamSize,
 			AmigaConstants.A500BootPseudoFastRamSize,
 			AmigaConstants.A500BootPseudoFastRamBase,
+			0,
+			AmigaConstants.A500RealFastRamBase,
 			2,
+			DefaultAgnusTimingMode,
+			M68kBackendKind.AccurateM68000,
 			CopperScreenKickstartSource.CopperStart,
 			null);
 	}
@@ -315,6 +380,8 @@ internal sealed class CopperScreenProfile
 
 		public MachineFile? Machine { get; set; }
 
+		public CpuFile? Cpu { get; set; }
+
 		public KickstartFile? Kickstart { get; set; }
 	}
 
@@ -328,7 +395,18 @@ internal sealed class CopperScreenProfile
 
 		public string? PseudoFastBase { get; set; }
 
+		public int RealFastRamKb { get; set; }
+
+		public string? RealFastBase { get; set; }
+
 		public int? FloppyDriveCount { get; set; }
+
+		public string? AgnusTimingMode { get; set; }
+	}
+
+	private sealed class CpuFile
+	{
+		public string? Backend { get; set; }
 	}
 
 	private sealed class KickstartFile

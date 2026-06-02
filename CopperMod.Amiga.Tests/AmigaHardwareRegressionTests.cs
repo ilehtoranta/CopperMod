@@ -7,7 +7,7 @@ public sealed class AmigaHardwareRegressionTests
 	[Fact]
 	public void PaulaManualAudioDataWritePlaysBothWordBytesAndRequestsInterrupt()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyComponentBus();
 		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
 		var buffer = new float[4];
 
@@ -24,7 +24,7 @@ public sealed class AmigaHardwareRegressionTests
 	[Fact]
 	public void PaulaManualAudioInterruptDoesNotDependOnVolume()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyComponentBus();
 		bus.WriteWord(0x00DFF0A8, 0x0000, 0);
 		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
 
@@ -36,7 +36,7 @@ public sealed class AmigaHardwareRegressionTests
 	[Fact]
 	public void PaulaAcceptsEvenByteVolumeWrites()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x7F;
 		bus.WriteWord(0x00DFF0A0, 0x0000, 0);
@@ -56,7 +56,7 @@ public sealed class AmigaHardwareRegressionTests
 	[Fact]
 	public void AmigaBusUsesTwentyFourBitAddressAliasesForCustomRegisters()
 	{
-		var bus = new AmigaBus();
+		var bus = CreateLegacyComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x7F;
 		bus.WriteWord(0x6CDFF0A0, 0x0000, 0);
@@ -118,5 +118,10 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteByte(0x00BFD500, 0x42, 0);
 
 		Assert.Equal(168_960, bus.CiaBTimerAIntervalCycles);
+	}
+
+	private static AmigaBus CreateLegacyComponentBus()
+	{
+		return new AmigaBus(enableLiveAgnusDma: false, agnusTimingMode: AgnusTimingMode.LegacyReservation);
 	}
 }

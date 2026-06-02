@@ -35,6 +35,25 @@ public sealed class CopperScreenArchitectureTests
 		AssertProfile("expanded-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 		AssertProfile("vanilla-kickstart13", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0, 1);
 		AssertProfile("expanded-kickstart13", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
+		AssertProfile(
+			"expanded-jit-realfast-copperstart",
+			AmigaMachineProfile.A500Pal512KBoot,
+			CopperScreenKickstartSource.CopperStart,
+			512 * 1024,
+			2,
+			AgnusTimingMode.SlotEngine,
+			M68kBackendKind.JitM68000,
+			2 * 1024 * 1024);
+		AssertProfile(
+			"expanded-jit-realfast-kickstart13",
+			AmigaMachineProfile.A500Pal512KBoot,
+			CopperScreenKickstartSource.Kickstart13Rom,
+			512 * 1024,
+			2,
+			AgnusTimingMode.SlotEngine,
+			M68kBackendKind.JitM68000,
+			2 * 1024 * 1024);
+		AssertProfile("diagnostic-slotengine-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2, AgnusTimingMode.SlotEngine);
 	}
 
 	[Fact]
@@ -65,6 +84,9 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal("Custom Vanilla", profile.DisplayName);
 			Assert.Equal(512 * 1024, profile.ChipRamSize);
 			Assert.Equal(0, profile.ExpansionRamSize);
+			Assert.Equal(0, profile.RealFastRamSize);
+			Assert.Equal(M68kBackendKind.AccurateM68000, profile.CpuBackend);
+			Assert.Equal(AgnusTimingMode.SlotEngine, profile.AgnusTimingMode);
 		}
 		finally
 		{
@@ -90,6 +112,35 @@ public sealed class CopperScreenArchitectureTests
 		{
 			File.Delete(diskPath);
 		}
+	}
+
+	[Fact]
+	public void StartupArgumentParserCanOverrideAgnusTimingMode()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", "--agnus-timing", "legacy" },
+			AppContext.BaseDirectory);
+
+		Assert.Null(options.Error);
+		Assert.Equal(AgnusTimingMode.SlotEngine, options.Profile.AgnusTimingMode);
+		Assert.Equal(AgnusTimingMode.LegacyReservation, options.AgnusTimingModeOverride);
+	}
+
+	[Fact]
+	public void StartupArgumentParserCanOverrideCpuBackend()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", "--jit" },
+			AppContext.BaseDirectory);
+
+		Assert.Null(options.Error);
+		Assert.Equal(M68kBackendKind.AccurateM68000, options.Profile.CpuBackend);
+		Assert.Equal(M68kBackendKind.JitM68000, options.CpuBackendOverride);
+
+		var explicitOptions = CopperScreenStartupOptions.Parse(
+			new[] { "--cpu", "interpreter" },
+			AppContext.BaseDirectory);
+		Assert.Equal(M68kBackendKind.AccurateM68000, explicitOptions.CpuBackendOverride);
 	}
 
 	[Fact]
@@ -150,13 +201,47 @@ public sealed class CopperScreenArchitectureTests
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize,
 		int expectedFloppyDriveCount)
+		=> AssertProfile(id, expectedMachineProfile, expectedKickstartSource, expectedExpansionRamSize, expectedFloppyDriveCount, AgnusTimingMode.SlotEngine);
+
+	private static void AssertProfile(
+		string id,
+		AmigaMachineProfile expectedMachineProfile,
+		CopperScreenKickstartSource expectedKickstartSource,
+		int expectedExpansionRamSize,
+		int expectedFloppyDriveCount,
+		AgnusTimingMode expectedAgnusTimingMode)
+		=> AssertProfile(
+			id,
+			expectedMachineProfile,
+			expectedKickstartSource,
+			expectedExpansionRamSize,
+			expectedFloppyDriveCount,
+			expectedAgnusTimingMode,
+			M68kBackendKind.AccurateM68000,
+			0);
+
+	private static void AssertProfile(
+		string id,
+		AmigaMachineProfile expectedMachineProfile,
+		CopperScreenKickstartSource expectedKickstartSource,
+		int expectedExpansionRamSize,
+		int expectedFloppyDriveCount,
+		AgnusTimingMode expectedAgnusTimingMode,
+		M68kBackendKind expectedCpuBackend,
+		int expectedRealFastRamSize)
 	{
 		Assert.True(CopperScreenProfile.TryLoad(id, AppContext.BaseDirectory, out var profile, out var error), error);
 		Assert.Equal(expectedMachineProfile, profile.MachineProfile);
 		Assert.Equal(expectedKickstartSource, profile.KickstartSource);
 		Assert.Equal(512 * 1024, profile.ChipRamSize);
 		Assert.Equal(expectedExpansionRamSize, profile.ExpansionRamSize);
+		Assert.Equal(expectedRealFastRamSize, profile.RealFastRamSize);
+		Assert.Equal(expectedCpuBackend, profile.CpuBackend);
 		Assert.Equal(expectedFloppyDriveCount, profile.FloppyDriveCount);
+		Assert.Equal(expectedAgnusTimingMode, profile.AgnusTimingMode);
 		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);
+		Assert.Equal(expectedAgnusTimingMode, profile.CreateMachineOptions().AgnusTimingMode);
+		Assert.Equal(expectedCpuBackend, profile.CreateMachineOptions().CpuBackend);
+		Assert.Equal(expectedRealFastRamSize, profile.CreateMachineOptions().RealFastRamSize);
 	}
 }

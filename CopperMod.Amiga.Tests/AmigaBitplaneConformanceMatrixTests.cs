@@ -118,6 +118,9 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "OCS bitplane DMA enable inside DDF waits for next line":
                 OcsBitplaneDmaEnableInsideDdfWaitsForNextLine();
                 break;
+            case "Copper BPLCON0 disable before DDF suppresses same-line pixels":
+                CopperBplcon0DisableBeforeDdfSuppressesSameLinePixels();
+                break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for bitplane row '{row.Name}'.");
         }
@@ -158,6 +161,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("undocumented-ocs", "undocumented BPLCON2 values affect normal playfield"),
         Executable("undocumented-ocs", "undocumented BPLCON2 values affect dual playfield"),
         Executable("undocumented-ocs", "OCS bitplane DMA enable inside DDF waits for next line"),
+        Executable("dma-control", "Copper BPLCON0 disable before DDF suppresses same-line pixels"),
         Pending("undocumented-ocs", "BPLxDAT Denise latch and sprite-enable timing", "Requires a latch-level Denise model."),
         Pending("undocumented-ocs", "OCS 7-plane mode and HAM plus dual-playfield interaction", "Requires BPLxDAT latch and mode-combination modelling."),
         Pending("undocumented-ocs", "DDFSTRT sprite-slot stealing and refresh conflicts", "Requires a fuller Agnus DMA conflict model."),
@@ -594,6 +598,35 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY + 1));
+    }
+
+    private static void CopperBplcon0DisableBeforeDdfSuppressesSameLinePixels()
+    {
+        const uint CopperList = 0x4000;
+        var bus = CreateDisplayBus();
+        SetBitplanePointer(bus, 0, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1028, 0x8000);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x0038);
+        bus.WriteWord(0x00DFF100, 0x1000);
+
+        var disableLine = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + StandardY + 1;
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList, (ushort)((disableLine << 8) | 0x11));
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 2, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 4, 0x0100);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 6, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 8, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 10, 0xFFFE);
+        bus.WriteWord(0x00DFF080, (ushort)(CopperList >> 16));
+        bus.WriteWord(0x00DFF082, (ushort)CopperList);
+        bus.WriteWord(0x00DFF096, 0x8380);
+
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY + 1));
     }
 
     private static AmigaBus CreateDisplayBus()

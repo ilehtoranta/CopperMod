@@ -28,6 +28,7 @@ internal sealed class MainWindow : Window
 	private readonly TextBlock _ledFilterStatus;
 	private readonly TextBlock _cpuPcStatus;
 	private readonly TextBlock _lastPcStatus;
+	private readonly TextBlock _frameStatus;
 	private readonly TextBlock _perfStatus;
 	private readonly TextBlock[] _driveStatusTexts = new TextBlock[4];
 	private readonly Border[] _driveStatusBoxes = new Border[4];
@@ -78,6 +79,7 @@ internal sealed class MainWindow : Window
 		_ledFilterStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_cpuPcStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_lastPcStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
+		_frameStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_perfStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_benchPath = new TextBlock();
 		_benchDetails = new TextBlock();
@@ -504,6 +506,7 @@ internal sealed class MainWindow : Window
 		topRow.Children.Add(_ledFilterBox);
 		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
 		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
+		topRow.Children.Add(CreateIndicatorBox(_frameStatus, 92, "Published emulator frame counter"));
 		topRow.Children.Add(CreateIndicatorBox(_perfStatus, 76, "Emulation speed and frame timing"));
 
 		var drives = new StackPanel
@@ -999,6 +1002,7 @@ internal sealed class MainWindow : Window
 			state.AudioFilterEnabled ? Color.FromRgb(210, 255, 218) : Color.FromRgb(148, 154, 164));
 		SetText(_cpuPcStatus, $"PC {state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}");
 		SetText(_lastPcStatus, $"LP {state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}");
+		SetText(_frameStatus, $"F {state.FrameNumber}");
 		SetText(_perfStatus, $"Q{state.QueuedAudioBuffers} D{state.DroppedFrames}");
 
 		for (var driveIndex = 0; driveIndex < _driveStatusTexts.Length; driveIndex++)

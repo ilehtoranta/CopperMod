@@ -304,7 +304,9 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	[Fact]
 	public void BlitterDmaControlBusyZeroInterruptAndNastyModeMatchHrmControlExpectations()
 	{
-		var bus = new AmigaBus(expansionRamSize: 0x10000);
+		var bus = new AmigaBus(
+			expansionRamSize: 0x10000,
+			realFastRamSize: 0x10000);
 		for (var i = 0; i < 4; i++)
 		{
 			WriteWord(bus, SourceA + (uint)(i * 2), (ushort)(0x1234 + i));
@@ -320,7 +322,11 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		EnableBlitterDma(bus, nasty: true, cycle: 100);
 		var expansionCycle = 100L;
 		_ = bus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref expansionCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(100, expansionCycle);
+		Assert.True(expansionCycle > 100);
+
+		var realFastCycle = 100L;
+		_ = bus.ReadWord(AmigaConstants.A500RealFastRamBase, ref realFastCycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(100, realFastCycle);
 
 		var chipCycle = 100L;
 		_ = bus.ReadWord(0x00001000, ref chipCycle, AmigaBusAccessKind.CpuDataRead);

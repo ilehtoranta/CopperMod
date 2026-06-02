@@ -423,6 +423,37 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void MakeVPortHonorsRasInfoSourceOffsetsInBitplanePointers()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint rasInfo = 0x2380;
+		const uint bitMap = 0x23A0;
+		const uint plane = 0x3000;
+		bus.WriteWord(viewPort + 0x18, 16);
+		bus.WriteWord(viewPort + 0x1A, 1);
+		bus.WriteLong(viewPort + 0x24, rasInfo);
+		bus.WriteLong(rasInfo + 0x04, bitMap);
+		bus.WriteWord(rasInfo + 0x0A, 1);
+		bus.WriteWord(bitMap + 0x00, 2);
+		bus.WriteWord(bitMap + 0x02, 2);
+		bus.WriteByte(bitMap + 0x05, 1, 0);
+		bus.WriteLong(bitMap + 0x08, plane);
+		bus.WriteWord(plane, 0x0000);
+		bus.WriteWord(plane + 2, 0x8000);
+		var state = new M68kCpuState();
+		state.A[0] = view;
+		state.A[1] = viewPort;
+		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal(0x0000, ReadCopperMoveValue(bus, copperList, 0x00E0));
+		Assert.Equal(0x3002, ReadCopperMoveValue(bus, copperList, 0x00E2));
+	}
+
+	[Fact]
 	public void InitViewClearsKickstartViewHeaderOnly()
 	{
 		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
@@ -448,7 +479,10 @@ public sealed class AmigaBootMemoryTests
 
 	private static AmigaMachine StartBootShim(AmigaMachineProfile profile)
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(profile));
+		var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(profile)
+			.WithAgnusTimingMode(AgnusTimingMode.LegacyReservation)
+			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
 		return machine;
@@ -674,6 +708,26 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(address + 2, color);
 		bus.WriteWord(address + 4, 0xFFFF);
 		bus.WriteWord(address + 6, 0xFFFE);
+	}
+
+	private static ushort ReadCopperMoveValue(AmigaBus bus, uint copperList, ushort register)
+	{
+		for (var offset = 0u; offset < 0x100; offset += 4)
+		{
+			var first = bus.ReadWord(copperList + offset);
+			var second = bus.ReadWord(copperList + offset + 2);
+			if (first == 0xFFFF && second == 0xFFFE)
+			{
+				break;
+			}
+
+			if ((first & 0x01FE) == register)
+			{
+				return second;
+			}
+		}
+
+		throw new InvalidOperationException($"Copper MOVE ${register:X4} was not emitted.");
 	}
 
 	private static void WriteMinimalViewPort(AmigaBus bus, uint viewPort)
