@@ -16,6 +16,8 @@ namespace CopperScreen;
 internal sealed class MainWindow : Window
 {
 	private const int StatusUpdateIntervalMilliseconds = 250;
+	private const double DebuggerPanelWidth = 1120;
+	private const double DebuggerLeftColumnWidth = 500;
 	private long _presentedFrames;
 	private readonly CopperScreenRuntime _runtime;
 	private readonly CopperBenchViewModel _bench;
@@ -719,7 +721,7 @@ internal sealed class MainWindow : Window
 		{
 			ColumnDefinitions =
 			{
-				new ColumnDefinition(new GridLength(370)),
+				new ColumnDefinition(new GridLength(DebuggerLeftColumnWidth)),
 				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
 			},
 			RowDefinitions =
@@ -787,14 +789,14 @@ internal sealed class MainWindow : Window
 
 		return new Border
 		{
-			Width = 900,
-			Margin = new Thickness(12, 78, 0, 12),
+			MaxWidth = DebuggerPanelWidth,
+			Margin = new Thickness(12, 78, 12, 12),
 			Padding = new Thickness(12),
 			CornerRadius = new CornerRadius(6),
 			Background = new SolidColorBrush(Color.FromArgb(242, 18, 20, 25)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(188, 103, 72)),
 			BorderThickness = new Thickness(1),
-			HorizontalAlignment = HorizontalAlignment.Left,
+			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Stretch,
 			IsVisible = false,
 			Child = panel
@@ -950,7 +952,7 @@ internal sealed class MainWindow : Window
 			_benchPanel.Margin = new Thickness(12, 78, 0, 12);
 			Grid.SetRow(_debuggerPanel, 0);
 			Grid.SetRowSpan(_debuggerPanel, 2);
-			_debuggerPanel.Margin = new Thickness(12, 78, 0, 12);
+			_debuggerPanel.Margin = new Thickness(12, 78, 12, 12);
 			return;
 		}
 
@@ -961,7 +963,7 @@ internal sealed class MainWindow : Window
 		_benchPanel.Margin = new Thickness(12, 12, 0, 12);
 		Grid.SetRow(_debuggerPanel, 1);
 		Grid.SetRowSpan(_debuggerPanel, 1);
-		_debuggerPanel.Margin = new Thickness(12, 12, 0, 12);
+		_debuggerPanel.Margin = new Thickness(12, 12, 12, 12);
 	}
 
 	private void ToggleOverscan()
