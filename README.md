@@ -140,8 +140,9 @@ CopperScreen/
 ```
 
 File extensions are ignored when matching the stems above. Samples are decoded
-with NAudio, so supported formats depend on the host. Missing individual files
-are fine; a missing or empty pack disables drive sounds with a status message.
+with NAudio, so supported formats depend on the host. In `samples` mode,
+missing individual files are fine; a missing or empty pack disables drive sounds
+with a status message.
 
 Profile configuration:
 
@@ -149,6 +150,7 @@ Profile configuration:
 "audio": {
   "floppyDriveSounds": {
     "enabled": false,
+    "mode": "synthetic",
     "soundPack": "default",
     "volume": 0.25
   }
@@ -158,11 +160,14 @@ Profile configuration:
 Command-line overrides:
 
 ```powershell
-dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-pack default --floppy-sound-volume 0.25 "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-mode synthetic --floppy-sound-volume 0.25 "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-mode samples --floppy-sound-pack default --floppy-sound-volume 0.25 "path\to\disk.adf"
 ```
 
-`soundPack` resolves as `CopperScreen\Sounds\Floppy\<name>` unless it is an
-absolute path or an explicit relative path such as `.\MyPack`.
+`mode` defaults to `synthetic` when drive sounds are enabled. Synthetic mode
+does not require sample files. `samples` mode uses `soundPack`, which resolves
+as `CopperScreen\Sounds\Floppy\<name>` unless it is an absolute path or an
+explicit relative path such as `.\MyPack`.
 
 ## Website
 
@@ -181,6 +186,7 @@ dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.m
 
 WAV output is 32-bit float. PCM output is raw interleaved little-endian Float32.
 MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
+See [CopperMod.Tools README](CopperMod.Tools/README.md) for the full command reference.
 
 ## Binary Releases
 

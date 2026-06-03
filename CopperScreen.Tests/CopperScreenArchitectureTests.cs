@@ -88,6 +88,7 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal(M68kBackendKind.AccurateM68000, profile.CpuBackend);
 			Assert.Equal(AgnusTimingMode.SlotEngine, profile.AgnusTimingMode);
 			Assert.False(profile.FloppyDriveAudio.Enabled);
+			Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
 		}
@@ -115,6 +116,7 @@ public sealed class CopperScreenArchitectureTests
 			  "audio": {
 			    "floppyDriveSounds": {
 			      "enabled": true,
+			      "mode": "samples",
 			      "soundPack": "bench-pack",
 			      "volume": 0.6
 			    }
@@ -130,6 +132,7 @@ public sealed class CopperScreenArchitectureTests
 			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
 
 			Assert.True(profile.FloppyDriveAudio.Enabled);
+			Assert.Equal(FloppyDriveAudioMode.Samples, profile.FloppyDriveAudio.Mode);
 			Assert.Equal("bench-pack", profile.FloppyDriveAudio.SoundPack);
 			Assert.Equal(0.6f, profile.FloppyDriveAudio.Volume);
 		}
@@ -200,6 +203,8 @@ public sealed class CopperScreenArchitectureTests
 				"on",
 				"--floppy-sound-pack",
 				".\\Sounds\\CustomFloppy",
+				"--floppy-sound-mode",
+				"samples",
 				"--floppy-sound-volume",
 				"0.75"
 			},
@@ -207,6 +212,7 @@ public sealed class CopperScreenArchitectureTests
 
 		Assert.Null(options.Error);
 		Assert.True(options.FloppyDriveAudio.Enabled);
+		Assert.Equal(FloppyDriveAudioMode.Samples, options.FloppyDriveAudio.Mode);
 		Assert.Equal(".\\Sounds\\CustomFloppy", options.FloppyDriveAudio.SoundPack);
 		Assert.Equal(0.75f, options.FloppyDriveAudio.Volume);
 
@@ -215,7 +221,18 @@ public sealed class CopperScreenArchitectureTests
 			AppContext.BaseDirectory);
 		Assert.Null(disabled.Error);
 		Assert.False(disabled.FloppyDriveAudio.Enabled);
+		Assert.Equal(FloppyDriveAudioMode.Synthetic, disabled.FloppyDriveAudio.Mode);
 		Assert.Equal(1f, disabled.FloppyDriveAudio.Volume);
+	}
+
+	[Fact]
+	public void StartupArgumentParserRejectsUnknownFloppyDriveAudioMode()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", "--floppy-sound-mode", "vinyl" },
+			AppContext.BaseDirectory);
+
+		Assert.Contains("Unsupported floppy sound mode", options.Error);
 	}
 
 	[Fact]
@@ -315,6 +332,7 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(expectedFloppyDriveCount, profile.FloppyDriveCount);
 		Assert.Equal(expectedAgnusTimingMode, profile.AgnusTimingMode);
 		Assert.False(profile.FloppyDriveAudio.Enabled);
+		Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
 		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);

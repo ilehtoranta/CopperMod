@@ -2,12 +2,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
+using System.Text;
 
 namespace CopperScreen;
 
@@ -22,6 +24,7 @@ internal sealed class MainWindow : Window
 	private readonly Grid _root;
 	private readonly Border _toolbar;
 	private readonly Border _benchPanel;
+	private readonly Border _debuggerPanel;
 	private readonly TextBlock _diskStatus;
 	private readonly TextBlock _ledFilterStatus;
 	private readonly TextBlock _cpuPcStatus;
@@ -34,6 +37,12 @@ internal sealed class MainWindow : Window
 	private Border _ledFilterBox = null!;
 	private readonly TextBlock _benchPath;
 	private readonly TextBlock _benchDetails;
+	private readonly TextBlock _debuggerTitle;
+	private readonly TextBlock _debuggerMessage;
+	private readonly TextBlock _debuggerRegisters;
+	private readonly TextBlock _debuggerDisassembly;
+	private readonly TextBlock _debuggerStack;
+	private readonly TextBlock _debuggerDevices;
 	private readonly Button _benchToggleButton;
 	private readonly Button _pauseButton;
 	private readonly Button _numpadModeButton;
@@ -50,6 +59,7 @@ internal sealed class MainWindow : Window
 	private bool _showFullOverscan = true;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
+	private CopperScreenDebugSnapshot? _visibleDebugSnapshot;
 
 	public MainWindow(string[] args)
 	{
@@ -78,6 +88,12 @@ internal sealed class MainWindow : Window
 		_perfStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
 		_benchPath = new TextBlock();
 		_benchDetails = new TextBlock();
+		_debuggerTitle = new TextBlock();
+		_debuggerMessage = new TextBlock();
+		_debuggerRegisters = new TextBlock();
+		_debuggerDisassembly = new TextBlock();
+		_debuggerStack = new TextBlock();
+		_debuggerDevices = new TextBlock();
 		_benchToggleButton = CreateToolbarButton("Bench", ToggleCopperBench, "Show or hide the CopperBench overlay");
 		_pauseButton = CreateToolbarButton("Pause", TogglePause, "Pause or resume emulation");
 		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode, "Toggle numpad between joystick emulation and Amiga numpad keys");
@@ -93,13 +109,16 @@ internal sealed class MainWindow : Window
 			}
 		};
 		_benchPanel = CreateCopperBenchPanel();
+		_debuggerPanel = CreateDebuggerPanel();
 		_toolbar = CreateToolbar();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
+		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
+		RefreshDebuggerUi(_latestState.DebugSnapshot);
 		_timer = new DispatcherTimer(TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds), DispatcherPriority.Render, (_, _) => PresentLatestFrame());
 		Opened += (_, _) =>
 		{
@@ -166,6 +185,7 @@ internal sealed class MainWindow : Window
 
 		var state = frameLease.State;
 		_latestState = state;
+		RefreshDebuggerUi(state.DebugSnapshot);
 		if (state.FrameNumber != _presentedFrames)
 		{
 			_presenter.Update(frameLease.Framebuffer);
@@ -194,7 +214,8 @@ internal sealed class MainWindow : Window
 	private string BuildCrashLogState(CopperScreenState state)
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
+		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -646,6 +667,151 @@ internal sealed class MainWindow : Window
 		};
 	}
 
+	private Border CreateDebuggerPanel()
+	{
+		var panel = new Grid
+		{
+			RowDefinitions =
+			{
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(new GridLength(1, GridUnitType.Star)),
+				new RowDefinition(GridLength.Auto)
+			}
+		};
+
+		_debuggerTitle.Text = "Debugger";
+		_debuggerTitle.FontSize = 18;
+		_debuggerTitle.FontWeight = FontWeight.SemiBold;
+		_debuggerTitle.Foreground = Brushes.White;
+		_debuggerTitle.Margin = new Thickness(0, 0, 0, 6);
+		Grid.SetRow(_debuggerTitle, 0);
+		panel.Children.Add(_debuggerTitle);
+
+		_debuggerMessage.Foreground = new SolidColorBrush(Color.FromRgb(242, 208, 161));
+		_debuggerMessage.TextWrapping = TextWrapping.Wrap;
+		_debuggerMessage.Margin = new Thickness(0, 0, 0, 10);
+		Grid.SetRow(_debuggerMessage, 1);
+		panel.Children.Add(_debuggerMessage);
+
+		var details = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(370)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			},
+			RowDefinitions =
+			{
+				new RowDefinition(new GridLength(1, GridUnitType.Star)),
+				new RowDefinition(new GridLength(160))
+			}
+		};
+
+		_debuggerRegisters.FontFamily = FontFamily.Parse("Consolas");
+		_debuggerRegisters.FontSize = 12;
+		_debuggerRegisters.Foreground = new SolidColorBrush(Color.FromRgb(224, 231, 241));
+		_debuggerRegisters.TextWrapping = TextWrapping.NoWrap;
+		var registerPane = CreateDebuggerPane(_debuggerRegisters);
+		Grid.SetColumn(registerPane, 0);
+		Grid.SetRow(registerPane, 0);
+		details.Children.Add(registerPane);
+
+		_debuggerDisassembly.FontFamily = FontFamily.Parse("Consolas");
+		_debuggerDisassembly.FontSize = 12;
+		_debuggerDisassembly.Foreground = new SolidColorBrush(Color.FromRgb(226, 238, 216));
+		_debuggerDisassembly.TextWrapping = TextWrapping.NoWrap;
+		var disassemblyPane = CreateDebuggerPane(_debuggerDisassembly);
+		disassemblyPane.Margin = new Thickness(10, 0, 0, 0);
+		Grid.SetColumn(disassemblyPane, 1);
+		Grid.SetRow(disassemblyPane, 0);
+		details.Children.Add(disassemblyPane);
+
+		_debuggerDevices.FontFamily = FontFamily.Parse("Consolas");
+		_debuggerDevices.FontSize = 12;
+		_debuggerDevices.Foreground = new SolidColorBrush(Color.FromRgb(214, 224, 238));
+		_debuggerDevices.TextWrapping = TextWrapping.Wrap;
+		var devicePane = CreateDebuggerPane(_debuggerDevices);
+		devicePane.Margin = new Thickness(0, 10, 0, 0);
+		Grid.SetColumn(devicePane, 0);
+		Grid.SetRow(devicePane, 1);
+		details.Children.Add(devicePane);
+
+		_debuggerStack.FontFamily = FontFamily.Parse("Consolas");
+		_debuggerStack.FontSize = 12;
+		_debuggerStack.Foreground = new SolidColorBrush(Color.FromRgb(218, 223, 232));
+		_debuggerStack.TextWrapping = TextWrapping.NoWrap;
+		var stackPane = CreateDebuggerPane(_debuggerStack);
+		stackPane.Margin = new Thickness(10, 10, 0, 0);
+		Grid.SetColumn(stackPane, 1);
+		Grid.SetRow(stackPane, 1);
+		details.Children.Add(stackPane);
+
+		Grid.SetRow(details, 2);
+		panel.Children.Add(details);
+
+		var commands = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 6,
+			Margin = new Thickness(0, 10, 0, 0)
+		};
+		commands.Children.Add(CreatePanelButton("Copy report", CopyDebuggerReport));
+		commands.Children.Add(CreatePanelButton("Reset", async () =>
+		{
+			await ResetRuntimeAsync().ConfigureAwait(true);
+		}));
+		Grid.SetRow(commands, 3);
+		panel.Children.Add(commands);
+
+		return new Border
+		{
+			Width = 900,
+			Margin = new Thickness(12, 78, 0, 12),
+			Padding = new Thickness(12),
+			CornerRadius = new CornerRadius(6),
+			Background = new SolidColorBrush(Color.FromArgb(242, 18, 20, 25)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(188, 103, 72)),
+			BorderThickness = new Thickness(1),
+			HorizontalAlignment = HorizontalAlignment.Left,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			IsVisible = false,
+			Child = panel
+		};
+	}
+
+	private static Border CreateDebuggerPane(TextBlock content)
+	{
+		content.Margin = new Thickness(8);
+		return new Border
+		{
+			Background = new SolidColorBrush(Color.FromArgb(230, 8, 10, 14)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(56, 66, 82)),
+			BorderThickness = new Thickness(1),
+			Child = new ScrollViewer
+			{
+				VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+				HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+				Content = content
+			}
+		};
+	}
+
+	private void CopyDebuggerReport()
+	{
+		var snapshot = _visibleDebugSnapshot;
+		if (snapshot == null)
+		{
+			return;
+		}
+
+		var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+		if (clipboard != null)
+		{
+			_ = clipboard.SetTextAsync(snapshot.ToReport());
+		}
+	}
+
 	private static Button CreateToolbarButton(string text, Action action, string tooltip)
 	{
 		var button = new Button
@@ -761,6 +927,9 @@ internal sealed class MainWindow : Window
 			Grid.SetRow(_benchPanel, 0);
 			Grid.SetRowSpan(_benchPanel, 2);
 			_benchPanel.Margin = new Thickness(12, 78, 0, 12);
+			Grid.SetRow(_debuggerPanel, 0);
+			Grid.SetRowSpan(_debuggerPanel, 2);
+			_debuggerPanel.Margin = new Thickness(12, 78, 0, 12);
 			return;
 		}
 
@@ -769,6 +938,9 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(_benchPanel, 1);
 		Grid.SetRowSpan(_benchPanel, 1);
 		_benchPanel.Margin = new Thickness(12, 12, 0, 12);
+		Grid.SetRow(_debuggerPanel, 1);
+		Grid.SetRowSpan(_debuggerPanel, 1);
+		_debuggerPanel.Margin = new Thickness(12, 12, 0, 12);
 	}
 
 	private void ToggleOverscan()
@@ -862,6 +1034,7 @@ internal sealed class MainWindow : Window
 		}
 
 		_bench.SetStatusMessage(result.Message);
+		RefreshDebuggerUi(result.State.DebugSnapshot);
 		RefreshCopperBenchUi();
 		PresentFrame(catchUpAudio: false);
 	}
@@ -910,7 +1083,7 @@ internal sealed class MainWindow : Window
 	private void RefreshCopperBenchUi()
 	{
 		ApplyWindowPresentationMode();
-		_benchPanel.IsVisible = _bench.IsOverlayVisible;
+		_benchPanel.IsVisible = _bench.IsOverlayVisible && _visibleDebugSnapshot == null;
 		_benchToggleButton.Content = _bench.IsOverlayVisible ? "Hide" : "Bench";
 		_pauseButton.Content = _latestState.IsPaused ? "Run" : "Pause";
 		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "N:Joy" : "N:Key";
@@ -920,6 +1093,68 @@ internal sealed class MainWindow : Window
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
 		UpdateToolbarStatus();
+	}
+
+	private void RefreshDebuggerUi(CopperScreenDebugSnapshot? snapshot)
+	{
+		ApplyWindowPresentationMode();
+		if (ReferenceEquals(_visibleDebugSnapshot, snapshot))
+		{
+			_debuggerPanel.IsVisible = snapshot != null;
+			_benchPanel.IsVisible = _bench.IsOverlayVisible && snapshot == null;
+			return;
+		}
+
+		_visibleDebugSnapshot = snapshot;
+		_debuggerPanel.IsVisible = snapshot != null;
+		_benchPanel.IsVisible = _bench.IsOverlayVisible && snapshot == null;
+		if (snapshot == null)
+		{
+			_debuggerTitle.Text = "Debugger";
+			_debuggerMessage.Text = string.Empty;
+			_debuggerRegisters.Text = string.Empty;
+			_debuggerDisassembly.Text = string.Empty;
+			_debuggerStack.Text = string.Empty;
+			_debuggerDevices.Text = string.Empty;
+			return;
+		}
+
+		_debuggerTitle.Text = "Debugger - " + snapshot.ReasonCode;
+		_debuggerMessage.Text = snapshot.Message;
+		_debuggerRegisters.Text = snapshot.Cpu.FormatRegisters();
+		_debuggerDisassembly.Text = string.Join(Environment.NewLine, snapshot.Disassembly);
+		_debuggerStack.Text = string.Join(Environment.NewLine, snapshot.StackWords);
+		_debuggerDevices.Text = FormatDebuggerDevices(snapshot);
+	}
+
+	private static string FormatDebuggerDevices(CopperScreenDebugSnapshot snapshot)
+	{
+		var builder = new StringBuilder();
+		builder.AppendLine($"Profile: {snapshot.ProfileName}");
+		builder.AppendLine($"CPU: {snapshot.CpuBackendName}");
+		builder.AppendLine($"Frame: {snapshot.FrameNumber}");
+		builder.AppendLine($"Disk: {snapshot.DiskName}");
+		if (!string.IsNullOrWhiteSpace(snapshot.DiskPath))
+		{
+			builder.AppendLine(snapshot.DiskPath);
+		}
+
+		builder.AppendLine();
+		for (var i = 0; i < snapshot.Drives.Length; i++)
+		{
+			builder.AppendLine(CopperScreenDebugSnapshot.FormatDrive(snapshot.Drives[i]));
+		}
+
+		if (snapshot.Diagnostics.Length > 0)
+		{
+			builder.AppendLine();
+			for (var i = 0; i < snapshot.Diagnostics.Length; i++)
+			{
+				builder.AppendLine(snapshot.Diagnostics[i]);
+			}
+		}
+
+		return builder.ToString();
 	}
 
 	private void RefreshEntryList()

@@ -36,6 +36,7 @@ internal readonly record struct CopperScreenState(
 	string? DiskPath,
 	CopperScreenCpuState Cpu,
 	CopperScreenDriveState[] Drives,
+	CopperScreenDebugSnapshot? DebugSnapshot,
 	string StatusText,
 	bool IsPaused,
 	bool IsWorkbenchHandoffPending,
@@ -534,8 +535,22 @@ internal sealed class CopperScreenRuntime : IDisposable
 				}
 
 			var startTimestamp = Stopwatch.GetTimestamp();
-			_emulator.RenderNextFrame();
-			var audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+			int audioFrames;
+			try
+			{
+				_emulator.RenderNextFrame();
+				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+			}
+			catch (Exception ex)
+			{
+				CopperScreenCrashLog.WriteException("CopperScreenRuntime.RenderFrames", ex, ex);
+				_emulator.CaptureFatalException(ex);
+				_audioBuffer.AsSpan().Clear();
+				_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+				PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? queuedAudioBuffers);
+				return;
+			}
+
 			if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)
 			{
 				_emulator.CaptureDriveStates(_floppyDriveAudioStates);
@@ -614,6 +629,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_emulator.DiskPath,
 			_emulator.CpuState,
 			CaptureDriveStates(),
+			_emulator.DebugSnapshot,
 			_emulator.StatusText,
 			_emulator.IsPaused,
 			_emulator.IsWorkbenchHandoffPending,

@@ -65,6 +65,7 @@ internal sealed class CopperScreenStartupOptions
 		AgnusTimingMode? agnusTimingModeOverride = null;
 		M68kBackendKind? cpuBackendOverride = null;
 		bool? floppySoundsEnabledOverride = null;
+		FloppyDriveAudioMode? floppySoundModeOverride = null;
 		string? floppySoundPackOverride = null;
 		float? floppySoundVolumeOverride = null;
 
@@ -149,6 +150,20 @@ internal sealed class CopperScreenStartupOptions
 			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sound-pack", null, out var floppySoundPack))
 			{
 				floppySoundPackOverride = floppySoundPack;
+				continue;
+			}
+
+			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sound-mode", null, out var floppySoundMode))
+			{
+				if (FloppyDriveAudioOptions.TryParseMode(floppySoundMode, out var mode))
+				{
+					floppySoundModeOverride = mode;
+				}
+				else
+				{
+					error ??= $"Unsupported floppy sound mode '{floppySoundMode}'. Use synthetic or samples.";
+				}
+
 				continue;
 			}
 
@@ -241,6 +256,7 @@ internal sealed class CopperScreenStartupOptions
 
 		var floppyDriveAudio = profile.FloppyDriveAudio.WithOverrides(
 			floppySoundsEnabledOverride,
+			floppySoundModeOverride,
 			floppySoundPackOverride,
 			floppySoundVolumeOverride);
 		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, agnusTimingModeOverride, cpuBackendOverride, floppyDriveAudio, baseDirectory, error);

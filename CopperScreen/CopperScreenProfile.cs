@@ -367,10 +367,21 @@ internal sealed class CopperScreenProfile
 
 		return new FloppyDriveAudioOptions(
 			config.Enabled,
+			ParseFloppyDriveAudioMode(config.Mode),
 			string.IsNullOrWhiteSpace(config.SoundPack)
 				? FloppyDriveAudioOptions.DefaultSoundPack
 				: config.SoundPack.Trim(),
 			FloppyDriveAudioOptions.ClampVolume(config.Volume ?? FloppyDriveAudioOptions.DefaultVolume));
+	}
+
+	private static FloppyDriveAudioMode ParseFloppyDriveAudioMode(string? value)
+	{
+		if (FloppyDriveAudioOptions.TryParseMode(value, out var mode))
+		{
+			return mode;
+		}
+
+		throw new InvalidOperationException($"Unsupported floppy drive sound mode '{value}'.");
 	}
 
 	private static CopperScreenProfile CreateFallbackDefault()
@@ -441,6 +452,8 @@ internal sealed class CopperScreenProfile
 	private sealed class FloppyDriveSoundFile
 	{
 		public bool Enabled { get; set; }
+
+		public string? Mode { get; set; }
 
 		public string? SoundPack { get; set; }
 

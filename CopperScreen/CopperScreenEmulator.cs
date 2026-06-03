@@ -54,6 +54,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly string?[] _driveDiskPaths = new string?[4];
 	private readonly string[] _driveDiskNames = ["No disk", "No disk", "No disk", "No disk"];
 	private string _diskName;
+	private CopperScreenDebugSnapshot? _debugSnapshot;
 
 	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
 	{
@@ -89,6 +90,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public string StatusText { get; private set; }
 
 	public bool IsPaused { get; private set; }
+
+	public CopperScreenDebugSnapshot? DebugSnapshot => _debugSnapshot;
 
 	public bool IsWorkbenchHandoffPending => _workbenchHandoffPending;
 
@@ -406,6 +409,15 @@ internal sealed class CopperScreenEmulator : IDisposable
 		StatusText = statusText;
 	}
 
+	internal void CaptureFatalException(Exception exception)
+	{
+		ArgumentNullException.ThrowIfNull(exception);
+		CaptureFatalStop(
+			"COPPERSCREEN_RUNTIME_FAULT",
+			exception.Message,
+			[exception.ToString()]);
+	}
+
 	private static string? ResolveAdjacentDiskPath(string? currentDiskPath, int delta)
 	{
 		if (string.IsNullOrWhiteSpace(currentDiskPath))
@@ -509,10 +521,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public void Reset()
 	{
+		var wasDebuggerStopped = _debugSnapshot != null;
 		_bootAttempted = false;
 		_previousInterlaceFrameValid = false;
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
+		_debugSnapshot = null;
 		_firePulseFrames = 0;
 		_pendingDiskImage = null;
 		_pendingDiskPath = null;
@@ -522,11 +536,23 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_frameAudio.AsSpan().Clear();
 		_machine.ResetHardware();
 		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
+		if (wasDebuggerStopped)
+		{
+			IsPaused = false;
+		}
+
 		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
 	}
 
 	public bool TogglePaused()
 	{
+		if (_debugSnapshot != null)
+		{
+			IsPaused = true;
+			StatusText = "debugger stopped: reset to continue";
+			return true;
+		}
+
 		if (_workbenchHandoffPending && IsPaused)
 		{
 			StatusText = "start a Workbench item from CopperBench";
@@ -540,6 +566,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public void SetPaused(bool paused)
 	{
+		if (_debugSnapshot != null && !paused)
+		{
+			StatusText = "debugger stopped: reset to continue";
+			IsPaused = true;
+			return;
+		}
+
 		if (_workbenchHandoffPending && !paused)
 		{
 			StatusText = "start a Workbench item from CopperBench";
@@ -1037,6 +1070,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return false;
 		}
 
+		var fatalDiagnostic = GetFirstFatalDiagnostic(result.Diagnostics);
+		CaptureFatalStop(
+			fatalDiagnostic.Code,
+			fatalDiagnostic.Message,
+			FormatDiagnostics(result.Diagnostics));
 		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
 		return true;
 	}
@@ -1069,6 +1107,108 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private static bool IsFatalDiagnostic(string code)
 	{
 		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED" or "AMIGA_BOOT_NULL_PC";
+	}
+
+	private static AmigaBootDiagnostic GetFirstFatalDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			if (IsFatalDiagnostic(diagnostics[i].Code))
+			{
+				return diagnostics[i];
+			}
+		}
+
+		return new AmigaBootDiagnostic("AMIGA_BOOT_FAULT", "Unknown fatal boot diagnostic.");
+	}
+
+	private static string[] FormatDiagnostics(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		var formatted = new string[diagnostics.Count];
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			formatted[i] = diagnostics[i].Code + ": " + diagnostics[i].Message;
+		}
+
+		return formatted;
+	}
+
+	private void CaptureFatalStop(string reasonCode, string message, string[] diagnostics)
+	{
+		if (_debugSnapshot != null)
+		{
+			return;
+		}
+
+		_frameAudio.AsSpan().Clear();
+		_previousInterlaceFrameValid = false;
+		IsPaused = true;
+		StatusText = reasonCode + ": " + message;
+		_debugSnapshot = CreateDebugSnapshot(reasonCode, message, diagnostics);
+		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
+	}
+
+	private CopperScreenDebugSnapshot CreateDebugSnapshot(string reasonCode, string message, string[] diagnostics)
+	{
+		var cpu = _machine.Cpu.State;
+		var dataRegisters = new uint[8];
+		var addressRegisters = new uint[8];
+		Array.Copy(cpu.D, dataRegisters, dataRegisters.Length);
+		Array.Copy(cpu.A, addressRegisters, addressRegisters.Length);
+		var cpuSnapshot = new CopperScreenDebugCpuSnapshot(
+			cpu.ProgramCounter,
+			cpu.LastInstructionProgramCounter,
+			cpu.LastOpcode,
+			cpu.StatusRegister,
+			cpu.UserStackPointer,
+			cpu.SupervisorStackPointer,
+			cpu.Cycles,
+			cpu.Halted,
+			cpu.Stopped,
+			dataRegisters,
+			addressRegisters);
+		return new CopperScreenDebugSnapshot(
+			DateTimeOffset.Now,
+			reasonCode,
+			message,
+			ProfileName,
+			CpuBackendName,
+			DiskName,
+			DiskPath,
+			_targetCycle / PalFrameCycles,
+			cpuSnapshot,
+			CaptureDriveStates(),
+			diagnostics,
+			M68kMiniDisassembler.Disassemble(cpu.ProgramCounter, 16, TryReadHostWord),
+			CaptureStackWords(cpu.A[7], 16));
+	}
+
+	private string[] CaptureStackWords(uint stackPointer, int wordCount)
+	{
+		var lines = new string[wordCount];
+		for (var i = 0; i < lines.Length; i++)
+		{
+			var address = (stackPointer + (uint)(i * 2)) & 0x00FF_FFFF;
+			lines[i] = TryReadHostWord(address, out var value)
+				? $"{address:X6}: {value:X4}"
+				: $"{address:X6}: ????";
+		}
+
+		return lines;
+	}
+
+	private bool TryReadHostWord(uint address, out ushort value)
+	{
+		try
+		{
+			value = _machine.Bus.ReadHostWord(address & 0x00FF_FFFF);
+			return true;
+		}
+		catch (Exception)
+		{
+			value = 0;
+			return false;
+		}
 	}
 
 }
