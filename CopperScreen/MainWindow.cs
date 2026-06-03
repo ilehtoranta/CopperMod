@@ -15,7 +15,6 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
-	private const int DisplayTimerIntervalMilliseconds = 20;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private long _presentedFrames;
 	private readonly CopperScreenRuntime _runtime;
@@ -49,7 +48,6 @@ internal sealed class MainWindow : Window
 	private readonly Button _fullscreenButton;
 	private readonly Button _overscanButton;
 	private readonly StackPanel _entryList;
-	private readonly DispatcherTimer _timer;
 	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
 	private CopperScreenState _latestState;
@@ -60,6 +58,8 @@ internal sealed class MainWindow : Window
 	private double? _lastMouseX;
 	private double? _lastMouseY;
 	private CopperScreenDebugSnapshot? _visibleDebugSnapshot;
+	private int _presentationQueued;
+	private bool _isClosed;
 
 	public MainWindow(string[] args)
 	{
@@ -119,13 +119,12 @@ internal sealed class MainWindow : Window
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
 		RefreshDebuggerUi(_latestState.DebugSnapshot);
-		_timer = new DispatcherTimer(TimeSpan.FromMilliseconds(DisplayTimerIntervalMilliseconds), DispatcherPriority.Render, (_, _) => PresentLatestFrame());
+		_runtime.FramePublished += QueueFramePresentation;
 		Opened += (_, _) =>
 		{
 			_presenter.Focus();
 			_runtime.Start();
 			PresentLatestFrame(forceStatus: true);
-			_timer.Start();
 		};
 		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
 		_presenter.PointerPressed += (_, args) =>
@@ -158,7 +157,8 @@ internal sealed class MainWindow : Window
 		Deactivated += (_, _) => ReleaseInteractiveInput();
 		Closed += (_, _) =>
 		{
-			_timer.Stop();
+			_isClosed = true;
+			_runtime.FramePublished -= QueueFramePresentation;
 			_runtime.Dispose();
 		};
 	}
@@ -173,6 +173,27 @@ internal sealed class MainWindow : Window
 	{
 		_ = catchUpAudio;
 		PresentLatestFrame(forceStatus: true);
+	}
+
+	private void QueueFramePresentation()
+	{
+		if (_isClosed || Interlocked.Exchange(ref _presentationQueued, 1) != 0)
+		{
+			return;
+		}
+
+		Dispatcher.UIThread.Post(PresentQueuedFrame, DispatcherPriority.Render);
+	}
+
+	private void PresentQueuedFrame()
+	{
+		Interlocked.Exchange(ref _presentationQueued, 0);
+		if (_isClosed)
+		{
+			return;
+		}
+
+		PresentLatestFrame();
 	}
 
 	private void PresentLatestFrame(bool forceStatus = false)
