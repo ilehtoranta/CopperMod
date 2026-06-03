@@ -186,6 +186,23 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
+	public void NoiseCombinedWithOtherWaveformsTraceLocksAndSilencesNoise()
+	{
+		var chip = CreateTracedChip(out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
+
+		chip.Render(1);
+
+		var frame = Frame(trace, cycle: 1, voice: 0);
+		Assert.Equal(0xA0, frame.Waveform);
+		Assert.Equal(0u, frame.NoiseShiftRegister);
+		Assert.Equal(0u, frame.NoiseDac);
+		Assert.Equal(0u, frame.WaveformDac);
+		Assert.False(frame.NoiseUsesPostShiftRegister);
+		Assert.Equal(0.0, frame.WaveformOutput);
+	}
+
+	[Fact]
 	public void CombinedWaveformsTraceBitwiseDacCombination()
 	{
 		var chip = CreateTracedChip(out var trace);

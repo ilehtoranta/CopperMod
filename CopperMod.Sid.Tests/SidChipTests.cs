@@ -425,6 +425,50 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void TestBitResetsNoiseShiftRegister()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x80);
+		chip.Render(16);
+
+		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Write(0x04, 0x08);
+		chip.Render(1);
+
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void NoiseCombinedWithOtherWaveformsLocksUntilTestReset(bool traced)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		if (traced)
+		{
+			chip.Trace = new SidCycleTrace();
+		}
+
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
+
+		chip.Render(1);
+
+		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Write(0x04, 0x80);
+		chip.Render(1);
+
+		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Write(0x04, 0x88);
+		chip.Render(1);
+
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
 	public void NoiseDacUsesDocumentedOutputBits()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);

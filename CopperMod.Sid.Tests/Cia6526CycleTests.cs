@@ -180,21 +180,97 @@ public sealed class Cia6526CycleTests
 	[Fact]
 	public void TodHoursReadLatchesTenthsUntilTenthsReadReleasesLatch()
 	{
-		var cia = CreateCia(cpuCyclesPerSecond: 10);
-		cia.Write(0x08, 0x01);
+		var cia = CreateCia(cpuCyclesPerSecond: 60, todInputFrequencyHz: 60);
 		cia.Write(0x0B, 0x01);
+		cia.Write(0x08, 0x01);
+		Tick(cia, 6);
 
 		Assert.Equal(0x01, cia.Read(0x0B));
-		cia.Tick();
+		Tick(cia, 6);
+
+		Assert.Equal(0x02, cia.Read(0x08));
+		Assert.Equal(0x03, cia.Read(0x08));
+	}
+
+	[Fact]
+	public void TodHoursWriteStopsClockUntilTenthsWriteRestarts()
+	{
+		var cia = CreateCia(cpuCyclesPerSecond: 60, todInputFrequencyHz: 60);
+		cia.Write(0x0B, 0x01);
+		cia.Write(0x08, 0x00);
+		Tick(cia, 6);
 
 		Assert.Equal(0x01, cia.Read(0x08));
+
+		cia.Write(0x0B, 0x01);
+		Tick(cia, 12);
+
+		Assert.Equal(0x01, cia.Read(0x08));
+
+		cia.Write(0x08, 0x01);
+		Tick(cia, 5);
+
+		Assert.Equal(0x01, cia.Read(0x08));
+
+		cia.Tick();
+
 		Assert.Equal(0x02, cia.Read(0x08));
 	}
 
-	private static Cia6526 CreateCia(int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond)
+	[Fact]
+	public void TodControlASelectsFiftyOrSixtyHzDivider()
+	{
+		var sixtyHzDivider = CreateCia(cpuCyclesPerSecond: 60, todInputFrequencyHz: 60);
+		sixtyHzDivider.Write(0x0B, 0x01);
+		sixtyHzDivider.Write(0x08, 0x00);
+
+		Tick(sixtyHzDivider, 5);
+
+		Assert.Equal(0x00, sixtyHzDivider.Read(0x08));
+
+		sixtyHzDivider.Tick();
+
+		Assert.Equal(0x01, sixtyHzDivider.Read(0x08));
+
+		var fiftyHzDivider = CreateCia(cpuCyclesPerSecond: 60, todInputFrequencyHz: 60);
+		fiftyHzDivider.Write(0x0E, 0x80);
+		fiftyHzDivider.Write(0x0B, 0x01);
+		fiftyHzDivider.Write(0x08, 0x00);
+
+		Tick(fiftyHzDivider, 5);
+
+		Assert.Equal(0x01, fiftyHzDivider.Read(0x08));
+	}
+
+	[Fact]
+	public void TodAlarmWritesDoNotStopOrRestartClock()
+	{
+		var cia = CreateCia(cpuCyclesPerSecond: 60, todInputFrequencyHz: 60);
+		cia.Write(0x0B, 0x01);
+		cia.Write(0x08, 0x00);
+		cia.Write(0x0F, 0x80);
+		cia.Write(0x0B, 0x01);
+		cia.Write(0x08, 0x05);
+
+		Tick(cia, 6);
+
+		Assert.Equal(0x01, cia.Read(0x08));
+	}
+
+	private static void Tick(Cia6526 cia, int cycles)
+	{
+		for (var i = 0; i < cycles; i++)
+		{
+			cia.Tick();
+		}
+	}
+
+	private static Cia6526 CreateCia(
+		int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
+		int todInputFrequencyHz = 0)
 	{
 		var cia = new Cia6526();
-		cia.Reset(defaultTimerA60Hz: false, cpuCyclesPerSecond);
+		cia.Reset(defaultTimerA60Hz: false, cpuCyclesPerSecond, todInputFrequencyHz);
 		return cia;
 	}
 }

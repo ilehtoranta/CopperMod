@@ -17,6 +17,7 @@ namespace CopperMod.Sid
         private const byte ControlForceLoad = 0x10;
         private const byte ControlCountCnt = 0x20;
         private const byte ControlTimerBCountTimerA = 0x40;
+        private const byte ControlTod50Hz = 0x80;
 
         private byte _portA = 0xFF;
         private byte _portB = 0xFF;
@@ -39,8 +40,11 @@ namespace CopperMod.Sid
         private byte _latchedMinutes;
         private byte _latchedHours;
         private bool _todLatched;
+        private int _cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond;
+        private int _todInputFrequencyHz = 50;
         private int _todCycleAccumulator;
-        private int _todCyclesPerTenth = 98525;
+        private int _todInputPulseAccumulator;
+        private bool _todStopped;
         private byte _serialData;
         private byte _controlA;
         private byte _controlB;
@@ -76,8 +80,15 @@ namespace CopperMod.Sid
 
         public ushort TimerALatch => _timerALatch;
 
-        public void Reset(bool defaultTimerA60Hz, int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond)
+        public void Reset(
+            bool defaultTimerA60Hz,
+            int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
+            int todInputFrequencyHz = 0)
         {
+            _cpuCyclesPerSecond = Math.Max(1, cpuCyclesPerSecond);
+            _todInputFrequencyHz = todInputFrequencyHz > 0
+                ? todInputFrequencyHz
+                : InferTodInputFrequencyHz(_cpuCyclesPerSecond);
             _portA = 0xFF;
             _portB = 0xFF;
             _ddrA = 0;
@@ -100,7 +111,8 @@ namespace CopperMod.Sid
             _latchedHours = 0;
             _todLatched = false;
             _todCycleAccumulator = 0;
-            _todCyclesPerTenth = Math.Max(1, (int)SidIntegerMath.DivRoundNearest(cpuCyclesPerSecond, 10));
+            _todInputPulseAccumulator = 0;
+            _todStopped = false;
             _serialData = 0;
             _controlA = defaultTimerA60Hz ? (byte)0x11 : (byte)0x00;
             _controlB = 0;
@@ -175,7 +187,7 @@ namespace CopperMod.Sid
 
                     break;
                 case 0x08:
-                    WriteTodOrAlarm(ref _todTenths, ref _alarmTenths, value);
+                    WriteTodTenthsOrAlarm(value);
                     break;
                 case 0x09:
                     WriteTodOrAlarm(ref _todSeconds, ref _alarmSeconds, value);
@@ -184,7 +196,7 @@ namespace CopperMod.Sid
                     WriteTodOrAlarm(ref _todMinutes, ref _alarmMinutes, value);
                     break;
                 case 0x0B:
-                    WriteTodOrAlarm(ref _todHours, ref _alarmHours, value);
+                    WriteTodHoursOrAlarm(value);
                     break;
                 case 0x0C:
                     _serialData = value;
@@ -342,20 +354,30 @@ namespace CopperMod.Sid
 
         private void TickTod()
         {
-            _todCycleAccumulator++;
-            if (_todCycleAccumulator < _todCyclesPerTenth)
+            if (_todStopped)
             {
                 return;
             }
 
-            _todCycleAccumulator = 0;
-            IncrementTod();
-            if (_todTenths == _alarmTenths &&
-                _todSeconds == _alarmSeconds &&
-                _todMinutes == _alarmMinutes &&
-                _todHours == _alarmHours)
+            _todCycleAccumulator += _todInputFrequencyHz;
+            while (_todCycleAccumulator >= _cpuCyclesPerSecond)
             {
-                SetInterrupt(InterruptTod);
+                _todCycleAccumulator -= _cpuCyclesPerSecond;
+                _todInputPulseAccumulator++;
+                if (_todInputPulseAccumulator < GetTodInputPulsesPerTenth())
+                {
+                    continue;
+                }
+
+                _todInputPulseAccumulator = 0;
+                IncrementTod();
+                if (_todTenths == _alarmTenths &&
+                    _todSeconds == _alarmSeconds &&
+                    _todMinutes == _alarmMinutes &&
+                    _todHours == _alarmHours)
+                {
+                    SetInterrupt(InterruptTod);
+                }
             }
         }
 
@@ -425,6 +447,47 @@ namespace CopperMod.Sid
             {
                 tod = value;
             }
+        }
+
+        private void WriteTodTenthsOrAlarm(byte value)
+        {
+            if ((_controlB & 0x80) != 0)
+            {
+                _alarmTenths = value;
+                return;
+            }
+
+            _todTenths = value;
+            _todCycleAccumulator = 0;
+            _todInputPulseAccumulator = 0;
+            _todStopped = false;
+        }
+
+        private void WriteTodHoursOrAlarm(byte value)
+        {
+            if ((_controlB & 0x80) != 0)
+            {
+                _alarmHours = value;
+                return;
+            }
+
+            _todHours = value;
+            _todCycleAccumulator = 0;
+            _todInputPulseAccumulator = 0;
+            _todStopped = true;
+        }
+
+        private int GetTodInputPulsesPerTenth()
+        {
+            return (_controlA & ControlTod50Hz) != 0 ? 5 : 6;
+        }
+
+        private static int InferTodInputFrequencyHz(int cpuCyclesPerSecond)
+        {
+            return Math.Abs(cpuCyclesPerSecond - SidConstants.PalCpuCyclesPerSecond) <
+                Math.Abs(cpuCyclesPerSecond - SidConstants.NtscCpuCyclesPerSecond)
+                    ? 50
+                    : 60;
         }
 
         private byte ReadTodTenths()

@@ -13,6 +13,7 @@ namespace CopperMod.Sid
         private const uint PhaseMask = 0x00FFFFFF;
         private const uint PhaseMsb = 0x00800000;
         private const uint NoiseClockBit = 0x00080000;
+        private const uint NoiseResetValue = 0x7FFFF8;
         private static readonly int[] RatePeriods =
         {
             9, 32, 63, 95, 149, 220, 267, 313,
@@ -20,7 +21,7 @@ namespace CopperMod.Sid
         };
 
         private uint _phase;
-        private uint _noise = 0x7FFFF8;
+        private uint _noise = NoiseResetValue;
         private int _envelopeCounter;
         private int _rateCounter;
         private int _exponentialCounter;
@@ -60,7 +61,7 @@ namespace CopperMod.Sid
         public void Reset()
         {
             _phase = 0;
-            _noise = 0x7FFFF8;
+            _noise = NoiseResetValue;
             _envelopeCounter = 0;
             _rateCounter = 0;
             _exponentialCounter = 0;
@@ -181,8 +182,7 @@ namespace CopperMod.Sid
         {
             if (TestEnabled)
             {
-                _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
-                _phase = 0;
+                ResetForTestBit();
                 return;
             }
 
@@ -277,8 +277,7 @@ namespace CopperMod.Sid
             _control = value;
             if (TestEnabled)
             {
-                _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
-                _phase = 0;
+                ResetForTestBit();
             }
         }
 
@@ -346,6 +345,25 @@ namespace CopperMod.Sid
             var noiseSelected = (waveformMask & 0x80) != 0;
             if ((waveformMask & 0x80) != 0)
             {
+                if (NoiseLocksWithOtherWaveforms(waveformMask))
+                {
+                    _noise = 0;
+                }
+
+                if (_noise == 0)
+                {
+                    trace = captureTrace
+                        ? new SidWaveformTrace(
+                            0,
+                            pulseHigh,
+                            syncSourceMsb,
+                            ringModInverted,
+                            triangleInverted,
+                            noiseUsesPostShiftRegister: false)
+                        : default;
+                    return 0;
+                }
+
                 combinedDac &= GetNoiseDac();
                 outputs++;
             }
@@ -434,6 +452,11 @@ namespace CopperMod.Sid
                 case 0x50 when model == SidChipModel.Mos6581:
                     return RenderMos6581TrianglePulseFast(syncSource);
                 case 0x80:
+                    if (_noise == 0)
+                    {
+                        return 0;
+                    }
+
                     return SidAnalog.ConvertWaveformDac12(GetNoiseDac(), model);
             }
 
@@ -459,6 +482,16 @@ namespace CopperMod.Sid
 
             if ((waveformMask & 0x80) != 0)
             {
+                if (NoiseLocksWithOtherWaveforms(waveformMask))
+                {
+                    _noise = 0;
+                }
+
+                if (_noise == 0)
+                {
+                    return 0;
+                }
+
                 combinedDac &= GetNoiseDac();
                 outputs++;
             }
@@ -489,6 +522,18 @@ namespace CopperMod.Sid
         private double GetMos6581TrianglePulseBias()
         {
             return (_control & 0x01) == 0 ? -0.55 : -1.4;
+        }
+
+        private void ResetForTestBit()
+        {
+            _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
+            _phase = 0;
+            _noise = NoiseResetValue;
+        }
+
+        private static bool NoiseLocksWithOtherWaveforms(int waveformMask)
+        {
+            return (waveformMask & 0x80) != 0 && (waveformMask & 0x70) != 0;
         }
 
         private uint GetTriangleDac(

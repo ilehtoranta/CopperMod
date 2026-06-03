@@ -78,6 +78,7 @@ public sealed class C64MachineTests
 		cia.Write(0x0A, 0x00);
 		cia.Write(0x0B, 0x01);
 		cia.Write(0x0F, 0x00);
+		cia.Write(0x0E, 0x80);
 		cia.Write(0x0D, 0x84);
 
 		for (var i = 0; i < SidIntegerMath.DivRoundNearest(SidConstants.PalCpuCyclesPerSecond, 10); i++)
