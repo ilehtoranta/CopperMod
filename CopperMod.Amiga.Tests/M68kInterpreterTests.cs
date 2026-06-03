@@ -687,6 +687,36 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x78, bus.Memory[0x2003]);
 	}
 
+	[Fact]
+	public void ClrMemoryReadsDestinationBeforeWritingZero()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x42, 0x90); // CLR.L (A0)
+		Write(bus.Memory, 0x2000, 0x12, 0x34, 0x56, 0x78);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		var dataAccesses = bus.Accesses
+			.Where(access => access.Kind is AmigaBusAccessKind.CpuDataRead or AmigaBusAccessKind.CpuDataWrite)
+			.ToArray();
+		Assert.Equal(2, dataAccesses.Length);
+		Assert.Equal((uint)0x2000, dataAccesses[0].Address);
+		Assert.Equal(AmigaBusAccessSize.Long, dataAccesses[0].Size);
+		Assert.False(dataAccesses[0].IsWrite);
+		Assert.Equal((uint)0x2000, dataAccesses[1].Address);
+		Assert.Equal(AmigaBusAccessSize.Long, dataAccesses[1].Size);
+		Assert.True(dataAccesses[1].IsWrite);
+		Assert.True(dataAccesses[1].Cycle >= dataAccesses[0].Cycle);
+		Assert.Equal(0u, BigEndian.ReadUInt32(bus.Memory, 0x2000, "cleared longword"));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);

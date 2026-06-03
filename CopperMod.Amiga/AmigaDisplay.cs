@@ -29,7 +29,9 @@ namespace CopperMod.Amiga
         private const int CopperInstructionDataHpUnits = 2;
         private const int CopperMoveHpUnits = 4;
         private const int CopperSkipHpUnits = 4;
-        private const int CopperWaitWakeHpUnits = 6;
+        // WAIT is a 3-memory-cycle instruction total; after the fetched WAIT is parked,
+        // only the extra wake memory cycle remains.
+        private const int CopperWaitWakeHpUnits = 2;
         private const ushort CopconCopperDanger = 0x0002;
         private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
         private const int PalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;

@@ -19,7 +19,6 @@ internal sealed class MainWindow : Window
 	private readonly CopperScreenRuntime _runtime;
 	private readonly CopperBenchViewModel _bench;
 	private readonly FramebufferPresenter _presenter;
-	private readonly int[] _presentationFramebuffer;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
 	private readonly Border _benchPanel;
@@ -62,7 +61,6 @@ internal sealed class MainWindow : Window
 		_runtime = CopperScreenRuntime.Create(args, AppContext.BaseDirectory);
 		_latestState = _runtime.CurrentState;
 		_bench = new CopperBenchViewModel();
-		_presentationFramebuffer = new int[_runtime.Width * _runtime.Height];
 
 		_presenter = new FramebufferPresenter(_runtime.Width, _runtime.Height)
 		{
@@ -160,15 +158,17 @@ internal sealed class MainWindow : Window
 
 	private void PresentLatestFrame(bool forceStatus = false)
 	{
-		if (!_runtime.TryCopyLatestFrame(_presentationFramebuffer, ref _lastSeenFrameNumber, out var state, forceStatus))
+		using var frameLease = _runtime.TryAcquireLatestFrame(ref _lastSeenFrameNumber, forceStatus);
+		if (frameLease == null)
 		{
 			return;
 		}
 
+		var state = frameLease.State;
 		_latestState = state;
 		if (state.FrameNumber != _presentedFrames)
 		{
-			_presenter.Update(_presentationFramebuffer);
+			_presenter.Update(frameLease.Framebuffer);
 			_presentedFrames = state.FrameNumber;
 		}
 

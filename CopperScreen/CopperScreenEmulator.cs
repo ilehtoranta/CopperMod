@@ -5,7 +5,7 @@ using CopperMod.Amiga;
 
 namespace CopperScreen;
 
-internal sealed class CopperScreenEmulator
+internal sealed class CopperScreenEmulator : IDisposable
 {
 	private const int DefaultAudioSampleRate = 44_100;
 	private const int DefaultAudioChannels = 2;
@@ -16,6 +16,8 @@ internal sealed class CopperScreenEmulator
 	private readonly AmigaMachine _machine;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
+	private readonly string _baseDirectory;
+	private readonly FloppyDriveAudioOptions _floppyDriveAudioOptions;
 	private readonly string? _startupError;
 	private readonly float[] _frameAudio;
 	private readonly int[] _previousInterlaceFrame;
@@ -61,6 +63,8 @@ internal sealed class CopperScreenEmulator
 		Framebuffer = new int[Width * Height];
 		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
 		_profile = startupOptions.Profile;
+		_baseDirectory = startupOptions.BaseDirectory;
+		_floppyDriveAudioOptions = startupOptions.FloppyDriveAudio;
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
 		_boot.AutoStartWorkbenchDefaultTool = false;
@@ -109,6 +113,10 @@ internal sealed class CopperScreenEmulator
 
 	public string ProfileName => _profile.DisplayName;
 
+	public string BaseDirectory => _baseDirectory;
+
+	public FloppyDriveAudioOptions FloppyDriveAudioOptions => _floppyDriveAudioOptions;
+
 	public string CpuBackendName => _machine.Options.CpuBackend.ToString();
 
 	public M68kJitCounters JitCounters => _machine.Cpu is M68kJitCore jit ? jit.Counters : default;
@@ -117,6 +125,9 @@ internal sealed class CopperScreenEmulator
 		_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider
 			? frequencyProvider.CaptureInstructionFrequency()
 			: M68kInstructionFrequencySnapshot.Empty;
+
+	public void Dispose()
+		=> _machine.Dispose();
 
 	public string ProgramCounterText => $"PC=${_machine.Cpu.State.ProgramCounter:X6}";
 

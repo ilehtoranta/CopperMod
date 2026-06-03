@@ -523,6 +523,7 @@ namespace CopperMod.Amiga
         }
 
         private sealed class BootInstructionBoundary :
+            IM68kTraceBatchDiagnosticsBoundary,
             IM68kStoppedCpuFastForwardBoundary,
             IM68kPureCpuTraceBatchBoundary,
             IM68kBusAccessTraceBatchBoundary
@@ -546,6 +547,8 @@ namespace CopperMod.Amiga
             }
 
             public bool Completed { get; private set; }
+
+            public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
 
             public bool BeforeInstruction()
             {
@@ -592,9 +595,13 @@ namespace CopperMod.Amiga
                     return false;
                 }
 
+                var interruptMask = (state.StatusRegister >> 8) & 0x07;
                 batchTargetCycle = _owner._machine.Bus.GetNextCpuBatchWakeCandidateCycle(
                     state.Cycles,
-                    targetCycle);
+                    targetCycle,
+                    interruptMask,
+                    out var wakeSource);
+                LastTraceBatchWakeSource = wakeSource;
                 batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle);
                 return batchTargetCycle > state.Cycles;
             }
@@ -647,7 +654,11 @@ namespace CopperMod.Amiga
                     return false;
                 }
 
-                var wakeCycle = _owner._machine.Bus.GetNextStoppedCpuWakeCandidateCycle(previousCycle, targetCycle);
+                var interruptMask = (state.StatusRegister >> 8) & 0x07;
+                var wakeCycle = _owner._machine.Bus.GetNextStoppedCpuWakeCandidateCycle(
+                    previousCycle,
+                    targetCycle,
+                    interruptMask);
                 wakeCycle = Math.Clamp(wakeCycle, previousCycle + 1, targetCycle);
                 advancedCycles = wakeCycle - previousCycle;
                 state.Cycles = wakeCycle;

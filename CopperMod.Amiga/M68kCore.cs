@@ -28,7 +28,20 @@ namespace CopperMod.Amiga
         void ResetExternalDevices(long cycle);
     }
 
-    internal interface IM68kCore
+    internal enum M68kTraceBatchWakeSource
+    {
+        Unknown = 0,
+        TargetCycle,
+        PendingInterrupt,
+        VerticalBlank,
+        HorizontalSyncTod,
+        CiaTimer,
+        Disk,
+        Paula,
+        Blitter
+    }
+
+    internal interface IM68kCore : IDisposable
     {
         M68kCpuState State { get; }
 
@@ -46,6 +59,11 @@ namespace CopperMod.Amiga
         bool BeforeInstruction();
 
         void AfterInstruction(long previousCycle, long currentCycle);
+    }
+
+    internal interface IM68kTraceBatchDiagnosticsBoundary
+    {
+        M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; }
     }
 
     internal interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
@@ -318,6 +336,10 @@ namespace CopperMod.Amiga
 
         public void ResetInstructionFrequency()
             => _instructionFrequency.Reset();
+
+        public void Dispose()
+        {
+        }
 
         public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {

@@ -131,6 +131,30 @@ public sealed class CopperScreenRuntimeTests
 		Assert.Equal(sentinel, destination[0]);
 	}
 
+	[Fact]
+	public void FrameLeaseKeepsRuntimeFromOverwritingReadableBuffer()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
+		var publish = typeof(CopperScreenRuntime).GetMethod("PublishCurrentFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(publish);
+		const int leasedPixel = unchecked((int)0xFF112233);
+		Array.Fill(emulator.Framebuffer, leasedPixel);
+		publish.Invoke(runtime, [1, 0]);
+		var lastSeenFrameNumber = 0L;
+		using var lease = runtime.TryAcquireLatestFrame(ref lastSeenFrameNumber);
+		Assert.NotNull(lease);
+		var leasedBuffer = lease.Framebuffer;
+
+		for (var i = 0; i < 4; i++)
+		{
+			Array.Fill(emulator.Framebuffer, unchecked((int)(0xFF445500u + (uint)i)));
+			publish.Invoke(runtime, [1, 0]);
+		}
+
+		Assert.Equal(leasedPixel, leasedBuffer[0]);
+	}
+
 	private static T GetPrivateField<T>(CopperScreenRuntime runtime, string fieldName)
 	{
 		var field = typeof(CopperScreenRuntime).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);

@@ -47,7 +47,16 @@ namespace CopperMod.Amiga
         Divs,
         ShiftRegister,
         BitImmediate,
-        BitDynamic
+        BitDynamic,
+        OriToCcr,
+        OriToSr,
+        AndiToCcr,
+        AndiToSr,
+        EoriToCcr,
+        EoriToSr,
+        MoveToCcr,
+        MoveToSr,
+        Pea
     }
 
     internal enum M68kJitEaKind
@@ -220,6 +229,23 @@ namespace CopperMod.Amiga
         public bool StopsTrace { get; }
     }
 
+    internal interface IM68kCodeReader
+    {
+        bool HasHostCallback(uint address);
+
+        ushort ReadHostWord(uint address);
+    }
+
+    internal sealed class M68kCodeReadException : Exception
+    {
+        public static M68kCodeReadException Instance { get; } = new M68kCodeReadException();
+
+        private M68kCodeReadException()
+            : base("The MC68000 JIT decoder attempted to read outside the captured code snapshot.")
+        {
+        }
+    }
+
     internal static class M68kDecoder
     {
         [Flags]
@@ -235,55 +261,63 @@ namespace CopperMod.Amiga
         }
 
         public static bool TryDecode(
-            AmigaBus bus,
+            IM68kCodeReader codeReader,
             uint programCounter,
             out M68kDecodedInstruction instruction,
             out M68kJitBailoutReason reason)
         {
             instruction = default;
             reason = M68kJitBailoutReason.None;
-            programCounter = Normalize(programCounter);
-            if ((programCounter & 1) != 0 || bus.HasHostCallback(programCounter))
+            try
             {
-                reason = M68kJitBailoutReason.HostTrap;
+                programCounter = Normalize(programCounter);
+                if ((programCounter & 1) != 0 || codeReader.HasHostCallback(programCounter))
+                {
+                    reason = M68kJitBailoutReason.HostTrap;
+                    return false;
+                }
+
+                var opcode = codeReader.ReadHostWord(programCounter);
+                if ((opcode & 0xF000) is 0xA000 or 0xF000 || opcode is 0x4AFC)
+                {
+                    reason = M68kJitBailoutReason.ExceptionInstruction;
+                    return false;
+                }
+
+                if (opcode is 0x4E70 or 0x4E72 or 0x4E73 or 0x4E76 or 0x4E77 or 0x4E7A or 0x4E7B ||
+                    (opcode & 0xFFF0) == 0x4E40 ||
+                    (opcode & 0xFFF0) == 0x4E60)
+                {
+                    reason = M68kJitBailoutReason.SystemInstruction;
+                    return false;
+                }
+
+                var cursor = new DecodeCursor(codeReader, programCounter + 2);
+                if (TryDecodeMove(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeLine0(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeLine4(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeLine5(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeBranch(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeMoveq(programCounter, opcode, ref cursor, out instruction) ||
+                    TryDecodeArithmetic(programCounter, opcode, ref cursor, out instruction, out reason) ||
+                    TryDecodeShiftRotate(programCounter, opcode, ref cursor, out instruction, out reason))
+                {
+                    return true;
+                }
+
+                if (reason == M68kJitBailoutReason.None)
+                {
+                    reason = M68kJitBailoutReason.UnsupportedOpcode;
+                }
+
                 return false;
             }
-
-            var opcode = bus.ReadHostWord(programCounter);
-            if ((opcode & 0xF000) is 0xA000 or 0xF000 || opcode is 0x4AFC)
-            {
-                reason = M68kJitBailoutReason.ExceptionInstruction;
-                return false;
-            }
-
-            if (opcode is 0x4E70 or 0x4E72 or 0x4E73 or 0x4E76 or 0x4E77 or 0x4E7A or 0x4E7B ||
-                (opcode & 0xFFF0) == 0x4E40 ||
-                (opcode & 0xFFF0) == 0x4E60 ||
-                opcode is 0x003C or 0x007C or 0x023C or 0x027C or 0x0A3C or 0x0A7C)
-            {
-                reason = M68kJitBailoutReason.SystemInstruction;
-                return false;
-            }
-
-            var cursor = new DecodeCursor(bus, programCounter + 2);
-            if (TryDecodeMove(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeLine0(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeLine4(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeLine5(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeBranch(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeMoveq(programCounter, opcode, ref cursor, out instruction) ||
-                TryDecodeArithmetic(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                TryDecodeShiftRotate(programCounter, opcode, ref cursor, out instruction, out reason))
-            {
-                return true;
-            }
-
-            if (reason == M68kJitBailoutReason.None)
+            catch (M68kCodeReadException)
             {
                 reason = M68kJitBailoutReason.UnsupportedOpcode;
+                instruction = default;
+                return false;
             }
-
-            return false;
         }
 
         private static bool TryDecodeMove(
@@ -453,6 +487,11 @@ namespace CopperMod.Amiga
         {
             instruction = default;
             reason = M68kJitBailoutReason.None;
+            if (TryDecodeImmediateToStatus(pc, opcode, ref cursor, out instruction))
+            {
+                return true;
+            }
+
             if ((opcode & 0xFF00) is 0x0800 or 0x0840 or 0x0880 or 0x08C0)
             {
                 var local = cursor;
@@ -580,6 +619,50 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        private static bool TryDecodeImmediateToStatus(
+            uint pc,
+            ushort opcode,
+            ref DecodeCursor cursor,
+            out M68kDecodedInstruction instruction)
+        {
+            instruction = default;
+            var operation = opcode switch
+            {
+                0x003C => M68kJitOperation.OriToCcr,
+                0x007C => M68kJitOperation.OriToSr,
+                0x023C => M68kJitOperation.AndiToCcr,
+                0x027C => M68kJitOperation.AndiToSr,
+                0x0A3C => M68kJitOperation.EoriToCcr,
+                0x0A7C => M68kJitOperation.EoriToSr,
+                _ => (M68kJitOperation)(-1)
+            };
+            if ((int)operation < 0)
+            {
+                return false;
+            }
+
+            var local = cursor;
+            var immediate = local.FetchWord();
+            cursor = local;
+            instruction = Create(
+                pc,
+                opcode,
+                operation,
+                M68kOperandSize.Word,
+                new M68kDecodedEa(M68kJitEaKind.Immediate, 0, 0, 0, 0, immediate),
+                M68kDecodedEa.None,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                pc + 2,
+                cursor,
+                stopsTrace: operation is M68kJitOperation.OriToSr or M68kJitOperation.AndiToSr or M68kJitOperation.EoriToSr);
+            return true;
+        }
+
         private static bool TryDecodeLine4(
             uint pc,
             ushort opcode,
@@ -598,6 +681,31 @@ namespace CopperMod.Amiga
             if (opcode == 0x4E75)
             {
                 instruction = Create(pc, opcode, M68kJitOperation.Rts, M68kOperandSize.Long, M68kDecodedEa.None, M68kDecodedEa.None, 0, 0, 0, 0, 0, 0, pc + 2, cursor, true);
+                return true;
+            }
+
+            if (opcode is 0x44FC or 0x46FC)
+            {
+                var local = cursor;
+                var immediate = local.FetchWord();
+                cursor = local;
+                var operation = opcode == 0x44FC ? M68kJitOperation.MoveToCcr : M68kJitOperation.MoveToSr;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    operation,
+                    M68kOperandSize.Word,
+                    new M68kDecodedEa(M68kJitEaKind.Immediate, 0, 0, 0, 0, immediate),
+                    M68kDecodedEa.None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: operation == M68kJitOperation.MoveToSr);
                 return true;
             }
 
@@ -640,6 +748,26 @@ namespace CopperMod.Amiga
             if ((opcode & 0xFFF8) == 0x4840)
             {
                 instruction = Create(pc, opcode, M68kJitOperation.Swap, M68kOperandSize.Long, M68kDecodedEa.None, M68kDecodedEa.None, opcode & 7, 0, 0, 0, 0, 0, pc + 2, cursor, false);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x4840)
+            {
+                var local = cursor;
+                if (!TryDecodeEa(
+                        ref local,
+                        (opcode >> 3) & 7,
+                        opcode & 7,
+                        M68kOperandSize.Long,
+                        EaAllowed.Memory | EaAllowed.PcMemory,
+                        out var ea))
+                {
+                    reason = M68kJitBailoutReason.UnsupportedEa;
+                    return false;
+                }
+
+                cursor = local;
+                instruction = Create(pc, opcode, M68kJitOperation.Pea, M68kOperandSize.Long, ea, M68kDecodedEa.None, 0, 0, 0, 0, 0, 0, pc + 2, cursor, false);
                 return true;
             }
 
@@ -1328,11 +1456,11 @@ namespace CopperMod.Amiga
 
         private struct DecodeCursor
         {
-            private readonly AmigaBus _bus;
+            private readonly IM68kCodeReader _codeReader;
 
-            public DecodeCursor(AmigaBus bus, uint address)
+            public DecodeCursor(IM68kCodeReader codeReader, uint address)
             {
-                _bus = bus;
+                _codeReader = codeReader;
                 Address = Normalize(address);
                 ExtensionCount = 0;
                 Extension0 = 0;
@@ -1355,7 +1483,7 @@ namespace CopperMod.Amiga
 
             public ushort FetchWord()
             {
-                var word = _bus.ReadHostWord(Address);
+                var word = _codeReader.ReadHostWord(Address);
                 switch (ExtensionCount)
                 {
                     case 0:

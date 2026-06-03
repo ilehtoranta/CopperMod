@@ -1205,9 +1205,56 @@ public sealed class AmigaBusTimingTests
 		var currentCycle = frameCycle - 2;
 		bus.AdvanceRasterTo(currentCycle);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(currentCycle, frameCycle + 100);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(
+			currentCycle,
+			frameCycle + 100,
+			out var wakeSource);
 
 		Assert.Equal(frameCycle, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.VerticalBlank, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBatchWakeSourceKeepsTargetCycleWhenVblankIsOnlyTargetTie()
+	{
+		var bus = new AmigaBus();
+		var frameCycle = AmigaConstants.A500PalCpuCyclesPerFrame;
+		var currentCycle = frameCycle - 2;
+		bus.AdvanceRasterTo(currentCycle);
+
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(
+			currentCycle,
+			frameCycle,
+			out var wakeSource);
+
+		Assert.Equal(frameCycle, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateIgnoresMaskedPaulaInterruptLevel()
+	{
+		var bus = new AmigaBus();
+		bus.Paula.ScheduleWrite(
+			0,
+			0x09A,
+			(ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqVerticalBlank));
+		bus.Paula.ScheduleWrite(
+			0,
+			0x09C,
+			(ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank));
+		bus.Paula.AdvanceTo(0);
+
+		var legacyCandidate = bus.GetNextCpuBatchWakeCandidateCycle(100, 1000, out var legacyWakeSource);
+		var maskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(100, 1000, 3, out var maskedWakeSource);
+		var unmaskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(100, 1000, 2, out var unmaskedWakeSource);
+
+		Assert.Equal(101, legacyCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, legacyWakeSource);
+		Assert.Equal(1000, maskedCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, maskedWakeSource);
+		Assert.Equal(101, unmaskedCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, unmaskedWakeSource);
 	}
 
 	[Fact]
@@ -1219,9 +1266,10 @@ public sealed class AmigaBusTimingTests
 		bus.CiaB.WriteRegister(0x08, 0x01, 0, events);
 		bus.CiaB.WriteRegister(0x0D, 0x84, 0, events);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(0, 1000);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 1000, out var wakeSource);
 
 		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerRasterLine, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.HorizontalSyncTod, wakeSource);
 	}
 
 	[Fact]
@@ -1233,9 +1281,10 @@ public sealed class AmigaBusTimingTests
 		bus.CiaA.WriteRegister(0x05, 0x00, 0, events);
 		bus.CiaA.WriteRegister(0x0E, 0x11, 0, events);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(0, 100);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
 		Assert.Equal(20, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.CiaTimer, wakeSource);
 	}
 
 	[Fact]
@@ -1251,9 +1300,10 @@ public sealed class AmigaBusTimingTests
 		bus.Disk.WriteRegister(0x024, 0x8001, 0);
 		bus.Disk.WriteRegister(0x024, 0x8001, 0);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(0, 100);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
 		Assert.Equal(readyCycle, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.Disk, wakeSource);
 	}
 
 	[Fact]
@@ -1262,9 +1312,10 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus();
 		bus.Paula.ScheduleWrite(20, 0x0A6, 0x0003);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(0, 100);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
 		Assert.Equal(20, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.Paula, wakeSource);
 	}
 
 	[Fact]
@@ -1294,9 +1345,10 @@ public sealed class AmigaBusTimingTests
 		bus.AdvanceDmaTo(100);
 		var completionCycle = bus.Blitter.GetPredictedCompletionCycle();
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(100, 1000);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(100, 1000, out var wakeSource);
 
 		Assert.Equal(completionCycle, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.Blitter, wakeSource);
 	}
 
 	private static void Write(byte[] memory, int address, params byte[] data)

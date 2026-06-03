@@ -197,7 +197,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class AmigaMachine
+    internal sealed class AmigaMachine : IDisposable
     {
         public AmigaMachine(AmigaMachineOptions options)
         {
@@ -229,6 +229,9 @@ namespace CopperMod.Amiga
         public IM68kCore Cpu { get; }
 
         public AmigaKickstartHost Kickstart { get; }
+
+        public void Dispose()
+            => Cpu.Dispose();
 
         public void ResetHardware()
         {

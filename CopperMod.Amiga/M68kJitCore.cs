@@ -1,8 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
 
 namespace CopperMod.Amiga
 {
@@ -25,10 +29,12 @@ namespace CopperMod.Amiga
         private const int V2Tier1BranchExitPromotionExits = 512;
         private const int V2Tier2BranchExitPromotionExits = 2048;
         private const int V2Tier3BranchExitPromotionExits = 4096;
-        private const int V2TierCeilingBranchExitDisableExits = 128;
+        private const int V2TierCeilingBranchExitLimitExits = 128;
         private const int V2UnsupportedGraphHoleDisableExits = 8;
         private const int V2ZeroInstructionExitDisableExits = 8;
         private const int V2DiagnosticTopCount = 5;
+        private const int V2MaxExternalHandoffPrequeues = 4;
+        private const int AsyncCompileQueueCapacity = 1024;
         private const int BlacklistHits = 256;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
@@ -47,6 +53,9 @@ namespace CopperMod.Amiga
         private readonly bool _v2BusAccessEnabled;
         private readonly bool _v2FastReadEnabled;
         private readonly bool _v2BusGraphEnabled;
+        private readonly bool _asyncJitEnabled;
+        private readonly bool _asyncJitSyncFallbackEnabled;
+        private readonly M68kAsyncJitCompiler? _asyncCompiler;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency = new M68kInstructionFrequencyMatrix();
         private readonly Dictionary<uint, TraceEntry> _traces = new Dictionary<uint, TraceEntry>();
         private readonly Dictionary<uint, HashSet<uint>> _traceRootsByPage = new Dictionary<uint, HashSet<uint>>();
@@ -57,16 +66,33 @@ namespace CopperMod.Amiga
         private readonly Dictionary<uint, int> _v2UnsupportedGraphHoleExits = new Dictionary<uint, int>();
         private readonly Dictionary<uint, int> _v2ZeroInstructionExits = new Dictionary<uint, int>();
         private readonly Dictionary<uint, int> _v2BlockedPromotionTiers = new Dictionary<uint, int>();
+        private readonly Dictionary<uint, int> _v2HandoffQueuePressures = new Dictionary<uint, int>();
+        private readonly HashSet<uint> _v2BranchPressureLimitedRoots = new HashSet<uint>();
+        private readonly HashSet<ulong> _v2BranchPressureLimitedTargets = new HashSet<ulong>();
+        private readonly HashSet<uint> _v2BranchPressureQueuedTargets = new HashSet<uint>();
         private readonly HashSet<uint> _v2DisabledRoots = new HashSet<uint>();
+        private readonly Dictionary<uint, string> _v2DisabledRootReasons = new Dictionary<uint, string>();
         private readonly Dictionary<string, long> _v2UnsupportedOperationCauses = new Dictionary<string, long>();
         private readonly Dictionary<string, long> _v2UnsupportedEaCauses = new Dictionary<string, long>();
         private readonly Dictionary<string, long> _v2GraphHoleCauses = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2TraceHandoffBlockCauses = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2TraceHandoffFailureCauses = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2BranchPressureLimitCauses = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2BranchPressureTargetStates = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _pureTraceBatchLengthBuckets = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _pureTraceBatchWakeSources = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2BusAccessBatchLengthBuckets = new Dictionary<string, long>();
+        private readonly Dictionary<string, long> _v2BusAccessBatchWakeSources = new Dictionary<string, long>();
+        private readonly Dictionary<ulong, TraceEntry> _v2HandoffTraceCache = new Dictionary<ulong, TraceEntry>();
         private bool _v2PendingOutOfBlockBranch;
         private uint _v2PendingOutOfBlockBranchRoot;
         private uint _v2PendingOutOfBlockBranchTarget;
         private uint _v2PendingOutOfBlockBranchCodeStart;
         private int _v2PendingOutOfBlockBranchByteLength;
         private bool _v2PendingOutOfBlockBranchIsFallthrough;
+        private bool _disposed;
+        private int _asyncCompileEpoch;
+        private int _asyncCompileSequence;
         private static readonly MethodInfo CheckV2ConditionMethod =
             typeof(M68kJitCore).GetMethod(nameof(CheckV2Condition), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(CheckV2Condition));
@@ -151,9 +177,43 @@ namespace CopperMod.Amiga
                 },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledMovemForV2Batch));
+        private static readonly MethodInfo ExecuteStatusImmediateForV2BatchMethod =
+            typeof(M68kJitCore).GetMethod(
+                nameof(ExecuteCompiledStatusImmediate),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(int), typeof(uint) },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledStatusImmediate));
+        private static readonly MethodInfo ExecutePeaForV2BatchMethod =
+            typeof(M68kJitCore).GetMethod(
+                nameof(ExecuteCompiledPea),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(int), typeof(int), typeof(uint), typeof(ushort), typeof(ushort) },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledPea));
         private static readonly FieldInfo AmigaBusField =
             typeof(M68kJitCore).GetField(nameof(_amigaBus), BindingFlags.Instance | BindingFlags.NonPublic) ??
             throw new MissingFieldException(typeof(M68kJitCore).FullName, nameof(_amigaBus));
+        private static readonly FieldInfo AmigaBusRealFastRamField =
+            typeof(AmigaBus).GetField("_realFastRam", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(typeof(AmigaBus).FullName, "_realFastRam");
+        private static readonly FieldInfo AmigaBusRealFastRamBaseField =
+            typeof(AmigaBus).GetField("<RealFastRamBase>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(typeof(AmigaBus).FullName, "<RealFastRamBase>k__BackingField");
+        private static readonly FieldInfo AmigaBusRomOverlayRegionField =
+            typeof(AmigaBus).GetField("_romOverlayRegion", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(typeof(AmigaBus).FullName, "_romOverlayRegion");
+        private static readonly FieldInfo AmigaBusRomOverlayEnabledField =
+            typeof(AmigaBus).GetField("_romOverlayEnabled", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(typeof(AmigaBus).FullName, "_romOverlayEnabled");
+        private static readonly FieldInfo MappedMemoryRegionDataField =
+            AmigaBusRomOverlayRegionField.FieldType.GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(AmigaBusRomOverlayRegionField.FieldType.FullName, "_data");
+        private static readonly FieldInfo MappedMemoryRegionBaseAddressField =
+            AmigaBusRomOverlayRegionField.FieldType.GetField("<BaseAddress>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(AmigaBusRomOverlayRegionField.FieldType.FullName, "<BaseAddress>k__BackingField");
         private static readonly MethodInfo TryReadJitZeroWaitMemoryMethod =
             typeof(AmigaBus).GetMethod(
                 nameof(AmigaBus.TryReadJitZeroWaitMemory),
@@ -170,6 +230,30 @@ namespace CopperMod.Amiga
                 new[] { typeof(uint), typeof(uint), typeof(M68kOperandSize) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryWriteJitZeroWaitMemory));
+        private static readonly MethodInfo TryGetJitZeroWaitReadMemoryMethod =
+            typeof(AmigaBus).GetMethod(
+                nameof(AmigaBus.TryGetJitZeroWaitReadMemory),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(uint), typeof(int), typeof(byte[]).MakeByRefType(), typeof(int).MakeByRefType() },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryGetJitZeroWaitReadMemory));
+        private static readonly MethodInfo TryGetJitZeroWaitWriteMemoryMethod =
+            typeof(AmigaBus).GetMethod(
+                nameof(AmigaBus.TryGetJitZeroWaitWriteMemory),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(uint), typeof(int), typeof(byte[]).MakeByRefType(), typeof(int).MakeByRefType() },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryGetJitZeroWaitWriteMemory));
+        private static readonly MethodInfo CompleteJitZeroWaitWriteMethod =
+            typeof(AmigaBus).GetMethod(
+                nameof(AmigaBus.CompleteJitZeroWaitWrite),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(uint), typeof(int) },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.CompleteJitZeroWaitWrite));
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
 
@@ -202,8 +286,17 @@ namespace CopperMod.Amiga
             _v2BusAccessEnabled = enableV2BusAccess;
             _v2FastReadEnabled = enableV2FastRead;
             _v2BusGraphEnabled = enableV2BusGraph;
+            _asyncJitEnabled = IsAsyncJitEnabledByDefault();
+            _asyncJitSyncFallbackEnabled = IsAsyncJitSyncFallbackEnabledByDefault();
             State = new M68kCpuState();
             _fallback = new M68kInterpreter(bus, State, _instructionFrequency);
+            if (_asyncJitEnabled)
+            {
+                _asyncCompiler = new M68kAsyncJitCompiler(
+                    GetAsyncJitWorkerCount(),
+                    AsyncCompileQueueCapacity);
+            }
+
             if (_amigaBus != null)
             {
                 _amigaBus.JitEligibleMemoryWritten += InvalidateWrittenCodeRange;
@@ -220,6 +313,19 @@ namespace CopperMod.Amiga
                 counters.V2UnsupportedOperationTop = FormatV2DiagnosticTop(_v2UnsupportedOperationCauses);
                 counters.V2UnsupportedEaTop = FormatV2DiagnosticTop(_v2UnsupportedEaCauses);
                 counters.V2GraphHoleTop = FormatV2DiagnosticTop(_v2GraphHoleCauses);
+                counters.V2TraceHandoffBlockTop = FormatV2DiagnosticTop(_v2TraceHandoffBlockCauses);
+                counters.V2TraceHandoffFailureTop = FormatV2DiagnosticTop(_v2TraceHandoffFailureCauses);
+                counters.V2BranchPressureLimitTop = FormatV2DiagnosticTop(_v2BranchPressureLimitCauses);
+                counters.V2BranchPressureTargetStateTop = FormatV2DiagnosticTop(_v2BranchPressureTargetStates);
+                counters.PureTraceBatchLengthHistogram = FormatBatchLengthHistogram(_pureTraceBatchLengthBuckets);
+                counters.PureTraceBatchWakeSourceTop = FormatV2DiagnosticTop(_pureTraceBatchWakeSources);
+                counters.V2BusAccessBatchLengthHistogram = FormatBatchLengthHistogram(_v2BusAccessBatchLengthBuckets);
+                counters.V2BusAccessBatchWakeSourceTop = FormatV2DiagnosticTop(_v2BusAccessBatchWakeSources);
+                if (_asyncCompiler != null)
+                {
+                    counters.AsyncMaxQueueDepth = Math.Max(counters.AsyncMaxQueueDepth, _asyncCompiler.MaxQueueDepth);
+                }
+
                 return counters;
             }
         }
@@ -235,6 +341,21 @@ namespace CopperMod.Amiga
 
         public void ResetInstructionFrequency()
             => _instructionFrequency.Reset();
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _asyncCompiler?.Dispose();
+            if (_amigaBus != null)
+            {
+                _amigaBus.JitEligibleMemoryWritten -= InvalidateWrittenCodeRange;
+            }
+        }
 
         private static bool IsV2EnabledByDefault()
         {
@@ -292,6 +413,41 @@ namespace CopperMod.Amiga
                 string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsAsyncJitEnabledByDefault()
+        {
+            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsAsyncJitSyncFallbackEnabledByDefault()
+        {
+            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC_SYNC_FALLBACK");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int GetAsyncJitWorkerCount()
+        {
+            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC_WORKERS");
+            if (int.TryParse(value, out var requested))
+            {
+                return Math.Clamp(requested, 1, Math.Max(1, Environment.ProcessorCount));
+            }
+
+            return Math.Min(2, Math.Max(1, Environment.ProcessorCount - 2));
+        }
+
+        private static bool IsV2InlineZeroWaitMemoryEnabled()
+        {
+            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_V2_INLINE_ZERO_WAIT");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+        }
+
         public int ExecuteInstruction()
         {
             var startCycles = State.Cycles;
@@ -303,11 +459,13 @@ namespace CopperMod.Amiga
         public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {
             ArgumentNullException.ThrowIfNull(boundary);
+            DrainAsyncCompileResults();
             var instructions = 0;
             while (!State.Halted &&
                 instructions < maxInstructions &&
                 (!targetCycle.HasValue || State.Cycles < targetCycle.Value))
             {
+                DrainAsyncCompileResults();
                 if (State.Stopped)
                 {
                     if (!ExecuteStoppedInstruction(boundary, targetCycle, out var stoppedFastForwardedCycles))
@@ -340,6 +498,7 @@ namespace CopperMod.Amiga
                 instructions++;
             }
 
+            DrainAsyncCompileResults();
             return instructions;
         }
 
@@ -395,8 +554,14 @@ namespace CopperMod.Amiga
                 return pureBatchExecuted.Value;
             }
 
+            var compiled = trace.Compiled;
+            if (compiled == null)
+            {
+                return 0;
+            }
+
             _counters.TraceHits++;
-            var executed = trace.Compiled(this, maxInstructions, targetCycle ?? long.MaxValue, boundary);
+            var executed = compiled(this, maxInstructions, targetCycle ?? long.MaxValue, boundary);
             if (executed == 0)
             {
                 _counters.SideExits++;
@@ -442,7 +607,7 @@ namespace CopperMod.Amiga
             bool allowV2TraceHandoff)
         {
             if (!targetCycle.HasValue ||
-                maxInstructions <= 1 ||
+                !CanUseV2TraceForInstructionBudget(trace, maxInstructions) ||
                 trace.V2Compiled == null ||
                 !trace.V2PureCpuBatchEligible ||
                 _v2DisabledRoots.Contains(trace.Root) ||
@@ -450,7 +615,7 @@ namespace CopperMod.Amiga
                 (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
                 boundary is not IM68kPureCpuTraceBatchBoundary batchBoundary)
             {
-                return TryExecuteV2BusAccessTraceBatch(trace, maxInstructions, targetCycle, boundary);
+                return TryExecuteV2BusAccessTraceBatch(trace, maxInstructions, targetCycle, boundary, out _);
             }
 
             var previousCycle = State.Cycles;
@@ -483,6 +648,7 @@ namespace CopperMod.Amiga
             _counters.PureTraceBatchExecutions++;
             _counters.PureTraceBatchInstructions += executed;
             _counters.PureTraceBatchBoundaryCallsSaved += Math.Max(0, executed - 1);
+            RecordTraceBatchDiagnostics(_pureTraceBatchLengthBuckets, _pureTraceBatchWakeSources, executed, boundary);
 
             if (allowV2TraceHandoff &&
                 outOfBlockHandoffTrace.V2Compiled != null &&
@@ -496,13 +662,18 @@ namespace CopperMod.Amiga
                     outOfBlockHandoffTrace,
                     maxInstructions - executed,
                     targetCycle,
-                    boundary);
+                    boundary,
+                    out var handoffBlockReason);
                 if (handoffExecuted is int handoffCount && handoffCount > 0)
                 {
                     _counters.V2TraceHandoffExecutions++;
                     _counters.V2TraceHandoffInstructions += handoffCount;
                     return executed + handoffCount;
                 }
+
+                RecordV2TraceHandoffBlock(
+                    handoffExecuted.HasValue ? "execute-zero" : handoffBlockReason,
+                    outOfBlockHandoffTrace.Root);
             }
 
             return executed;
@@ -519,6 +690,7 @@ namespace CopperMod.Amiga
             var totalExecuted = 0;
             var remaining = maxInstructions;
             var current = trace;
+            var pendingHandoff = false;
             while (remaining > 0 &&
                 State.Cycles < batchTargetCycle &&
                 !State.Halted &&
@@ -540,27 +712,29 @@ namespace CopperMod.Amiga
 
                 totalExecuted += executed;
                 remaining -= executed;
+                if (pendingHandoff)
+                {
+                    _counters.V2TraceHandoffExecutions++;
+                    _counters.V2TraceHandoffInstructions += executed;
+                    pendingHandoff = false;
+                }
+
                 MaybePromoteV2Trace(current, executed);
                 if (!_v2PendingOutOfBlockBranch)
                 {
+                    if (State.Cycles >= batchTargetCycle && remaining > 0)
+                    {
+                        RecordV2TraceHandoffBlock("target-cycle", Normalize(State.ProgramCounter), countFailure: false);
+                    }
+
                     break;
                 }
 
                 var pc = Normalize(_v2PendingOutOfBlockBranchTarget);
-                if (Normalize(State.ProgramCounter) != pc ||
-                    !_traces.TryGetValue(pc, out var next) ||
-                    next.V2Compiled == null ||
-                    !next.V2PureCpuBatchEligible ||
-                    _v2DisabledRoots.Contains(next.Root) ||
-                    (_amigaBus != null && _amigaBus.HasHostCallback(next.Root)) ||
-                    !TryValidateTraceGeneration(pc, ref next))
+                if (remaining <= 0 ||
+                    State.Halted ||
+                    State.Stopped)
                 {
-                    _ = TryGetV2BusHandoffTrace(
-                        pc,
-                        remaining,
-                        batchTargetCycle,
-                        boundary,
-                        out outOfBlockHandoffTrace);
                     RecordV2OutOfBlockSideExit(
                         _v2PendingOutOfBlockBranchRoot,
                         _v2PendingOutOfBlockBranchTarget,
@@ -571,75 +745,536 @@ namespace CopperMod.Amiga
                     break;
                 }
 
-                if (remaining <= 0 ||
-                    State.Cycles >= batchTargetCycle ||
-                    State.Halted ||
-                    State.Stopped)
+                if (State.Cycles >= batchTargetCycle)
                 {
+                    RecordV2TraceHandoffBlock("target-cycle", pc, countFailure: false);
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
+
+                _counters.V2TraceHandoffAttempts++;
+                if (!TryGetV2PureHandoffTrace(current.Root, pc, out var next, out var pureBlockReason))
+                {
+                    _ = TryGetV2BusHandoffTrace(
+                        current.Root,
+                        pc,
+                        remaining,
+                        batchTargetCycle,
+                        boundary,
+                        out outOfBlockHandoffTrace,
+                        out var busBlockReason);
+                    if (outOfBlockHandoffTrace.V2Compiled == null)
+                    {
+                        RecordV2TraceHandoffBlock(
+                            busBlockReason.Length == 0 ? pureBlockReason : busBlockReason,
+                            pc);
+                        RecordV2OutOfBlockSideExit(
+                            _v2PendingOutOfBlockBranchRoot,
+                            _v2PendingOutOfBlockBranchTarget,
+                            _v2PendingOutOfBlockBranchCodeStart,
+                            _v2PendingOutOfBlockBranchByteLength,
+                            _v2PendingOutOfBlockBranchIsFallthrough);
+                    }
+
                     ClearPendingV2OutOfBlockBranch();
                     break;
                 }
 
                 current = next;
+                pendingHandoff = true;
             }
 
             return totalExecuted;
         }
 
+        private bool TryGetV2PureHandoffTrace(uint sourceRoot, uint pc, out TraceEntry trace, out string blockReason)
+        {
+            trace = default;
+            blockReason = string.Empty;
+            if (Normalize(State.ProgramCounter) != pc)
+            {
+                blockReason = "pc-mismatch";
+                return false;
+            }
+
+            if (TryGetCachedV2HandoffTrace(sourceRoot, pc, out trace))
+            {
+                if (!trace.V2PureCpuBatchEligible)
+                {
+                    blockReason = "not-pure";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (!_traces.TryGetValue(pc, out trace))
+            {
+                if (IsPendingV2GraphHoleTarget(pc))
+                {
+                    if (_asyncJitEnabled &&
+                        TryMakeV2HandoffTargetTrace(pc, out trace, out blockReason))
+                    {
+                        CacheV2HandoffTrace(sourceRoot, pc, trace);
+                        if (trace.V2PureCpuBatchEligible)
+                        {
+                            return true;
+                        }
+
+                        blockReason = "not-pure";
+                        return false;
+                    }
+
+                    if (!string.IsNullOrEmpty(blockReason))
+                    {
+                        return false;
+                    }
+
+                    blockReason = "no-trace-graph-hole";
+                    return false;
+                }
+
+                if (TryMakeV2HandoffTargetTrace(pc, out trace, out blockReason) &&
+                    trace.V2PureCpuBatchEligible)
+                {
+                    CacheV2HandoffTrace(sourceRoot, pc, trace);
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(blockReason))
+                {
+                    blockReason = "no-trace-unqueued";
+                }
+
+                return false;
+            }
+
+            if (trace.V2Compiled == null)
+            {
+                blockReason = "no-v2";
+                return false;
+            }
+
+            if (!trace.V2PureCpuBatchEligible)
+            {
+                blockReason = "not-pure";
+                return false;
+            }
+
+            if (_v2DisabledRoots.Contains(trace.Root))
+            {
+                blockReason = GetV2DisabledRootBlockReason(trace.Root);
+                return false;
+            }
+
+            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            {
+                blockReason = "host-trap";
+                return false;
+            }
+
+            if (!TryValidateTraceGeneration(pc, ref trace))
+            {
+                blockReason = "generation";
+                return false;
+            }
+
+            CacheV2HandoffTrace(sourceRoot, pc, trace);
+            return true;
+        }
+
         private bool TryGetV2BusHandoffTrace(
+            uint sourceRoot,
             uint pc,
             int remaining,
             long batchTargetCycle,
             IM68kInstructionBoundary boundary,
-            out TraceEntry trace)
+            out TraceEntry trace,
+            out string blockReason)
         {
             trace = default;
-            if (!_v2BusAccessEnabled ||
-                remaining <= 1 ||
-                State.Cycles >= batchTargetCycle ||
-                State.Halted ||
-                State.Stopped ||
-                boundary is not IM68kBusAccessTraceBatchBoundary ||
-                Normalize(State.ProgramCounter) != pc ||
-                !_traces.TryGetValue(pc, out trace) ||
-                trace.V2Compiled == null ||
-                trace.V2PureCpuBatchEligible ||
-                _v2DisabledRoots.Contains(trace.Root) ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)))
+            blockReason = string.Empty;
+            if (!_v2BusAccessEnabled)
+            {
+                blockReason = "bus-disabled";
+                return false;
+            }
+
+            if (remaining <= 0)
+            {
+                blockReason = "max-instructions";
+                return false;
+            }
+
+            if (State.Cycles >= batchTargetCycle)
+            {
+                blockReason = "target-cycle";
+                return false;
+            }
+
+            if (State.Halted)
+            {
+                blockReason = "halted";
+                return false;
+            }
+
+            if (State.Stopped)
+            {
+                blockReason = "stopped";
+                return false;
+            }
+
+            if (boundary is not IM68kBusAccessTraceBatchBoundary)
+            {
+                blockReason = "boundary";
+                return false;
+            }
+
+            if (Normalize(State.ProgramCounter) != pc)
+            {
+                blockReason = "pc-mismatch";
+                return false;
+            }
+
+            if (TryGetCachedV2HandoffTrace(sourceRoot, pc, out trace))
+            {
+                if (trace.V2PureCpuBatchEligible)
+                {
+                    blockReason = "pure";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (!_traces.TryGetValue(pc, out trace))
+            {
+                if (IsPendingV2GraphHoleTarget(pc))
+                {
+                    if (_asyncJitEnabled &&
+                        TryMakeV2HandoffTargetTrace(pc, out trace, out blockReason))
+                    {
+                        CacheV2HandoffTrace(sourceRoot, pc, trace);
+                        if (!trace.V2PureCpuBatchEligible)
+                        {
+                            return true;
+                        }
+
+                        blockReason = "pure";
+                        return false;
+                    }
+
+                    if (!string.IsNullOrEmpty(blockReason))
+                    {
+                        return false;
+                    }
+
+                    blockReason = "no-trace-graph-hole";
+                    return false;
+                }
+
+                if (TryMakeV2HandoffTargetTrace(pc, out trace, out blockReason) &&
+                    !trace.V2PureCpuBatchEligible)
+                {
+                    CacheV2HandoffTrace(sourceRoot, pc, trace);
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(blockReason))
+                {
+                    blockReason = "no-trace-unqueued";
+                }
+
+                return false;
+            }
+
+            if (trace.V2Compiled == null)
+            {
+                blockReason = "no-v2";
+                return false;
+            }
+
+            if (trace.V2PureCpuBatchEligible)
+            {
+                blockReason = "pure";
+                return false;
+            }
+
+            if (_v2DisabledRoots.Contains(trace.Root))
+            {
+                blockReason = GetV2DisabledRootBlockReason(trace.Root);
+                return false;
+            }
+
+            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            {
+                blockReason = "host-trap";
+                return false;
+            }
+
+            if (!TryValidateTraceGeneration(pc, ref trace))
+            {
+                blockReason = "generation";
+                return false;
+            }
+
+            CacheV2HandoffTrace(sourceRoot, pc, trace);
+            return true;
+        }
+
+        private bool TryGetCachedV2HandoffTrace(uint sourceRoot, uint target, out TraceEntry trace)
+        {
+            trace = default;
+            var key = GetV2HandoffCacheKey(sourceRoot, target);
+            if (!_v2HandoffTraceCache.TryGetValue(key, out var cached))
             {
                 return false;
             }
 
-            return TryValidateTraceGeneration(pc, ref trace);
+            if (!_traces.TryGetValue(target, out trace) ||
+                trace.Root != cached.Root ||
+                trace.V2Compiled == null ||
+                _v2DisabledRoots.Contains(trace.Root) ||
+                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
+                !TryValidateTraceGeneration(target, ref trace))
+            {
+                _v2HandoffTraceCache.Remove(key);
+                return false;
+            }
+
+            _v2HandoffTraceCache[key] = trace;
+            return true;
+        }
+
+        private void CacheV2HandoffTrace(uint sourceRoot, uint target, TraceEntry trace)
+        {
+            if (trace.V2Compiled != null)
+            {
+                _v2HandoffQueuePressures.Remove(Normalize(target));
+                _v2HandoffTraceCache[GetV2HandoffCacheKey(sourceRoot, target)] = trace;
+            }
+        }
+
+        private static ulong GetV2HandoffCacheKey(uint sourceRoot, uint target)
+            => ((ulong)Normalize(sourceRoot) << 24) | Normalize(target);
+
+        private bool IsPendingV2GraphHoleTarget(uint target)
+        {
+            if (!_v2PendingOutOfBlockBranch ||
+                _v2PendingOutOfBlockBranchByteLength <= 0)
+            {
+                return false;
+            }
+
+            var codeStart = Normalize(_v2PendingOutOfBlockBranchCodeStart);
+            var offset = Normalize(target - codeStart);
+            return offset < (uint)_v2PendingOutOfBlockBranchByteLength;
+        }
+
+        private bool TryMakeV2HandoffTargetTrace(uint target, out TraceEntry trace, out string blockReason)
+        {
+            trace = default;
+            blockReason = string.Empty;
+            target = Normalize(target);
+            if (!_v2Enabled)
+            {
+                blockReason = "no-trace-v2-disabled";
+                return false;
+            }
+
+            if (_amigaBus == null)
+            {
+                blockReason = "no-trace-no-bus";
+                return false;
+            }
+
+            if (_amigaBus.IsChipRamAddress(target))
+            {
+                blockReason = "no-trace-chip";
+                return false;
+            }
+
+            if (_amigaBus.HasHostCallback(target))
+            {
+                blockReason = "no-trace-host";
+                return false;
+            }
+
+            if (_v2DisabledRoots.Contains(target))
+            {
+                blockReason = "no-trace-" + GetV2DisabledRootBlockReason(target);
+                return false;
+            }
+
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _))
+            {
+                blockReason = "no-trace-decode";
+                return false;
+            }
+
+            if (!IsV2Instruction(instruction, out _))
+            {
+                blockReason = "no-trace-unsupported";
+                return false;
+            }
+
+            if (!_asyncJitEnabled)
+            {
+                blockReason = "no-trace-sync-disabled";
+                return false;
+            }
+
+            var handoffPressure = IncrementV2HandoffQueuePressure(target);
+            if (TryQueueAsyncTraceCompilation(
+                target,
+                V2TraceTier.Tier0,
+                M68kJitCompileReason.Handoff,
+                CompileThreshold * 8 + Math.Min(handoffPressure, 4096) * 64,
+                branchPressurePromotion: false,
+                out var queueResult))
+            {
+                blockReason = queueResult switch
+                {
+                    M68kAsyncJitQueueResult.Queued => "no-trace-queued",
+                    M68kAsyncJitQueueResult.DedupedPending => "no-trace-queued-pending",
+                    M68kAsyncJitQueueResult.DedupedCompiling => "no-trace-compiling",
+                    _ => "no-trace-queue-dropped"
+                };
+                DrainAsyncCompileResults();
+                if (TryGetInstalledV2HandoffTargetTrace(target, out trace))
+                {
+                    _v2HandoffQueuePressures.Remove(target);
+                    blockReason = "no-trace-installed-drained";
+                    return true;
+                }
+
+                return false;
+            }
+
+            blockReason = "no-trace-snapshot-failed";
+            if (!_asyncJitSyncFallbackEnabled)
+            {
+                return false;
+            }
+
+            if (!TryCompileTrace(target, M68kJitCompileReason.Handoff, out trace))
+            {
+                _blacklist[target] = BlacklistHits;
+                _counters.BlacklistCount++;
+                blockReason = "no-trace-compile-failed";
+                return false;
+            }
+
+            AddTrace(trace);
+            _v2HandoffQueuePressures.Remove(target);
+            _counters.CompiledTraces++;
+            if (trace.V2Compiled == null)
+            {
+                blockReason = "no-trace-compiled-no-v2";
+                return false;
+            }
+
+            blockReason = "no-trace-compiled";
+            return true;
+        }
+
+        private bool TryGetInstalledV2HandoffTargetTrace(uint target, out TraceEntry trace)
+        {
+            trace = default;
+            target = Normalize(target);
+            if (!_traces.TryGetValue(target, out trace) ||
+                trace.V2Compiled == null ||
+                _v2DisabledRoots.Contains(trace.Root) ||
+                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
+                !TryValidateTraceGeneration(target, ref trace))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private int IncrementV2HandoffQueuePressure(uint target)
+        {
+            target = Normalize(target);
+            _v2HandoffQueuePressures.TryGetValue(target, out var pressure);
+            pressure = Math.Min(16_384, pressure + 1);
+            _v2HandoffQueuePressures[target] = pressure;
+            return pressure;
         }
 
         private int? TryExecuteV2BusAccessTraceBatch(
             TraceEntry trace,
             int maxInstructions,
             long? targetCycle,
-            IM68kInstructionBoundary boundary)
+            IM68kInstructionBoundary boundary,
+            out string unavailableReason)
         {
-            if (trace.V2Compiled == null ||
-                trace.V2PureCpuBatchEligible ||
-                _v2DisabledRoots.Contains(trace.Root) ||
-                !targetCycle.HasValue ||
-                maxInstructions <= 1 ||
-                _instructionFrequency.Enabled ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
-                boundary is not IM68kBusAccessTraceBatchBoundary batchBoundary)
+            unavailableReason = string.Empty;
+            if (trace.V2Compiled == null)
             {
+                unavailableReason = "no-v2";
+                return null;
+            }
+
+            if (trace.V2PureCpuBatchEligible)
+            {
+                unavailableReason = "pure";
+                return null;
+            }
+
+            if (_v2DisabledRoots.Contains(trace.Root))
+            {
+                unavailableReason = GetV2DisabledRootBlockReason(trace.Root);
+                return null;
+            }
+
+            if (!targetCycle.HasValue)
+            {
+                unavailableReason = "no-target-cycle";
+                return null;
+            }
+
+            if (!CanUseV2TraceForInstructionBudget(trace, maxInstructions))
+            {
+                unavailableReason = "max-instructions";
+                return null;
+            }
+
+            if (_instructionFrequency.Enabled)
+            {
+                unavailableReason = "frequency";
+                return null;
+            }
+
+            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            {
+                unavailableReason = "host-trap";
+                return null;
+            }
+
+            if (boundary is not IM68kBusAccessTraceBatchBoundary batchBoundary)
+            {
+                unavailableReason = "boundary";
                 return null;
             }
 
             var previousCycle = State.Cycles;
             if (!batchBoundary.TryBeginBusAccessTraceBatch(State, targetCycle.Value, out var batchTargetCycle))
             {
+                unavailableReason = "boundary-refused";
                 return null;
             }
 
             _counters.TraceHits++;
             _counters.V2TraceHits++;
-            var executed = trace.V2Compiled(this, maxInstructions, batchTargetCycle, boundary);
+            var executed = ExecuteV2BusAccessTraceBatchChain(
+                trace,
+                maxInstructions,
+                batchTargetCycle,
+                boundary,
+                out var directCpuInstructions,
+                out var directMemoryInstructions);
             if (executed == 0)
             {
                 _counters.SideExits++;
@@ -651,12 +1286,160 @@ namespace CopperMod.Amiga
 
             batchBoundary.AfterBusAccessTraceBatch(previousCycle, State.Cycles, executed);
             _counters.DirectIlInstructions += executed;
-            _counters.DirectMemoryIlInstructions += executed;
+            _counters.DirectCpuIlInstructions += directCpuInstructions;
+            _counters.DirectMemoryIlInstructions += directMemoryInstructions;
             _counters.V2BusAccessBatchExecutions++;
             _counters.V2BusAccessBatchInstructions += executed;
             _counters.V2BusAccessBatchBoundaryCallsSaved += Math.Max(0, executed - 1);
-            MaybePromoteV2Trace(trace, executed);
+            RecordTraceBatchDiagnostics(_v2BusAccessBatchLengthBuckets, _v2BusAccessBatchWakeSources, executed, boundary);
             return executed;
+        }
+
+        private static bool CanUseV2TraceForInstructionBudget(TraceEntry trace, int maxInstructions)
+        {
+            if (maxInstructions > 1)
+            {
+                return true;
+            }
+
+            return maxInstructions == 1 && trace.Compiled == null;
+        }
+
+        private int ExecuteV2BusAccessTraceBatchChain(
+            TraceEntry trace,
+            int maxInstructions,
+            long batchTargetCycle,
+            IM68kInstructionBoundary boundary,
+            out int directCpuInstructions,
+            out int directMemoryInstructions)
+        {
+            var totalExecuted = 0;
+            var remaining = maxInstructions;
+            var current = trace;
+            var pendingHandoff = false;
+            directCpuInstructions = 0;
+            directMemoryInstructions = 0;
+            while (remaining > 0 &&
+                State.Cycles < batchTargetCycle &&
+                !State.Halted &&
+                !State.Stopped &&
+                current.V2Compiled != null)
+            {
+                if (totalExecuted != 0)
+                {
+                    _counters.TraceHits++;
+                    _counters.V2TraceHits++;
+                }
+
+                ClearPendingV2OutOfBlockBranch();
+                var currentIsPure = current.V2PureCpuBatchEligible;
+                var executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
+                if (executed == 0)
+                {
+                    if (pendingHandoff)
+                    {
+                        RecordV2TraceHandoffBlock("entry-zero", current.Root);
+                    }
+
+                    return totalExecuted;
+                }
+
+                if (pendingHandoff)
+                {
+                    _counters.V2TraceHandoffExecutions++;
+                    _counters.V2TraceHandoffInstructions += executed;
+                    pendingHandoff = false;
+                }
+
+                totalExecuted += executed;
+                remaining -= executed;
+                if (currentIsPure)
+                {
+                    directCpuInstructions += executed;
+                }
+                else
+                {
+                    directMemoryInstructions += executed;
+                }
+
+                MaybePromoteV2Trace(current, executed);
+                if (!_v2PendingOutOfBlockBranch)
+                {
+                    if (State.Cycles >= batchTargetCycle && remaining > 0)
+                    {
+                        RecordV2TraceHandoffBlock("target-cycle", Normalize(State.ProgramCounter), countFailure: false);
+                    }
+
+                    break;
+                }
+
+                var pc = Normalize(_v2PendingOutOfBlockBranchTarget);
+                if (State.Cycles >= batchTargetCycle)
+                {
+                    RecordV2TraceHandoffBlock("target-cycle", pc, countFailure: false);
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
+
+                if (remaining <= 0 ||
+                    State.Halted ||
+                    State.Stopped)
+                {
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
+
+                _counters.V2TraceHandoffAttempts++;
+                if (!TryGetV2BusHandoffTrace(
+                    current.Root,
+                    pc,
+                    remaining,
+                    batchTargetCycle,
+                    boundary,
+                    out var next,
+                    out var busBlockReason) &&
+                    !TryGetV2PureHandoffTrace(current.Root, pc, out next, out var pureBlockReason))
+                {
+                    var blockReason = SelectV2BusThenPureHandoffBlockReason(busBlockReason, pureBlockReason);
+                    RecordV2TraceHandoffBlock(blockReason, pc);
+                    RecordV2OutOfBlockSideExit(
+                        _v2PendingOutOfBlockBranchRoot,
+                        _v2PendingOutOfBlockBranchTarget,
+                        _v2PendingOutOfBlockBranchCodeStart,
+                        _v2PendingOutOfBlockBranchByteLength,
+                        _v2PendingOutOfBlockBranchIsFallthrough);
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
+
+                ClearPendingV2OutOfBlockBranch();
+                current = next;
+                pendingHandoff = true;
+            }
+
+            return totalExecuted;
+        }
+
+        private static string SelectV2BusThenPureHandoffBlockReason(string busBlockReason, string pureBlockReason)
+        {
+            if (string.IsNullOrEmpty(busBlockReason))
+            {
+                return pureBlockReason;
+            }
+
+            if (string.IsNullOrEmpty(pureBlockReason))
+            {
+                return busBlockReason;
+            }
+
+            if (busBlockReason == "pure")
+            {
+                return pureBlockReason;
+            }
+
+            return pureBlockReason == "not-pure"
+                ? busBlockReason
+                : pureBlockReason;
         }
 
         private int? TryExecutePureTraceBatch(
@@ -699,6 +1482,7 @@ namespace CopperMod.Amiga
             _counters.PureTraceBatchExecutions++;
             _counters.PureTraceBatchInstructions += executed;
             _counters.PureTraceBatchBoundaryCallsSaved += Math.Max(0, executed - 1);
+            RecordTraceBatchDiagnostics(_pureTraceBatchLengthBuckets, _pureTraceBatchWakeSources, executed, boundary);
             return executed;
         }
 
@@ -776,6 +1560,26 @@ namespace CopperMod.Amiga
             }
 
             _hotCounters.Remove(pc);
+            if (_asyncJitEnabled)
+            {
+                if (TryQueueAsyncTraceCompilation(
+                    pc,
+                    V2TraceTier.Tier0,
+                    M68kJitCompileReason.HotRoot,
+                    count + CompileThreshold,
+                    branchPressurePromotion: false))
+                {
+                    return;
+                }
+
+                if (!_asyncJitSyncFallbackEnabled)
+                {
+                    _blacklist[pc] = BlacklistHits;
+                    _counters.BlacklistCount++;
+                    return;
+                }
+            }
+
             if (!TryCompileTrace(pc, out var trace))
             {
                 _blacklist[pc] = BlacklistHits;
@@ -788,8 +1592,32 @@ namespace CopperMod.Amiga
         }
 
         private bool TryCompileTrace(uint root, out TraceEntry trace)
+            => TryCompileTrace(root, M68kJitCompileReason.HotRoot, out trace);
+
+        private bool TryCompileTrace(uint root, M68kJitCompileReason reason, out TraceEntry trace)
         {
             trace = default;
+            if (!TryCreateTraceCompilationPlan(
+                root,
+                V2TraceTier.Tier0,
+                reason,
+                out var plan))
+            {
+                return false;
+            }
+
+            trace = CompileTraceFromPlan(plan);
+            RecordTracePlanCompiledCounters(plan);
+            return true;
+        }
+
+        private bool TryCreateTraceCompilationPlan(
+            uint root,
+            V2TraceTier tier,
+            M68kJitCompileReason reason,
+            out M68kTraceCompilationPlan plan)
+        {
+            plan = default;
             if (_amigaBus == null || _amigaBus.IsChipRamAddress(root))
             {
                 return false;
@@ -806,9 +1634,9 @@ namespace CopperMod.Amiga
                     break;
                 }
 
-                if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out var reason))
+                if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out var decodeReason))
                 {
-                    CountBailout(reason);
+                    CountBailout(decodeReason);
                     break;
                 }
 
@@ -832,14 +1660,10 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var traceInstructions = instructions[..count];
-            var compiled = Compile(root, traceInstructions, emitBoundaryCalls: true);
+            var traceInstructions = instructions[..count].ToArray();
             var pureCpuBatchEligible = IsPureCpuBatchEligible(traceInstructions);
-            var pureCompiled = pureCpuBatchEligible
-                ? Compile(root, traceInstructions, emitBoundaryCalls: false)
-                : null;
-            var v2Trace = _v2Enabled
-                ? TryCompileV2Trace(root, V2TraceTier.Tier0, out var compiledV2Trace) ? compiledV2Trace : default
+            var v2Trace = _v2Enabled && TryCreateV2TracePlan(root, tier, out var compiledV2Trace)
+                ? compiledV2Trace
                 : default;
             var guardStart = root;
             var guardEnd = Normalize(root + (uint)byteCount);
@@ -859,27 +1683,568 @@ namespace CopperMod.Amiga
                 out var specializedHelperInstructionPrefixes);
             var startGeneration = _amigaBus.GetCodePageGeneration(guardStart);
             var endGeneration = _amigaBus.GetCodePageGeneration(Normalize(guardStart + (uint)guardByteLength - 1u));
-            trace = new TraceEntry(
+            plan = new M68kTraceCompilationPlan(
                 root,
+                tier,
+                reason,
                 guardStart,
                 guardByteLength,
                 startGeneration,
                 endGeneration,
                 codeWords,
+                traceInstructions,
+                pureCpuBatchEligible,
                 directInstructionPrefixes,
                 helperInstructionPrefixes,
                 directCpuInstructionPrefixes,
                 directMemoryInstructionPrefixes,
                 specializedHelperInstructionPrefixes,
-                compiled,
-                pureCpuBatchEligible,
-                pureCompiled,
-                v2Trace.Compiled,
-                v2Trace.Tier,
-                v2Trace.InstructionCount,
-                v2Trace.HasInternalLoop,
-                v2Trace.PureCpuBatchEligible);
+                v2Trace,
+                _v2BusGraphEnabled);
             return true;
+        }
+
+        private static TraceEntry CompileTraceFromPlan(M68kTraceCompilationPlan plan)
+        {
+            var compileV2Only = ShouldCompileV2OnlyTrace(plan);
+            var compiled = compileV2Only
+                ? null
+                : Compile(plan.Root, plan.TraceInstructions, emitBoundaryCalls: true);
+            var pureCompiled = !compileV2Only && plan.PureCpuBatchEligible
+                ? Compile(plan.Root, plan.TraceInstructions, emitBoundaryCalls: false)
+                : null;
+            var v2Compiled = plan.V2Trace.IsEmpty
+                ? null
+                : CompileV2(
+                    plan.Root,
+                    plan.V2Trace.Tier,
+                    plan.V2Trace.Instructions,
+                    plan.V2Trace.CodeStart,
+                    plan.V2Trace.ByteLength,
+                    plan.V2Trace.PureCpuBatchEligible,
+                    plan.V2Trace.FastReadOnlyBatchEligible,
+                    plan.V2BusGraphEnabled);
+            return new TraceEntry(
+                plan.Root,
+                plan.CodeStart,
+                plan.ByteLength,
+                plan.StartGeneration,
+                plan.EndGeneration,
+                plan.CodeWords,
+                plan.DirectInstructionPrefixes,
+                plan.HelperInstructionPrefixes,
+                plan.DirectCpuInstructionPrefixes,
+                plan.DirectMemoryInstructionPrefixes,
+                plan.SpecializedHelperInstructionPrefixes,
+                compiled,
+                plan.PureCpuBatchEligible,
+                pureCompiled,
+                v2Compiled,
+                plan.V2Trace.Tier,
+                plan.V2Trace.InstructionCount,
+                plan.V2Trace.HasInternalLoop,
+                plan.V2Trace.PureCpuBatchEligible);
+        }
+
+        private static bool ShouldCompileV2OnlyTrace(M68kTraceCompilationPlan plan)
+        {
+            if (plan.V2Trace.IsEmpty)
+            {
+                return false;
+            }
+
+            return plan.Reason is M68kJitCompileReason.Handoff or
+                M68kJitCompileReason.GraphHole or
+                M68kJitCompileReason.BranchPressure;
+        }
+
+        private static void PrepareTraceEntry(TraceEntry trace)
+        {
+            if (trace.Compiled != null)
+            {
+                PrepareCompiledTrace(trace.Compiled);
+            }
+
+            if (trace.PureCompiled != null)
+            {
+                PrepareCompiledTrace(trace.PureCompiled);
+            }
+
+            if (trace.V2Compiled != null)
+            {
+                PrepareCompiledTrace(trace.V2Compiled);
+            }
+        }
+
+        private static void PrepareCompiledTrace(CompiledTrace trace)
+        {
+            try
+            {
+                RuntimeHelpers.PrepareDelegate(trace);
+            }
+            catch (PlatformNotSupportedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        private void RecordTracePlanCompiledCounters(M68kTraceCompilationPlan plan)
+        {
+            if (!plan.V2Trace.IsEmpty)
+            {
+                RecordV2CompiledTrace(plan.V2Trace.Tier);
+                if (plan.V2Trace.WorkerGraphExpanded)
+                {
+                    _counters.V2WorkerExpandedGraphs++;
+                    _counters.V2WorkerExpandedGraphInstructions += plan.V2Trace.InstructionCount;
+                    _counters.V2WorkerExpandedGraphBytes += plan.V2Trace.ByteLength;
+                }
+
+                QueueV2ExternalHandoffTargets(plan);
+            }
+        }
+
+        private void QueueV2ExternalHandoffTargets(M68kTraceCompilationPlan plan)
+        {
+            if (!_asyncJitEnabled ||
+                _amigaBus == null ||
+                plan.V2Trace.IsEmpty ||
+                plan.V2Trace.ExternalHandoffTargets == null ||
+                plan.V2Trace.ExternalHandoffTargets.Length == 0)
+            {
+                return;
+            }
+
+            var queued = 0;
+            foreach (var rawTarget in plan.V2Trace.ExternalHandoffTargets)
+            {
+                var target = Normalize(rawTarget);
+                if (target == Normalize(plan.Root) ||
+                    _v2DisabledRoots.Contains(target) ||
+                    _amigaBus.IsChipRamAddress(target) ||
+                    _amigaBus.HasHostCallback(target))
+                {
+                    continue;
+                }
+
+                if (_traces.TryGetValue(target, out var existing))
+                {
+                    if (TryValidateTraceGeneration(target, ref existing) &&
+                        IsV2GraphHoleTargetChainable(existing))
+                    {
+                        CacheV2HandoffTrace(plan.Root, target, existing);
+                    }
+
+                    continue;
+                }
+
+                if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _) ||
+                    !IsV2Instruction(instruction, out _))
+                {
+                    continue;
+                }
+
+                var handoffPressure = IncrementV2HandoffQueuePressure(target);
+                if (TryQueueAsyncTraceCompilation(
+                    target,
+                    V2TraceTier.Tier0,
+                    M68kJitCompileReason.Handoff,
+                    CompileThreshold * 16 +
+                        plan.V2Trace.InstructionCount * 16 +
+                        Math.Min(handoffPressure, 4096) * 64,
+                    branchPressurePromotion: false,
+                    out var queueResult) &&
+                    queueResult is
+                        M68kAsyncJitQueueResult.Queued or
+                        M68kAsyncJitQueueResult.DedupedPending or
+                        M68kAsyncJitQueueResult.DedupedCompiling)
+                {
+                    queued++;
+                    if (queued >= V2MaxExternalHandoffPrequeues)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
+        private static bool TryCreateTraceCompilationPlanFromSnapshot(
+            M68kTraceCompilationInput input,
+            out M68kTraceCompilationPlan plan)
+        {
+            plan = default;
+            if (input.Snapshot.IsEmpty)
+            {
+                return false;
+            }
+
+            var reader = new M68kSnapshotCodeReader(input.Snapshot);
+            Span<M68kDecodedInstruction> instructions = stackalloc M68kDecodedInstruction[MaxTraceInstructions];
+            var count = 0;
+            var pc = input.Root;
+            var byteCount = 0;
+            while (count < MaxTraceInstructions && byteCount < MaxTraceBytes)
+            {
+                if (!reader.ContainsRange(pc, 2) ||
+                    !M68kDecoder.TryDecode(reader, pc, out var instruction, out _))
+                {
+                    break;
+                }
+
+                if (byteCount + instruction.Length > MaxTraceBytes ||
+                    !reader.ContainsRange(instruction.ProgramCounter, instruction.Length))
+                {
+                    break;
+                }
+
+                instructions[count++] = instruction;
+                byteCount += instruction.Length;
+                if (instruction.StopsTrace)
+                {
+                    break;
+                }
+
+                pc = Normalize(pc + (uint)instruction.Length);
+            }
+
+            if (count == 0)
+            {
+                return false;
+            }
+
+            var traceInstructions = instructions[..count].ToArray();
+            var pureCpuBatchEligible = IsPureCpuBatchEligible(traceInstructions);
+            var v2Trace = input.Options.V2Enabled &&
+                TryCreateV2TracePlanFromSnapshot(reader, input.Root, input.Tier, input.Options, out var compiledV2Trace)
+                    ? compiledV2Trace
+                    : default;
+            var guardStart = input.Root;
+            var guardEnd = Normalize(input.Root + (uint)byteCount);
+            if (!v2Trace.IsEmpty)
+            {
+                ExtendCodeRange(ref guardStart, ref guardEnd, v2Trace.CodeStart, v2Trace.ByteLength);
+            }
+
+            var guardByteLength = GetCodeRangeByteLength(guardStart, guardEnd);
+            if (!reader.ContainsRange(guardStart, guardByteLength) ||
+                !reader.TryCaptureWords(guardStart, guardByteLength, out var codeWords) ||
+                !reader.TryGetGeneration(guardStart, out var startGeneration) ||
+                !reader.TryGetGeneration(Normalize(guardStart + (uint)guardByteLength - 1u), out var endGeneration))
+            {
+                return false;
+            }
+
+            CaptureTraceInstructionKindPrefixes(
+                traceInstructions,
+                out var directInstructionPrefixes,
+                out var helperInstructionPrefixes,
+                out var directCpuInstructionPrefixes,
+                out var directMemoryInstructionPrefixes,
+                out var specializedHelperInstructionPrefixes);
+            plan = new M68kTraceCompilationPlan(
+                input.Root,
+                input.Tier,
+                input.Reason,
+                guardStart,
+                guardByteLength,
+                startGeneration,
+                endGeneration,
+                codeWords,
+                traceInstructions,
+                pureCpuBatchEligible,
+                directInstructionPrefixes,
+                helperInstructionPrefixes,
+                directCpuInstructionPrefixes,
+                directMemoryInstructionPrefixes,
+                specializedHelperInstructionPrefixes,
+                v2Trace,
+                input.Options.V2BusGraphEnabled);
+            return true;
+        }
+
+        private static bool TryCreateV2PromotionCompilationPlanFromSnapshot(
+            M68kV2PromotionCompilationInput input,
+            out M68kV2PromotionCompilationPlan plan)
+        {
+            plan = default;
+            if (input.Snapshot.IsEmpty ||
+                !input.Options.V2Enabled)
+            {
+                return false;
+            }
+
+            var reader = new M68kSnapshotCodeReader(input.Snapshot);
+            if (!TryCreateV2TracePlanFromSnapshot(reader, input.Root, input.Tier, input.Options, out var v2Trace))
+            {
+                return false;
+            }
+
+            var codeStart = input.CurrentCodeStart;
+            var codeEnd = Normalize(input.CurrentCodeStart + (uint)input.CurrentByteLength);
+            ExtendCodeRange(ref codeStart, ref codeEnd, v2Trace.CodeStart, v2Trace.ByteLength);
+            var byteLength = GetCodeRangeByteLength(codeStart, codeEnd);
+            if (!reader.ContainsRange(codeStart, byteLength) ||
+                !reader.TryCaptureWords(codeStart, byteLength, out var codeWords) ||
+                !reader.TryGetGeneration(codeStart, out var startGeneration) ||
+                !reader.TryGetGeneration(Normalize(codeStart + (uint)byteLength - 1u), out var endGeneration))
+            {
+                return false;
+            }
+
+            plan = new M68kV2PromotionCompilationPlan(
+                input.Root,
+                input.Tier,
+                codeStart,
+                byteLength,
+                startGeneration,
+                endGeneration,
+                codeWords,
+                v2Trace,
+                input.Options.V2BusGraphEnabled);
+            return true;
+        }
+
+        private static bool TryCreateV2TracePlanFromSnapshot(
+            M68kSnapshotCodeReader reader,
+            uint root,
+            V2TraceTier tier,
+            M68kTraceCompilationOptions options,
+            out V2TracePlan trace)
+        {
+            trace = default;
+            if (!options.V2Enabled)
+            {
+                return false;
+            }
+
+            var collectionTier = GetWorkerGraphExpansionTier(tier, options);
+            if (!TryCollectV2InstructionsFromSnapshot(
+                reader,
+                root,
+                collectionTier,
+                options,
+                out var instructions,
+                out var codeStart,
+                out var byteLength,
+                out var hasInternalLoop,
+                out var pureCpuBatchEligible,
+                out var fastReadOnlyBatchEligible,
+                out var externalHandoffTargets))
+            {
+                return false;
+            }
+
+            trace = new V2TracePlan(
+                collectionTier,
+                instructions,
+                codeStart,
+                byteLength,
+                hasInternalLoop,
+                pureCpuBatchEligible,
+                fastReadOnlyBatchEligible,
+                externalHandoffTargets,
+                workerGraphExpanded: collectionTier != tier);
+            return true;
+        }
+
+        private static bool TryCollectV2InstructionsFromSnapshot(
+            M68kSnapshotCodeReader reader,
+            uint root,
+            V2TraceTier tier,
+            M68kTraceCompilationOptions options,
+            out M68kDecodedInstruction[] instructions,
+            out uint codeStart,
+            out int byteLength,
+            out bool hasInternalLoop,
+            out bool pureCpuBatchEligible,
+            out bool fastReadOnlyBatchEligible,
+            out uint[] externalHandoffTargets)
+        {
+            instructions = Array.Empty<M68kDecodedInstruction>();
+            codeStart = root;
+            byteLength = 0;
+            hasInternalLoop = false;
+            pureCpuBatchEligible = true;
+            fastReadOnlyBatchEligible = false;
+            externalHandoffTargets = Array.Empty<uint>();
+            var (maxInstructions, maxBytes) = GetV2TierLimits(tier);
+            var collected = new Dictionary<uint, M68kDecodedInstruction>();
+            var queued = new HashSet<uint>();
+            var externalTargets = new List<uint>();
+            var work = new Queue<uint>();
+            var codeEnd = root;
+            var hasBranch = false;
+            var hasBusAccess = false;
+            var hasFastReadOnlyAccess = false;
+            var canCollectBusGraph = options.V2BusAccessEnabled && options.V2BusGraphEnabled;
+            EnqueueV2GraphAddress(root, codeStart, codeEnd, maxBytes, work, queued);
+            while (work.Count > 0 && collected.Count < maxInstructions)
+            {
+                var pc = work.Dequeue();
+                if (collected.ContainsKey(pc))
+                {
+                    continue;
+                }
+
+                while (collected.Count < maxInstructions)
+                {
+                    if (collected.ContainsKey(pc))
+                    {
+                        break;
+                    }
+
+                    if (!reader.ContainsRange(pc, 2) ||
+                        reader.HasHostCallback(pc) ||
+                        !M68kDecoder.TryDecode(reader, pc, out var instruction, out _))
+                    {
+                        if (collected.Count == 0)
+                        {
+                            return false;
+                        }
+
+                        break;
+                    }
+
+                    if (!reader.ContainsRange(instruction.ProgramCounter, instruction.Length) ||
+                        !TryExtendV2CodeRange(
+                            codeStart,
+                            codeEnd,
+                            instruction.ProgramCounter,
+                            instruction.Length,
+                            maxBytes,
+                            out var candidateCodeStart,
+                            out var candidateCodeEnd))
+                    {
+                        if (collected.Count == 0)
+                        {
+                            return false;
+                        }
+
+                        break;
+                    }
+
+                    if (!IsV2Instruction(instruction, options, out _))
+                    {
+                        if (collected.Count == 0)
+                        {
+                            return false;
+                        }
+
+                        break;
+                    }
+
+                    if (IsV2TerminalBusControlInstruction(instruction))
+                    {
+                        if (hasBranch && !canCollectBusGraph)
+                        {
+                            break;
+                        }
+
+                        collected.Add(pc, instruction);
+                        codeStart = candidateCodeStart;
+                        codeEnd = candidateCodeEnd;
+                        hasBusAccess = true;
+                        break;
+                    }
+
+                    if (IsV2BranchInstruction(instruction))
+                    {
+                        if (hasBusAccess && !canCollectBusGraph)
+                        {
+                            break;
+                        }
+
+                        collected.Add(pc, instruction);
+                        codeStart = candidateCodeStart;
+                        codeEnd = candidateCodeEnd;
+                        hasBranch = true;
+                        if (instruction.Operation == M68kJitOperation.Jmp)
+                        {
+                            break;
+                        }
+
+                        var target = GetBranchTarget(instruction);
+                        if (reader.ContainsRange(target, 2) &&
+                            CanIncludeV2GraphAddress(codeStart, codeEnd, target, maxBytes))
+                        {
+                            hasInternalLoop |= target <= instruction.ProgramCounter;
+                            EnqueueV2GraphAddress(target, codeStart, codeEnd, maxBytes, work, queued);
+                        }
+                        else
+                        {
+                            AddV2ExternalHandoffTarget(externalTargets, target);
+                        }
+
+                        if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
+                        {
+                            var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
+                            if (reader.ContainsRange(fallthrough, 2) &&
+                                CanIncludeV2GraphAddress(codeStart, codeEnd, fallthrough, maxBytes))
+                            {
+                                EnqueueV2GraphAddress(fallthrough, codeStart, codeEnd, maxBytes, work, queued);
+                            }
+                            else
+                            {
+                                AddV2ExternalHandoffTarget(externalTargets, fallthrough);
+                            }
+                        }
+
+                        break;
+                    }
+
+                    var instructionPure = IsV2PureCpuInstruction(instruction);
+                    var instructionFastReadOnly = !options.V2BusAccessEnabled &&
+                        options.V2FastReadEnabled &&
+                        IsV2FastReadOnlyBatchInstruction(instruction) &&
+                        ((!hasFastReadOnlyAccess && collected.Count == 0) ||
+                            IsV2PcIndexFastReadOnlyBatchInstruction(instruction));
+                    if (instructionFastReadOnly)
+                    {
+                        hasFastReadOnlyAccess = true;
+                    }
+
+                    if (!instructionPure && !instructionFastReadOnly)
+                    {
+                        if (hasBranch && !canCollectBusGraph)
+                        {
+                            break;
+                        }
+
+                        hasBusAccess = true;
+                    }
+
+                    collected.Add(pc, instruction);
+                    codeStart = candidateCodeStart;
+                    codeEnd = candidateCodeEnd;
+
+                    pc = Normalize(pc + (uint)instruction.Length);
+                    if (!reader.ContainsRange(pc, 2) ||
+                        !CanIncludeV2GraphAddress(codeStart, codeEnd, pc, maxBytes))
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (collected.Count == 0)
+            {
+                return false;
+            }
+
+            instructions = new M68kDecodedInstruction[collected.Count];
+            var index = 0;
+            foreach (var instruction in SortV2GraphInstructions(root, collected.Values))
+            {
+                instructions[index++] = instruction;
+            }
+
+            byteLength = GetCodeRangeByteLength(codeStart, codeEnd);
+            pureCpuBatchEligible = !hasBusAccess;
+            fastReadOnlyBatchEligible = pureCpuBatchEligible && hasFastReadOnlyAccess;
+            externalHandoffTargets = externalTargets.ToArray();
+            return !hasBusAccess || options.V2BusAccessEnabled;
         }
 
         private void RecordTraceInstructionKinds(TraceEntry trace, int executed)
@@ -1101,6 +2466,19 @@ namespace CopperMod.Amiga
         private bool TryCompileV2Trace(uint root, V2TraceTier tier, out V2TraceCompilation trace)
         {
             trace = default;
+            if (!TryCreateV2TracePlan(root, tier, out var plan))
+            {
+                return false;
+            }
+
+            trace = CompileV2FromPlan(root, plan, _v2BusGraphEnabled);
+            RecordV2CompiledTrace(tier);
+            return true;
+        }
+
+        private bool TryCreateV2TracePlan(uint root, V2TraceTier tier, out V2TracePlan trace)
+        {
+            trace = default;
             if (!_v2Enabled)
             {
                 RecordV2Rejection(V2TraceRejectionReason.Disabled);
@@ -1134,6 +2512,7 @@ namespace CopperMod.Amiga
                 out var hasInternalLoop,
                 out var pureCpuBatchEligible,
                 out var fastReadOnlyBatchEligible,
+                out var externalHandoffTargets,
                 out var rejectionReason,
                 out var rejectedInstruction))
             {
@@ -1141,25 +2520,37 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var compiled = CompileV2(
-                root,
-                tier,
-                instructions,
-                codeStart,
-                byteLength,
-                pureCpuBatchEligible,
-                fastReadOnlyBatchEligible,
-                _v2BusGraphEnabled);
-            trace = new V2TraceCompilation(
-                compiled,
+            trace = new V2TracePlan(
                 tier,
                 instructions,
                 codeStart,
                 byteLength,
                 hasInternalLoop,
-                pureCpuBatchEligible);
-            RecordV2CompiledTrace(tier);
+                pureCpuBatchEligible,
+                fastReadOnlyBatchEligible,
+                externalHandoffTargets);
             return true;
+        }
+
+        private static V2TraceCompilation CompileV2FromPlan(uint root, V2TracePlan plan, bool useGraph)
+        {
+            var compiled = CompileV2(
+                root,
+                plan.Tier,
+                plan.Instructions,
+                plan.CodeStart,
+                plan.ByteLength,
+                plan.PureCpuBatchEligible,
+                plan.FastReadOnlyBatchEligible,
+                useGraph);
+            return new V2TraceCompilation(
+                compiled,
+                plan.Tier,
+                plan.Instructions,
+                plan.CodeStart,
+                plan.ByteLength,
+                plan.HasInternalLoop,
+                plan.PureCpuBatchEligible);
         }
 
         private bool TryCollectV2Instructions(
@@ -1171,6 +2562,7 @@ namespace CopperMod.Amiga
             out bool hasInternalLoop,
             out bool pureCpuBatchEligible,
             out bool fastReadOnlyBatchEligible,
+            out uint[] externalHandoffTargets,
             out V2TraceRejectionReason rejectionReason,
             out M68kDecodedInstruction rejectedInstruction)
         {
@@ -1180,6 +2572,7 @@ namespace CopperMod.Amiga
             hasInternalLoop = false;
             pureCpuBatchEligible = true;
             fastReadOnlyBatchEligible = false;
+            externalHandoffTargets = Array.Empty<uint>();
             rejectionReason = V2TraceRejectionReason.Empty;
             rejectedInstruction = default;
             if (_amigaBus == null)
@@ -1191,6 +2584,7 @@ namespace CopperMod.Amiga
             var (maxInstructions, maxBytes) = GetV2TierLimits(tier);
             var collected = new Dictionary<uint, M68kDecodedInstruction>();
             var queued = new HashSet<uint>();
+            var externalTargets = new List<uint>();
             var work = new Queue<uint>();
             var codeEnd = root;
             var hasBranch = false;
@@ -1313,18 +2707,30 @@ namespace CopperMod.Amiga
                             hasInternalLoop |= target <= instruction.ProgramCounter;
                             EnqueueV2GraphAddress(target, codeStart, codeEnd, maxBytes, work, queued);
                         }
+                        else
+                        {
+                            AddV2ExternalHandoffTarget(externalTargets, target);
+                        }
 
                         if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
                         {
                             var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
-                            EnqueueV2GraphAddress(fallthrough, codeStart, codeEnd, maxBytes, work, queued);
+                            if (CanIncludeV2GraphAddress(codeStart, codeEnd, fallthrough, maxBytes))
+                            {
+                                EnqueueV2GraphAddress(fallthrough, codeStart, codeEnd, maxBytes, work, queued);
+                            }
+                            else
+                            {
+                                AddV2ExternalHandoffTarget(externalTargets, fallthrough);
+                            }
                         }
 
                         break;
                     }
 
                     var instructionPure = IsV2PureCpuInstruction(instruction);
-                    var instructionFastReadOnly = _v2FastReadEnabled &&
+                    var instructionFastReadOnly = !_v2BusAccessEnabled &&
+                        _v2FastReadEnabled &&
                         IsV2FastReadOnlyBatchInstruction(instruction) &&
                         ((!hasFastReadOnlyAccess && collected.Count == 0) ||
                             IsV2StaticallyZeroWaitFastReadInstruction(instruction) ||
@@ -1372,6 +2778,7 @@ namespace CopperMod.Amiga
             byteLength = GetCodeRangeByteLength(codeStart, codeEnd);
             pureCpuBatchEligible = !hasBusAccess;
             fastReadOnlyBatchEligible = pureCpuBatchEligible && hasFastReadOnlyAccess;
+            externalHandoffTargets = externalTargets.ToArray();
             if (hasBusAccess && !_v2BusAccessEnabled)
             {
                 rejectionReason = V2TraceRejectionReason.Empty;
@@ -1397,8 +2804,31 @@ namespace CopperMod.Amiga
                 hits,
                 branchExits,
                 out var branchPressurePromotion);
-            if (nextTier == V2TraceTier.None ||
-                !TryCompileV2Trace(trace.Root, nextTier, out var promoted))
+            if (nextTier == V2TraceTier.None)
+            {
+                return;
+            }
+
+            if (_asyncJitEnabled)
+            {
+                if (TryQueueAsyncV2Promotion(
+                    trace,
+                    nextTier,
+                    branchPressurePromotion,
+                    CalculateAsyncCompilePriority(
+                        trace.Root,
+                        nextTier,
+                        M68kJitCompileReason.Promotion,
+                        hits,
+                        branchExits,
+                        trace.V2HasInternalLoop)) ||
+                    !_asyncJitSyncFallbackEnabled)
+                {
+                    return;
+                }
+            }
+
+            if (!TryCompileV2Trace(trace.Root, nextTier, out var promoted))
             {
                 return;
             }
@@ -1580,6 +3010,24 @@ namespace CopperMod.Amiga
                 _ => (V2Tier0TraceInstructions, V2Tier0TraceBytes)
             };
 
+        private static V2TraceTier GetWorkerGraphExpansionTier(
+            V2TraceTier tier,
+            M68kTraceCompilationOptions options)
+        {
+            if (!options.WorkerGraphExpansionEnabled)
+            {
+                return tier;
+            }
+
+            return tier switch
+            {
+                V2TraceTier.Tier0 => V2TraceTier.Tier1,
+                V2TraceTier.Tier1 => V2TraceTier.Tier2,
+                V2TraceTier.Tier2 when options.V2Tier3Enabled => V2TraceTier.Tier3,
+                _ => tier
+            };
+        }
+
         private static int GetCodeRangeByteLength(uint codeStart, uint codeEnd)
             => (int)Normalize(codeEnd - codeStart);
 
@@ -1629,6 +3077,15 @@ namespace CopperMod.Amiga
             work.Enqueue(address);
         }
 
+        private static void AddV2ExternalHandoffTarget(List<uint> targets, uint target)
+        {
+            target = Normalize(target);
+            if (!targets.Contains(target))
+            {
+                targets.Add(target);
+            }
+        }
+
         private static bool CanIncludeV2GraphAddress(uint codeStart, uint codeEnd, uint address, int maxBytes)
             => TryExtendV2CodeRange(codeStart, codeEnd, address, 2, maxBytes, out _, out _);
 
@@ -1668,6 +3125,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Add or M68kJitOperation.Sub => IsV2AddSubInstruction(instruction),
                 M68kJitOperation.Cmp => IsV2ReadableSource(instruction.Source, allowMemoryRead),
                 M68kJitOperation.Cmpa => IsV2ReadableSource(instruction.Source, allowMemoryRead),
+                M68kJitOperation.Cmpm => IsV2CmpmInstruction(instruction, _v2BusAccessEnabled),
                 M68kJitOperation.And or M68kJitOperation.Or => IsV2LogicalInstruction(instruction, allowMemoryRead),
                 M68kJitOperation.Eor => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
                     (_v2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
@@ -1675,6 +3133,15 @@ namespace CopperMod.Amiga
                 M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap or M68kJitOperation.Exg => true,
                 M68kJitOperation.ShiftRegister => true,
                 M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic => IsV2BitInstruction(instruction),
+                M68kJitOperation.OriToCcr or
+                M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToCcr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToCcr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToCcr or
+                M68kJitOperation.MoveToSr => true,
+                M68kJitOperation.Pea => IsV2AddressOnlyEa(instruction.Source),
                 M68kJitOperation.Movem => true,
                 M68kJitOperation.Mulu or M68kJitOperation.Muls => IsV2MultiplyInstruction(instruction),
                 M68kJitOperation.Divu or M68kJitOperation.Divs => IsV2DivideInstruction(instruction),
@@ -1722,11 +3189,186 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        private static bool IsV2Instruction(
+            M68kDecodedInstruction instruction,
+            M68kTraceCompilationOptions options,
+            out V2TraceRejectionReason rejectionReason)
+        {
+            rejectionReason = V2TraceRejectionReason.None;
+            var allowMemoryRead = options.V2MemoryReadEnabled || options.V2FastReadEnabled || options.V2BusAccessEnabled;
+            var supported = instruction.Operation switch
+            {
+                M68kJitOperation.Nop => true,
+                M68kJitOperation.Moveq => true,
+                M68kJitOperation.Move => IsV2MoveInstruction(instruction, options, allowMemoryRead),
+                M68kJitOperation.Movea => IsV2ReadableSource(instruction.Source, allowMemoryRead) &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressRegister,
+                M68kJitOperation.Lea => IsV2AddressOnlyEa(instruction.Source),
+                M68kJitOperation.Addq or M68kJitOperation.Subq => instruction.Destination.Kind is
+                    M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister ||
+                    (options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
+                M68kJitOperation.Clr => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
+                    (options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
+                M68kJitOperation.Tst => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
+                    (allowMemoryRead && IsV2MemoryReadEa(instruction.Destination)),
+                M68kJitOperation.Addi or M68kJitOperation.Subi => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
+                    (options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
+                M68kJitOperation.Cmpi => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
+                    (allowMemoryRead && IsV2MemoryReadEa(instruction.Destination)),
+                M68kJitOperation.Add or M68kJitOperation.Sub => IsV2AddSubInstruction(instruction, options, allowMemoryRead),
+                M68kJitOperation.Cmp => IsV2ReadableSource(instruction.Source, allowMemoryRead),
+                M68kJitOperation.Cmpa => IsV2ReadableSource(instruction.Source, allowMemoryRead),
+                M68kJitOperation.Cmpm => IsV2CmpmInstruction(instruction, options.V2BusAccessEnabled),
+                M68kJitOperation.And or M68kJitOperation.Or => IsV2LogicalInstruction(instruction, options, allowMemoryRead),
+                M68kJitOperation.Eor => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
+                    (options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
+                M68kJitOperation.Not or M68kJitOperation.Neg => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap or M68kJitOperation.Exg => true,
+                M68kJitOperation.ShiftRegister => true,
+                M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic => IsV2BitInstruction(instruction, options),
+                M68kJitOperation.OriToCcr or
+                M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToCcr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToCcr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToCcr or
+                M68kJitOperation.MoveToSr => true,
+                M68kJitOperation.Pea => IsV2AddressOnlyEa(instruction.Source),
+                M68kJitOperation.Movem => true,
+                M68kJitOperation.Mulu or M68kJitOperation.Muls => IsV2MultiplyInstruction(instruction, options),
+                M68kJitOperation.Divu or M68kJitOperation.Divs => IsV2DivideInstruction(instruction, options),
+                M68kJitOperation.Jmp or M68kJitOperation.Jsr => IsV2AddressOnlyEa(instruction.Source),
+                M68kJitOperation.Bsr or M68kJitOperation.Rts => true,
+                M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
+                _ => false
+            };
+            if (supported)
+            {
+                return true;
+            }
+
+            rejectionReason = instruction.Operation switch
+            {
+                M68kJitOperation.Move or
+                M68kJitOperation.Movea or
+                M68kJitOperation.Lea or
+                M68kJitOperation.Add or
+                M68kJitOperation.Addi or
+                M68kJitOperation.Addq or
+                M68kJitOperation.Sub or
+                M68kJitOperation.Subi or
+                M68kJitOperation.Subq or
+                M68kJitOperation.Tst or
+                M68kJitOperation.Cmpi or
+                M68kJitOperation.Cmp or
+                M68kJitOperation.Cmpa or
+                M68kJitOperation.And or
+                M68kJitOperation.Andi or
+                M68kJitOperation.Or or
+                M68kJitOperation.Ori or
+                M68kJitOperation.Eor or
+                M68kJitOperation.Eori or
+                M68kJitOperation.Not or
+                M68kJitOperation.Neg or
+                M68kJitOperation.Mulu or
+                M68kJitOperation.Muls or
+                M68kJitOperation.Divu or
+                M68kJitOperation.Divs or
+                M68kJitOperation.Jmp or
+                M68kJitOperation.Jsr => V2TraceRejectionReason.UnsupportedEa,
+                _ => V2TraceRejectionReason.UnsupportedOperation
+            };
+            return false;
+        }
+
+        private static bool IsV2MoveInstruction(
+            M68kDecodedInstruction instruction,
+            M68kTraceCompilationOptions options,
+            bool allowMemoryRead)
+        {
+            if (instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+            {
+                return IsV2ReadableSource(instruction.Source, allowMemoryRead);
+            }
+
+            return options.V2BusAccessEnabled &&
+                IsV2ReadableSource(instruction.Source, allowMemoryRead) &&
+                IsV2MemoryWriteEa(instruction.Destination);
+        }
+
+        private static bool IsV2LogicalInstruction(
+            M68kDecodedInstruction instruction,
+            M68kTraceCompilationOptions options,
+            bool allowMemoryRead)
+        {
+            if (instruction.Variant == 1)
+            {
+                return options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination);
+            }
+
+            return instruction.Variant == 0 &&
+                instruction.Source.Kind != M68kJitEaKind.AddressRegister &&
+                IsV2ReadableSource(instruction.Source, allowMemoryRead);
+        }
+
+        private static bool IsV2AddSubInstruction(
+            M68kDecodedInstruction instruction,
+            M68kTraceCompilationOptions options,
+            bool allowMemoryRead)
+        {
+            if (instruction.Variant == 2)
+            {
+                return IsV2ReadableSource(instruction.Source, allowMemoryRead);
+            }
+
+            if (instruction.Variant == 1)
+            {
+                return options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination);
+            }
+
+            return instruction.Variant == 0 &&
+                instruction.Register >= 0 &&
+                IsV2ReadableSource(instruction.Source, allowMemoryRead);
+        }
+
+        private static bool IsV2MultiplyInstruction(M68kDecodedInstruction instruction, M68kTraceCompilationOptions options)
+            => instruction.Source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.Immediate ||
+                (options.V2BusAccessEnabled && IsV2MemoryReadEa(instruction.Source));
+
+        private static bool IsV2DivideInstruction(M68kDecodedInstruction instruction, M68kTraceCompilationOptions options)
+            => instruction.Source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.Immediate ||
+                (options.V2BusAccessEnabled && IsV2MemoryReadEa(instruction.Source));
+
+        private static bool IsV2BitInstruction(M68kDecodedInstruction instruction, M68kTraceCompilationOptions options)
+        {
+            if (instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+            {
+                return true;
+            }
+
+            if (!options.V2BusAccessEnabled && !options.V2MemoryReadEnabled && (!options.V2FastReadEnabled || instruction.Variant != 0))
+            {
+                return false;
+            }
+
+            return instruction.Variant == 0
+                ? IsV2MemoryReadEa(instruction.Destination)
+                : IsV2MemoryWriteEa(instruction.Destination);
+        }
+
         private static bool IsV2RegisterOrImmediateSource(M68kDecodedEa ea)
             => ea.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister or M68kJitEaKind.Immediate;
 
         private static bool IsV2ReadableSource(M68kDecodedEa ea, bool allowMemoryRead)
             => IsV2RegisterOrImmediateSource(ea) || (allowMemoryRead && IsV2MemoryReadEa(ea));
+
+        private static bool IsV2CmpmInstruction(M68kDecodedInstruction instruction, bool busAccessEnabled)
+            => busAccessEnabled &&
+                instruction.Size == M68kOperandSize.Byte &&
+                instruction.Source.Kind == M68kJitEaKind.AddressPostincrement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPostincrement;
 
         private static bool IsV2MemoryReadEa(M68kDecodedEa ea)
             => ea.Kind is M68kJitEaKind.AddressIndirect or
@@ -1791,6 +3433,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Cmpi => !IsV2MemoryReadEa(instruction.Destination) &&
                     !IsV2MemoryWriteEa(instruction.Destination),
                 M68kJitOperation.Cmpa => !IsV2MemoryReadEa(instruction.Source),
+                M68kJitOperation.Cmpm => false,
                 M68kJitOperation.And or
                 M68kJitOperation.Or => !IsV2MemoryReadEa(instruction.Source) &&
                     !IsV2MemoryWriteEa(instruction.Destination),
@@ -1927,7 +3570,13 @@ namespace CopperMod.Amiga
             => instruction.Operation is M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc or M68kJitOperation.Jmp;
 
         private static bool IsV2TerminalBusControlInstruction(M68kDecodedInstruction instruction)
-            => instruction.Operation is M68kJitOperation.Jsr or M68kJitOperation.Bsr or M68kJitOperation.Rts;
+            => instruction.Operation is M68kJitOperation.Jsr or
+                M68kJitOperation.Bsr or
+                M68kJitOperation.Rts or
+                M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToSr;
 
         private static void GetV2RegisterMasks(
             M68kDecodedInstruction[] instructions,
@@ -2316,7 +3965,16 @@ namespace CopperMod.Amiga
                     M68kJitOperation.Movem or
                     M68kJitOperation.Jsr or
                     M68kJitOperation.Bsr or
-                    M68kJitOperation.Rts)
+                    M68kJitOperation.Rts or
+                    M68kJitOperation.OriToCcr or
+                    M68kJitOperation.OriToSr or
+                    M68kJitOperation.AndiToCcr or
+                    M68kJitOperation.AndiToSr or
+                    M68kJitOperation.EoriToCcr or
+                    M68kJitOperation.EoriToSr or
+                    M68kJitOperation.MoveToCcr or
+                    M68kJitOperation.MoveToSr or
+                    M68kJitOperation.Pea)
                 {
                     return true;
                 }
@@ -2490,7 +4148,7 @@ namespace CopperMod.Amiga
                         root,
                         codeStart,
                         byteLength,
-                        recordOutOfBlockSideExit: true);
+                        recordOutOfBlockSideExit: false);
                     if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
                     {
                         var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
@@ -2505,7 +4163,7 @@ namespace CopperMod.Amiga
                             codeStart,
                             byteLength,
                             isFallthrough: true,
-                            recordOutOfBlockSideExit: true);
+                            recordOutOfBlockSideExit: false);
                     }
                     else if (!IsV2BranchInstruction(instruction) &&
                         (i + 1 >= instructions.Length ||
@@ -2531,7 +4189,7 @@ namespace CopperMod.Amiga
                         root,
                         root,
                         0,
-                        recordOutOfBlockSideExit: true);
+                        recordOutOfBlockSideExit: false);
                 }
             }
 
@@ -2605,6 +4263,9 @@ namespace CopperMod.Amiga
                 case M68kJitOperation.Cmpa:
                     EmitV2CompareAddress(il, context, instruction);
                     return;
+                case M68kJitOperation.Cmpm:
+                    EmitV2CompareMemory(il, context, instruction);
+                    return;
                 case M68kJitOperation.Cmpi:
                     EmitV2CompareImmediate(il, context, instruction);
                     return;
@@ -2668,6 +4329,19 @@ namespace CopperMod.Amiga
                 case M68kJitOperation.BitDynamic:
                     EmitV2BitOperation(il, context, instruction, immediateBit: false);
                     return;
+                case M68kJitOperation.OriToCcr:
+                case M68kJitOperation.OriToSr:
+                case M68kJitOperation.AndiToCcr:
+                case M68kJitOperation.AndiToSr:
+                case M68kJitOperation.EoriToCcr:
+                case M68kJitOperation.EoriToSr:
+                case M68kJitOperation.MoveToCcr:
+                case M68kJitOperation.MoveToSr:
+                    EmitV2StatusImmediate(il, context, instruction, exit);
+                    return;
+                case M68kJitOperation.Pea:
+                    EmitV2Pea(il, context, instruction);
+                    return;
                 case M68kJitOperation.Jmp:
                     EmitV2Jmp(il, context, instruction, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
                     return;
@@ -2716,8 +4390,11 @@ namespace CopperMod.Amiga
             else
             {
                 var address = il.DeclareLocal(typeof(uint));
+                var previous = il.DeclareLocal(typeof(uint));
                 EmitV2ResolveMemoryWriteAddress(il, context, instruction.Destination, instruction.Size);
                 il.Emit(OpCodes.Stloc, address);
+                EmitV2ReadMemoryValueFromAddress(il, context, address, instruction.Size);
+                il.Emit(OpCodes.Stloc, previous);
                 EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
             }
 
@@ -2906,13 +4583,26 @@ namespace CopperMod.Amiga
             else
             {
                 var address = il.DeclareLocal(typeof(uint));
+                var previous = il.DeclareLocal(typeof(uint));
                 EmitV2ResolveMemoryWriteAddress(il, context, instruction.Destination, instruction.Size);
                 il.Emit(OpCodes.Stloc, address);
+                EmitV2ReadMemoryValueFromAddress(il, context, address, instruction.Size);
+                il.Emit(OpCodes.Stloc, previous);
                 EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
             }
 
             context.EmitSetPendingLogic(value, instruction.Size);
-            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            context.EmitAddCycles(GetV2ClrCycles(instruction));
+        }
+
+        private static int GetV2ClrCycles(M68kDecodedInstruction instruction)
+        {
+            if (instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+            {
+                return instruction.Size == M68kOperandSize.Long ? 12 : 8;
+            }
+
+            return instruction.Size == M68kOperandSize.Long ? 20 : 10;
         }
 
         private static void EmitV2Compare(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -2947,6 +4637,20 @@ namespace CopperMod.Amiga
             EmitV2ArithmeticResult(il, destination, source, result, M68kOperandSize.Long, add: false);
             context.EmitSetPendingArithmetic(V2PendingFlags.Subtract, destination, source, result, M68kOperandSize.Long, setExtend: false);
             context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 8 : 6);
+        }
+
+        private static void EmitV2CompareMemory(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
+        {
+            var destination = il.DeclareLocal(typeof(uint));
+            var source = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            EmitV2LoadSourceValue(il, context, instruction.Source, instruction.Size);
+            il.Emit(OpCodes.Stloc, source);
+            EmitV2LoadSourceValue(il, context, instruction.Destination, instruction.Size);
+            il.Emit(OpCodes.Stloc, destination);
+            EmitV2ArithmeticResult(il, destination, source, result, instruction.Size, add: false);
+            context.EmitSetPendingArithmetic(V2PendingFlags.Subtract, destination, source, result, instruction.Size, setExtend: false);
+            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 20 : 12);
         }
 
         private static void EmitV2CompareImmediate(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -3299,6 +5003,40 @@ namespace CopperMod.Amiga
             }
 
             context.EmitAddCycles(memoryTarget ? 14 : immediateBit ? 10 : 8);
+        }
+
+        private static void EmitV2StatusImmediate(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            context.EmitStoreState(recordLazyWriteback: false);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Operation);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.Source.Immediate));
+            il.Emit(OpCodes.Call, ExecuteStatusImmediateForV2BatchMethod);
+            context.EmitReloadState();
+            if (instruction.Operation is M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToSr)
+            {
+                il.Emit(OpCodes.Br, exit);
+            }
+        }
+
+        private static void EmitV2Pea(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
+        {
+            context.EmitStoreState(recordLazyWriteback: false);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Source.Kind);
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Register);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.Source.ExtensionAddress));
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Extension0);
+            il.Emit(OpCodes.Ldc_I4, instruction.Source.Extension1);
+            il.Emit(OpCodes.Call, ExecutePeaForV2BatchMethod);
+            context.EmitReloadState();
         }
 
         private static void EmitV2Movem(
@@ -3712,21 +5450,49 @@ namespace CopperMod.Amiga
             var done = il.DefineLabel();
             if (context.ZeroWaitProbeEnabled)
             {
-                var fastValue = il.DeclareLocal(typeof(uint));
-                var amigaBus = il.DeclareLocal(typeof(AmigaBus));
-                il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Ldfld, AmigaBusField);
-                il.Emit(OpCodes.Stloc, amigaBus);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Brfalse, slowRead);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Ldloc, address);
-                il.Emit(OpCodes.Ldc_I4, (int)size);
-                il.Emit(OpCodes.Ldloca_S, fastValue);
-                il.Emit(OpCodes.Callvirt, TryReadJitZeroWaitMemoryMethod);
-                il.Emit(OpCodes.Brfalse, slowRead);
-                il.Emit(OpCodes.Ldloc, fastValue);
-                il.Emit(OpCodes.Br, done);
+                if (IsV2InlineZeroWaitMemoryEnabled())
+                {
+                    var fastMemory = il.DeclareLocal(typeof(byte[]));
+                    var fastOffset = il.DeclareLocal(typeof(int));
+                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastRead = il.DefineLabel();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldfld, AmigaBusField);
+                    il.Emit(OpCodes.Stloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Brfalse, slowRead);
+                    EmitSelectV2InlineZeroWaitMemory(
+                        il,
+                        amigaBus,
+                        address,
+                        GetV2MemoryByteCount(size),
+                        fastMemory,
+                        fastOffset,
+                        allowRom: true,
+                        fastRead,
+                        slowRead);
+                    il.MarkLabel(fastRead);
+                    EmitLoadV2ZeroWaitMemoryValue(il, fastMemory, fastOffset, size);
+                    il.Emit(OpCodes.Br, done);
+                }
+                else
+                {
+                    var fastValue = il.DeclareLocal(typeof(uint));
+                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldfld, AmigaBusField);
+                    il.Emit(OpCodes.Stloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Brfalse, slowRead);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, address);
+                    il.Emit(OpCodes.Ldc_I4, (int)size);
+                    il.Emit(OpCodes.Ldloca_S, fastValue);
+                    il.Emit(OpCodes.Callvirt, TryReadJitZeroWaitMemoryMethod);
+                    il.Emit(OpCodes.Brfalse, slowRead);
+                    il.Emit(OpCodes.Ldloc, fastValue);
+                    il.Emit(OpCodes.Br, done);
+                }
             }
 
             il.MarkLabel(slowRead);
@@ -3756,18 +5522,50 @@ namespace CopperMod.Amiga
             var done = il.DefineLabel();
             if (context.ZeroWaitProbeEnabled)
             {
-                var amigaBus = il.DeclareLocal(typeof(AmigaBus));
-                il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Ldfld, AmigaBusField);
-                il.Emit(OpCodes.Stloc, amigaBus);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Brfalse, slowWrite);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Ldloc, address);
-                il.Emit(OpCodes.Ldloc, value);
-                il.Emit(OpCodes.Ldc_I4, (int)size);
-                il.Emit(OpCodes.Callvirt, TryWriteJitZeroWaitMemoryMethod);
-                il.Emit(OpCodes.Brtrue, done);
+                if (IsV2InlineZeroWaitMemoryEnabled())
+                {
+                    var fastMemory = il.DeclareLocal(typeof(byte[]));
+                    var fastOffset = il.DeclareLocal(typeof(int));
+                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastWrite = il.DefineLabel();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldfld, AmigaBusField);
+                    il.Emit(OpCodes.Stloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Brfalse, slowWrite);
+                    EmitSelectV2InlineZeroWaitMemory(
+                        il,
+                        amigaBus,
+                        address,
+                        GetV2MemoryByteCount(size),
+                        fastMemory,
+                        fastOffset,
+                        allowRom: false,
+                        fastWrite,
+                        slowWrite);
+                    il.MarkLabel(fastWrite);
+                    EmitStoreV2ZeroWaitMemoryValue(il, fastMemory, fastOffset, value, size);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, address);
+                    il.Emit(OpCodes.Ldc_I4, GetV2MemoryByteCount(size));
+                    il.Emit(OpCodes.Callvirt, CompleteJitZeroWaitWriteMethod);
+                    il.Emit(OpCodes.Br, done);
+                }
+                else
+                {
+                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldfld, AmigaBusField);
+                    il.Emit(OpCodes.Stloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Brfalse, slowWrite);
+                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, address);
+                    il.Emit(OpCodes.Ldloc, value);
+                    il.Emit(OpCodes.Ldc_I4, (int)size);
+                    il.Emit(OpCodes.Callvirt, TryWriteJitZeroWaitMemoryMethod);
+                    il.Emit(OpCodes.Brtrue, done);
+                }
             }
 
             il.MarkLabel(slowWrite);
@@ -3778,6 +5576,243 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Ldc_I4, (int)size);
             il.Emit(OpCodes.Call, WriteMemoryValueForV2BatchSlowRefMethod);
             il.MarkLabel(done);
+        }
+
+        private static int GetV2MemoryByteCount(M68kOperandSize size)
+        {
+            return size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+        }
+
+        private static void EmitSelectV2InlineZeroWaitMemory(
+            ILGenerator il,
+            LocalBuilder amigaBus,
+            LocalBuilder address,
+            int byteCount,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            bool allowRom,
+            Label success,
+            Label fail)
+        {
+            var normalizedAddress = il.DeclareLocal(typeof(uint));
+            var baseAddress = il.DeclareLocal(typeof(uint));
+            var relativeOffset = il.DeclareLocal(typeof(uint));
+            var tryRom = allowRom ? il.DefineLabel() : fail;
+            il.Emit(OpCodes.Ldloc, address);
+            EmitLoadUIntConstant(il, 0x00FF_FFFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, normalizedAddress);
+            if (byteCount != 1)
+            {
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                il.Emit(OpCodes.Ldc_I4_1);
+                il.Emit(OpCodes.And);
+                il.Emit(OpCodes.Brtrue, fail);
+            }
+
+            il.Emit(OpCodes.Ldloc, amigaBus);
+            il.Emit(OpCodes.Ldfld, AmigaBusRealFastRamField);
+            il.Emit(OpCodes.Stloc, memory);
+            il.Emit(OpCodes.Ldloc, memory);
+            il.Emit(OpCodes.Brfalse, tryRom);
+            il.Emit(OpCodes.Ldloc, memory);
+            il.Emit(OpCodes.Ldlen);
+            il.Emit(OpCodes.Brfalse, tryRom);
+            il.Emit(OpCodes.Ldloc, amigaBus);
+            il.Emit(OpCodes.Ldfld, AmigaBusRealFastRamBaseField);
+            il.Emit(OpCodes.Stloc, baseAddress);
+            il.Emit(OpCodes.Ldloc, normalizedAddress);
+            il.Emit(OpCodes.Ldloc, baseAddress);
+            il.Emit(OpCodes.Blt_Un, tryRom);
+            il.Emit(OpCodes.Ldloc, normalizedAddress);
+            il.Emit(OpCodes.Ldloc, baseAddress);
+            il.Emit(OpCodes.Sub);
+            il.Emit(OpCodes.Stloc, relativeOffset);
+            EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, tryRom);
+            il.Emit(OpCodes.Ldloc, relativeOffset);
+            il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Stloc, offset);
+            il.Emit(OpCodes.Br, success);
+
+            if (allowRom)
+            {
+                var overlayRegion = il.DeclareLocal(AmigaBusRomOverlayRegionField.FieldType);
+                var tryOverlay = il.DefineLabel();
+                il.MarkLabel(tryRom);
+                il.Emit(OpCodes.Ldloc, amigaBus);
+                il.Emit(OpCodes.Ldfld, AmigaBusRomOverlayRegionField);
+                il.Emit(OpCodes.Stloc, overlayRegion);
+                il.Emit(OpCodes.Ldloc, overlayRegion);
+                il.Emit(OpCodes.Brfalse, fail);
+                il.Emit(OpCodes.Ldloc, overlayRegion);
+                il.Emit(OpCodes.Ldfld, MappedMemoryRegionDataField);
+                il.Emit(OpCodes.Stloc, memory);
+                il.Emit(OpCodes.Ldloc, memory);
+                il.Emit(OpCodes.Brfalse, fail);
+                il.Emit(OpCodes.Ldloc, overlayRegion);
+                il.Emit(OpCodes.Ldfld, MappedMemoryRegionBaseAddressField);
+                il.Emit(OpCodes.Stloc, baseAddress);
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                il.Emit(OpCodes.Ldloc, baseAddress);
+                il.Emit(OpCodes.Blt_Un, tryOverlay);
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                il.Emit(OpCodes.Ldloc, baseAddress);
+                il.Emit(OpCodes.Sub);
+                il.Emit(OpCodes.Stloc, relativeOffset);
+                EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, tryOverlay);
+                il.Emit(OpCodes.Ldloc, relativeOffset);
+                il.Emit(OpCodes.Conv_I4);
+                il.Emit(OpCodes.Stloc, offset);
+                il.Emit(OpCodes.Br, success);
+
+                il.MarkLabel(tryOverlay);
+                il.Emit(OpCodes.Ldloc, amigaBus);
+                il.Emit(OpCodes.Ldfld, AmigaBusRomOverlayEnabledField);
+                il.Emit(OpCodes.Brfalse, fail);
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                EmitLoadUIntConstant(il, 0x0008_0000);
+                il.Emit(OpCodes.Bge_Un, fail);
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                il.Emit(OpCodes.Ldc_I4, byteCount - 1);
+                il.Emit(OpCodes.Add);
+                EmitLoadUIntConstant(il, 0x0008_0000);
+                il.Emit(OpCodes.Bge_Un, fail);
+                il.Emit(OpCodes.Ldloc, normalizedAddress);
+                il.Emit(OpCodes.Ldloc, memory);
+                il.Emit(OpCodes.Ldlen);
+                il.Emit(OpCodes.Conv_U4);
+                il.Emit(OpCodes.Rem_Un);
+                il.Emit(OpCodes.Stloc, relativeOffset);
+                EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, fail);
+                il.Emit(OpCodes.Ldloc, relativeOffset);
+                il.Emit(OpCodes.Conv_I4);
+                il.Emit(OpCodes.Stloc, offset);
+                il.Emit(OpCodes.Br, success);
+            }
+        }
+
+        private static void EmitBranchIfV2InlineMemoryRangeTooSmall(
+            ILGenerator il,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            int byteCount,
+            Label fail)
+        {
+            il.Emit(OpCodes.Ldloc, offset);
+            il.Emit(OpCodes.Conv_U8);
+            il.Emit(OpCodes.Ldc_I8, (long)byteCount);
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldloc, memory);
+            il.Emit(OpCodes.Ldlen);
+            il.Emit(OpCodes.Conv_U8);
+            il.Emit(OpCodes.Bgt_Un, fail);
+        }
+
+        private static void EmitLoadV2ZeroWaitMemoryValue(
+            ILGenerator il,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                EmitLoadV2ZeroWaitMemoryByte(il, memory, offset, 0);
+                il.Emit(OpCodes.Conv_U4);
+                return;
+            }
+
+            EmitLoadV2ZeroWaitMemoryByte(il, memory, offset, 0);
+            il.Emit(OpCodes.Ldc_I4, size == M68kOperandSize.Long ? 24 : 8);
+            il.Emit(OpCodes.Shl);
+            EmitLoadV2ZeroWaitMemoryByte(il, memory, offset, 1);
+            if (size == M68kOperandSize.Long)
+            {
+                il.Emit(OpCodes.Ldc_I4, 16);
+                il.Emit(OpCodes.Shl);
+            }
+
+            il.Emit(OpCodes.Or);
+            if (size == M68kOperandSize.Long)
+            {
+                EmitLoadV2ZeroWaitMemoryByte(il, memory, offset, 2);
+                il.Emit(OpCodes.Ldc_I4, 8);
+                il.Emit(OpCodes.Shl);
+                il.Emit(OpCodes.Or);
+                EmitLoadV2ZeroWaitMemoryByte(il, memory, offset, 3);
+                il.Emit(OpCodes.Or);
+            }
+
+            il.Emit(OpCodes.Conv_U4);
+        }
+
+        private static void EmitStoreV2ZeroWaitMemoryValue(
+            ILGenerator il,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            LocalBuilder value,
+            M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 0, value, 0);
+                return;
+            }
+
+            if (size == M68kOperandSize.Word)
+            {
+                EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 0, value, 8);
+                EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 1, value, 0);
+                return;
+            }
+
+            EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 0, value, 24);
+            EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 1, value, 16);
+            EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 2, value, 8);
+            EmitStoreV2ZeroWaitMemoryByte(il, memory, offset, 3, value, 0);
+        }
+
+        private static void EmitLoadV2ZeroWaitMemoryByte(
+            ILGenerator il,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            int displacement)
+        {
+            il.Emit(OpCodes.Ldloc, memory);
+            EmitLoadV2ZeroWaitMemoryOffset(il, offset, displacement);
+            il.Emit(OpCodes.Ldelem_U1);
+        }
+
+        private static void EmitStoreV2ZeroWaitMemoryByte(
+            ILGenerator il,
+            LocalBuilder memory,
+            LocalBuilder offset,
+            int displacement,
+            LocalBuilder value,
+            int shift)
+        {
+            il.Emit(OpCodes.Ldloc, memory);
+            EmitLoadV2ZeroWaitMemoryOffset(il, offset, displacement);
+            il.Emit(OpCodes.Ldloc, value);
+            if (shift != 0)
+            {
+                il.Emit(OpCodes.Ldc_I4, shift);
+                il.Emit(OpCodes.Shr_Un);
+            }
+
+            il.Emit(OpCodes.Conv_U1);
+            il.Emit(OpCodes.Stelem_I1);
+        }
+
+        private static void EmitLoadV2ZeroWaitMemoryOffset(ILGenerator il, LocalBuilder offset, int displacement)
+        {
+            il.Emit(OpCodes.Ldloc, offset);
+            if (displacement == 0)
+            {
+                return;
+            }
+
+            il.Emit(OpCodes.Ldc_I4, displacement);
+            il.Emit(OpCodes.Add);
         }
 
         private static void EmitV2ResolveMemoryReadAddress(
@@ -4084,6 +6119,128 @@ namespace CopperMod.Amiga
             IncrementV2Diagnostic(_v2GraphHoleCauses, FormatV2InstructionCause(instruction));
         }
 
+        private void RecordV2TraceHandoffBlock(string reason, uint target, bool countFailure = true)
+        {
+            if (string.IsNullOrEmpty(reason))
+            {
+                reason = "unknown";
+            }
+
+            if (_amigaBus == null)
+            {
+                RecordV2TraceHandoffDiagnostic(reason + ":no-bus", countFailure);
+                return;
+            }
+
+            if (_amigaBus.IsChipRamAddress(target))
+            {
+                RecordV2TraceHandoffDiagnostic(reason + ":chip", countFailure);
+                return;
+            }
+
+            if (_amigaBus.HasHostCallback(target))
+            {
+                RecordV2TraceHandoffDiagnostic(reason + ":host", countFailure);
+                return;
+            }
+
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            {
+                var opcode = _amigaBus.ReadHostWord(target);
+                RecordV2TraceHandoffDiagnostic(
+                    reason + ":decode:" + decodeReason + "@0x" + Normalize(target).ToString("X6") + "/0x" + opcode.ToString("X4"),
+                    countFailure);
+                return;
+            }
+
+            RecordV2TraceHandoffDiagnostic(
+                reason + ":" + FormatV2InstructionCause(instruction),
+                countFailure);
+        }
+
+        private void RecordV2TraceHandoffDiagnostic(string diagnostic, bool countFailure)
+        {
+            IncrementV2Diagnostic(_v2TraceHandoffBlockCauses, diagnostic);
+            if (!countFailure)
+            {
+                return;
+            }
+
+            _counters.V2TraceHandoffFailures++;
+            IncrementV2Diagnostic(_v2TraceHandoffFailureCauses, diagnostic);
+        }
+
+        private void RecordV2BranchPressureLimitCause(uint target)
+        {
+            if (_amigaBus == null)
+            {
+                IncrementV2Diagnostic(_v2BranchPressureLimitCauses, "no-bus");
+                return;
+            }
+
+            if (_amigaBus.IsChipRamAddress(target))
+            {
+                IncrementV2Diagnostic(_v2BranchPressureLimitCauses, "chip");
+                return;
+            }
+
+            if (_amigaBus.HasHostCallback(target))
+            {
+                IncrementV2Diagnostic(_v2BranchPressureLimitCauses, "host");
+                return;
+            }
+
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            {
+                var opcode = _amigaBus.ReadHostWord(target);
+                IncrementV2Diagnostic(
+                    _v2BranchPressureLimitCauses,
+                    "decode:" + decodeReason + "@0x" + Normalize(target).ToString("X6") + "/0x" + opcode.ToString("X4"));
+                return;
+            }
+
+            IncrementV2Diagnostic(_v2BranchPressureLimitCauses, FormatV2InstructionCause(instruction));
+        }
+
+        private void RecordV2BranchPressureTargetState(string state, uint target)
+        {
+            if (string.IsNullOrEmpty(state))
+            {
+                state = "unknown";
+            }
+
+            if (_amigaBus == null)
+            {
+                IncrementV2Diagnostic(_v2BranchPressureTargetStates, state + ":no-bus");
+                return;
+            }
+
+            if (_amigaBus.IsChipRamAddress(target))
+            {
+                IncrementV2Diagnostic(_v2BranchPressureTargetStates, state + ":chip");
+                return;
+            }
+
+            if (_amigaBus.HasHostCallback(target))
+            {
+                IncrementV2Diagnostic(_v2BranchPressureTargetStates, state + ":host");
+                return;
+            }
+
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            {
+                var opcode = _amigaBus.ReadHostWord(target);
+                IncrementV2Diagnostic(
+                    _v2BranchPressureTargetStates,
+                    state + ":decode:" + decodeReason + "@0x" + Normalize(target).ToString("X6") + "/0x" + opcode.ToString("X4"));
+                return;
+            }
+
+            IncrementV2Diagnostic(
+                _v2BranchPressureTargetStates,
+                state + ":" + FormatV2InstructionCause(instruction));
+        }
+
         private static bool HasDecodedInstruction(M68kDecodedInstruction instruction)
             => instruction.Opcode != 0 || instruction.ProgramCounter != 0;
 
@@ -4091,6 +6248,111 @@ namespace CopperMod.Amiga
         {
             counters.TryGetValue(key, out var count);
             counters[key] = count + 1;
+        }
+
+        private static void RecordTraceBatchDiagnostics(
+            Dictionary<string, long> lengthBuckets,
+            Dictionary<string, long> wakeSources,
+            int instructionCount,
+            IM68kInstructionBoundary boundary)
+        {
+            IncrementV2Diagnostic(lengthBuckets, GetBatchLengthBucket(instructionCount));
+            if (boundary is IM68kTraceBatchDiagnosticsBoundary diagnosticsBoundary)
+            {
+                IncrementV2Diagnostic(wakeSources, FormatTraceBatchWakeSource(diagnosticsBoundary.LastTraceBatchWakeSource));
+            }
+        }
+
+        private static string GetBatchLengthBucket(int instructionCount)
+        {
+            if (instructionCount <= 1)
+            {
+                return "1";
+            }
+
+            if (instructionCount == 2)
+            {
+                return "2";
+            }
+
+            if (instructionCount <= 4)
+            {
+                return "3-4";
+            }
+
+            if (instructionCount <= 8)
+            {
+                return "5-8";
+            }
+
+            if (instructionCount <= 16)
+            {
+                return "9-16";
+            }
+
+            if (instructionCount <= 32)
+            {
+                return "17-32";
+            }
+
+            if (instructionCount <= 64)
+            {
+                return "33-64";
+            }
+
+            return "65+";
+        }
+
+        private static string FormatTraceBatchWakeSource(M68kTraceBatchWakeSource source)
+        {
+            return source switch
+            {
+                M68kTraceBatchWakeSource.TargetCycle => "target-cycle",
+                M68kTraceBatchWakeSource.PendingInterrupt => "pending-interrupt",
+                M68kTraceBatchWakeSource.VerticalBlank => "vblank",
+                M68kTraceBatchWakeSource.HorizontalSyncTod => "hsync-tod",
+                M68kTraceBatchWakeSource.CiaTimer => "cia-timer",
+                M68kTraceBatchWakeSource.Disk => "disk",
+                M68kTraceBatchWakeSource.Paula => "paula",
+                M68kTraceBatchWakeSource.Blitter => "blitter",
+                _ => "unknown"
+            };
+        }
+
+        private static string FormatBatchLengthHistogram(Dictionary<string, long> counters)
+        {
+            if (counters.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+            AppendBatchLengthBucket(builder, counters, "1");
+            AppendBatchLengthBucket(builder, counters, "2");
+            AppendBatchLengthBucket(builder, counters, "3-4");
+            AppendBatchLengthBucket(builder, counters, "5-8");
+            AppendBatchLengthBucket(builder, counters, "9-16");
+            AppendBatchLengthBucket(builder, counters, "17-32");
+            AppendBatchLengthBucket(builder, counters, "33-64");
+            AppendBatchLengthBucket(builder, counters, "65+");
+            return builder.ToString();
+        }
+
+        private static void AppendBatchLengthBucket(StringBuilder builder, Dictionary<string, long> counters, string bucket)
+        {
+            if (!counters.TryGetValue(bucket, out var count) || count == 0)
+            {
+                return;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.Append('|');
+            }
+
+            builder.Append(bucket);
+            builder.Append(':');
+            builder.Append(count);
         }
 
         private static string FormatV2DiagnosticTop(Dictionary<string, long> counters)
@@ -4165,6 +6427,14 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Moveq => "#imm",
                 M68kJitOperation.Addq or M68kJitOperation.Subq => "#q",
                 M68kJitOperation.ShiftRegister => (instruction.Variant & 8) != 0 ? "Dn" : "#n",
+                M68kJitOperation.OriToCcr or
+                M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToCcr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToCcr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToCcr or
+                M68kJitOperation.MoveToSr => "#imm",
                 _ => string.Empty
             };
         }
@@ -4186,6 +6456,8 @@ namespace CopperMod.Amiga
                 M68kJitOperation.ShiftRegister => "Dn",
                 M68kJitOperation.Add or M68kJitOperation.Sub when instruction.Variant == 2 => "An",
                 M68kJitOperation.Cmpa => "An",
+                M68kJitOperation.OriToCcr or M68kJitOperation.AndiToCcr or M68kJitOperation.EoriToCcr or M68kJitOperation.MoveToCcr => "CCR",
+                M68kJitOperation.OriToSr or M68kJitOperation.AndiToSr or M68kJitOperation.EoriToSr or M68kJitOperation.MoveToSr => "SR",
                 _ => string.Empty
             };
         }
@@ -4217,7 +6489,16 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Dbcc or
                 M68kJitOperation.Jmp or
                 M68kJitOperation.Jsr or
-                M68kJitOperation.Rts => string.Empty,
+                M68kJitOperation.Rts or
+                M68kJitOperation.OriToCcr or
+                M68kJitOperation.OriToSr or
+                M68kJitOperation.AndiToCcr or
+                M68kJitOperation.AndiToSr or
+                M68kJitOperation.EoriToCcr or
+                M68kJitOperation.EoriToSr or
+                M68kJitOperation.MoveToCcr or
+                M68kJitOperation.MoveToSr or
+                M68kJitOperation.Pea => string.Empty,
                 M68kJitOperation.ExtWord => ".W",
                 M68kJitOperation.ExtLong => ".L",
                 _ => instruction.Size switch
@@ -4259,6 +6540,11 @@ namespace CopperMod.Amiga
                 M68kJitOperation.ShiftRegister => "SHIFT",
                 M68kJitOperation.BitImmediate => "BITI",
                 M68kJitOperation.BitDynamic => "BITD",
+                M68kJitOperation.OriToCcr or M68kJitOperation.OriToSr => "ORI",
+                M68kJitOperation.AndiToCcr or M68kJitOperation.AndiToSr => "ANDI",
+                M68kJitOperation.EoriToCcr or M68kJitOperation.EoriToSr => "EORI",
+                M68kJitOperation.MoveToCcr or M68kJitOperation.MoveToSr => "MOVE",
+                M68kJitOperation.Pea => "PEA",
                 _ => operation.ToString().ToUpperInvariant()
             };
 
@@ -4274,7 +6560,7 @@ namespace CopperMod.Amiga
             _v2TraceBranchExits.TryGetValue(root, out var exits);
             exits++;
             _v2TraceBranchExits[root] = exits;
-            RecordV2TierCeilingBranchExit(root, exits);
+            RecordV2TierCeilingBranchExit(root, target, exits);
             if (isFallthrough)
             {
                 _counters.V2SideExitConditionalFallthrough++;
@@ -4304,13 +6590,13 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _counters.V2SideExitGraphHole++;
-            RecordV2GraphHoleCause(target);
             if (TryFillV2GraphHoleTarget(target))
             {
                 return;
             }
 
+            _counters.V2SideExitGraphHole++;
+            RecordV2GraphHoleCause(target);
             RecordV2UnsupportedGraphHoleExit(root, target);
         }
 
@@ -4328,6 +6614,27 @@ namespace CopperMod.Amiga
             {
                 return TryValidateTraceGeneration(target, ref existing) &&
                     IsV2GraphHoleTargetChainable(existing);
+            }
+
+            if (_asyncJitEnabled)
+            {
+                _v2UnsupportedGraphHoleExits.TryGetValue(target, out var holePressure);
+                if (TryQueueAsyncTraceCompilation(
+                    target,
+                    V2TraceTier.Tier0,
+                    M68kJitCompileReason.GraphHole,
+                    CalculateAsyncCompilePriority(
+                        target,
+                        V2TraceTier.Tier0,
+                        M68kJitCompileReason.GraphHole,
+                        holePressure,
+                        holePressure,
+                        hasInternalLoop: false),
+                    branchPressurePromotion: false) ||
+                    !_asyncJitSyncFallbackEnabled)
+                {
+                    return false;
+                }
             }
 
             if (!TryCompileTrace(target, out var trace))
@@ -4348,9 +6655,9 @@ namespace CopperMod.Amiga
                 (trace.V2PureCpuBatchEligible || _v2BusAccessEnabled);
         }
 
-        private void RecordV2TierCeilingBranchExit(uint root, int exits)
+        private void RecordV2TierCeilingBranchExit(uint root, uint target, int exits)
         {
-            if (exits < V2TierCeilingBranchExitDisableExits ||
+            if (exits < V2TierCeilingBranchExitLimitExits ||
                 _v2DisabledRoots.Contains(root) ||
                 !_traces.TryGetValue(root, out var trace) ||
                 trace.V2Compiled == null ||
@@ -4359,8 +6666,101 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _v2DisabledRoots.Add(root);
-            _counters.V2DisabledBranchExitRoots++;
+            var firstLimitedTarget = _v2BranchPressureLimitedTargets.Add(GetV2HandoffCacheKey(root, target));
+            RecordV2BranchPressureLimitCause(target);
+            RecordV2BranchPressureTargetState(
+                TryQueueV2BranchPressureTarget(root, target, exits, firstLimitedTarget),
+                target);
+            if (_v2BranchPressureLimitedRoots.Add(root))
+            {
+                _counters.V2BranchPressureLimitedRoots++;
+            }
+        }
+
+        private string TryQueueV2BranchPressureTarget(uint sourceRoot, uint target, int exits, bool firstLimitedTarget)
+        {
+            if (!_v2Enabled)
+            {
+                return "disabled";
+            }
+
+            if (_amigaBus == null)
+            {
+                return "no-bus";
+            }
+
+            if (_amigaBus.IsChipRamAddress(target))
+            {
+                return "chip";
+            }
+
+            if (_amigaBus.HasHostCallback(target))
+            {
+                return "host";
+            }
+
+            target = Normalize(target);
+            if (_traces.TryGetValue(target, out var existing))
+            {
+                if (TryValidateTraceGeneration(target, ref existing) &&
+                    IsV2GraphHoleTargetChainable(existing))
+                {
+                    _v2BranchPressureQueuedTargets.Remove(target);
+                    CacheV2HandoffTrace(sourceRoot, target, existing);
+                    return "linked";
+                }
+
+                return "existing-unusable";
+            }
+
+            if (_v2BranchPressureQueuedTargets.Contains(target))
+            {
+                return "pending";
+            }
+
+            if (!firstLimitedTarget && (exits & (exits - 1)) != 0)
+            {
+                return "throttled";
+            }
+
+            if (!_asyncJitEnabled)
+            {
+                return "async-disabled";
+            }
+
+            if (!TryQueueAsyncTraceCompilation(
+                target,
+                V2TraceTier.Tier0,
+                M68kJitCompileReason.BranchPressure,
+                CalculateAsyncCompilePriority(
+                    target,
+                    V2TraceTier.Tier0,
+                    M68kJitCompileReason.BranchPressure,
+                    exits,
+                    exits,
+                    hasInternalLoop: false),
+                branchPressurePromotion: false,
+                out var queueResult))
+            {
+                return "snapshot-failed";
+            }
+
+            if (queueResult is
+                M68kAsyncJitQueueResult.Queued or
+                M68kAsyncJitQueueResult.DedupedPending or
+                M68kAsyncJitQueueResult.DedupedCompiling)
+            {
+                _v2BranchPressureQueuedTargets.Add(target);
+            }
+
+            return queueResult switch
+            {
+                M68kAsyncJitQueueResult.Queued => "queued",
+                M68kAsyncJitQueueResult.DedupedPending => "deduped-pending",
+                M68kAsyncJitQueueResult.DedupedCompiling => "deduped-compiling",
+                M68kAsyncJitQueueResult.Dropped => "dropped",
+                _ => "queue-unknown"
+            };
         }
 
         private void RecordV2ZeroInstructionExit(uint root)
@@ -4373,7 +6773,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _v2DisabledRoots.Add(root);
+            DisableV2Root(root, "entry");
             _counters.V2DisabledEntryMismatchRoots++;
         }
 
@@ -4406,8 +6806,23 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _v2DisabledRoots.Add(root);
+            DisableV2Root(root, "hole");
             _counters.V2DisabledGraphHoleRoots++;
+        }
+
+        private void DisableV2Root(uint root, string reason)
+        {
+            root = Normalize(root);
+            _v2DisabledRoots.Add(root);
+            _v2DisabledRootReasons[root] = reason;
+        }
+
+        private string GetV2DisabledRootBlockReason(uint root)
+        {
+            return _v2DisabledRootReasons.TryGetValue(Normalize(root), out var reason) &&
+                !string.IsNullOrEmpty(reason)
+                    ? "disabled-" + reason
+                    : "disabled";
         }
 
         private bool IsUnsupportedV2GraphHole(uint target)
@@ -4977,12 +7392,91 @@ namespace CopperMod.Amiga
                 case M68kJitOperation.BitDynamic:
                     ExecuteBitOperation(destination, (int)State.D[register], variant, size, immediateBit: false);
                     return true;
+                case M68kJitOperation.OriToCcr:
+                case M68kJitOperation.OriToSr:
+                case M68kJitOperation.AndiToCcr:
+                case M68kJitOperation.AndiToSr:
+                case M68kJitOperation.EoriToCcr:
+                case M68kJitOperation.EoriToSr:
+                case M68kJitOperation.MoveToCcr:
+                case M68kJitOperation.MoveToSr:
+                    ExecuteCompiledStatusImmediate(operationValue, source.Immediate);
+                    return true;
+                case M68kJitOperation.Pea:
+                    ExecuteCompiledPea(
+                        (int)source.Kind,
+                        source.Register,
+                        source.ExtensionAddress,
+                        source.Extension0,
+                        source.Extension1);
+                    return true;
                 default:
                     State.ProgramCounter = State.LastInstructionProgramCounter;
                     State.Cycles = _compiledInstructionPreviousCycle;
                     _counters.UnsupportedOpcode++;
                     return false;
             }
+        }
+
+        private void ExecuteCompiledStatusImmediate(int operationValue, uint immediate)
+        {
+            var operation = (M68kJitOperation)operationValue;
+            if (operation == M68kJitOperation.MoveToCcr)
+            {
+                SetCcr((ushort)immediate);
+                AddCycles(12);
+                return;
+            }
+
+            if (operation == M68kJitOperation.MoveToSr)
+            {
+                State.StatusRegister = (ushort)immediate;
+                AddCycles(12);
+                return;
+            }
+
+            var status = State.StatusRegister;
+            var result = operation switch
+            {
+                M68kJitOperation.OriToCcr or M68kJitOperation.OriToSr => status | (ushort)immediate,
+                M68kJitOperation.AndiToCcr or M68kJitOperation.AndiToSr => status & (ushort)immediate,
+                M68kJitOperation.EoriToCcr or M68kJitOperation.EoriToSr => status ^ (ushort)immediate,
+                _ => status
+            };
+
+            if (operation is M68kJitOperation.OriToCcr or M68kJitOperation.AndiToCcr or M68kJitOperation.EoriToCcr)
+            {
+                SetCcr((ushort)result);
+                AddCycles(8);
+                return;
+            }
+
+            if (!State.GetFlag(M68kCpuState.Supervisor))
+            {
+                RaiseException(8, State.LastInstructionProgramCounter, 34);
+                return;
+            }
+
+            State.StatusRegister = (ushort)result;
+            AddCycles(20);
+        }
+
+        private void ExecuteCompiledPea(
+            int sourceKindValue,
+            int sourceRegister,
+            uint sourceExtensionAddress,
+            ushort sourceExtension0,
+            ushort sourceExtension1)
+        {
+            var source = new M68kDecodedEa(
+                (M68kJitEaKind)sourceKindValue,
+                sourceRegister,
+                sourceExtensionAddress,
+                sourceExtension0,
+                sourceExtension1,
+                0);
+            PushLong(ResolveEaAddress(source, M68kOperandSize.Long, applySideEffects: false));
+            AddCycles(12);
         }
 
         private bool ExecuteCompiledMovem(
@@ -5992,6 +8486,11 @@ namespace CopperMod.Amiga
             State.A[register] = value;
         }
 
+        private void SetCcr(ushort value)
+        {
+            State.StatusRegister = (ushort)((State.StatusRegister & 0xFFE0) | (value & 0x001F));
+        }
+
         private uint Add(uint destination, uint source, M68kOperandSize size, bool setExtend)
         {
             var mask = M68kCpuState.Mask(size);
@@ -6174,6 +8673,7 @@ namespace CopperMod.Amiga
         private void AddTrace(TraceEntry trace)
         {
             RemoveTrace(trace.Root);
+            RemoveV2HandoffCacheEntries(trace.Root);
             _traces[trace.Root] = trace;
             ForEachTracePage(trace, page =>
             {
@@ -6201,7 +8701,13 @@ namespace CopperMod.Amiga
             _v2UnsupportedGraphHoleExits.Remove(root);
             _v2ZeroInstructionExits.Remove(root);
             _v2BlockedPromotionTiers.Remove(root);
+            _v2HandoffQueuePressures.Remove(root);
+            _v2BranchPressureLimitedRoots.Remove(root);
+            _v2BranchPressureQueuedTargets.Remove(root);
             _v2DisabledRoots.Remove(root);
+            _v2DisabledRootReasons.Remove(root);
+            RemoveV2HandoffCacheEntries(root);
+            RemoveV2BranchPressureTargetEntries(root);
             ForEachTracePage(trace, page =>
             {
                 if (!_traceRootsByPage.TryGetValue(page, out var roots))
@@ -6216,6 +8722,72 @@ namespace CopperMod.Amiga
                 }
             });
             return true;
+        }
+
+        private void RemoveV2HandoffCacheEntries(uint root)
+        {
+            if (_v2HandoffTraceCache.Count == 0)
+            {
+                return;
+            }
+
+            root = Normalize(root);
+            List<ulong>? keysToRemove = null;
+            foreach (var (key, trace) in _v2HandoffTraceCache)
+            {
+                var source = (uint)(key >> 24);
+                var target = (uint)(key & 0x00FF_FFFF);
+                if (source != root && target != root && trace.Root != root)
+                {
+                    continue;
+                }
+
+                keysToRemove ??= new List<ulong>();
+                keysToRemove.Add(key);
+            }
+
+            if (keysToRemove == null)
+            {
+                return;
+            }
+
+            foreach (var key in keysToRemove)
+            {
+                _v2HandoffTraceCache.Remove(key);
+            }
+        }
+
+        private void RemoveV2BranchPressureTargetEntries(uint root)
+        {
+            if (_v2BranchPressureLimitedTargets.Count == 0)
+            {
+                return;
+            }
+
+            root = Normalize(root);
+            List<ulong>? keysToRemove = null;
+            foreach (var key in _v2BranchPressureLimitedTargets)
+            {
+                var source = (uint)(key >> 24);
+                var target = (uint)(key & 0x00FF_FFFF);
+                if (source != root && target != root)
+                {
+                    continue;
+                }
+
+                keysToRemove ??= new List<ulong>();
+                keysToRemove.Add(key);
+            }
+
+            if (keysToRemove == null)
+            {
+                return;
+            }
+
+            foreach (var key in keysToRemove)
+            {
+                _v2BranchPressureLimitedTargets.Remove(key);
+            }
         }
 
         private static void ForEachTracePage(TraceEntry trace, Action<uint> action)
@@ -6259,8 +8831,416 @@ namespace CopperMod.Amiga
             _v2UnsupportedGraphHoleExits.Clear();
             _v2ZeroInstructionExits.Clear();
             _v2BlockedPromotionTiers.Clear();
+            _v2HandoffQueuePressures.Clear();
+            _v2BranchPressureLimitedRoots.Clear();
+            _v2BranchPressureLimitedTargets.Clear();
+            _v2BranchPressureQueuedTargets.Clear();
             _v2DisabledRoots.Clear();
+            _v2DisabledRootReasons.Clear();
+            _v2HandoffTraceCache.Clear();
+            unchecked
+            {
+                _asyncCompileEpoch++;
+            }
+
+            _asyncCompiler?.Clear();
             ClearPendingV2OutOfBlockBranch();
+        }
+
+        private bool TryQueueAsyncTraceCompilation(
+            uint root,
+            V2TraceTier tier,
+            M68kJitCompileReason reason,
+            int priority,
+            bool branchPressurePromotion)
+            => TryQueueAsyncTraceCompilation(
+                root,
+                tier,
+                reason,
+                priority,
+                branchPressurePromotion,
+                out _);
+
+        private bool TryQueueAsyncTraceCompilation(
+            uint root,
+            V2TraceTier tier,
+            M68kJitCompileReason reason,
+            int priority,
+            bool branchPressurePromotion,
+            out M68kAsyncJitQueueResult queueResult)
+        {
+            queueResult = M68kAsyncJitQueueResult.Dropped;
+            if (_asyncCompiler == null ||
+                _amigaBus == null ||
+                !_amigaBus.TryCaptureJitCodeSnapshot(root, GetAsyncSnapshotByteCount(tier), out var snapshot))
+            {
+                return false;
+            }
+
+            priority = CalculateAsyncCompilePriority(
+                root,
+                tier,
+                reason,
+                priority,
+                branchExits: 0,
+                hasInternalLoop: false);
+            var input = new M68kTraceCompilationInput(
+                root,
+                tier,
+                reason,
+                snapshot,
+                CreateTraceCompilationOptions(root, reason));
+            var request = M68kJitCompileRequest.ForTrace(
+                Interlocked.Increment(ref _asyncCompileSequence),
+                _asyncCompileEpoch,
+                priority,
+                branchPressurePromotion,
+                input);
+            queueResult = _asyncCompiler.Enqueue(request, out var queueDepth);
+            RecordAsyncQueueResult(queueResult);
+            _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, queueDepth);
+            return true;
+        }
+
+        private bool TryQueueAsyncV2Promotion(
+            TraceEntry trace,
+            V2TraceTier tier,
+            bool branchPressurePromotion,
+            int priority)
+        {
+            if (_asyncCompiler == null ||
+                _amigaBus == null ||
+                !_amigaBus.TryCaptureJitCodeSnapshot(trace.CodeStart, GetAsyncSnapshotByteCount(tier), out var snapshot))
+            {
+                return false;
+            }
+
+            var input = new M68kV2PromotionCompilationInput(
+                trace.Root,
+                tier,
+                trace.CodeStart,
+                trace.ByteLength,
+                snapshot,
+                CreateTraceCompilationOptions(trace.Root, M68kJitCompileReason.Promotion));
+            var request = M68kJitCompileRequest.ForPromotion(
+                Interlocked.Increment(ref _asyncCompileSequence),
+                _asyncCompileEpoch,
+                priority,
+                branchPressurePromotion,
+                input);
+            RecordAsyncQueueResult(_asyncCompiler.Enqueue(request, out var queueDepth));
+            _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, queueDepth);
+            return true;
+        }
+
+        private M68kTraceCompilationOptions CreateTraceCompilationOptions(uint root, M68kJitCompileReason reason)
+        {
+            var workerGraphExpansionEnabled = reason is not (
+                M68kJitCompileReason.Handoff or
+                M68kJitCompileReason.GraphHole or
+                M68kJitCompileReason.BranchPressure);
+            return CreateTraceCompilationOptions(root, workerGraphExpansionEnabled);
+        }
+
+        private M68kTraceCompilationOptions CreateTraceCompilationOptions(uint root, bool workerGraphExpansionEnabled)
+            => new M68kTraceCompilationOptions(
+                _v2Enabled && !_v2DisabledRoots.Contains(root),
+                _v2Tier3Enabled,
+                _v2MemoryReadEnabled,
+                _v2BusAccessEnabled,
+                _v2FastReadEnabled,
+                _v2BusGraphEnabled || _v2BusAccessEnabled,
+                workerGraphExpansionEnabled);
+
+        private int CalculateAsyncCompilePriority(
+            uint root,
+            V2TraceTier tier,
+            M68kJitCompileReason reason,
+            int hits,
+            int branchExits,
+            bool hasInternalLoop)
+        {
+            var tierBonus = tier switch
+            {
+                V2TraceTier.Tier3 => 65_536,
+                V2TraceTier.Tier2 => 16_384,
+                V2TraceTier.Tier1 => 4_096,
+                _ => 0
+            };
+            var reasonBonus = reason switch
+            {
+                M68kJitCompileReason.Handoff => 8_192,
+                M68kJitCompileReason.BranchPressure => 4_096,
+                M68kJitCompileReason.Promotion => 2_048,
+                M68kJitCompileReason.GraphHole => 1_024,
+                _ => 0
+            };
+            var loopBonus = hasInternalLoop ? 512 : 0;
+            var blacklistPenalty = _blacklist.ContainsKey(root) ? 4_096 : 0;
+            return Math.Max(0, hits + (branchExits * 4) + tierBonus + reasonBonus + loopBonus - blacklistPenalty);
+        }
+
+        private static int GetAsyncSnapshotByteCount(V2TraceTier tier)
+        {
+            var snapshotTier = tier switch
+            {
+                V2TraceTier.Tier0 or V2TraceTier.None => V2TraceTier.Tier1,
+                V2TraceTier.Tier1 => V2TraceTier.Tier2,
+                V2TraceTier.Tier2 => V2TraceTier.Tier3,
+                _ => tier
+            };
+            var (_, tierBytes) = GetV2TierLimits(snapshotTier);
+            return Math.Max(MaxTraceBytes, tierBytes);
+        }
+
+        private void RecordAsyncQueueResult(M68kAsyncJitQueueResult result)
+        {
+            switch (result)
+            {
+                case M68kAsyncJitQueueResult.Queued:
+                    _counters.AsyncRequestsQueued++;
+                    break;
+                case M68kAsyncJitQueueResult.DedupedPending:
+                case M68kAsyncJitQueueResult.DedupedCompiling:
+                    _counters.AsyncRequestsDeduped++;
+                    break;
+                case M68kAsyncJitQueueResult.Dropped:
+                    _counters.AsyncRequestsDropped++;
+                    break;
+            }
+        }
+
+        private void DrainAsyncCompileResults()
+        {
+            if (_asyncCompiler == null)
+            {
+                return;
+            }
+
+            while (_asyncCompiler.TryDequeueCompleted(out var result))
+            {
+                _counters.AsyncWorkerCompilesStarted++;
+                _counters.AsyncWorkerCompileMilliseconds += Math.Max(0, result.CompileMilliseconds);
+                if (!result.Succeeded)
+                {
+                    _counters.AsyncWorkerCompilesFailed++;
+                    RecordAsyncCompileFailure(result);
+                    continue;
+                }
+
+                _counters.AsyncWorkerCompilesCompleted++;
+                if (result.Epoch != _asyncCompileEpoch)
+                {
+                    _counters.AsyncCompletedDiscardedSuperseded++;
+                    continue;
+                }
+
+                if (result.Trace.HasValue)
+                {
+                    InstallAsyncTraceResult(result);
+                }
+                else if (result.Promotion.HasValue)
+                {
+                    InstallAsyncPromotionResult(result);
+                }
+            }
+        }
+
+        private void RecordAsyncCompileFailure(M68kJitCompileResult result)
+        {
+            if (result.Key.Kind == M68kJitCompileKind.Promotion)
+            {
+                BlockV2PromotionTier(result.Key.Root, result.Key.Tier);
+                return;
+            }
+
+            if (result.Reason == M68kJitCompileReason.Handoff)
+            {
+                _v2HandoffQueuePressures.Remove(result.Key.Root);
+                RecordV2TraceHandoffBlock("no-trace-compile-failed", result.Key.Root, countFailure: false);
+            }
+            else if (result.Reason == M68kJitCompileReason.BranchPressure)
+            {
+                _v2BranchPressureQueuedTargets.Remove(result.Key.Root);
+            }
+
+            _blacklist[result.Key.Root] = BlacklistHits;
+            _counters.BlacklistCount++;
+        }
+
+        private void InstallAsyncTraceResult(M68kJitCompileResult result)
+        {
+            var plan = result.Trace!.Value.Plan;
+            if (plan.Reason == M68kJitCompileReason.Handoff)
+            {
+                _v2HandoffQueuePressures.Remove(plan.Root);
+            }
+
+            if (plan.Reason == M68kJitCompileReason.BranchPressure)
+            {
+                _v2BranchPressureQueuedTargets.Remove(plan.Root);
+            }
+
+            if (_traces.TryGetValue(plan.Root, out var existing) &&
+                !AsyncTraceResultImprovesExistingTrace(existing, result.Trace.Value.Trace))
+            {
+                _counters.AsyncCompletedDiscardedSuperseded++;
+                if (plan.Reason == M68kJitCompileReason.Handoff)
+                {
+                    RecordV2TraceHandoffBlock("no-trace-superseded", plan.Root, countFailure: false);
+                }
+
+                return;
+            }
+
+            if (!TracePlanGenerationMatches(plan.CodeStart, plan.ByteLength, plan.StartGeneration, plan.EndGeneration, plan.CodeWords))
+            {
+                _counters.AsyncCompletedDiscardedStale++;
+                if (plan.Reason == M68kJitCompileReason.Handoff)
+                {
+                    RecordV2TraceHandoffBlock("no-trace-stale", plan.Root, countFailure: false);
+                }
+
+                return;
+            }
+
+            AddTrace(result.Trace.Value.Trace);
+            _counters.AsyncCompletedInstalled++;
+            _counters.CompiledTraces++;
+            RecordTracePlanCompiledCounters(plan);
+            RecordAsyncTierInstall(plan.V2Trace.Tier);
+            if (plan.Reason == M68kJitCompileReason.GraphHole)
+            {
+                _counters.V2GraphHoleTargetCompiles++;
+            }
+            else if (plan.Reason == M68kJitCompileReason.Handoff)
+            {
+                RecordV2TraceHandoffBlock("no-trace-installed", plan.Root, countFailure: false);
+            }
+        }
+
+        private static bool AsyncTraceResultImprovesExistingTrace(TraceEntry existing, TraceEntry candidate)
+        {
+            if (candidate.V2Compiled == null)
+            {
+                return false;
+            }
+
+            if (existing.V2Compiled == null)
+            {
+                return true;
+            }
+
+            if (candidate.V2Tier > existing.V2Tier)
+            {
+                return true;
+            }
+
+            return candidate.V2Tier == existing.V2Tier &&
+                candidate.V2InstructionCount > existing.V2InstructionCount;
+        }
+
+        private void InstallAsyncPromotionResult(M68kJitCompileResult result)
+        {
+            var promotion = result.Promotion!.Value;
+            var plan = promotion.Plan;
+            if (!_traces.TryGetValue(plan.Root, out var current) ||
+                current.V2Compiled == null ||
+                current.V2Tier >= plan.Tier)
+            {
+                _counters.AsyncCompletedDiscardedSuperseded++;
+                return;
+            }
+
+            if (!TracePlanGenerationMatches(plan.CodeStart, plan.ByteLength, plan.StartGeneration, plan.EndGeneration, plan.CodeWords))
+            {
+                _counters.AsyncCompletedDiscardedStale++;
+                return;
+            }
+
+            if (!V2PromotionExpandsTrace(current, promotion.Compiled) &&
+                (!result.BranchPressurePromotion || !CanV2TierPromoteFurther(plan.Tier)))
+            {
+                BlockV2PromotionTier(plan.Root, plan.Tier);
+                _counters.AsyncCompletedDiscardedSuperseded++;
+                return;
+            }
+
+            var updated = current.WithV2(
+                plan.CodeStart,
+                plan.ByteLength,
+                plan.StartGeneration,
+                plan.EndGeneration,
+                plan.CodeWords,
+                promotion.Compiled.Compiled!,
+                promotion.Compiled.Tier,
+                promotion.Compiled.InstructionCount,
+                promotion.Compiled.HasInternalLoop,
+                promotion.Compiled.PureCpuBatchEligible);
+            AddTrace(updated);
+            _counters.AsyncCompletedInstalled++;
+            _v2TraceBranchExits[plan.Root] = 0;
+            _v2BlockedPromotionTiers.Remove(plan.Root);
+            RecordV2CompiledTrace(plan.Tier);
+            RecordAsyncTierInstall(plan.Tier);
+            if (plan.V2Trace.WorkerGraphExpanded)
+            {
+                _counters.V2WorkerExpandedGraphs++;
+                _counters.V2WorkerExpandedGraphInstructions += plan.V2Trace.InstructionCount;
+                _counters.V2WorkerExpandedGraphBytes += plan.V2Trace.ByteLength;
+            }
+
+            _counters.V2TierPromotions++;
+            if (result.BranchPressurePromotion)
+            {
+                _counters.V2TierPressurePromotions++;
+            }
+        }
+
+        private bool TracePlanGenerationMatches(
+            uint codeStart,
+            int byteLength,
+            uint startGeneration,
+            uint endGeneration,
+            ushort[] codeWords)
+        {
+            if (_amigaBus == null ||
+                !_amigaBus.CodeRangeGenerationMatches(codeStart, byteLength, startGeneration, endGeneration))
+            {
+                return false;
+            }
+
+            var address = codeStart;
+            for (var i = 0; i < codeWords.Length; i++)
+            {
+                if (_amigaBus.ReadHostWord(address) != codeWords[i])
+                {
+                    return false;
+                }
+
+                address = Normalize(address + 2);
+            }
+
+            return true;
+        }
+
+        private void RecordAsyncTierInstall(V2TraceTier tier)
+        {
+            switch (tier)
+            {
+                case V2TraceTier.Tier3:
+                    _counters.AsyncTier3Installs++;
+                    break;
+                case V2TraceTier.Tier2:
+                    _counters.AsyncTier2Installs++;
+                    break;
+                case V2TraceTier.Tier1:
+                    _counters.AsyncTier1Installs++;
+                    break;
+                default:
+                    _counters.AsyncTier0Installs++;
+                    break;
+            }
         }
 
         private void ClearPendingV2OutOfBlockBranch()
@@ -6908,6 +9888,726 @@ namespace CopperMod.Amiga
             public bool PureCpuBatchEligible { get; }
         }
 
+        private readonly struct V2TracePlan
+        {
+            public V2TracePlan(
+                V2TraceTier tier,
+                M68kDecodedInstruction[] instructions,
+                uint codeStart,
+                int byteLength,
+                bool hasInternalLoop,
+                bool pureCpuBatchEligible,
+                bool fastReadOnlyBatchEligible,
+                uint[] externalHandoffTargets,
+                bool workerGraphExpanded = false)
+            {
+                Tier = tier;
+                Instructions = instructions;
+                CodeStart = codeStart;
+                ByteLength = byteLength;
+                HasInternalLoop = hasInternalLoop;
+                PureCpuBatchEligible = pureCpuBatchEligible;
+                FastReadOnlyBatchEligible = fastReadOnlyBatchEligible;
+                ExternalHandoffTargets = externalHandoffTargets;
+                WorkerGraphExpanded = workerGraphExpanded;
+            }
+
+            public bool IsEmpty => Instructions == null || Instructions.Length == 0;
+
+            public V2TraceTier Tier { get; }
+
+            public M68kDecodedInstruction[] Instructions { get; }
+
+            public uint CodeStart { get; }
+
+            public int ByteLength { get; }
+
+            public int InstructionCount => Instructions?.Length ?? 0;
+
+            public bool HasInternalLoop { get; }
+
+            public bool PureCpuBatchEligible { get; }
+
+            public bool FastReadOnlyBatchEligible { get; }
+
+            public uint[] ExternalHandoffTargets { get; }
+
+            public bool WorkerGraphExpanded { get; }
+        }
+
+        private enum M68kJitCompileReason
+        {
+            HotRoot,
+            Promotion,
+            GraphHole,
+            Handoff,
+            BranchPressure
+        }
+
+        private enum M68kJitCompileKind
+        {
+            Trace,
+            Promotion
+        }
+
+        private enum M68kAsyncJitQueueResult
+        {
+            Queued,
+            DedupedPending,
+            DedupedCompiling,
+            Dropped
+        }
+
+        private readonly struct M68kJitCompileKey : IEquatable<M68kJitCompileKey>
+        {
+            public M68kJitCompileKey(uint root, V2TraceTier tier, M68kJitCompileKind kind)
+            {
+                Root = root;
+                Tier = tier;
+                Kind = kind;
+            }
+
+            public uint Root { get; }
+
+            public V2TraceTier Tier { get; }
+
+            public M68kJitCompileKind Kind { get; }
+
+            public bool Equals(M68kJitCompileKey other)
+                => Root == other.Root && Tier == other.Tier && Kind == other.Kind;
+
+            public override bool Equals(object? obj)
+                => obj is M68kJitCompileKey other && Equals(other);
+
+            public override int GetHashCode()
+                => HashCode.Combine(Root, Tier, Kind);
+        }
+
+        private readonly struct M68kTraceCompilationPlan
+        {
+            public M68kTraceCompilationPlan(
+                uint root,
+                V2TraceTier requestedTier,
+                M68kJitCompileReason reason,
+                uint codeStart,
+                int byteLength,
+                uint startGeneration,
+                uint endGeneration,
+                ushort[] codeWords,
+                M68kDecodedInstruction[] traceInstructions,
+                bool pureCpuBatchEligible,
+                int[] directInstructionPrefixes,
+                int[] helperInstructionPrefixes,
+                int[] directCpuInstructionPrefixes,
+                int[] directMemoryInstructionPrefixes,
+                int[] specializedHelperInstructionPrefixes,
+                V2TracePlan v2Trace,
+                bool v2BusGraphEnabled)
+            {
+                Root = root;
+                RequestedTier = requestedTier;
+                Reason = reason;
+                CodeStart = codeStart;
+                ByteLength = byteLength;
+                StartGeneration = startGeneration;
+                EndGeneration = endGeneration;
+                CodeWords = codeWords;
+                TraceInstructions = traceInstructions;
+                PureCpuBatchEligible = pureCpuBatchEligible;
+                DirectInstructionPrefixes = directInstructionPrefixes;
+                HelperInstructionPrefixes = helperInstructionPrefixes;
+                DirectCpuInstructionPrefixes = directCpuInstructionPrefixes;
+                DirectMemoryInstructionPrefixes = directMemoryInstructionPrefixes;
+                SpecializedHelperInstructionPrefixes = specializedHelperInstructionPrefixes;
+                V2Trace = v2Trace;
+                V2BusGraphEnabled = v2BusGraphEnabled;
+            }
+
+            public uint Root { get; }
+
+            public V2TraceTier RequestedTier { get; }
+
+            public M68kJitCompileReason Reason { get; }
+
+            public uint CodeStart { get; }
+
+            public int ByteLength { get; }
+
+            public uint StartGeneration { get; }
+
+            public uint EndGeneration { get; }
+
+            public ushort[] CodeWords { get; }
+
+            public M68kDecodedInstruction[] TraceInstructions { get; }
+
+            public bool PureCpuBatchEligible { get; }
+
+            public int[] DirectInstructionPrefixes { get; }
+
+            public int[] HelperInstructionPrefixes { get; }
+
+            public int[] DirectCpuInstructionPrefixes { get; }
+
+            public int[] DirectMemoryInstructionPrefixes { get; }
+
+            public int[] SpecializedHelperInstructionPrefixes { get; }
+
+            public V2TracePlan V2Trace { get; }
+
+            public bool V2BusGraphEnabled { get; }
+        }
+
+        private readonly struct M68kTraceCompilationOptions
+        {
+            public M68kTraceCompilationOptions(
+                bool v2Enabled,
+                bool v2Tier3Enabled,
+                bool v2MemoryReadEnabled,
+                bool v2BusAccessEnabled,
+                bool v2FastReadEnabled,
+                bool v2BusGraphEnabled,
+                bool workerGraphExpansionEnabled)
+            {
+                V2Enabled = v2Enabled;
+                V2Tier3Enabled = v2Tier3Enabled;
+                V2MemoryReadEnabled = v2MemoryReadEnabled;
+                V2BusAccessEnabled = v2BusAccessEnabled;
+                V2FastReadEnabled = v2FastReadEnabled;
+                V2BusGraphEnabled = v2BusGraphEnabled;
+                WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
+            }
+
+            public bool V2Enabled { get; }
+
+            public bool V2Tier3Enabled { get; }
+
+            public bool V2MemoryReadEnabled { get; }
+
+            public bool V2BusAccessEnabled { get; }
+
+            public bool V2FastReadEnabled { get; }
+
+            public bool V2BusGraphEnabled { get; }
+
+            public bool WorkerGraphExpansionEnabled { get; }
+        }
+
+        private readonly struct M68kTraceCompilationInput
+        {
+            public M68kTraceCompilationInput(
+                uint root,
+                V2TraceTier tier,
+                M68kJitCompileReason reason,
+                M68kJitCodeSnapshot snapshot,
+                M68kTraceCompilationOptions options)
+            {
+                Root = root;
+                Tier = tier;
+                Reason = reason;
+                Snapshot = snapshot;
+                Options = options;
+            }
+
+            public uint Root { get; }
+
+            public V2TraceTier Tier { get; }
+
+            public M68kJitCompileReason Reason { get; }
+
+            public M68kJitCodeSnapshot Snapshot { get; }
+
+            public M68kTraceCompilationOptions Options { get; }
+        }
+
+        private readonly struct M68kV2PromotionCompilationInput
+        {
+            public M68kV2PromotionCompilationInput(
+                uint root,
+                V2TraceTier tier,
+                uint currentCodeStart,
+                int currentByteLength,
+                M68kJitCodeSnapshot snapshot,
+                M68kTraceCompilationOptions options)
+            {
+                Root = root;
+                Tier = tier;
+                CurrentCodeStart = currentCodeStart;
+                CurrentByteLength = currentByteLength;
+                Snapshot = snapshot;
+                Options = options;
+            }
+
+            public uint Root { get; }
+
+            public V2TraceTier Tier { get; }
+
+            public uint CurrentCodeStart { get; }
+
+            public int CurrentByteLength { get; }
+
+            public M68kJitCodeSnapshot Snapshot { get; }
+
+            public M68kTraceCompilationOptions Options { get; }
+        }
+
+        private readonly struct M68kV2PromotionCompilationPlan
+        {
+            public M68kV2PromotionCompilationPlan(
+                uint root,
+                V2TraceTier tier,
+                uint codeStart,
+                int byteLength,
+                uint startGeneration,
+                uint endGeneration,
+                ushort[] codeWords,
+                V2TracePlan v2Trace,
+                bool v2BusGraphEnabled)
+            {
+                Root = root;
+                Tier = tier;
+                CodeStart = codeStart;
+                ByteLength = byteLength;
+                StartGeneration = startGeneration;
+                EndGeneration = endGeneration;
+                CodeWords = codeWords;
+                V2Trace = v2Trace;
+                V2BusGraphEnabled = v2BusGraphEnabled;
+            }
+
+            public uint Root { get; }
+
+            public V2TraceTier Tier { get; }
+
+            public uint CodeStart { get; }
+
+            public int ByteLength { get; }
+
+            public uint StartGeneration { get; }
+
+            public uint EndGeneration { get; }
+
+            public ushort[] CodeWords { get; }
+
+            public V2TracePlan V2Trace { get; }
+
+            public bool V2BusGraphEnabled { get; }
+        }
+
+        private readonly struct M68kTraceCompileSuccess
+        {
+            public M68kTraceCompileSuccess(M68kTraceCompilationPlan plan, TraceEntry trace)
+            {
+                Plan = plan;
+                Trace = trace;
+            }
+
+            public M68kTraceCompilationPlan Plan { get; }
+
+            public TraceEntry Trace { get; }
+        }
+
+        private readonly struct M68kPromotionCompileSuccess
+        {
+            public M68kPromotionCompileSuccess(M68kV2PromotionCompilationPlan plan, V2TraceCompilation compiled)
+            {
+                Plan = plan;
+                Compiled = compiled;
+            }
+
+            public M68kV2PromotionCompilationPlan Plan { get; }
+
+            public V2TraceCompilation Compiled { get; }
+        }
+
+        private readonly struct M68kJitCompileRequest
+        {
+            private M68kJitCompileRequest(
+                int sequence,
+                int epoch,
+                int priority,
+                bool branchPressurePromotion,
+                M68kJitCompileKind kind,
+                M68kJitCompileKey key,
+                M68kTraceCompilationInput trace,
+                M68kV2PromotionCompilationInput promotion)
+            {
+                Sequence = sequence;
+                Epoch = epoch;
+                Priority = priority;
+                BranchPressurePromotion = branchPressurePromotion;
+                Kind = kind;
+                Key = key;
+                Trace = trace;
+                Promotion = promotion;
+            }
+
+            public static M68kJitCompileRequest ForTrace(
+                int sequence,
+                int epoch,
+                int priority,
+                bool branchPressurePromotion,
+                M68kTraceCompilationInput trace)
+                => new M68kJitCompileRequest(
+                    sequence,
+                    epoch,
+                    priority,
+                    branchPressurePromotion,
+                    M68kJitCompileKind.Trace,
+                    new M68kJitCompileKey(trace.Root, trace.Tier, M68kJitCompileKind.Trace),
+                    trace,
+                    default);
+
+            public static M68kJitCompileRequest ForPromotion(
+                int sequence,
+                int epoch,
+                int priority,
+                bool branchPressurePromotion,
+                M68kV2PromotionCompilationInput promotion)
+                => new M68kJitCompileRequest(
+                    sequence,
+                    epoch,
+                    priority,
+                    branchPressurePromotion,
+                    M68kJitCompileKind.Promotion,
+                    new M68kJitCompileKey(promotion.Root, promotion.Tier, M68kJitCompileKind.Promotion),
+                    default,
+                    promotion);
+
+            public int Sequence { get; }
+
+            public int Epoch { get; }
+
+            public int Priority { get; private init; }
+
+            public bool BranchPressurePromotion { get; }
+
+            public M68kJitCompileKind Kind { get; }
+
+            public M68kJitCompileKey Key { get; }
+
+            public M68kTraceCompilationInput Trace { get; }
+
+            public M68kV2PromotionCompilationInput Promotion { get; }
+
+            public M68kJitCompileRequest WithPriority(int priority)
+                => new M68kJitCompileRequest(
+                    Sequence,
+                    Epoch,
+                    priority,
+                    BranchPressurePromotion,
+                    Kind,
+                    Key,
+                    Trace,
+                    Promotion);
+
+            public M68kJitCompileResult Compile()
+            {
+                var stopwatch = Stopwatch.StartNew();
+                try
+                {
+                    if (Kind == M68kJitCompileKind.Trace)
+                    {
+                        if (!TryCreateTraceCompilationPlanFromSnapshot(Trace, out var plan))
+                        {
+                            return M68kJitCompileResult.Failed(Epoch, BranchPressurePromotion, stopwatch, Key, Trace.Reason);
+                        }
+
+                        var trace = CompileTraceFromPlan(plan);
+                        PrepareTraceEntry(trace);
+                        return M68kJitCompileResult.ForTrace(
+                            Epoch,
+                            BranchPressurePromotion,
+                            stopwatch,
+                            new M68kTraceCompileSuccess(plan, trace));
+                    }
+
+                    if (!TryCreateV2PromotionCompilationPlanFromSnapshot(Promotion, out var promotionPlan))
+                    {
+                        return M68kJitCompileResult.Failed(Epoch, BranchPressurePromotion, stopwatch, Key, M68kJitCompileReason.Promotion);
+                    }
+
+                    var compiled = CompileV2FromPlan(promotionPlan.Root, promotionPlan.V2Trace, promotionPlan.V2BusGraphEnabled);
+                    PrepareCompiledTrace(compiled.Compiled!);
+                    return M68kJitCompileResult.ForPromotion(
+                        Epoch,
+                        BranchPressurePromotion,
+                        stopwatch,
+                        new M68kPromotionCompileSuccess(
+                            promotionPlan,
+                            compiled));
+                }
+                catch
+                {
+                    var reason = Kind == M68kJitCompileKind.Trace ? Trace.Reason : M68kJitCompileReason.Promotion;
+                    return M68kJitCompileResult.Failed(Epoch, BranchPressurePromotion, stopwatch, Key, reason);
+                }
+            }
+        }
+
+        private readonly struct M68kJitCompileResult
+        {
+            private M68kJitCompileResult(
+                int epoch,
+                bool branchPressurePromotion,
+                bool succeeded,
+                long compileMilliseconds,
+                M68kJitCompileKey key,
+                M68kJitCompileReason reason,
+                M68kTraceCompileSuccess? trace,
+                M68kPromotionCompileSuccess? promotion)
+            {
+                Epoch = epoch;
+                BranchPressurePromotion = branchPressurePromotion;
+                Succeeded = succeeded;
+                CompileMilliseconds = compileMilliseconds;
+                Key = key;
+                Reason = reason;
+                Trace = trace;
+                Promotion = promotion;
+            }
+
+            public static M68kJitCompileResult ForTrace(
+                int epoch,
+                bool branchPressurePromotion,
+                Stopwatch stopwatch,
+                M68kTraceCompileSuccess trace)
+                => new M68kJitCompileResult(
+                    epoch,
+                    branchPressurePromotion,
+                    succeeded: true,
+                    stopwatch.ElapsedMilliseconds,
+                    new M68kJitCompileKey(trace.Plan.Root, trace.Plan.RequestedTier, M68kJitCompileKind.Trace),
+                    trace.Plan.Reason,
+                    trace,
+                    null);
+
+            public static M68kJitCompileResult ForPromotion(
+                int epoch,
+                bool branchPressurePromotion,
+                Stopwatch stopwatch,
+                M68kPromotionCompileSuccess promotion)
+                => new M68kJitCompileResult(
+                    epoch,
+                    branchPressurePromotion,
+                    succeeded: true,
+                    stopwatch.ElapsedMilliseconds,
+                    new M68kJitCompileKey(promotion.Plan.Root, promotion.Plan.Tier, M68kJitCompileKind.Promotion),
+                    M68kJitCompileReason.Promotion,
+                    null,
+                    promotion);
+
+            public static M68kJitCompileResult Failed(
+                int epoch,
+                bool branchPressurePromotion,
+                Stopwatch stopwatch,
+                M68kJitCompileKey key,
+                M68kJitCompileReason reason)
+                => new M68kJitCompileResult(
+                    epoch,
+                    branchPressurePromotion,
+                    succeeded: false,
+                    stopwatch.ElapsedMilliseconds,
+                    key,
+                    reason,
+                    null,
+                    null);
+
+            public int Epoch { get; }
+
+            public bool BranchPressurePromotion { get; }
+
+            public bool Succeeded { get; }
+
+            public long CompileMilliseconds { get; }
+
+            public M68kJitCompileKey Key { get; }
+
+            public M68kJitCompileReason Reason { get; }
+
+            public M68kTraceCompileSuccess? Trace { get; }
+
+            public M68kPromotionCompileSuccess? Promotion { get; }
+        }
+
+        private sealed class M68kAsyncJitCompiler : IDisposable
+        {
+            private readonly object _gate = new object();
+            private readonly int _capacity;
+            private readonly List<M68kJitCompileRequest> _pending = new List<M68kJitCompileRequest>();
+            private readonly HashSet<M68kJitCompileKey> _compiling = new HashSet<M68kJitCompileKey>();
+            private readonly ConcurrentQueue<M68kJitCompileResult> _completed = new ConcurrentQueue<M68kJitCompileResult>();
+            private readonly Thread[] _workers;
+            private bool _stopping;
+            private int _maxQueueDepth;
+
+            public M68kAsyncJitCompiler(int workerCount, int capacity)
+            {
+                _capacity = Math.Max(1, capacity);
+                _workers = new Thread[Math.Max(1, workerCount)];
+                for (var i = 0; i < _workers.Length; i++)
+                {
+                    var worker = new Thread(WorkerLoop)
+                    {
+                        IsBackground = true,
+                        Name = "M68k async JIT compiler " + i
+                    };
+                    _workers[i] = worker;
+                    worker.Start();
+                }
+            }
+
+            public M68kAsyncJitQueueResult Enqueue(M68kJitCompileRequest request, out int queueDepth)
+            {
+                lock (_gate)
+                {
+                    queueDepth = _pending.Count;
+                    if (_stopping)
+                    {
+                        return M68kAsyncJitQueueResult.Dropped;
+                    }
+
+                    if (_compiling.Contains(request.Key))
+                    {
+                        return M68kAsyncJitQueueResult.DedupedCompiling;
+                    }
+
+                    for (var i = 0; i < _pending.Count; i++)
+                    {
+                        if (_pending[i].Key.Equals(request.Key))
+                        {
+                            if (request.Priority > _pending[i].Priority)
+                            {
+                                _pending[i] = _pending[i].WithPriority(request.Priority);
+                            }
+
+                            return M68kAsyncJitQueueResult.DedupedPending;
+                        }
+                    }
+
+                    if (_pending.Count >= _capacity)
+                    {
+                        var lowestIndex = 0;
+                        var lowestPriority = _pending[0].Priority;
+                        for (var i = 1; i < _pending.Count; i++)
+                        {
+                            if (_pending[i].Priority < lowestPriority)
+                            {
+                                lowestIndex = i;
+                                lowestPriority = _pending[i].Priority;
+                            }
+                        }
+
+                        if (request.Priority <= lowestPriority)
+                        {
+                            return M68kAsyncJitQueueResult.Dropped;
+                        }
+
+                        _pending.RemoveAt(lowestIndex);
+                    }
+
+                    _pending.Add(request);
+                    queueDepth = _pending.Count;
+                    if (queueDepth > _maxQueueDepth)
+                    {
+                        _maxQueueDepth = queueDepth;
+                    }
+
+                    Monitor.Pulse(_gate);
+                    return M68kAsyncJitQueueResult.Queued;
+                }
+            }
+
+            public bool TryDequeueCompleted(out M68kJitCompileResult result)
+                => _completed.TryDequeue(out result);
+
+            public void Clear()
+            {
+                lock (_gate)
+                {
+                    _pending.Clear();
+                    Monitor.PulseAll(_gate);
+                }
+
+                while (_completed.TryDequeue(out _))
+                {
+                }
+            }
+
+            public int MaxQueueDepth => Volatile.Read(ref _maxQueueDepth);
+
+            public void Dispose()
+            {
+                lock (_gate)
+                {
+                    _stopping = true;
+                    _pending.Clear();
+                    Monitor.PulseAll(_gate);
+                }
+
+                for (var i = 0; i < _workers.Length; i++)
+                {
+                    var worker = _workers[i];
+                    if (worker.IsAlive)
+                    {
+                        worker.Join(TimeSpan.FromSeconds(1));
+                    }
+                }
+
+                while (_completed.TryDequeue(out _))
+                {
+                }
+            }
+
+            private void WorkerLoop()
+            {
+                while (true)
+                {
+                    M68kJitCompileRequest request;
+                    lock (_gate)
+                    {
+                        while (_pending.Count == 0 && !_stopping)
+                        {
+                            Monitor.Wait(_gate);
+                        }
+
+                        if (_pending.Count == 0 && _stopping)
+                        {
+                            return;
+                        }
+
+                        var selectedIndex = 0;
+                        var selectedPriority = _pending[0].Priority;
+                        for (var i = 1; i < _pending.Count; i++)
+                        {
+                            if (_pending[i].Priority > selectedPriority)
+                            {
+                                selectedIndex = i;
+                                selectedPriority = _pending[i].Priority;
+                            }
+                        }
+
+                        request = _pending[selectedIndex];
+                        _pending.RemoveAt(selectedIndex);
+                        _compiling.Add(request.Key);
+                    }
+
+                    var result = request.Compile();
+                    var shouldPublish = true;
+                    lock (_gate)
+                    {
+                        _compiling.Remove(request.Key);
+                        shouldPublish = !_stopping;
+                    }
+
+                    if (shouldPublish)
+                    {
+                        _completed.Enqueue(result);
+                    }
+                }
+            }
+        }
+
         private readonly struct TraceEntry
         {
             public TraceEntry(
@@ -6922,7 +10622,7 @@ namespace CopperMod.Amiga
                 int[] directCpuInstructionPrefixes,
                 int[] directMemoryInstructionPrefixes,
                 int[] specializedHelperInstructionPrefixes,
-                CompiledTrace compiled,
+                CompiledTrace? compiled,
                 bool pureCpuBatchEligible,
                 CompiledTrace? pureCompiled,
                 CompiledTrace? v2Compiled,
@@ -6974,7 +10674,7 @@ namespace CopperMod.Amiga
 
             public int[] SpecializedHelperInstructionPrefixes { get; }
 
-            public CompiledTrace Compiled { get; }
+            public CompiledTrace? Compiled { get; }
 
             public bool PureCpuBatchEligible { get; }
 
@@ -7088,6 +10788,8 @@ namespace CopperMod.Amiga
 
         public long V2DisabledBranchExitRoots { get; set; }
 
+        public long V2BranchPressureLimitedRoots { get; set; }
+
         public long V2DisabledEntryMismatchRoots { get; set; }
 
         public long V2GraphHoleTargetCompiles { get; set; }
@@ -7098,17 +10800,31 @@ namespace CopperMod.Amiga
 
         public long V2TraceHandoffInstructions { get; set; }
 
+        public long V2TraceHandoffFailures { get; set; }
+
         public long V2BusAccessBatchExecutions { get; set; }
 
         public long V2BusAccessBatchInstructions { get; set; }
 
         public long V2BusAccessBatchBoundaryCallsSaved { get; set; }
 
+        public string? V2BusAccessBatchLengthHistogram { get; set; }
+
+        public string? V2BusAccessBatchWakeSourceTop { get; set; }
+
         public string? V2UnsupportedOperationTop { get; set; }
 
         public string? V2UnsupportedEaTop { get; set; }
 
         public string? V2GraphHoleTop { get; set; }
+
+        public string? V2TraceHandoffBlockTop { get; set; }
+
+        public string? V2TraceHandoffFailureTop { get; set; }
+
+        public string? V2BranchPressureLimitTop { get; set; }
+
+        public string? V2BranchPressureTargetStateTop { get; set; }
 
         public long V2Tier0CompiledTraces { get; set; }
 
@@ -7121,6 +10837,42 @@ namespace CopperMod.Amiga
         public long V2TierPromotions { get; set; }
 
         public long V2TierPressurePromotions { get; set; }
+
+        public long V2WorkerExpandedGraphs { get; set; }
+
+        public long V2WorkerExpandedGraphInstructions { get; set; }
+
+        public long V2WorkerExpandedGraphBytes { get; set; }
+
+        public long AsyncRequestsQueued { get; set; }
+
+        public long AsyncRequestsDeduped { get; set; }
+
+        public long AsyncRequestsDropped { get; set; }
+
+        public long AsyncWorkerCompilesStarted { get; set; }
+
+        public long AsyncWorkerCompilesCompleted { get; set; }
+
+        public long AsyncWorkerCompilesFailed { get; set; }
+
+        public long AsyncCompletedInstalled { get; set; }
+
+        public long AsyncCompletedDiscardedStale { get; set; }
+
+        public long AsyncCompletedDiscardedSuperseded { get; set; }
+
+        public long AsyncTier0Installs { get; set; }
+
+        public long AsyncTier1Installs { get; set; }
+
+        public long AsyncTier2Installs { get; set; }
+
+        public long AsyncTier3Installs { get; set; }
+
+        public long AsyncMaxQueueDepth { get; set; }
+
+        public long AsyncWorkerCompileMilliseconds { get; set; }
 
         public long CompiledTraces { get; set; }
 
@@ -7187,6 +10939,10 @@ namespace CopperMod.Amiga
         public long PureTraceBatchBoundaryCallsSaved { get; set; }
 
         public long PureTraceBatchSideExits { get; set; }
+
+        public string? PureTraceBatchLengthHistogram { get; set; }
+
+        public string? PureTraceBatchWakeSourceTop { get; set; }
 
         public long DirectCpuIlInstructions { get; set; }
 

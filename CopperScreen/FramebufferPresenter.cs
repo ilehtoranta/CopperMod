@@ -7,10 +7,9 @@ using Avalonia.Platform;
 
 namespace CopperScreen;
 
-internal sealed class FramebufferPresenter : Image
+internal sealed class FramebufferPresenter : Control
 {
 	private readonly WriteableBitmap _bitmap;
-	private readonly CroppedBitmap _croppedBitmap;
 	private readonly int _width;
 	private readonly int _height;
 	private PixelRect _sourceRect;
@@ -19,7 +18,6 @@ internal sealed class FramebufferPresenter : Image
 	{
 		_width = width;
 		_height = height;
-		Stretch = Stretch.Uniform;
 		RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.None);
 		_bitmap = new WriteableBitmap(
 			new PixelSize(width, height),
@@ -27,12 +25,6 @@ internal sealed class FramebufferPresenter : Image
 			PixelFormat.Bgra8888,
 			AlphaFormat.Opaque);
 		_sourceRect = new PixelRect(0, 0, width, height);
-		_croppedBitmap = new CroppedBitmap
-		{
-			Source = _bitmap,
-			SourceRect = _sourceRect
-		};
-		Source = _croppedBitmap;
 	}
 
 	public void Update(int[] bgra)
@@ -47,6 +39,20 @@ internal sealed class FramebufferPresenter : Image
 		InvalidateVisual();
 	}
 
+	public override void Render(DrawingContext context)
+	{
+		base.Render(context);
+		if (!TryCalculateUniformDestination(Bounds.Size, new Size(_sourceRect.Width, _sourceRect.Height), out var destination))
+		{
+			return;
+		}
+
+		context.DrawImage(
+			_bitmap,
+			new Rect(_sourceRect.X, _sourceRect.Y, _sourceRect.Width, _sourceRect.Height),
+			destination);
+	}
+
 	public void SetSourceViewport(int x, int y, int width, int height)
 	{
 		x = Math.Clamp(x, 0, _width - 1);
@@ -54,7 +60,6 @@ internal sealed class FramebufferPresenter : Image
 		width = Math.Clamp(width, 1, _width - x);
 		height = Math.Clamp(height, 1, _height - y);
 		_sourceRect = new PixelRect(x, y, width, height);
-		_croppedBitmap.SourceRect = _sourceRect;
 		InvalidateMeasure();
 		InvalidateVisual();
 	}
@@ -75,6 +80,9 @@ internal sealed class FramebufferPresenter : Image
 		framebufferPoint = new Point(sourceRect.X + sourcePoint.X, sourceRect.Y + sourcePoint.Y);
 		return true;
 	}
+
+	protected override Size MeasureOverride(Size availableSize)
+		=> new(_sourceRect.Width, _sourceRect.Height);
 
 	internal static bool TryMapUniformStretchPoint(Size bounds, Size source, Point position, out Point framebufferPoint)
 	{
@@ -107,4 +115,27 @@ internal sealed class FramebufferPresenter : Image
 		return true;
 	}
 
+	private static bool TryCalculateUniformDestination(Size bounds, Size source, out Rect destination)
+	{
+		destination = default;
+		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		{
+			return false;
+		}
+
+		var scale = Math.Min(bounds.Width / source.Width, bounds.Height / source.Height);
+		if (scale <= 0)
+		{
+			return false;
+		}
+
+		var imageWidth = source.Width * scale;
+		var imageHeight = source.Height * scale;
+		destination = new Rect(
+			(bounds.Width - imageWidth) / 2.0,
+			(bounds.Height - imageHeight) / 2.0,
+			imageWidth,
+			imageHeight);
+		return true;
+	}
 }

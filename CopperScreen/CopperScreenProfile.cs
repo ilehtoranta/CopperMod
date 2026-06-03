@@ -34,6 +34,7 @@ internal sealed class CopperScreenProfile
 		int floppyDriveCount,
 		AgnusTimingMode agnusTimingMode,
 		M68kBackendKind cpuBackend,
+		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
 		string? configPath)
 	{
@@ -48,6 +49,7 @@ internal sealed class CopperScreenProfile
 		FloppyDriveCount = floppyDriveCount;
 		AgnusTimingMode = agnusTimingMode;
 		CpuBackend = cpuBackend;
+		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
 		ConfigPath = configPath;
 	}
@@ -73,6 +75,8 @@ internal sealed class CopperScreenProfile
 	public AgnusTimingMode AgnusTimingMode { get; }
 
 	public M68kBackendKind CpuBackend { get; }
+
+	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
 
 	public CopperScreenKickstartSource KickstartSource { get; }
 
@@ -198,6 +202,7 @@ internal sealed class CopperScreenProfile
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
 		var agnusTimingMode = ParseAgnusTimingMode(machine.AgnusTimingMode);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
+		var floppyDriveAudio = ParseFloppyDriveAudio(config.Audio?.FloppyDriveSounds);
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -220,6 +225,7 @@ internal sealed class CopperScreenProfile
 			floppyDriveCount,
 			agnusTimingMode,
 			cpuBackend,
+			floppyDriveAudio,
 			kickstartSource,
 			Path.GetFullPath(path));
 	}
@@ -352,6 +358,21 @@ internal sealed class CopperScreenProfile
 		};
 	}
 
+	private static FloppyDriveAudioOptions ParseFloppyDriveAudio(FloppyDriveSoundFile? config)
+	{
+		if (config == null)
+		{
+			return FloppyDriveAudioOptions.Default;
+		}
+
+		return new FloppyDriveAudioOptions(
+			config.Enabled,
+			string.IsNullOrWhiteSpace(config.SoundPack)
+				? FloppyDriveAudioOptions.DefaultSoundPack
+				: config.SoundPack.Trim(),
+			FloppyDriveAudioOptions.ClampVolume(config.Volume ?? FloppyDriveAudioOptions.DefaultVolume));
+	}
+
 	private static CopperScreenProfile CreateFallbackDefault()
 	{
 		return new CopperScreenProfile(
@@ -366,6 +387,7 @@ internal sealed class CopperScreenProfile
 			2,
 			DefaultAgnusTimingMode,
 			M68kBackendKind.AccurateM68000,
+			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
 			null);
 	}
@@ -381,6 +403,8 @@ internal sealed class CopperScreenProfile
 		public MachineFile? Machine { get; set; }
 
 		public CpuFile? Cpu { get; set; }
+
+		public AudioFile? Audio { get; set; }
 
 		public KickstartFile? Kickstart { get; set; }
 	}
@@ -407,6 +431,20 @@ internal sealed class CopperScreenProfile
 	private sealed class CpuFile
 	{
 		public string? Backend { get; set; }
+	}
+
+	private sealed class AudioFile
+	{
+		public FloppyDriveSoundFile? FloppyDriveSounds { get; set; }
+	}
+
+	private sealed class FloppyDriveSoundFile
+	{
+		public bool Enabled { get; set; }
+
+		public string? SoundPack { get; set; }
+
+		public float? Volume { get; set; }
 	}
 
 	private sealed class KickstartFile

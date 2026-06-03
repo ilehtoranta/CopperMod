@@ -50,6 +50,31 @@ internal readonly record struct CopperScreenState(
 	long AudioSubmitFailures,
 	double LastEmulationFrameMilliseconds);
 
+internal sealed class CopperScreenFrameLease : IDisposable
+{
+	private CopperScreenRuntime? _owner;
+
+	internal CopperScreenFrameLease(CopperScreenRuntime owner, int bufferIndex, int[] framebuffer, CopperScreenState state)
+	{
+		_owner = owner;
+		BufferIndex = bufferIndex;
+		Framebuffer = framebuffer;
+		State = state;
+	}
+
+	public int[] Framebuffer { get; }
+
+	public CopperScreenState State { get; }
+
+	private int BufferIndex { get; }
+
+	public void Dispose()
+	{
+		var owner = Interlocked.Exchange(ref _owner, null);
+		owner?.ReleaseFrameLease(BufferIndex);
+	}
+}
+
 internal sealed class CopperScreenRuntime : IDisposable
 {
 	private const int AudioSampleRate = 44_100;
@@ -61,12 +86,15 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private readonly CopperScreenEmulator _emulator;
 	private readonly ICopperScreenAudioOutput? _audio;
 	private readonly bool _disposeAudio;
+	private readonly FloppyDriveAudio? _floppyDriveAudio;
 	private readonly float[] _audioBuffer;
 	private readonly CopperScreenDriveState[] _driveStates = new CopperScreenDriveState[4];
+	private readonly CopperScreenDriveState[] _floppyDriveAudioStates = new CopperScreenDriveState[4];
 	private readonly ConcurrentQueue<CopperScreenCommand> _commands = new ConcurrentQueue<CopperScreenCommand>();
 	private readonly AutoResetEvent _wake = new AutoResetEvent(false);
 	private readonly object _presentationSync = new object();
 	private readonly int[][] _frameBuffers;
+	private readonly int[] _frameBufferLeaseCounts;
 	private Thread? _thread;
 	private volatile bool _running;
 	private int _writeBufferIndex;
@@ -86,12 +114,23 @@ internal sealed class CopperScreenRuntime : IDisposable
 		_audio = audio;
 		_disposeAudio = disposeAudio;
 		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(AudioSampleRate) * AudioChannels];
+		_floppyDriveAudio = FloppyDriveAudio.TryCreate(
+			_emulator.FloppyDriveAudioOptions,
+			_emulator.BaseDirectory,
+			AudioSampleRate,
+			out var floppyDriveAudioStatus);
+		if (floppyDriveAudioStatus != null)
+		{
+			_emulator.SetStatusText(floppyDriveAudioStatus);
+		}
+
 		_frameBuffers =
 		[
 			new int[_emulator.Framebuffer.Length],
 			new int[_emulator.Framebuffer.Length],
 			new int[_emulator.Framebuffer.Length]
 		];
+		_frameBufferLeaseCounts = new int[_frameBuffers.Length];
 		_latestBufferIndex = 0;
 		PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0);
 	}
@@ -207,6 +246,32 @@ internal sealed class CopperScreenRuntime : IDisposable
 			state = _latestState with { DroppedFrames = _droppedFrames };
 			lastSeenFrameNumber = frameNumber;
 			return true;
+		}
+	}
+
+	public CopperScreenFrameLease? TryAcquireLatestFrame(ref long lastSeenFrameNumber, bool force = false)
+	{
+		lock (_presentationSync)
+		{
+			var frameNumber = _latestFrameNumber;
+			if (!force && frameNumber == lastSeenFrameNumber)
+			{
+				return null;
+			}
+
+			if (lastSeenFrameNumber != 0 && frameNumber > lastSeenFrameNumber + 1)
+			{
+				_droppedFrames += frameNumber - lastSeenFrameNumber - 1;
+			}
+
+			var bufferIndex = _latestBufferIndex;
+			_frameBufferLeaseCounts[bufferIndex]++;
+			lastSeenFrameNumber = frameNumber;
+			return new CopperScreenFrameLease(
+				this,
+				bufferIndex,
+				_frameBuffers[bufferIndex],
+				_latestState with { DroppedFrames = _droppedFrames });
 		}
 	}
 
@@ -344,11 +409,14 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 		_disposed = true;
 		Stop();
+		_emulator.Dispose();
 		_wake.Dispose();
 		if (_disposeAudio)
 		{
 			_audio?.Dispose();
 		}
+
+		_floppyDriveAudio?.Dispose();
 	}
 
 	private Task<CopperScreenCommandResult> SetStatusAsync(string message)
@@ -468,6 +536,12 @@ internal sealed class CopperScreenRuntime : IDisposable
 			var startTimestamp = Stopwatch.GetTimestamp();
 			_emulator.RenderNextFrame();
 			var audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+			if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)
+			{
+				_emulator.CaptureDriveStates(_floppyDriveAudioStates);
+				_floppyDriveAudio.Mix(_audioBuffer.AsSpan(0, audioFrames * AudioChannels), audioFrames, AudioChannels, _floppyDriveAudioStates);
+			}
+
 			_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
 			if (_audio != null && !_audio.Submit(_audioBuffer.AsSpan(0, audioFrames * AudioChannels)))
 			{
@@ -482,10 +556,15 @@ internal sealed class CopperScreenRuntime : IDisposable
 	{
 		_pendingCopperBenchRequest |= _emulator.ConsumeCopperBenchRequest();
 		var state = CaptureState(framesRendered, queuedAudioBuffers);
-		var nextBuffer = (_writeBufferIndex + 1) % _frameBuffers.Length;
-		if (nextBuffer == Volatile.Read(ref _latestBufferIndex))
+		int nextBuffer;
+		lock (_presentationSync)
 		{
-			nextBuffer = (nextBuffer + 1) % _frameBuffers.Length;
+			nextBuffer = SelectWritableFrameBufferNoLock();
+			if (nextBuffer < 0)
+			{
+				_droppedFrames++;
+				return;
+			}
 		}
 
 		_emulator.Framebuffer.AsSpan().CopyTo(_frameBuffers[nextBuffer]);
@@ -498,6 +577,33 @@ internal sealed class CopperScreenRuntime : IDisposable
 		}
 
 		FramePublished?.Invoke();
+	}
+
+	private int SelectWritableFrameBufferNoLock()
+	{
+		for (var offset = 1; offset <= _frameBuffers.Length; offset++)
+		{
+			var candidate = (_writeBufferIndex + offset) % _frameBuffers.Length;
+			if (candidate != _latestBufferIndex && _frameBufferLeaseCounts[candidate] == 0)
+			{
+				return candidate;
+			}
+		}
+
+		return -1;
+	}
+
+	internal void ReleaseFrameLease(int bufferIndex)
+	{
+		lock (_presentationSync)
+		{
+			if ((uint)bufferIndex >= (uint)_frameBufferLeaseCounts.Length || _frameBufferLeaseCounts[bufferIndex] <= 0)
+			{
+				return;
+			}
+
+			_frameBufferLeaseCounts[bufferIndex]--;
+		}
 	}
 
 	private CopperScreenState CaptureState(int framesRendered, int queuedAudioBuffers)

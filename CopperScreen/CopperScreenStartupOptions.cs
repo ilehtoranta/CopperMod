@@ -10,6 +10,7 @@ internal sealed class CopperScreenStartupOptions
 		string? kickstartRomPath,
 		AgnusTimingMode? agnusTimingModeOverride,
 		M68kBackendKind? cpuBackendOverride,
+		FloppyDriveAudioOptions floppyDriveAudio,
 		string baseDirectory,
 		string? error)
 	{
@@ -18,6 +19,7 @@ internal sealed class CopperScreenStartupOptions
 		KickstartRomPath = kickstartRomPath;
 		AgnusTimingModeOverride = agnusTimingModeOverride;
 		CpuBackendOverride = cpuBackendOverride;
+		FloppyDriveAudio = floppyDriveAudio;
 		BaseDirectory = baseDirectory;
 		Error = error;
 	}
@@ -32,6 +34,8 @@ internal sealed class CopperScreenStartupOptions
 
 	public M68kBackendKind? CpuBackendOverride { get; }
 
+	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
+
 	public string BaseDirectory { get; }
 
 	public string? Error { get; }
@@ -45,6 +49,7 @@ internal sealed class CopperScreenStartupOptions
 			null,
 			null,
 			null,
+			profile.FloppyDriveAudio,
 			baseDirectory,
 			error);
 	}
@@ -59,6 +64,9 @@ internal sealed class CopperScreenStartupOptions
 		string? kickstartRomPath = null;
 		AgnusTimingMode? agnusTimingModeOverride = null;
 		M68kBackendKind? cpuBackendOverride = null;
+		bool? floppySoundsEnabledOverride = null;
+		string? floppySoundPackOverride = null;
+		float? floppySoundVolumeOverride = null;
 
 		for (var i = 0; i < startupArgs.Length; i++)
 		{
@@ -121,6 +129,40 @@ internal sealed class CopperScreenStartupOptions
 			if (IsOption(arg, "--jit"))
 			{
 				cpuBackendOverride = M68kBackendKind.JitM68000;
+				continue;
+			}
+
+			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sounds", null, out var floppySoundsValue))
+			{
+				if (TryParseOnOff(floppySoundsValue, out var enabled))
+				{
+					floppySoundsEnabledOverride = enabled;
+				}
+				else
+				{
+					error ??= $"Unsupported floppy sound setting '{floppySoundsValue}'. Use on or off.";
+				}
+
+				continue;
+			}
+
+			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sound-pack", null, out var floppySoundPack))
+			{
+				floppySoundPackOverride = floppySoundPack;
+				continue;
+			}
+
+			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sound-volume", null, out var floppySoundVolume))
+			{
+				if (float.TryParse(floppySoundVolume, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var volume))
+				{
+					floppySoundVolumeOverride = FloppyDriveAudioOptions.ClampVolume(volume);
+				}
+				else
+				{
+					error ??= $"Unsupported floppy sound volume '{floppySoundVolume}'.";
+				}
+
 				continue;
 			}
 
@@ -197,7 +239,35 @@ internal sealed class CopperScreenStartupOptions
 			error ??= "A Kickstart ROM path was supplied with a CopperStart profile.";
 		}
 
-		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, agnusTimingModeOverride, cpuBackendOverride, baseDirectory, error);
+		var floppyDriveAudio = profile.FloppyDriveAudio.WithOverrides(
+			floppySoundsEnabledOverride,
+			floppySoundPackOverride,
+			floppySoundVolumeOverride);
+		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, agnusTimingModeOverride, cpuBackendOverride, floppyDriveAudio, baseDirectory, error);
+	}
+
+	private static bool TryParseOnOff(string value, out bool enabled)
+	{
+		switch (value.Trim().ToLowerInvariant())
+		{
+			case "on":
+			case "true":
+			case "1":
+			case "yes":
+			case "enabled":
+				enabled = true;
+				return true;
+			case "off":
+			case "false":
+			case "0":
+			case "no":
+			case "disabled":
+				enabled = false;
+				return true;
+			default:
+				enabled = false;
+				return false;
+		}
 	}
 
 	private static bool TryReadOptionValue(

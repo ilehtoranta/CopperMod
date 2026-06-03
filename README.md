@@ -112,6 +112,58 @@ dotnet run --project .\CopperScreen -- --profile ".\CopperScreen\Profiles\expand
 The ROM-backed profiles are still an emulator bring-up path; CopperStart remains
 the default for day-to-day disk testing.
 
+### CopperScreen Floppy Drive Sounds
+
+CopperScreen can optionally mix user-supplied mechanical floppy drive sounds into
+the host audio output. These sounds are a front-end feature only: they are mixed
+after Paula audio, and are not referenced by `CopperMod.Amiga` or the CUST
+player. No sound samples are bundled or committed.
+
+Sound packs live under `CopperScreen\Sounds\Floppy\<pack-name>` by default:
+
+```text
+CopperScreen/
+  Sounds/
+    Floppy/
+      default/
+        motor-start.*
+        motor-loop.*
+        motor-stop.*
+        disk-insert.*
+        disk-eject.*
+        step/
+          step-01.*
+          step-02.*
+        seek/
+          seek-01.*
+          seek-02.*
+```
+
+File extensions are ignored when matching the stems above. Samples are decoded
+with NAudio, so supported formats depend on the host. Missing individual files
+are fine; a missing or empty pack disables drive sounds with a status message.
+
+Profile configuration:
+
+```json
+"audio": {
+  "floppyDriveSounds": {
+    "enabled": false,
+    "soundPack": "default",
+    "volume": 0.25
+  }
+}
+```
+
+Command-line overrides:
+
+```powershell
+dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-pack default --floppy-sound-volume 0.25 "path\to\disk.adf"
+```
+
+`soundPack` resolves as `CopperScreen\Sounds\Floppy\<name>` unless it is an
+absolute path or an explicit relative path such as `.\MyPack`.
+
 ## Website
 
 The static project website lives in `docs`. GitHub Pages deploys it through
