@@ -16,7 +16,8 @@ internal static class Program
 		try
 		{
 			Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime;
-			GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+			//GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+			GCSettings.LatencyMode = GCLatencyMode.Interactive;
 			BuildAvaloniaApp().StartWithClassicDesktopLifetime(StartupArgs);
 		}
 		catch (Exception ex)
