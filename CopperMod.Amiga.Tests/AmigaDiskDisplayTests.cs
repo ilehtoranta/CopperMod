@@ -1168,7 +1168,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 64, 0));
     }
 
     [Fact]
@@ -1191,8 +1191,86 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 22, 0));
         Assert.Equal(0xFFFF0000u, Pixel(frame, 23, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 24, 0));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 26, 0));
+    }
+
+    [Fact]
+    public void CopperPaletteMovesBecomeVisibleOneLowResPixelAfterDataCycle()
+    {
+        var bus = new AmigaBus();
+        var waitV = 0x2C - StandardY;
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, (ushort)((waitV << 8) | 0x0041));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, (ushort)((waitV << 8) | 0x0049));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2410, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2412, 0xFFFE);
+        bus.WriteWord(0x00DFF180, 0x0F00);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 44, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 45, 0));
+    }
+
+    [Fact]
+    public void CopperComplexTimingPreservesPalettePhaseAcrossWaitsRowCarryAndJump()
+    {
+        var bus = new AmigaBus();
+        var row0WaitV = 0x2C - StandardY;
+        var row1WaitV = row0WaitV + 1;
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, (ushort)((row0WaitV << 8) | 0x0041));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, (ushort)((row0WaitV << 8) | 0x0049));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240C, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240E, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2410, (ushort)((row0WaitV << 8) | 0x00E3));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2412, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2414, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2416, 0x000F);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2418, 0x0084);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241A, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241C, 0x0086);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x241E, 0x2600);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2420, 0x008A);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2422, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2424, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2426, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2600, (ushort)((row1WaitV << 8) | 0x0041));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2602, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2604, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2606, 0x0F00);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2608, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x260A, 0xFFFE);
+        bus.WriteWord(0x00DFF180, 0x0F00);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 44, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 45, 0));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 0, 1));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 1, 1));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 24, 1));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 25, 1));
     }
 
     [Fact]
@@ -1220,8 +1298,9 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFF000000u, Pixel(frame, 22, 0));
         Assert.Equal(0xFF000000u, Pixel(frame, 23, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 24, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 24, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 26, 0));
     }
 
     [Fact]
@@ -1250,8 +1329,9 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 22, 0));
         Assert.Equal(0xFFFF0000u, Pixel(frame, 23, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 24, 0));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 26, 0));
     }
 
     [Fact]
@@ -1276,7 +1356,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 64, 0));
         Assert.Equal(0xFFFF0000u, Pixel(frame, AmigaConstants.PalLowResWidth - 1, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 1));
     }
@@ -1303,7 +1383,8 @@ public sealed class AmigaDiskDisplayTests
 
         var triggerY = 0x2F - (0x2C - StandardY);
         Assert.Equal(0xFFFF0000u, Pixel(frame, 0, triggerY - 1));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 1, triggerY));
     }
 
     [Fact]
@@ -1351,7 +1432,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 64, 0));
     }
 
     [Fact]
@@ -1368,7 +1449,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 64, 0));
     }
 
     [Fact]
@@ -1402,7 +1483,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame, 0, frameCycles);
 
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 64, 0));
     }
 
     [Fact]
@@ -1436,7 +1517,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame, 0, frameCycles);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 64, 0));
     }
 
     [Fact]
@@ -1459,7 +1540,8 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame, 0, frameCycles);
 
         Assert.Equal(0xFF000000u, Pixel(frame, 0, 4));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 5));
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, 5));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 1, 5));
     }
 
     [Fact]
@@ -1485,7 +1567,8 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame, 0, frameCycles);
 
         Assert.Equal(0xFF000000u, Pixel(frame, 0, 4));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 5));
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, 5));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 1, 5));
     }
 
     [Fact]
@@ -1506,7 +1589,8 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame);
 
         Assert.Equal(0xFF000000u, Pixel(frame, 0, 0));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 1));
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, 1));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 1, 1));
     }
 
     [Fact]

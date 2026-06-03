@@ -654,7 +654,7 @@ namespace CopperMod.Amiga
             InvalidateLiveDisplayEventCycle();
         }
 
-        private void RecordLiveFrameWrite(long cycle, ushort offset, ushort value)
+        private void RecordLiveFrameWrite(long cycle, ushort offset, ushort value, bool isCopper = false)
         {
             if (!_advancingLiveDma ||
                 !_liveFrameValid ||
@@ -676,7 +676,7 @@ namespace CopperMod.Amiga
             }
 
             var replayCycle = Math.Max(cycle, _liveFrameStartCycle);
-            _liveFrameWrites.Add(new PendingCustomWrite(replayCycle, offset, value));
+            _liveFrameWrites.Add(new PendingCustomWrite(replayCycle, offset, value, isCopper));
         }
 
         private void TrimLiveFrameWritesFrom(long cycle)
@@ -1092,7 +1092,7 @@ namespace CopperMod.Amiga
                 _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
                 AdvanceLiveDisplayWindowStateToCycle(dataCycle);
                 ApplyCopperMove(register, value, dataCycle);
-                RecordLiveFrameWrite(dataCycle, register, value);
+                RecordLiveFrameWrite(dataCycle, register, value, isCopper: true);
                 RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
                 if (register == 0x088)
                 {
@@ -1737,6 +1737,7 @@ namespace CopperMod.Amiga
                     _renderingCopperFrame = true;
                     _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
                     var renderCursorCycle = frameStartCycle;
+                    var renderCursorPixelDelay = 0;
                     for (var i = 0; i < _liveFrameWrites.Count; i++)
                     {
                         var write = _liveFrameWrites[i];
@@ -1745,12 +1746,28 @@ namespace CopperMod.Amiga
                             break;
                         }
 
-                        RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, write.Cycle, useTimedWrites: true);
+                        var writePixelDelay = GetPresentationWritePixelDelay(write);
+                        RenderPresentationSpan(
+                            bgra,
+                            frameStartCycle,
+                            renderCursorCycle,
+                            write.Cycle,
+                            useTimedWrites: true,
+                            renderCursorPixelDelay,
+                            writePixelDelay);
                         renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
+                        renderCursorPixelDelay = writePixelDelay;
                         ApplyLivePresentationReplayWrite(write, frameStartCycle);
                     }
 
-                    RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, frameStopCycle, useTimedWrites: true);
+                    RenderPresentationSpan(
+                        bgra,
+                        frameStartCycle,
+                        renderCursorCycle,
+                        frameStopCycle,
+                        useTimedWrites: true,
+                        renderCursorPixelDelay,
+                        toPixelDelay: 0);
                     RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
                     _renderingCopperFrame = savedRenderingCopperFrame;
                 }
@@ -1801,6 +1818,22 @@ namespace CopperMod.Amiga
             ApplyWrite(write.Offset, write.Value, write.Cycle);
         }
 
+        private static int GetPresentationWritePixelDelay(PendingCustomWrite write)
+        {
+            return write.IsCopper
+                ? GetCopperWritePixelDelay(write.Offset)
+                : 0;
+        }
+
+        private static int GetCopperWritePixelDelay(ushort offset)
+        {
+            // Copper palette writes reach Denise one low-res pixel after the bus event;
+            // the Copper cycle itself still remains at the data-word grant.
+            return offset >= 0x180 && offset < 0x1C0
+                ? 1
+                : 0;
+        }
+
         private void RenderLiveCapturedRows(Span<uint> bgra)
         {
             for (var row = 0; row < LowResOutputHeight; row++)
@@ -1830,6 +1863,7 @@ namespace CopperMod.Amiga
             _renderingCopperFrame = true;
             _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
             var renderCursorCycle = frameStartCycle;
+            var renderCursorPixelDelay = 0;
             var copper = new CopperPresentationState(_copperListPointer, frameStartCycle);
             var safetyRemaining = GetCopperFrameInstructionLimit(frameStartCycle, frameStopCycle);
 
@@ -1839,15 +1873,30 @@ namespace CopperMod.Amiga
                 {
                     if (TryPeekPendingWrite(out var pending) && pending.Cycle <= copper.Cycle)
                     {
-                        RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+                        RenderPresentationSpan(
+                            bgra,
+                            frameStartCycle,
+                            renderCursorCycle,
+                            pending.Cycle,
+                            useTimedWrites,
+                            renderCursorPixelDelay,
+                            toPixelDelay: 0);
                         renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+                        renderCursorPixelDelay = 0;
                         ApplyTimedPendingWrite(ref copper);
                         continue;
                     }
 
                     if (copper.Stopped || !IsCopperDmaEnabled())
                     {
-                        if (!TryAdvanceCopperToNextPendingWrite(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper))
+                        if (!TryAdvanceCopperToNextPendingWrite(
+                            bgra,
+                            frameStartCycle,
+                            frameStopCycle,
+                            useTimedWrites,
+                            ref renderCursorCycle,
+                            ref renderCursorPixelDelay,
+                            ref copper))
                         {
                             break;
                         }
@@ -1857,7 +1906,14 @@ namespace CopperMod.Amiga
 
                     if (copper.Waiting)
                     {
-                        if (!TryAdvanceCopperWait(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper))
+                        if (!TryAdvanceCopperWait(
+                            bgra,
+                            frameStartCycle,
+                            frameStopCycle,
+                            useTimedWrites,
+                            ref renderCursorCycle,
+                            ref renderCursorPixelDelay,
+                            ref copper))
                         {
                             break;
                         }
@@ -1870,10 +1926,24 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    StepCopperInstruction(bgra, frameStartCycle, frameStopCycle, useTimedWrites, ref renderCursorCycle, ref copper);
+                    StepCopperInstruction(
+                        bgra,
+                        frameStartCycle,
+                        frameStopCycle,
+                        useTimedWrites,
+                        ref renderCursorCycle,
+                        ref renderCursorPixelDelay,
+                        ref copper);
                 }
 
-                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, frameStopCycle, useTimedWrites);
+                RenderPresentationSpan(
+                    bgra,
+                    frameStartCycle,
+                    renderCursorCycle,
+                    frameStopCycle,
+                    useTimedWrites,
+                    renderCursorPixelDelay,
+                    toPixelDelay: 0);
                 RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites);
             }
             finally
@@ -1914,6 +1984,7 @@ namespace CopperMod.Amiga
             long frameStopCycle,
             bool useTimedWrites,
             ref long renderCursorCycle,
+            ref int renderCursorPixelDelay,
             ref CopperPresentationState copper)
         {
             if (!TryPeekPendingWrite(out var pending) || pending.Cycle >= frameStopCycle)
@@ -1921,8 +1992,16 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+            RenderPresentationSpan(
+                bgra,
+                frameStartCycle,
+                renderCursorCycle,
+                pending.Cycle,
+                useTimedWrites,
+                renderCursorPixelDelay,
+                toPixelDelay: 0);
             renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+            renderCursorPixelDelay = 0;
             copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
             ApplyTimedPendingWrite(ref copper);
             return true;
@@ -1934,6 +2013,7 @@ namespace CopperMod.Amiga
             long frameStopCycle,
             bool useTimedWrites,
             ref long renderCursorCycle,
+            ref int renderCursorPixelDelay,
             ref CopperPresentationState copper)
         {
             if (!IsCopperDmaEnabled())
@@ -1944,6 +2024,7 @@ namespace CopperMod.Amiga
                     frameStopCycle,
                     useTimedWrites,
                     ref renderCursorCycle,
+                    ref renderCursorPixelDelay,
                     ref copper);
             }
 
@@ -1963,8 +2044,16 @@ namespace CopperMod.Amiga
             var nextWakeCycle = Math.Min(waitCycle, blitterReadyCycle);
             if (TryPeekPendingWrite(out var pending) && pending.Cycle < nextWakeCycle)
             {
-                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, pending.Cycle, useTimedWrites);
+                RenderPresentationSpan(
+                    bgra,
+                    frameStartCycle,
+                    renderCursorCycle,
+                    pending.Cycle,
+                    useTimedWrites,
+                    renderCursorPixelDelay,
+                    toPixelDelay: 0);
                 renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
+                renderCursorPixelDelay = 0;
                 copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
                 ApplyTimedPendingWrite(ref copper);
                 return true;
@@ -1973,16 +2062,32 @@ namespace CopperMod.Amiga
             if (blitterReadyCycle > copper.Cycle)
             {
                 var readyCycle = Math.Min(blitterReadyCycle, frameStopCycle);
-                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, readyCycle, useTimedWrites);
+                RenderPresentationSpan(
+                    bgra,
+                    frameStartCycle,
+                    renderCursorCycle,
+                    readyCycle,
+                    useTimedWrites,
+                    renderCursorPixelDelay,
+                    toPixelDelay: 0);
                 _bus.Blitter.AdvanceTo(readyCycle);
                 renderCursorCycle = Math.Max(renderCursorCycle, readyCycle);
+                renderCursorPixelDelay = 0;
                 copper.Cycle = Math.Max(copper.Cycle, readyCycle);
                 return copper.Cycle < frameStopCycle;
             }
 
             var resumeCycle = waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits);
-            RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, Math.Min(resumeCycle, frameStopCycle), useTimedWrites);
+            RenderPresentationSpan(
+                bgra,
+                frameStartCycle,
+                renderCursorCycle,
+                Math.Min(resumeCycle, frameStopCycle),
+                useTimedWrites,
+                renderCursorPixelDelay,
+                toPixelDelay: 0);
             renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(resumeCycle, frameStopCycle));
+            renderCursorPixelDelay = 0;
             copper.Cycle = Math.Max(copper.Cycle, resumeCycle);
             copper.Waiting = false;
             return copper.Cycle < frameStopCycle;
@@ -2004,6 +2109,7 @@ namespace CopperMod.Amiga
             long frameStopCycle,
             bool useTimedWrites,
             ref long renderCursorCycle,
+            ref int renderCursorPixelDelay,
             ref CopperPresentationState copper)
         {
             var fetchCycle = Math.Min(copper.Cycle, frameStopCycle);
@@ -2028,8 +2134,18 @@ namespace CopperMod.Amiga
             if ((first & 1) == 0)
             {
                 var register = (ushort)(first & 0x01FE);
-                RenderPresentationSpan(bgra, frameStartCycle, renderCursorCycle, Math.Min(dataCycle, frameStopCycle), useTimedWrites);
+                var writePixelDelay = GetCopperWritePixelDelay(register);
+                var clippedWritePixelDelay = dataCycle <= frameStopCycle ? writePixelDelay : 0;
+                RenderPresentationSpan(
+                    bgra,
+                    frameStartCycle,
+                    renderCursorCycle,
+                    Math.Min(dataCycle, frameStopCycle),
+                    useTimedWrites,
+                    renderCursorPixelDelay,
+                    clippedWritePixelDelay);
                 renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(dataCycle, frameStopCycle));
+                renderCursorPixelDelay = clippedWritePixelDelay;
                 if (dataCycle <= frameStopCycle)
                 {
                     var suppressMove = copper.SuppressNextMove;
@@ -2133,7 +2249,9 @@ namespace CopperMod.Amiga
             long frameStartCycle,
             long fromCycle,
             long toCycle,
-            bool useTimedWrites)
+            bool useTimedWrites,
+            int fromPixelDelay = 0,
+            int toPixelDelay = 0)
         {
             if (toCycle <= fromCycle)
             {
@@ -2164,9 +2282,22 @@ namespace CopperMod.Amiga
 
                 var row = line - StandardVStart;
                 var xStart = GetOutputXForCycle(frameStartCycle, segmentStart);
+                if (fromPixelDelay != 0 && segmentStart == clippedStart && clippedStart == fromCycle)
+                {
+                    xStart = Math.Clamp(xStart + fromPixelDelay, 0, AmigaConstants.PalLowResWidth);
+                }
+
                 var xStop = segmentStop >= lineStop
                     ? AmigaConstants.PalLowResWidth
                     : GetOutputXForCycle(frameStartCycle, segmentStop);
+                if (toPixelDelay != 0 &&
+                    segmentStop == clippedStop &&
+                    clippedStop == toCycle &&
+                    segmentStop < lineStop)
+                {
+                    xStop = Math.Clamp(xStop + toPixelDelay, 0, AmigaConstants.PalLowResWidth);
+                }
+
                 if (xStop <= xStart)
                 {
                     continue;
@@ -5475,11 +5606,12 @@ namespace CopperMod.Amiga
 
         private readonly struct PendingCustomWrite
         {
-            public PendingCustomWrite(long cycle, ushort offset, ushort value)
+            public PendingCustomWrite(long cycle, ushort offset, ushort value, bool isCopper = false)
             {
                 Cycle = cycle;
                 Offset = offset;
                 Value = value;
+                IsCopper = isCopper;
             }
 
             public long Cycle { get; }
@@ -5487,6 +5619,8 @@ namespace CopperMod.Amiga
             public ushort Offset { get; }
 
             public ushort Value { get; }
+
+            public bool IsCopper { get; }
         }
 
         private readonly struct SpriteDescriptor

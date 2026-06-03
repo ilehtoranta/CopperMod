@@ -249,7 +249,8 @@ public sealed class AmigaCopperConformanceMatrixTests
         var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 0, triggerY - 1));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 1, triggerY));
     }
 
     private static void WaitFullMaskResolvesExactBeamTarget()
@@ -330,7 +331,8 @@ public sealed class AmigaCopperConformanceMatrixTests
         var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
 
         Assert.Equal(0xFF000000u, Pixel(frame, 0, triggerY - 1));
-        Assert.Equal(0xFF0000FFu, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFF000000u, Pixel(frame, 0, triggerY));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, 1, triggerY));
     }
 
     private static void SkipSuppressedDangerousMoveStopsCopper()
