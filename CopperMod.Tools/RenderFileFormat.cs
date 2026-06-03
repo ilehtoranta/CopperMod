@@ -4,5 +4,6 @@ internal enum RenderFileFormat
 {
 	Wav,
 	Pcm,
-	Mp3
+	Mp3,
+	Bmp
 }

@@ -14,11 +14,45 @@ public sealed class RenderCommandOptionsTests
 	}
 
 	[Fact]
+	public void InfersBitmapOutputFormatFromExtension()
+	{
+		var options = RenderCommandOptions.Parse(new[] { "render", "input.mod", "--out", "output.bmp" });
+
+		Assert.Equal(RenderFileFormat.Bmp, options.Format);
+	}
+
+	[Fact]
 	public void ExplicitFormatOverridesExtension()
 	{
 		var options = RenderCommandOptions.Parse(new[] { "render", "input.mod", "--out", "output.bin", "--format", "wav" });
 
 		Assert.Equal(RenderFileFormat.Wav, options.Format);
+	}
+
+	[Fact]
+	public void ParsesBitmapDimensions()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.mod",
+			"--out",
+			"output.bmp",
+			"--bitmap-width",
+			"320",
+			"--bitmap-height",
+			"120"
+		});
+
+		Assert.Equal(320, options.BitmapWidth);
+		Assert.Equal(120, options.BitmapHeight);
+	}
+
+	[Fact]
+	public void BitmapDimensionsRequireBitmapOutput()
+	{
+		Assert.Throws<CommandLineException>(() =>
+			RenderCommandOptions.Parse(new[] { "render", "input.mod", "--out", "output.wav", "--bitmap-width", "320" }));
 	}
 
 	[Fact]

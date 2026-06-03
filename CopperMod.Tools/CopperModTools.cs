@@ -53,6 +53,9 @@ internal static class CopperModTools
 			case RenderFileFormat.Mp3:
 				RenderMp3(song, options, fixedDuration);
 				break;
+			case RenderFileFormat.Bmp:
+				RenderBmp(song, options, fixedDuration);
+				break;
 			default:
 				throw new CommandLineException("Unsupported output format.");
 		}
@@ -137,9 +140,35 @@ internal static class CopperModTools
 		Mp3Encoder.Encode(provider, options.OutputPath, options.Mp3BitrateKbps);
 	}
 
+	private static void RenderBmp(IModuleSong song, RenderCommandOptions options, TimeSpan? duration)
+	{
+		using var renderer = CreateRenderer(song, options);
+		var sampler = new WaveformBitmapSampler(
+			options.ChannelCount,
+			options.SampleRate,
+			options.BitmapWidth,
+			ResolveWaveformFrameCount(song, options, duration));
+
+		RenderFloatSamples(renderer, options, duration, sampler.AddSamples);
+		var image = WaveformBitmapRenderer.Render(sampler.CreateSnapshot(), options.BitmapWidth, options.BitmapHeight);
+		using var stream = File.Create(options.OutputPath);
+		WaveformBitmapWriter.Write(stream, image);
+	}
+
 	private static ModulePcmRenderer CreateRenderer(IModuleSong song, RenderCommandOptions options)
 	{
 		return new ModulePcmRenderer(song, options.ToRenderSettings());
+	}
+
+	private static long? ResolveWaveformFrameCount(IModuleSong song, RenderCommandOptions options, TimeSpan? duration)
+	{
+		var waveformDuration = duration ?? song.Duration.Time;
+		if (!waveformDuration.HasValue)
+		{
+			return null;
+		}
+
+		return checked((long)Math.Ceiling(waveformDuration.Value.TotalSeconds * options.SampleRate));
 	}
 
 	private static void RenderFloatSamples(

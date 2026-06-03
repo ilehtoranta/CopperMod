@@ -41,6 +41,36 @@ public sealed class RenderCommandIntegrationTests
 	}
 
 	[Fact]
+	public void RendersProTrackerFixtureToWaveformBitmap()
+	{
+		using var temp = TemporaryDirectory.Create();
+		var input = FindWorkspaceFile("TestTunes", "ProTracker", "failright.mod");
+		var output = Path.Combine(temp.Path, "failright.bmp");
+
+		var exitCode = Run(
+			"render",
+			input,
+			"--out",
+			output,
+			"--seconds",
+			"1",
+			"--bitmap-width",
+			"320",
+			"--bitmap-height",
+			"120",
+			"--overwrite");
+
+		Assert.Equal(0, exitCode);
+		var bitmap = ReadBitmap(output);
+		Assert.Equal(320, bitmap.Width);
+		Assert.Equal(120, bitmap.Height);
+		Assert.Equal(24, bitmap.BitsPerPixel);
+		Assert.True(
+			ContainsColor(bitmap, r: 238, g: 170, b: 92) ||
+			ContainsColor(bitmap, r: 86, g: 190, b: 170));
+	}
+
+	[Fact]
 	public void RendersSidFixtureWithExplicitSecondsDespiteUnknownDuration()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -203,5 +233,44 @@ public sealed class RenderCommandIntegrationTests
 		return false;
 	}
 
+	private static BitmapData ReadBitmap(string path)
+	{
+		var bytes = File.ReadAllBytes(path);
+		Assert.True(bytes.Length >= 54);
+		Assert.Equal((byte)'B', bytes[0]);
+		Assert.Equal((byte)'M', bytes[1]);
+		Assert.Equal(bytes.Length, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(2, sizeof(int))));
+		var pixelOffset = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(10, sizeof(int)));
+		Assert.Equal(40, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(14, sizeof(int))));
+		var width = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(18, sizeof(int)));
+		var height = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(22, sizeof(int)));
+		Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(26, sizeof(short))));
+		var bitsPerPixel = BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(28, sizeof(short)));
+		Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(30, sizeof(int))));
+		return new BitmapData(width, height, bitsPerPixel, pixelOffset, bytes);
+	}
+
+	private static bool ContainsColor(BitmapData bitmap, byte r, byte g, byte b)
+	{
+		var rowBytes = bitmap.Width * 3;
+		var stride = (rowBytes + 3) & ~3;
+		for (var y = 0; y < bitmap.Height; y++)
+		{
+			var rowOffset = bitmap.PixelOffset + (y * stride);
+			for (var x = 0; x < bitmap.Width; x++)
+			{
+				var offset = rowOffset + (x * 3);
+				if (bitmap.Bytes[offset] == b && bitmap.Bytes[offset + 1] == g && bitmap.Bytes[offset + 2] == r)
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
 	private readonly record struct WavData(short FormatTag, short Channels, int SampleRate, float[] Samples);
+
+	private readonly record struct BitmapData(int Width, int Height, short BitsPerPixel, int PixelOffset, byte[] Bytes);
 }

@@ -18,6 +18,8 @@ internal sealed class RenderCommandOptions
 		AmigaOutputProfile amigaProfile,
 		C64OutputProfile c64Profile,
 		int mp3BitrateKbps,
+		int bitmapWidth,
+		int bitmapHeight,
 		bool overwrite)
 	{
 		InputPath = inputPath;
@@ -32,6 +34,8 @@ internal sealed class RenderCommandOptions
 		AmigaProfile = amigaProfile;
 		C64Profile = c64Profile;
 		Mp3BitrateKbps = mp3BitrateKbps;
+		BitmapWidth = bitmapWidth;
+		BitmapHeight = bitmapHeight;
 		Overwrite = overwrite;
 	}
 
@@ -58,6 +62,10 @@ internal sealed class RenderCommandOptions
 	public C64OutputProfile C64Profile { get; }
 
 	public int Mp3BitrateKbps { get; }
+
+	public int BitmapWidth { get; }
+
+	public int BitmapHeight { get; }
 
 	public bool Overwrite { get; }
 
@@ -97,9 +105,12 @@ internal sealed class RenderCommandOptions
 		var amigaProfile = AmigaOutputProfile.A500;
 		var c64Profile = C64OutputProfile.C64;
 		var mp3Bitrate = 192;
+		var bitmapWidth = WaveformBitmapRenderer.DefaultWidth;
+		var bitmapHeight = WaveformBitmapRenderer.DefaultHeight;
 		var overwrite = false;
 		var amigaProfileSpecified = false;
 		var c64ProfileSpecified = false;
+		var bitmapSizeSpecified = false;
 
 		for (var i = 1; i < args.Length; i++)
 		{
@@ -147,6 +158,14 @@ internal sealed class RenderCommandOptions
 				case "--mp3-bitrate":
 					mp3Bitrate = ParsePositiveInt(RequireValue(args, ref i, arg), arg);
 					break;
+				case "--bitmap-width":
+					bitmapWidth = ParseBitmapDimension(RequireValue(args, ref i, arg), arg, WaveformBitmapRenderer.MinimumWidth, WaveformBitmapRenderer.MaximumWidth);
+					bitmapSizeSpecified = true;
+					break;
+				case "--bitmap-height":
+					bitmapHeight = ParseBitmapDimension(RequireValue(args, ref i, arg), arg, WaveformBitmapRenderer.MinimumHeight, WaveformBitmapRenderer.MaximumHeight);
+					bitmapSizeSpecified = true;
+					break;
 				case "--overwrite":
 					overwrite = true;
 					break;
@@ -174,6 +193,11 @@ internal sealed class RenderCommandOptions
 
 		format ??= InferFormat(outputPath);
 
+		if (bitmapSizeSpecified && format.Value != RenderFileFormat.Bmp)
+		{
+			throw new CommandLineException("Bitmap size options require BMP output.");
+		}
+
 		return new RenderCommandOptions(
 			positional[0],
 			outputPath,
@@ -187,6 +211,8 @@ internal sealed class RenderCommandOptions
 			amigaProfile,
 			c64Profile,
 			mp3Bitrate,
+			bitmapWidth,
+			bitmapHeight,
 			overwrite);
 	}
 
@@ -214,7 +240,8 @@ internal sealed class RenderCommandOptions
 			".wav" => RenderFileFormat.Wav,
 			".pcm" => RenderFileFormat.Pcm,
 			".mp3" => RenderFileFormat.Mp3,
-			_ => throw new CommandLineException("Cannot infer output format. Use --format wav, pcm, or mp3.")
+			".bmp" => RenderFileFormat.Bmp,
+			_ => throw new CommandLineException("Cannot infer output format. Use --format wav, pcm, mp3, or bmp.")
 		};
 	}
 
@@ -225,6 +252,8 @@ internal sealed class RenderCommandOptions
 			"wav" => RenderFileFormat.Wav,
 			"pcm" => RenderFileFormat.Pcm,
 			"mp3" => RenderFileFormat.Mp3,
+			"bmp" => RenderFileFormat.Bmp,
+			"bitmap" => RenderFileFormat.Bmp,
 			_ => throw new CommandLineException("Unsupported output format: " + value)
 		};
 	}
@@ -275,6 +304,17 @@ internal sealed class RenderCommandOptions
 		if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) || result <= 0)
 		{
 			throw new CommandLineException(option + " must be a positive number.");
+		}
+
+		return result;
+	}
+
+	private static int ParseBitmapDimension(string value, string option, int minimum, int maximum)
+	{
+		var result = ParsePositiveInt(value, option);
+		if (result < minimum || result > maximum)
+		{
+			throw new CommandLineException(option + " must be between " + minimum.ToString(CultureInfo.InvariantCulture) + " and " + maximum.ToString(CultureInfo.InvariantCulture) + ".");
 		}
 
 		return result;
