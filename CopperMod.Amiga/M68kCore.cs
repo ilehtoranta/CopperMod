@@ -60,6 +60,13 @@ namespace CopperMod.Amiga
         void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
+    internal interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
+    {
+        bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
+
+        void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
+    }
+
     internal interface IM68kBatchCore : IM68kCore
     {
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);

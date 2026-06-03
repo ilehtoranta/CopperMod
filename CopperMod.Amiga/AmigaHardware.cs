@@ -1691,6 +1691,344 @@ namespace CopperMod.Amiga
             return ((uint)ReadRawWord(address) << 16) | ReadRawWord(address + 2);
         }
 
+        internal bool TryReadJitZeroWaitMemory(uint address, M68kOperandSize size, out uint value)
+        {
+            value = 0;
+            if (!_useChipSlotScheduler || (size != M68kOperandSize.Byte && (address & 1) != 0))
+            {
+                return false;
+            }
+
+            address = NormalizeAddress(address);
+            var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+            var target = ClassifyTarget(address);
+            if (target == AmigaBusAccessTarget.RealFastRam)
+            {
+                if (!IsRealFastRamRange(address, byteCount))
+                {
+                    return false;
+                }
+            }
+            else if (target == AmigaBusAccessTarget.Rom)
+            {
+                var lastAddress = NormalizeAddress(address + (uint)(byteCount - 1));
+                if (ClassifyTarget(lastAddress) != AmigaBusAccessTarget.Rom)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+
+            value = size switch
+            {
+                M68kOperandSize.Byte => ReadRawByte(address),
+                M68kOperandSize.Word => ReadRawWord(address),
+                _ => ReadRawLong(address)
+            };
+            return true;
+        }
+
+        internal bool TryWriteJitZeroWaitMemory(uint address, uint value, M68kOperandSize size)
+        {
+            if (!_useChipSlotScheduler || (size != M68kOperandSize.Byte && (address & 1) != 0))
+            {
+                return false;
+            }
+
+            address = NormalizeAddress(address);
+            var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+            if (!IsRealFastRamRange(address, byteCount))
+            {
+                return false;
+            }
+
+            if (size == M68kOperandSize.Byte)
+            {
+                var realFastOffset = checked((int)(address - RealFastRamBase));
+                _realFastRam[realFastOffset] = (byte)value;
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                var realFastOffset = checked((int)(address - RealFastRamBase));
+                _realFastRam[realFastOffset] = (byte)(value >> 8);
+                _realFastRam[realFastOffset + 1] = (byte)value;
+            }
+            else
+            {
+                var realFastOffset = checked((int)(address - RealFastRamBase));
+                _realFastRam[realFastOffset] = (byte)(value >> 24);
+                _realFastRam[realFastOffset + 1] = (byte)(value >> 16);
+                _realFastRam[realFastOffset + 2] = (byte)(value >> 8);
+                _realFastRam[realFastOffset + 3] = (byte)value;
+            }
+
+            TouchCodePages(address, byteCount);
+            NotifyJitEligibleMemoryWritten(address, byteCount);
+            return true;
+        }
+
+        internal uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
+        {
+            AdvanceCiasTo(cycle);
+            if (size == M68kOperandSize.Byte)
+            {
+                return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new AmigaEmulationException(
+                    size == M68kOperandSize.Word
+                        ? $"Odd MC68000 word read at 0x{address:X8}."
+                        : $"Odd MC68000 long read at 0x{address:X8}.");
+            }
+
+            return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
+        }
+
+        internal void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
+        {
+            AdvanceCiasTo(cycle);
+            if (size == M68kOperandSize.Byte)
+            {
+                WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
+                return;
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new AmigaEmulationException(
+                    size == M68kOperandSize.Word
+                        ? $"Odd MC68000 word write at 0x{address:X8}."
+                        : $"Odd MC68000 long write at 0x{address:X8}.");
+            }
+
+            WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
+        }
+
+        private uint ReadJitSlotAwareMemoryUnchecked(ref long cycle, uint address, M68kOperandSize size)
+        {
+            address = NormalizeAddress(address);
+            var target = ClassifyTarget(address);
+            var accessSize = ToBusAccessSize(size);
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(target, address, accessSize, cycle, AmigaBusAccessKind.CpuDataRead, isWrite: false)
+                : Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataRead, target, address, accessSize, cycle, isWrite: false);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+
+            var value = TryReadJitMappedMemory(target, address, size, out var mappedValue)
+                ? mappedValue
+                : ReadJitRawMemory(target, address, size, access);
+            cycle = access.CompletedCycle;
+            if (size == M68kOperandSize.Byte &&
+                target == AmigaBusAccessTarget.Cia &&
+                TryGetCiaRegister(address, out var cia, out var ciaRegister) &&
+                cia == CiaA &&
+                ciaRegister == 0x0C)
+            {
+                Keyboard.AcknowledgeSerialDataRead(cycle);
+            }
+
+            return value;
+        }
+
+        private void WriteJitSlotAwareMemoryUnchecked(ref long cycle, uint address, uint value, M68kOperandSize size)
+        {
+            address = NormalizeAddress(address);
+            var target = ClassifyTarget(address);
+            var accessSize = ToBusAccessSize(size);
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(target, address, accessSize, cycle, AmigaBusAccessKind.CpuDataWrite, isWrite: true)
+                : Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataWrite, target, address, accessSize, cycle, isWrite: true);
+            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            if (!TryWriteJitMappedMemory(target, address, value, size))
+            {
+                if (size == M68kOperandSize.Byte)
+                {
+                    WriteRawByte(address, (byte)value, access.GrantedCycle);
+                }
+                else if (size == M68kOperandSize.Word)
+                {
+                    WriteRawWord(address, (ushort)value, access.GrantedCycle);
+                }
+                else
+                {
+                    WriteRawLong(address, value, access.GrantedCycle, GetSecondWordCycle(access));
+                }
+            }
+
+            cycle = access.CompletedCycle;
+        }
+
+        private static AmigaBusAccessSize ToBusAccessSize(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => AmigaBusAccessSize.Byte,
+                M68kOperandSize.Word => AmigaBusAccessSize.Word,
+                _ => AmigaBusAccessSize.Long
+            };
+
+        private uint ReadJitRawMemory(
+            AmigaBusAccessTarget target,
+            uint address,
+            M68kOperandSize size,
+            AmigaBusAccessResult access)
+        {
+            if (target == AmigaBusAccessTarget.CustomRegisters)
+            {
+                return size switch
+                {
+                    M68kOperandSize.Byte => ReadRawByte(address, access.GrantedCycle),
+                    M68kOperandSize.Word => ReadRawWord(address, access.GrantedCycle),
+                    _ => ReadRawLong(address, access.GrantedCycle, GetSecondWordCycle(access))
+                };
+            }
+
+            return size switch
+            {
+                M68kOperandSize.Byte => ReadRawByte(address),
+                M68kOperandSize.Word => ReadRawWord(address),
+                _ => ReadRawLong(address)
+            };
+        }
+
+        private bool TryReadJitMappedMemory(
+            AmigaBusAccessTarget target,
+            uint address,
+            M68kOperandSize size,
+            out uint value)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam)
+            {
+                value = size switch
+                {
+                    M68kOperandSize.Byte => _chipRam[GetChipRamOffset(address)],
+                    M68kOperandSize.Word => ReadChipDmaWord(address),
+                    _ => ((uint)ReadChipDmaWord(address) << 16) | ReadChipDmaWord(address + 2)
+                };
+                return true;
+            }
+
+            if (target == AmigaBusAccessTarget.ExpansionRam &&
+                TryReadJitLinearMemory(_expansionRam, ExpansionRamBase, address, size, out value))
+            {
+                return true;
+            }
+
+            if (target == AmigaBusAccessTarget.RealFastRam &&
+                TryReadJitLinearMemory(_realFastRam, RealFastRamBase, address, size, out value))
+            {
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private static bool TryReadJitLinearMemory(
+            byte[] memory,
+            uint baseAddress,
+            uint address,
+            M68kOperandSize size,
+            out uint value)
+        {
+            var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+            if (memory.Length == 0 || address < baseAddress)
+            {
+                value = 0;
+                return false;
+            }
+
+            var offset = address - baseAddress;
+            if (offset >= memory.Length || (ulong)offset + (ulong)byteCount > (ulong)memory.Length)
+            {
+                value = 0;
+                return false;
+            }
+
+            var index = (int)offset;
+            value = size switch
+            {
+                M68kOperandSize.Byte => memory[index],
+                M68kOperandSize.Word => (uint)((memory[index] << 8) | memory[index + 1]),
+                _ => ((uint)memory[index] << 24) |
+                    ((uint)memory[index + 1] << 16) |
+                    ((uint)memory[index + 2] << 8) |
+                    memory[index + 3]
+            };
+            return true;
+        }
+
+        private bool TryWriteJitMappedMemory(
+            AmigaBusAccessTarget target,
+            uint address,
+            uint value,
+            M68kOperandSize size)
+        {
+            if (target == AmigaBusAccessTarget.ExpansionRam &&
+                TryWriteJitLinearMemory(_expansionRam, ExpansionRamBase, address, value, size))
+            {
+                var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+                TouchCodePages(address, byteCount);
+                NotifyJitEligibleMemoryWritten(address, byteCount);
+                return true;
+            }
+
+            if (target == AmigaBusAccessTarget.RealFastRam &&
+                TryWriteJitLinearMemory(_realFastRam, RealFastRamBase, address, value, size))
+            {
+                var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+                TouchCodePages(address, byteCount);
+                NotifyJitEligibleMemoryWritten(address, byteCount);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryWriteJitLinearMemory(
+            byte[] memory,
+            uint baseAddress,
+            uint address,
+            uint value,
+            M68kOperandSize size)
+        {
+            var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
+            if (memory.Length == 0 || address < baseAddress)
+            {
+                return false;
+            }
+
+            var offset = address - baseAddress;
+            if (offset >= memory.Length || (ulong)offset + (ulong)byteCount > (ulong)memory.Length)
+            {
+                return false;
+            }
+
+            var index = (int)offset;
+            if (size == M68kOperandSize.Byte)
+            {
+                memory[index] = (byte)value;
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                memory[index] = (byte)(value >> 8);
+                memory[index + 1] = (byte)value;
+            }
+            else
+            {
+                memory[index] = (byte)(value >> 24);
+                memory[index + 1] = (byte)(value >> 16);
+                memory[index + 2] = (byte)(value >> 8);
+                memory[index + 3] = (byte)value;
+            }
+
+            return true;
+        }
+
         private uint ReadRawLong(uint address, long firstWordCycle, long secondWordCycle)
         {
             return ((uint)ReadRawWord(address, firstWordCycle) << 16) | ReadRawWord(address + 2, secondWordCycle);
@@ -2974,9 +3312,17 @@ namespace CopperMod.Amiga
             return (long)Math.Max(1, period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
-        private static long GetDmaPeriodCycles(int period)
+        private static long GetDmaPeriodCycles(int period, AmigaBus bus)
         {
-            return GetPeriodCycles(period);
+            var dmaPeriod = UsesPartialPlaybackDmaMinimum(bus)
+                ? Math.Max(period, bus.AudioDmaMinimumPeriod)
+                : period;
+            return GetPeriodCycles(dmaPeriod);
+        }
+
+        private static bool UsesPartialPlaybackDmaMinimum(AmigaBus bus)
+        {
+            return bus.LiveAgnusDmaEnabled && !bus.LiveDisplayDmaEnabled;
         }
 
         private static long? MinWakeCandidate(long? candidate, long? eventCycle)
@@ -3050,6 +3396,7 @@ namespace CopperMod.Amiga
             private bool _hasDataWord;
             private bool _nextByteIsLow;
             private long _nextSampleCycle;
+            private long _nextDmaFetchCycle;
             private uint _currentAddress;
             private int _remainingWords;
 
@@ -3085,6 +3432,7 @@ namespace CopperMod.Amiga
                 _hasDataWord = false;
                 _nextByteIsLow = false;
                 _nextSampleCycle = 0;
+                _nextDmaFetchCycle = long.MaxValue;
                 _currentAddress = 0;
                 _remainingWords = 0;
             }
@@ -3096,6 +3444,7 @@ namespace CopperMod.Amiga
                     DmaEnabled = false;
                     _hasDataWord = false;
                     _nextByteIsLow = false;
+                    _nextDmaFetchCycle = long.MaxValue;
                     return;
                 }
 
@@ -3103,7 +3452,6 @@ namespace CopperMod.Amiga
                 _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
                 FetchDmaWord(bus, cycle, paula, forceInterrupt: true);
-                _nextSampleCycle = cycle + GetDmaPeriodCycles(Period);
             }
 
             public void WriteData(ushort value, long cycle, Paula paula)
@@ -3113,6 +3461,7 @@ namespace CopperMod.Amiga
                 _nextByteIsLow = true;
                 CurrentSample = unchecked((sbyte)(value >> 8));
                 _nextSampleCycle = cycle + GetPeriodCycles(Period);
+                _nextDmaFetchCycle = long.MaxValue;
                 paula.RequestAudioInterrupt(Index, cycle);
             }
 
@@ -3130,14 +3479,18 @@ namespace CopperMod.Amiga
                         CurrentSample = unchecked((sbyte)_dataWord);
                         _nextByteIsLow = false;
                         paula.ApplyModulationFrom(Index, _dataWord);
-                        _nextSampleCycle += GetActivePeriodCycles();
+                        _nextSampleCycle += GetPeriodCycles(Period);
+                        if (DmaEnabled && UsesPartialPlaybackDmaMinimum(bus))
+                        {
+                            _nextSampleCycle = Math.Max(_nextSampleCycle, _nextDmaFetchCycle);
+                        }
+
                         continue;
                     }
 
                     if (DmaEnabled)
                     {
                         FetchDmaWord(bus, _nextSampleCycle, paula, forceInterrupt: false);
-                        _nextSampleCycle += GetDmaPeriodCycles(Period);
                     }
                     else
                     {
@@ -3191,18 +3544,13 @@ namespace CopperMod.Amiga
                 _hasDataWord = true;
                 _nextByteIsLow = true;
                 CurrentSample = unchecked((sbyte)(_dataWord >> 8));
+                _nextSampleCycle = cycle + GetPeriodCycles(Period);
+                _nextDmaFetchCycle = cycle + (GetDmaPeriodCycles(Period, bus) * 2);
 
                 if (forceInterrupt || _remainingWords == 0)
                 {
                     paula.RequestAudioInterrupt(Index, cycle);
                 }
-            }
-
-            private long GetActivePeriodCycles()
-            {
-                return DmaEnabled
-                    ? GetDmaPeriodCycles(Period)
-                    : GetPeriodCycles(Period);
             }
 
         }

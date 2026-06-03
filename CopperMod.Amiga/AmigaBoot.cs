@@ -524,7 +524,8 @@ namespace CopperMod.Amiga
 
         private sealed class BootInstructionBoundary :
             IM68kStoppedCpuFastForwardBoundary,
-            IM68kPureCpuTraceBatchBoundary
+            IM68kPureCpuTraceBatchBoundary,
+            IM68kBusAccessTraceBatchBoundary
         {
             private readonly AmigaBootController _owner;
             private AmigaBootRunMode _runMode;
@@ -599,6 +600,15 @@ namespace CopperMod.Amiga
             }
 
             public void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
+
+            public bool TryBeginBusAccessTraceBatch(
+                M68kCpuState state,
+                long targetCycle,
+                out long batchTargetCycle)
+                => TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+
+            public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount)
                 => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
 
             private void AfterInstructionBatch(long previousCycle, long currentCycle, int instructionCount)

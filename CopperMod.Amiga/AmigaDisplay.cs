@@ -888,6 +888,11 @@ namespace CopperMod.Amiga
 
         private long GetNextLiveCopperCycle(long targetCycle)
         {
+            if (_liveCopper.PendingMove)
+            {
+                return _liveCopper.PendingMoveCycle;
+            }
+
             if (_liveCopper.Stopped)
             {
                 return long.MaxValue;
@@ -926,6 +931,12 @@ namespace CopperMod.Amiga
 
         private void StepLiveCopper(long targetCycle)
         {
+            if (_liveCopper.PendingMove)
+            {
+                CompletePendingLiveCopperMove(targetCycle);
+                return;
+            }
+
             if (_liveCopper.Stopped || !IsLiveCopperDmaEnabled())
             {
                 return;
@@ -961,6 +972,7 @@ namespace CopperMod.Amiga
                 if (resumeCycle > targetCycle)
                 {
                     _liveCopper.Cycle = resumeCycle;
+                    _liveCopper.Waiting = false;
                     return;
                 }
 
@@ -981,7 +993,6 @@ namespace CopperMod.Amiga
             var instructionStopCycle = Math.Max(
                 secondAccess.CompletedCycle,
                 firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperMoveHpUnits));
-            var oldPc = _liveCopper.Pc;
             _liveCopper.Pc = AddDmaPointerOffset(_liveCopper.Pc, 4);
 
             if (first == 0xFFFF && second == 0xFFFE)
@@ -994,39 +1005,24 @@ namespace CopperMod.Amiga
             if ((first & 1) == 0)
             {
                 var register = (ushort)(first & 0x01FE);
+                var suppressMove = _liveCopper.SuppressNextMove;
+                _liveCopper.SuppressNextMove = false;
+                if (dataCycle > targetCycle)
+                {
+                    _liveCopper.PendingMove = true;
+                    _liveCopper.PendingMoveRegister = register;
+                    _liveCopper.PendingMoveValue = second;
+                    _liveCopper.PendingMoveCycle = dataCycle;
+                    _liveCopper.PendingMoveStopCycle = instructionStopCycle;
+                    _liveCopper.PendingMoveSuppress = suppressMove;
+                    _liveCopper.Cycle = dataCycle;
+                    InvalidateLiveDisplayEventCycle();
+                    return;
+                }
+
                 if (dataCycle <= targetCycle)
                 {
-                    var suppressMove = _liveCopper.SuppressNextMove;
-                    _liveCopper.SuppressNextMove = false;
-                    if (IsCopperDangerStopRegister(register))
-                    {
-                        _liveCopper.Stopped = true;
-                        _liveCopper.Cycle = instructionStopCycle;
-                        return;
-                    }
-
-                    if (!suppressMove && CanCopperWriteRegister(register))
-                    {
-                        _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
-                        AdvanceLiveDisplayWindowStateToCycle(dataCycle);
-                        ApplyCopperMove(register, second, dataCycle);
-                        RecordLiveFrameWrite(dataCycle, register, second);
-                        RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
-                        if (register == 0x088)
-                        {
-                            _liveCopper.JumpTo(_copperListPointer, dataCycle);
-                        }
-                        else if (register == 0x08A)
-                        {
-                            _liveCopper.JumpTo(_copperListPointer2, dataCycle);
-                        }
-                    }
-                }
-                else if (dataCycle > targetCycle)
-                {
-                    _liveCopper.Pc = oldPc;
-                    _liveCopper.Cycle = dataCycle;
-                    return;
+                    ApplyLiveCopperMove(register, second, dataCycle, instructionStopCycle, suppressMove);
                 }
 
                 _liveCopper.Cycle = instructionStopCycle;
@@ -1035,6 +1031,7 @@ namespace CopperMod.Amiga
 
             if ((second & 1) == 0)
             {
+                _liveCopper.Cycle = instructionStopCycle;
                 _liveCopper.Wait(first, second);
                 return;
             }
@@ -1049,7 +1046,63 @@ namespace CopperMod.Amiga
                 _liveCopper.SuppressNextMove = true;
             }
 
-            _liveCopper.Cycle = fetchCycle + CopperHpToCpuCycles(CopperSkipHpUnits);
+            _liveCopper.Cycle = instructionStopCycle;
+        }
+
+        private void CompletePendingLiveCopperMove(long targetCycle)
+        {
+            if (!_liveCopper.PendingMove || _liveCopper.PendingMoveCycle > targetCycle)
+            {
+                return;
+            }
+
+            var register = _liveCopper.PendingMoveRegister;
+            var value = _liveCopper.PendingMoveValue;
+            var dataCycle = _liveCopper.PendingMoveCycle;
+            var stopCycle = _liveCopper.PendingMoveStopCycle;
+            var suppressMove = _liveCopper.PendingMoveSuppress;
+            _liveCopper.PendingMove = false;
+            ApplyLiveCopperMove(register, value, dataCycle, stopCycle, suppressMove);
+            if (!_liveCopper.Stopped)
+            {
+                _liveCopper.Cycle = stopCycle;
+            }
+
+            InvalidateLiveDisplayEventCycle();
+        }
+
+        private void ApplyLiveCopperMove(
+            ushort register,
+            ushort value,
+            long dataCycle,
+            long instructionStopCycle,
+            bool suppressMove)
+        {
+            if (IsCopperDangerStopRegister(register))
+            {
+                _liveCopper.Stopped = true;
+                _liveCopper.Cycle = instructionStopCycle;
+                return;
+            }
+
+            if (!suppressMove && CanCopperWriteRegister(register))
+            {
+                _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
+                AdvanceLiveDisplayWindowStateToCycle(dataCycle);
+                ApplyCopperMove(register, value, dataCycle);
+                RecordLiveFrameWrite(dataCycle, register, value);
+                RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
+                if (register == 0x088)
+                {
+                    _liveCopper.JumpTo(_copperListPointer, dataCycle);
+                }
+                else if (register == 0x08A)
+                {
+                    _liveCopper.JumpTo(_copperListPointer2, dataCycle);
+                }
+            }
+
+            _liveCopper.Cycle = instructionStopCycle;
         }
 
         private long GetNextLiveLineStateCycle()
@@ -2007,6 +2060,7 @@ namespace CopperMod.Amiga
 
             if ((second & 1) == 0)
             {
+                copper.Cycle = instructionStopCycle;
                 copper.Wait(first, second);
                 return;
             }
@@ -2021,7 +2075,7 @@ namespace CopperMod.Amiga
                 copper.SuppressNextMove = true;
             }
 
-            copper.Cycle = fetchCycle + CopperHpToCpuCycles(CopperSkipHpUnits);
+            copper.Cycle = instructionStopCycle;
         }
 
         private bool TryPeekPendingWrite(out PendingCustomWrite write)
@@ -5358,6 +5412,12 @@ namespace CopperMod.Amiga
                 Stopped = false;
                 Waiting = false;
                 SuppressNextMove = false;
+                PendingMove = false;
+                PendingMoveRegister = 0;
+                PendingMoveValue = 0;
+                PendingMoveCycle = 0;
+                PendingMoveStopCycle = 0;
+                PendingMoveSuppress = false;
                 WaitFirst = 0;
                 WaitSecond = 0;
             }
@@ -5371,6 +5431,18 @@ namespace CopperMod.Amiga
             public bool Waiting;
 
             public bool SuppressNextMove;
+
+            public bool PendingMove;
+
+            public ushort PendingMoveRegister;
+
+            public ushort PendingMoveValue;
+
+            public long PendingMoveCycle;
+
+            public long PendingMoveStopCycle;
+
+            public bool PendingMoveSuppress;
 
             public ushort WaitFirst;
 
@@ -5390,6 +5462,12 @@ namespace CopperMod.Amiga
                 Stopped = false;
                 Waiting = false;
                 SuppressNextMove = false;
+                PendingMove = false;
+                PendingMoveRegister = 0;
+                PendingMoveValue = 0;
+                PendingMoveCycle = 0;
+                PendingMoveStopCycle = 0;
+                PendingMoveSuppress = false;
             }
         }
 

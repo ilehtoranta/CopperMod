@@ -1221,6 +1221,34 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void LiveCopperMoveSplitByPendingDisplayWriteCompletesWithoutRefetch()
+    {
+        var bus = new AmigaBus(agnusTimingMode: AgnusTimingMode.SlotEngine);
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var waitV = 0x2C - StandardY;
+        var moveIr1Cycle = CycleForOutputRowHorizontal(0, 0x46, lineCycles);
+        var splitCycle = moveIr1Cycle + CopperHpToCpuCyclesForTest(1);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, (ushort)((waitV << 8) | 0x0041));
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0x00F0);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2408, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x240A, 0xFFFE);
+        bus.WriteWord(0x00DFF180, 0x0F00);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        bus.WriteWord(0x00DFF096, 0x8280);
+        bus.Display.ScheduleWrite(splitCycle, 0x0104, 0x0000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, frameCycles);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 31, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 32, 0));
+    }
+
+    [Fact]
     public void CopperEndOfLineHorizontalWaitRendersWholeOutputRow()
     {
         var bus = new AmigaBus();

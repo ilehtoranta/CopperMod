@@ -182,6 +182,29 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void PartialPlaybackLiveDmaUsesConfiguredMinimumForAudioDmaRefillSlots()
+	{
+		var bus = new AmigaBus(
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false,
+			agnusTimingMode: AgnusTimingMode.SlotEngine);
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+
+		bus.Paula.AdvanceTo(1_000);
+
+		var requestedCycles = bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.Select(access => access.RequestedCycle)
+			.ToArray();
+		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
+	}
+
+	[Fact]
 	public void DmaLengthReloadInterruptsUseExactSampleBoundary()
 	{
 		var bus = CreateLegacyPaulaBus();

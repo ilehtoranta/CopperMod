@@ -204,12 +204,33 @@ namespace CopperMod.Amiga
         {
             return instruction.Operation switch
             {
+                M68kJitOperation.Move => IsSupportedReadEa(instruction.Source) &&
+                    IsSupportedWriteEa(instruction.Destination),
+                M68kJitOperation.Movea => instruction.Destination.Kind == M68kJitEaKind.AddressRegister &&
+                    IsSupportedReadEa(instruction.Source),
+                M68kJitOperation.Lea => IsSupportedAddressEa(instruction.Source),
+                M68kJitOperation.Addq or M68kJitOperation.Subq => instruction.Destination.Kind == M68kJitEaKind.AddressRegister ||
+                    IsSupportedReadWriteEa(instruction.Destination),
+                M68kJitOperation.Tst => IsSupportedReadEa(instruction.Destination),
+                M68kJitOperation.Cmpi => IsSupportedReadEa(instruction.Destination),
+                M68kJitOperation.Cmp => instruction.Source.Kind != M68kJitEaKind.AddressRegister &&
+                    IsSupportedReadEa(instruction.Source),
+                M68kJitOperation.Cmpa => IsSupportedReadEa(instruction.Source),
+                M68kJitOperation.Cmpm => instruction.Source.Kind == M68kJitEaKind.AddressPostincrement &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressPostincrement,
+                M68kJitOperation.Add or M68kJitOperation.Sub => instruction.Variant == 2
+                    ? IsSupportedReadEa(instruction.Source)
+                    : IsSupportedBinaryArithmeticEa(instruction),
+                M68kJitOperation.Addi or M68kJitOperation.Subi or
+                M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori => IsSupportedReadWriteEa(instruction.Destination),
+                M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor => IsSupportedBinaryArithmeticEa(instruction),
+                M68kJitOperation.Not or M68kJitOperation.Neg => IsSupportedReadWriteEa(instruction.Destination),
                 _ => false
             };
         }
 
         private static bool CanEmitSpecializedHelper(M68kDecodedInstruction instruction)
-            => false;
+            => instruction.Operation == M68kJitOperation.Movem;
 
         private static bool IsRegisterArithmetic(M68kDecodedInstruction instruction)
         {
@@ -297,7 +318,7 @@ namespace CopperMod.Amiga
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Move:
-                    EmitMoveDataRegister(il, instruction, context);
+                    EmitMove(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Movea:
@@ -309,23 +330,23 @@ namespace CopperMod.Amiga
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Addq:
-                    EmitQuickDataRegisterArithmetic(il, instruction, context, add: true);
+                    EmitQuickArithmetic(il, instruction, context, add: true);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Subq:
-                    EmitQuickDataRegisterArithmetic(il, instruction, context, add: false);
+                    EmitQuickArithmetic(il, instruction, context, add: false);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Tst:
-                    EmitTstDataRegister(il, instruction, context);
+                    EmitTst(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Cmp:
-                    EmitCompareDataRegisters(il, instruction, context);
+                    EmitCompare(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Cmpi:
-                    EmitCompareImmediateDataRegister(il, instruction, context);
+                    EmitCompareImmediate(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Cmpa:
@@ -393,11 +414,11 @@ namespace CopperMod.Amiga
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Not:
-                    EmitNotDataRegister(il, instruction, context);
+                    EmitNot(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Neg:
-                    EmitNegDataRegister(il, instruction, context);
+                    EmitNeg(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.ExtWord:
