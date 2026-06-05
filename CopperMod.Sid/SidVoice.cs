@@ -159,6 +159,8 @@ namespace CopperMod.Sid
             var sustain = GetSustainLevel();
             if (_envelopeCounter <= sustain)
             {
+                _envelopeCounter = sustain;
+                _exponentialCounter = 0;
                 _envelopeState = Sustain;
                 return;
             }
@@ -422,6 +424,11 @@ namespace CopperMod.Sid
             var saw = GetSawDac();
             var contentionMask = (_phase >> 10) & 0x0FFF;
             var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
+            if ((PulseWidth & 0x0FFF) != 0)
+            {
+                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
+            }
+
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             trace = captureTrace
                 ? new SidWaveformTrace(
@@ -514,6 +521,11 @@ namespace CopperMod.Sid
             var saw = GetSawDac();
             var contentionMask = (_phase >> 10) & 0x0FFF;
             var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
+            if ((PulseWidth & 0x0FFF) != 0)
+            {
+                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
+            }
+
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;

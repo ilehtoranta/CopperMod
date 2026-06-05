@@ -176,6 +176,17 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void Mos6581VolumeRegisterStepsAddSlewedTransientDigiEnergy()
+	{
+		var mos6581 = MeasureVolumeStepTransient(SidChipModel.Mos6581);
+		var mos8580 = MeasureVolumeStepTransient(SidChipModel.Mos8580);
+
+		Assert.True(mos6581.EarlyExcursion > 0.15, $"Expected 6581 D418 step to create strong transient digi energy, got {mos6581.EarlyExcursion:0.000}.");
+		Assert.True(Math.Abs(mos6581.Settled - SidAnalog.VolumeOffset(3, SidChipModel.Mos6581)) < 0.01, $"Expected 6581 D418 transient to decay back to the volume rest offset, settled {mos6581.Settled:0.000}.");
+		Assert.True(mos8580.EarlyExcursion < 0.02, $"Expected 8580 D418 transient to remain weak, got {mos8580.EarlyExcursion:0.000}.");
+	}
+
+	[Fact]
 	public void MultipleVoicesSumLouderWithoutActiveChannelNormalization()
 	{
 		var oneVoice = CreateSawVoice();
@@ -561,6 +572,29 @@ public sealed class SidChipTests
 		}
 
 		return rendered;
+	}
+
+	private static (double EarlyExcursion, double Settled) MeasureVolumeStepTransient(SidChipModel model)
+	{
+		var chip = new SidChip(model, 0xD400);
+		chip.Write(0x18, 0x08);
+		RenderCycles(chip, 12000);
+		_ = chip.Render(1);
+		chip.Write(0x18, 0x03);
+
+		var minimum = double.MaxValue;
+		var maximum = double.MinValue;
+		for (var i = 0; i < 2048; i++)
+		{
+			var sample = chip.Render(1);
+			minimum = Math.Min(minimum, sample);
+			maximum = Math.Max(maximum, sample);
+		}
+
+		RenderCycles(chip, 16000);
+		var settled = chip.Render(1);
+		var earlyExcursion = Math.Max(Math.Abs(minimum - settled), Math.Abs(maximum - settled));
+		return (earlyExcursion, settled);
 	}
 
 	private static SidChip CreateTwoSawVoices()

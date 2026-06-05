@@ -2,13 +2,13 @@ namespace CopperMod.Rendering;
 
 public sealed class C64OutputStage
 {
-	private const double DcBlockCutoffHz = 1.0;
-	private const double OutputLowPassCutoffHz = 18000.0;
-	private const float EdgeEmphasis = 0.1f;
-	private const float OutputHeadroom = 0.555f;
+	private static readonly C64OutputStageProfile C64Profile = new C64OutputStageProfile(
+		DcBlockCutoffHz: 15.9,
+		OutputLowPassCutoffHz: 18000.0,
+		OutputHeadroom: 0.555f,
+		Drive: 0.0f);
+
 	private float[] _lowPassState = Array.Empty<float>();
-	private bool[] _edgeInitialized = Array.Empty<bool>();
-	private float[] _edgePreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousInput = Array.Empty<float>();
 	private float[] _dcPreviousOutput = Array.Empty<float>();
 
@@ -22,8 +22,6 @@ public sealed class C64OutputStage
 	public void Reset()
 	{
 		Array.Clear(_lowPassState);
-		Array.Clear(_edgeInitialized);
-		Array.Clear(_edgePreviousInput);
 		Array.Clear(_dcPreviousInput);
 		Array.Clear(_dcPreviousOutput);
 	}
@@ -46,16 +44,17 @@ public sealed class C64OutputStage
 		}
 
 		EnsureState(channels);
-		var lowPassAlpha = GetLowPassAlpha(OutputLowPassCutoffHz, sampleRate);
-		var highPassAlpha = GetHighPassAlpha(DcBlockCutoffHz, sampleRate);
+		var profile = C64Profile;
+		var lowPassAlpha = GetLowPassAlpha(profile.OutputLowPassCutoffHz, sampleRate);
+		var highPassAlpha = GetHighPassAlpha(profile.DcBlockCutoffHz, sampleRate);
 		for (var i = 0; i < samples.Length; i++)
 		{
 			var channel = i % channels;
 			var sample = samples[i];
 			sample = OnePoleLowPass(sample, channel, lowPassAlpha);
 			sample = DcBlock(sample, channel, highPassAlpha);
-			sample = EmphasizeEdges(sample, channel);
-			samples[i] = Math.Clamp(sample * OutputHeadroom, -1.0f, 1.0f);
+			sample = SoftClip(sample, profile.Drive);
+			samples[i] = Math.Clamp(sample * profile.OutputHeadroom, -1.0f, 1.0f);
 		}
 	}
 
@@ -67,8 +66,6 @@ public sealed class C64OutputStage
 		}
 
 		_lowPassState = new float[channels];
-		_edgeInitialized = new bool[channels];
-		_edgePreviousInput = new float[channels];
 		_dcPreviousInput = new float[channels];
 		_dcPreviousOutput = new float[channels];
 	}
@@ -88,18 +85,15 @@ public sealed class C64OutputStage
 		return output;
 	}
 
-	private float EmphasizeEdges(float sample, int channel)
+	private static float SoftClip(float sample, float drive)
 	{
-		if (!_edgeInitialized[channel])
+		if (drive <= 0.0f)
 		{
-			_edgeInitialized[channel] = true;
-			_edgePreviousInput[channel] = sample;
 			return sample;
 		}
 
-		var edge = sample - _edgePreviousInput[channel];
-		_edgePreviousInput[channel] = sample;
-		return sample + (edge * EdgeEmphasis);
+		var driven = sample * (1.0f + drive);
+		return driven / (1.0f + (Math.Abs(driven) * drive));
 	}
 
 	private static double GetLowPassAlpha(double cutoffHz, int sampleRate)
@@ -113,4 +107,10 @@ public sealed class C64OutputStage
 		var dt = 1.0 / sampleRate;
 		return rc / (rc + dt);
 	}
+
+	private readonly record struct C64OutputStageProfile(
+		double DcBlockCutoffHz,
+		double OutputLowPassCutoffHz,
+		float OutputHeadroom,
+		float Drive);
 }

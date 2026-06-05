@@ -48,4 +48,32 @@ public sealed class SidAnalogTests
 		Assert.True(nightdawnStyleRange > 0.22, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
 		Assert.True(mos8580Range < mos6581Range * 0.10, $"Expected 8580 volume digis to remain much weaker, 8580 {mos8580Range:0.000}, 6581 {mos6581Range:0.000}.");
 	}
+
+	[Fact]
+	public void Mos6581VolumeZeroKeepsNonZeroRestVoltage()
+	{
+		Assert.Equal(0.0, SidAnalog.ConvertVolume(0, SidChipModel.Mos6581), precision: 12);
+		Assert.True(
+			Math.Abs(SidAnalog.VolumeOffset(0, SidChipModel.Mos6581)) > 0.02,
+			$"Expected 6581 volume zero to retain a rest voltage, got {SidAnalog.VolumeOffset(0, SidChipModel.Mos6581):0.000}.");
+		Assert.True(
+			Math.Abs(SidAnalog.VolumeOffset(0, SidChipModel.Mos8580)) < Math.Abs(SidAnalog.VolumeOffset(0, SidChipModel.Mos6581)) * 0.10,
+			"Expected 8580 volume-zero rest voltage to stay far below the 6581 profile.");
+	}
+
+	[Fact]
+	public void Mos6581VolumeGainAndDcAreSeparateProfileCurves()
+	{
+		Assert.Equal(0.0, SidAnalog.ConvertVolume(0, SidChipModel.Mos6581), precision: 12);
+		Assert.Equal(1.0, SidAnalog.ConvertVolume(15, SidChipModel.Mos6581), precision: 12);
+		for (var volume = 1; volume < 16; volume++)
+		{
+			Assert.True(
+				SidAnalog.ConvertVolume(volume, SidChipModel.Mos6581) > SidAnalog.ConvertVolume(volume - 1, SidChipModel.Mos6581),
+				$"Expected 6581 volume gain {volume} to exceed {volume - 1}.");
+			Assert.True(
+				SidAnalog.VolumeOffset(volume, SidChipModel.Mos6581) > SidAnalog.VolumeOffset(volume - 1, SidChipModel.Mos6581),
+				$"Expected 6581 volume DC {volume} to exceed {volume - 1}.");
+		}
+	}
 }
