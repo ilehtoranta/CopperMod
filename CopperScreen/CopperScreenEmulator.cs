@@ -205,6 +205,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 				drive.Head,
 				connected && drive.MotorOn,
 				connected && drive.Selected,
+				connected && drive.WriteProtected,
 				connected && disk.ActiveDma && disk.ActiveDmaDrive == driveIndex);
 		}
 	}
@@ -396,6 +397,31 @@ internal sealed class CopperScreenEmulator : IDisposable
 		GetDrive(driveIndex).Insert(disk, markChanged);
 		SetDriveDiskMetadata(driveIndex, fullPath);
 		StatusText = $"inserted DF{driveIndex}: {Path.GetFileName(fullPath)}";
+		return true;
+	}
+
+	internal bool SetDriveWriteProtected(int driveIndex, bool writeProtected)
+	{
+		if ((uint)driveIndex >= 4)
+		{
+			throw new ArgumentOutOfRangeException(nameof(driveIndex));
+		}
+
+		if (driveIndex >= _machine.Bus.Disk.ConnectedDriveCount)
+		{
+			StatusText = $"DF{driveIndex}: drive is not connected";
+			return false;
+		}
+
+		var drive = GetDrive(driveIndex);
+		if (!drive.HasDisk)
+		{
+			StatusText = $"DF{driveIndex}: no disk inserted";
+			return false;
+		}
+
+		drive.SetWriteProtected(writeProtected);
+		StatusText = $"DF{driveIndex}: write protect {(writeProtected ? "on" : "off")}";
 		return true;
 	}
 

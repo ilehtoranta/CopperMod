@@ -29,6 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
     <ProjectReference Include="..\CopperScreen\CopperScreen.csproj" />
   </ItemGroup>

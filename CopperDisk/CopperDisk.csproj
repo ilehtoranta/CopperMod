@@ -4,16 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Ipf</PackageId>
-    <Title>CopperMod.Ipf</Title>
+    <PackageId>CopperDisk</PackageId>
+    <Title>CopperDisk</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Managed IPF disk image decoder for Amiga emulation.</Description>
+    <Description>Managed Amiga ADF and IPF disk image library.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;ipf;disk</PackageTags>
+    <PackageTags>amiga;emulation;adf;ipf;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
@@ -22,11 +22,11 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

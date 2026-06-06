@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
-namespace CopperMod.Ipf;
+namespace CopperDisk;
 
 /// <summary>
 /// Decodes Software Preservation Society IPF disk images into raw track byte streams.
@@ -166,7 +166,13 @@ public static class IpfDecoder
                 WriteGeneratedGap(block, gapBits, context);
             }
 
-            return new IpfTrack(image.Cylinder, image.Head, trackBits, startBit, writer.ToArray());
+            return new IpfTrack(
+                image.Cylinder,
+                image.Head,
+                trackBits,
+                startBit,
+                writer.ToArray(),
+                context.Features | AmigaTrackFeatures.PreservedTrackData);
         }
 
         private static ImageBlock[] ReadBlocks(InfoDescriptor info, ImageDescriptor image, ReadOnlySpan<byte> data)
@@ -304,6 +310,7 @@ public static class IpfDecoder
 
                     break;
                 case StreamElementType.WeakData:
+                    context.Features |= AmigaTrackFeatures.WeakData | AmigaTrackFeatures.ApproximateWeakData;
                     if (encoderType == MfmEncoder)
                     {
                         Span<byte> zero = stackalloc byte[1];
@@ -480,6 +487,8 @@ public static class IpfDecoder
         }
 
         public TrackBitWriter Writer { get; }
+
+        public AmigaTrackFeatures Features { get; set; }
 
         private bool PreviousDataBit { get; set; }
 

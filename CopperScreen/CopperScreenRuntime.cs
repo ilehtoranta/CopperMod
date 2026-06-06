@@ -28,6 +28,7 @@ internal readonly record struct CopperScreenDriveState(
 	int Head,
 	bool MotorOn,
 	bool Selected,
+	bool WriteProtected,
 	bool ActiveDma);
 
 internal readonly record struct CopperScreenState(
@@ -384,6 +385,13 @@ internal sealed class CopperScreenRuntime : IDisposable
 			return new CopperScreenCommandResult(inserted, message, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		}).ConfigureAwait(false);
 	}
+
+	public Task<CopperScreenCommandResult> SetDriveWriteProtectedAsync(int driveIndex, bool writeProtected)
+		=> EnqueueAsync(emulator =>
+		{
+			var updated = emulator.SetDriveWriteProtected(driveIndex, writeProtected);
+			return new CopperScreenCommandResult(updated, emulator.StatusText, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
+		});
 
 	public Task<CopperScreenCommandResult> LaunchCopperBenchPathAsync(string amigaPath)
 		=> EnqueueAsync(emulator =>

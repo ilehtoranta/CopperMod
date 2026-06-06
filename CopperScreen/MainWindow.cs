@@ -49,6 +49,7 @@ internal sealed class MainWindow : Window
 	private readonly Button _numpadModeButton;
 	private readonly Button _fullscreenButton;
 	private readonly Button _overscanButton;
+	private readonly Button _writeProtectButton;
 	private readonly StackPanel _entryList;
 	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
@@ -101,6 +102,10 @@ internal sealed class MainWindow : Window
 		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode, "Toggle numpad between joystick emulation and Amiga numpad keys");
 		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen, "Toggle fullscreen mode");
 		_overscanButton = CreateToolbarButton("Crop", ToggleOverscan, "Toggle between full overscan and cropped display");
+		_writeProtectButton = CreateToolbarButton("WP ON", async () =>
+		{
+			await ToggleWriteProtectAsync().ConfigureAwait(true);
+		}, "Toggle DF0: write protection");
 		_entryList = new StackPanel { Orientation = Orientation.Vertical, Spacing = 2 };
 		_root = new Grid
 		{
@@ -545,6 +550,7 @@ internal sealed class MainWindow : Window
 			VerticalAlignment = VerticalAlignment.Center
 		};
 		bottomRow.Children.Add(drives);
+		bottomRow.Children.Add(_writeProtectButton);
 		bottomRow.Children.Add(_ledFilterBox);
 
 		var layout = new StackPanel
@@ -1074,6 +1080,23 @@ internal sealed class MainWindow : Window
 	private Task InsertPreviousDiskAsync()
 		=> CompleteDiskCommandAsync(_runtime.InsertPreviousDiskAsync());
 
+	private async Task ToggleWriteProtectAsync()
+	{
+		var drive = _latestState.Drives.Length > 0
+			? _latestState.Drives[0]
+			: new CopperScreenDriveState(0, false, false, "No disk", null, 0, 0, false, false, false, false);
+		if (!drive.Connected || !drive.HasDisk)
+		{
+			return;
+		}
+
+		var result = await _runtime.SetDriveWriteProtectedAsync(0, !drive.WriteProtected).ConfigureAwait(true);
+		_latestState = result.State;
+		_bench.SetStatusMessage(result.Message);
+		RefreshCopperBenchUi();
+		PresentFrame(catchUpAudio: false);
+	}
+
 	private async Task CompleteDiskCommandAsync(Task<CopperScreenCommandResult> command)
 	{
 		var result = await command.ConfigureAwait(true);
@@ -1248,12 +1271,29 @@ internal sealed class MainWindow : Window
 		SetText(_lastPcStatus, $"LP {state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}");
 		SetText(_frameStatus, $"F {state.FrameNumber}");
 		SetText(_perfStatus, $"Q{state.QueuedAudioBuffers} D{state.DroppedFrames}");
+		var primaryDrive = state.Drives.Length > 0
+			? state.Drives[0]
+			: new CopperScreenDriveState(0, false, false, "No disk", null, 0, 0, false, false, false, false);
+		_writeProtectButton.IsEnabled = primaryDrive.Connected && primaryDrive.HasDisk;
+		_writeProtectButton.Content = primaryDrive.WriteProtected ? "WP ON" : "WP OFF";
+		_writeProtectButton.Background = new SolidColorBrush(primaryDrive.WriteProtected
+			? Color.FromRgb(56, 42, 24)
+			: Color.FromRgb(29, 58, 40));
+		_writeProtectButton.BorderBrush = new SolidColorBrush(primaryDrive.WriteProtected
+			? Color.FromRgb(148, 101, 48)
+			: Color.FromRgb(76, 142, 92));
+		_writeProtectButton.Foreground = new SolidColorBrush(primaryDrive.WriteProtected
+			? Color.FromRgb(255, 226, 170)
+			: Color.FromRgb(206, 248, 213));
+		SetWriteProtectToolTip(primaryDrive.HasDisk
+			? $"DF0: write protection {(primaryDrive.WriteProtected ? "enabled" : "disabled")}"
+			: "DF0: insert a disk before changing write protection");
 
 		for (var driveIndex = 0; driveIndex < _driveStatusTexts.Length; driveIndex++)
 		{
 			var drive = driveIndex < state.Drives.Length
 				? state.Drives[driveIndex]
-				: new CopperScreenDriveState(driveIndex, false, false, "No disk", null, 0, 0, false, false, false);
+				: new CopperScreenDriveState(driveIndex, false, false, "No disk", null, 0, 0, false, false, false, false);
 			UpdateDriveStatus(drive, state.IsDiskSwapPending && driveIndex == 0);
 		}
 
@@ -1294,7 +1334,7 @@ internal sealed class MainWindow : Window
 		}
 
 		var flags = string.Concat(drive.ActiveDma ? 'D' : drive.MotorOn ? 'M' : '-', drive.Selected ? 'S' : '-');
-		SetText(text, $"DF{drive.Index} {drive.Cylinder:00}.{drive.Head} {flags}");
+		SetText(text, $"DF{drive.Index} {drive.Cylinder:00}.{drive.Head} {flags}{(drive.WriteProtected ? "P" : "W")}");
 		if (drive.ActiveDma)
 		{
 			StyleIndicator(box, Color.FromRgb(76, 35, 28), Color.FromRgb(182, 93, 66), Color.FromRgb(255, 220, 202));
@@ -1332,7 +1372,16 @@ internal sealed class MainWindow : Window
 		}
 
 		var insertedDisk = string.IsNullOrWhiteSpace(drive.DiskPath) ? drive.DiskName : drive.DiskPath;
-		return $"DF{drive.Index}: {drive.DiskName}\n{insertedDisk}\nClick to change disk image";
+		return $"DF{drive.Index}: {drive.DiskName}\n{insertedDisk}\nWrite protect: {(drive.WriteProtected ? "on" : "off")}\nClick to change disk image";
+	}
+
+	private void SetWriteProtectToolTip(string text)
+	{
+		ToolTip.SetTip(_writeProtectButton, new TextBlock
+		{
+			Text = text,
+			Foreground = Brushes.White
+		});
 	}
 
 	private static void SetText(TextBlock text, string value)

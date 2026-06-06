@@ -3,7 +3,7 @@ using System.IO.Compression;
 using System.Text.RegularExpressions;
 using Avalonia.Input;
 using CopperMod.Amiga;
-using CopperMod.Ipf;
+using CopperDisk;
 using CopperScreen;
 
 namespace CopperScreen.Tests;

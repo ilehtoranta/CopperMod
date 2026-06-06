@@ -321,7 +321,7 @@ public sealed class FloppyDriveAudioTests
 		=> Drive(0, hasDisk, motorOn, cylinder);
 
 	private static CopperScreenDriveState Drive(int index, bool hasDisk, bool motorOn, int cylinder)
-		=> new(index, true, hasDisk, hasDisk ? "disk.adf" : string.Empty, hasDisk ? "disk.adf" : null, cylinder, 0, motorOn, true, false);
+		=> new(index, true, hasDisk, hasDisk ? "disk.adf" : string.Empty, hasDisk ? "disk.adf" : null, cylinder, 0, motorOn, true, true, false);
 
 	private static string CreatePackDirectory(string baseDirectory, string name)
 	{

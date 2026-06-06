@@ -1,6 +1,6 @@
-using CopperMod.Ipf;
+using CopperDisk;
 
-namespace CopperMod.Ipf.Tests;
+namespace CopperDisk.Tests;
 
 public sealed class IpfDecoderTests
 {
@@ -15,7 +15,16 @@ public sealed class IpfDecoderTests
         Assert.Equal(0, track.Cylinder);
         Assert.Equal(0, track.Head);
         Assert.Equal(32, track.BitLength);
+        Assert.Equal(AmigaTrackFeatures.PreservedTrackData, track.Features);
         Assert.Equal(new byte[] { 0x44, 0x89, 0x44, 0xA9 }, track.Data);
+    }
+
+    [Fact]
+    public void IpfLoadedMediaIsReadOnly()
+    {
+        var media = AmigaDiskLoader.FromIpfBytes(CreateSingleTrackIpf());
+
+        Assert.False(media is IWritableAmigaDiskMedia);
     }
 
     [Fact]

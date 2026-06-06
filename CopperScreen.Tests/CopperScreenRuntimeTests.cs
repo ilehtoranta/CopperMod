@@ -1,4 +1,5 @@
 using System.Reflection;
+using CopperMod.Amiga;
 using CopperScreen;
 
 namespace CopperScreen.Tests;
@@ -82,6 +83,38 @@ public sealed class CopperScreenRuntimeTests
 	}
 
 	[Fact]
+	public async Task InsertedAdfDefaultsWriteProtectedAndRuntimeCanToggleIt()
+	{
+		using var temp = new TempDiskFile(".adf");
+		using var nextTemp = new TempDiskFile(".adf");
+		var adf = new byte[AmigaDiskImage.StandardAdfSize];
+		File.WriteAllBytes(temp.Path, adf);
+		File.WriteAllBytes(nextTemp.Path, adf);
+		var emulator = CopperScreenEmulator.CreateWithLoadedDisk(
+			[temp.Path],
+			AppContext.BaseDirectory,
+			AmigaDiskImage.FromAdfBytes(adf, Path.GetFileName(temp.Path)));
+		emulator.RenderNextFrame();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
+		runtime.Start();
+
+		Assert.True(runtime.CurrentState.Drives[0].HasDisk);
+		Assert.True(runtime.CurrentState.Drives[0].WriteProtected);
+
+		var unprotected = await runtime.SetDriveWriteProtectedAsync(0, false);
+		Assert.True(unprotected.Success);
+		Assert.False(unprotected.State.Drives[0].WriteProtected);
+
+		var insertedNext = await runtime.InsertDiskAsync(nextTemp.Path, markChanged: false);
+		Assert.True(insertedNext.Success);
+		Assert.True(insertedNext.State.Drives[0].WriteProtected);
+
+		var protectedAgain = await runtime.SetDriveWriteProtectedAsync(0, true);
+		Assert.True(protectedAgain.Success);
+		Assert.True(protectedAgain.State.Drives[0].WriteProtected);
+	}
+
+	[Fact]
 	public async Task FramePublishedNotifiesPresentationLoop()
 	{
 		using var audio = new FakeAudioOutput();
@@ -160,6 +193,27 @@ public sealed class CopperScreenRuntimeTests
 		var field = typeof(CopperScreenRuntime).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
 		Assert.NotNull(field);
 		return Assert.IsType<T>(field.GetValue(runtime));
+	}
+
+	private sealed class TempDiskFile : IDisposable
+	{
+		public TempDiskFile(string extension)
+		{
+			Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
+		}
+
+		public string Path { get; }
+
+		public void Dispose()
+		{
+			try
+			{
+				File.Delete(Path);
+			}
+			catch (IOException)
+			{
+			}
+		}
 	}
 
 	private sealed class FakeAudioOutput : ICopperScreenAudioOutput

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace CopperMod.Ipf;
+namespace CopperDisk;
 
 /// <summary>
 /// A decoded IPF floppy disk image.

@@ -56,7 +56,7 @@ public sealed class CopperScreenDebugSnapshotTests
 			42,
 			cpu,
 			[
-				new CopperScreenDriveState(0, true, true, "Test.adf", @"C:\Test\Test.adf", 12, 1, true, true, true)
+				new CopperScreenDriveState(0, true, true, "Test.adf", @"C:\Test\Test.adf", 12, 1, true, true, true, true)
 			],
 			["AMIGA_BOOT_UNSUPPORTED_OPCODE: Unsupported MC68000 opcode."],
 			["123456: 4E7A 0801       MOVEC (68010+, illegal on 68000)"],
@@ -67,7 +67,7 @@ public sealed class CopperScreenDebugSnapshotTests
 		Assert.Contains("AMIGA_BOOT_UNSUPPORTED_OPCODE", report);
 		Assert.Contains("PC=$123456", report);
 		Assert.Contains("D0=$00001000", report);
-		Assert.Contains("DF0: cyl 12.1 DS Test.adf", report);
+		Assert.Contains("DF0: cyl 12.1 DSP Test.adf", report);
 		Assert.Contains("MOVEC", report);
 		Assert.Contains("00FE00: 1234", report);
 	}

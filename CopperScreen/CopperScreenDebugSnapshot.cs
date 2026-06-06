@@ -125,7 +125,7 @@ internal sealed class CopperScreenDebugSnapshot
 			return $"DF{drive.Index}: empty";
 		}
 
-		var flags = string.Concat(drive.ActiveDma ? 'D' : drive.MotorOn ? 'M' : '-', drive.Selected ? 'S' : '-');
+		var flags = string.Concat(drive.ActiveDma ? 'D' : drive.MotorOn ? 'M' : '-', drive.Selected ? 'S' : '-', drive.WriteProtected ? 'P' : 'W');
 		return $"DF{drive.Index}: cyl {drive.Cylinder:00}.{drive.Head} {flags} {drive.DiskName}";
 	}
 }

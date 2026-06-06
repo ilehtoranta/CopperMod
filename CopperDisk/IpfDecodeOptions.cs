@@ -1,4 +1,4 @@
-namespace CopperMod.Ipf;
+namespace CopperDisk;
 
 /// <summary>
 /// Controls how IPF track streams are materialized for an emulator.

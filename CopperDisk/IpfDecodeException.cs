@@ -1,6 +1,6 @@
 using System;
 
-namespace CopperMod.Ipf;
+namespace CopperDisk;
 
 /// <summary>
 /// Represents an error while parsing or decoding an IPF disk image.

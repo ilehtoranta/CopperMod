@@ -1,4 +1,5 @@
 using CopperMod.Amiga;
+using CopperDisk;
 
 namespace CopperMod.Amiga.Tests;
 

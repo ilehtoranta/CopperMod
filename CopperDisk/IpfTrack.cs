@@ -1,17 +1,20 @@
-namespace CopperMod.Ipf;
+using System;
+
+namespace CopperDisk;
 
 /// <summary>
 /// A single decoded floppy track.
 /// </summary>
-public sealed class IpfTrack
+public sealed class IpfTrack : IAmigaTrack
 {
-    internal IpfTrack(int cylinder, int head, int bitLength, int startBit, byte[] data)
+    internal IpfTrack(int cylinder, int head, int bitLength, int startBit, byte[] data, AmigaTrackFeatures features)
     {
         Cylinder = cylinder;
         Head = head;
         BitLength = bitLength;
         StartBit = startBit;
         Data = data;
+        Features = features;
     }
 
     /// <summary>
@@ -38,4 +41,11 @@ public sealed class IpfTrack
     /// Gets the decoded track bytes.
     /// </summary>
     public byte[] Data { get; }
+
+    ReadOnlyMemory<byte> IAmigaTrack.Data => Data;
+
+    /// <summary>
+    /// Gets feature flags exposed by the decoder for this track.
+    /// </summary>
+    public AmigaTrackFeatures Features { get; }
 }

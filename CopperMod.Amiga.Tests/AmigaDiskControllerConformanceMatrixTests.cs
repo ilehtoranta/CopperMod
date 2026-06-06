@@ -1,4 +1,6 @@
 using CopperMod.Amiga;
+using CopperDisk;
+using System.IO.Compression;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -106,7 +108,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("registers", "DSKSYNC default and writable value");
 			yield return DiskConformanceRow.Executable("dsklen", "two matching DMAEN writes required");
 			yield return DiskConformanceRow.Executable("dsklen", "mismatched second DMAEN write rearms but does not start");
-			yield return DiskConformanceRow.Executable("dsklen", "WRITE bit prevents read DMA and reports DISKWRITE");
+			yield return DiskConformanceRow.Executable("write-dma", "WRITE bit starts write DMA and reports DISKWRITE");
 			yield return DiskConformanceRow.Executable("dsklen", "zero length cancels pending DMA");
 			yield return DiskConformanceRow.Executable("dma-control", "DMA stop cancels active transfer");
 			yield return DiskConformanceRow.Executable("dma-control", "DSKPT advances and DSKLEN counts down at completion");
@@ -126,7 +128,9 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("cia-drive-lines", "500ms motor spin-up delay before DSKRDY");
 			yield return DiskConformanceRow.Executable("dsklen", "pending read DMA starts when motor becomes ready");
 			yield return DiskConformanceRow.Executable("diagnostics", "bounded disk DMA trace records start/completion/cancel/sync-miss state");
-			yield return DiskConformanceRow.Pending("write-dma", "DSKDAT write path and magnetic write DMA", "The controller currently models read DMA only.");
+			yield return DiskConformanceRow.Executable("write-dma", "ADF write DMA updates writable in-memory media");
+			yield return DiskConformanceRow.Executable("write-dma", "write-protect and read-only media block media mutation");
+			yield return DiskConformanceRow.Executable("write-dma", "WORDSYNC gates write DMA start");
 			yield return DiskConformanceRow.Pending("wordsync", "MSBSYNC/GCR byte sync mode", "ADKCON MSBSYNC is recorded by Paula but not implemented by disk input.");
 			yield return DiskConformanceRow.Pending("timing", "ADKCON FAST two-microsecond bit-cell mode", "The drive stream currently derives timing from encoded track length and 300 RPM.");
 			yield return DiskConformanceRow.Pending("write-dma", "MFM/GCR precompensation and write splice edge cases", "Precompensation bits are not consumed without a write path.");
@@ -272,16 +276,19 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
-	public void DsklenWriteBitPreventsReadDmaAndReportsDiskWriteStatus()
+	public void DsklenWriteBitStartsWriteDmaAndReportsDiskWriteStatus()
 	{
 		var bus = CreateBusWithTrack(0x1234);
 		var cycle = PrepareDiskDma(bus);
 		SetDiskPointer(bus, DmaBase, cycle);
+		WriteChipWord(bus, DmaBase, 0xBEEF);
 
 		bus.WriteWord(0x00DFF024, 0xC001, cycle);
 		bus.WriteWord(0x00DFF024, 0xC001, cycle);
 
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+		CompleteDiskDma(bus);
+		Assert.Equal(0xBEEF, bus.ReadWord(0x00DFF008));
 		Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x2000);
 	}
 
@@ -639,6 +646,27 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void InsertUsesMediaDefaultWriteProtectionPolicy()
+	{
+		var adfBus = CreateDiskComponentBus();
+		adfBus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
+		SelectDriveAndStartMotor(adfBus, drive: 0);
+		Assert.Equal(0, adfBus.ReadByte(0x00BFE001) & 0x08);
+
+		var preservedBus = CreateDiskComponentBus();
+		preservedBus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
+		SelectDriveAndStartMotor(preservedBus, drive: 0);
+		Assert.Equal(0, preservedBus.ReadByte(0x00BFE001) & 0x08);
+
+		using var zip = new TempDiskFile(".zip");
+		WriteZip(zip.Path, "disk.adf", new byte[AmigaDiskImage.StandardAdfSize]);
+		var zipBus = CreateDiskComponentBus();
+		zipBus.Disk.Drive0.Insert(AmigaDiskImage.Load(zip.Path));
+		SelectDriveAndStartMotor(zipBus, drive: 0);
+		Assert.Equal(0, zipBus.ReadByte(0x00BFE001) & 0x08);
+	}
+
+	[Fact]
 	public void DskdatWriteLatchesDataRegisterWithoutStartingWriteDma()
 	{
 		var bus = CreateDiskComponentBus();
@@ -647,6 +675,124 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		Assert.Equal(0xBEEF, bus.ReadWord(0x00DFF008));
 		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+	}
+
+	[Fact]
+	public void AdfWriteDmaUpdatesWritableInMemoryMedia()
+	{
+		var target = AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]);
+		var sourceData = new byte[AmigaDiskImage.StandardAdfSize];
+		sourceData[5 * AmigaDiskImage.SectorSize] = 0x42;
+		sourceData[(5 * AmigaDiskImage.SectorSize) + 511] = 0x99;
+		var sourceTrack = AmigaDiskImage.FromAdfBytes(sourceData).ReadEncodedTrack(0, 0);
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(target, writeProtected: false);
+		WriteTrackToChip(bus, DmaBase, sourceTrack);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, (ushort)(sourceTrack.ByteLength / 2), cycle, writeMode: true);
+		var afterWriteCycle = CompleteDiskDma(bus);
+
+		var sector = target.ReadSector(0, 0, 5);
+		Assert.Equal(0x42, sector[0]);
+		Assert.Equal(0x99, sector[^1]);
+		Assert.True(target.IsDirty);
+	}
+
+	[Fact]
+	public void AdfWriteDmaCanBeReadBackThroughDiskDmaAsCanonicalTrack()
+	{
+		var target = AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]);
+		var sourceData = new byte[AmigaDiskImage.StandardAdfSize];
+		FillTrackPattern(sourceData, cylinder: 0, head: 0);
+		var sourceDisk = AmigaDiskImage.FromAdfBytes(sourceData);
+		var sourceTrack = sourceDisk.ReadEncodedTrack(0, 0);
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(target, writeProtected: false);
+		WriteTrackToChip(bus, DmaBase, sourceTrack);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, (ushort)(sourceTrack.ByteLength / 2), cycle, writeMode: true);
+		var afterWriteCycle = CompleteDiskDma(bus);
+
+		var canonicalTrack = target.ReadEncodedTrack(0, 0);
+		Assert.Equal(sourceTrack.BitLength, canonicalTrack.BitLength);
+		Assert.Equal(sourceTrack.Data.ToArray(), canonicalTrack.Data.ToArray());
+		var postWriteOffset = bus.Disk.CaptureDmaTrace()
+			.Last(entry => entry.Kind == AmigaDiskDmaTraceKind.Completed)
+			.SourceBit;
+
+		SetDiskPointer(bus, DmaBase + 0x2000, afterWriteCycle);
+		WriteDsklenStartSequence(bus, words: 4, afterWriteCycle);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset), ReadChipWord(bus, DmaBase + 0x2000));
+		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 16), ReadChipWord(bus, DmaBase + 0x2002));
+		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 32), ReadChipWord(bus, DmaBase + 0x2004));
+		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 48), ReadChipWord(bus, DmaBase + 0x2006));
+	}
+
+	[Fact]
+	public void WriteProtectedAdfRunsWriteDmaButLeavesMediaUnchanged()
+	{
+		var targetData = new byte[AmigaDiskImage.StandardAdfSize];
+		targetData[5 * AmigaDiskImage.SectorSize] = 0x11;
+		var target = AmigaDiskImage.FromAdfBytes(targetData);
+		var sourceData = new byte[AmigaDiskImage.StandardAdfSize];
+		sourceData[5 * AmigaDiskImage.SectorSize] = 0x42;
+		var sourceTrack = AmigaDiskImage.FromAdfBytes(sourceData).ReadEncodedTrack(0, 0);
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(target, writeProtected: true);
+		WriteTrackToChip(bus, DmaBase, sourceTrack);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, (ushort)(sourceTrack.ByteLength / 2), cycle, writeMode: true);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(0x11, target.ReadSector(0, 0, 5)[0]);
+		Assert.False(target.IsDirty);
+	}
+
+	[Fact]
+	public void ReadOnlyMediaRunsWriteDmaButLeavesTrackUnchanged()
+	{
+		var tracks = CreateTrackSetWithWords(0xAAAA);
+		var disk = AmigaDiskImage.FromEncodedTracks(tracks);
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(disk, writeProtected: false);
+		WriteChipWord(bus, DmaBase, 0x5555);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, words: 1, cycle, writeMode: true);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(0xAAAA, disk.ReadEncodedTrack(0, 0).ReadUInt16(0));
+	}
+
+	[Fact]
+	public void WordSyncWriteDmaWaitsForDskSyncBeforeConsumingMemoryWords()
+	{
+		var bus = CreateBusWithTrack(0xAAAA, SyncWord, 0xBBBB);
+		bus.Disk.Drive0.SetWriteProtected(false);
+		var cycle = PrepareDiskDma(bus);
+		bus.WriteWord(0x00DFF09E, 0x8400, cycle);
+		SetDiskPointer(bus, DmaBase, cycle);
+		WriteChipWord(bus, DmaBase, 0x1234);
+
+		WriteDsklenStartSequence(bus, words: 1, cycle, writeMode: true);
+
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Started));
+		Assert.True(started.WordSyncEnabled);
+		Assert.Equal(32, started.SourceBit);
+		Assert.Equal(32, started.SyncWaitBits);
+		CompleteDiskDma(bus);
+		Assert.Equal(0x1234, bus.ReadWord(0x00DFF008));
 	}
 
 	[Fact]
@@ -971,9 +1117,9 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		bus.WriteWord(0x00DFF022, (ushort)targetAddress, cycle);
 	}
 
-	private static void WriteDsklenStartSequence(AmigaBus bus, ushort words, long cycle = 0)
+	private static void WriteDsklenStartSequence(AmigaBus bus, ushort words, long cycle = 0, bool writeMode = false)
 	{
-		var dsklen = (ushort)(0x8000 | words);
+		var dsklen = (ushort)(0x8000 | (writeMode ? 0x4000 : 0) | words);
 		bus.WriteWord(0x00DFF024, dsklen, cycle);
 		bus.WriteWord(0x00DFF024, dsklen, cycle);
 	}
@@ -1057,6 +1203,21 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		return BigEndian.ReadUInt16(bus.ChipRam, checked((int)address), "disk DMA word");
 	}
 
+	private static void WriteChipWord(AmigaBus bus, uint address, ushort value)
+	{
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address), value);
+	}
+
+	private static void WriteTrackToChip(AmigaBus bus, uint address, AmigaEncodedTrack track)
+	{
+		var data = track.Data.Span;
+		for (var offset = 0; offset < track.ByteLength; offset += 2)
+		{
+			var value = BigEndian.ReadUInt16(data, offset, "encoded track DMA word");
+			WriteChipWord(bus, address + (uint)offset, value);
+		}
+	}
+
 	private static long DiskByteCycleCount(int byteCount)
 	{
 		return DiskByteCycleCount(AmigaDosTrackEncoder.EncodedTrackBytes, byteCount);
@@ -1118,6 +1279,28 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		}
 
 		return data;
+	}
+
+	private static void FillTrackPattern(byte[] data, int cylinder, int head)
+	{
+		for (var sector = 0; sector < AmigaDiskImage.SectorsPerTrack; sector++)
+		{
+			var logicalSector = ((cylinder * AmigaDiskImage.HeadCount) + head) * AmigaDiskImage.SectorsPerTrack + sector;
+			var offset = logicalSector * AmigaDiskImage.SectorSize;
+			for (var index = 0; index < AmigaDiskImage.SectorSize; index++)
+			{
+				data[offset + index] = (byte)((sector * 19 + index * 5 + cylinder + head) & 0xFF);
+			}
+		}
+	}
+
+	private static void WriteZip(string path, string entryName, byte[] data)
+	{
+		using var file = File.Open(path, FileMode.Create, FileAccess.ReadWrite);
+		using var archive = new ZipArchive(file, ZipArchiveMode.Create);
+		var entry = archive.CreateEntry(entryName);
+		using var stream = entry.Open();
+		stream.Write(data);
 	}
 
 	private static AmigaEncodedTrack CreateBitSlippedSyncTrack()
@@ -1240,6 +1423,27 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		ushort Word1,
 		ushort Word2,
 		ushort Word3);
+
+	private sealed class TempDiskFile : IDisposable
+	{
+		public TempDiskFile(string extension)
+		{
+			Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
+		}
+
+		public string Path { get; }
+
+		public void Dispose()
+		{
+			try
+			{
+				File.Delete(Path);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
 
 	private sealed class EnvironmentVariableScope : IDisposable
 	{
