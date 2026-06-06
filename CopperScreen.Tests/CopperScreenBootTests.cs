@@ -35,6 +35,29 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void NoDiskRealKickstartDoesNotRenderCopperStartInsertDiskScreen()
+	{
+		var romPath = Path.Combine(Path.GetTempPath(), "copperscreen-test-kickstart-" + Guid.NewGuid().ToString("N") + ".rom");
+		File.WriteAllBytes(romPath, new byte[8]);
+		try
+		{
+			var emulator = CopperScreenEmulator.Create(
+				new[] { "--profile", "expanded-kickstart13", "--kickstart-rom", romPath },
+				AppContext.BaseDirectory);
+
+			emulator.RenderNextFrame();
+
+			Assert.Equal("insert disk image", emulator.StatusText);
+			Assert.Equal(unchecked((int)0xFF05070E), emulator.Framebuffer[0]);
+			Assert.DoesNotContain(unchecked((int)0xFF1B4AA8), emulator.Framebuffer);
+		}
+		finally
+		{
+			File.Delete(romPath);
+		}
+	}
+
+	[Fact]
 	public void ShadowOfTheBeastIpfDoesNotExitDuringInitialFramesWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile(
@@ -128,7 +151,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var result = RunShadowOfTheBeastDiskTwoDiagnostic(diskPath, agnusTimingMode: null, stopAtCoreScene: true);
+		var result = RunShadowOfTheBeastDiskTwoDiagnostic(diskPath, stopAtCoreScene: true);
 
 		Assert.True(
 			result.ReachedCoreScene,
@@ -176,47 +199,6 @@ public sealed class CopperScreenBootTests
 		Assert.False(ContainsFatalBootStatus(production.StatusText), diagnostic);
 		Assert.True(production.SawPostSwapTransfer, diagnostic);
 		Assert.True(production.ReachedDiskTwoScene, diagnostic);
-	}
-
-	[Fact]
-	public void ShadowOfTheBeastIpfDiskTwoAgnusTimingDiagnosticsWhenEnabled()
-	{
-		if (!string.Equals(
-			Environment.GetEnvironmentVariable("COPPERSCREEN_SHADOW_AGNUS_TIMING_DIAGNOSTICS"),
-			"1",
-			StringComparison.Ordinal))
-		{
-			return;
-		}
-
-		var diskPath = TryFindWorkspaceFile(
-			"CopperScreen",
-			"TestImages",
-			"Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip");
-		if (diskPath == null || CopperScreenEmulator.ResolveNextDiskPath(diskPath) == null)
-		{
-			return;
-		}
-
-		var legacy = RunShadowOfTheBeastDiskTwoDiagnostic(diskPath, "legacy", stopAtCoreScene: false);
-		var slot = RunShadowOfTheBeastDiskTwoDiagnostic(diskPath, "slot", stopAtCoreScene: false);
-		var diagnostic = string.Join(
-			Environment.NewLine,
-			BuildShadowOfTheBeastDiskTwoDiagnostic(legacy),
-			BuildShadowOfTheBeastDiskTwoDiagnostic(slot));
-
-		Assert.False(ContainsFatalBootStatus(legacy.StatusText), diagnostic);
-		Assert.False(ContainsFatalBootStatus(slot.StatusText), diagnostic);
-		Assert.True(legacy.SawPostSwapTransfer, diagnostic);
-		Assert.True(slot.SawPostSwapTransfer, diagnostic);
-		Assert.True(legacy.ReachedCoreScene, diagnostic);
-		Assert.True(slot.ReachedCoreScene, diagnostic);
-		Assert.DoesNotContain(
-			legacy.DiskTrace,
-			entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.SyncMissing && entry.Trace.TransferCount > legacy.TransferCountAtSwap);
-		Assert.DoesNotContain(
-			slot.DiskTrace,
-			entry => entry.Trace.Kind == AmigaDiskDmaTraceKind.SyncMissing && entry.Trace.TransferCount > slot.TransferCountAtSwap);
 	}
 
 	[Fact]
@@ -2339,14 +2321,13 @@ public sealed class CopperScreenBootTests
 
 	private static ShadowDiskTwoDiagnosticResult RunShadowOfTheBeastDiskTwoDiagnostic(
 		string diskPath,
-		string? agnusTimingMode,
 		bool stopAtCoreScene)
 	{
 		const int MaxFrames = 7_000;
 		const int IdleFramesBeforeFire = 45;
 		const int FirePulseFrames = 20;
 		var emulator = CopperScreenEmulator.Create(
-			CreateShadowOfTheBeastDiskTwoArgs(diskPath, agnusTimingMode),
+			CreateShadowOfTheBeastDiskTwoArgs(diskPath),
 			AppContext.BaseDirectory);
 		var machine = GetMachine(emulator);
 		var frame = 0;
@@ -2435,7 +2416,7 @@ public sealed class CopperScreenBootTests
 			: visual;
 		var finalEdge = MeasureShadowEdgeStrips(emulator.Framebuffer);
 		return new ShadowDiskTwoDiagnosticResult(
-			agnusTimingMode ?? "profile",
+			"hrm",
 			renderedFrame,
 			firePulses,
 			idleFrames,
@@ -2457,15 +2438,8 @@ public sealed class CopperScreenBootTests
 			diskTrace);
 	}
 
-	private static string[] CreateShadowOfTheBeastDiskTwoArgs(string diskPath, string? agnusTimingMode)
-	{
-		if (string.IsNullOrWhiteSpace(agnusTimingMode))
-		{
-			return new[] { "--profile", "expanded-copperstart", diskPath };
-		}
-
-		return new[] { "--profile", "expanded-copperstart", "--agnus-timing", agnusTimingMode, diskPath };
-	}
+	private static string[] CreateShadowOfTheBeastDiskTwoArgs(string diskPath)
+		=> new[] { "--profile", "expanded-copperstart", diskPath };
 
 	private static bool IsShadowOfTheBeastDiskTwoCoreScene(
 		string statusText,

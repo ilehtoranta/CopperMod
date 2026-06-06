@@ -186,7 +186,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void DiskRegistersResetToHrmDefaults()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		var snapshot = bus.Disk.CaptureSnapshot();
 
 		Assert.Equal(0u, snapshot.DiskPointer);
@@ -200,7 +200,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	public void DiskPointerRegistersMaskWordAddressAndStayInChipDmaSpace(object rowObject)
 	{
 		var row = Assert.IsType<PointerRow>(rowObject);
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 
 		SetDiskPointer(bus, row.Address);
 
@@ -212,7 +212,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void DskSyncDefaultsToMagicMfmSyncAndCanBeChanged()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 
 		Assert.Equal(SyncWord, bus.ReadWord(0x00DFF07E));
 
@@ -415,7 +415,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		var track = WordsToBytes(SyncWord, 0xABCD, 0x1357);
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = ShiftTrackBits(track, row.ShiftBits);
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.WriteWord(0x00DFF09E, 0x8400);
 		bus.Paula.AdvanceTo(0);
@@ -462,7 +462,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	public void CiaBSelectBitsChooseOneOfFourConnectedDrives(object rowObject)
 	{
 		var row = Assert.IsType<DriveRow>(rowObject);
-		var bus = CreateLegacyDiskBus(floppyDriveCount: 4);
+		var bus = CreateDiskComponentBus(floppyDriveCount: 4);
 		for (var drive = 0; drive < 4; drive++)
 		{
 			GetDrive(bus, drive).Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords((ushort)(0x1000 + drive))));
@@ -483,7 +483,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	public void CiaBStepPulseMovesSelectedDriveInRequestedDirection(object rowObject)
 	{
 		var row = Assert.IsType<StepRow>(rowObject);
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
 		bus.Disk.Drive0.Step(2);
 		SelectDriveAndStartMotor(bus, drive: 0);
@@ -505,7 +505,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x1111));
 		tracks[1] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x2222));
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 
 		SelectDriveAndStartMotor(bus, drive: 0, head: 1);
@@ -525,7 +525,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x1111));
 		tracks[2] = AmigaEncodedTrack.FromBytes(WordsToBytes(0x3333));
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.Disk.Drive0.Step(1);
 
@@ -541,7 +541,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	public void DiskDmaReadsFromSelectedExternalDrive(object rowObject)
 	{
 		var row = Assert.IsType<DriveRow>(rowObject);
-		var bus = CreateLegacyDiskBus(floppyDriveCount: 4);
+		var bus = CreateDiskComponentBus(floppyDriveCount: 4);
 		for (var drive = 0; drive < 4; drive++)
 		{
 			GetDrive(bus, drive).Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords((ushort)(0xA000 + drive))));
@@ -557,7 +557,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void CiaAReportsDiskChangeTrackZeroAndReadyLinesAsActiveLow()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)), markChanged: true);
 
 		var changedAtTrackZero = bus.ReadByte(0x00BFE001);
@@ -631,7 +631,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void InsertCanMarkMediaWriteProtected()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)), writeProtected: true);
 		SelectDriveAndStartMotor(bus, drive: 0);
 
@@ -641,7 +641,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void DskdatWriteLatchesDataRegisterWithoutStartingWriteDma()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 
 		bus.WriteWord(0x00DFF026, 0xBEEF);
 
@@ -682,7 +682,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	{
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = CreateBitSlippedSyncTrack();
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.WriteWord(0x00DFF09E, 0x8400);
 		bus.Paula.AdvanceTo(0);
@@ -732,6 +732,83 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void DivergenceTraceRecordsDsklenArmingDmaWordsAndDiskInterrupt()
+	{
+		using var trace = new EnvironmentVariableScope("COPPER_DISK_DIVERGENCE_TRACE", "1");
+		var bus = CreateBusWithTrack(0x1111, 0x2222);
+		bus.ConfigureDiskDivergenceTrace(
+			"test",
+			() => new AmigaDiskTraceCpuContext(
+				programCounter: 0x0204,
+				lastInstructionProgramCounter: 0x0200,
+				lastOpcode: 0x33FC,
+				cycles: 1234));
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		CompleteDiskDma(bus);
+
+		var events = bus.Disk.CaptureDivergenceTrace();
+		var dsklenWrites = events
+			.Where(entry => entry.Kind == AmigaDiskTraceEventKind.RegisterWrite && entry.Register == 0x024)
+			.ToArray();
+		Assert.Equal(2, dsklenWrites.Length);
+		Assert.All(dsklenWrites, entry =>
+		{
+			Assert.Equal(0x0200u, entry.LastInstructionProgramCounter);
+			Assert.Equal(0x33FC, entry.LastOpcode);
+			Assert.Equal((ushort)0x8002, entry.Value);
+		});
+		Assert.Contains(events, entry => entry.Kind == AmigaDiskTraceEventKind.DmaStarted);
+		Assert.Contains(events, entry => entry.Kind == AmigaDiskTraceEventKind.DmaWord && entry.TransferredWords == 1);
+		Assert.Contains(events, entry => entry.Kind == AmigaDiskTraceEventKind.DmaWord && entry.TransferredWords == 2);
+		Assert.Contains(events, entry => entry.Kind == AmigaDiskTraceEventKind.DmaCompleted);
+		Assert.Contains(events, entry =>
+			entry.Kind == AmigaDiskTraceEventKind.DiskInterruptWrite &&
+			entry.Register == 0x09C &&
+			entry.Value == 0x8002);
+	}
+
+	[Fact]
+	public void DiskAdvancementIsChunkInvariantForInputAndActiveDma()
+	{
+		var inputEnd = DiskByteCycleCount(6);
+		foreach (var split in new[]
+		{
+			1L,
+			DiskByteCycleCount(2),
+			Math.Max(1, DiskByteCycleCount(4) - 1)
+		})
+		{
+			var direct = RunSelectedInputAdvance(inputEnd);
+			var splitRun = RunSelectedInputAdvance(split, inputEnd);
+			Assert.Equal(direct, splitRun);
+		}
+
+		var activeDirect = RunActiveDiskDmaAdvance(splitBeforeCompletion: false);
+		var activeSplit = RunActiveDiskDmaAdvance(splitBeforeCompletion: true);
+		Assert.Equal(activeDirect, activeSplit);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateIncludesNextDskbytrInputAdvance()
+	{
+		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		var seedCycle = readyCycle + 1;
+		bus.AdvanceDmaTo(seedCycle);
+		var byteCycles = DiskByteCycleCount(trackBytes.Length, 1);
+
+		var candidate = bus.Disk.GetNextWakeCandidateCycle(
+			seedCycle,
+			seedCycle + DiskByteCycleCount(trackBytes.Length, 3));
+
+		Assert.NotNull(candidate);
+		Assert.InRange(candidate.Value, seedCycle + 1, seedCycle + byteCycles);
+	}
+
+	[Fact]
 	public void DmaTraceRecordsCancellationReasonAndPartialCountdown()
 	{
 		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
@@ -757,7 +834,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		const int ShiftBits = 5;
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = ShiftTrackBits(WordsToBytes(SyncWord, 0xABCD), ShiftBits);
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.WriteWord(0x00DFF09E, 0x8400);
 		bus.Paula.AdvanceTo(0);
@@ -795,7 +872,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void SelectingUnconnectedDriveDoesNotAliasDf0()
 	{
-		var bus = CreateLegacyDiskBus(floppyDriveCount: 1);
+		var bus = CreateDiskComponentBus(floppyDriveCount: 1);
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
 
 		SelectDriveAndStartMotor(bus, drive: 1);
@@ -812,7 +889,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	[Fact]
 	public void FloppyIndexPulseSetsCiaBFlagWhenMotorIsOn()
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x1234)));
 		bus.AbleCiaInterrupts(AmigaCiaId.B, 0x80 | AmigaCia.FlagInterruptMask, 0);
 		SelectDriveAndStartMotor(bus, drive: 0);
@@ -830,14 +907,14 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 	private static AmigaBus CreateBusWithTrack(params ushort[] words)
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(words)));
 		return bus;
 	}
 
 	private static AmigaBus CreateBusWithTrackBytes(params byte[] bytes)
 	{
-		var bus = CreateLegacyDiskBus();
+		var bus = CreateDiskComponentBus();
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithBytes(bytes)));
 		return bus;
 	}
@@ -913,6 +990,66 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		bus.AdvanceCiasTo(completionCycle);
 		bus.Paula.AdvanceTo(completionCycle);
 		return completionCycle;
+	}
+
+	private static DiskAdvanceOutcome RunSelectedInputAdvance(params long[] relativeAdvanceCycles)
+	{
+		using var trace = new EnvironmentVariableScope("COPPER_DISK_DIVERGENCE_TRACE", "1");
+		var bytes = WordsToBytes(SyncWord, 0xABCD, 0x1357, 0x2468);
+		var bus = CreateBusWithTrackBytes(bytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		bus.WriteWord(0x00DFF09A, 0x9000, readyCycle);
+		bus.Paula.AdvanceTo(readyCycle);
+		bus.Disk.ClearDmaTrace();
+		foreach (var relativeCycle in relativeAdvanceCycles)
+		{
+			bus.AdvanceDmaTo(readyCycle + relativeCycle);
+			bus.Paula.AdvanceTo(readyCycle + relativeCycle);
+		}
+
+		return CaptureDiskAdvanceOutcome(bus);
+	}
+
+	private static DiskAdvanceOutcome RunActiveDiskDmaAdvance(bool splitBeforeCompletion)
+	{
+		using var trace = new EnvironmentVariableScope("COPPER_DISK_DIVERGENCE_TRACE", "1");
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
+		StartDiskDma(bus, DmaBase, words: 4);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		if (splitBeforeCompletion)
+		{
+			bus.AdvanceDmaTo(Math.Max(0, completionCycle - 1));
+		}
+
+		bus.AdvanceDmaTo(completionCycle);
+		bus.Paula.AdvanceTo(completionCycle);
+		return CaptureDiskAdvanceOutcome(bus);
+	}
+
+	private static DiskAdvanceOutcome CaptureDiskAdvanceOutcome(AmigaBus bus)
+	{
+		var snapshot = bus.Disk.CaptureSnapshot();
+		var inputEnd = bus.Disk.CaptureDivergenceTrace()
+			.LastOrDefault(entry => entry.Kind == AmigaDiskTraceEventKind.DiskInputAdvance && entry.Detail == "end");
+		return new DiskAdvanceOutcome(
+			snapshot.DiskPointer,
+			snapshot.Dsklen,
+			snapshot.Dskbytr,
+			snapshot.Dskdatr,
+			snapshot.ActiveDma,
+			snapshot.ActiveDmaCompletionCycle,
+			snapshot.TransferCount,
+			snapshot.LastTransferWords,
+			snapshot.LastTransferAddress,
+			bus.Paula.Intreq,
+			inputEnd.StreamCycle,
+			inputEnd.StreamOffset,
+			inputEnd.StreamPosition,
+			ReadChipWord(bus, DmaBase),
+			ReadChipWord(bus, DmaBase + 2),
+			ReadChipWord(bus, DmaBase + 4),
+			ReadChipWord(bus, DmaBase + 6));
 	}
 
 	private static ushort ReadChipWord(AmigaBus bus, uint address)
@@ -1045,12 +1182,11 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		data[bitOffset >> 3] = (byte)(data[bitOffset >> 3] | (1 << (7 - (bitOffset & 7))));
 	}
 
-	private static AmigaBus CreateLegacyDiskBus(int floppyDriveCount = 1)
+	private static AmigaBus CreateDiskComponentBus(int floppyDriveCount = 1)
 	{
 		return new AmigaBus(
 			floppyDriveCount: floppyDriveCount,
-			enableLiveAgnusDma: false,
-			agnusTimingMode: AgnusTimingMode.LegacyReservation);
+			enableLiveAgnusDma: false);
 	}
 
 	private sealed record DiskConformanceRow(string Group, string Name, DiskRowStatus Status, string Reason)
@@ -1085,4 +1221,41 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	private sealed record WordSyncRow(string Name, ushort Sync, ushort Payload);
 
 	private sealed record RawBitOffsetRow(int ShiftBits);
+
+	private sealed record DiskAdvanceOutcome(
+		uint DiskPointer,
+		ushort Dsklen,
+		ushort Dskbytr,
+		ushort Dskdatr,
+		bool ActiveDma,
+		long ActiveDmaCompletionCycle,
+		int TransferCount,
+		int LastTransferWords,
+		uint LastTransferAddress,
+		ushort Intreq,
+		long StreamCycle,
+		int StreamOffset,
+		double StreamPosition,
+		ushort Word0,
+		ushort Word1,
+		ushort Word2,
+		ushort Word3);
+
+	private sealed class EnvironmentVariableScope : IDisposable
+	{
+		private readonly string _name;
+		private readonly string? _previous;
+
+		public EnvironmentVariableScope(string name, string? value)
+		{
+			_name = name;
+			_previous = Environment.GetEnvironmentVariable(name);
+			Environment.SetEnvironmentVariable(name, value);
+		}
+
+		public void Dispose()
+		{
+			Environment.SetEnvironmentVariable(_name, _previous);
+		}
+	}
 }

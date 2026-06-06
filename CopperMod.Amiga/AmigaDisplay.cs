@@ -4,7 +4,7 @@ using System.Numerics;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class OcsDisplay : IAgnusSparseSlotParticipant
+    internal sealed class OcsDisplay
     {
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
@@ -211,29 +211,30 @@ namespace CopperMod.Amiga
                 cycle <= _liveCapturedThroughCycle;
         }
 
-        internal void CaptureLiveDisplayDmaBeforeSlotEngineGrant(long requestedCycle)
+        internal void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle)
         {
-            if (!_liveDmaEnabled || !_liveFrameValid || _bus.AgnusTimingMode != AgnusTimingMode.SlotEngine)
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid)
             {
                 return;
             }
 
             for (var attempt = 0; attempt < 32; attempt++)
             {
-                var before = _bus.FindSlotEngineDmaCandidate(requestedCycle);
-                CaptureLiveBitplaneDmaBeforeSlotEngineGrant(requestedCycle);
-                CaptureLiveSpriteDmaBeforeSlotEngineGrant(requestedCycle);
-                if (_bus.FindSlotEngineDmaCandidate(requestedCycle) == before)
+                var before = _bus.FindHrmDmaCandidate(requestedCycle);
+                CaptureLiveBitplaneDmaBeforeHrmGrant(requestedCycle);
+                CaptureLiveSpriteDmaBeforeHrmGrant(requestedCycle);
+                if (_bus.FindHrmDmaCandidate(requestedCycle) == before)
                 {
                     return;
                 }
             }
         }
 
-        private void CaptureLiveBitplaneDmaBeforeSlotEngineGrant(long requestedCycle)
+        private void CaptureLiveBitplaneDmaBeforeHrmGrant(long requestedCycle)
         {
             var requestedSlot = _bus.NextChipSlotCycle(requestedCycle);
-            var candidate = _bus.FindSlotEngineDmaCandidate(requestedCycle);
+            var candidate = _bus.FindHrmDmaCandidate(requestedCycle);
             if (candidate <= _liveCapturedThroughCycle)
             {
                 return;
@@ -245,7 +246,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (requestedSlot < nextFetchCycle && !_bus.IsSlotEngineChipSlotReserved(requestedSlot))
+            if (requestedSlot < nextFetchCycle && !_bus.IsHrmChipSlotReserved(requestedSlot))
             {
                 return;
             }
@@ -264,7 +265,7 @@ namespace CopperMod.Amiga
                 }
 
                 nextFetchCycle = GetNextKnownLiveBitplaneFetchCycle();
-                var adjustedCandidate = _bus.FindSlotEngineDmaCandidate(requestedCycle);
+                var adjustedCandidate = _bus.FindHrmDmaCandidate(requestedCycle);
                 if (adjustedCandidate == candidate)
                 {
                     return;
@@ -274,7 +275,7 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void CaptureLiveSpriteDmaBeforeSlotEngineGrant(long requestedCycle)
+        private void CaptureLiveSpriteDmaBeforeHrmGrant(long requestedCycle)
         {
             if (!IsSpriteDmaEnabled())
             {
@@ -284,7 +285,7 @@ namespace CopperMod.Amiga
             var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
             while (true)
             {
-                var candidate = _bus.FindSlotEngineDmaCandidate(requestedCycle);
+                var candidate = _bus.FindHrmDmaCandidate(requestedCycle);
                 if (candidate >= frameStopCycle ||
                     !TryGetLiveSpriteDmaSlot(candidate, out var row, out var spriteIndex, out var word))
                 {
@@ -296,7 +297,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                if (_bus.FindSlotEngineDmaCandidate(requestedCycle) == candidate)
+                if (_bus.FindHrmDmaCandidate(requestedCycle) == candidate)
                 {
                     return;
                 }
@@ -513,63 +514,6 @@ namespace CopperMod.Amiga
                 IsLiveCopperDmaEnabled() ||
                 IsSpriteDmaEnabled() ||
                 TryPeekPendingWrite(out _);
-        }
-
-        bool IAgnusSparseSlotParticipant.TryGetNextChipBusRequest(
-            long currentCycle,
-            long stopCycle,
-            out AgnusSparseChipBusRequest request)
-        {
-            request = default;
-            if (!_liveDmaEnabled ||
-                !_liveFrameValid ||
-                _bus.AgnusTimingMode != AgnusTimingMode.SlotEngine)
-            {
-                return false;
-            }
-
-            var fetchCycle = GetNextKnownLiveBitplaneFetchCycle();
-            if (fetchCycle < currentCycle || fetchCycle > stopCycle)
-            {
-                return false;
-            }
-
-            if ((uint)_liveNextFetchRow >= (uint)LowResOutputHeight ||
-                (uint)_liveNextFetchPlane >= (uint)LiveBitplanePlaneCount ||
-                (uint)_liveNextFetchWord >= (uint)MaxBitplaneFetchWords)
-            {
-                return false;
-            }
-
-            var state = _liveLineStates[_liveNextFetchRow];
-            if (!IsLiveLineValid(_liveNextFetchRow) ||
-                (state.PlaneHasRowMask & (1 << _liveNextFetchPlane)) == 0)
-            {
-                return false;
-            }
-
-            var address = unchecked(state.BitplaneRowAddresses[_liveNextFetchPlane] + (uint)(_liveNextFetchWord * 2));
-            var busRequest = new AmigaBusAccessRequest(
-                AmigaBusRequester.Bitplane,
-                AmigaBusAccessKind.Bitplane,
-                AmigaBusAccessTarget.ChipRam,
-                address,
-                AmigaBusAccessSize.Word,
-                fetchCycle,
-                isWrite: false);
-            request = new AgnusSparseChipBusRequest(busRequest, fixedSlot: true);
-            return true;
-        }
-
-        void IAgnusSparseSlotParticipant.CommitChipBusGrant(AgnusSparseChipBusRequest request, AmigaBusAccessResult result)
-        {
-            _ = request;
-            _ = result;
-        }
-
-        void IAgnusSparseSlotParticipant.AdvanceInternalTo(long cycle)
-        {
-            AdvanceLiveDmaTo(cycle);
         }
 
         private void AdvanceIdleLiveDmaTo(long targetCycle)
@@ -2777,7 +2721,7 @@ namespace CopperMod.Amiga
             }
 
             var fetchCycle = GetSpriteDmaFetchCycle(row, spriteIndex, word);
-            var alreadyCaptured = recordLiveCapture && _bus.IsSlotEngineChipSlotReserved(fetchCycle);
+            var alreadyCaptured = recordLiveCapture && _bus.IsHrmChipSlotReserved(fetchCycle);
             if (!_bus.TryReadDisplayDmaWordForPresentation(
                     AmigaBusRequester.Sprite,
                     AmigaBusAccessKind.Sprite,
@@ -3020,7 +2964,8 @@ namespace CopperMod.Amiga
         private static long GetSpriteDmaFetchCycle(long frameStartCycle, int row, int spriteIndex, int word)
         {
             var lineStart = GetOutputRowStartCycle(frameStartCycle, row);
-            var horizontal = 0x14 + (Math.Clamp(spriteIndex, 0, 7) * 4) + (Math.Clamp(word, 0, 1) * 2);
+            var firstSpriteHorizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal;
+            var horizontal = firstSpriteHorizontal + (Math.Clamp(spriteIndex, 0, 7) * 4) + (Math.Clamp(word, 0, 1) * 2);
             return AgnusChipSlotScheduler.AlignToSlot(lineStart + ((long)horizontal * CopperHpCycles));
         }
 
@@ -3042,7 +2987,8 @@ namespace CopperMod.Amiga
             }
 
             var horizontal = (int)((slotCycle - GetLineStartCycle(_liveFrameStartCycle, line)) / CopperHpCycles);
-            var spriteOffset = horizontal - 0x14;
+            var firstSpriteHorizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal;
+            var spriteOffset = horizontal - firstSpriteHorizontal;
             if (spriteOffset < 0 || spriteOffset >= _sprites.Length * 4)
             {
                 return false;
@@ -3131,7 +3077,7 @@ namespace CopperMod.Amiga
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
             return TryReadSpriteWordForPresentation(address, row, spriteIndex, word, out _, recordLiveCapture: true) &&
-                _bus.IsSlotEngineChipSlotReserved(slotCycle);
+                _bus.IsHrmChipSlotReserved(slotCycle);
         }
 
         private bool TryCaptureLiveSpriteControlWord(
@@ -3150,7 +3096,7 @@ namespace CopperMod.Amiga
 
                 state.PendingPos = pos;
                 state.HasPendingPos = true;
-                return _bus.IsSlotEngineChipSlotReserved(slotCycle);
+                return _bus.IsHrmChipSlotReserved(slotCycle);
             }
 
             if (!state.HasPendingPos)
@@ -3163,7 +3109,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var slotGranted = _bus.IsSlotEngineChipSlotReserved(slotCycle);
+            var slotGranted = _bus.IsHrmChipSlotReserved(slotCycle);
             var pendingPos = state.PendingPos;
             state.PendingPos = 0;
             state.HasPendingPos = false;
@@ -7380,17 +7326,17 @@ namespace CopperMod.Amiga
                 ticks += 2;
             }
 
-            if (_useC && _useD)
+            if (_useC)
             {
                 ticks += 2;
             }
 
-            return ticks * ChipSlotCycles;
+            return ticks;
         }
 
         private static int GetLinePixelCycles()
         {
-            return 8 * ChipSlotCycles;
+            return 8;
         }
 
         private long GetCurrentStepEndCycle()

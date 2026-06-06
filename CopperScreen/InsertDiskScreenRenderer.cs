@@ -32,6 +32,12 @@ internal static class InsertDiskScreenRenderer
 		DrawText(framebuffer, width, height, status.ToUpperInvariant(), width / 2, height / 2, 2, White);
 	}
 
+	public static void RenderHostStatus(int[] framebuffer, int width, int height, string status)
+	{
+		Array.Fill(framebuffer, Black);
+		DrawText(framebuffer, width, height, status.ToUpperInvariant(), width / 2, height / 2, 2, White);
+	}
+
 	private static void Fill(int[] framebuffer, int width, int x, int y, int w, int h, int color)
 	{
 		for (var row = Math.Max(0, y); row < y + h && row < framebuffer.Length / width; row++)

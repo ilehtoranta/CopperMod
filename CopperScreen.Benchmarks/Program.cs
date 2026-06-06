@@ -22,45 +22,32 @@ var workloads = options.Smoke
     ? new[] { allWorkloads[0] }
     : FilterWorkloads(allWorkloads, options.Only);
 
-if (options.CompareAgnus)
+if (options.DiskDivergenceTrace)
 {
-    Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={FormatCompareRepeatCount(options)}, Release={IsRelease()}, Agnus=compare legacy-vs-slot");
-    WriteBenchmarkHeader();
-    WriteComparisonHeader();
+    Console.WriteLine($"Disk divergence trace, Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, Profile={options.Profile ?? "default"}, Kickstart={FormatKickstartOption(options)}");
     foreach (var workload in workloads)
     {
-        if (options.RepeatCount <= 1)
-        {
-            var legacy = RunBenchmark(workload, "legacy", options);
-            WriteBenchmarkResult(legacy, options);
-            var slot = RunBenchmark(workload, "slot", options);
-            WriteBenchmarkResult(slot, options);
-            WriteComparison(legacy, slot);
-        }
-        else
-        {
-            WriteRepeatedComparison(workload, options);
-        }
+        RunDiskDivergenceTrace(workload, options);
     }
 
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "default"}, Agnus={options.AgnusTimingMode ?? "profile"}, CPU={options.CpuBackend ?? "profile"}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
 {
     for (var repeat = 0; repeat < options.RepeatCount; repeat++)
     {
-        WriteBenchmarkResult(RunBenchmark(workload, options.AgnusTimingMode, options), options);
+        WriteBenchmarkResult(RunBenchmark(workload, options), options);
     }
 }
 
-static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, string? agnusTimingMode, BenchmarkOptions options)
+static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOptions options)
 {
-    var timingMode = agnusTimingMode ?? "profile";
-    var emulator = CreateEmulator(workload.FileName, agnusTimingMode, options);
+    var timingMode = "hrm";
+    var emulator = CreateEmulator(workload.FileName, options);
     if (emulator == null)
     {
         return new BenchmarkRunResult(
@@ -84,6 +71,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, string? agnus
             M68kInstructionFrequencySnapshot.Empty,
             "missing",
             default,
+            Array.Empty<AmigaDiskTraceEvent>(),
             "missing disk image");
     }
 
@@ -157,7 +145,162 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, string? agnus
         instructionFrequency,
         emulator.CpuBackendName,
         emulator.JitCounters,
+        options.DiskDivergenceTrace ? CaptureDiskTrace(emulator) : Array.Empty<AmigaDiskTraceEvent>(),
         CaptureStatusText(emulator));
+}
+
+static void RunDiskDivergenceTrace(BenchmarkWorkload workload, BenchmarkOptions options)
+{
+    var previousTrace = Environment.GetEnvironmentVariable("COPPER_DISK_DIVERGENCE_TRACE");
+    Environment.SetEnvironmentVariable("COPPER_DISK_DIVERGENCE_TRACE", "1");
+    try
+    {
+        var interpreterOptions = options with
+        {
+            CpuBackend = "interpreter",
+            InstructionMatrix = false
+        };
+        var jitOptions = options with
+        {
+            CpuBackend = "jit",
+            InstructionMatrix = false
+        };
+
+        Console.WriteLine($"disk-trace-workload\t{workload.Name}");
+        var interpreter = RunBenchmark(workload, interpreterOptions);
+        var jit = RunBenchmark(workload, jitOptions);
+        if (interpreter.Missing || jit.Missing)
+        {
+            Console.WriteLine($"disk-trace-missing\t{workload.Name}\tinterpreter={interpreter.StatusText}\tjit={jit.StatusText}");
+            return;
+        }
+
+        Console.WriteLine($"disk-trace-summary\tinterpreter\tfps={interpreter.FramesPerSecond:F1}\tdisk={FormatDiskSummary(interpreter.Disk)}\ttrace={interpreter.DiskTrace.Length}\tfirstSeq={GetFirstTraceSequence(interpreter.DiskTrace)}");
+        Console.WriteLine($"disk-trace-summary\tjit\tfps={jit.FramesPerSecond:F1}\tdisk={FormatDiskSummary(jit.Disk)}\ttrace={jit.DiskTrace.Length}\tfirstSeq={GetFirstTraceSequence(jit.DiskTrace)}");
+        WriteDiskTraceComparison(interpreter.DiskTrace, jit.DiskTrace);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("COPPER_DISK_DIVERGENCE_TRACE", previousTrace);
+    }
+}
+
+static long GetFirstTraceSequence(AmigaDiskTraceEvent[] trace)
+    => trace.Length == 0 ? -1 : trace[0].Sequence;
+
+static void WriteDiskTraceComparison(AmigaDiskTraceEvent[] interpreter, AmigaDiskTraceEvent[] jit)
+{
+    var comparableInterpreter = GetComparableDiskTrace(interpreter);
+    var comparableJit = GetComparableDiskTrace(jit);
+    Console.WriteLine($"disk-trace-comparable\tinterpreter={comparableInterpreter.Length}\tjit={comparableJit.Length}");
+    var max = Math.Max(comparableInterpreter.Length, comparableJit.Length);
+    for (var i = 0; i < max; i++)
+    {
+        var hasInterpreter = i < comparableInterpreter.Length;
+        var hasJit = i < comparableJit.Length;
+        if (!hasInterpreter || !hasJit)
+        {
+            Console.WriteLine($"disk-trace-first-mismatch\tindex={i}\tclassification={ClassifyDiskTraceMismatch(hasInterpreter ? comparableInterpreter[i] : null, hasJit ? comparableJit[i] : null)}");
+            WriteDiskTraceContext(comparableInterpreter, comparableJit, i);
+            return;
+        }
+
+        var interpreterText = GetDiskTraceComparisonText(comparableInterpreter[i]);
+        var jitText = GetDiskTraceComparisonText(comparableJit[i]);
+        if (!string.Equals(interpreterText, jitText, StringComparison.Ordinal))
+        {
+            Console.WriteLine($"disk-trace-first-mismatch\tindex={i}\tclassification={ClassifyDiskTraceMismatch(comparableInterpreter[i], comparableJit[i])}");
+            Console.WriteLine($"disk-trace-interpreter\t{GetDiskTraceSignificantText(comparableInterpreter[i])}");
+            Console.WriteLine($"disk-trace-jit\t{GetDiskTraceSignificantText(comparableJit[i])}");
+            WriteDiskTraceContext(comparableInterpreter, comparableJit, i);
+            return;
+        }
+    }
+
+    Console.WriteLine("disk-trace-match\tNo disk trace divergence found in captured events.");
+}
+
+static AmigaDiskTraceEvent[] GetComparableDiskTrace(AmigaDiskTraceEvent[] trace)
+    => trace
+        .Where(entry =>
+            entry.Kind != AmigaDiskTraceEventKind.DiskInputAdvance &&
+            entry.Kind != AmigaDiskTraceEventKind.WakeCandidate)
+        .ToArray();
+
+static void WriteDiskTraceContext(AmigaDiskTraceEvent[] interpreter, AmigaDiskTraceEvent[] jit, int mismatchIndex)
+{
+    var start = Math.Max(0, mismatchIndex - 3);
+    var end = Math.Min(Math.Max(interpreter.Length, jit.Length) - 1, mismatchIndex + 3);
+    for (var i = start; i <= end; i++)
+    {
+        Console.WriteLine($"disk-trace-context\t{i}\tinterpreter\t{(i < interpreter.Length ? GetDiskTraceSignificantText(interpreter[i]) : "<missing>")}");
+        Console.WriteLine($"disk-trace-context\t{i}\tjit\t{(i < jit.Length ? GetDiskTraceSignificantText(jit[i]) : "<missing>")}");
+    }
+}
+
+static string ClassifyDiskTraceMismatch(AmigaDiskTraceEvent? interpreter, AmigaDiskTraceEvent? jit)
+{
+    if (!interpreter.HasValue || !jit.HasValue)
+    {
+        return "trace length differs; one backend produced extra disk events";
+    }
+
+    var left = interpreter.Value;
+    var right = jit.Value;
+    if (IsCpuDiskWriteKind(left.Kind) || IsCpuDiskWriteKind(right.Kind))
+    {
+        return "CPU disk register writes differ; likely JIT CPU semantics, PC path, flags, or bus cycle accounting";
+    }
+
+    if (left.Kind == AmigaDiskTraceEventKind.DiskInputAdvance &&
+        right.Kind == AmigaDiskTraceEventKind.DiskInputAdvance &&
+        left.Cycle == right.Cycle &&
+        left.TargetCycle == right.TargetCycle)
+    {
+        return "same disk advance interval produced different disk state; chunk-invariance or float rounding is suspect";
+    }
+
+    if (left.Kind == AmigaDiskTraceEventKind.WakeCandidate ||
+        right.Kind == AmigaDiskTraceEventKind.WakeCandidate)
+    {
+        return "disk wake candidate differs; likely JIT batch wake policy or device event clamping";
+    }
+
+    if (left.Cycle != right.Cycle)
+    {
+        return "disk event timing differs after matching CPU writes; likely JIT batching/wake timing or disk advancement ordering";
+    }
+
+    return "disk state differs at matching event cycle; likely disk model chunk-invariance or interpreter/JIT state sampling difference";
+}
+
+static bool IsCpuDiskWriteKind(AmigaDiskTraceEventKind kind)
+    => kind == AmigaDiskTraceEventKind.RegisterWrite ||
+        kind == AmigaDiskTraceEventKind.CiaBDriveControlWrite;
+
+static string GetDiskTraceComparisonText(AmigaDiskTraceEvent entry)
+{
+    var streamText = entry.Kind == AmigaDiskTraceEventKind.DmaWord
+        ? string.Empty
+        : $",stream={entry.StreamCycle}/{entry.StreamOffset}";
+    return FormatDiskTraceText(entry, streamText, includeDskbytr: entry.Kind != AmigaDiskTraceEventKind.DmaWord);
+}
+
+static string GetDiskTraceSignificantText(AmigaDiskTraceEvent entry)
+{
+    var streamText = $",stream={entry.StreamCycle}/{entry.StreamOffset}/{entry.StreamPosition:G17}";
+    return FormatDiskTraceText(entry, streamText, includeDskbytr: true);
+}
+
+static string FormatDiskTraceText(AmigaDiskTraceEvent entry, string streamText, bool includeDskbytr)
+{
+    var pcText = IsCpuDiskWriteKind(entry.Kind)
+        ? $",pc=0x{entry.LastInstructionProgramCounter & 0x00FF_FFFF:X6},op=0x{entry.LastOpcode:X4}"
+        : string.Empty;
+    var dskbytrText = includeDskbytr
+        ? $",bytr=0x{entry.Dskbytr:X4}"
+        : string.Empty;
+    return $"{entry.Kind},cycle={entry.Cycle},target={entry.TargetCycle},candidate={entry.CandidateCycle}{pcText},reg=0x{entry.Register:X3},value=0x{entry.Value:X4},beam={entry.BeamLine}:{entry.BeamHorizontal},dmacon=0x{entry.Dmacon:X4},adkcon=0x{entry.Adkcon:X4},intena=0x{entry.Intena:X4},intreq=0x{entry.Intreq:X4},dsklen=0x{entry.Dsklen:X4}{dskbytrText},datr=0x{entry.Dskdatr:X4},ptr=0x{entry.DiskPointer:X6},sel={entry.SelectedDrive},act={entry.ActiveDma},actDrive={entry.ActiveDmaDrive},cyl={entry.Cylinder},head={entry.Head},pending={entry.PendingReadDmaWords},req={entry.RequestedWords},xfer={entry.TransferredWords},src={entry.SourceBit}{streamText},addr=0x{entry.TargetAddress:X6},done={entry.CompletionCycle},detail={FormatCounterText(entry.Detail)}";
 }
 
 static void ApplyFrameActions(CopperScreenEmulator emulator, BenchmarkWorkload workload, int frame)
@@ -170,14 +313,14 @@ static void ApplyFrameActions(CopperScreenEmulator emulator, BenchmarkWorkload w
 
 static void WriteBenchmarkHeader()
 {
-    Console.WriteLine("name\tagnus\tbackend\tframes/sec\treal-time\tms/frame\tallocated bytes\tcpu%\tagnus%\tdisplay%\tjit traces\tjit hits\tjit exits\tjit fallback\tjit invalid\tjit unsupported opcode\tjit unsupported ea\tjit host trap\tjit system\tjit exception\tjit generation\tjit boundary\tjit selfmod\tjit direct il\tjit helper il\tjit direct cpu\tjit direct mem\tjit spec helper\tjit v2 tier0\tjit v2 tier1\tjit v2 tier2\tjit v2 tier3\tjit v2 hits\tjit v2 exits\tjit v2 exit entry\tjit v2 exit branch\tjit v2 exit before\tjit v2 exit beyond\tjit v2 exit chip\tjit v2 exit host\tjit v2 exit hole\tjit v2 exit fall\tjit v2 flags\tjit v2 writes\tjit v2 promotions\tjit v2 pressure promotions\tjit v2 worker graphs\tjit v2 worker graph instr\tjit v2 worker graph bytes\tjit async queued\tjit async dedup\tjit async dropped\tjit async started\tjit async completed\tjit async failed\tjit async installed\tjit async stale\tjit async superseded\tjit async tier0\tjit async tier1\tjit async tier2\tjit async tier3\tjit async maxq\tjit async ms\tjit v2 rejected\tjit v2 rej chip\tjit v2 rej host\tjit v2 rej dec\tjit v2 rej op\tjit v2 rej ea\tjit v2 rej budget\tjit v2 rej empty\tjit v2 disabled holes\tjit v2 disabled branches\tjit v2 branch limited\tjit v2 disabled entry\tjit v2 hole compiles\tjit v2 handoff try\tjit v2 handoff hit\tjit v2 handoff instr\tjit v2 handoff fail\tjit v2 bus batch\tjit v2 bus instr\tjit v2 bus saved\tjit v2 bus hist\tjit v2 bus wake\tjit v2 rej op top\tjit v2 rej ea top\tjit v2 hole top\tjit v2 handoff block top\tjit v2 handoff fail top\tjit v2 branch limit top\tjit v2 branch target state top\tjit gen guard\tjit pure batch\tjit pure instr\tjit pure saved\tjit pure exits\tjit pure hist\tjit pure wake\tjit stopped ff\tjit stopped cycles\tlive events\tcopper\tpending\tfetches\tframebuffer\taudio\tdisplay summary\tdisk\tspecialization\tretained slots\tslot grants\tgrant mix\tdenied\tdenied mix\tblocked by\tlast denied\tdivergences\tlast divergence\tstatus");
+    Console.WriteLine("name\tagnus\tbackend\tframes/sec\treal-time\tms/frame\tallocated bytes\tcpu%\tagnus%\tdisplay%\tjit traces\tjit hits\tjit exits\tjit fallback\tjit invalid\tjit unsupported opcode\tjit unsupported ea\tjit host trap\tjit system\tjit exception\tjit generation\tjit boundary\tjit selfmod\tjit direct il\tjit helper il\tjit direct cpu\tjit direct mem\tjit spec helper\tjit v2 tier0\tjit v2 tier1\tjit v2 tier2\tjit v2 tier3\tjit v2 hits\tjit v2 exits\tjit v2 exit entry\tjit v2 exit branch\tjit v2 exit before\tjit v2 exit beyond\tjit v2 exit chip\tjit v2 exit host\tjit v2 exit hole\tjit v2 exit fall\tjit v2 flags\tjit v2 branch pending\tjit v2 branch sr\tjit v2 writes\tjit v2 zw read rf\tjit v2 zw read rom\tjit v2 zw read overlay\tjit v2 zw write rf\tjit v2 zw read slow\tjit v2 zw write slow\tjit v2 promotions\tjit v2 pressure promotions\tjit v2 worker graphs\tjit v2 worker graph instr\tjit v2 worker graph bytes\tjit async queued\tjit async dedup\tjit async dropped\tjit async bumps\tjit async snap avoided\tjit async started\tjit async completed\tjit async failed\tjit async installed\tjit async stale\tjit async superseded\tjit async tier0\tjit async tier1\tjit async tier2\tjit async tier3\tjit async maxq\tjit async ms\tjit v2 rejected\tjit v2 rej chip\tjit v2 rej host\tjit v2 rej dec\tjit v2 rej op\tjit v2 rej ea\tjit v2 rej budget\tjit v2 rej empty\tjit v2 disabled holes\tjit v2 disabled branches\tjit v2 branch limited\tjit v2 disabled entry\tjit v2 hole compiles\tjit v2 handoff try\tjit v2 handoff hit\tjit v2 handoff instr\tjit v2 handoff fail\tjit v2 handoff queued wait\tjit v2 bus batch\tjit v2 bus instr\tjit v2 bus saved\tjit v2 bus hist\tjit v2 bus wake\tjit v2 rej op top\tjit v2 rej ea top\tjit v2 hole top\tjit v2 handoff block top\tjit v2 handoff fail top\tjit v2 branch limit top\tjit v2 branch target state top\tjit gen guard\tjit pure batch\tjit pure instr\tjit pure saved\tjit pure exits\tjit pure hist\tjit pure wake\tjit stopped ff\tjit stopped cycles\tlive events\tcopper\tpending\tfetches\tframebuffer\taudio\tdisplay summary\tdisk\tspecialization\tretained slots\tslot grants\tgrant mix\tdenied\tdenied mix\tblocked by\tlast denied\tstatus");
 }
 
 static void WriteBenchmarkResult(BenchmarkRunResult result, BenchmarkOptions options)
 {
     if (result.Missing)
     {
-        Console.WriteLine($"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\tmissing{new string('\t', 108)}{result.StatusText}");
+        Console.WriteLine($"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\tmissing{new string('\t', 120)}{result.StatusText}");
         if (options.InstructionMatrix)
         {
             WriteInstructionMatrix(result, options.TopInstructionOpcodes);
@@ -189,7 +332,7 @@ static void WriteBenchmarkResult(BenchmarkRunResult result, BenchmarkOptions opt
     var agnus = result.Agnus;
     var jit = result.Jit;
     Console.WriteLine(
-        $"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\t{result.FramesPerSecond:F1}\t{result.FramesPerSecond / 50.0:F2}x\t{result.MillisecondsPerFrame:F2}\t{result.AllocatedBytes}\t{result.Phase.CpuPercent:F1}\t{result.Phase.AgnusPercent:F1}\t{result.Phase.DisplayPercent:F1}\t{jit.CompiledTraces}\t{jit.TraceHits}\t{jit.SideExits}\t{jit.FallbackInstructions}\t{jit.Invalidations}\t{jit.UnsupportedOpcode}\t{jit.UnsupportedEa}\t{jit.HostTrapBailouts}\t{jit.SystemInstructionBailouts}\t{jit.ExceptionInstructionBailouts}\t{jit.GenerationMismatches}\t{jit.BoundarySideExits}\t{jit.SelfModifiedCodeExits}\t{jit.DirectIlInstructions}\t{jit.HelperIlInstructions}\t{jit.DirectCpuIlInstructions}\t{jit.DirectMemoryIlInstructions}\t{jit.SpecializedHelperIlInstructions}\t{jit.V2Tier0CompiledTraces}\t{jit.V2Tier1CompiledTraces}\t{jit.V2Tier2CompiledTraces}\t{jit.V2Tier3CompiledTraces}\t{jit.V2TraceHits}\t{jit.V2SideExits}\t{jit.V2SideExitEntryMismatch}\t{jit.V2SideExitOutOfBlockBranch}\t{jit.V2SideExitBeforeGraph}\t{jit.V2SideExitBeyondGraph}\t{jit.V2SideExitChipRam}\t{jit.V2SideExitHostTrap}\t{jit.V2SideExitGraphHole}\t{jit.V2SideExitConditionalFallthrough}\t{jit.V2FlagMaterializations}\t{jit.V2LazyWritebacks}\t{jit.V2TierPromotions}\t{jit.V2TierPressurePromotions}\t{jit.V2WorkerExpandedGraphs}\t{jit.V2WorkerExpandedGraphInstructions}\t{jit.V2WorkerExpandedGraphBytes}\t{jit.AsyncRequestsQueued}\t{jit.AsyncRequestsDeduped}\t{jit.AsyncRequestsDropped}\t{jit.AsyncWorkerCompilesStarted}\t{jit.AsyncWorkerCompilesCompleted}\t{jit.AsyncWorkerCompilesFailed}\t{jit.AsyncCompletedInstalled}\t{jit.AsyncCompletedDiscardedStale}\t{jit.AsyncCompletedDiscardedSuperseded}\t{jit.AsyncTier0Installs}\t{jit.AsyncTier1Installs}\t{jit.AsyncTier2Installs}\t{jit.AsyncTier3Installs}\t{jit.AsyncMaxQueueDepth}\t{jit.AsyncWorkerCompileMilliseconds}\t{jit.V2RejectedCandidates}\t{jit.V2RejectedChipRam}\t{jit.V2RejectedHostTrap}\t{jit.V2RejectedDecode}\t{jit.V2RejectedUnsupportedOperation}\t{jit.V2RejectedUnsupportedEa}\t{jit.V2RejectedBudget}\t{jit.V2RejectedEmpty}\t{jit.V2DisabledGraphHoleRoots}\t{jit.V2DisabledBranchExitRoots}\t{jit.V2BranchPressureLimitedRoots}\t{jit.V2DisabledEntryMismatchRoots}\t{jit.V2GraphHoleTargetCompiles}\t{jit.V2TraceHandoffAttempts}\t{jit.V2TraceHandoffExecutions}\t{jit.V2TraceHandoffInstructions}\t{jit.V2TraceHandoffFailures}\t{jit.V2BusAccessBatchExecutions}\t{jit.V2BusAccessBatchInstructions}\t{jit.V2BusAccessBatchBoundaryCallsSaved}\t{FormatCounterText(jit.V2BusAccessBatchLengthHistogram)}\t{FormatCounterText(jit.V2BusAccessBatchWakeSourceTop)}\t{FormatCounterText(jit.V2UnsupportedOperationTop)}\t{FormatCounterText(jit.V2UnsupportedEaTop)}\t{FormatCounterText(jit.V2GraphHoleTop)}\t{FormatCounterText(jit.V2TraceHandoffBlockTop)}\t{FormatCounterText(jit.V2TraceHandoffFailureTop)}\t{FormatCounterText(jit.V2BranchPressureLimitTop)}\t{FormatCounterText(jit.V2BranchPressureTargetStateTop)}\t{jit.GenerationGuardExits}\t{jit.PureTraceBatchExecutions}\t{jit.PureTraceBatchInstructions}\t{jit.PureTraceBatchBoundaryCallsSaved}\t{jit.PureTraceBatchSideExits}\t{FormatCounterText(jit.PureTraceBatchLengthHistogram)}\t{FormatCounterText(jit.PureTraceBatchWakeSourceTop)}\t{jit.StoppedFastForwards}\t{jit.StoppedFastForwardCycles}\t{result.LiveDisplayEventCount}\t{result.LiveCopperStepCount}\t{result.LivePendingWriteEventCount}\t{result.LiveFetchBatchWordCount}\t{FormatFramebufferSummary(result.Framebuffer)}\t{FormatAudioSummary(result.Audio)}\t{FormatDisplaySummary(result.Display)}\t{FormatDiskSummary(result.Disk)}\t{FormatSpecializationSummary(result.Specialization)}\t{agnus.SlotReservationCount}\t{agnus.SlotGrantCount}\t{FormatSlotGrantMix(agnus)}\t{agnus.DeniedFixedSlotCount}\t{FormatDeniedSlotMix(agnus)}\t{FormatDeniedBlockerMix(agnus)}\t{FormatLastDeniedFixedSlot(agnus)}\t{agnus.DivergenceCount}\t{FormatLastDivergence(agnus.LastDivergence)}\t{result.StatusText}");
+        $"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\t{result.FramesPerSecond:F1}\t{result.FramesPerSecond / 50.0:F2}x\t{result.MillisecondsPerFrame:F2}\t{result.AllocatedBytes}\t{result.Phase.CpuPercent:F1}\t{result.Phase.AgnusPercent:F1}\t{result.Phase.DisplayPercent:F1}\t{jit.CompiledTraces}\t{jit.TraceHits}\t{jit.SideExits}\t{jit.FallbackInstructions}\t{jit.Invalidations}\t{jit.UnsupportedOpcode}\t{jit.UnsupportedEa}\t{jit.HostTrapBailouts}\t{jit.SystemInstructionBailouts}\t{jit.ExceptionInstructionBailouts}\t{jit.GenerationMismatches}\t{jit.BoundarySideExits}\t{jit.SelfModifiedCodeExits}\t{jit.DirectIlInstructions}\t{jit.HelperIlInstructions}\t{jit.DirectCpuIlInstructions}\t{jit.DirectMemoryIlInstructions}\t{jit.SpecializedHelperIlInstructions}\t{jit.V2Tier0CompiledTraces}\t{jit.V2Tier1CompiledTraces}\t{jit.V2Tier2CompiledTraces}\t{jit.V2Tier3CompiledTraces}\t{jit.V2TraceHits}\t{jit.V2SideExits}\t{jit.V2SideExitEntryMismatch}\t{jit.V2SideExitOutOfBlockBranch}\t{jit.V2SideExitBeforeGraph}\t{jit.V2SideExitBeyondGraph}\t{jit.V2SideExitChipRam}\t{jit.V2SideExitHostTrap}\t{jit.V2SideExitGraphHole}\t{jit.V2SideExitConditionalFallthrough}\t{jit.V2FlagMaterializations}\t{jit.V2BranchPendingFlagChecks}\t{jit.V2BranchStatusFlagChecks}\t{jit.V2LazyWritebacks}\t{jit.V2ZeroWaitReadRealFast}\t{jit.V2ZeroWaitReadRom}\t{jit.V2ZeroWaitReadOverlay}\t{jit.V2ZeroWaitWriteRealFast}\t{jit.V2ZeroWaitReadSlow}\t{jit.V2ZeroWaitWriteSlow}\t{jit.V2TierPromotions}\t{jit.V2TierPressurePromotions}\t{jit.V2WorkerExpandedGraphs}\t{jit.V2WorkerExpandedGraphInstructions}\t{jit.V2WorkerExpandedGraphBytes}\t{jit.AsyncRequestsQueued}\t{jit.AsyncRequestsDeduped}\t{jit.AsyncRequestsDropped}\t{jit.AsyncPriorityBumps}\t{jit.AsyncSnapshotCapturesAvoided}\t{jit.AsyncWorkerCompilesStarted}\t{jit.AsyncWorkerCompilesCompleted}\t{jit.AsyncWorkerCompilesFailed}\t{jit.AsyncCompletedInstalled}\t{jit.AsyncCompletedDiscardedStale}\t{jit.AsyncCompletedDiscardedSuperseded}\t{jit.AsyncTier0Installs}\t{jit.AsyncTier1Installs}\t{jit.AsyncTier2Installs}\t{jit.AsyncTier3Installs}\t{jit.AsyncMaxQueueDepth}\t{jit.AsyncWorkerCompileMilliseconds}\t{jit.V2RejectedCandidates}\t{jit.V2RejectedChipRam}\t{jit.V2RejectedHostTrap}\t{jit.V2RejectedDecode}\t{jit.V2RejectedUnsupportedOperation}\t{jit.V2RejectedUnsupportedEa}\t{jit.V2RejectedBudget}\t{jit.V2RejectedEmpty}\t{jit.V2DisabledGraphHoleRoots}\t{jit.V2DisabledBranchExitRoots}\t{jit.V2BranchPressureLimitedRoots}\t{jit.V2DisabledEntryMismatchRoots}\t{jit.V2GraphHoleTargetCompiles}\t{jit.V2TraceHandoffAttempts}\t{jit.V2TraceHandoffExecutions}\t{jit.V2TraceHandoffInstructions}\t{jit.V2TraceHandoffFailures}\t{jit.V2TraceHandoffQueuedNotReady}\t{jit.V2BusAccessBatchExecutions}\t{jit.V2BusAccessBatchInstructions}\t{jit.V2BusAccessBatchBoundaryCallsSaved}\t{FormatCounterText(jit.V2BusAccessBatchLengthHistogram)}\t{FormatCounterText(jit.V2BusAccessBatchWakeSourceTop)}\t{FormatCounterText(jit.V2UnsupportedOperationTop)}\t{FormatCounterText(jit.V2UnsupportedEaTop)}\t{FormatCounterText(jit.V2GraphHoleTop)}\t{FormatCounterText(jit.V2TraceHandoffBlockTop)}\t{FormatCounterText(jit.V2TraceHandoffFailureTop)}\t{FormatCounterText(jit.V2BranchPressureLimitTop)}\t{FormatCounterText(jit.V2BranchPressureTargetStateTop)}\t{jit.GenerationGuardExits}\t{jit.PureTraceBatchExecutions}\t{jit.PureTraceBatchInstructions}\t{jit.PureTraceBatchBoundaryCallsSaved}\t{jit.PureTraceBatchSideExits}\t{FormatCounterText(jit.PureTraceBatchLengthHistogram)}\t{FormatCounterText(jit.PureTraceBatchWakeSourceTop)}\t{jit.StoppedFastForwards}\t{jit.StoppedFastForwardCycles}\t{result.LiveDisplayEventCount}\t{result.LiveCopperStepCount}\t{result.LivePendingWriteEventCount}\t{result.LiveFetchBatchWordCount}\t{FormatFramebufferSummary(result.Framebuffer)}\t{FormatAudioSummary(result.Audio)}\t{FormatDisplaySummary(result.Display)}\t{FormatDiskSummary(result.Disk)}\t{FormatSpecializationSummary(result.Specialization)}\t{agnus.SlotReservationCount}\t{agnus.SlotGrantCount}\t{FormatSlotGrantMix(agnus)}\t{agnus.DeniedFixedSlotCount}\t{FormatDeniedSlotMix(agnus)}\t{FormatDeniedBlockerMix(agnus)}\t{FormatLastDeniedFixedSlot(agnus)}\t{result.StatusText}");
     if (options.InstructionMatrix)
     {
         WriteInstructionMatrix(result, options.TopInstructionOpcodes);
@@ -233,269 +376,6 @@ static void WriteInstructionMatrix(BenchmarkRunResult result, int topOpcodeCount
     }
 }
 
-static void WriteComparisonHeader()
-{
-    Console.WriteLine("comparison\tlegacy fps\tslot fps\tfps delta%\tlegacy alloc\tslot alloc\talloc delta\tlegacy agnus ms/frame\tslot agnus ms/frame\tagnus delta%\tframebuffer\taudio\tdisplay\tdisk\tlegacy denied\tslot denied\tslot denied mix\tslot blocked by\tgate");
-}
-
-static void WriteComparison(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    if (legacy.Missing || slot.Missing)
-    {
-        Console.WriteLine($"{legacy.Workload.Name}\tmissing\tmissing{new string('\t', 16)}blocked:missing");
-        return;
-    }
-
-    var agnusDelta = DeltaPercent(slot.Phase.AgnusMillisecondsPerFrame, legacy.Phase.AgnusMillisecondsPerFrame);
-    Console.WriteLine(
-        $"{legacy.Workload.Name}\t{legacy.FramesPerSecond:F1}\t{slot.FramesPerSecond:F1}\t{DeltaPercent(slot.FramesPerSecond, legacy.FramesPerSecond):F1}\t{legacy.AllocatedBytes}\t{slot.AllocatedBytes}\t{slot.AllocatedBytes - legacy.AllocatedBytes}\t{legacy.Phase.AgnusMillisecondsPerFrame:F4}\t{slot.Phase.AgnusMillisecondsPerFrame:F4}\t{agnusDelta:F1}\t{CompareFramebufferSummary(legacy, slot)}\t{CompareAudioSummary(legacy, slot)}\t{CompareDisplaySummary(legacy, slot)}\t{CompareDiskSummary(legacy, slot)}\t{legacy.Agnus.DeniedFixedSlotCount}\t{slot.Agnus.DeniedFixedSlotCount}\t{FormatDeniedSlotMix(slot.Agnus)}\t{FormatDeniedBlockerMix(slot.Agnus)}\t{BuildGateStatus(legacy, slot)}");
-}
-
-static void WriteRepeatedComparison(BenchmarkWorkload workload, BenchmarkOptions options)
-{
-    var repeatCount = GetBalancedCompareRepeatCount(options);
-    var legacyRuns = new BenchmarkRunResult[repeatCount];
-    var slotRuns = new BenchmarkRunResult[repeatCount];
-    for (var repeat = 0; repeat < repeatCount; repeat++)
-    {
-        if ((repeat & 1) == 0)
-        {
-            legacyRuns[repeat] = RunBenchmark(workload, "legacy", options);
-            slotRuns[repeat] = RunBenchmark(workload, "slot", options);
-        }
-        else
-        {
-            slotRuns[repeat] = RunBenchmark(workload, "slot", options);
-            legacyRuns[repeat] = RunBenchmark(workload, "legacy", options);
-        }
-    }
-
-    if (legacyRuns.Any(run => run.Missing) || slotRuns.Any(run => run.Missing))
-    {
-        Console.WriteLine($"{workload.Name} median({repeatCount})\tmissing\tmissing{new string('\t', 16)}blocked:missing");
-        return;
-    }
-
-    var legacyFps = Median(legacyRuns, run => run.FramesPerSecond);
-    var slotFps = Median(slotRuns, run => run.FramesPerSecond);
-    var legacyAlloc = MaxLong(legacyRuns, run => run.AllocatedBytes);
-    var slotAlloc = MaxLong(slotRuns, run => run.AllocatedBytes);
-    var legacyAgnus = Median(legacyRuns, run => run.Phase.AgnusMillisecondsPerFrame);
-    var slotAgnus = Median(slotRuns, run => run.Phase.AgnusMillisecondsPerFrame);
-    var legacyDenied = MaxInt(legacyRuns, run => run.Agnus.DeniedFixedSlotCount);
-    var slotDenied = MaxInt(slotRuns, run => run.Agnus.DeniedFixedSlotCount);
-    var slotDiagnosticRun = SelectMostDeniedRun(slotRuns);
-    var legacyDiagnosticRun = SelectMedianFpsRun(legacyRuns, legacyFps);
-    if (slotDiagnosticRun.Agnus.DeniedFixedSlotCount == 0)
-    {
-        slotDiagnosticRun = SelectMedianFpsRun(slotRuns, slotFps);
-    }
-
-    Console.WriteLine(
-        $"{workload.Name} median({repeatCount})\t{legacyFps:F1}\t{slotFps:F1}\t{DeltaPercent(slotFps, legacyFps):F1}\t{legacyAlloc}\t{slotAlloc}\t{slotAlloc - legacyAlloc}\t{legacyAgnus:F4}\t{slotAgnus:F4}\t{DeltaPercent(slotAgnus, legacyAgnus):F1}\t{CompareFramebufferSummary(legacyDiagnosticRun, slotDiagnosticRun)}\t{CompareAudioSummary(legacyDiagnosticRun, slotDiagnosticRun)}\t{CompareDisplaySummary(legacyDiagnosticRun, slotDiagnosticRun)}\t{CompareDiskSummary(legacyDiagnosticRun, slotDiagnosticRun)}\t{legacyDenied}\t{slotDenied}\t{FormatDeniedSlotMix(slotDiagnosticRun.Agnus)}\t{FormatDeniedBlockerMix(slotDiagnosticRun.Agnus)}\t{BuildRepeatedGateStatus(legacyFps, slotFps, legacyAlloc, slotAlloc, legacyAgnus, slotAgnus, legacyRuns, slotRuns)}");
-}
-
-static string FormatCompareRepeatCount(BenchmarkOptions options)
-{
-    var repeatCount = GetBalancedCompareRepeatCount(options);
-    return repeatCount == options.RepeatCount
-        ? repeatCount.ToString()
-        : $"{repeatCount} (balanced from {options.RepeatCount})";
-}
-
-static int GetBalancedCompareRepeatCount(BenchmarkOptions options)
-{
-    return options.RepeatCount > 1 && (options.RepeatCount & 1) != 0
-        ? options.RepeatCount + 1
-        : options.RepeatCount;
-}
-
-static string BuildGateStatus(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    var status = string.Empty;
-    if (slot.FramesPerSecond < legacy.FramesPerSecond)
-    {
-        AppendGateFailure(ref status, "fps");
-    }
-
-    if (slot.AllocatedBytes > legacy.AllocatedBytes)
-    {
-        AppendGateFailure(ref status, "alloc");
-    }
-
-    if (slot.Phase.AgnusMillisecondsPerFrame > legacy.Phase.AgnusMillisecondsPerFrame)
-    {
-        AppendGateFailure(ref status, "agnus");
-    }
-
-    AppendSummaryGateFailures(ref status, legacy, slot);
-
-    return string.IsNullOrEmpty(status) ? "pass" : $"fail:{status}";
-}
-
-static string BuildRepeatedGateStatus(
-    double legacyFps,
-    double slotFps,
-    long legacyAllocatedBytes,
-    long slotAllocatedBytes,
-    double legacyAgnusMilliseconds,
-    double slotAgnusMilliseconds,
-    BenchmarkRunResult[] legacyRuns,
-    BenchmarkRunResult[] slotRuns)
-{
-    var status = string.Empty;
-    if (slotFps < legacyFps)
-    {
-        AppendGateFailure(ref status, "fps");
-    }
-
-    if (slotAllocatedBytes > legacyAllocatedBytes)
-    {
-        AppendGateFailure(ref status, "alloc");
-    }
-
-    if (slotAgnusMilliseconds > legacyAgnusMilliseconds)
-    {
-        AppendGateFailure(ref status, "agnus");
-    }
-
-    AppendRepeatedSummaryGateFailures(ref status, legacyRuns, slotRuns);
-
-    return string.IsNullOrEmpty(status) ? "pass" : $"fail:{status}";
-}
-
-static void AppendSummaryGateFailures(ref string status, BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    if (!legacy.Framebuffer.Equals(slot.Framebuffer))
-    {
-        AppendGateFailure(ref status, "framebuffer");
-    }
-
-    if (!legacy.Audio.Equals(slot.Audio))
-    {
-        AppendGateFailure(ref status, "audio");
-    }
-
-    if (!DisplayEndpointsEqual(legacy.Display, slot.Display))
-    {
-        AppendGateFailure(ref status, "display");
-    }
-
-    if (!legacy.Disk.Equals(slot.Disk))
-    {
-        AppendGateFailure(ref status, "disk");
-    }
-}
-
-static void AppendRepeatedSummaryGateFailures(
-    ref string status,
-    BenchmarkRunResult[] legacyRuns,
-    BenchmarkRunResult[] slotRuns)
-{
-    if (SummaryDiffersAcrossRuns(legacyRuns, slotRuns, run => run.Framebuffer))
-    {
-        AppendGateFailure(ref status, "framebuffer");
-    }
-
-    if (SummaryDiffersAcrossRuns(legacyRuns, slotRuns, run => run.Audio))
-    {
-        AppendGateFailure(ref status, "audio");
-    }
-
-    if (DisplaySummaryDiffersAcrossRuns(legacyRuns, slotRuns))
-    {
-        AppendGateFailure(ref status, "display");
-    }
-
-    if (SummaryDiffersAcrossRuns(legacyRuns, slotRuns, run => run.Disk))
-    {
-        AppendGateFailure(ref status, "disk");
-    }
-}
-
-static bool SummaryDiffersAcrossRuns<T>(
-    BenchmarkRunResult[] legacyRuns,
-    BenchmarkRunResult[] slotRuns,
-    Func<BenchmarkRunResult, T> selector)
-{
-    var expected = selector(legacyRuns[0]);
-    var comparer = EqualityComparer<T>.Default;
-    for (var i = 0; i < legacyRuns.Length; i++)
-    {
-        if (!comparer.Equals(selector(legacyRuns[i]), expected))
-        {
-            return true;
-        }
-    }
-
-    for (var i = 0; i < slotRuns.Length; i++)
-    {
-        if (!comparer.Equals(selector(slotRuns[i]), expected))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool DisplaySummaryDiffersAcrossRuns(
-    BenchmarkRunResult[] legacyRuns,
-    BenchmarkRunResult[] slotRuns)
-{
-    var expected = legacyRuns[0].Display;
-    for (var i = 0; i < legacyRuns.Length; i++)
-    {
-        if (!DisplayEndpointsEqual(legacyRuns[i].Display, expected))
-        {
-            return true;
-        }
-    }
-
-    for (var i = 0; i < slotRuns.Length; i++)
-    {
-        if (!DisplayEndpointsEqual(slotRuns[i].Display, expected))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool DisplayEndpointsEqual(DisplaySummary left, DisplaySummary right)
-{
-    return left.Bplcon0 == right.Bplcon0 &&
-        left.Bplcon1 == right.Bplcon1 &&
-        left.Bplcon2 == right.Bplcon2 &&
-        left.BitplanePixels == right.BitplanePixels &&
-        left.BitplaneMinX == right.BitplaneMinX &&
-        left.BitplaneMinY == right.BitplaneMinY &&
-        left.BitplaneMaxX == right.BitplaneMaxX &&
-        left.BitplaneMaxY == right.BitplaneMaxY &&
-        left.SpritePixels == right.SpritePixels &&
-        left.SpriteMinX == right.SpriteMinX &&
-        left.SpriteMinY == right.SpriteMinY &&
-        left.SpriteMaxX == right.SpriteMaxX &&
-        left.SpriteMaxY == right.SpriteMaxY &&
-        left.BitplaneDmaFetches == right.BitplaneDmaFetches &&
-        left.SpriteDmaFetches == right.SpriteDmaFetches;
-}
-
-static void AppendGateFailure(ref string status, string failure)
-{
-    status = string.IsNullOrEmpty(status)
-        ? failure
-        : $"{status},{failure}";
-}
-
-static double DeltaPercent(double value, double baseline)
-{
-    return baseline == 0
-        ? 0
-        : ((value - baseline) * 100.0) / baseline;
-}
-
 static string PercentText(long value, long total)
     => total == 0 ? "0.00" : $"{(value * 100.0) / total:F2}";
 
@@ -504,77 +384,9 @@ static string FormatCounterText(string? value)
         ? string.Empty
         : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
-static double Median(BenchmarkRunResult[] runs, Func<BenchmarkRunResult, double> selector)
+static CopperScreenEmulator? CreateEmulator(string? fileName, BenchmarkOptions options)
 {
-    var values = new double[runs.Length];
-    for (var i = 0; i < runs.Length; i++)
-    {
-        values[i] = selector(runs[i]);
-    }
-
-    Array.Sort(values);
-    var middle = values.Length / 2;
-    return (values.Length & 1) != 0
-        ? values[middle]
-        : (values[middle - 1] + values[middle]) / 2.0;
-}
-
-static long MaxLong(BenchmarkRunResult[] runs, Func<BenchmarkRunResult, long> selector)
-{
-    var max = long.MinValue;
-    for (var i = 0; i < runs.Length; i++)
-    {
-        max = Math.Max(max, selector(runs[i]));
-    }
-
-    return max;
-}
-
-static int MaxInt(BenchmarkRunResult[] runs, Func<BenchmarkRunResult, int> selector)
-{
-    var max = int.MinValue;
-    for (var i = 0; i < runs.Length; i++)
-    {
-        max = Math.Max(max, selector(runs[i]));
-    }
-
-    return max;
-}
-
-static BenchmarkRunResult SelectMostDeniedRun(BenchmarkRunResult[] runs)
-{
-    var selected = runs[0];
-    for (var i = 1; i < runs.Length; i++)
-    {
-        if (runs[i].Agnus.DeniedFixedSlotCount > selected.Agnus.DeniedFixedSlotCount)
-        {
-            selected = runs[i];
-        }
-    }
-
-    return selected;
-}
-
-static BenchmarkRunResult SelectMedianFpsRun(BenchmarkRunResult[] runs, double medianFps)
-{
-    var selected = runs[0];
-    var selectedDistance = Math.Abs(selected.FramesPerSecond - medianFps);
-    for (var i = 1; i < runs.Length; i++)
-    {
-        var distance = Math.Abs(runs[i].FramesPerSecond - medianFps);
-        if (distance < selectedDistance)
-        {
-            selected = runs[i];
-            selectedDistance = distance;
-        }
-    }
-
-    return selected;
-}
-
-static CopperScreenEmulator? CreateEmulator(string? fileName, string? agnusTimingMode, BenchmarkOptions options)
-{
-    var args = CreateEmulatorArgs(fileName, agnusTimingMode, options);
+    var args = CreateEmulatorArgs(fileName, options);
     if (fileName == null)
     {
         return args.Length == 0
@@ -585,16 +397,15 @@ static CopperScreenEmulator? CreateEmulator(string? fileName, string? agnusTimin
     var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
     return diskPath == null
         ? null
-        : CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, agnusTimingMode, options), AppContext.BaseDirectory);
+        : CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options), AppContext.BaseDirectory);
 }
 
-static string[] CreateEmulatorArgs(string? diskPath, string? agnusTimingMode, BenchmarkOptions options)
+static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options)
 {
     var count = (diskPath == null ? 0 : 1) +
         (string.IsNullOrWhiteSpace(options.Profile) ? 0 : 2) +
         (options.RealKickstart ? 1 : 0) +
         (string.IsNullOrWhiteSpace(options.KickstartRomPath) ? 0 : 2) +
-        (string.IsNullOrWhiteSpace(agnusTimingMode) ? 0 : 2) +
         (string.IsNullOrWhiteSpace(options.CpuBackend) ? 0 : 2);
     if (count == 0)
     {
@@ -623,12 +434,6 @@ static string[] CreateEmulatorArgs(string? diskPath, string? agnusTimingMode, Be
     {
         args[index++] = "--kickstart-rom";
         args[index++] = options.KickstartRomPath;
-    }
-
-    if (!string.IsNullOrWhiteSpace(agnusTimingMode))
-    {
-        args[index++] = "--agnus-timing";
-        args[index++] = agnusTimingMode;
     }
 
     if (!string.IsNullOrWhiteSpace(options.CpuBackend))
@@ -852,6 +657,14 @@ static DiskSummary CaptureDiskSummary(CopperScreenEmulator emulator)
         disk.Dskbytr);
 }
 
+static AmigaDiskTraceEvent[] CaptureDiskTrace(CopperScreenEmulator emulator)
+{
+    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+        .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
+        .GetValue(emulator)!;
+    return machine.Bus.Disk.CaptureDivergenceTrace();
+}
+
 static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEmulator emulator)
 {
     var machine = (AmigaMachine)typeof(CopperScreenEmulator)
@@ -965,48 +778,6 @@ static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
         $"dskSync={summary.DiskSyncIndexHits}/{summary.DiskSyncIndexMisses}";
 }
 
-static string CompareFramebufferSummary(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    return legacy.Framebuffer.Equals(slot.Framebuffer)
-        ? "match"
-        : $"{FormatFramebufferSummary(legacy.Framebuffer)}->{FormatFramebufferSummary(slot.Framebuffer)}";
-}
-
-static string CompareAudioSummary(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    return legacy.Audio.Equals(slot.Audio)
-        ? "match"
-        : $"{FormatAudioSummary(legacy.Audio)}->{FormatAudioSummary(slot.Audio)}";
-}
-
-static string CompareDisplaySummary(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    return DisplayEndpointsEqual(legacy.Display, slot.Display)
-        ? "match"
-        : $"{FormatDisplaySummary(legacy.Display)}->{FormatDisplaySummary(slot.Display)}";
-}
-
-static string CompareDiskSummary(BenchmarkRunResult legacy, BenchmarkRunResult slot)
-{
-    return legacy.Disk.Equals(slot.Disk)
-        ? "match"
-        : $"{FormatDiskSummary(legacy.Disk)}->{FormatDiskSummary(slot.Disk)}";
-}
-
-static string FormatLastDivergence(AgnusSlotDivergenceSnapshot? divergence)
-{
-    if (!divergence.HasValue)
-    {
-        return "none";
-    }
-
-    var value = divergence.Value;
-    var prefix = $"{value.Kind}:{value.Request.Requester}/{value.Request.Kind}/{value.Request.Size}@{value.Request.RequestedCycle}:legacy={FormatDivergenceGrant(value.PrimaryGranted, value.PrimaryGrantedCycle, value.PrimaryCompletedCycle)},slot={FormatDivergenceGrant(value.ShadowGranted, value.ShadowGrantedCycle, value.ShadowCompletedCycle)}";
-    return value.HasValueComparison
-        ? $"{prefix},values={value.PrimaryValue:X4}->{value.ShadowValue:X4}"
-        : prefix;
-}
-
 static string FormatLastDeniedFixedSlot(AgnusBeamDmaSnapshot agnus)
 {
     if (!agnus.LastDeniedFixedSlot.HasValue)
@@ -1035,13 +806,6 @@ static string FormatDeniedSlotMix(AgnusBeamDmaSnapshot agnus)
 static string FormatDeniedBlockerMix(AgnusBeamDmaSnapshot agnus)
 {
     return $"cpu={agnus.CpuDeniedFixedSlotBlockerCount},blt={agnus.BlitterDeniedFixedSlotBlockerCount},cop={agnus.CopperDeniedFixedSlotBlockerCount},pau={agnus.PaulaDeniedFixedSlotBlockerCount},dsk={agnus.DiskDeniedFixedSlotBlockerCount},spr={agnus.SpriteDeniedFixedSlotBlockerCount},bpl={agnus.BitplaneDeniedFixedSlotBlockerCount}";
-}
-
-static string FormatDivergenceGrant(bool granted, long grantedCycle, long completedCycle)
-{
-    return granted
-        ? $"{grantedCycle}->{completedCycle}"
-        : $"denied@{grantedCycle}";
 }
 
 static double Percent(long value, long total)
@@ -1137,6 +901,7 @@ internal readonly record struct BenchmarkRunResult(
     M68kInstructionFrequencySnapshot InstructionFrequency,
     string CpuBackend,
     M68kJitCounters Jit,
+    AmigaDiskTraceEvent[] DiskTrace,
     string StatusText);
 
 internal readonly record struct BenchmarkOptions(
@@ -1146,27 +911,24 @@ internal readonly record struct BenchmarkOptions(
     int RepeatCount,
     string? Only,
     string? Profile,
-    string? AgnusTimingMode,
     string? CpuBackend,
     bool RealKickstart,
     string? KickstartRomPath,
-    bool CompareAgnus,
     bool InstructionMatrix,
+    bool DiskDivergenceTrace,
     int TopInstructionOpcodes)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
         var smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
-        var compareAgnus = args.Contains("--compare", StringComparer.OrdinalIgnoreCase) ||
-            args.Contains("--compare-agnus", StringComparer.OrdinalIgnoreCase);
         var warmup = smoke ? 20 : 240;
         var measured = smoke ? 20 : 360;
         var repeatCount = 1;
         var instructionMatrix = false;
+        var diskDivergenceTrace = false;
         var topInstructionOpcodes = 16;
         string? only = null;
         string? profile = null;
-        string? agnusTimingMode = null;
         string? cpuBackend = null;
         var realKickstart = false;
         string? kickstartRomPath = null;
@@ -1194,12 +956,6 @@ internal readonly record struct BenchmarkOptions(
             {
                 profile = args[++i];
             }
-            else if ((string.Equals(args[i], "--agnus", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(args[i], "--agnus-timing", StringComparison.OrdinalIgnoreCase)) &&
-                i + 1 < args.Length)
-            {
-                agnusTimingMode = args[++i];
-            }
             else if (string.Equals(args[i], "--cpu", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
                 cpuBackend = args[++i];
@@ -1224,6 +980,10 @@ internal readonly record struct BenchmarkOptions(
             {
                 instructionMatrix = true;
             }
+            else if (string.Equals(args[i], "--disk-divergence-trace", StringComparison.OrdinalIgnoreCase))
+            {
+                diskDivergenceTrace = true;
+            }
             else if (string.Equals(args[i], "--top-opcodes", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
                 instructionMatrix = true;
@@ -1238,12 +998,11 @@ internal readonly record struct BenchmarkOptions(
             Math.Max(1, repeatCount),
             only,
             profile,
-            agnusTimingMode,
             cpuBackend,
             realKickstart,
             kickstartRomPath,
-            compareAgnus,
             instructionMatrix,
+            diskDivergenceTrace,
             Math.Clamp(topInstructionOpcodes, 0, 256));
     }
 }

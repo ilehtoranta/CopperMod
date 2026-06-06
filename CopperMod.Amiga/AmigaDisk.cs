@@ -975,6 +975,7 @@ namespace CopperMod.Amiga
         private const ushort DskLengthMask = 0x3FFF;
         private const int MaxDmaTraceEntries = 4096;
         private const int DiskRevolutionsPerSecond = 5;
+        private const double DiskStreamPositionQuantum = 1e-6;
         private static readonly long DiskWordEqualHoldCycles = Math.Max(
             1,
             (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 500_000.0));
@@ -989,6 +990,7 @@ namespace CopperMod.Amiga
         private readonly bool _specializationEnabled;
         private readonly AmigaFloppyDrive[] _drives;
         private readonly List<AmigaDiskDmaTraceEntry> _dmaTrace = new List<AmigaDiskDmaTraceEntry>(MaxDmaTraceEntries);
+        private readonly AmigaDiskTraceRecorder? _traceRecorder;
         private long _currentCycle;
         private ushort _dsklen;
         private ushort _dsksync = 0x4489;
@@ -1049,6 +1051,9 @@ namespace CopperMod.Amiga
             _streams = Enumerable.Range(0, MaxFloppyDriveCount)
                 .Select(_ => new DiskStreamState())
                 .ToArray();
+            _traceRecorder = AmigaDiskTraceRecorder.IsEnvironmentEnabled()
+                ? new AmigaDiskTraceRecorder()
+                : null;
             Reset();
         }
 
@@ -1063,6 +1068,11 @@ namespace CopperMod.Amiga
         public AmigaFloppyDrive Drive3 { get; }
 
         public int TransferCount => _transferCount;
+
+        public bool DivergenceTraceEnabled => _traceRecorder != null;
+
+        internal void ConfigureDivergenceTrace(string backend, Func<AmigaDiskTraceCpuContext>? cpuContextProvider)
+            => _traceRecorder?.Configure(backend, cpuContextProvider);
 
         public AmigaDiskControllerSnapshot CaptureSnapshot()
         {
@@ -1105,9 +1115,13 @@ namespace CopperMod.Amiga
             return _dmaTrace.ToArray();
         }
 
+        public AmigaDiskTraceEvent[] CaptureDivergenceTrace()
+            => _traceRecorder?.Capture() ?? Array.Empty<AmigaDiskTraceEvent>();
+
         public void ClearDmaTrace()
         {
             _dmaTrace.Clear();
+            _traceRecorder?.Clear();
         }
 
         public void Reset()
@@ -1123,6 +1137,7 @@ namespace CopperMod.Amiga
             _dskbytrWordEqualUntilCycle = 0;
             _transferCount = 0;
             _dmaTrace.Clear();
+            _traceRecorder?.Clear();
             _lastTransferWords = 0;
             _lastTransferDrive = -1;
             _lastTransferCylinder = 0;
@@ -1239,7 +1254,7 @@ namespace CopperMod.Amiga
             long? candidate = null;
             candidate = MinWakeCandidate(candidate, GetPendingReadDmaWakeCandidateCycle(currentCycle));
 
-            if (_nextDiskInputAdvanceCycle > 0 && _bus.Paula.IsInterruptEnabled(DskSynInterrupt))
+            if (_nextDiskInputAdvanceCycle > 0)
             {
                 candidate = MinWakeCandidate(candidate, _nextDiskInputAdvanceCycle);
             }
@@ -1254,7 +1269,18 @@ namespace CopperMod.Amiga
                 candidate = MinWakeCandidate(candidate, _nextIndexPulseCycle);
             }
 
-            return ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            var clamped = ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            if (clamped.HasValue)
+            {
+                AppendDivergenceTrace(
+                    AmigaDiskTraceEventKind.WakeCandidate,
+                    currentCycle,
+                    targetCycle: targetCycle,
+                    candidateCycle: clamped.Value,
+                    detail: "candidate");
+            }
+
+            return clamped;
         }
 
         private long? GetPendingReadDmaWakeCandidateCycle(long currentCycle)
@@ -1390,12 +1416,15 @@ namespace CopperMod.Amiga
             {
                 case DskDat:
                     _diskDataRegister = value;
+                    AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
                 case DskPth:
                     _diskPointer = _bus.WriteChipDmaPointerHigh(_diskPointer, value);
+                    AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
                 case DskPtl:
                     _diskPointer = _bus.WriteChipDmaPointerLow(_diskPointer, value);
+                    AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
                 case DskLen:
                     AdvanceActiveDmaTo(cycle);
@@ -1405,6 +1434,7 @@ namespace CopperMod.Amiga
                         CancelActiveDma(cycle);
                         _armedDsklen = null;
                         _pendingReadDmaWords = 0;
+                        AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                         break;
                     }
 
@@ -1419,12 +1449,14 @@ namespace CopperMod.Amiga
                         _armedDsklen = value;
                     }
 
+                    AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
                 case DskSync:
                     _dsksync = value;
                     InvalidateSyncCaches();
                     InvalidateNextDiskInputAdvanceCycle();
                     TryStartPendingReadDma(cycle);
+                    AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
             }
         }
@@ -1469,6 +1501,11 @@ namespace CopperMod.Amiga
             }
 
             InvalidateNextDiskInputAdvanceCycle();
+            AppendDivergenceTrace(
+                AmigaDiskTraceEventKind.CiaBDriveControlWrite,
+                cycle,
+                register: 0xB100,
+                value);
             var previousStepHigh = (previous & 0x01) != 0;
             var stepHigh = (value & 0x01) != 0;
             if (previousStepHigh && !stepHigh)
@@ -1803,6 +1840,16 @@ namespace CopperMod.Amiga
                         _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2),
                         value,
                         plan.CompletionCycle);
+                    AppendDivergenceTrace(
+                        AmigaDiskTraceEventKind.DmaWord,
+                        plan.CompletionCycle,
+                        drive: _activeDmaDrive,
+                        requestedWords: _activeDmaRequestedWords,
+                        transferredWords: word + 1,
+                        sourceBit: plan.SourceBit,
+                        targetAddress: _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2),
+                        completionCycle: _activeDmaCompletionCycle,
+                        detail: $"value=0x{value:X4}");
                     _activeDmaNextSourceBit = plan.NextSourceBit;
                     _activeDmaNextWordStartCycle = plan.NextWordStartCycle;
                     _activeDmaTransferredWords++;
@@ -1841,6 +1888,17 @@ namespace CopperMod.Amiga
                 _activeDmaTrackBitLength,
                 _activeDmaWordSyncEnabled,
                 _activeDmaCompletionCycle);
+            AppendDivergenceTrace(
+                AmigaDiskTraceEventKind.DiskInterruptWrite,
+                _activeDmaCompletionCycle,
+                register: 0x09C,
+                value: (ushort)(0x8000 | DskBlkInterrupt),
+                drive: _activeDmaDrive,
+                requestedWords: _activeDmaRequestedWords,
+                transferredWords: _activeDmaTransferredWords,
+                targetAddress: _activeDmaTargetAddress,
+                completionCycle: _activeDmaCompletionCycle,
+                detail: "dskblk");
             _bus.WriteDeviceWord(
                 AmigaBusRequester.Disk,
                 AmigaBusAccessKind.DiskDma,
@@ -1952,7 +2010,108 @@ namespace CopperMod.Amiga
                 trackBitLength,
                 wordSyncEnabled,
                 completionCycle));
+            AppendDivergenceTrace(
+                kind switch
+                {
+                    AmigaDiskDmaTraceKind.Started => AmigaDiskTraceEventKind.DmaStarted,
+                    AmigaDiskDmaTraceKind.Completed => AmigaDiskTraceEventKind.DmaCompleted,
+                    AmigaDiskDmaTraceKind.Cancelled => AmigaDiskTraceEventKind.DmaCancelled,
+                    AmigaDiskDmaTraceKind.Stopped => AmigaDiskTraceEventKind.DmaStopped,
+                    AmigaDiskDmaTraceKind.SyncMissing => AmigaDiskTraceEventKind.DmaSyncMissing,
+                    _ => AmigaDiskTraceEventKind.Unknown
+                },
+                cycle,
+                drive: drive,
+                requestedWords: requestedWords,
+                transferredWords: transferredWords,
+                sourceBit: sourceBit,
+                targetAddress: targetAddress,
+                completionCycle: completionCycle,
+                detail: wordSyncEnabled ? "wordsync" : string.Empty);
         }
+
+        private void AppendDivergenceTrace(
+            AmigaDiskTraceEventKind kind,
+            long cycle,
+            ushort register = 0,
+            ushort value = 0,
+            int drive = -1,
+            int requestedWords = 0,
+            int transferredWords = 0,
+            int sourceBit = 0,
+            uint targetAddress = 0,
+            long targetCycle = 0,
+            long candidateCycle = 0,
+            long completionCycle = 0,
+            string detail = "")
+        {
+            if (_traceRecorder == null)
+            {
+                return;
+            }
+
+            var traceDrive = ResolveTraceDrive(drive);
+            var stream = GetTraceStream(traceDrive);
+            var driveState = GetDriveOrNull(traceDrive);
+            var builder = new AmigaDiskTraceEventBuilder
+            {
+                Kind = kind,
+                Cycle = cycle,
+                Register = register,
+                Value = value,
+                Dmacon = _bus.Paula.Dmacon,
+                Adkcon = _bus.Paula.Adkcon,
+                Intena = _bus.Paula.Intena,
+                Intreq = _bus.Paula.Intreq,
+                Dsklen = _dsklen,
+                Dsksync = _dsksync,
+                Dskbytr = PeekDskbytr(),
+                Dskdatr = _diskDataRegister,
+                DiskPointer = _diskPointer,
+                SelectedDrive = GetSelectedDriveIndex(),
+                ActiveDmaDrive = _activeDmaDrive,
+                ActiveDma = _activeDma,
+                Cylinder = driveState?.Cylinder ?? 0,
+                Head = driveState?.Head ?? 0,
+                PendingReadDmaWords = _pendingReadDmaWords,
+                RequestedWords = requestedWords != 0 ? requestedWords : _activeDmaRequestedWords,
+                TransferredWords = transferredWords != 0 ? transferredWords : _activeDmaTransferredWords,
+                SourceBit = sourceBit,
+                StreamOffset = stream?.Offset ?? 0,
+                StreamPosition = stream?.Position ?? 0,
+                StreamCycle = stream?.Cycle ?? 0,
+                TargetAddress = targetAddress != 0 ? targetAddress : _activeDmaTargetAddress,
+                TargetCycle = targetCycle,
+                CandidateCycle = candidateCycle,
+                CompletionCycle = completionCycle != 0 ? completionCycle : _activeDmaCompletionCycle,
+                Detail = detail
+            };
+            _traceRecorder.Add(builder);
+        }
+
+        private int ResolveTraceDrive(int drive)
+        {
+            if ((uint)drive < (uint)_streams.Length)
+            {
+                return drive;
+            }
+
+            var selected = GetSelectedDriveIndex();
+            if ((uint)selected < (uint)_streams.Length)
+            {
+                return selected;
+            }
+
+            if ((uint)_activeDmaDrive < (uint)_streams.Length)
+            {
+                return _activeDmaDrive;
+            }
+
+            return 0;
+        }
+
+        private DiskStreamState? GetTraceStream(int drive)
+            => (uint)drive < (uint)_streams.Length ? _streams[drive] : null;
 
         private void ClearActiveDma()
         {
@@ -2032,6 +2191,18 @@ namespace CopperMod.Amiga
 
         private void AdvanceDiskInputTo(long cycle)
         {
+            if (_traceRecorder != null)
+            {
+                var traceDrive = ResolveTraceDrive(-1);
+                var traceStream = GetTraceStream(traceDrive);
+                AppendDivergenceTrace(
+                    AmigaDiskTraceEventKind.DiskInputAdvance,
+                    traceStream?.Cycle ?? _currentCycle,
+                    drive: traceDrive,
+                    targetCycle: cycle,
+                    detail: "start");
+            }
+
             var nextInputAdvanceCycle = long.MaxValue;
             for (var driveIndex = 0; driveIndex < _drives.Length; driveIndex++)
             {
@@ -2080,6 +2251,17 @@ namespace CopperMod.Amiga
             }
 
             _nextDiskInputAdvanceCycle = nextInputAdvanceCycle == long.MaxValue ? 0 : nextInputAdvanceCycle;
+            if (_traceRecorder != null)
+            {
+                var traceDrive = ResolveTraceDrive(-1);
+                AppendDivergenceTrace(
+                    AmigaDiskTraceEventKind.DiskInputAdvance,
+                    cycle,
+                    drive: traceDrive,
+                    targetCycle: cycle,
+                    candidateCycle: _nextDiskInputAdvanceCycle,
+                    detail: "end");
+            }
         }
 
         private void AdvanceInputStreamTo(
@@ -2232,6 +2414,12 @@ namespace CopperMod.Amiga
 
                 var matchCycle = startCycle + CyclesForBits(completionPosition - startPosition, cyclesPerBit);
                 _dskbytrWordEqualUntilCycle = Math.Max(_dskbytrWordEqualUntilCycle, matchCycle + DiskWordEqualHoldCycles);
+                AppendDivergenceTrace(
+                    AmigaDiskTraceEventKind.DiskInterruptWrite,
+                    matchCycle,
+                    register: 0x09C,
+                    value: (ushort)(0x8000 | DskSynInterrupt),
+                    detail: "dsksyn");
                 _bus.WriteDeviceWord(
                     AmigaBusRequester.Disk,
                     AmigaBusAccessKind.DiskDma,
@@ -2507,10 +2695,22 @@ namespace CopperMod.Amiga
 
         private void SetStreamPosition(DiskStreamState stream, double position, long cycle)
         {
+            position = CanonicalizeStreamPosition(position);
             stream.Position = position;
             stream.Offset = Math.Max(0, (int)Math.Floor(position));
             stream.Cycle = cycle;
             InvalidateNextDiskInputAdvanceCycle();
+        }
+
+        private static double CanonicalizeStreamPosition(double position)
+        {
+            if (!double.IsFinite(position))
+            {
+                return 0;
+            }
+
+            position = Math.Round(position / DiskStreamPositionQuantum) * DiskStreamPositionQuantum;
+            return position == 0 ? 0 : position;
         }
 
         private void InvalidateNextDiskInputAdvanceCycle()

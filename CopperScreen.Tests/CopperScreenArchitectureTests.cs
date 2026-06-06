@@ -41,7 +41,6 @@ public sealed class CopperScreenArchitectureTests
 			CopperScreenKickstartSource.CopperStart,
 			512 * 1024,
 			2,
-			AgnusTimingMode.SlotEngine,
 			M68kBackendKind.JitM68000,
 			2 * 1024 * 1024);
 		AssertProfile(
@@ -50,10 +49,9 @@ public sealed class CopperScreenArchitectureTests
 			CopperScreenKickstartSource.Kickstart13Rom,
 			512 * 1024,
 			2,
-			AgnusTimingMode.SlotEngine,
 			M68kBackendKind.JitM68000,
 			2 * 1024 * 1024);
-		AssertProfile("diagnostic-slotengine-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2, AgnusTimingMode.SlotEngine);
+		AssertProfile("diagnostic-hrm-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 	}
 
 	[Fact]
@@ -86,7 +84,6 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal(0, profile.ExpansionRamSize);
 			Assert.Equal(0, profile.RealFastRamSize);
 			Assert.Equal(M68kBackendKind.AccurateM68000, profile.CpuBackend);
-			Assert.Equal(AgnusTimingMode.SlotEngine, profile.AgnusTimingMode);
 			Assert.False(profile.FloppyDriveAudio.Enabled);
 			Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
@@ -160,18 +157,6 @@ public sealed class CopperScreenArchitectureTests
 		{
 			File.Delete(diskPath);
 		}
-	}
-
-	[Fact]
-	public void StartupArgumentParserCanOverrideAgnusTimingMode()
-	{
-		var options = CopperScreenStartupOptions.Parse(
-			new[] { "--profile", "expanded-copperstart", "--agnus-timing", "legacy" },
-			AppContext.BaseDirectory);
-
-		Assert.Null(options.Error);
-		Assert.Equal(AgnusTimingMode.SlotEngine, options.Profile.AgnusTimingMode);
-		Assert.Equal(AgnusTimingMode.LegacyReservation, options.AgnusTimingModeOverride);
 	}
 
 	[Fact]
@@ -293,22 +278,12 @@ public sealed class CopperScreenArchitectureTests
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize,
 		int expectedFloppyDriveCount)
-		=> AssertProfile(id, expectedMachineProfile, expectedKickstartSource, expectedExpansionRamSize, expectedFloppyDriveCount, AgnusTimingMode.SlotEngine);
-
-	private static void AssertProfile(
-		string id,
-		AmigaMachineProfile expectedMachineProfile,
-		CopperScreenKickstartSource expectedKickstartSource,
-		int expectedExpansionRamSize,
-		int expectedFloppyDriveCount,
-		AgnusTimingMode expectedAgnusTimingMode)
 		=> AssertProfile(
 			id,
 			expectedMachineProfile,
 			expectedKickstartSource,
 			expectedExpansionRamSize,
 			expectedFloppyDriveCount,
-			expectedAgnusTimingMode,
 			M68kBackendKind.AccurateM68000,
 			0);
 
@@ -318,7 +293,6 @@ public sealed class CopperScreenArchitectureTests
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize,
 		int expectedFloppyDriveCount,
-		AgnusTimingMode expectedAgnusTimingMode,
 		M68kBackendKind expectedCpuBackend,
 		int expectedRealFastRamSize)
 	{
@@ -330,13 +304,11 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(expectedRealFastRamSize, profile.RealFastRamSize);
 		Assert.Equal(expectedCpuBackend, profile.CpuBackend);
 		Assert.Equal(expectedFloppyDriveCount, profile.FloppyDriveCount);
-		Assert.Equal(expectedAgnusTimingMode, profile.AgnusTimingMode);
 		Assert.False(profile.FloppyDriveAudio.Enabled);
 		Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
 		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);
-		Assert.Equal(expectedAgnusTimingMode, profile.CreateMachineOptions().AgnusTimingMode);
 		Assert.Equal(expectedCpuBackend, profile.CreateMachineOptions().CpuBackend);
 		Assert.Equal(expectedRealFastRamSize, profile.CreateMachineOptions().RealFastRamSize);
 	}

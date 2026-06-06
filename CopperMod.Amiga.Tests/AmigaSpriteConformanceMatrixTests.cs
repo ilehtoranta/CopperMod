@@ -494,7 +494,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void ManualSpriteRepeatsFollowingScanLinesUntilCtlDisarmsIt()
 	{
-		var bus = CreateLegacyDisplayBus();
+		var bus = CreateDisplayComponentBus();
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		var (pos, ctl) = EncodeSpritePosition(StandardX, StandardY, 1);
 		var armCycle = RowCycle(StandardY);
@@ -710,7 +710,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void TimedSpriteDmaUsesBusSlotsAndRecordsMissedSlots()
 	{
-		var bus = CreateLegacyDisplayBus();
+		var bus = CreateDisplayComponentBus();
 		EnableSpriteDma(bus, 0x8220);
 		bus.WriteWord(0x00DFF092, 0x0030);
 		bus.WriteWord(0x00DFF094, 0x00D0);
@@ -808,11 +808,10 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		return frame;
 	}
 
-	private static AmigaBus CreateLegacyDisplayBus()
+	private static AmigaBus CreateDisplayComponentBus()
 	{
 		return new AmigaBus(
-			enableLiveAgnusDma: false,
-			agnusTimingMode: AgnusTimingMode.LegacyReservation);
+			enableLiveAgnusDma: false);
 	}
 
 	private static uint Pixel(uint[] frame, int x, int y)

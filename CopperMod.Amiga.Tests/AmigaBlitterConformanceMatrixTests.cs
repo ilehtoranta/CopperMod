@@ -71,6 +71,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	{
 		get
 		{
+			yield return new object[] { new AreaTimingRow("D-only clear", 0x0100, DestinationD, 4, 1) };
 			yield return new object[] { new AreaTimingRow("A+D copy", 0x09F0, SourceA, 4, 2) };
 			yield return new object[] { new AreaTimingRow("B+D copy", 0x05CC, SourceB, 6, 2) };
 			yield return new object[] { new AreaTimingRow("B+C+D copy", 0x07CA, SourceB, 8, 3) };
@@ -101,7 +102,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.Equal(32, ShiftRows.Count());
 		Assert.Equal(16, LineOctantRows.Count());
 		Assert.Equal(16, LineTextureRows.Count());
-		Assert.Equal(3, AreaTimingRows.Count());
+		Assert.Equal(4, AreaTimingRows.Count());
 	}
 
 	[Theory]
@@ -232,7 +233,12 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		ConfigureAreaBlit(bus, 0x0100, destinationD: destination);
 		bus.WriteWord(0x00DFF066, rowStride - (widthWords * 2));
 
-		StartBlitAndRun(bus, widthWords, height);
+		EnableBlitterDma(bus);
+		bus.WriteWord(0x00DFF058, (ushort)((height << 6) | widthWords));
+		var expectedCompletion = bus.Blitter.CaptureSnapshot().NextDmaCycle +
+			(widthWords * height * 4);
+		RunBlitterUntilIdle(bus);
+		Assert.Equal(expectedCompletion, bus.Blitter.CaptureSnapshot().CurrentCycle);
 
 		for (var y = 0; y < height; y++)
 		{
@@ -393,7 +399,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 		bus.WriteWord(0x00DFF058, 0x0041);
 		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
-		var expectedCompletion = startCycle + (row.ExpectedTicks * AgnusChipSlotScheduler.SlotCycles);
+		var expectedCompletion = startCycle + row.ExpectedCycles;
 
 		bus.AdvanceDmaTo(expectedCompletion - 1);
 		Assert.True(bus.Blitter.CaptureSnapshot().Busy, row.ToString());
@@ -419,7 +425,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 		bus.WriteWord(0x00DFF058, 0x0082);
 		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
-		var expectedCompletion = startCycle + (2 * 8 * AgnusChipSlotScheduler.SlotCycles);
+		var expectedCompletion = startCycle + (2 * 8);
 
 		bus.AdvanceDmaTo(expectedCompletion - 1);
 		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
@@ -719,7 +725,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		public override string ToString() => $"texture shift={ShiftB}";
 	}
 
-	private sealed record AreaTimingRow(string Name, ushort Bltcon0, uint SourceAddress, int ExpectedTicks, int ExpectedMicroOps)
+	private sealed record AreaTimingRow(string Name, ushort Bltcon0, uint SourceAddress, int ExpectedCycles, int ExpectedMicroOps)
 	{
 		public override string ToString() => Name;
 	}

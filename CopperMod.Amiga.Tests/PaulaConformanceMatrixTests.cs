@@ -130,7 +130,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void DmaconSetAndClearSemantics()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
 
         bus.WriteWord(0x00DFF096, 0x8201, 0);
         bus.Paula.AdvanceTo(0);
@@ -143,7 +143,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void DmaconMasterGatesAudioDma()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 2, volume: 64);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
 
@@ -162,7 +162,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void AdkconSetAndClearSemantics()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
 
         bus.WriteWord(0x00DFF09E, 0x8011, 0);
         bus.Paula.AdvanceTo(0);
@@ -175,7 +175,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void IntenaGatesIntreqDelivery()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
 
         bus.WriteWord(0x00DFF0AA, 0x0102, 0);
         bus.Paula.AdvanceTo(0);
@@ -193,7 +193,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void AudioRegistersLatchPointerLengthPeriodAndVolume()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
 
         ConfigureAudioDma(bus, channel: 2, address: 0x1234, lengthWords: 3, period: 0, volume: 0x7F);
         var snapshot = bus.Paula.GetChannelSnapshot(2);
@@ -225,7 +225,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void ManualAudioPlaysHighThenLowByte()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         bus.WriteWord(0x00DFF09A, 0xC080, 0);
         bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
         var buffer = new float[4];
@@ -240,7 +240,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void ManualDataCanBeReplacedBeforeLowByte()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         bus.WriteWord(0x00DFF0A6, 0x0004, 0);
         bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
         bus.WriteWord(0x00DFF0AA, 0x4080, 4);
@@ -259,7 +259,7 @@ public sealed class PaulaConformanceMatrixTests
     {
         for (var channel = 0; channel < AmigaConstants.PaulaChannelCount; channel++)
         {
-            var bus = CreateLegacyPaulaBus();
+            var bus = CreatePaulaComponentBus();
             var address = (uint)(0x1000 + (channel * 0x100));
             ConfigureAudioDma(bus, channel, address, lengthWords: 1, period: 2, volume: 64);
             BigEndian.WriteUInt16(bus.ChipRam, (int)address, 0x7F81);
@@ -276,7 +276,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void LengthOneDmaReloadsFromOriginalLocation()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x20E0);
         ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 1, volume: 64);
         bus.WriteWord(0x00DFF09A, 0xC080, 0);
@@ -292,7 +292,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void AudioDmaCompletionRequestsInterrupt()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
         ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 2, volume: 64);
         bus.WriteWord(0x00DFF09A, 0xC080, 0);
@@ -306,21 +306,21 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void ChannelsRouteToStereoPairs()
     {
-        var leftBus = CreateLegacyPaulaBus();
+        var leftBus = CreatePaulaComponentBus();
         leftBus.WriteWord(0x00DFF0AA, 0x7F00, 0);
         var leftBuffer = new float[2];
         leftBus.Paula.RenderSample(0, leftBuffer, 0, 2);
         Assert.True(leftBuffer[0] > 0.20f);
         Assert.Equal(0.0f, leftBuffer[1]);
 
-        var rightBus = CreateLegacyPaulaBus();
+        var rightBus = CreatePaulaComponentBus();
         rightBus.WriteWord(0x00DFF0BA, 0x7F00, 0);
         var rightBuffer = new float[2];
         rightBus.Paula.RenderSample(0, rightBuffer, 0, 2);
         Assert.Equal(0.0f, rightBuffer[0]);
         Assert.True(rightBuffer[1] > 0.20f);
 
-        var leftBus3 = CreateLegacyPaulaBus();
+        var leftBus3 = CreatePaulaComponentBus();
         leftBus3.WriteWord(0x00DFF0DA, 0x7F00, 0);
         var left3Buffer = new float[2];
         leftBus3.Paula.RenderSample(0, left3Buffer, 0, 2);
@@ -330,7 +330,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void VolumeAttachModulatesNextChannel()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         bus.WriteWord(0x00DFF09E, 0x8001, 0);
         bus.WriteWord(0x00DFF0A6, 0x0002, 0);
         bus.WriteWord(0x00DFF0AA, 0x0020, 0);
@@ -345,7 +345,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void PeriodAttachModulatesNextChannel()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         bus.WriteWord(0x00DFF09E, 0x8010, 0);
         bus.WriteWord(0x00DFF0A6, 0x0002, 0);
         bus.WriteWord(0x00DFF0AA, 0x0005, 0);
@@ -357,7 +357,7 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void PaulaDmaUsesNamedBusRequestPath()
     {
-        var bus = CreateLegacyPaulaBus();
+        var bus = CreatePaulaComponentBus();
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
         ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 2, volume: 64);
 
@@ -383,19 +383,17 @@ public sealed class PaulaConformanceMatrixTests
         bus.Paula.AdvanceTo(0);
     }
 
-    private static AmigaBus CreateLegacyPaulaBus()
+    private static AmigaBus CreatePaulaComponentBus()
     {
         return new AmigaBus(
             enableLiveAgnusDma: false,
-            agnusTimingMode: AgnusTimingMode.LegacyReservation,
             audioDmaMinimumPeriod: 1);
     }
 
     private static AmigaBus CreateDefaultMinimumPaulaBus()
     {
         return new AmigaBus(
-            enableLiveAgnusDma: false,
-            agnusTimingMode: AgnusTimingMode.LegacyReservation);
+            enableLiveAgnusDma: false);
     }
 
     private static MatrixRow Executable(string group, string name)

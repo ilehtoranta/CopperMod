@@ -96,6 +96,9 @@ namespace CopperMod.Amiga
         private static readonly MethodInfo CheckV2ConditionMethod =
             typeof(M68kJitCore).GetMethod(nameof(CheckV2Condition), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(CheckV2Condition));
+        private static readonly MethodInfo CheckV2ConditionFromPendingFlagsMethod =
+            typeof(M68kJitCore).GetMethod(nameof(CheckV2ConditionFromPendingFlags), BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(CheckV2ConditionFromPendingFlags));
         private static readonly MethodInfo ShiftV2RegisterMethod =
             typeof(M68kJitCore).GetMethod(nameof(ShiftV2Register), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ShiftV2Register));
@@ -443,7 +446,15 @@ namespace CopperMod.Amiga
         private static bool IsV2InlineZeroWaitMemoryEnabled()
         {
             var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_V2_INLINE_ZERO_WAIT");
-            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "off", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return string.IsNullOrWhiteSpace(value) ||
+                string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
         }
@@ -606,6 +617,11 @@ namespace CopperMod.Amiga
             IM68kInstructionBoundary boundary,
             bool allowV2TraceHandoff)
         {
+            if (IsRomTraceRoot(trace.Root))
+            {
+                return null;
+            }
+
             if (!targetCycle.HasValue ||
                 !CanUseV2TraceForInstructionBudget(trace, maxInstructions) ||
                 trace.V2Compiled == null ||
@@ -1106,6 +1122,14 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            DrainAsyncCompileResults();
+            if (TryGetInstalledV2HandoffTargetTrace(target, out trace))
+            {
+                _v2HandoffQueuePressures.Remove(target);
+                blockReason = "no-trace-installed-drained";
+                return true;
+            }
+
             if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _))
             {
                 blockReason = "no-trace-decode";
@@ -1148,6 +1172,7 @@ namespace CopperMod.Amiga
                     return true;
                 }
 
+                _counters.V2TraceHandoffQueuedNotReady++;
                 return false;
             }
 
@@ -1214,6 +1239,12 @@ namespace CopperMod.Amiga
             if (trace.V2Compiled == null)
             {
                 unavailableReason = "no-v2";
+                return null;
+            }
+
+            if (IsRomTraceRoot(trace.Root))
+            {
+                unavailableReason = "rom-boundary";
                 return null;
             }
 
@@ -1304,6 +1335,9 @@ namespace CopperMod.Amiga
 
             return maxInstructions == 1 && trace.Compiled == null;
         }
+
+        private static bool IsRomTraceRoot(uint root)
+            => root is >= 0x00F8_0000 and < 0x0100_0000;
 
         private int ExecuteV2BusAccessTraceBatchChain(
             TraceEntry trace,
@@ -1448,6 +1482,11 @@ namespace CopperMod.Amiga
             long? targetCycle,
             IM68kInstructionBoundary boundary)
         {
+            if (IsRomTraceRoot(trace.Root))
+            {
+                return null;
+            }
+
             if (!targetCycle.HasValue ||
                 maxInstructions <= 1 ||
                 !trace.PureCpuBatchEligible ||
@@ -1531,7 +1570,9 @@ namespace CopperMod.Amiga
 
         private void ObserveHotRoot(uint pc)
         {
-            if (_amigaBus == null || _traces.ContainsKey(pc) || _amigaBus.IsChipRamAddress(pc))
+            if (_amigaBus == null ||
+                _traces.ContainsKey(pc) ||
+                _amigaBus.IsChipRamAddress(pc))
             {
                 return;
             }
@@ -4118,7 +4159,7 @@ namespace CopperMod.Amiga
             var exit = il.DefineLabel();
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il);
-            context.SetZeroWaitProbe(enabled: false);
+            context.SetZeroWaitProbe(enabled: true);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
             if (useGraph)
@@ -4390,11 +4431,8 @@ namespace CopperMod.Amiga
             else
             {
                 var address = il.DeclareLocal(typeof(uint));
-                var previous = il.DeclareLocal(typeof(uint));
                 EmitV2ResolveMemoryWriteAddress(il, context, instruction.Destination, instruction.Size);
                 il.Emit(OpCodes.Stloc, address);
-                EmitV2ReadMemoryValueFromAddress(il, context, address, instruction.Size);
-                il.Emit(OpCodes.Stloc, previous);
                 EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
             }
 
@@ -4597,12 +4635,7 @@ namespace CopperMod.Amiga
 
         private static int GetV2ClrCycles(M68kDecodedInstruction instruction)
         {
-            if (instruction.Destination.Kind == M68kJitEaKind.DataRegister)
-            {
-                return instruction.Size == M68kOperandSize.Long ? 12 : 8;
-            }
-
-            return instruction.Size == M68kOperandSize.Long ? 20 : 10;
+            return instruction.Size == M68kOperandSize.Long ? 12 : 8;
         }
 
         private static void EmitV2Compare(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -5293,10 +5326,7 @@ namespace CopperMod.Amiga
         {
             var notTaken = il.DefineLabel();
             var target = GetBranchTarget(instruction);
-            context.EmitMaterializePendingFlags();
-            il.Emit(OpCodes.Ldloc, context.StatusRegister);
-            il.Emit(OpCodes.Ldc_I4, instruction.Condition);
-            il.Emit(OpCodes.Call, CheckV2ConditionMethod);
+            context.EmitCheckCondition(instruction.Condition);
             il.Emit(OpCodes.Brfalse, notTaken);
             context.EmitAddCycles(10);
             context.EmitSetProgramCounter(target);
@@ -5333,10 +5363,7 @@ namespace CopperMod.Amiga
             var done = il.DefineLabel();
             var counter = il.DeclareLocal(typeof(uint));
             var target = GetBranchTarget(instruction);
-            context.EmitMaterializePendingFlags();
-            il.Emit(OpCodes.Ldloc, context.StatusRegister);
-            il.Emit(OpCodes.Ldc_I4, instruction.Condition);
-            il.Emit(OpCodes.Call, CheckV2ConditionMethod);
+            context.EmitCheckCondition(instruction.Condition);
             il.Emit(OpCodes.Brfalse, conditionFalse);
             context.EmitAddCycles(12);
             il.Emit(OpCodes.Br, done);
@@ -5454,6 +5481,7 @@ namespace CopperMod.Amiga
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
                     var fastOffset = il.DeclareLocal(typeof(int));
+                    var fastTarget = il.DeclareLocal(typeof(int));
                     var amigaBus = il.DeclareLocal(typeof(AmigaBus));
                     var fastRead = il.DefineLabel();
                     il.Emit(OpCodes.Ldarg_0);
@@ -5468,11 +5496,13 @@ namespace CopperMod.Amiga
                         GetV2MemoryByteCount(size),
                         fastMemory,
                         fastOffset,
+                        fastTarget,
                         allowRom: true,
                         fastRead,
                         slowRead);
                     il.MarkLabel(fastRead);
                     EmitLoadV2ZeroWaitMemoryValue(il, fastMemory, fastOffset, size);
+                    context.EmitIncrementZeroWaitRead(fastTarget);
                     il.Emit(OpCodes.Br, done);
                 }
                 else
@@ -5503,6 +5533,12 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (context.ZeroWaitProbeEnabled)
+            {
+                context.EmitIncrementZeroWaitSlowRead();
+            }
+
+            context.EmitStoreInstructionContext();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
             il.Emit(OpCodes.Ldloc, address);
@@ -5526,6 +5562,7 @@ namespace CopperMod.Amiga
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
                     var fastOffset = il.DeclareLocal(typeof(int));
+                    var fastTarget = il.DeclareLocal(typeof(int));
                     var amigaBus = il.DeclareLocal(typeof(AmigaBus));
                     var fastWrite = il.DefineLabel();
                     il.Emit(OpCodes.Ldarg_0);
@@ -5540,6 +5577,7 @@ namespace CopperMod.Amiga
                         GetV2MemoryByteCount(size),
                         fastMemory,
                         fastOffset,
+                        fastTarget,
                         allowRom: false,
                         fastWrite,
                         slowWrite);
@@ -5549,6 +5587,7 @@ namespace CopperMod.Amiga
                     il.Emit(OpCodes.Ldloc, address);
                     il.Emit(OpCodes.Ldc_I4, GetV2MemoryByteCount(size));
                     il.Emit(OpCodes.Callvirt, CompleteJitZeroWaitWriteMethod);
+                    context.EmitIncrementZeroWaitWriteRealFast();
                     il.Emit(OpCodes.Br, done);
                 }
                 else
@@ -5569,6 +5608,12 @@ namespace CopperMod.Amiga
             }
 
             il.MarkLabel(slowWrite);
+            if (context.ZeroWaitProbeEnabled)
+            {
+                context.EmitIncrementZeroWaitSlowWrite();
+            }
+
+            context.EmitStoreInstructionContext();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
             il.Emit(OpCodes.Ldloc, address);
@@ -5590,6 +5635,7 @@ namespace CopperMod.Amiga
             int byteCount,
             LocalBuilder memory,
             LocalBuilder offset,
+            LocalBuilder targetKind,
             bool allowRom,
             Label success,
             Label fail)
@@ -5632,6 +5678,8 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Ldloc, relativeOffset);
             il.Emit(OpCodes.Conv_I4);
             il.Emit(OpCodes.Stloc, offset);
+            il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Stloc, targetKind);
             il.Emit(OpCodes.Br, success);
 
             if (allowRom)
@@ -5663,6 +5711,8 @@ namespace CopperMod.Amiga
                 il.Emit(OpCodes.Ldloc, relativeOffset);
                 il.Emit(OpCodes.Conv_I4);
                 il.Emit(OpCodes.Stloc, offset);
+                il.Emit(OpCodes.Ldc_I4_1);
+                il.Emit(OpCodes.Stloc, targetKind);
                 il.Emit(OpCodes.Br, success);
 
                 il.MarkLabel(tryOverlay);
@@ -5687,6 +5737,8 @@ namespace CopperMod.Amiga
                 il.Emit(OpCodes.Ldloc, relativeOffset);
                 il.Emit(OpCodes.Conv_I4);
                 il.Emit(OpCodes.Stloc, offset);
+                il.Emit(OpCodes.Ldc_I4_2);
+                il.Emit(OpCodes.Stloc, targetKind);
                 il.Emit(OpCodes.Br, success);
             }
         }
@@ -6553,6 +6605,22 @@ namespace CopperMod.Amiga
             _counters.V2LazyWritebacks++;
         }
 
+        private void RecordV2ZeroWaitTraceStats(
+            int readRealFast,
+            int readRom,
+            int readOverlay,
+            int writeRealFast,
+            int slowReads,
+            int slowWrites)
+        {
+            _counters.V2ZeroWaitReadRealFast += readRealFast;
+            _counters.V2ZeroWaitReadRom += readRom;
+            _counters.V2ZeroWaitReadOverlay += readOverlay;
+            _counters.V2ZeroWaitWriteRealFast += writeRealFast;
+            _counters.V2ZeroWaitReadSlow += slowReads;
+            _counters.V2ZeroWaitWriteSlow += slowWrites;
+        }
+
         private void RecordV2OutOfBlockSideExit(uint root, uint target, uint codeStart, int byteLength, bool isFallthrough)
         {
             _counters.V2SideExits++;
@@ -6911,6 +6979,48 @@ namespace CopperMod.Amiga
             return status;
         }
 
+        private bool CheckV2ConditionFromPendingFlags(
+            int status,
+            int kind,
+            uint destination,
+            uint source,
+            uint result,
+            int sizeValue,
+            int condition)
+        {
+            if (kind == (int)V2PendingFlags.None)
+            {
+                _counters.V2BranchStatusFlagChecks++;
+                return CheckV2Condition(status, condition);
+            }
+
+            _counters.V2BranchPendingFlagChecks++;
+            var size = (M68kOperandSize)sizeValue;
+            var mask = M68kCpuState.Mask(size);
+            var sign = M68kCpuState.SignBit(size);
+            destination &= mask;
+            source &= mask;
+            result &= mask;
+            var c = false;
+            var v = false;
+            var z = result == 0;
+            var n = (result & sign) != 0;
+
+            if (kind == (int)V2PendingFlags.Add)
+            {
+                var full = (ulong)destination + source;
+                c = full > mask;
+                v = (~(destination ^ source) & (destination ^ result) & sign) != 0;
+            }
+            else if (kind == (int)V2PendingFlags.Subtract)
+            {
+                c = source > destination;
+                v = ((destination ^ source) & (destination ^ result) & sign) != 0;
+            }
+
+            return CheckV2ConditionBits(c, z, n, v, condition);
+        }
+
         private static ulong DivideV2Register(uint dividend, uint divisor, int status, bool signed)
         {
             if (!signed)
@@ -7062,6 +7172,11 @@ namespace CopperMod.Amiga
             var z = (status & M68kCpuState.Zero) != 0;
             var n = (status & M68kCpuState.Negative) != 0;
             var v = (status & M68kCpuState.Overflow) != 0;
+            return CheckV2ConditionBits(c, z, n, v, condition);
+        }
+
+        private static bool CheckV2ConditionBits(bool c, bool z, bool n, bool v, int condition)
+        {
             return condition switch
             {
                 0x0 => true,
@@ -7936,7 +8051,7 @@ namespace CopperMod.Amiga
             {
                 PushLong(State.ProgramCounter);
                 State.ProgramCounter = Normalize(target);
-                AddCycles(18);
+                AddCycles(source.Kind == M68kJitEaKind.AddressIndirect ? 16 : 18);
             }
             else
             {
@@ -8870,9 +8985,7 @@ namespace CopperMod.Amiga
             out M68kAsyncJitQueueResult queueResult)
         {
             queueResult = M68kAsyncJitQueueResult.Dropped;
-            if (_asyncCompiler == null ||
-                _amigaBus == null ||
-                !_amigaBus.TryCaptureJitCodeSnapshot(root, GetAsyncSnapshotByteCount(tier), out var snapshot))
+            if (_asyncCompiler == null)
             {
                 return false;
             }
@@ -8884,6 +8997,22 @@ namespace CopperMod.Amiga
                 priority,
                 branchExits: 0,
                 hasInternalLoop: false);
+            var key = new M68kJitCompileKey(root, tier, M68kJitCompileKind.Trace);
+            if (_asyncCompiler.TryUpdatePriority(key, priority, out queueResult, out var dedupeQueueDepth))
+            {
+                RecordAsyncQueueResult(queueResult);
+                _counters.AsyncPriorityBumps++;
+                _counters.AsyncSnapshotCapturesAvoided++;
+                _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, dedupeQueueDepth);
+                return true;
+            }
+
+            if (_amigaBus == null ||
+                !_amigaBus.TryCaptureJitCodeSnapshot(root, GetAsyncSnapshotByteCount(tier), out var snapshot))
+            {
+                return false;
+            }
+
             var input = new M68kTraceCompilationInput(
                 root,
                 tier,
@@ -8908,8 +9037,22 @@ namespace CopperMod.Amiga
             bool branchPressurePromotion,
             int priority)
         {
-            if (_asyncCompiler == null ||
-                _amigaBus == null ||
+            if (_asyncCompiler == null)
+            {
+                return false;
+            }
+
+            var key = new M68kJitCompileKey(trace.Root, tier, M68kJitCompileKind.Promotion);
+            if (_asyncCompiler.TryUpdatePriority(key, priority, out var queueResult, out var dedupeQueueDepth))
+            {
+                RecordAsyncQueueResult(queueResult);
+                _counters.AsyncPriorityBumps++;
+                _counters.AsyncSnapshotCapturesAvoided++;
+                _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, dedupeQueueDepth);
+                return true;
+            }
+
+            if (_amigaBus == null ||
                 !_amigaBus.TryCaptureJitCodeSnapshot(trace.CodeStart, GetAsyncSnapshotByteCount(tier), out var snapshot))
             {
                 return false;
@@ -9309,6 +9452,9 @@ namespace CopperMod.Amiga
             private static readonly MethodInfo RecordLazyWriteback =
                 typeof(M68kJitCore).GetMethod(nameof(RecordV2LazyWriteback), BindingFlags.Instance | BindingFlags.NonPublic) ??
                 throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(RecordV2LazyWriteback));
+            private static readonly MethodInfo RecordZeroWaitTraceStats =
+                typeof(M68kJitCore).GetMethod(nameof(RecordV2ZeroWaitTraceStats), BindingFlags.Instance | BindingFlags.NonPublic) ??
+                throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(RecordV2ZeroWaitTraceStats));
             private static readonly MethodInfo RecordOutOfBlockSideExit =
                 typeof(M68kJitCore).GetMethod(
                     nameof(RecordV2OutOfBlockSideExit),
@@ -9366,6 +9512,12 @@ namespace CopperMod.Amiga
                 LastInstructionProgramCounter = il.DeclareLocal(typeof(uint));
                 PreviousLastOpcode = il.DeclareLocal(typeof(int));
                 PreviousLastInstructionProgramCounter = il.DeclareLocal(typeof(uint));
+                ZeroWaitReadRealFast = il.DeclareLocal(typeof(int));
+                ZeroWaitReadRom = il.DeclareLocal(typeof(int));
+                ZeroWaitReadOverlay = il.DeclareLocal(typeof(int));
+                ZeroWaitWriteRealFast = il.DeclareLocal(typeof(int));
+                ZeroWaitReadSlow = il.DeclareLocal(typeof(int));
+                ZeroWaitWriteSlow = il.DeclareLocal(typeof(int));
             }
 
             public LocalBuilder State { get; }
@@ -9406,11 +9558,25 @@ namespace CopperMod.Amiga
 
             public LocalBuilder PreviousLastInstructionProgramCounter { get; }
 
+            public LocalBuilder ZeroWaitReadRealFast { get; }
+
+            public LocalBuilder ZeroWaitReadRom { get; }
+
+            public LocalBuilder ZeroWaitReadOverlay { get; }
+
+            public LocalBuilder ZeroWaitWriteRealFast { get; }
+
+            public LocalBuilder ZeroWaitReadSlow { get; }
+
+            public LocalBuilder ZeroWaitWriteSlow { get; }
+
             public bool FastReadOnlyFailureEnabled { get; private set; }
 
             public Label FastReadOnlyFailureLabel { get; private set; }
 
             public bool ZeroWaitProbeEnabled { get; private set; } = true;
+
+            public bool ZeroWaitStatsUsed { get; private set; }
 
             public static V2EmitContext Create(ILGenerator il)
                 => new V2EmitContext(il);
@@ -9541,6 +9707,23 @@ namespace CopperMod.Amiga
                 _il.Emit(OpCodes.Brfalse, returnZero);
             }
 
+            public void EmitStoreInstructionContext()
+            {
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Ldloc, ProgramCounter);
+                _il.Emit(OpCodes.Call, ProgramCounterProperty.SetMethod!);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Call, CyclesProperty.SetMethod!);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Ldloc, LastOpcode);
+                _il.Emit(OpCodes.Conv_U2);
+                _il.Emit(OpCodes.Call, LastOpcodeProperty.SetMethod!);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Ldloc, LastInstructionProgramCounter);
+                _il.Emit(OpCodes.Call, LastInstructionProgramCounterProperty.SetMethod!);
+            }
+
             public void EmitWriteback(int dirtyDataRegisters, int dirtyAddressRegisters)
                 => EmitStoreState(recordLazyWriteback: true, dirtyDataRegisters, dirtyAddressRegisters);
 
@@ -9586,6 +9769,7 @@ namespace CopperMod.Amiga
                 _il.Emit(OpCodes.Ldloc, State);
                 _il.Emit(OpCodes.Ldloc, LastInstructionProgramCounter);
                 _il.Emit(OpCodes.Call, LastInstructionProgramCounterProperty.SetMethod!);
+                EmitRecordZeroWaitTraceStats();
                 if (recordLazyWriteback)
                 {
                     _il.Emit(OpCodes.Ldarg_0);
@@ -9619,6 +9803,59 @@ namespace CopperMod.Amiga
                 _il.Emit(OpCodes.Call, LastInstructionProgramCounterProperty.GetMethod!);
                 _il.Emit(OpCodes.Stloc, LastInstructionProgramCounter);
                 EmitStoreInt(PendingKind, 0);
+            }
+
+            public void EmitCheckCondition(int condition)
+            {
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldloc, StatusRegister);
+                _il.Emit(OpCodes.Ldloc, PendingKind);
+                _il.Emit(OpCodes.Ldloc, PendingDestination);
+                _il.Emit(OpCodes.Ldloc, PendingSource);
+                _il.Emit(OpCodes.Ldloc, PendingResult);
+                _il.Emit(OpCodes.Ldloc, PendingSize);
+                _il.Emit(OpCodes.Ldc_I4, condition);
+                _il.Emit(OpCodes.Call, CheckV2ConditionFromPendingFlagsMethod);
+            }
+
+            public void EmitIncrementZeroWaitRead(LocalBuilder targetKind)
+            {
+                ZeroWaitStatsUsed = true;
+                var rom = _il.DefineLabel();
+                var overlay = _il.DefineLabel();
+                var done = _il.DefineLabel();
+                _il.Emit(OpCodes.Ldloc, targetKind);
+                _il.Emit(OpCodes.Ldc_I4_1);
+                _il.Emit(OpCodes.Beq, rom);
+                _il.Emit(OpCodes.Ldloc, targetKind);
+                _il.Emit(OpCodes.Ldc_I4_2);
+                _il.Emit(OpCodes.Beq, overlay);
+                EmitIncrementLocal(ZeroWaitReadRealFast);
+                _il.Emit(OpCodes.Br, done);
+                _il.MarkLabel(rom);
+                EmitIncrementLocal(ZeroWaitReadRom);
+                _il.Emit(OpCodes.Br, done);
+                _il.MarkLabel(overlay);
+                EmitIncrementLocal(ZeroWaitReadOverlay);
+                _il.MarkLabel(done);
+            }
+
+            public void EmitIncrementZeroWaitWriteRealFast()
+            {
+                ZeroWaitStatsUsed = true;
+                EmitIncrementLocal(ZeroWaitWriteRealFast);
+            }
+
+            public void EmitIncrementZeroWaitSlowRead()
+            {
+                ZeroWaitStatsUsed = true;
+                EmitIncrementLocal(ZeroWaitReadSlow);
+            }
+
+            public void EmitIncrementZeroWaitSlowWrite()
+            {
+                ZeroWaitStatsUsed = true;
+                EmitIncrementLocal(ZeroWaitWriteSlow);
             }
 
             public void EmitReloadCycles()
@@ -9715,6 +9952,29 @@ namespace CopperMod.Amiga
                 _il.Emit(OpCodes.Call, MaterializeFlags);
                 _il.Emit(OpCodes.Stloc, StatusRegister);
                 EmitStoreInt(PendingKind, 0);
+            }
+
+            private void EmitRecordZeroWaitTraceStats()
+            {
+                if (!ZeroWaitStatsUsed)
+                {
+                    return;
+                }
+
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitReadRealFast);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitReadRom);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitReadOverlay);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitWriteRealFast);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitReadSlow);
+                _il.Emit(OpCodes.Ldloc, ZeroWaitWriteSlow);
+                _il.Emit(OpCodes.Call, RecordZeroWaitTraceStats);
+                EmitStoreInt(ZeroWaitReadRealFast, 0);
+                EmitStoreInt(ZeroWaitReadRom, 0);
+                EmitStoreInt(ZeroWaitReadOverlay, 0);
+                EmitStoreInt(ZeroWaitWriteRealFast, 0);
+                EmitStoreInt(ZeroWaitReadSlow, 0);
+                EmitStoreInt(ZeroWaitWriteSlow, 0);
             }
 
             public void EmitAddCycles(int cycles)
@@ -9822,6 +10082,14 @@ namespace CopperMod.Amiga
             private void EmitStoreBool(LocalBuilder local, bool value)
             {
                 _il.Emit(value ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+                _il.Emit(OpCodes.Stloc, local);
+            }
+
+            private void EmitIncrementLocal(LocalBuilder local)
+            {
+                _il.Emit(OpCodes.Ldloc, local);
+                _il.Emit(OpCodes.Ldc_I4_1);
+                _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, local);
             }
         }
@@ -10518,6 +10786,47 @@ namespace CopperMod.Amiga
                 }
             }
 
+            public bool TryUpdatePriority(
+                M68kJitCompileKey key,
+                int priority,
+                out M68kAsyncJitQueueResult result,
+                out int queueDepth)
+            {
+                lock (_gate)
+                {
+                    queueDepth = _pending.Count;
+                    result = M68kAsyncJitQueueResult.Dropped;
+                    if (_stopping)
+                    {
+                        return false;
+                    }
+
+                    if (_compiling.Contains(key))
+                    {
+                        result = M68kAsyncJitQueueResult.DedupedCompiling;
+                        return true;
+                    }
+
+                    for (var i = 0; i < _pending.Count; i++)
+                    {
+                        if (!_pending[i].Key.Equals(key))
+                        {
+                            continue;
+                        }
+
+                        if (priority > _pending[i].Priority)
+                        {
+                            _pending[i] = _pending[i].WithPriority(priority);
+                        }
+
+                        result = M68kAsyncJitQueueResult.DedupedPending;
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+
             public bool TryDequeueCompleted(out M68kJitCompileResult result)
                 => _completed.TryDequeue(out result);
 
@@ -10802,6 +11111,8 @@ namespace CopperMod.Amiga
 
         public long V2TraceHandoffFailures { get; set; }
 
+        public long V2TraceHandoffQueuedNotReady { get; set; }
+
         public long V2BusAccessBatchExecutions { get; set; }
 
         public long V2BusAccessBatchInstructions { get; set; }
@@ -10849,6 +11160,10 @@ namespace CopperMod.Amiga
         public long AsyncRequestsDeduped { get; set; }
 
         public long AsyncRequestsDropped { get; set; }
+
+        public long AsyncPriorityBumps { get; set; }
+
+        public long AsyncSnapshotCapturesAvoided { get; set; }
 
         public long AsyncWorkerCompilesStarted { get; set; }
 
@@ -10899,6 +11214,22 @@ namespace CopperMod.Amiga
         public long V2LazyWritebacks { get; set; }
 
         public long V2FlagMaterializations { get; set; }
+
+        public long V2BranchPendingFlagChecks { get; set; }
+
+        public long V2BranchStatusFlagChecks { get; set; }
+
+        public long V2ZeroWaitReadRealFast { get; set; }
+
+        public long V2ZeroWaitReadRom { get; set; }
+
+        public long V2ZeroWaitReadOverlay { get; set; }
+
+        public long V2ZeroWaitWriteRealFast { get; set; }
+
+        public long V2ZeroWaitReadSlow { get; set; }
+
+        public long V2ZeroWaitWriteSlow { get; set; }
 
         public long Invalidations { get; set; }
 

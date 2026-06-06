@@ -8,7 +8,6 @@ internal sealed class CopperScreenStartupOptions
 		CopperScreenProfile profile,
 		string? diskPath,
 		string? kickstartRomPath,
-		AgnusTimingMode? agnusTimingModeOverride,
 		M68kBackendKind? cpuBackendOverride,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		string baseDirectory,
@@ -17,7 +16,6 @@ internal sealed class CopperScreenStartupOptions
 		Profile = profile;
 		DiskPath = diskPath;
 		KickstartRomPath = kickstartRomPath;
-		AgnusTimingModeOverride = agnusTimingModeOverride;
 		CpuBackendOverride = cpuBackendOverride;
 		FloppyDriveAudio = floppyDriveAudio;
 		BaseDirectory = baseDirectory;
@@ -29,8 +27,6 @@ internal sealed class CopperScreenStartupOptions
 	public string? DiskPath { get; }
 
 	public string? KickstartRomPath { get; }
-
-	public AgnusTimingMode? AgnusTimingModeOverride { get; }
 
 	public M68kBackendKind? CpuBackendOverride { get; }
 
@@ -48,7 +44,6 @@ internal sealed class CopperScreenStartupOptions
 			null,
 			null,
 			null,
-			null,
 			profile.FloppyDriveAudio,
 			baseDirectory,
 			error);
@@ -62,7 +57,6 @@ internal sealed class CopperScreenStartupOptions
 		var profileExplicit = false;
 		string? diskPath = null;
 		string? kickstartRomPath = null;
-		AgnusTimingMode? agnusTimingModeOverride = null;
 		M68kBackendKind? cpuBackendOverride = null;
 		bool? floppySoundsEnabledOverride = null;
 		FloppyDriveAudioMode? floppySoundModeOverride = null;
@@ -96,20 +90,6 @@ internal sealed class CopperScreenStartupOptions
 				TryReadOptionValue(startupArgs, ref i, arg, "--rom", null, out romValue))
 			{
 				kickstartRomPath = ResolveOptionalPath(romValue, baseDirectory);
-				continue;
-			}
-
-			if (TryReadOptionValue(startupArgs, ref i, arg, "--agnus-timing", "--agnus", out var agnusTimingValue))
-			{
-				try
-				{
-					agnusTimingModeOverride = CopperScreenProfile.ParseAgnusTimingMode(agnusTimingValue);
-				}
-				catch (InvalidOperationException ex)
-				{
-					error ??= ex.Message;
-				}
-
 				continue;
 			}
 
@@ -259,7 +239,7 @@ internal sealed class CopperScreenStartupOptions
 			floppySoundModeOverride,
 			floppySoundPackOverride,
 			floppySoundVolumeOverride);
-		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, agnusTimingModeOverride, cpuBackendOverride, floppyDriveAudio, baseDirectory, error);
+		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, cpuBackendOverride, floppyDriveAudio, baseDirectory, error);
 	}
 
 	private static bool TryParseOnOff(string value, out bool enabled)

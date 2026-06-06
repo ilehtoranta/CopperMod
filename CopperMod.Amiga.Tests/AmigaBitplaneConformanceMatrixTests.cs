@@ -477,6 +477,38 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.True(liveBus.Display.CaptureSnapshot().LastBitplaneDmaFetches > 0);
     }
 
+    [Fact]
+    public void DiagnosticLiveDmaCaptureDivergesOnSameLineBplcon1ScrollChange()
+    {
+        var presentationBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: false);
+        var liveBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: true);
+        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var actual = new uint[expected.Length];
+        var targetRow = StandardY;
+
+        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+        var firstMismatchX = -1;
+        var mismatches = 0;
+        for (var x = StandardX; x < StandardX + 256; x++)
+        {
+            if (Pixel(expected, x, targetRow) == Pixel(actual, x, targetRow))
+            {
+                continue;
+            }
+
+            firstMismatchX = firstMismatchX < 0 ? x : firstMismatchX;
+            mismatches++;
+        }
+
+        Assert.True(liveBus.Display.CaptureSnapshot().LastBitplaneDmaFetches > 0);
+        Assert.True(
+            mismatches > 0,
+            "Live DMA capture matched the direct timed renderer for the same-line BPLCON1 scroll change.");
+        Assert.InRange(firstMismatchX, StandardX, StandardX + 255);
+    }
+
     private static AmigaBus CreateTimedPaletteBitplaneBus(bool enableLiveDma)
     {
         var bus = CreateDisplayBus();
@@ -520,6 +552,32 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF094, 0x00D0);
         bus.WriteWord(0x00DFF096, 0x8380);
         bus.WriteWord(0x00DFF100, 0x1000);
+
+        return bus;
+    }
+
+    private static AmigaBus CreateSameLineBplcon1ScrollBus(bool enableLiveDma)
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: enableLiveDma);
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF184, 0x00F0);
+        bus.WriteWord(0x00DFF186, 0x0FF0);
+        SetBitplanePointer(bus, 0, 0x1000);
+        SetBitplanePointer(bus, 1, 0x2000);
+        for (var word = 0; word < 32; word++)
+        {
+            BigEndian.WriteUInt16(bus.ChipRam, 0x1000 + (word * 2), (word & 1) == 0 ? (ushort)0xAAAA : (ushort)0x5555);
+            BigEndian.WriteUInt16(bus.ChipRam, 0x2000 + (word * 2), (word & 1) == 0 ? (ushort)0xCCCC : (ushort)0x3333);
+        }
+
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.WriteWord(0x00DFF100, 0x2000);
+        bus.WriteWord(0x00DFF102, 0x0000);
+        var scrollChangeCycle = OutputRowStartCycle(StandardY) + (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+        bus.WriteWord(0x00DFF102, 0x0011, scrollChangeCycle);
 
         return bus;
     }

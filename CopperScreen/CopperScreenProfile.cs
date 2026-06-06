@@ -13,7 +13,6 @@ internal enum CopperScreenKickstartSource
 internal sealed class CopperScreenProfile
 {
 	public const string DefaultProfileId = "expanded-copperstart";
-	private const AgnusTimingMode DefaultAgnusTimingMode = AgnusTimingMode.SlotEngine;
 	private const int Kilobyte = 1024;
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -32,7 +31,6 @@ internal sealed class CopperScreenProfile
 		int realFastRamSize,
 		uint realFastRamBase,
 		int floppyDriveCount,
-		AgnusTimingMode agnusTimingMode,
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
@@ -47,7 +45,6 @@ internal sealed class CopperScreenProfile
 		RealFastRamSize = realFastRamSize;
 		RealFastRamBase = realFastRamBase;
 		FloppyDriveCount = floppyDriveCount;
-		AgnusTimingMode = agnusTimingMode;
 		CpuBackend = cpuBackend;
 		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
@@ -72,8 +69,6 @@ internal sealed class CopperScreenProfile
 
 	public int FloppyDriveCount { get; }
 
-	public AgnusTimingMode AgnusTimingMode { get; }
-
 	public M68kBackendKind CpuBackend { get; }
 
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
@@ -96,7 +91,6 @@ internal sealed class CopperScreenProfile
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
 			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
 			.WithFloppyDriveCount(FloppyDriveCount)
-			.WithAgnusTimingMode(AgnusTimingMode)
 			.WithCpu(M68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
@@ -200,7 +194,6 @@ internal sealed class CopperScreenProfile
 		var realFastRamSize = CheckedKilobytes(machine.RealFastRamKb, "machine.realFastRamKb");
 		var realFastRamBase = ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
-		var agnusTimingMode = ParseAgnusTimingMode(machine.AgnusTimingMode);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
 		var floppyDriveAudio = ParseFloppyDriveAudio(config.Audio?.FloppyDriveSounds);
 		if (floppyDriveCount is < 1 or > 4)
@@ -223,7 +216,6 @@ internal sealed class CopperScreenProfile
 			realFastRamSize,
 			realFastRamBase,
 			floppyDriveCount,
-			agnusTimingMode,
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
@@ -325,23 +317,6 @@ internal sealed class CopperScreenProfile
 		};
 	}
 
-	internal static AgnusTimingMode ParseAgnusTimingMode(string? value)
-	{
-		if (string.IsNullOrWhiteSpace(value))
-		{
-			return DefaultAgnusTimingMode;
-		}
-
-		var mode = value.Trim().ToLowerInvariant().Replace("-", string.Empty);
-		return mode switch
-		{
-			"legacy" or "legacyreservation" => AgnusTimingMode.LegacyReservation,
-			"slot" or "slotengine" => AgnusTimingMode.SlotEngine,
-			"shadow" or "shadowcompare" => AgnusTimingMode.ShadowCompare,
-			_ => throw new InvalidOperationException($"Unsupported Agnus timing mode '{value}'.")
-		};
-	}
-
 	internal static M68kBackendKind ParseCpuBackend(string? value)
 	{
 		if (string.IsNullOrWhiteSpace(value))
@@ -396,7 +371,6 @@ internal sealed class CopperScreenProfile
 			0,
 			AmigaConstants.A500RealFastRamBase,
 			2,
-			DefaultAgnusTimingMode,
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
@@ -435,8 +409,6 @@ internal sealed class CopperScreenProfile
 		public string? RealFastBase { get; set; }
 
 		public int? FloppyDriveCount { get; set; }
-
-		public string? AgnusTimingMode { get; set; }
 	}
 
 	private sealed class CpuFile

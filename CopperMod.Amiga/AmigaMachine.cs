@@ -43,8 +43,6 @@ namespace CopperMod.Amiga
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
-        public AgnusTimingMode AgnusTimingMode { get; private set; } = AgnusTimingMode.SlotEngine;
-
         public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
@@ -129,12 +127,6 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithAgnusTimingMode(AgnusTimingMode timingMode)
-        {
-            AgnusTimingMode = timingMode;
-            return this;
-        }
-
         public AmigaMachineOptions WithChipRam(int size)
         {
             if (size <= 0)
@@ -212,11 +204,21 @@ namespace CopperMod.Amiga
                 options.LiveAgnusDma,
                 options.LiveDisplayDma,
                 options.AudioDmaMinimumPeriod,
-                options.AgnusTimingMode,
                 options.RealFastRamSize,
                 options.RealFastRamBase,
                 options.HardwareSpecializationEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
+            if (Bus.DiskDivergenceTraceEnabled)
+            {
+                Bus.ConfigureDiskDivergenceTrace(
+                    options.CpuBackend.ToString(),
+                    () => new AmigaDiskTraceCpuContext(
+                        Cpu.State.ProgramCounter,
+                        Cpu.State.LastInstructionProgramCounter,
+                        Cpu.State.LastOpcode,
+                        Cpu.State.Cycles));
+            }
+
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }
 

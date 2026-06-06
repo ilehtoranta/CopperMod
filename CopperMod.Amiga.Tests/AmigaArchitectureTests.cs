@@ -24,8 +24,6 @@ public sealed class AmigaArchitectureTests
 		Assert.Equal(AmigaMachineProfile.A500PalFullEmulationSkeleton, emulatorSkeleton.Profile);
 		Assert.IsType<ZeroWaitBusArbiter>(custMachine.Bus.Arbiter);
 		Assert.IsType<ZeroWaitBusArbiter>(emulatorSkeleton.Bus.Arbiter);
-		Assert.Equal(AgnusTimingMode.SlotEngine, custMachine.Options.AgnusTimingMode);
-		Assert.Equal(AgnusTimingMode.SlotEngine, custMachine.Bus.AgnusTimingMode);
 		Assert.True(custMachine.Options.LiveAgnusDma);
 		Assert.True(custMachine.Bus.LiveAgnusDmaEnabled);
 		Assert.False(custMachine.Options.LiveDisplayDma);
@@ -66,23 +64,13 @@ public sealed class AmigaArchitectureTests
 	}
 
 	[Fact]
-	public void AgnusTimingModeDefaultsToSlotEngineAndCanSelectLegacyOptOut()
+	public void MachineProfilesEnableLiveAgnusAndDisplayDmaByDefault()
 	{
-		var slot = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
-		var legacy = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithAgnusTimingMode(AgnusTimingMode.LegacyReservation)
-			.WithLiveAgnusDma(false));
+		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
 
-		Assert.Equal(AgnusTimingMode.SlotEngine, slot.Options.AgnusTimingMode);
-		Assert.Equal(AgnusTimingMode.SlotEngine, slot.Bus.AgnusTimingMode);
-		Assert.True(slot.Options.LiveAgnusDma);
-		Assert.True(slot.Bus.LiveAgnusDmaEnabled);
-		Assert.True(slot.Options.LiveDisplayDma);
-		Assert.True(slot.Bus.LiveDisplayDmaEnabled);
-		Assert.Equal(AgnusTimingMode.LegacyReservation, legacy.Options.AgnusTimingMode);
-		Assert.Equal(AgnusTimingMode.LegacyReservation, legacy.Bus.AgnusTimingMode);
-		Assert.False(legacy.Options.LiveAgnusDma);
-		Assert.False(legacy.Bus.LiveAgnusDmaEnabled);
+		Assert.True(machine.Options.LiveAgnusDma);
+		Assert.True(machine.Bus.LiveAgnusDmaEnabled);
+		Assert.True(machine.Options.LiveDisplayDma);
+		Assert.True(machine.Bus.LiveDisplayDmaEnabled);
 	}
 }

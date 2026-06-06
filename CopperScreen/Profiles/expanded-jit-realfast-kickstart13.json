@@ -9,8 +9,7 @@
     "pseudoFastBase": "$C00000",
     "realFastRamKb": 2048,
     "realFastBase": "$200000",
-    "floppyDriveCount": 2,
-    "agnusTimingMode": "slot"
+    "floppyDriveCount": 2
   },
   "cpu": {
     "backend": "JitM68000"

@@ -234,11 +234,6 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		startupError = startupOptions.Error;
 		var machineOptions = startupOptions.Profile.CreateMachineOptions();
-		if (startupOptions.AgnusTimingModeOverride.HasValue)
-		{
-			machineOptions.WithAgnusTimingMode(startupOptions.AgnusTimingModeOverride.Value);
-		}
-
 		if (startupOptions.CpuBackendOverride.HasValue)
 		{
 			machineOptions.WithCpu(M68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
@@ -703,8 +698,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		{
 			_frameAudio.AsSpan().Clear();
 			_previousInterlaceFrameValid = false;
-			InsertDiskScreenRenderer.Render(Framebuffer, Width, Height);
 			StatusText = _startupError;
+			RenderStatusFrame(StatusText);
 			AdvanceInputPulse();
 			return;
 		}
@@ -713,8 +708,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		{
 			_frameAudio.AsSpan().Clear();
 			_previousInterlaceFrameValid = false;
-			InsertDiskScreenRenderer.Render(Framebuffer, Width, Height);
 			StatusText = "insert disk image";
+			RenderNoDiskFrame();
 			AdvanceInputPulse();
 			return;
 		}
@@ -753,7 +748,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 				_frameAudio.AsSpan().Clear();
 				_previousInterlaceFrameValid = false;
 				StatusText = ex.Message;
-				InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
+				RenderStatusFrame(StatusText);
 				AdvanceInputPulse();
 				return;
 			}
@@ -1075,7 +1070,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			fatalDiagnostic.Code,
 			fatalDiagnostic.Message,
 			FormatDiagnostics(result.Diagnostics));
-		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
+		RenderStatusFrame(StatusText);
 		return true;
 	}
 
@@ -1145,7 +1140,29 @@ internal sealed class CopperScreenEmulator : IDisposable
 		IsPaused = true;
 		StatusText = reasonCode + ": " + message;
 		_debugSnapshot = CreateDebugSnapshot(reasonCode, message, diagnostics);
-		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, StatusText);
+		RenderStatusFrame(StatusText);
+	}
+
+	private void RenderNoDiskFrame()
+	{
+		if (_profile.UsesKickstartRom)
+		{
+			InsertDiskScreenRenderer.RenderHostStatus(Framebuffer, Width, Height, StatusText);
+			return;
+		}
+
+		InsertDiskScreenRenderer.Render(Framebuffer, Width, Height);
+	}
+
+	private void RenderStatusFrame(string status)
+	{
+		if (_profile.UsesKickstartRom)
+		{
+			InsertDiskScreenRenderer.RenderHostStatus(Framebuffer, Width, Height, status);
+			return;
+		}
+
+		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, status);
 	}
 
 	private CopperScreenDebugSnapshot CreateDebugSnapshot(string reasonCode, string message, string[] diagnostics)

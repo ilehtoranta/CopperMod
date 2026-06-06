@@ -7,7 +7,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void ManualAudioDataOutputsHighThenLowByteAndRequestsInterrupt()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.WriteWord(0x00DFF09A, 0xC080, 0);
 		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
 		var buffer = new float[4];
@@ -26,7 +26,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void ManualAudioDataTransitionsOnExactIntegerPeriodCycles()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		SchedulePaulaWrite(bus, 0x0A6, 0x0003, 0);
 		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
 		var buffer = new float[4];
@@ -47,7 +47,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void ManualAudioDataRewriteAfterLowBoundaryIsCausal()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
 		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
 		SchedulePaulaWrite(bus, 0x0AA, 0x4080, 5);
@@ -69,7 +69,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void ManualAudioDataCanBeReplacedBeforeLowByteIsPlayed()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.WriteWord(0x00DFF0A6, 0x0004, 0);
 		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
 		bus.WriteWord(0x00DFF0AA, 0x4080, 4);
@@ -87,7 +87,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void IntenaGatesAudioInterruptEventsButNotIntreqPolling()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 
 		bus.WriteWord(0x00DFF0AA, 0x0102, 0);
 		bus.Paula.AdvanceTo(0);
@@ -106,7 +106,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void DmaFetchesWordsAdvancesPointerAndReloadsLength()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x81;
 		bus.ChipRam[0x1002] = 0x40;
@@ -135,7 +135,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void DmaFetchRequestCyclesRemainExactAcrossPeriods()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x81;
 		bus.ChipRam[0x1002] = 0x40;
@@ -186,8 +186,7 @@ public sealed class PaulaTests
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
-			enableLiveDisplayDma: false,
-			agnusTimingMode: AgnusTimingMode.SlotEngine);
+			enableLiveDisplayDma: false);
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x81;
 		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
@@ -207,7 +206,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void DmaLengthReloadInterruptsUseExactSampleBoundary()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x20;
 		bus.ChipRam[0x1001] = 0xE0;
 		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
@@ -231,7 +230,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void DmaLengthOneReloadsFromOriginalLocation()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x20;
 		bus.ChipRam[0x1001] = 0xE0;
 		bus.WriteWord(0x00DFF09A, 0xC080, 0);
@@ -251,7 +250,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void AdkconUsesSetClearSemantics()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 
 		bus.WriteWord(0x00DFF09E, 0x8011, 0);
 		bus.Paula.AdvanceTo(0);
@@ -264,7 +263,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void AdkconVolumeAttachMutesSourceAndModulatesNextChannelVolume()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.WriteWord(0x00DFF09E, 0x8001, 0);
 		bus.WriteWord(0x00DFF0A6, 0x0002, 0);
 		bus.WriteWord(0x00DFF0AA, 0x0020, 0);
@@ -284,7 +283,7 @@ public sealed class PaulaTests
 	[Fact]
 	public void AdkconPeriodAttachModulatesNextChannelPeriod()
 	{
-		var bus = CreateLegacyPaulaBus();
+		var bus = CreatePaulaComponentBus();
 		bus.WriteWord(0x00DFF09E, 0x8010, 0);
 		bus.WriteWord(0x00DFF0A6, 0x0002, 0);
 		bus.WriteWord(0x00DFF0AA, 0x0005, 0);
@@ -299,18 +298,16 @@ public sealed class PaulaTests
 		bus.Paula.ScheduleWrite(cycle, offset, value);
 	}
 
-	private static AmigaBus CreateLegacyPaulaBus()
+	private static AmigaBus CreatePaulaComponentBus()
 	{
 		return new AmigaBus(
 			enableLiveAgnusDma: false,
-			agnusTimingMode: AgnusTimingMode.LegacyReservation,
 			audioDmaMinimumPeriod: 1);
 	}
 
 	private static AmigaBus CreateDefaultMinimumPaulaBus()
 	{
 		return new AmigaBus(
-			enableLiveAgnusDma: false,
-			agnusTimingMode: AgnusTimingMode.LegacyReservation);
+			enableLiveAgnusDma: false);
 	}
 }

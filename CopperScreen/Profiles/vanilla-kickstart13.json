@@ -7,8 +7,7 @@
     "chipRamKb": 512,
     "pseudoFastRamKb": 0,
     "pseudoFastBase": "$C00000",
-    "floppyDriveCount": 1,
-    "agnusTimingMode": "slot"
+    "floppyDriveCount": 1
   },
   "kickstart": {
     "source": "Kickstart13Rom",

@@ -481,7 +481,6 @@ public sealed class AmigaBootMemoryTests
 	{
 		var machine = new AmigaMachine(AmigaMachineOptions
 			.ForProfile(profile)
-			.WithAgnusTimingMode(AgnusTimingMode.LegacyReservation)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());

@@ -146,7 +146,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void MoveWritesCustomRegisters()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(bus, CopperList, (0x0180, 0x00F0), (0xFFFF, 0xFFFE));
 
         new AmigaCopper().ExecuteList(bus, CopperList);
@@ -157,7 +157,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void EndStopsListExecution()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(bus, CopperList, (0x0180, 0x0F00), (0xFFFF, 0xFFFE), (0x0180, 0x00F0));
 
         new AmigaCopper().ExecuteList(bus, CopperList);
@@ -168,7 +168,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void Cop1LcStartsDisplayCopperList()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(bus, CopperList, (0x0180, 0x000F), (0xFFFF, 0xFFFE));
         SetCopperPointer(bus, 1, CopperList);
 
@@ -179,7 +179,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void CopJmp2SwitchesToSecondList()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -198,7 +198,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void DmaEnableGatesTimedCopperExecution()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         var frameCycles = FrameCycles();
         WriteCopperList(bus, CopperList, (0x0180, 0x0F00), (0xFFFF, 0xFFFE));
         SetCopperPointer(bus, 1, CopperList);
@@ -215,7 +215,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void HorizontalCompareIsGreaterOrEqual()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -234,7 +234,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void WaitMasksBeamBits()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -255,7 +255,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void WaitFullMaskResolvesExactBeamTarget()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -277,7 +277,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void WaitMaskedHorizontalResolvesFirstMatchingSlot()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -299,7 +299,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void SkipSuppressesFollowingInstruction()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -316,7 +316,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void SkipDoesNotSkipWaitInstructions()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -337,7 +337,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void SkipSuppressedDangerousMoveStopsCopper()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(
             bus,
             CopperList,
@@ -354,7 +354,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void BfdSetIgnoresBlitterBusy()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         StartLongBlit(bus);
         WriteCopperList(
             bus,
@@ -372,7 +372,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void CopperMoveCanRequestIntreq()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(bus, CopperList, (0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)), (0xFFFF, 0xFFFE));
         bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
         SetCopperPointer(bus, 1, CopperList);
@@ -385,7 +385,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void CopperLocationHighWordMasksUnusedDmaBits()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         WriteCopperList(bus, 0x0420, (0x0180, 0x0F00), (0xFFFF, 0xFFFE));
         bus.WriteWord(0x00DFF080, 0x0140);
         bus.WriteWord(0x00DFF082, 0x0420);
@@ -397,7 +397,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void CopperDangerRegisterProtectionViaCopcon()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         var moves = new List<ushort>();
         WriteCopperList(
             bus,
@@ -431,7 +431,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void CopperMoveToAlwaysProtectedRegisterStopsCopper()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         var moves = new List<ushort>();
         WriteCopperList(
             bus,
@@ -452,7 +452,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void BfdClearWaitsForLiveBlitterCompletionCycle()
     {
-        var bus = CreateLegacyCopperBus();
+        var bus = CreateCopperComponentBus();
         StartLongBlit(bus);
         var expectedReadyCycle = bus.Blitter.GetPredictedCompletionCycle();
         WriteCopperList(
@@ -553,18 +553,16 @@ public sealed class AmigaCopperConformanceMatrixTests
         return (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
     }
 
-    private static AmigaBus CreateLegacyCopperBus()
+    private static AmigaBus CreateCopperComponentBus()
     {
         return new AmigaBus(
-            enableLiveAgnusDma: false,
-            agnusTimingMode: AgnusTimingMode.LegacyReservation);
+            enableLiveAgnusDma: false);
     }
 
     private static AmigaBus CreateSlotCopperBus()
     {
         return new AmigaBus(
-            enableLiveAgnusDma: true,
-            agnusTimingMode: AgnusTimingMode.SlotEngine);
+            enableLiveAgnusDma: true);
     }
 
     private static MatrixRow Executable(string group, string name)

@@ -769,25 +769,14 @@ namespace CopperMod.Amiga
             }
 
             ReadBootDiskBytesToChipRam(checked((int)offset), checked((int)length), destination, state.Cycles);
-            if (ShouldLeaveDf0SelectedAfterBootRead())
-            {
-                LeaveDf0SelectedAfterBootRead(state.Cycles);
-            }
-
+            CompleteTrackdiskReadDriveState(state.Cycles);
             _machine.Bus.WriteByte(io + IoErrorOffset, 0, state.Cycles);
             _machine.Bus.WriteLong(io + IoActualOffset, length, state.Cycles);
             _bootDiskReadCompleted = true;
             state.D[0] = 0;
         }
 
-        private bool ShouldLeaveDf0SelectedAfterBootRead()
-        {
-            return Drive0.Disk != null &&
-                (IsFullContactDiskOneBootBlock(Drive0.Disk.BootBlock) ||
-                    Drive0.Disk.Name.IndexOf("Full Contact", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-        private void LeaveDf0SelectedAfterBootRead(long cycle)
+        private void CompleteTrackdiskReadDriveState(long cycle)
         {
             _machine.Bus.WriteByte(0x00BFD100, 0x77, cycle);
             _machine.Bus.WriteByte(0x00BFD300, 0xFF, cycle);
@@ -822,15 +811,6 @@ namespace CopperMod.Amiga
             }
 
             _machine.Bus.CopyToChipRam(destination, buffer);
-        }
-
-        private static bool IsFullContactDiskOneBootBlock(ReadOnlySpan<byte> bootBlock)
-        {
-            return bootBlock.Length >= 0xCE &&
-                BigEndian.ReadUInt32(bootBlock, 0, "boot magic") == 0x444F_5300 &&
-                BigEndian.ReadUInt32(bootBlock, 4, "boot checksum") == 0x730D_90D9 &&
-                BigEndian.ReadUInt32(bootBlock, 0xC8, "known protection jump high") == 0x4EB9_0007 &&
-                BigEndian.ReadUInt16(bootBlock, 0xCC, "known protection jump low") == 0xB000;
         }
 
         private string DescribeCpuFault(string message)
