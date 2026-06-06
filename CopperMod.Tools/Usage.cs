@@ -8,11 +8,14 @@ internal static class Usage
 
 		Options:
 		  --format wav|pcm|mp3|bmp   Optional when output extension is .wav, .pcm, .mp3, or .bmp.
-		  --seconds <number>         Render a fixed duration.
+		  --seconds <number|auto>    Render a fixed duration, or auto-detect SID duration.
 		  --subsong <number>         Select a 1-based subtune.
 		  --sample-rate <hz>         Default: 44100.
 		  --channels <count>         Default: 2.
 		  --sid-solo <1|2|3>         Render only one SID voice.
+		  --sid-detect-loop          Use SID write-loop detection as render duration.
+		  --sid-detect-duration      Detect SID duration from loop or sustained silence.
+		  --sid-detect-max-seconds <n> Default: 600. Requires SID detection.
 		  --output raw|player        Default: raw.
 		  --amiga-profile clean|a500|led
 		  --c64-profile clean|c64

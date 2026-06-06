@@ -9,7 +9,7 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector
     {
         private readonly SidModule _module;
         private readonly C64Machine _machine;
@@ -143,6 +143,16 @@ namespace CopperMod.Sid
             Reset();
         }
 
+        public SidLoopDetectionResult DetectLoop(SidLoopDetectionOptions? options = null)
+        {
+            return SidLoopDetector.Detect(_module, _currentSubSongIndex, options ?? new SidLoopDetectionOptions());
+        }
+
+        public SidDurationDetectionResult DetectDuration(SidDurationDetectionOptions? options = null)
+        {
+            return SidLoopDetector.DetectDuration(_module, _currentSubSongIndex, options ?? new SidDurationDetectionOptions());
+        }
+
         public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
         {
             options ??= AudioRenderOptions.Default;
@@ -235,9 +245,14 @@ namespace CopperMod.Sid
 
         private long GetCurrentTickCycleCount()
         {
-            return UsesCiaTiming(_module, _currentSubSongIndex)
-                ? Math.Max(1, _machine.PsidCiaTimerAIntervalCycles)
-                : _machine.Clock.CyclesPerFrame;
+            return GetCurrentTickCycleCount(_module, _currentSubSongIndex, _machine);
+        }
+
+        internal static long GetCurrentTickCycleCount(SidModule module, int subSongIndex, C64Machine machine)
+        {
+            return UsesCiaTiming(module, subSongIndex)
+                ? Math.Max(1, machine.PsidCiaTimerAIntervalCycles)
+                : machine.Clock.CyclesPerFrame;
         }
 
         private SidSampleClock GetSampleClock(AudioRenderOptions options)
@@ -272,7 +287,7 @@ namespace CopperMod.Sid
             _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles);
         }
 
-        private static bool UsesCiaTiming(SidModule module, int subSongIndex)
+        internal static bool UsesCiaTiming(SidModule module, int subSongIndex)
         {
             if (module.IsRsid)
             {

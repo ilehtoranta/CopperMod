@@ -39,7 +39,7 @@ internal static class CopperModTools
 
 		using var song = ModuleFormatRegistry.LoadFile(options.InputPath);
 		ConfigureSong(song, options);
-		var fixedDuration = ResolveFixedDuration(song, options);
+		var fixedDuration = ResolveFixedDuration(song, options, output);
 		Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath)) ?? ".");
 
 		switch (options.Format)
@@ -97,11 +97,48 @@ internal static class CopperModTools
 		}
 	}
 
-	internal static TimeSpan? ResolveFixedDuration(IModuleSong song, RenderCommandOptions options)
+	internal static TimeSpan? ResolveFixedDuration(IModuleSong song, RenderCommandOptions options, TextWriter? output = null)
 	{
 		if (options.RenderDuration.HasValue)
 		{
 			return options.RenderDuration.Value;
+		}
+
+		if (options.SidDetectLoop)
+		{
+			if (song is not ISidLoopDetector sidLoopDetector)
+			{
+				throw new CommandLineException("--sid-detect-loop requires a SID input file.");
+			}
+
+			var result = sidLoopDetector.DetectLoop(new SidLoopDetectionOptions(maxSearchDuration: options.SidDetectMaxDuration));
+			if (!result.Detected || !result.LoopEnd.HasValue || !result.LoopStart.HasValue || !result.LoopLength.HasValue)
+			{
+				throw new CommandLineException("SID loop was not detected within " + FormatDuration(options.SidDetectMaxDuration) + ". Use --seconds or increase --sid-detect-max-seconds.");
+			}
+
+			output?.WriteLine(
+				"Detected SID loop at " + FormatDuration(result.LoopEnd.Value) +
+				" (loop " + FormatDuration(result.LoopLength.Value) +
+				" from " + FormatDuration(result.LoopStart.Value) + ").");
+			return result.LoopEnd.Value;
+		}
+
+		if (options.SidDetectDuration)
+		{
+			if (song is not ISidDurationDetector sidDurationDetector)
+			{
+				throw new CommandLineException("--sid-detect-duration requires a SID input file.");
+			}
+
+			var result = sidDurationDetector.DetectDuration(new SidDurationDetectionOptions(maxSearchDuration: options.SidDetectMaxDuration));
+			if (!result.Detected || !result.Duration.HasValue)
+			{
+				throw new CommandLineException("SID duration was not detected within " + FormatDuration(options.SidDetectMaxDuration) + ". Use --seconds or increase --sid-detect-max-seconds.");
+			}
+
+			output?.WriteLine(FormatSidDurationDetection(result));
+			return result.Duration.Value;
 		}
 
 		if (song.Duration.Time.HasValue)
@@ -110,6 +147,34 @@ internal static class CopperModTools
 		}
 
 		throw new CommandLineException("The module duration is unknown. Use --seconds to choose a render duration.");
+	}
+
+	private static string FormatDuration(TimeSpan duration)
+	{
+		if (duration.TotalHours >= 1)
+		{
+			return duration.ToString(@"h\:mm\:ss\.fff", System.Globalization.CultureInfo.InvariantCulture);
+		}
+
+		return duration.ToString(@"m\:ss\.fff", System.Globalization.CultureInfo.InvariantCulture);
+	}
+
+	private static string FormatSidDurationDetection(SidDurationDetectionResult result)
+	{
+		if (result.Kind == SidDurationDetectionKind.Loop && result.Loop?.LoopStart.HasValue == true && result.Loop.LoopLength.HasValue)
+		{
+			return "Detected SID duration " + FormatDuration(result.Duration!.Value) +
+				" by loop (loop " + FormatDuration(result.Loop.LoopLength.Value) +
+				" from " + FormatDuration(result.Loop.LoopStart.Value) + ").";
+		}
+
+		if (result.Kind == SidDurationDetectionKind.Silence && result.SilenceDuration.HasValue)
+		{
+			return "Detected SID duration " + FormatDuration(result.Duration!.Value) +
+				" by silence (" + FormatDuration(result.SilenceDuration.Value) + " confirmed).";
+		}
+
+		return "Detected SID duration " + FormatDuration(result.Duration!.Value) + ".";
 	}
 
 	private static void RenderWav(IModuleSong song, RenderCommandOptions options, TimeSpan? duration)

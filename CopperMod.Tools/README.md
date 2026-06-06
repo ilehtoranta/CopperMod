@@ -59,6 +59,18 @@ Render only SID voice 2:
 dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out voice2.wav --seconds 30 --sid-solo 2
 ```
 
+Render one detected SID playthrough:
+
+```powershell
+dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.wav --sid-detect-duration
+```
+
+The same automatic SID duration path can be selected through `--seconds auto`:
+
+```powershell
+dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.wav --seconds auto
+```
+
 ## Command
 
 ```text
@@ -76,11 +88,14 @@ The output format is inferred from the output extension when it is `.wav`,
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
 | `--format` | `wav`, `pcm`, `mp3`, `bmp` | inferred from `--out` | Selects the output file format. |
-| `--seconds` | positive number | song duration | Renders a fixed duration. Required for formats whose duration is unknown, such as many SID tunes. |
+| `--seconds` | positive number, `auto` | song duration | Renders a fixed duration. `auto` enables SID duration detection for SID tunes. |
 | `--subsong` | positive integer | format default | Selects a 1-based subtune when the loaded module exposes subtunes. |
 | `--sample-rate` | positive integer | `44100` | Sets the output sample rate in Hz. |
 | `--channels` | positive integer | `2` | Sets the interleaved output channel count. |
 | `--sid-solo` | `1`, `2`, `3` | none | Renders only one SID voice. This option is SID-specific. |
+| `--sid-detect-loop` | flag | off | Uses exact SID write-loop detection as the render duration. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-duration`. |
+| `--sid-detect-duration` | flag | off | Detects SID duration from either an exact write-loop restart or sustained silence. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-loop`. |
+| `--sid-detect-max-seconds` | positive number | `600` | Maximum emulated SID playback time to scan for SID loop or duration detection. |
 | `--output` | `raw`, `player` | `raw` | `raw` writes direct renderer output. `player` applies the same Amiga or C64 output stage used by the player. |
 | `--amiga-profile` | `clean`, `a500`, `led` | `a500` | Selects the Amiga player output profile. Requires `--output player`. |
 | `--c64-profile` | `clean`, `c64` | `c64` | Selects the C64 player output profile. Requires `--output player`. |
@@ -135,7 +150,16 @@ ends before the requested duration, the rest of the output is padded with
 silence.
 
 If `--seconds` is omitted, the tool renders until the song ends. Modules with an
-unknown duration require `--seconds`.
+unknown duration require `--seconds`, unless a SID tune is rendered with
+`--sid-detect-duration`, `--sid-detect-loop`, or `--seconds auto`.
+
+`--sid-detect-duration` first looks for exact SID register write-loop restarts
+per playback tick. It also renders a low-rate mono analysis stream and accepts
+sustained low-range audio as the end of one-shot tunes that stop in silence.
+The scan is bounded by `--sid-detect-max-seconds`.
+
+`--sid-detect-loop` is the narrower diagnostic mode: it accepts only exact
+write-loop restarts and ignores silence.
 
 ## Exit Codes
 

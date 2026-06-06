@@ -109,6 +109,11 @@ namespace CopperMod.Sid
             }
         }
 
+        internal void ClearCapturedWrites()
+        {
+            _writes.Clear();
+        }
+
         [HotPath]
         public bool TryWrite(ushort address, byte value, long cycle)
         {

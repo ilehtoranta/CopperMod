@@ -8,7 +8,7 @@
     <Title>CopperMod.Sid</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>PSID/RSID parser and register-scheduled SID renderer.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

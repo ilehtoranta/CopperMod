@@ -1,5 +1,6 @@
 using System.Globalization;
 using CopperMod.Rendering;
+using CopperMod.Sid;
 
 namespace CopperMod.Tools;
 
@@ -14,6 +15,9 @@ internal sealed class RenderCommandOptions
 		int sampleRate,
 		int channelCount,
 		int? sidSoloVoice,
+		bool sidDetectLoop,
+		bool sidDetectDuration,
+		double sidDetectMaxSeconds,
 		ModuleRenderOutputMode outputMode,
 		AmigaOutputProfile amigaProfile,
 		C64OutputProfile c64Profile,
@@ -30,6 +34,9 @@ internal sealed class RenderCommandOptions
 		SampleRate = sampleRate;
 		ChannelCount = channelCount;
 		SidSoloVoice = sidSoloVoice;
+		SidDetectLoop = sidDetectLoop;
+		SidDetectDuration = sidDetectDuration;
+		SidDetectMaxSeconds = sidDetectMaxSeconds;
 		OutputMode = outputMode;
 		AmigaProfile = amigaProfile;
 		C64Profile = c64Profile;
@@ -55,6 +62,12 @@ internal sealed class RenderCommandOptions
 
 	public int? SidSoloVoice { get; }
 
+	public bool SidDetectLoop { get; }
+
+	public bool SidDetectDuration { get; }
+
+	public double SidDetectMaxSeconds { get; }
+
 	public ModuleRenderOutputMode OutputMode { get; }
 
 	public AmigaOutputProfile AmigaProfile { get; }
@@ -70,6 +83,8 @@ internal sealed class RenderCommandOptions
 	public bool Overwrite { get; }
 
 	public TimeSpan? RenderDuration => Seconds.HasValue ? TimeSpan.FromSeconds(Seconds.Value) : null;
+
+	public TimeSpan SidDetectMaxDuration => TimeSpan.FromSeconds(SidDetectMaxSeconds);
 
 	public ModuleRenderSettings ToRenderSettings()
 	{
@@ -101,6 +116,10 @@ internal sealed class RenderCommandOptions
 		var sampleRate = 44100;
 		var channelCount = 2;
 		int? sidSoloVoice = null;
+		var sidDetectLoop = false;
+		var sidDetectDuration = false;
+		var sidDetectMaxSeconds = SidDurationDetectionOptions.DefaultMaxSearchDuration.TotalSeconds;
+		var sidDetectMaxSecondsSpecified = false;
 		var outputMode = ModuleRenderOutputMode.Raw;
 		var amigaProfile = AmigaOutputProfile.A500;
 		var c64Profile = C64OutputProfile.C64;
@@ -130,7 +149,15 @@ internal sealed class RenderCommandOptions
 					format = ParseFormat(RequireValue(args, ref i, arg));
 					break;
 				case "--seconds":
-					seconds = ParsePositiveDouble(RequireValue(args, ref i, arg), arg);
+					var secondsValue = RequireValue(args, ref i, arg);
+					if (string.Equals(secondsValue, "auto", StringComparison.OrdinalIgnoreCase))
+					{
+						sidDetectDuration = true;
+					}
+					else
+					{
+						seconds = ParsePositiveDouble(secondsValue, arg);
+					}
 					break;
 				case "--subsong":
 					subSong = ParsePositiveInt(RequireValue(args, ref i, arg), arg);
@@ -143,6 +170,20 @@ internal sealed class RenderCommandOptions
 					break;
 				case "--sid-solo":
 					sidSoloVoice = ParseSidVoice(RequireValue(args, ref i, arg), arg);
+					break;
+				case "--sid-detect-loop":
+					sidDetectLoop = true;
+					break;
+				case "--sid-detect-duration":
+					sidDetectDuration = true;
+					break;
+				case "--sid-detect-max-seconds":
+					sidDetectMaxSeconds = ParsePositiveDouble(RequireValue(args, ref i, arg), arg);
+					sidDetectMaxSecondsSpecified = true;
+					break;
+				case "--sid-loop-max-seconds":
+					sidDetectMaxSeconds = ParsePositiveDouble(RequireValue(args, ref i, arg), arg);
+					sidDetectMaxSecondsSpecified = true;
 					break;
 				case "--output":
 					outputMode = ParseOutputMode(RequireValue(args, ref i, arg));
@@ -191,6 +232,21 @@ internal sealed class RenderCommandOptions
 			throw new CommandLineException("Output profile options require --output player.");
 		}
 
+		if (seconds.HasValue && (sidDetectLoop || sidDetectDuration))
+		{
+			throw new CommandLineException("Use either --seconds, --sid-detect-loop, or --sid-detect-duration.");
+		}
+
+		if (sidDetectLoop && sidDetectDuration)
+		{
+			throw new CommandLineException("Use either --sid-detect-loop or --sid-detect-duration, not both.");
+		}
+
+		if (sidDetectMaxSecondsSpecified && !sidDetectLoop && !sidDetectDuration)
+		{
+			throw new CommandLineException("--sid-detect-max-seconds requires --sid-detect-loop or --sid-detect-duration.");
+		}
+
 		format ??= InferFormat(outputPath);
 
 		if (bitmapSizeSpecified && format.Value != RenderFileFormat.Bmp)
@@ -207,6 +263,9 @@ internal sealed class RenderCommandOptions
 			sampleRate,
 			channelCount,
 			sidSoloVoice,
+			sidDetectLoop,
+			sidDetectDuration,
+			sidDetectMaxSeconds,
 			outputMode,
 			amigaProfile,
 			c64Profile,
