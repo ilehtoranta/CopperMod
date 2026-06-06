@@ -1,5 +1,13 @@
 # CopperMod
 
+[![CopperMod.Abstractions](https://img.shields.io/nuget/v/CopperMod.Abstractions?label=CopperMod.Abstractions)](https://www.nuget.org/packages/CopperMod.Abstractions)
+[![CopperMod.Med](https://img.shields.io/nuget/v/CopperMod.Med?label=CopperMod.Med)](https://www.nuget.org/packages/CopperMod.Med)
+[![CopperMod.ProTracker](https://img.shields.io/nuget/v/CopperMod.ProTracker?label=CopperMod.ProTracker)](https://www.nuget.org/packages/CopperMod.ProTracker)
+[![CopperMod.Sid](https://img.shields.io/nuget/v/CopperMod.Sid?label=CopperMod.Sid)](https://www.nuget.org/packages/CopperMod.Sid)
+[![CopperMod.Cust](https://img.shields.io/nuget/v/CopperMod.Cust?label=CopperMod.Cust)](https://www.nuget.org/packages/CopperMod.Cust)
+[![CopperMod.Amiga](https://img.shields.io/nuget/v/CopperMod.Amiga?label=CopperMod.Amiga)](https://www.nuget.org/packages/CopperMod.Amiga)
+[![CopperDisk](https://img.shields.io/nuget/v/CopperDisk?label=CopperDisk)](https://www.nuget.org/packages/CopperDisk)
+
 CopperMod is a terminal music player for classic tracker and chip music formats.
 It started as a portable MED renderer, but is growing into a small playback stack
 with reusable C# backends and a Terminal.Gui based player application.
@@ -45,7 +53,19 @@ they sit near hot-path code. Hot paths must not call allocation-allowed helpers.
 
 ## Packages
 
-The reusable playback backends are intended to be published separately:
+Reusable libraries are published on NuGet:
+
+| Package | Description |
+| --- | --- |
+| [CopperMod.Abstractions](https://www.nuget.org/packages/CopperMod.Abstractions) | Shared module loading and rendering interfaces. |
+| [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED MMD module parser and renderer. |
+| [CopperMod.ProTracker](https://www.nuget.org/packages/CopperMod.ProTracker) | ProTracker MOD parser and renderer. |
+| [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parser and SID renderer. |
+| [CopperMod.Cust](https://www.nuget.org/packages/CopperMod.Cust) | Amiga CUST loader and Paula playback sandbox. |
+| [CopperMod.Amiga](https://www.nuget.org/packages/CopperMod.Amiga) | Shared Amiga hardware emulation core. |
+| [CopperDisk](https://www.nuget.org/packages/CopperDisk) | Managed Amiga ADF and IPF disk image library. |
+
+Install the playback backends separately:
 
 ```powershell
 dotnet add package CopperMod.Med
