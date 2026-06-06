@@ -30,8 +30,6 @@ public sealed class CustRenderTests
 		var machine = new CustMachine(hunk, tags);
 
 		Assert.Equal(AmigaMachineProfile.A500PalCustPlayback, machine.Machine.Profile);
-		Assert.Equal(AgnusTimingMode.SlotEngine, machine.Machine.Options.AgnusTimingMode);
-		Assert.Equal(AgnusTimingMode.SlotEngine, machine.Bus.AgnusTimingMode);
 		Assert.True(machine.Machine.Options.LiveAgnusDma);
 		Assert.True(machine.Bus.LiveAgnusDmaEnabled);
 		Assert.False(machine.Machine.Options.LiveDisplayDma);

@@ -8,7 +8,7 @@
     <Title>CopperMod.Cust</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Native Amiga CUST Hunk loader with an A500 PAL MC68000/Paula playback sandbox.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
@@ -19,12 +19,20 @@
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeInternalAmigaAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
+    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
+    <PackageReference Include="CopperDisk" Version="1.0.0" />
     <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
+
+  <Target Name="IncludeInternalAmigaAssemblyInPackage" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'CopperMod.Amiga'" />
+    </ItemGroup>
+  </Target>
 
 </Project>
