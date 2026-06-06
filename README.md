@@ -56,6 +56,13 @@ dotnet add package CopperMod.Sid
 All backend packages depend on `CopperMod.Abstractions`, which contains the
 shared module loading and rendering interfaces.
 
+`CopperDisk` is the managed Amiga disk-image package used by CopperScreen for
+ADF and IPF loading:
+
+```powershell
+dotnet add package CopperDisk
+```
+
 ## Run
 
 ```powershell
@@ -77,11 +84,12 @@ dotnet run --project .\CopperScreen -- "path\to\disk.ipf"
 dotnet run --project .\CopperScreen -- "path\to\disk.zip"
 ```
 
-IPF support is provided by the native `CopperMod.Ipf` decoder. It decodes SPS /
-CAPS IPF images into raw Amiga track streams for CopperScreen's floppy path, so
-protected or non-standard disks can be tested without converting them to sector
-ADF images first. This is still part of emulator bring-up, so tricky protection
-schemes may continue to expose missing floppy-controller or disk-DMA behavior.
+ADF and IPF image loading is provided by the managed `CopperDisk` library. It
+parses ADF sector images and decodes SPS / CAPS IPF images into raw Amiga track
+streams for CopperScreen's floppy path, so protected or non-standard disks can
+be tested without converting them to sector ADF images first. This is still part
+of emulator bring-up, so tricky protection schemes may continue to expose
+missing floppy-controller or disk-DMA behavior.
 
 By default CopperScreen starts from the `expanded-copperstart` profile config in
 `CopperScreen\Profiles`. Profiles are JSON files that describe the machine
@@ -219,6 +227,6 @@ and upload the generated zip files plus `SHA256SUMS.txt`.
 - `CopperMod.Med` - MED / OctaMED backend.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.
+- `CopperDisk` - managed Amiga ADF / IPF disk image library.
 - `CopperMod.Amiga` - shared Amiga 500 emulation core.
-- `CopperMod.Ipf` - native SPS / CAPS IPF disk image decoder.
 - `CopperScreen` - Avalonia Amiga 500 emulator front-end.
