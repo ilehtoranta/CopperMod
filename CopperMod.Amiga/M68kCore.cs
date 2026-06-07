@@ -23,7 +23,9 @@ namespace CopperMod.Amiga
 
         void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind);
 
-        bool TryInvokeHost(uint address, M68kCpuState state);
+        bool HasHostTrapStub(uint address);
+
+        bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state);
 
         void ResetExternalDevices(long cycle);
     }
@@ -131,6 +133,7 @@ namespace CopperMod.Amiga
         public const ushort Negative = 0x0008;
         public const ushort Extend = 0x0010;
         public const ushort Supervisor = 0x2000;
+        private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
         public uint[] D { get; } = new uint[8];
 
@@ -162,14 +165,22 @@ namespace CopperMod.Amiga
 
         public bool GetFlag(ushort flag)
         {
-            return (StatusRegister & flag) != 0;
+            return (_statusRegister & flag) != 0;
         }
 
         public void SetFlag(ushort flag, bool value)
         {
+            if ((flag & ~ConditionCodeMask) == 0)
+            {
+                _statusRegister = value
+                    ? (ushort)(_statusRegister | flag)
+                    : (ushort)(_statusRegister & ~flag);
+                return;
+            }
+
             StatusRegister = value
-                ? (ushort)(StatusRegister | flag)
-                : (ushort)(StatusRegister & ~flag);
+                ? (ushort)(_statusRegister | flag)
+                : (ushort)(_statusRegister & ~flag);
         }
 
         public void ResetStackPointers(uint supervisorStackPointer, uint userStackPointer, bool supervisorMode)
@@ -255,8 +266,18 @@ namespace CopperMod.Amiga
             var mask = Mask(size);
             var sign = SignBit(size);
             value &= mask;
-            SetFlag(Zero, value == 0);
-            SetFlag(Negative, (value & sign) != 0);
+            var status = _statusRegister & unchecked((ushort)~(Zero | Negative));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & sign) != 0)
+            {
+                status |= Negative;
+            }
+
+            _statusRegister = (ushort)status;
         }
 
         public static uint Mask(M68kOperandSize size)
@@ -391,18 +412,6 @@ namespace CopperMod.Amiga
             }
 
             var startCycles = State.Cycles;
-            var directHostAddress = State.ProgramCounter;
-            if (_bus.TryInvokeHost(directHostAddress, State))
-            {
-                AddCycles(16);
-                if (!State.Halted && State.ProgramCounter == directHostAddress)
-                {
-                    State.ProgramCounter = PullLong();
-                }
-
-                return (int)(State.Cycles - startCycles);
-            }
-
             var instructionPc = State.ProgramCounter;
             var opcode = FetchWord();
             State.LastOpcode = opcode;
@@ -434,6 +443,24 @@ namespace CopperMod.Amiga
 
             if ((opcode & 0xF000) == 0xF000)
             {
+                if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
+                {
+                    var trapId = FetchWord();
+                    var returnProgramCounter = State.ProgramCounter;
+                    if (_bus.TryInvokeHostTrap(instructionPc, trapId, State))
+                    {
+                        AddCycles(16);
+                        if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                        {
+                            State.ProgramCounter = PullLong();
+                        }
+
+                        return (int)(State.Cycles - startCycles);
+                    }
+
+                    State.ProgramCounter = returnProgramCounter;
+                }
+
                 RaiseException(11, instructionPc, 34);
                 return (int)(State.Cycles - startCycles);
             }
@@ -934,12 +961,6 @@ namespace CopperMod.Amiga
             if ((opcode & 0xFFF8) == 0x4E90)
             {
                 var target = State.A[opcode & 7];
-                if (_bus.TryInvokeHost(target, State))
-                {
-                    AddCycles(16);
-                    return true;
-                }
-
                 PushLong(State.ProgramCounter);
                 State.ProgramCounter = target;
                 AddCycles(16);

@@ -403,7 +403,7 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus();
 		bus.MapReadOnlyMemory(0x00FC0000, new byte[] { 0x12, 0x34 });
-		bus.RegisterHostCallback(0x00F00000, _ => { });
+		bus.RegisterHostTrapStub(0x00F00000, _ => { });
 
 		var cycle = 10L;
 		_ = bus.ReadByte(0x00001000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
@@ -413,8 +413,8 @@ public sealed class AmigaBusTimingTests
 		bus.WriteByte(0x00BFE001, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 		cycle = 40;
 		_ = bus.ReadByte(0x00FC0000, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		var state = new M68kCpuState { Cycles = 50 };
-		Assert.True(bus.TryInvokeHost(0x00F00000, state));
+		cycle = 50;
+		Assert.Equal(0xFF00, bus.ReadWord(0x00F00000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch));
 
 		Assert.Contains(bus.BusAccesses, access =>
 			access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch &&
@@ -431,7 +431,7 @@ public sealed class AmigaBusTimingTests
 			access.Request.Kind == AmigaBusAccessKind.CpuDataRead &&
 			access.Request.Target == AmigaBusAccessTarget.Rom);
 		Assert.Contains(bus.BusAccesses, access =>
-			access.Request.Kind == AmigaBusAccessKind.HostTrap &&
+			access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch &&
 			access.Request.Target == AmigaBusAccessTarget.HostTrap);
 	}
 

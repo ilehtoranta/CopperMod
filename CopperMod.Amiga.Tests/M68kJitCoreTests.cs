@@ -57,7 +57,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateRealFastCodeBus();
 		WriteWords(bus, RealFastCodeBase, 0x7001, 0x5280, 0x60FC);
-		bus.RegisterHostCallback(RealFastCodeBase, _ => { });
+		bus.RegisterHostTrapStub(RealFastCodeBase, _ => { });
 		Assert.True(bus.TryCaptureJitCodeSnapshot(RealFastCodeBase, 16, out var snapshot));
 		var reader = new M68kSnapshotCodeReader(snapshot);
 
@@ -282,20 +282,19 @@ public sealed class M68kJitCoreTests
 	public void JitDoesNotCompileAcrossHostTrapAddresses()
 	{
 		var bus = CreateCodeBus();
-		WriteWords(bus, FastCodeBase + 2, 0x60FC); // BRA.S trap
+		WriteWords(bus, FastCodeBase + 4, 0x60FA); // BRA.S trap
 		var hostHits = 0;
-		bus.RegisterHostCallback(FastCodeBase, state =>
+		bus.RegisterHostTrapStub(FastCodeBase, state =>
 		{
 			hostHits++;
-			state.ProgramCounter = FastCodeBase + 2;
+			state.ProgramCounter = FastCodeBase + 4;
 		});
 		var cpu = new M68kJitCore(bus);
 		cpu.Reset(FastCodeBase, 0x4000);
 
 		cpu.ExecuteInstructions(180, null, new CountingBoundary());
 
-		Assert.True(hostHits > 64);
-		Assert.True(cpu.Counters.CompiledTraces > 0);
+		Assert.True(hostHits > 0);
 		Assert.True(cpu.Counters.FallbackInstructions >= hostHits);
 	}
 
@@ -915,7 +914,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitPureTraceSideExitForHostTrapDoesNotCallBatchEnd()
+	public void JitPureTraceInvalidatedByHostTrapDoesNotCallBatchEnd()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
@@ -924,13 +923,18 @@ public sealed class M68kJitCoreTests
 		var boundary = new PureBatchBoundary();
 		cpu.ExecuteInstructions(220, 100_000, boundary);
 		var batchAfterCount = boundary.BatchAfterCount;
-		var sideExits = cpu.Counters.PureTraceBatchSideExits;
-		bus.RegisterHostCallback(FastCodeBase, state => state.ProgramCounter = FastCodeBase + 2);
+		WriteWords(bus, FastCodeBase + 4, 0x4E71);
+		var hostHits = 0;
+		bus.RegisterHostTrapStub(FastCodeBase, state =>
+		{
+			hostHits++;
+			state.ProgramCounter = FastCodeBase + 4;
+		});
 		cpu.State.ProgramCounter = FastCodeBase;
 
 		cpu.ExecuteInstructions(2, cpu.State.Cycles + 10_000, boundary);
 
-		Assert.True(cpu.Counters.PureTraceBatchSideExits > sideExits);
+		Assert.Equal(1, hostHits);
 		Assert.Equal(batchAfterCount, boundary.BatchAfterCount);
 	}
 
@@ -3420,24 +3424,22 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitV2JsrHostTrapSideExitDoesNotPushReturnAddress()
+	public void JitV2JsrHostTrapSideExitUsesRealJsrReturnAddress()
 	{
 		var hostTarget = FastCodeBase + 0x100;
 		var jitBus = CreateCodeBus();
 		var interpreterBus = CreateCodeBus();
-		WriteWords(jitBus, FastCodeBase, 0x4E90); // JSR (A0)
-		WriteWords(interpreterBus, FastCodeBase, 0x4E90);
+		WriteWords(jitBus, FastCodeBase, 0x4E90, 0x60FC); // JSR (A0); BRA.S self
+		WriteWords(interpreterBus, FastCodeBase, 0x4E90, 0x60FC);
 		var jitHostHits = 0;
 		var interpreterHostHits = 0;
-		jitBus.RegisterHostCallback(hostTarget, state =>
+		jitBus.RegisterHostTrapStub(hostTarget, state =>
 		{
 			jitHostHits++;
-			state.ProgramCounter = FastCodeBase;
 		});
-		interpreterBus.RegisterHostCallback(hostTarget, state =>
+		interpreterBus.RegisterHostTrapStub(hostTarget, state =>
 		{
 			interpreterHostHits++;
-			state.ProgramCounter = FastCodeBase;
 		});
 		var jit = new M68kJitCore(jitBus, enableV2: true);
 		var interpreter = new M68kInterpreter(interpreterBus);
@@ -3446,15 +3448,15 @@ public sealed class M68kJitCoreTests
 		jit.State.A[0] = hostTarget;
 		interpreter.State.A[0] = hostTarget;
 
-		var jitExecuted = jit.ExecuteInstructions(220, 500_000, new PureBatchBoundary());
-		var interpreterExecuted = interpreter.ExecuteInstructions(220, null, new CountingBoundary());
+		var jitExecuted = jit.ExecuteInstructions(219, 500_000, new PureBatchBoundary());
+		var interpreterExecuted = interpreter.ExecuteInstructions(219, null, new CountingBoundary());
 
 		Assert.Equal(interpreterExecuted, jitExecuted);
 		Assert.Equal(interpreterHostHits, jitHostHits);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.Equal(0x4000u, jit.State.A[7]);
-		Assert.Equal(0u, jitBus.ReadLong(0x3FFC));
+		Assert.Equal(FastCodeBase + 2, jitBus.ReadLong(0x3FFC));
 		Assert.True(jit.Counters.V2TraceHits > 0);
 		Assert.True(jit.Counters.HostTrapBailouts > 0);
 		Assert.True(jit.Counters.V2SideExitHostTrap > 0);

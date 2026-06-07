@@ -177,7 +177,6 @@ namespace CopperMod.Amiga
         private void InstallHostShim(AmigaBus bus, AmigaKickstartTrapTable traps)
         {
             bus.MapReadOnlyMemory(AmigaKickstartRomFont.BaseAddress, AmigaKickstartRomFont.CreateTopazCompatibleFont());
-            bus.RegisterHostCallback(0, traps.NullCallback);
             bus.WriteLong(0, ExecStructAddress);
             bus.WriteLong(4, ExecLibraryBase);
             if (traps.OkCallbackAddress != 0)
@@ -274,7 +273,7 @@ namespace CopperMod.Amiga
             int displacement,
             Action<M68kCpuState> callback)
         {
-            bus.RegisterHostCallback(unchecked((uint)((int)libraryBase + displacement)), callback);
+            bus.RegisterHostTrapStub(unchecked((uint)((int)libraryBase + displacement)), callback);
         }
     }
 

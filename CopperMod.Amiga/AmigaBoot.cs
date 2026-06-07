@@ -369,50 +369,50 @@ namespace CopperMod.Amiga
             for (var displacement = -6; displacement >= -600; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, captured), state => HostExecGeneric(state, captured));
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, captured), state => HostExecGeneric(state, captured));
             }
 
             InstallTaskTrapDispatchers();
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -456), HostDoIo);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -96), HostFindResident);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -132), HostOk);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -138), HostOk);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -276), HostFindName);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), HostAllocMem);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), HostAllocAbs);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -210), HostFreeMem);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -216), HostAvailMem);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -408), HostOpenLibrary);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -414), HostOk);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -498), HostOpenLibrary);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExecLibraryBase, -552), HostOpenLibrary);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -48), HostDosWrite);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -54), HostDosInput);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -60), HostDosOutput);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -84), HostDosLock);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -90), HostDosUnLock);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -102), HostDosExamine);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -126), HostDosCurrentDir);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.DosLibraryBase, -132), HostDosIoErr);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -456), HostDoIo);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -96), HostFindResident);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -132), HostOk);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -138), HostOk);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -276), HostFindName);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), HostAllocMem);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), HostAllocAbs);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -210), HostFreeMem);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -216), HostAvailMem);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -408), HostOpenLibrary);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -414), HostOk);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -498), HostOpenLibrary);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -552), HostOpenLibrary);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -48), HostDosWrite);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -54), HostDosInput);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -60), HostDosOutput);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -84), HostDosLock);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -90), HostDosUnLock);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -102), HostDosExamine);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -126), HostDosCurrentDir);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -132), HostDosIoErr);
             for (var displacement = -6; displacement >= -180; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, captured), state => HostIconGeneric(state, captured));
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, captured), state => HostIconGeneric(state, captured));
             }
 
             for (var displacement = -6; displacement >= -600; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostCallback(Lvo(AmigaKickstartHost.GraphicsLibraryBase, captured), state => HostGraphicsGeneric(state, captured));
-                bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IntuitionLibraryBase, captured), state => HostIntuitionGeneric(state, captured));
-                bus.RegisterHostCallback(Lvo(AmigaKickstartHost.ExpansionLibraryBase, captured), state => HostExpansionGeneric(state, captured));
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.GraphicsLibraryBase, captured), state => HostGraphicsGeneric(state, captured));
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IntuitionLibraryBase, captured), state => HostIntuitionGeneric(state, captured));
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExpansionLibraryBase, captured), state => HostExpansionGeneric(state, captured));
             }
 
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, -78), HostIconGetDiskObject);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, -90), HostIconFreeDiskObject);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, -96), HostIconFindToolType);
-            bus.RegisterHostCallback(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
-            bus.RegisterHostCallback(DosResidentInitAddress, HostInitResident);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -78), HostIconGetDiskObject);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -90), HostIconFreeDiskObject);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -96), HostIconFindToolType);
+            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
+            bus.RegisterHostTrapStub(DosResidentInitAddress, HostInitResident);
             InstallKickstartMemoryList();
         }
 
@@ -454,12 +454,12 @@ namespace CopperMod.Amiga
         private void InstallTaskTrapDispatchers()
         {
             var bus = _machine.Bus;
-            bus.RegisterHostCallback(DefaultTaskTrapCodeAddress, HostDefaultTaskTrapCode);
+            bus.RegisterHostTrapStub(DefaultTaskTrapCodeAddress, HostDefaultTaskTrapCode);
             for (var trap = 0; trap < 16; trap++)
             {
                 var vector = 32 + trap;
                 var dispatcherAddress = TaskTrapDispatcherBaseAddress + (uint)(trap * 4);
-                bus.RegisterHostCallback(dispatcherAddress, state => HostTaskTrapDispatcher(state, vector));
+                bus.RegisterHostTrapStub(dispatcherAddress, state => HostTaskTrapDispatcher(state, vector));
                 bus.WriteLong((uint)(vector * 4), dispatcherAddress);
             }
         }

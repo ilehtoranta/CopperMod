@@ -187,9 +187,16 @@ public sealed class M68kOpcodeMatrixTests
 			WriteLongRaw(address, value);
 		}
 
-		public bool TryInvokeHost(uint address, M68kCpuState state)
+		public bool HasHostTrapStub(uint address)
 		{
 			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
 			_ = state;
 			return false;
 		}

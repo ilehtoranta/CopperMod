@@ -254,7 +254,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(io + BootIoDataOffset, ChipPublicLowerAddress);
 		bus.WriteLong(io + BootIoOffsetOffset, 0x400);
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -456), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -456), state));
 
 		Assert.Equal(0u, state.D[0]);
 		Assert.Equal(0, bus.ReadByte(io + BootIoErrorOffset));
@@ -269,14 +269,14 @@ public sealed class AmigaBootMemoryTests
 		state.ResetStackPointers(supervisorStackPointer: 0x400, userStackPointer: 0x2000, supervisorMode: false);
 		state.SetActiveStackPointer(0x1FFC);
 
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -150), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -150), state));
 
 		Assert.Equal(0x400u, state.D[0]);
 		Assert.True(state.GetFlag(M68kCpuState.Supervisor));
 		Assert.Equal(0x1FFCu, state.A[7]);
 
 		state.D[0] = 0x400;
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -156), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -156), state));
 
 		Assert.False(state.GetFlag(M68kCpuState.Supervisor));
 		Assert.Equal(0x1FFCu, state.A[7]);
@@ -289,25 +289,25 @@ public sealed class AmigaBootMemoryTests
 		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
 		var state = new M68kCpuState();
 
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -294), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -294), state));
 
 		var currentTask = machine.Bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecThisTaskOffset);
 		Assert.Equal(currentTask, state.D[0]);
 
 		state.D[0] = 4;
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -342), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -342), state));
 
 		Assert.Equal(4u, state.D[0]);
 		Assert.Equal(0x0010, machine.Bus.ReadWord(currentTask + TaskTrapAllocOffset));
 		Assert.Equal(0x0010, machine.Bus.ReadWord(currentTask + TaskTrapAbleOffset));
 
 		state.D[0] = 4;
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -342), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -342), state));
 
 		Assert.Equal(0xFFFF_FFFFu, state.D[0]);
 
 		state.D[0] = 4;
-		Assert.True(machine.Bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -348), state));
+		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -348), state));
 
 		Assert.Equal(0, machine.Bus.ReadWord(currentTask + TaskTrapAllocOffset));
 		Assert.Equal(0, machine.Bus.ReadWord(currentTask + TaskTrapAbleOffset));
@@ -359,9 +359,9 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.A[1] = 0x2200;
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
 		bus.WriteLong(0x2304, 0x2600);
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.IntuitionLibraryBase, -0x186), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -0x186), state));
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 		bus.Display.RenderFrame(frame);
 
@@ -386,12 +386,12 @@ public sealed class AmigaBootMemoryTests
 		state.A[1] = view;
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
 		bus.Display.RenderFrame(frame);
 		Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
 
 		bus.WriteLong(view + ViewLofCprListOffset, 0);
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
 		bus.Display.RenderFrame(frame);
 		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
 	}
@@ -410,7 +410,7 @@ public sealed class AmigaBootMemoryTests
 		state.A[0] = view;
 		state.A[1] = viewPort;
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
 
 		var lofCprList = bus.ReadLong(view + ViewLofCprListOffset);
 		var shfCprList = bus.ReadLong(view + ViewShfCprListOffset);
@@ -446,7 +446,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.A[0] = view;
 		state.A[1] = viewPort;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
 
 		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
 		Assert.Equal(0x0000, ReadCopperMoveValue(bus, copperList, 0x00E0));
@@ -467,7 +467,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.A[1] = view;
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0x168), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0x168), state));
 		for (var offset = 0; offset < ViewStructSize; offset++)
 		{
 			Assert.Equal((byte)0, bus.ReadByte(view + (uint)offset));
@@ -492,7 +492,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.D[0] = byteCount;
 		state.D[1] = flags;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -198), state));
 		return state.D[0];
 	}
 
@@ -501,7 +501,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.D[0] = byteCount;
 		state.A[1] = location;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -204), state));
 		return state.D[0];
 	}
 
@@ -509,7 +509,7 @@ public sealed class AmigaBootMemoryTests
 	{
 		var state = new M68kCpuState();
 		state.D[1] = flags;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -216), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -216), state));
 		return state.D[0];
 	}
 
@@ -518,7 +518,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.A[1] = address;
 		state.D[0] = byteCount;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -210), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -210), state));
 		Assert.Equal(0u, state.D[0]);
 	}
 
@@ -699,6 +699,16 @@ public sealed class AmigaBootMemoryTests
 	private static uint Lvo(uint libraryBase, int displacement)
 	{
 		return unchecked((uint)((int)libraryBase + displacement));
+	}
+
+	private static bool InvokeHostTrap(AmigaBus bus, uint address, M68kCpuState state)
+	{
+		if (bus.ReadWord(address) != 0xFF00)
+		{
+			return false;
+		}
+
+		return bus.TryInvokeHostTrap(address, bus.ReadWord(address + 2), state);
 	}
 
 	private static void WriteCopperColorList(AmigaBus bus, uint address, ushort color)

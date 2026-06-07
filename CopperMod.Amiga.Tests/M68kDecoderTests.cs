@@ -84,7 +84,7 @@ public sealed class M68kDecoderTests
 	public void KeepsHostTrapRootsOutOfTraces()
 	{
 		var bus = new AmigaBus();
-		bus.RegisterHostCallback(0x1000, _ => { });
+		bus.RegisterHostTrapStub(0x1000, _ => { });
 
 		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var reason));
 		Assert.Equal(M68kJitBailoutReason.HostTrap, reason);

@@ -173,6 +173,69 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void RegisteredLineFHostTrapStubInvokesCallbackAndReturns()
+	{
+		var bus = new AmigaBus();
+		var trapAddress = 0x00F0_0000u;
+		var callbackCalled = false;
+		bus.RegisterHostTrapStub(trapAddress, state =>
+		{
+			callbackCalled = true;
+			state.D[0] = 0x1234_5678;
+		});
+		bus.WriteWord(0x1000, 0x4EB9); // JSR absolute long
+		bus.WriteLong(0x1002, trapAddress);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.True(callbackCalled);
+		Assert.Equal(0x1234_5678u, cpu.State.D[0]);
+		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+		Assert.Equal(0xFF00, bus.ReadWord(trapAddress));
+		Assert.NotEqual(0, bus.ReadWord(trapAddress + 2));
+	}
+
+	[Fact]
+	public void RegisteredLineFHostTrapDoesNotReturnWhenCallbackChangesProgramCounter()
+	{
+		var bus = new AmigaBus();
+		var trapAddress = 0x00F0_0000u;
+		bus.RegisterHostTrapStub(trapAddress, state => state.ProgramCounter = 0x2000);
+		bus.WriteWord(0x1000, 0x4EB9); // JSR absolute long
+		bus.WriteLong(0x1002, trapAddress);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFCu, cpu.State.A[7]);
+		Assert.Equal(0x1006u, bus.ReadLong(0x2FFC));
+	}
+
+	[Fact]
+	public void UnregisteredLineFHostTrapOpcodeRaisesRealLineFException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xFF, 0x00, 0x12, 0x34);
+		bus.WriteLong(11 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, BigEndian.ReadUInt32(bus.Memory, 0x4FFC, "line-F stacked program counter"));
+		Assert.DoesNotContain(bus.Accesses, access => access.Address == 0x1002 && access.Kind == AmigaBusAccessKind.CpuInstructionFetch);
+	}
+
+	[Fact]
 	public void ResetInstructionSignalsExternalDevices()
 	{
 		var bus = new TestBus();
@@ -782,9 +845,16 @@ public sealed class M68kInterpreterTests
 			Writes.Add((address + 3, (byte)value, cycle));
 		}
 
-		public bool TryInvokeHost(uint address, M68kCpuState state)
+		public bool HasHostTrapStub(uint address)
 		{
 			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
 			_ = state;
 			return false;
 		}

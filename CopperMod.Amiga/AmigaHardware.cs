@@ -20,6 +20,22 @@ namespace CopperMod.Amiga
         public ushort Value { get; }
     }
 
+    internal readonly struct HostTrapStub
+    {
+        public HostTrapStub(uint address, ushort trapId, Action<M68kCpuState> callback)
+        {
+            Address = address;
+            TrapId = trapId;
+            Callback = callback ?? throw new ArgumentNullException(nameof(callback));
+        }
+
+        public uint Address { get; }
+
+        public ushort TrapId { get; }
+
+        public Action<M68kCpuState> Callback { get; }
+    }
+
     internal readonly struct M68kCodeGenerationStamp
     {
         public M68kCodeGenerationStamp(uint[] pages, uint[] generations)
@@ -37,12 +53,12 @@ namespace CopperMod.Amiga
 
     internal readonly struct M68kJitCodeSnapshot
     {
-        public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostCallbackAddresses)
+        public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostTrapStubAddresses)
         {
             Root = root;
             Bytes = bytes;
             GenerationStamp = generationStamp;
-            HostCallbackAddresses = hostCallbackAddresses;
+            HostTrapStubAddresses = hostTrapStubAddresses;
         }
 
         public uint Root { get; }
@@ -51,7 +67,7 @@ namespace CopperMod.Amiga
 
         public M68kCodeGenerationStamp GenerationStamp { get; }
 
-        public uint[] HostCallbackAddresses { get; }
+        public uint[] HostTrapStubAddresses { get; }
 
         public bool IsEmpty => Bytes == null || Bytes.Length == 0;
     }
@@ -70,7 +86,7 @@ namespace CopperMod.Amiga
 
         public int ByteLength => _snapshot.Bytes?.Length ?? 0;
 
-        public bool HasHostCallback(uint address)
+        public bool HasHostTrapStub(uint address)
         {
             address = NormalizeAddress(address);
             if (!TryGetOffset(address, 2, out _))
@@ -78,15 +94,15 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            var callbacks = _snapshot.HostCallbackAddresses;
-            if (callbacks == null)
+            var trapStubs = _snapshot.HostTrapStubAddresses;
+            if (trapStubs == null)
             {
                 return false;
             }
 
-            for (var i = 0; i < callbacks.Length; i++)
+            for (var i = 0; i < trapStubs.Length; i++)
             {
-                if (callbacks[i] == address)
+                if (trapStubs[i] == address)
                 {
                     return true;
                 }
@@ -180,6 +196,7 @@ namespace CopperMod.Amiga
 
     internal sealed class AmigaBus : IM68kBus, IM68kCodeReader
     {
+        private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
         private const int MaxPendingInterruptEvents = 65536;
         private const int CodeGenerationPageShift = 8;
@@ -191,7 +208,7 @@ namespace CopperMod.Amiga
         private readonly uint[] _chipCodePageGenerations;
         private readonly uint[] _expansionCodePageGenerations;
         private readonly uint[] _realFastCodePageGenerations;
-        private readonly Dictionary<uint, Action<M68kCpuState>> _hostCallbacks = new Dictionary<uint, Action<M68kCpuState>>();
+        private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
         private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
         private readonly AmigaCiaInterruptEvent[] _drainedCiaInterruptBuffer = new AmigaCiaInterruptEvent[MaxPendingInterruptEvents];
@@ -217,6 +234,7 @@ namespace CopperMod.Amiga
         private long _nextHorizontalSyncCycle;
         private long _lastRasterAdvanceCycle;
         private uint _codeGenerationClock = 1;
+        private ushort _nextHostTrapId = 1;
 
         internal event Action<uint, int>? JitEligibleMemoryWritten;
 
@@ -415,7 +433,8 @@ namespace CopperMod.Amiga
             Array.Clear(_realFastRam);
             Array.Clear(_pendingCustomBytes);
             Array.Clear(_pendingCustomByteWritten);
-            _hostCallbacks.Clear();
+            _hostTrapStubs.Clear();
+            _nextHostTrapId = 1;
             _mappedMemoryRegions.Clear();
             _romOverlayRegion = null;
             _romOverlayEnabled = true;
@@ -458,39 +477,42 @@ namespace CopperMod.Amiga
             gamePort.JoystickRight = right;
         }
 
-        public void RegisterHostCallback(uint address, Action<M68kCpuState> callback)
-        {
-            _hostCallbacks[address] = callback ?? throw new ArgumentNullException(nameof(callback));
-        }
-
-        public bool TryInvokeHost(uint address, M68kCpuState state)
+        public ushort RegisterHostTrapStub(uint address, Action<M68kCpuState> callback)
         {
             address = NormalizeAddress(address);
-            if (!_hostCallbacks.TryGetValue(address, out var callback))
+            var trapId = _nextHostTrapId++;
+            if (trapId == 0)
+            {
+                throw new AmigaEmulationException("Host trap id space exhausted.");
+            }
+
+            _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
+            TouchCodePages(address, 4);
+            NotifyJitEligibleMemoryWritten(address, 4);
+            return trapId;
+        }
+
+        public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+        {
+            instructionProgramCounter = NormalizeAddress(instructionProgramCounter);
+            if (!_hostTrapStubs.TryGetValue(instructionProgramCounter, out var stub) ||
+                stub.TrapId != trapId)
             {
                 return false;
             }
 
-            var access = Arbitrate(
-                AmigaBusRequester.Cpu,
-                AmigaBusAccessKind.HostTrap,
-                AmigaBusAccessTarget.HostTrap,
-                address,
-                AmigaBusAccessSize.Word,
-                state.Cycles,
-                isWrite: false);
-            state.Cycles = access.CompletedCycle;
-            callback(state);
+            stub.Callback(state);
             return true;
         }
 
-        internal bool HasHostCallback(uint address)
+        public bool HasHostTrapStub(uint address)
         {
-            return _hostCallbacks.ContainsKey(NormalizeAddress(address));
+            address = NormalizeAddress(address);
+            return _hostTrapStubs.ContainsKey(address);
         }
 
-        bool IM68kCodeReader.HasHostCallback(uint address)
-            => HasHostCallback(address);
+        bool IM68kCodeReader.HasHostTrapStub(uint address)
+            => HasHostTrapStub(address);
 
         public void ResetExternalDevices(long cycle)
         {
@@ -1670,7 +1692,7 @@ namespace CopperMod.Amiga
                 return AmigaBusAccessTarget.Cia;
             }
 
-            if (_hostCallbacks.ContainsKey(address))
+            if (TryReadHostTrapStubByte(address, out _))
             {
                 return AmigaBusAccessTarget.HostTrap;
             }
@@ -1694,6 +1716,11 @@ namespace CopperMod.Amiga
         private byte ReadRawByte(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
+            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
+            }
+
             if (TryReadRomOverlayByte(address, out var overlayValue))
             {
                 return overlayValue;
@@ -1754,6 +1781,32 @@ namespace CopperMod.Amiga
             return 0;
         }
 
+        private bool TryReadHostTrapStubByte(uint address, out byte value)
+        {
+            address = NormalizeAddress(address);
+            for (var offset = 0u; offset < 4; offset++)
+            {
+                var baseAddress = NormalizeAddress(address - offset);
+                if (!_hostTrapStubs.TryGetValue(baseAddress, out var entry) ||
+                    NormalizeAddress(entry.Address + offset) != address)
+                {
+                    continue;
+                }
+
+                value = offset switch
+                {
+                    0 => (byte)(HostTrapOpcode >> 8),
+                    1 => (byte)(HostTrapOpcode & 0x00FF),
+                    2 => (byte)(entry.TrapId >> 8),
+                    _ => (byte)entry.TrapId
+                };
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
         private void UpdateBeamPositionForCustomRead(ushort offset, long cycle)
         {
             if (offset < 0x004 ||
@@ -1787,6 +1840,11 @@ namespace CopperMod.Amiga
         private ushort ReadRawWord(uint address)
         {
             address = NormalizeAddress(address);
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
+
             if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
             {
                 var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
@@ -1811,6 +1869,11 @@ namespace CopperMod.Amiga
         private ushort ReadRawWord(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
+
             if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
             {
                 var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
@@ -1955,13 +2018,13 @@ namespace CopperMod.Amiga
                 }
             }
 
-            var hostCallbacks = new List<uint>();
+            var hostTrapStubs = new List<uint>();
             for (var offset = 0; offset + 1 < byteCount; offset += 2)
             {
                 var address = NormalizeAddress(root + (uint)offset);
-                if (HasHostCallback(address))
+                if (HasHostTrapStub(address))
                 {
-                    hostCallbacks.Add(address);
+                    hostTrapStubs.Add(address);
                 }
             }
 
@@ -1969,7 +2032,7 @@ namespace CopperMod.Amiga
                 root,
                 bytes,
                 new M68kCodeGenerationStamp(pages, beforeGenerations),
-                hostCallbacks.ToArray());
+                hostTrapStubs.ToArray());
             return true;
         }
 
@@ -2259,6 +2322,19 @@ namespace CopperMod.Amiga
             if (target == AmigaBusAccessTarget.RealFastRam &&
                 TryReadJitLinearMemory(_realFastRam, RealFastRamBase, address, size, out value))
             {
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private bool TryReadHostTrapStubWord(uint address, out ushort value)
+        {
+            if (TryReadHostTrapStubByte(address, out var high) &&
+                TryReadHostTrapStubByte(address + 1, out var low))
+            {
+                value = (ushort)((high << 8) | low);
                 return true;
             }
 

@@ -628,7 +628,7 @@ namespace CopperMod.Amiga
                 !trace.V2PureCpuBatchEligible ||
                 _v2DisabledRoots.Contains(trace.Root) ||
                 _instructionFrequency.Enabled ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
+                (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root)) ||
                 boundary is not IM68kPureCpuTraceBatchBoundary batchBoundary)
             {
                 return TryExecuteV2BusAccessTraceBatch(trace, maxInstructions, targetCycle, boundary, out _);
@@ -883,7 +883,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root))
             {
                 blockReason = "host-trap";
                 return false;
@@ -1022,7 +1022,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root))
             {
                 blockReason = "host-trap";
                 return false;
@@ -1051,7 +1051,7 @@ namespace CopperMod.Amiga
                 trace.Root != cached.Root ||
                 trace.V2Compiled == null ||
                 _v2DisabledRoots.Contains(trace.Root) ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
+                (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root)) ||
                 !TryValidateTraceGeneration(target, ref trace))
             {
                 _v2HandoffTraceCache.Remove(key);
@@ -1110,7 +1110,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (_amigaBus.HasHostCallback(target))
+            if (_amigaBus.HasHostTrapStub(target))
             {
                 blockReason = "no-trace-host";
                 return false;
@@ -1210,7 +1210,7 @@ namespace CopperMod.Amiga
             if (!_traces.TryGetValue(target, out trace) ||
                 trace.V2Compiled == null ||
                 _v2DisabledRoots.Contains(trace.Root) ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root)) ||
+                (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root)) ||
                 !TryValidateTraceGeneration(target, ref trace))
             {
                 return false;
@@ -1278,7 +1278,7 @@ namespace CopperMod.Amiga
                 return null;
             }
 
-            if (_amigaBus != null && _amigaBus.HasHostCallback(trace.Root))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(trace.Root))
             {
                 unavailableReason = "host-trap";
                 return null;
@@ -1865,7 +1865,7 @@ namespace CopperMod.Amiga
                 if (target == Normalize(plan.Root) ||
                     _v2DisabledRoots.Contains(target) ||
                     _amigaBus.IsChipRamAddress(target) ||
-                    _amigaBus.HasHostCallback(target))
+                    _amigaBus.HasHostTrapStub(target))
                 {
                     continue;
                 }
@@ -2137,7 +2137,7 @@ namespace CopperMod.Amiga
                     }
 
                     if (!reader.ContainsRange(pc, 2) ||
-                        reader.HasHostCallback(pc) ||
+                        reader.HasHostTrapStub(pc) ||
                         !M68kDecoder.TryDecode(reader, pc, out var instruction, out _))
                     {
                         if (collected.Count == 0)
@@ -2659,7 +2659,7 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    if (_amigaBus.HasHostCallback(pc))
+                    if (_amigaBus.HasHostTrapStub(pc))
                     {
                         if (collected.Count == 0)
                         {
@@ -6190,7 +6190,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (_amigaBus.HasHostCallback(target))
+            if (_amigaBus.HasHostTrapStub(target))
             {
                 RecordV2TraceHandoffDiagnostic(reason + ":host", countFailure);
                 return;
@@ -6236,7 +6236,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (_amigaBus.HasHostCallback(target))
+            if (_amigaBus.HasHostTrapStub(target))
             {
                 IncrementV2Diagnostic(_v2BranchPressureLimitCauses, "host");
                 return;
@@ -6273,7 +6273,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (_amigaBus.HasHostCallback(target))
+            if (_amigaBus.HasHostTrapStub(target))
             {
                 IncrementV2Diagnostic(_v2BranchPressureTargetStates, state + ":host");
                 return;
@@ -6640,7 +6640,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (_amigaBus != null && _amigaBus.HasHostCallback(target))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(target))
             {
                 _counters.V2SideExitHostTrap++;
                 return;
@@ -6673,7 +6673,7 @@ namespace CopperMod.Amiga
             if (!_v2Enabled ||
                 _amigaBus == null ||
                 _amigaBus.IsChipRamAddress(target) ||
-                _amigaBus.HasHostCallback(target))
+                _amigaBus.HasHostTrapStub(target))
             {
                 return false;
             }
@@ -6762,7 +6762,7 @@ namespace CopperMod.Amiga
                 return "chip";
             }
 
-            if (_amigaBus.HasHostCallback(target))
+            if (_amigaBus.HasHostTrapStub(target))
             {
                 return "host";
             }
@@ -6897,7 +6897,7 @@ namespace CopperMod.Amiga
         {
             if (_amigaBus == null ||
                 _amigaBus.IsChipRamAddress(target) ||
-                _amigaBus.HasHostCallback(target) ||
+                _amigaBus.HasHostTrapStub(target) ||
                 !M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _))
             {
                 return false;
@@ -7253,7 +7253,7 @@ namespace CopperMod.Amiga
             programCounter = Normalize(programCounter);
             _compiledInstructionPreviousCycle = State.Cycles;
             if (State.ProgramCounter != programCounter ||
-                (_amigaBus != null && _amigaBus.HasHostCallback(programCounter)))
+                (_amigaBus != null && _amigaBus.HasHostTrapStub(programCounter)))
             {
                 _counters.HostTrapBailouts++;
                 return false;
@@ -7638,7 +7638,7 @@ namespace CopperMod.Amiga
 
         private bool ExecuteCompiledJumpTo(uint target, bool link)
         {
-            if (_amigaBus != null && _amigaBus.HasHostCallback(target))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(target))
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
                 State.Cycles = _compiledInstructionPreviousCycle;
@@ -7663,7 +7663,7 @@ namespace CopperMod.Amiga
 
         private bool ExecuteV2JumpTo(uint target, bool link, int cycles)
         {
-            if (_amigaBus != null && _amigaBus.HasHostCallback(target))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(target))
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
                 _counters.HostTrapBailouts++;
@@ -8039,7 +8039,7 @@ namespace CopperMod.Amiga
         private bool ExecuteJump(M68kDecodedEa source, bool link)
         {
             var target = ResolveEaAddress(source, M68kOperandSize.Long, applySideEffects: false);
-            if (_amigaBus != null && _amigaBus.HasHostCallback(target))
+            if (_amigaBus != null && _amigaBus.HasHostTrapStub(target))
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
                 State.Cycles = _compiledInstructionPreviousCycle;

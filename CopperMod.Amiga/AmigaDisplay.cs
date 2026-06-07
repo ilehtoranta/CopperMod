@@ -38,6 +38,7 @@ namespace CopperMod.Amiga
         private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
         private const int MaxPaletteFrameSpans = MaxPendingWrites;
+        private const int MaxBitplaneDataSpans = MaxPendingWrites;
         private const int MaxSpriteFrameCommands = 256;
         private const int LiveBitplanePlaneCount = 6;
         private const int LiveBitplaneWordsPerRow = LiveBitplanePlaneCount * MaxBitplaneFetchWords;
@@ -56,12 +57,15 @@ namespace CopperMod.Amiga
         private byte[] _playfieldPriorityMasks = Array.Empty<byte>();
         private readonly ushort[,] _renderPlaneWords = new ushort[6, MaxBitplaneFetchWords];
         private readonly bool[] _renderPlaneHasRow = new bool[6];
+        private readonly ushort[] _bitplaneDataRegisters = new ushort[6];
+        private readonly bool[] _bitplaneDataRegisterWritten = new bool[6];
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
         private readonly List<SpriteFrameCommand>[] _spriteCommandScratch = new List<SpriteFrameCommand>[8];
         private readonly bool[] _evenSpriteAttached = new bool[MaxSpriteFrameCommands];
         private readonly bool[] _oddSpriteAttached = new bool[MaxSpriteFrameCommands];
         private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
+        private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
         private readonly uint[] _paletteFrameSpanColors = new uint[MaxPaletteFrameSpans * PaletteColorCount];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
         private readonly SavedDisplayState _liveFrameInitialState = new SavedDisplayState();
@@ -393,6 +397,9 @@ namespace CopperMod.Amiga
             _pendingIndex = 0;
             Array.Clear(_bitplanePointers);
             Array.Clear(_bitplaneBaseRows);
+            Array.Clear(_bitplaneDataRegisters);
+            Array.Clear(_bitplaneDataRegisterWritten);
+            _bitplaneDataSpans.Clear();
             _copperListPointer = 0;
             _copperListPointer2 = 0;
             _diwStart = DefaultDiwStart;
@@ -564,6 +571,7 @@ namespace CopperMod.Amiga
                 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or
                 0x100 or 0x102 or 0x104 or 0x108 or 0x10A ||
                 (offset >= 0x0E0 && offset <= 0x0F6) ||
+                (offset >= 0x110 && offset <= 0x11A) ||
                 (offset >= 0x120 && offset < 0x180) ||
                 (offset >= 0x180 && offset < 0x1C0);
         }
@@ -685,6 +693,7 @@ namespace CopperMod.Amiga
                 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or
                 0x100 or 0x102 or 0x104 or 0x108 or 0x10A ||
                 (offset >= 0x0E0 && offset <= 0x0F6) ||
+                (offset >= 0x110 && offset <= 0x11A) ||
                 (offset >= 0x180 && offset < 0x1C0);
         }
 
@@ -1668,6 +1677,7 @@ namespace CopperMod.Amiga
                 throw new ArgumentException("The framebuffer is smaller than the PAL display.", nameof(bgra));
             }
 
+            _bitplaneDataSpans.Clear();
             if (useTimedWrites && _bus.LiveAgnusDmaEnabled)
             {
                 var frameStopCycle = GetPresentationFrameStopCycle(frameStartCycle, frameEndCycle);
@@ -1694,6 +1704,7 @@ namespace CopperMod.Amiga
             ResetPlayfieldPriorityMasks();
             _spriteFrameCommands.Clear();
             _paletteFrameSpans.Clear();
+            _bitplaneDataSpans.Clear();
             _enforceDmaForFrame = useTimedWrites;
             _useTimedPresentationReads = useTimedWrites;
             _renderFrameStartCycle = frameStartCycle;
@@ -1781,6 +1792,7 @@ namespace CopperMod.Amiga
             var saved = SaveDisplayState();
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
+            _bitplaneDataSpans.Clear();
             _paletteFrameSpans.Clear();
             _renderInterlaceField = InterlaceEnabled
                 ? (int)((frameStartCycle / PalFrameCycles) & 1)
@@ -1924,10 +1936,13 @@ namespace CopperMod.Amiga
                 ApplyLiveLineStateForRendering(state);
                 _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
                 _displayWindowStateLine = StandardVStart + row + 1;
+                _currentRenderRow = row;
                 CapturePaletteFrameSpans(row, row + 1, 0, AmigaConstants.PalLowResWidth);
                 FillRows(bgra, row, row + 1);
                 RenderBitplanes(bgra, row, row + 1);
             }
+
+            _currentRenderRow = -1;
         }
 
         private void RenderTimedPresentationFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
@@ -2784,7 +2799,9 @@ namespace CopperMod.Amiga
 
             if (!_useTimedPresentationReads)
             {
-                return _bus.ReadChipWordForPresentation(address);
+                var immediateValue = _bus.ReadChipWordForPresentation(address);
+                LoadBitplaneDataRegister(plane, immediateValue);
+                return immediateValue;
             }
 
             row = Math.Clamp(row, 0, LowResOutputHeight - 1);
@@ -2806,7 +2823,19 @@ namespace CopperMod.Amiga
 
             _lastBitplaneDmaFetches++;
             RecordDisplayDmaCycle(access.GrantedCycle);
+            LoadBitplaneDataRegister(plane, value);
             return value;
+        }
+
+        private void LoadBitplaneDataRegister(int plane, ushort value)
+        {
+            if ((uint)plane >= (uint)_bitplaneDataRegisters.Length)
+            {
+                return;
+            }
+
+            _bitplaneDataRegisters[plane] = value;
+            _bitplaneDataRegisterWritten[plane] = true;
         }
 
         private bool TryReadSpriteWordForPresentation(
@@ -3693,6 +3722,12 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (offset >= 0x110 && offset <= 0x11A)
+            {
+                ApplyBitplaneDataWrite(offset, value, cycle);
+                return;
+            }
+
             if (offset >= 0x180 && offset < 0x1C0)
             {
                 var colorIndex = (offset - 0x180) / 2;
@@ -3726,6 +3761,78 @@ namespace CopperMod.Amiga
             {
                 ApplySpriteWrite(offset, value);
             }
+        }
+
+        private void ApplyBitplaneDataWrite(ushort offset, ushort value, long cycle)
+        {
+            var plane = (offset - 0x110) / 2;
+            if ((uint)plane >= (uint)_bitplaneDataRegisters.Length)
+            {
+                return;
+            }
+
+            _bitplaneDataRegisters[plane] = value;
+            _bitplaneDataRegisterWritten[plane] = true;
+            if (plane == 0)
+            {
+                CaptureBitplaneDataShiftGroup(cycle);
+            }
+        }
+
+        private void CaptureBitplaneDataShiftGroup(long cycle)
+        {
+            if (_bitplaneDataSpans.Count >= MaxBitplaneDataSpans)
+            {
+                return;
+            }
+
+            if (!TryGetBitplaneDataWritePosition(cycle, out var row, out var xStart))
+            {
+                return;
+            }
+
+            var pixelCount = IsHighResolutionEnabled() ? 8 : 16;
+            var xStop = Math.Min(AmigaConstants.PalLowResWidth, xStart + pixelCount);
+            if (xStop <= xStart)
+            {
+                return;
+            }
+
+            _bitplaneDataSpans.Add(new BitplaneDataSpan(
+                row,
+                xStart,
+                xStop,
+                _bitplaneDataRegisters[0],
+                _bitplaneDataRegisters[1],
+                _bitplaneDataRegisters[2],
+                _bitplaneDataRegisters[3],
+                _bitplaneDataRegisters[4],
+                _bitplaneDataRegisters[5]));
+        }
+
+        private bool TryGetBitplaneDataWritePosition(long cycle, out int row, out int xStart)
+        {
+            if (cycle == long.MinValue)
+            {
+                row = TryGetCurrentOutputRow(out var currentRow)
+                    ? currentRow
+                    : 0;
+                xStart = GetDataFetchStartX(GetDisplayWindow());
+                return (uint)row < (uint)LowResOutputHeight;
+            }
+
+            var frameStart = _advancingLiveDma
+                ? _liveFrameStartCycle
+                : _renderFrameStartCycle;
+            row = GetOutputRowForCycle(frameStart, cycle);
+            xStart = GetOutputXForCycle(frameStart, cycle);
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
+            return true;
         }
 
         private void ApplyCopperMove(ushort offset, ushort value, long cycle)
@@ -4055,7 +4162,10 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (_enforceDmaForFrame && (_dmacon & (DmaconMasterEnable | DmaconBitplaneEnable)) != (DmaconMasterEnable | DmaconBitplaneEnable))
+            var hasBitplaneDataSpans = HasBitplaneDataSpanInBand(bandStart, bandStop, xClipStart, xClipStop);
+            var bitplaneDmaEnabled = !_enforceDmaForFrame ||
+                (_dmacon & (DmaconMasterEnable | DmaconBitplaneEnable)) == (DmaconMasterEnable | DmaconBitplaneEnable);
+            if (!bitplaneDmaEnabled && !hasBitplaneDataSpans)
             {
                 return;
             }
@@ -4085,134 +4195,94 @@ namespace CopperMod.Amiga
             var renderHighHeight = IsRenderingHighResolutionHeight();
             var renderInterlace = InterlaceEnabled;
             var renderInterlaceField = _renderInterlaceField;
-            for (var y = rowStart; y < rowStop; y++)
+            var savedCurrentRenderRow = _currentRenderRow;
+            try
             {
-                _lastBitplaneRows++;
-                for (var plane = 0; plane < planeCount; plane++)
+                for (var y = rowStart; y < rowStop; y++)
                 {
-                    var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
-                    var rowStride = (fetchWords * 2) + mod;
-                    var displaySourceY = y - _bitplaneBaseRows[plane];
-                    var planeSourceY = displaySourceY;
-                    var liveCapturedMask = _renderingLiveCapture
-                        ? _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(y, plane)]
-                        : 0UL;
-                    planeHasRow[plane] = displaySourceY >= 0 || liveCapturedMask != 0;
-                    var rowAddress = unchecked(_bitplanePointers[plane] + (uint)(planeSourceY * rowStride));
-                    for (var word = 0; word < fetchWords; word++)
+                    _currentRenderRow = y;
+                    _lastBitplaneRows++;
+                    for (var plane = 0; plane < planeCount; plane++)
                     {
-                        if (!planeHasRow[plane])
+                        var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
+                        var rowStride = (fetchWords * 2) + mod;
+                        var displaySourceY = y - _bitplaneBaseRows[plane];
+                        var planeSourceY = displaySourceY;
+                        var liveCapturedMask = _renderingLiveCapture
+                            ? _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(y, plane)]
+                            : 0UL;
+                        planeHasRow[plane] = bitplaneDmaEnabled && (displaySourceY >= 0 || liveCapturedMask != 0);
+                        var rowAddress = unchecked(_bitplanePointers[plane] + (uint)(planeSourceY * rowStride));
+                        for (var word = 0; word < fetchWords; word++)
                         {
-                            planeWords[plane, word] = 0;
-                            continue;
-                        }
-
-                        if ((liveCapturedMask & (1UL << word)) != 0 &&
-                            TryReadLiveCapturedBitplaneWord(y, plane, word, out var captured))
-                        {
-                            planeWords[plane, word] = captured;
-                            _lastBitplaneWords++;
-                            continue;
-                        }
-
-                        var address = unchecked(rowAddress + (uint)(word * 2));
-                        planeWords[plane, word] = ReadBitplaneWordForPresentation(address, y, plane, word);
-                        _lastBitplaneWords++;
-                    }
-                }
-
-                var xStart = Math.Max(clipLeft, Math.Max(0, originX));
-                var xStop = Math.Min(clipRight, Math.Min(AmigaConstants.PalLowResWidth, originX + drawPixels + (highResolution ? 8 : 16)));
-                var hamColor = _colors[0];
-                if (!highResolution && !dualPlayfield && !holdAndModify && zeroScroll)
-                {
-                    for (var x = xStart; x < xStop; x++)
-                    {
-                        var relativeX = x - originX;
-                        if ((uint)relativeX >= (uint)fetchPixels)
-                        {
-                            continue;
-                        }
-
-                        var word = relativeX >> 4;
-                        if ((uint)word >= MaxBitplaneFetchWords)
-                        {
-                            continue;
-                        }
-
-                        var mask = 1 << (15 - (relativeX & 0x0F));
-                        var colorIndex = 0;
-                        for (var plane = 0; plane < planeCount; plane++)
-                        {
-                            if (planeHasRow[plane] && (planeWords[plane, word] & mask) != 0)
+                            if (!planeHasRow[plane])
                             {
-                                colorIndex |= 1 << plane;
+                                planeWords[plane, word] = 0;
+                                continue;
                             }
-                        }
 
-                        colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(colorIndex, planeCount);
-                        if (colorIndex != 0)
-                        {
-                            RecordBitplanePixel(colorIndex, NormalPlayfieldPriorityMask, x, y);
-                        }
+                            if ((liveCapturedMask & (1UL << word)) != 0 &&
+                                TryReadLiveCapturedBitplaneWord(y, plane, word, out var captured))
+                            {
+                                planeWords[plane, word] = captured;
+                                LoadBitplaneDataRegister(plane, captured);
+                                _lastBitplaneWords++;
+                                continue;
+                            }
 
-                        SetPlayfieldPriorityMask(
-                            x,
-                            y,
-                            colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask);
-                        WriteLowResolutionOutputPixel(
-                            bgra,
-                            x,
-                            y,
-                            _convertedColors[colorIndex],
-                            renderHighWidth,
-                            renderHighHeight,
-                            renderInterlace,
-                            renderInterlaceField);
+                            var address = unchecked(rowAddress + (uint)(word * 2));
+                            planeWords[plane, word] = ReadBitplaneWordForPresentation(address, y, plane, word);
+                            _lastBitplaneWords++;
+                        }
                     }
 
-                    continue;
-                }
-
-                for (var x = xStart; x < xStop; x++)
-                {
-                    if (highResolution)
+                    var xStart = Math.Max(clipLeft, Math.Max(0, originX));
+                    var xStop = Math.Min(clipRight, Math.Min(AmigaConstants.PalLowResWidth, originX + drawPixels + (highResolution ? 8 : 16)));
+                    var hamColor = _colors[0];
+                    if (!highResolution && !dualPlayfield && !holdAndModify && zeroScroll)
                     {
-                        var leftColorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels, hiresSubPixel: 0);
-                        var rightColorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels, hiresSubPixel: 1);
-                        SetPlayfieldPriorityMask(
-                            x,
-                            y,
-                            (leftColorIndex | rightColorIndex) == 0 ? (byte)0 : NormalPlayfieldPriorityMask);
-                        if ((leftColorIndex | rightColorIndex) != 0)
+                        for (var x = xStart; x < xStop; x++)
                         {
-                            RecordBitplanePixel(
-                                leftColorIndex != 0 ? leftColorIndex : rightColorIndex,
-                                NormalPlayfieldPriorityMask,
-                                x,
-                                y);
-                        }
+                            var relativeX = x - originX;
+                            if ((uint)relativeX >= (uint)fetchPixels)
+                            {
+                                continue;
+                            }
 
-                        if (renderHighWidth)
-                        {
-                            WriteHighResolutionOutputPixelPair(
-                                bgra,
+                            var word = relativeX >> 4;
+                            if ((uint)word >= MaxBitplaneFetchWords)
+                            {
+                                continue;
+                            }
+
+                            var mask = 1 << (15 - (relativeX & 0x0F));
+                            if (!TryGetBitplaneDataSpanColorIndex(x, y, planeCount, highResolution: false, hiresSubPixel: -1, out var colorIndex))
+                            {
+                                colorIndex = 0;
+                                for (var plane = 0; plane < planeCount; plane++)
+                                {
+                                    if (planeHasRow[plane] && (planeWords[plane, word] & mask) != 0)
+                                    {
+                                        colorIndex |= 1 << plane;
+                                    }
+                                }
+                            }
+
+                            colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(colorIndex, planeCount);
+                            if (colorIndex != 0)
+                            {
+                                RecordBitplanePixel(colorIndex, NormalPlayfieldPriorityMask, x, y);
+                            }
+
+                            SetPlayfieldPriorityMask(
                                 x,
                                 y,
-                                ConvertColorIndex(leftColorIndex),
-                                ConvertColorIndex(rightColorIndex),
-                                renderHighWidth,
-                                renderHighHeight,
-                                renderInterlace,
-                                renderInterlaceField);
-                        }
-                        else
-                        {
+                                colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask);
                             WriteLowResolutionOutputPixel(
                                 bgra,
                                 x,
                                 y,
-                                ConvertColorIndex(SelectLowResolutionHiResColorIndex(leftColorIndex, rightColorIndex)),
+                                _convertedColors[colorIndex],
                                 renderHighWidth,
                                 renderHighHeight,
                                 renderInterlace,
@@ -4222,40 +4292,93 @@ namespace CopperMod.Amiga
                         continue;
                     }
 
-                    var colorIndex = 0;
-                    var playfieldPriorityMask = (byte)0;
-                    if (dualPlayfield)
+                    for (var x = xStart; x < xStop; x++)
                     {
-                        var dualPixel = GetDualPlayfieldPixel(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
-                        colorIndex = dualPixel.ColorIndex;
-                        playfieldPriorityMask = dualPixel.PriorityMask;
-                    }
-                    else
-                    {
-                        colorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
-                        colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(colorIndex, planeCount);
-                        playfieldPriorityMask = colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
-                    }
+                        if (highResolution)
+                        {
+                            var leftColorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels, hiresSubPixel: 0);
+                            var rightColorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels, hiresSubPixel: 1);
+                            SetPlayfieldPriorityMask(
+                                x,
+                                y,
+                                (leftColorIndex | rightColorIndex) == 0 ? (byte)0 : NormalPlayfieldPriorityMask);
+                            if ((leftColorIndex | rightColorIndex) != 0)
+                            {
+                                RecordBitplanePixel(
+                                    leftColorIndex != 0 ? leftColorIndex : rightColorIndex,
+                                    NormalPlayfieldPriorityMask,
+                                    x,
+                                    y);
+                            }
 
-                    SetPlayfieldPriorityMask(x, y, playfieldPriorityMask);
-                    if (colorIndex != 0)
-                    {
-                        RecordBitplanePixel(colorIndex, playfieldPriorityMask, x, y);
-                    }
+                            if (renderHighWidth)
+                            {
+                                WriteHighResolutionOutputPixelPair(
+                                    bgra,
+                                    x,
+                                    y,
+                                    ConvertColorIndex(leftColorIndex),
+                                    ConvertColorIndex(rightColorIndex),
+                                    renderHighWidth,
+                                    renderHighHeight,
+                                    renderInterlace,
+                                    renderInterlaceField);
+                            }
+                            else
+                            {
+                                WriteLowResolutionOutputPixel(
+                                    bgra,
+                                    x,
+                                    y,
+                                    ConvertColorIndex(SelectLowResolutionHiResColorIndex(leftColorIndex, rightColorIndex)),
+                                    renderHighWidth,
+                                    renderHighHeight,
+                                    renderInterlace,
+                                    renderInterlaceField);
+                            }
 
-                    var pixel = holdAndModify
-                        ? ConvertHamPixel(colorIndex, ref hamColor)
-                        : ConvertColorIndex(colorIndex);
-                    WriteLowResolutionOutputPixel(
-                        bgra,
-                        x,
-                        y,
-                        pixel,
-                        renderHighWidth,
-                        renderHighHeight,
-                        renderInterlace,
-                        renderInterlaceField);
+                            continue;
+                        }
+
+                        var colorIndex = 0;
+                        var playfieldPriorityMask = (byte)0;
+                        if (dualPlayfield)
+                        {
+                            var dualPixel = GetDualPlayfieldPixel(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
+                            colorIndex = dualPixel.ColorIndex;
+                            playfieldPriorityMask = dualPixel.PriorityMask;
+                        }
+                        else
+                        {
+                            colorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels);
+                            colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(colorIndex, planeCount);
+                            playfieldPriorityMask = colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
+                        }
+
+                        SetPlayfieldPriorityMask(x, y, playfieldPriorityMask);
+                        if (colorIndex != 0)
+                        {
+                            RecordBitplanePixel(colorIndex, playfieldPriorityMask, x, y);
+                        }
+
+                        var pixel = holdAndModify
+                            ? ConvertHamPixel(colorIndex, ref hamColor)
+                            : ConvertColorIndex(colorIndex);
+                        WriteLowResolutionOutputPixel(
+                            bgra,
+                            x,
+                            y,
+                            pixel,
+                            renderHighWidth,
+                            renderHighHeight,
+                            renderInterlace,
+                            renderInterlaceField);
+                    }
                 }
+            }
+            finally
+            {
+                _currentRenderRow = savedCurrentRenderRow;
             }
         }
 
@@ -4316,6 +4439,11 @@ namespace CopperMod.Amiga
 
         private int GetBitplaneColorIndex(ushort[,] planeWords, bool[] planeHasRow, int planeCount, int x, int originX, int fetchPixels, int hiresSubPixel = -1)
         {
+            if (TryGetBitplaneDataSpanColorIndex(x, _currentRenderRow, planeCount, hiresSubPixel >= 0, hiresSubPixel, out var spanColorIndex))
+            {
+                return spanColorIndex;
+            }
+
             var colorIndex = 0;
             for (var plane = 0; plane < planeCount; plane++)
             {
@@ -4375,6 +4503,11 @@ namespace CopperMod.Amiga
 
         private DualPlayfieldPixel GetDualPlayfieldPixel(ushort[,] planeWords, bool[] planeHasRow, int planeCount, int x, int originX, int fetchPixels)
         {
+            if (TryGetBitplaneDataSpanColorIndex(x, _currentRenderRow, planeCount, highResolution: false, hiresSubPixel: -1, out var spanColorIndex))
+            {
+                return ConvertRawColorIndexToDualPlayfieldPixel(spanColorIndex, planeCount);
+            }
+
             var playfield1 = 0;
             var playfield2 = 0;
             for (var plane = 0; plane < planeCount; plane++)
@@ -4398,6 +4531,127 @@ namespace CopperMod.Amiga
 
                 var bit = 15 - (relativeX & 0x0F);
                 var pixelBit = (planeWords[plane, word] >> bit) & 1;
+                if ((plane & 1) == 0)
+                {
+                    playfield1 |= pixelBit << (plane / 2);
+                }
+                else
+                {
+                    playfield2 |= pixelBit << (plane / 2);
+                }
+            }
+
+            if (playfield1 == 0 && playfield2 == 0)
+            {
+                return default;
+            }
+
+            var priorityMask = (byte)0;
+            if (playfield1 != 0)
+            {
+                priorityMask |= Playfield1PriorityMask;
+            }
+
+            if (playfield2 != 0)
+            {
+                priorityMask |= Playfield2PriorityMask;
+            }
+
+            var playfield2Color = playfield2 == 0 ? 0 : playfield2 + 8;
+            var playfield1Color = GetPlayfield1Priority() >= 5 && playfield1 != 0 ? 0 : playfield1;
+            playfield2Color = GetPlayfield2Priority() >= 5 && playfield2 != 0 ? 0 : playfield2Color;
+            if ((_bplcon2 & 0x0040) != 0)
+            {
+                return new DualPlayfieldPixel(playfield2 != 0 ? playfield2Color : playfield1Color, priorityMask);
+            }
+
+            return new DualPlayfieldPixel(playfield1 != 0 ? playfield1Color : playfield2Color, priorityMask);
+        }
+
+        private bool HasBitplaneDataSpanInBand(int rowStart, int rowStop, int xStart, int xStop)
+        {
+            if (_bitplaneDataSpans.Count == 0)
+            {
+                return false;
+            }
+
+            if (xStop < 0)
+            {
+                xStop = AmigaConstants.PalLowResWidth;
+            }
+
+            rowStart = Math.Clamp(rowStart, 0, LowResOutputHeight);
+            rowStop = Math.Clamp(rowStop, rowStart, LowResOutputHeight);
+            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
+            xStop = Math.Clamp(xStop, xStart, AmigaConstants.PalLowResWidth);
+            for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _bitplaneDataSpans[i];
+                if (span.Row >= rowStart &&
+                    span.Row < rowStop &&
+                    span.XStop > xStart &&
+                    span.XStart < xStop)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetBitplaneDataSpanColorIndex(
+            int x,
+            int y,
+            int planeCount,
+            bool highResolution,
+            int hiresSubPixel,
+            out int colorIndex)
+        {
+            colorIndex = 0;
+            if ((uint)y >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _bitplaneDataSpans[i];
+                if (!span.Contains(x, y))
+                {
+                    continue;
+                }
+
+                var relativeX = x - span.XStart;
+                if (highResolution)
+                {
+                    relativeX = (relativeX * 2) + Math.Clamp(hiresSubPixel, 0, 1);
+                }
+
+                if ((uint)relativeX >= 16)
+                {
+                    return false;
+                }
+
+                var bit = 15 - relativeX;
+                var enabledPlanes = Math.Min(planeCount, _bitplaneDataRegisters.Length);
+                for (var plane = 0; plane < enabledPlanes; plane++)
+                {
+                    colorIndex |= ((span.GetWord(plane) >> bit) & 1) << plane;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private DualPlayfieldPixel ConvertRawColorIndexToDualPlayfieldPixel(int rawColorIndex, int planeCount)
+        {
+            var playfield1 = 0;
+            var playfield2 = 0;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                var pixelBit = (rawColorIndex >> plane) & 1;
                 if ((plane & 1) == 0)
                 {
                     playfield1 |= pixelBit << (plane / 2);
@@ -5570,6 +5824,8 @@ namespace CopperMod.Amiga
             Array.Copy(_convertedColors, saved.ConvertedColors, _convertedColors.Length);
             Array.Copy(_bitplanePointers, saved.BitplanePointers, _bitplanePointers.Length);
             Array.Copy(_bitplaneBaseRows, saved.BitplaneBaseRows, _bitplaneBaseRows.Length);
+            Array.Copy(_bitplaneDataRegisters, saved.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
+            Array.Copy(_bitplaneDataRegisterWritten, saved.BitplaneDataRegisterWritten, _bitplaneDataRegisterWritten.Length);
         }
 
         private void RestoreDisplayState(SavedDisplayState saved)
@@ -5591,6 +5847,8 @@ namespace CopperMod.Amiga
             Array.Copy(saved.ConvertedColors, _convertedColors, _convertedColors.Length);
             Array.Copy(saved.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
             Array.Copy(saved.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
+            Array.Copy(saved.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
+            Array.Copy(saved.BitplaneDataRegisterWritten, _bitplaneDataRegisterWritten, _bitplaneDataRegisterWritten.Length);
         }
 
         private void ApplyLiveLineStateForRendering(LiveLineState state)
@@ -5712,6 +5970,63 @@ namespace CopperMod.Amiga
             public bool Contains(int x, int y)
             {
                 return y == Row && x >= XStart && x < XStop;
+            }
+        }
+
+        private readonly struct BitplaneDataSpan
+        {
+            private readonly ushort _word0;
+            private readonly ushort _word1;
+            private readonly ushort _word2;
+            private readonly ushort _word3;
+            private readonly ushort _word4;
+            private readonly ushort _word5;
+
+            public BitplaneDataSpan(
+                int row,
+                int xStart,
+                int xStop,
+                ushort word0,
+                ushort word1,
+                ushort word2,
+                ushort word3,
+                ushort word4,
+                ushort word5)
+            {
+                Row = row;
+                XStart = xStart;
+                XStop = xStop;
+                _word0 = word0;
+                _word1 = word1;
+                _word2 = word2;
+                _word3 = word3;
+                _word4 = word4;
+                _word5 = word5;
+            }
+
+            public int Row { get; }
+
+            public int XStart { get; }
+
+            public int XStop { get; }
+
+            public bool Contains(int x, int y)
+            {
+                return y == Row && x >= XStart && x < XStop;
+            }
+
+            public ushort GetWord(int plane)
+            {
+                return plane switch
+                {
+                    0 => _word0,
+                    1 => _word1,
+                    2 => _word2,
+                    3 => _word3,
+                    4 => _word4,
+                    5 => _word5,
+                    _ => 0
+                };
             }
         }
 
@@ -5975,6 +6290,8 @@ namespace CopperMod.Amiga
             public readonly uint[] ConvertedColors = new uint[64];
             public readonly uint[] BitplanePointers = new uint[6];
             public readonly int[] BitplaneBaseRows = new int[6];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
+            public readonly bool[] BitplaneDataRegisterWritten = new bool[6];
         }
 
         private sealed class SpriteState

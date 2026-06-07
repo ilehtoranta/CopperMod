@@ -231,7 +231,7 @@ namespace CopperMod.Amiga
 
     internal interface IM68kCodeReader
     {
-        bool HasHostCallback(uint address);
+        bool HasHostTrapStub(uint address);
 
         ushort ReadHostWord(uint address);
     }
@@ -271,7 +271,7 @@ namespace CopperMod.Amiga
             try
             {
                 programCounter = Normalize(programCounter);
-                if ((programCounter & 1) != 0 || codeReader.HasHostCallback(programCounter))
+                if ((programCounter & 1) != 0 || codeReader.HasHostTrapStub(programCounter))
                 {
                     reason = M68kJitBailoutReason.HostTrap;
                     return false;

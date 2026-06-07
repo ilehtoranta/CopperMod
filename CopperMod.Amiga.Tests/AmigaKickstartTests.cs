@@ -19,10 +19,10 @@ public sealed class AmigaKickstartTests
 
 		Assert.Equal(AmigaKickstartHost.ExecStructAddress, bus.ReadLong(0));
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, bus.ReadLong(4));
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), new M68kCpuState()));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -198), new M68kCpuState()));
 
 		var state = new M68kCpuState();
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -198), state));
 		Assert.True(allocCalled);
 		Assert.Equal(0x0004_2000u, state.D[0]);
 	}
@@ -64,7 +64,7 @@ public sealed class AmigaKickstartTests
 		var state = new M68kCpuState();
 		state.A[1] = 0x1000;
 
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -408), state));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -408), state));
 
 		Assert.Equal(AmigaKickstartHost.DosLibraryBase, state.D[0]);
 	}
@@ -81,8 +81,8 @@ public sealed class AmigaKickstartTests
 
 		Assert.Equal(rom[0], bus.ReadByte(baseAddress));
 		Assert.Equal(rom[^1], bus.ReadByte(baseAddress + (uint)rom.Length - 1));
-		Assert.False(bus.TryInvokeHost(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), new M68kCpuState()));
-		Assert.False(bus.TryInvokeHost(Lvo(AmigaKickstartHost.CiaBResourceBase, -18), new M68kCpuState()));
+		Assert.False(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -198), new M68kCpuState()));
+		Assert.False(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.CiaBResourceBase, -18), new M68kCpuState()));
 	}
 
 	[Fact]
@@ -130,12 +130,12 @@ public sealed class AmigaKickstartTests
 		var ciaAState = new M68kCpuState();
 		ciaAState.A[6] = AmigaKickstartHost.CiaAResourceBase;
 		ciaAState.D[0] = 0x81;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.CiaAResourceBase, -18), ciaAState));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.CiaAResourceBase, -18), ciaAState));
 
 		var ciaBState = new M68kCpuState();
 		ciaBState.A[6] = AmigaKickstartHost.CiaBResourceBase;
 		ciaBState.D[0] = 0x81;
-		Assert.True(bus.TryInvokeHost(Lvo(AmigaKickstartHost.CiaBResourceBase, -24), ciaBState));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.CiaBResourceBase, -24), ciaBState));
 
 		Assert.Equal(new[] { AmigaKickstartHost.CiaAResourceBase }, ableCalls);
 		Assert.Equal(new[] { AmigaKickstartHost.CiaBResourceBase }, setCalls);
@@ -187,6 +187,16 @@ public sealed class AmigaKickstartTests
 	private static uint Lvo(uint libraryBase, int displacement)
 	{
 		return unchecked((uint)((int)libraryBase + displacement));
+	}
+
+	private static bool InvokeHostTrap(AmigaBus bus, uint address, M68kCpuState state)
+	{
+		if (bus.ReadWord(address) != 0xFF00)
+		{
+			return false;
+		}
+
+		return bus.TryInvokeHostTrap(address, bus.ReadWord(address + 2), state);
 	}
 
 	private static void WriteString(AmigaBus bus, uint address, string value)

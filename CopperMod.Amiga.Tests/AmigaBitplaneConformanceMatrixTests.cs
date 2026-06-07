@@ -125,6 +125,12 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "Copper BPLCON0 disable before DDF suppresses same-line pixels":
                 CopperBplcon0DisableBeforeDdfSuppressesSameLinePixels();
                 break;
+            case "BPLxDAT Denise latch and sprite-enable timing":
+                BpldatWritesTriggerDeniseShiftGroup();
+                CopperBpldatWritesAreTimedWithinTheLine();
+                BpldatDisabledPlanesDoNotContribute();
+                LiveDmaCapturePreservesTimedBpldatWrites();
+                break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for bitplane row '{row.Name}'.");
         }
@@ -167,7 +173,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("undocumented-ocs", "undocumented BPLCON2 values affect dual playfield"),
         Executable("undocumented-ocs", "OCS bitplane DMA enable inside DDF waits for next line"),
         Executable("dma-control", "Copper BPLCON0 disable before DDF suppresses same-line pixels"),
-        Pending("undocumented-ocs", "BPLxDAT Denise latch and sprite-enable timing", "Requires a latch-level Denise model."),
+        Executable("undocumented-ocs", "BPLxDAT Denise latch and sprite-enable timing"),
         Pending("undocumented-ocs", "OCS 7-plane mode and HAM plus dual-playfield interaction", "Requires BPLxDAT latch and mode-combination modelling."),
         Pending("undocumented-ocs", "DDFSTRT sprite-slot stealing and refresh conflicts", "Requires a fuller Agnus DMA conflict model."),
         Pending("resolution", "ECS/AGA superhires and productivity modes", "Out of scope for A500 PAL OCS."),
@@ -742,6 +748,100 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY + 1));
     }
 
+    private static void BpldatWritesTriggerDeniseShiftGroup()
+    {
+        var bus = CreateBpldatManualBus(enableLiveDma: false);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var x = OutputXForHorizontal(0x70);
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFFFFFF00u, Pixel(frame, x, StandardY));
+        Assert.Equal(0xFFFFFF00u, Pixel(frame, x + 15, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, x + 16, StandardY));
+    }
+
+    private static void CopperBpldatWritesAreTimedWithinTheLine()
+    {
+        var bus = CreateDisplayBus();
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var targetLine = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + StandardY;
+        SetColor(bus, 3, 0x0FF0);
+        WriteCopperList(
+            bus,
+            CopperListBase,
+            ((ushort)((targetLine << 8) | 0x71), 0xFFFE),
+            (0x0112, 0xFFFF),
+            (0x0110, 0xFFFF),
+            (0xFFFF, 0xFFFE));
+        bus.WriteWord(0x00DFF080, (ushort)(CopperListBase >> 16));
+        bus.WriteWord(0x00DFF082, (ushort)CopperListBase);
+        bus.WriteWord(0x00DFF096, 0x8280);
+        bus.WriteWord(0x00DFF100, 0x2000);
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        var firstYellow = -1;
+        for (var x = 0; x < AmigaConstants.PalLowResWidth; x++)
+        {
+            if (Pixel(frame, x, StandardY) == 0xFFFFFF00u)
+            {
+                firstYellow = x;
+                break;
+            }
+        }
+
+        Assert.InRange(firstYellow, OutputXForHorizontal(0x70), OutputXForHorizontal(0x90));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFFFFFF00u, Pixel(frame, firstYellow + 15, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, firstYellow + 16, StandardY));
+    }
+
+    private static void BpldatDisabledPlanesDoNotContribute()
+    {
+        var bus = CreateDisplayBus();
+        var writeCycle = OutputCycle(StandardY, 0x70);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var x = OutputXForHorizontal(0x70);
+        SetColor(bus, 3, 0x0FF0);
+        bus.WriteWord(0x00DFF100, 0x1000, 0);
+        bus.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+        bus.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, x, StandardY));
+    }
+
+    private static void LiveDmaCapturePreservesTimedBpldatWrites()
+    {
+        var presentationBus = CreateBpldatManualBus(enableLiveDma: false);
+        var liveBus = CreateBpldatManualBus(enableLiveDma: true);
+        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var actual = new uint[expected.Length];
+        var x = OutputXForHorizontal(0x70);
+
+        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+        Assert.Equal(Pixel(expected, x, StandardY), Pixel(actual, x, StandardY));
+        Assert.Equal(Pixel(expected, x + 15, StandardY), Pixel(actual, x + 15, StandardY));
+        Assert.Equal(Pixel(expected, x + 16, StandardY), Pixel(actual, x + 16, StandardY));
+    }
+
+    private static AmigaBus CreateBpldatManualBus(bool enableLiveDma)
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: enableLiveDma);
+        var writeCycle = OutputCycle(StandardY, 0x70);
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF186, 0x0FF0);
+        bus.WriteWord(0x00DFF100, 0x2000, 0);
+        bus.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+        bus.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+        return bus;
+    }
+
     private static AmigaBus CreateDisplayBus()
     {
         var bus = new AmigaBus();
@@ -847,6 +947,16 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     {
         var line = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
         return (long)line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+    }
+
+    private static long OutputCycle(int row, int horizontal)
+    {
+        return OutputRowStartCycle(row) + ((long)horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
+    }
+
+    private static int OutputXForHorizontal(int horizontal)
+    {
+        return Math.Clamp((horizontal - 0x38) * 2, 0, AmigaConstants.PalLowResWidth);
     }
 
     private static MatrixRow Executable(string group, string name)
