@@ -1782,12 +1782,7 @@ namespace CopperMod.Amiga
                 targetAddress: _activeDmaTargetAddress,
                 completionCycle: _activeDmaCompletionCycle,
                 detail: "dskblk");
-            _bus.WriteDeviceWord(
-                AmigaBusRequester.Disk,
-                AmigaBusAccessKind.DiskDma,
-                0x00DFF09C,
-                (ushort)(0x8000 | DskBlkInterrupt),
-                _activeDmaCompletionCycle);
+            _bus.RequestHardwareInterrupt(DskBlkInterrupt, _activeDmaCompletionCycle);
             ClearActiveDma();
         }
 
@@ -2338,12 +2333,7 @@ namespace CopperMod.Amiga
                     register: 0x09C,
                     value: (ushort)(0x8000 | DskSynInterrupt),
                     detail: "dsksyn");
-                _bus.WriteDeviceWord(
-                    AmigaBusRequester.Disk,
-                    AmigaBusAccessKind.DiskDma,
-                    0x00DFF09C,
-                    (ushort)(0x8000 | DskSynInterrupt),
-                    matchCycle);
+                _bus.RequestHardwareInterrupt(DskSynInterrupt, matchCycle);
                 AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
             }
         }

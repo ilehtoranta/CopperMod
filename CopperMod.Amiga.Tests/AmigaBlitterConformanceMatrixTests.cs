@@ -417,6 +417,41 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
+	public void BlitterBusyRemainsSetWhenBitplaneDmaDelaysFinalWriteSlot()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var destination = 0x1000u;
+		WriteWord(bus, SourceA, 0xCAFE);
+		WriteWord(bus, destination, 0x1234);
+		ConfigureAreaBlit(bus, 0x09F0, destinationD: destination);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		WritePointer(bus, 0x00DFF0E0, 0x2000);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		bus.WriteWord(0x00DFF096, 0x8340);
+		bus.EnableLiveAgnusDma();
+
+		bus.Blitter.WriteRegister(0x058, 0x0041, fetchCycle - (2 * AgnusChipSlotScheduler.SlotCycles));
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		Assert.Equal(fetchCycle - AgnusChipSlotScheduler.SlotCycles, startCycle);
+
+		var nominalCompletion = startCycle + 4;
+		bus.AdvanceDmaTo(nominalCompletion);
+
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(0xCAFE, bus.ReadChipWordForPresentation(destination, nominalCompletion));
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqBlitter);
+
+		bus.AdvanceDmaTo(nominalCompletion + AgnusChipSlotScheduler.SlotCycles);
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(0xCAFE, bus.ReadChipWordForPresentation(destination, nominalCompletion + AgnusChipSlotScheduler.SlotCycles));
+	}
+
+	[Fact]
 	public void BlitterLineModeUsesEightHrmTicksPerPixel()
 	{
 		var bus = new AmigaBus();
@@ -659,6 +694,12 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	private static void WriteWord(AmigaBus bus, uint address, ushort value)
 	{
 		BigEndian.WriteUInt16(bus.ChipRam, (int)address, value);
+	}
+
+	private static long OutputRowStartCycle(int row)
+	{
+		var line = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
+		return (long)line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 	}
 
 	private static ushort ReadWord(AmigaBus bus, uint address)

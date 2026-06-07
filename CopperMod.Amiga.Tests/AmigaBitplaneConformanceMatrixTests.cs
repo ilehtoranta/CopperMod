@@ -260,6 +260,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, StandardY * 2));
         Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, (StandardY * 2) + 1));
 
+        bus.WriteWord(0x00DFF0E0, 0x0000, frameCycle);
+        bus.WriteWord(0x00DFF0E2, 0x1000, frameCycle);
         bus.Display.RenderFrame(frame, frameCycle, frameCycle * 2);
         Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, (StandardY * 2) + 1));
     }

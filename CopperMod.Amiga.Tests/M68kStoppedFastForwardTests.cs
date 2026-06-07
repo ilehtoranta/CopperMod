@@ -70,7 +70,7 @@ public sealed class M68kStoppedFastForwardTests
 		Assert.Equal(0x3FFAu, cpu.State.A[7]);
 		Assert.Equal(FastCodeBase, bus.ReadLong(0x3FFC));
 		Assert.Equal(0x2000, bus.ReadWord(0x3FFA));
-		Assert.Equal(104, cpu.State.Cycles);
+		Assert.Equal(114, cpu.State.Cycles);
 	}
 
 	private class FastForwardBoundary : IM68kStoppedCpuFastForwardBoundary

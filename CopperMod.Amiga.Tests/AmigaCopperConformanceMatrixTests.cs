@@ -497,7 +497,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         _ = bus.ReadLiveCopperDmaWord(CopperList, sharedCycle, out var copper);
 
         Assert.Equal(sharedCycle, bitplane.GrantedCycle);
-        Assert.Equal(sharedCycle + AgnusChipSlotScheduler.SlotCycles, copper.GrantedCycle);
+        Assert.Equal(sharedCycle + (2 * AgnusChipSlotScheduler.SlotCycles), copper.GrantedCycle);
         Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastDeniedFixedSlot?.Owner);
     }
 

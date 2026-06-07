@@ -963,7 +963,7 @@ namespace CopperMod.Amiga
             }
             else
             {
-                granted = TryReserveFixedDmaSlot(request, out access);
+                granted = TryReserveExactFixedDmaSlot(request, out access);
             }
 
             if (!granted)
@@ -1008,7 +1008,7 @@ namespace CopperMod.Amiga
             }
             else
             {
-                granted = TryReserveFixedDmaSlot(request, out access);
+                granted = TryReserveExactFixedDmaSlot(request, out access);
             }
 
             if (!granted)
@@ -1146,7 +1146,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            return TryReserveFixedDmaSlot(request, out access);
+            return TryReserveExactFixedDmaSlot(request, out access);
         }
 
         public void ClearPresentationWriteHistory()
@@ -1188,8 +1188,20 @@ namespace CopperMod.Amiga
         public void WriteDeviceWord(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
         {
             address = NormalizeAddress(address);
-            var access = Arbitrate(requester, kind, ClassifyTarget(address), address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
+            var target = ClassifyTarget(address);
+            if (target == AmigaBusAccessTarget.CustomRegisters && requester != AmigaBusRequester.Cpu)
+            {
+                WriteRawWord(address, value, Math.Max(0, requestedCycle));
+                return;
+            }
+
+            var access = Arbitrate(requester, kind, target, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
             WriteRawWord(address, value, access.GrantedCycle);
+        }
+
+        internal void RequestHardwareInterrupt(ushort intreqBit, long cycle)
+        {
+            Paula.RequestInterrupt(intreqBit, Math.Max(0, cycle));
         }
 
         public void AdvanceRasterTo(long targetCycle)
@@ -1212,12 +1224,7 @@ namespace CopperMod.Amiga
             while (_nextVerticalBlankCycle <= targetCycle)
             {
                 CiaA.IncrementTod(_nextVerticalBlankCycle, _pendingCiaInterrupts);
-                WriteDeviceWord(
-                    AmigaBusRequester.Bitplane,
-                    AmigaBusAccessKind.CustomRegister,
-                    0x00DFF09C,
-                    (ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank),
-                    _nextVerticalBlankCycle);
+                RequestHardwareInterrupt(AmigaConstants.IntreqVerticalBlank, _nextVerticalBlankCycle);
                 _nextVerticalBlankCycle += _palFrameCycles;
             }
         }
@@ -1588,6 +1595,12 @@ namespace CopperMod.Amiga
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReserveExactFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result)
+        {
+            return _hrmSlotEngine.TryReserveExactFixedDmaSlot(request, out result);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
         {
             return _hrmSlotEngine.ReserveBitplaneDmaSlot(address, requestedCycle);
@@ -1678,7 +1691,7 @@ namespace CopperMod.Amiga
             return ReadRawByte(address, long.MinValue);
         }
 
-        private byte ReadRawByte(uint address, long customRegisterSampleCycle)
+        private byte ReadRawByte(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
             if (TryReadRomOverlayByte(address, out var overlayValue))
@@ -1704,7 +1717,7 @@ namespace CopperMod.Amiga
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
                 var offset = (ushort)(address - 0x00DFF000);
-                UpdateBeamPositionForCustomRead(offset, customRegisterSampleCycle);
+                UpdateBeamPositionForCustomRead(offset, sampleCycle);
                 if (TryReadGamePortCustomByte(offset, out var gamePortValue))
                 {
                     return gamePortValue;
@@ -1795,7 +1808,7 @@ namespace CopperMod.Amiga
             return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
         }
 
-        private ushort ReadRawWord(uint address, long customRegisterSampleCycle)
+        private ushort ReadRawWord(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
             if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
@@ -1816,8 +1829,8 @@ namespace CopperMod.Amiga
                 return (ushort)((_realFastRam[realFastOffset] << 8) | _realFastRam[realFastOffset + 1]);
             }
 
-            return (ushort)((ReadRawByte(address, customRegisterSampleCycle) << 8) |
-                ReadRawByte(address + 1, customRegisterSampleCycle));
+            return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
+                ReadRawByte(address + 1, sampleCycle));
         }
 
         private uint ReadRawLong(uint address)
@@ -3564,13 +3577,21 @@ namespace CopperMod.Amiga
             if ((uint)channel < AmigaConstants.PaulaChannelCount)
             {
                 var bit = GetAudioInterruptBit(channel);
-                _intreq |= bit;
-                WriteRegisterWord(0x01E, _intreq);
-                if (IsInterruptEnabled(bit))
-                {
-                    _pendingInterrupts.Add(new PaulaInterruptEvent(channel, bit, cycle));
-                }
+                RequestInterrupt(bit, cycle);
             }
+        }
+
+        internal void RequestInterrupt(ushort bit, long cycle)
+        {
+            bit = (ushort)(bit & 0x3FFF);
+            if (bit == 0)
+            {
+                return;
+            }
+
+            _intreq |= bit;
+            WriteRegisterWord(0x01E, _intreq);
+            QueuePendingEnabledAudioInterrupts(cycle, bit);
         }
 
         private void ApplyModulationFrom(int sourceChannel, ushort value)

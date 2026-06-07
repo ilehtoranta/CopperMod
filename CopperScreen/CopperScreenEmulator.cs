@@ -782,24 +782,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		_targetCycle += PalFrameCycles;
 		BeginFrameAudio(_targetCycle);
-		var useLiveAgnusForPresentation = _machine.Bus.LiveAgnusDmaEnabled;
-		if (useLiveAgnusForPresentation)
-		{
-			_machine.Bus.SetLiveAgnusDmaEnabled(false);
-		}
-
 		AmigaBootResult result;
-		try
-		{
-			result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
-		}
-		finally
-		{
-			if (useLiveAgnusForPresentation)
-			{
-				_machine.Bus.SetLiveAgnusDmaEnabled(true);
-			}
-		}
+		result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
 
 		FinishFrameAudio();
 		if (HandleBootResult(result))

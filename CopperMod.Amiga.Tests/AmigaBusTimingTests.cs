@@ -255,6 +255,47 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void BlitterSearchSkipsFutureLiveBitplaneSlot()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var requestedCycle = fetchCycle - AgnusChipSlotScheduler.SlotCycles;
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x1000);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		bus.EnableLiveAgnusDma();
+
+		var blocker = bus.ReadChipWordForDeviceWithResult(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			0x2000,
+			requestedCycle);
+		var write = bus.WriteChipWordForDeviceWithResult(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			0x1000,
+			0xFFFF,
+			requestedCycle);
+
+		Assert.Equal(requestedCycle, blocker.BusAccess.GrantedCycle);
+		Assert.True(write.GrantedCycle > fetchCycle, $"write.GrantedCycle={write.GrantedCycle}, fetchCycle={fetchCycle}");
+		var bitplane = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.Request.RequestedCycle == fetchCycle);
+		Assert.Equal(fetchCycle, bitplane.GrantedCycle);
+		Assert.Equal(0x0000, bus.ReadChipWordForPresentation(0x1000, fetchCycle));
+	}
+
+	[Fact]
 	public void LiveDisplayDmaStallsPseudoFastButNotRealFastRomOrCiaAccesses()
 	{
 		var bus = new AmigaBus(
@@ -468,7 +509,6 @@ public sealed class AmigaBusTimingTests
 	[Theory]
 	[InlineData((int)AmigaBusRequester.Disk, (int)AmigaBusAccessKind.DiskDma, 0x08)]
 	[InlineData((int)AmigaBusRequester.Paula, (int)AmigaBusAccessKind.PaulaDma, 0x10)]
-	[InlineData((int)AmigaBusRequester.Sprite, (int)AmigaBusAccessKind.Sprite, 0x18)]
 	public void HrmSlotEngineLegalizesFixedDeviceDmaToHrmWindows(
 		int requesterValue,
 		int kindValue,
@@ -484,6 +524,22 @@ public sealed class AmigaBusTimingTests
 
 		Assert.Equal(expectedHorizontal * AgnusChipSlotScheduler.SlotCycles, access.GrantedCycle);
 		Assert.Equal(requester == AmigaBusRequester.Paula ? AgnusChipSlotOwner.Paula : requester == AmigaBusRequester.Disk ? AgnusChipSlotOwner.Disk : AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void HrmExactDisplayDmaRejectsWrongFixedWindow()
+	{
+		var bus = new AmigaBus();
+
+		Assert.False(bus.TryReserveDisplayDmaSlot(
+			AmigaBusRequester.Sprite,
+			AmigaBusAccessKind.Sprite,
+			0x1000,
+			0,
+			out var access));
+
+		Assert.Equal(0, access.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastDeniedFixedSlot?.Owner);
 	}
 
 	[Fact]

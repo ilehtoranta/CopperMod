@@ -198,6 +198,8 @@ namespace CopperMod.Amiga
 
         bool TryReserveFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result);
 
+        bool TryReserveExactFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result);
+
         AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle);
 
         AmigaBusAccessResult ReserveCopperDmaSlot(uint address, long requestedCycle);
@@ -499,6 +501,31 @@ namespace CopperMod.Amiga
         }
 
         [HotPath]
+        public bool TryReserveExactFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result)
+        {
+            if (!UsesChipSlot(request))
+            {
+                result = new AmigaBusAccessResult(request, request.RequestedCycle, request.RequestedCycle);
+                return true;
+            }
+
+            var owner = GetOwner(request.Requester);
+            var granted = AgnusChipSlotScheduler.AlignToSlot(request.RequestedCycle);
+            if (!AgnusHrmOcsSlotTable.IsFixedDmaSlotForOwner(owner, granted))
+            {
+                var fixedOwner = AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(granted));
+                result = new AmigaBusAccessResult(request, granted, granted);
+                _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: true);
+                _lastDeniedFixedSlotBlocker = new AgnusChipSlotSnapshot(fixedOwner, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
+                RecordDeniedFixedSlot(owner, fixedOwner);
+                AdvanceTo(granted);
+                return false;
+            }
+
+            return TryCommitFixedSlot(request, owner, granted, out result);
+        }
+
+        [HotPath]
         public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
         {
             requestedCycle = Math.Max(0, requestedCycle);
@@ -696,7 +723,7 @@ namespace CopperMod.Amiga
 
                 var slotStride = GetSlotStride(owner);
                 CommitRefreshSlotsThrough(candidate + ((slotCount - 1) * slotStride));
-                if (AreSlotsAvailable(candidate, slotCount, owner, request))
+                if (AreSlotsAvailable(candidate, slotCount, owner, request, GetPriority(owner)))
                 {
                     return candidate;
                 }
@@ -709,7 +736,8 @@ namespace CopperMod.Amiga
             long firstSlot,
             int slotCount,
             AgnusChipSlotOwner owner,
-            AmigaBusAccessRequest request)
+            AmigaBusAccessRequest request,
+            AgnusChipSlotPriority priority)
         {
             var slotStride = GetSlotStride(owner);
             for (var slot = 0; slot < slotCount; slot++)
@@ -730,7 +758,10 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                return false;
+                if (existing.Priority >= priority)
+                {
+                    return false;
+                }
             }
 
             return true;
