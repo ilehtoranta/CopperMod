@@ -304,7 +304,7 @@ public sealed class CopperScreenBootTests
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
 
-		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
+		Assert.False(machine.Bus.HasHostTrapStub(0x0007_B000));
 		Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED");
 	}
 
@@ -326,7 +326,7 @@ public sealed class CopperScreenBootTests
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
 
-		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
+		Assert.False(machine.Bus.HasHostTrapStub(0x0007_B000));
 	}
 
 	[Fact]
@@ -345,7 +345,7 @@ public sealed class CopperScreenBootTests
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
 
 		Assert.True(disk.HasPreservedTrackData);
-		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
+		Assert.False(machine.Bus.HasHostTrapStub(0x0007_B000));
 		Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED");
 	}
 
@@ -367,7 +367,7 @@ public sealed class CopperScreenBootTests
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
 
-		Assert.False(machine.Bus.HasHostCallback(0x0007_B000));
+		Assert.False(machine.Bus.HasHostTrapStub(0x0007_B000));
 	}
 
 	[Fact]

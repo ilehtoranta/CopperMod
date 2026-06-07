@@ -3614,7 +3614,7 @@ namespace CopperMod.Amiga
                     channel.LengthWords = Math.Max(1, (int)value);
                     break;
                 case 0x06:
-                    channel.Period = ClampPeriod(value);
+                    channel.Period = value;
                     break;
                 case 0x08:
                     var volume = value & 0x7F;
@@ -3685,7 +3685,7 @@ namespace CopperMod.Amiga
 
             if (IsPeriodAttached(sourceChannel))
             {
-                _channels[targetChannel].Period = ClampPeriod(value);
+                _channels[targetChannel].Period = value;
             }
         }
 
@@ -3756,22 +3756,23 @@ namespace CopperMod.Amiga
             return (ushort)(0x0080 << channel);
         }
 
-        private static int ClampPeriod(ushort value)
-        {
-            return Math.Max(1, (int)value);
-        }
-
         private static long GetPeriodCycles(int period)
         {
-            return (long)Math.Max(1, period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
+            return GetEffectivePeriod(period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
         private static long GetDmaPeriodCycles(int period, AmigaBus bus)
         {
+            var effectivePeriod = GetEffectivePeriod(period);
             var dmaPeriod = UsesPartialPlaybackDmaMinimum(bus)
-                ? Math.Max(period, bus.AudioDmaMinimumPeriod)
-                : period;
-            return GetPeriodCycles(dmaPeriod);
+                ? Math.Max(effectivePeriod, bus.AudioDmaMinimumPeriod)
+                : effectivePeriod;
+            return dmaPeriod * AmigaConstants.A500PalCpuCyclesPerColorClock;
+        }
+
+        private static long GetEffectivePeriod(int period)
+        {
+            return period == 0 ? 65_536L : Math.Max(1, period);
         }
 
         private static bool UsesPartialPlaybackDmaMinimum(AmigaBus bus)

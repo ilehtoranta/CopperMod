@@ -200,7 +200,7 @@ public sealed class PaulaConformanceMatrixTests
 
         Assert.Equal(0x1234u, snapshot.Location);
         Assert.Equal(3, snapshot.LengthWords);
-        Assert.Equal(1, snapshot.Period);
+        Assert.Equal(0, snapshot.Period);
         Assert.Equal(64, snapshot.Volume);
     }
 

@@ -182,6 +182,30 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void AudxperZeroIsLatchedRawAndUsesFullSixteenBitEffectivePeriod()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0000, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+
+		bus.Paula.AdvanceTo(0);
+		var afterEnable = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(262_143);
+		var beforeNextDmaFetch = bus.BusAccesses.Count(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma);
+		bus.Paula.AdvanceTo(262_144);
+		var afterNextDmaFetch = bus.BusAccesses.Count(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma);
+
+		Assert.Equal(0, afterEnable.Period);
+		Assert.Equal(131_072, afterEnable.NextSampleCycle);
+		Assert.Equal(1, beforeNextDmaFetch);
+		Assert.Equal(2, afterNextDmaFetch);
+	}
+
+	[Fact]
 	public void PartialPlaybackLiveDmaUsesConfiguredMinimumForAudioDmaRefillSlots()
 	{
 		var bus = new AmigaBus(

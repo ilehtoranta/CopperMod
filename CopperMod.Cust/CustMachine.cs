@@ -327,13 +327,13 @@ namespace CopperMod.Cust
 
         private void InstallHostEnvironment()
         {
-            Bus.RegisterHostCallback(_hostGetListDataAddress, HostGetListData);
-            Bus.RegisterHostCallback(_hostOkAddress, HostOk);
-            Bus.RegisterHostCallback(_hostSongEndAddress, HostSongEnd);
-            Bus.RegisterHostCallback(_hostResetPathAddress, HostResetPath);
-            Bus.RegisterHostCallback(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
-            Bus.RegisterHostCallback(_hostAudioAllocAddress, HostAudioAlloc);
-            Bus.RegisterHostCallback(_hostAudioFreeAddress, HostAudioFree);
+            Bus.RegisterHostTrapStub(_hostGetListDataAddress, HostGetListData);
+            Bus.RegisterHostTrapStub(_hostOkAddress, HostOk);
+            Bus.RegisterHostTrapStub(_hostSongEndAddress, HostSongEnd);
+            Bus.RegisterHostTrapStub(_hostResetPathAddress, HostResetPath);
+            Bus.RegisterHostTrapStub(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
+            Bus.RegisterHostTrapStub(_hostAudioAllocAddress, HostAudioAlloc);
+            Bus.RegisterHostTrapStub(_hostAudioFreeAddress, HostAudioFree);
             Machine.Kickstart.Install(
                 Bus,
                 new AmigaKickstartTrapTable(
