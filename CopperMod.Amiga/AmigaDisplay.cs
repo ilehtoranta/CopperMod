@@ -141,8 +141,10 @@ namespace CopperMod.Amiga
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
         private readonly ushort[] _livePaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _livePaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
+        private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
         private bool _renderingLiveCapture;
         private bool _advancingLiveDma;
+        private long _previousLiveSpriteFrameStartCycle = long.MinValue;
         private bool _liveFrameValid;
         private int _liveGeneration = 1;
         private int _livePaletteSnapshotCount;
@@ -459,6 +461,8 @@ namespace CopperMod.Amiga
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
+            _previousLiveSpriteFrameStartCycle = long.MinValue;
+            _previousLiveSpriteFrameCommands.Clear();
             InvalidateLiveDisplayEventCycle();
             ClearLiveFrameCapture(0);
         }
@@ -612,6 +616,7 @@ namespace CopperMod.Amiga
 
         private void StartLiveFrame(long frameStartCycle)
         {
+            ArchiveLiveSpriteFrameBeforeStarting(frameStartCycle);
             ClearLiveFrameCapture(frameStartCycle);
             _liveFrameStartCycle = frameStartCycle;
             _liveCycle = frameStartCycle;
@@ -644,6 +649,25 @@ namespace CopperMod.Amiga
 
             ResetLiveDisplayWindowStateTracking();
             InvalidateLiveDisplayEventCycle();
+        }
+
+        private void ArchiveLiveSpriteFrameBeforeStarting(long nextFrameStartCycle)
+        {
+            if (!_liveFrameValid ||
+                _liveFrameStartCycle >= nextFrameStartCycle ||
+                _liveCapturedThroughCycle < Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles) - 1)
+            {
+                _previousLiveSpriteFrameStartCycle = long.MinValue;
+                _previousLiveSpriteFrameCommands.Clear();
+                return;
+            }
+
+            _previousLiveSpriteFrameStartCycle = _liveFrameStartCycle;
+            _previousLiveSpriteFrameCommands.Clear();
+            for (var i = 0; i < _spriteFrameCommands.Count; i++)
+            {
+                _previousLiveSpriteFrameCommands.Add(_spriteFrameCommands[i]);
+            }
         }
 
         private void RecordLiveFrameWrite(long cycle, ushort offset, ushort value, bool isCopper = false)
@@ -694,6 +718,7 @@ namespace CopperMod.Amiga
                 0x100 or 0x102 or 0x104 or 0x108 or 0x10A ||
                 (offset >= 0x0E0 && offset <= 0x0F6) ||
                 (offset >= 0x110 && offset <= 0x11A) ||
+                (offset >= 0x120 && offset < 0x180) ||
                 (offset >= 0x180 && offset < 0x1C0);
         }
 
@@ -4945,7 +4970,9 @@ namespace CopperMod.Amiga
 
             var sprite = _sprites[spriteIndex];
             var allowStateFallback = !_renderingLiveCapture &&
-                (!_useTimedPresentationReads || !_bus.LiveAgnusDmaEnabled);
+                (!_useTimedPresentationReads ||
+                    !_bus.LiveAgnusDmaEnabled ||
+                    HasArchivedLiveSpriteFrameCommands(_renderFrameStartCycle));
             if (commands.Count == 0 && allowStateFallback && IsSpriteDmaEnabled() && sprite.Pointer != 0)
             {
                 if (IsSpriteDmaChannelAvailable(spriteIndex))
@@ -4967,6 +4994,12 @@ namespace CopperMod.Amiga
             }
 
             return commands;
+        }
+
+        private bool HasArchivedLiveSpriteFrameCommands(long frameStartCycle)
+        {
+            return _previousLiveSpriteFrameStartCycle == frameStartCycle &&
+                _previousLiveSpriteFrameCommands.Count > 0;
         }
 
         private static void AppendUniqueSpriteFrameCommand(List<SpriteFrameCommand> commands, SpriteFrameCommand command)

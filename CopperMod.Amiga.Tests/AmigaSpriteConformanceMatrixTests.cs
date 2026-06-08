@@ -732,6 +732,22 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.True(snapshot.LastMissedSpriteDmaSlots > 0);
 	}
 
+	[Fact]
+	public void TimedRenderKeepsLiveSpriteDmaCommandsAfterFrameBoundaryOvershoot()
+	{
+		var bus = new AmigaBus();
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.AdvanceDmaTo(FrameCycles() + 112);
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
 	private static void WriteManualSprite(
 		AmigaBus bus,
 		int sprite,
