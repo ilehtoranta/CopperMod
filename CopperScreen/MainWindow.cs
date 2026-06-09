@@ -9,6 +9,7 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace CopperScreen;
@@ -60,6 +61,13 @@ internal sealed class MainWindow : Window
 	private bool _showFullOverscan = true;
 	private double? _lastMouseX;
 	private double? _lastMouseY;
+	private double _mouseDeltaRemainderX;
+	private double _mouseDeltaRemainderY;
+	private bool _mouseGrabActive;
+	private bool _mouseGrabWaitingForCenter;
+	private IPointer? _mouseGrabPointer;
+	private Point? _mouseGrabCenterFramebufferPoint;
+	private Point? _mouseGrabInitialFramebufferPoint;
 	private CopperScreenDebugSnapshot? _visibleDebugSnapshot;
 	private int _presentationQueued;
 	private bool _isClosed;
@@ -137,7 +145,15 @@ internal sealed class MainWindow : Window
 		_presenter.PointerPressed += (_, args) =>
 		{
 			_presenter.Focus();
-			UpdateMousePort(args);
+			if (BeginMouseGrab(args))
+			{
+				UpdateMouseButtons(args);
+			}
+			else
+			{
+				UpdateMousePort(args);
+			}
+
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
 		};
@@ -149,8 +165,10 @@ internal sealed class MainWindow : Window
 		};
 		_presenter.PointerExited += (_, _) =>
 		{
-			_lastMouseX = null;
-			_lastMouseY = null;
+			if (!_mouseGrabActive)
+			{
+				ResetMouseTracking();
+			}
 		};
 		KeyDown += OnKeyDown;
 		KeyUp += OnKeyUp;
@@ -234,7 +252,7 @@ internal sealed class MainWindow : Window
 		{
 			_lastStatusUpdateTick = now;
 			UpdateToolbarStatus(state);
-			Title = "CopperScreen - " + state.ProfileName + " - Alt+Enter fullscreen, F11 toolbar in fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
+			Title = "CopperScreen - " + state.ProfileName + " - Alt+Enter fullscreen, F10 release mouse, F11 toolbar in fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
 			CopperScreenCrashLog.Heartbeat(() => BuildCrashLogState(state));
 		}
 	}
@@ -264,13 +282,20 @@ internal sealed class MainWindow : Window
 
 	private void UpdateMousePort(PointerEventArgs args)
 	{
+		if (_mouseGrabActive)
+		{
+			UpdateGrabbedMousePort(args);
+			UpdateMouseButtons(args);
+			return;
+		}
+
 		var position = args.GetPosition(_presenter);
 		if (_presenter.TryMapPointToFramebuffer(position, out var framebufferPoint))
 		{
 			if (_lastMouseX.HasValue && _lastMouseY.HasValue)
 			{
-				var deltaX = (int)Math.Round(framebufferPoint.X - _lastMouseX.Value);
-				var deltaY = (int)Math.Round(framebufferPoint.Y - _lastMouseY.Value);
+				var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, framebufferPoint.X - _lastMouseX.Value);
+				var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
 					_runtime.MoveMousePort(deltaX, deltaY);
@@ -282,18 +307,82 @@ internal sealed class MainWindow : Window
 		}
 		else
 		{
-			_lastMouseX = null;
-			_lastMouseY = null;
+			ResetMouseTracking();
 		}
 
+		UpdateMouseButtons(args);
+	}
+
+	private void UpdateGrabbedMousePort(PointerEventArgs args)
+	{
+		if (!_mouseGrabCenterFramebufferPoint.HasValue)
+		{
+			ReleaseMouseGrab();
+			return;
+		}
+
+		var position = args.GetPosition(_presenter);
+		if (_presenter.TryMapPointToFramebufferUnclamped(position, out var framebufferPoint))
+		{
+			var center = _mouseGrabCenterFramebufferPoint.Value;
+			if (_mouseGrabWaitingForCenter)
+			{
+				if (IsNearFramebufferPoint(framebufferPoint, center))
+				{
+					_mouseGrabWaitingForCenter = false;
+					_mouseGrabInitialFramebufferPoint = null;
+					_ = TryRecenterMousePointer();
+					return;
+				}
+
+				if (_mouseGrabInitialFramebufferPoint.HasValue &&
+					IsNearFramebufferPoint(framebufferPoint, _mouseGrabInitialFramebufferPoint.Value))
+				{
+					_ = TryRecenterMousePointer();
+					return;
+				}
+
+				_mouseGrabWaitingForCenter = false;
+				_mouseGrabInitialFramebufferPoint = null;
+			}
+
+			var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, framebufferPoint.X - center.X);
+			var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - center.Y);
+			if (deltaX != 0 || deltaY != 0)
+			{
+				_runtime.MoveMousePort(deltaX, deltaY);
+			}
+		}
+
+		_ = TryRecenterMousePointer();
+	}
+
+	private void UpdateMouseButtons(PointerEventArgs args)
+	{
 		var properties = args.GetCurrentPoint(_presenter).Properties;
 		_runtime.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
 	}
 
+	internal static int ConsumeWholeMouseDelta(ref double remainder, double delta)
+	{
+		var accumulated = remainder + delta;
+		var whole = (int)Math.Truncate(accumulated);
+		remainder = accumulated - whole;
+		return whole;
+	}
+
 	private async void OnKeyDown(object? sender, KeyEventArgs args)
 	{
+		if (_mouseGrabActive && (args.Key == Key.F10 || args.PhysicalKey == PhysicalKey.F10))
+		{
+			ReleaseMouseGrab();
+			args.Handled = true;
+			return;
+		}
+
 		if (args.Key == Key.F11 || args.PhysicalKey == PhysicalKey.F11)
 		{
+			ReleaseMouseGrab();
 			if (WindowState == WindowState.FullScreen)
 			{
 				_bench.ToggleToolbar();
@@ -307,6 +396,7 @@ internal sealed class MainWindow : Window
 		if ((args.Key == Key.Enter || args.Key == Key.Return || args.PhysicalKey == PhysicalKey.Enter || args.PhysicalKey == PhysicalKey.NumPadEnter) &&
 			(args.KeyModifiers & KeyModifiers.Alt) != 0)
 		{
+			ReleaseMouseGrab();
 			ToggleFullscreen();
 			args.Handled = true;
 			return;
@@ -473,8 +563,7 @@ internal sealed class MainWindow : Window
 
 		_pressedAmigaKeys.Clear();
 		_pressedJoystickKeys = JoystickKeys.None;
-		_lastMouseX = null;
-		_lastMouseY = null;
+		ReleaseMouseGrab();
 		_runtime.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
 		_runtime.SetJoystickPort(
 			up: false,
@@ -935,6 +1024,7 @@ internal sealed class MainWindow : Window
 
 	private void ToggleFullscreen()
 	{
+		ReleaseMouseGrab();
 		WindowState = WindowState == WindowState.FullScreen
 			? WindowState.Normal
 			: WindowState.FullScreen;
@@ -994,9 +1084,95 @@ internal sealed class MainWindow : Window
 				AmigaConstants.PalLowResStandardHeight);
 		}
 
+		ReleaseMouseGrab();
+	}
+
+	private bool BeginMouseGrab(PointerEventArgs args)
+	{
+		if (_mouseGrabActive)
+		{
+			return true;
+		}
+
+		if (!TryGetPresenterCenterFramebufferPoint(out var center))
+		{
+			return false;
+		}
+
+		_mouseGrabActive = true;
+		_mouseGrabWaitingForCenter = true;
+		_mouseGrabPointer = args.Pointer;
+		_mouseGrabCenterFramebufferPoint = center;
+		_mouseGrabInitialFramebufferPoint = _presenter.TryMapPointToFramebufferUnclamped(args.GetPosition(_presenter), out var initial)
+			? initial
+			: null;
+		ResetMouseTracking();
+		args.Pointer.Capture(_presenter);
+		if (!TryRecenterMousePointer())
+		{
+			ReleaseMouseGrab();
+			return false;
+		}
+
+		return true;
+	}
+
+	private void ReleaseMouseGrab()
+	{
+		if (_mouseGrabPointer != null)
+		{
+			_mouseGrabPointer.Capture(null!);
+			_mouseGrabPointer = null;
+		}
+
+		_mouseGrabActive = false;
+		_mouseGrabWaitingForCenter = false;
+		_mouseGrabCenterFramebufferPoint = null;
+		_mouseGrabInitialFramebufferPoint = null;
+		ResetMouseTracking();
+	}
+
+	private static bool IsNearFramebufferPoint(Point left, Point right)
+	{
+		return Math.Abs(left.X - right.X) < 0.75 &&
+			Math.Abs(left.Y - right.Y) < 0.75;
+	}
+
+	private bool TryGetPresenterCenterFramebufferPoint(out Point framebufferPoint)
+	{
+		var center = new Point(_presenter.Bounds.Width / 2.0, _presenter.Bounds.Height / 2.0);
+		return _presenter.TryMapPointToFramebufferUnclamped(center, out framebufferPoint);
+	}
+
+	private bool TryRecenterMousePointer()
+	{
+		if (!OperatingSystem.IsWindows() || _presenter.Bounds.Width <= 0 || _presenter.Bounds.Height <= 0)
+		{
+			return false;
+		}
+
+		try
+		{
+			var center = new Point(_presenter.Bounds.Width / 2.0, _presenter.Bounds.Height / 2.0);
+			var screenPoint = _presenter.PointToScreen(center);
+			return SetCursorPos(screenPoint.X, screenPoint.Y);
+		}
+		catch (InvalidOperationException)
+		{
+			return false;
+		}
+	}
+
+	private void ResetMouseTracking()
+	{
 		_lastMouseX = null;
 		_lastMouseY = null;
+		_mouseDeltaRemainderX = 0;
+		_mouseDeltaRemainderY = 0;
 	}
+
+	[DllImport("user32.dll")]
+	private static extern bool SetCursorPos(int x, int y);
 
 	private void ToggleNumpadMode()
 	{

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
@@ -3772,7 +3773,13 @@ namespace CopperMod.Amiga
 
         private static long GetEffectivePeriod(int period)
         {
-            return period == 0 ? 65_536L : Math.Max(1, period);
+            if (period == 0)
+            {
+                return 65_536L;
+            }
+
+            Debug.Assert(period > 0, "Paula audio period must be a raw non-negative register value.");
+            return period;
         }
 
         private static bool UsesPartialPlaybackDmaMinimum(AmigaBus bus)

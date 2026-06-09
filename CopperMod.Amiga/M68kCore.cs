@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
@@ -584,6 +585,38 @@ namespace CopperMod.Amiga
                 PushLong(State.ProgramCounter);
                 State.ProgramCounter = (uint)(branchBase + offset);
                 AddCycles(displacement == 0 ? 18 : 18);
+                return true;
+            }
+
+            if (condition == 6)
+            {
+                if ((State.StatusRegister & M68kCpuState.Zero) == 0)
+                {
+                    State.ProgramCounter = (uint)(branchBase + offset);
+                    AddCycles(displacement == 0 ? 10 : 10);
+                }
+                else
+                {
+                    _ = instructionPc;
+                    AddCycles(8);
+                }
+
+                return true;
+            }
+
+            if (condition == 7)
+            {
+                if ((State.StatusRegister & M68kCpuState.Zero) != 0)
+                {
+                    State.ProgramCounter = (uint)(branchBase + offset);
+                    AddCycles(displacement == 0 ? 10 : 10);
+                }
+                else
+                {
+                    _ = instructionPc;
+                    AddCycles(8);
+                }
+
                 return true;
             }
 
@@ -2031,9 +2064,11 @@ namespace CopperMod.Amiga
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AddCycles(int cycles)
         {
-            State.Cycles += Math.Max(1, cycles);
+            System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            State.Cycles += cycles;
         }
 
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)

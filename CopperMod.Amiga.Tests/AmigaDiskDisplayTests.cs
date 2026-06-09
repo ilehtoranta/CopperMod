@@ -1352,6 +1352,9 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(timedFrame, liveFrame);
         Assert.Equal(0xFFFF0000u, Pixel(liveFrame, StandardX, StandardY));
         Assert.Equal(0xFF00FF00u, Pixel(liveFrame, 25, StandardY));
+        var snapshot = liveBus.Display.CaptureSnapshot();
+        Assert.True(snapshot.LastTimelineSegmentCount > 0);
+        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
     }
 
     [Fact]
@@ -1374,6 +1377,9 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(timedFrame, liveFrame);
         Assert.Equal(0xFFFF0000u, Pixel(liveFrame, 50, StandardY));
+        var snapshot = liveBus.Display.CaptureSnapshot();
+        Assert.True(snapshot.LastTimelineSegmentCount > 0);
+        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
     }
 
     [Fact]

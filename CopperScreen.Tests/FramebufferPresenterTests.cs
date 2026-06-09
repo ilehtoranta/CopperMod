@@ -53,4 +53,27 @@ public sealed class FramebufferPresenterTests
 		Assert.Equal(176, center.X, precision: 6);
 		Assert.Equal(144, center.Y, precision: 6);
 	}
+
+	[Fact]
+	public void UnclampedUniformStretchMouseMappingKeepsRelativeDeltasOutsideImage()
+	{
+		var bounds = new Size(1200, 960);
+		var source = new Size(352, 288);
+		var scale = bounds.Height / source.Height;
+		var offsetX = (bounds.Width - (source.Width * scale)) / 2.0;
+
+		Assert.False(FramebufferPresenter.TryMapUniformStretchPoint(
+			bounds,
+			source,
+			new Point(offsetX - scale, bounds.Height / 2.0),
+			out _));
+
+		Assert.True(FramebufferPresenter.TryMapUniformStretchPointUnclamped(
+			bounds,
+			source,
+			new Point(offsetX - scale, bounds.Height / 2.0),
+			out var point));
+		Assert.Equal(-1, point.X, precision: 6);
+		Assert.Equal(144, point.Y, precision: 6);
+	}
 }

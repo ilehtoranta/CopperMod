@@ -69,9 +69,26 @@ internal sealed class FramebufferPresenter : Control
 		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, out framebufferPoint);
 	}
 
+	public bool TryMapPointToFramebufferUnclamped(Point position, out Point framebufferPoint)
+	{
+		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, out framebufferPoint);
+	}
+
 	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
 	{
 		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
+		{
+			framebufferPoint = default;
+			return false;
+		}
+
+		framebufferPoint = new Point(sourceRect.X + sourcePoint.X, sourceRect.Y + sourcePoint.Y);
+		return true;
+	}
+
+	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
+	{
+		if (!TryMapUniformStretchPointUnclamped(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
 		{
 			framebufferPoint = default;
 			return false;
@@ -112,6 +129,30 @@ internal sealed class FramebufferPresenter : Control
 		framebufferPoint = new Point(
 			Math.Clamp(imageX / scale, 0, source.Width - 1),
 			Math.Clamp(imageY / scale, 0, source.Height - 1));
+		return true;
+	}
+
+	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, Size source, Point position, out Point framebufferPoint)
+	{
+		framebufferPoint = default;
+		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		{
+			return false;
+		}
+
+		var scale = Math.Min(bounds.Width / source.Width, bounds.Height / source.Height);
+		if (scale <= 0)
+		{
+			return false;
+		}
+
+		var imageWidth = source.Width * scale;
+		var imageHeight = source.Height * scale;
+		var offsetX = (bounds.Width - imageWidth) / 2.0;
+		var offsetY = (bounds.Height - imageHeight) / 2.0;
+		framebufferPoint = new Point(
+			(position.X - offsetX) / scale,
+			(position.Y - offsetY) / scale);
 		return true;
 	}
 

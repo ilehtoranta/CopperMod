@@ -46,6 +46,9 @@ namespace CopperMod.Amiga
         private const int LiveSpriteWordsPerChannel = 2;
         private const int LiveSpriteWordsPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
         private const int MaxLivePaletteSnapshots = MaxPendingWrites;
+        private const int MaxTimelineStateSnapshots = MaxPendingWrites;
+        private const int PlanarChunkPixels = 16;
+        private const int MaxTimelineSegmentsPerFrame = LowResOutputHeight + MaxPendingWrites;
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [0, 1, 2, 3, 4, 5];
         private readonly AmigaBus _bus;
         private readonly bool _liveDmaEnabled;
@@ -67,6 +70,8 @@ namespace CopperMod.Amiga
         private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
         private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
         private readonly uint[] _paletteFrameSpanColors = new uint[MaxPaletteFrameSpans * PaletteColorCount];
+        private readonly byte[] _timelineFastPathColorIndexes = new byte[AmigaConstants.PalLowResWidth];
+        private readonly byte[] _timelineFastPathPriorityMasks = new byte[AmigaConstants.PalLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
         private readonly SavedDisplayState _liveFrameInitialState = new SavedDisplayState();
         private readonly List<PendingCustomWrite> _liveFrameWrites = new List<PendingCustomWrite>(MaxPendingWrites);
@@ -142,6 +147,10 @@ namespace CopperMod.Amiga
         private readonly ushort[] _livePaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _livePaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
         private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
+        private DisplayFrameTimeline _displayTimeline = new DisplayFrameTimeline();
+        private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
+        private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
+        private readonly uint[] _archivedPaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
         private bool _renderingLiveCapture;
         private bool _advancingLiveDma;
         private long _previousLiveSpriteFrameStartCycle = long.MinValue;
@@ -153,6 +162,8 @@ namespace CopperMod.Amiga
         private bool _livePaletteSnapshotDirty = true;
         private bool _liveNextDisplayEventValid;
         private long _liveNextDisplayEventCycle;
+        private bool _liveNextWorkCycleValid;
+        private long _liveNextWorkCycle;
         private long _liveCycle;
         private long _liveFrameStartCycle;
         private long _liveCapturedThroughCycle;
@@ -177,6 +188,50 @@ namespace CopperMod.Amiga
         private bool _liveFrameInitialStateValid;
         private bool _liveFrameWriteOverflowed;
         private bool _liveFrameHasLateDisplayWindowWrites;
+        private bool _liveTimelineUnsafeForFrame;
+        private ushort _liveTimelineUnsafeOffset;
+        private bool _liveTimelineUnsafeIsCopper;
+        private int _lastTimelineSegmentCount;
+        private int _lastTimelineFallbackCount;
+        private int _lastTimelineSpriteCommandCount;
+        private int _lastActiveTimelineFrameCount;
+        private int _lastArchivedTimelineFrameCount;
+        private int _lastPlanarChunkCacheHits;
+        private int _lastPlanarChunkCacheMisses;
+        private int _lastTimelineCoalescedSegmentCount;
+        private int _lastTimelineFastPathRowCount;
+        private int _lastTimelineFastPathMissCount;
+        private int _lastSpriteRecoveryAttemptCount;
+        private int _lastSpriteDeniedFetchCount;
+        private int _lastArchiveRejectFrameIncomplete;
+        private int _lastArchiveRejectTimelineInvalid;
+        private int _lastArchiveRejectUnsafeWrite;
+        private int _lastArchiveRejectSegmentCapacity;
+        private int _lastArchiveRejectMissingLine;
+        private int _lastArchiveRejectUnsafeLine;
+        private int _lastArchiveRejectMissingBitplaneFetch;
+        private int _lastArchiveRejectMissingSpriteFetch;
+        private ushort _lastArchiveRejectUnsafeOffset;
+        private bool _lastArchiveRejectUnsafeIsCopper;
+        private int _lastArchiveRejectMissingSpriteIndex;
+        private int _lastArchiveRejectMissingSpriteRow;
+        private int _lastArchiveRejectMissingSpriteWord;
+        private int _lastArchiveRejectMissingSpriteStatusA;
+        private int _lastArchiveRejectMissingSpriteStatusB;
+        private int _lastArchiveRejectMissingSpriteCommandRow;
+        private int _lastArchiveRejectMissingSpriteYStart;
+        private int _lastArchiveRejectMissingSpriteYStop;
+        private int _lastArchiveRejectMissingSpriteUsableChannels;
+        private int _lastArchiveRejectMissingSpriteDdfStart;
+        private ushort _lastArchiveRejectMissingSpriteDmacon;
+        private ushort _lastArchiveRejectMissingSpriteBplcon0;
+        private int _lastArchiveRejectMissingSpritePreviousStatusA;
+        private int _lastArchiveRejectMissingSpritePreviousStatusB;
+        private bool _archivedTimelineValid;
+        private bool _renderingArchivedTimeline;
+        private long _archivedTimelineFrameStartCycle = long.MinValue;
+        private long _archivedTimelineFrameStopCycle = long.MinValue;
+        private int _archivedPaletteSnapshotCount;
 
         public OcsDisplay(AmigaBus bus, bool liveDmaEnabled = true)
         {
@@ -235,6 +290,13 @@ namespace CopperMod.Amiga
                 {
                     var before = _bus.FindHrmDmaCandidate(requestedCycle);
                     var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+                    if (before <= _liveCapturedThroughCycle ||
+                        before >= frameStopCycle ||
+                        !HasLivePreGrantWorkThrough(before))
+                    {
+                        return;
+                    }
+
                     if (before < frameStopCycle)
                     {
                         AdvanceLiveDmaWithinFrame(before);
@@ -252,6 +314,31 @@ namespace CopperMod.Amiga
             {
                 EndLiveDmaCapture(savedAdvancingLiveDma);
             }
+        }
+
+        private bool HasLivePreGrantWorkThrough(long candidateCycle)
+        {
+            return GetNextLiveWorkCycle() <= candidateCycle;
+        }
+
+        private long GetNextLiveWorkCycle()
+        {
+            if (_liveNextWorkCycleValid)
+            {
+                return _liveNextWorkCycle;
+            }
+
+            _liveNextWorkCycle = Math.Min(
+                Math.Min(GetNextLiveDisplayEventCycle(), GetNextLiveLineStateCycle()),
+                Math.Min(GetNextLiveBitplaneFetchCycle(), GetNextLiveSpriteFetchCycle()));
+            _liveNextWorkCycleValid = true;
+            return _liveNextWorkCycle;
+        }
+
+        private void InvalidateLiveWorkCycle()
+        {
+            _liveNextWorkCycleValid = false;
+            _liveNextWorkCycle = long.MaxValue;
         }
 
         private void CaptureLiveBitplaneDmaBeforeHrmGrant(long requestedCycle)
@@ -390,7 +477,43 @@ namespace CopperMod.Amiga
                 bitplanePointers,
                 bitplaneBaseRows,
                 colors,
-                colorCounts);
+                colorCounts,
+                _lastTimelineSegmentCount,
+                _lastTimelineFallbackCount,
+                _lastTimelineSpriteCommandCount,
+                _lastActiveTimelineFrameCount,
+                _lastArchivedTimelineFrameCount,
+                _lastPlanarChunkCacheHits,
+                _lastPlanarChunkCacheMisses,
+                _lastTimelineCoalescedSegmentCount,
+                _lastTimelineFastPathRowCount,
+                _lastTimelineFastPathMissCount,
+                _lastSpriteRecoveryAttemptCount,
+                _lastSpriteDeniedFetchCount,
+                _lastArchiveRejectFrameIncomplete,
+                _lastArchiveRejectTimelineInvalid,
+                _lastArchiveRejectUnsafeWrite,
+                _lastArchiveRejectSegmentCapacity,
+                _lastArchiveRejectMissingLine,
+                _lastArchiveRejectUnsafeLine,
+                _lastArchiveRejectMissingBitplaneFetch,
+                _lastArchiveRejectMissingSpriteFetch,
+                _lastArchiveRejectUnsafeOffset,
+                _lastArchiveRejectUnsafeIsCopper,
+                _lastArchiveRejectMissingSpriteIndex,
+                _lastArchiveRejectMissingSpriteRow,
+                _lastArchiveRejectMissingSpriteWord,
+                _lastArchiveRejectMissingSpriteStatusA,
+                _lastArchiveRejectMissingSpriteStatusB,
+                _lastArchiveRejectMissingSpriteCommandRow,
+                _lastArchiveRejectMissingSpriteYStart,
+                _lastArchiveRejectMissingSpriteYStop,
+                _lastArchiveRejectMissingSpriteUsableChannels,
+                _lastArchiveRejectMissingSpriteDdfStart,
+                _lastArchiveRejectMissingSpriteDmacon,
+                _lastArchiveRejectMissingSpriteBplcon0,
+                _lastArchiveRejectMissingSpritePreviousStatusA,
+                _lastArchiveRejectMissingSpritePreviousStatusB);
         }
 
         public void Reset()
@@ -463,6 +586,12 @@ namespace CopperMod.Amiga
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
             _previousLiveSpriteFrameStartCycle = long.MinValue;
             _previousLiveSpriteFrameCommands.Clear();
+            _archivedTimelineValid = false;
+            _archivedTimelineFrameStartCycle = long.MinValue;
+            _archivedTimelineFrameStopCycle = long.MinValue;
+            _archivedPaletteSnapshotCount = 0;
+            _displayTimeline.Reset(0);
+            _archivedDisplayTimeline.Reset(long.MinValue);
             InvalidateLiveDisplayEventCycle();
             ClearLiveFrameCapture(0);
         }
@@ -484,7 +613,7 @@ namespace CopperMod.Amiga
             var savedAdvancingLiveDma = BeginLiveDmaCapture();
             try
             {
-                while (targetCycle > _liveFrameStartCycle + PalFrameCycles)
+                while (targetCycle >= _liveFrameStartCycle + PalFrameCycles)
                 {
                     AdvanceLiveDmaWithinFrame((_liveFrameStartCycle + PalFrameCycles) - 1);
                     StartLiveFrame(_liveFrameStartCycle + PalFrameCycles);
@@ -559,7 +688,7 @@ namespace CopperMod.Amiga
 
         private void AdvanceIdleLiveDmaTo(long targetCycle)
         {
-            while (targetCycle > _liveFrameStartCycle + PalFrameCycles)
+            while (targetCycle >= _liveFrameStartCycle + PalFrameCycles)
             {
                 StartLiveFrame(_liveFrameStartCycle + PalFrameCycles);
             }
@@ -593,6 +722,10 @@ namespace CopperMod.Amiga
                 _liveLineStates[y].Generation = 0;
             }
 
+            if (!_liveTimelineUnsafeForFrame)
+            {
+                _displayTimeline.InvalidateFromRow(row);
+            }
             ClearLiveSpriteWordMasksFrom(row);
             ResetLiveSpriteDmaStates(row);
             _liveNextLineStateRow = Math.Min(_liveNextLineStateRow, row);
@@ -612,10 +745,12 @@ namespace CopperMod.Amiga
             }
 
             TrimLiveFrameWritesFrom(cycle);
+            InvalidateLiveWorkCycle();
         }
 
         private void StartLiveFrame(long frameStartCycle)
         {
+            ArchiveCompletedTimelineBeforeStarting(frameStartCycle);
             ArchiveLiveSpriteFrameBeforeStarting(frameStartCycle);
             ClearLiveFrameCapture(frameStartCycle);
             _liveFrameStartCycle = frameStartCycle;
@@ -651,6 +786,58 @@ namespace CopperMod.Amiga
             InvalidateLiveDisplayEventCycle();
         }
 
+        private void ArchiveCompletedTimelineBeforeStarting(long nextFrameStartCycle)
+        {
+            ClearArchiveRejectCounters();
+            _archivedTimelineValid = false;
+            _archivedTimelineFrameStartCycle = long.MinValue;
+            _archivedTimelineFrameStopCycle = long.MinValue;
+            _archivedPaletteSnapshotCount = 0;
+
+            if (!_liveFrameValid ||
+                _liveFrameStartCycle >= nextFrameStartCycle ||
+                _liveCapturedThroughCycle < Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles) - 1)
+            {
+                RecordArchiveReject(TimelineRejectReason.FrameIncomplete);
+                return;
+            }
+
+            var frameStopCycle = Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles);
+            if (!_displayTimeline.IsValidForFrame(_liveFrameStartCycle))
+            {
+                RecordArchiveReject(TimelineRejectReason.TimelineInvalid);
+                return;
+            }
+
+            CompleteTimelineSpriteFetchOutcomes(_displayTimeline, _liveFrameStartCycle, frameStopCycle, allowExactCompletionReads: true);
+            var rejectReason = GetTimelineRejectReason(_displayTimeline, _liveFrameStartCycle, frameStopCycle);
+            if (rejectReason != TimelineRejectReason.None)
+            {
+                RecordArchiveReject(rejectReason);
+                return;
+            }
+
+            var archived = _archivedDisplayTimeline;
+            _archivedDisplayTimeline = _displayTimeline;
+            _displayTimeline = archived;
+            _archivedTimelineValid = true;
+            _archivedTimelineFrameStartCycle = _liveFrameStartCycle;
+            _archivedTimelineFrameStopCycle = frameStopCycle;
+            _archivedPaletteSnapshotCount = _livePaletteSnapshotCount;
+            Array.Copy(
+                _livePaletteSnapshotColors,
+                0,
+                _archivedPaletteSnapshotColors,
+                0,
+                _livePaletteSnapshotCount * _colors.Length);
+            Array.Copy(
+                _livePaletteSnapshotConvertedColors,
+                0,
+                _archivedPaletteSnapshotConvertedColors,
+                0,
+                _livePaletteSnapshotCount * PaletteColorCount);
+        }
+
         private void ArchiveLiveSpriteFrameBeforeStarting(long nextFrameStartCycle)
         {
             if (!_liveFrameValid ||
@@ -667,6 +854,67 @@ namespace CopperMod.Amiga
             for (var i = 0; i < _spriteFrameCommands.Count; i++)
             {
                 _previousLiveSpriteFrameCommands.Add(_spriteFrameCommands[i]);
+            }
+        }
+
+        private void ClearArchiveRejectCounters()
+        {
+            _lastArchiveRejectFrameIncomplete = 0;
+            _lastArchiveRejectTimelineInvalid = 0;
+            _lastArchiveRejectUnsafeWrite = 0;
+            _lastArchiveRejectSegmentCapacity = 0;
+            _lastArchiveRejectMissingLine = 0;
+            _lastArchiveRejectUnsafeLine = 0;
+            _lastArchiveRejectMissingBitplaneFetch = 0;
+            _lastArchiveRejectMissingSpriteFetch = 0;
+            _lastArchiveRejectUnsafeOffset = 0;
+            _lastArchiveRejectUnsafeIsCopper = false;
+            _lastArchiveRejectMissingSpriteIndex = -1;
+            _lastArchiveRejectMissingSpriteRow = -1;
+            _lastArchiveRejectMissingSpriteWord = -1;
+            _lastArchiveRejectMissingSpriteStatusA = -1;
+            _lastArchiveRejectMissingSpriteStatusB = -1;
+            _lastArchiveRejectMissingSpriteCommandRow = -1;
+            _lastArchiveRejectMissingSpriteYStart = -1;
+            _lastArchiveRejectMissingSpriteYStop = -1;
+            _lastArchiveRejectMissingSpriteUsableChannels = -1;
+            _lastArchiveRejectMissingSpriteDdfStart = -1;
+            _lastArchiveRejectMissingSpriteDmacon = 0;
+            _lastArchiveRejectMissingSpriteBplcon0 = 0;
+            _lastArchiveRejectMissingSpritePreviousStatusA = -1;
+            _lastArchiveRejectMissingSpritePreviousStatusB = -1;
+        }
+
+        private void RecordArchiveReject(TimelineRejectReason reason)
+        {
+            switch (reason)
+            {
+                case TimelineRejectReason.FrameIncomplete:
+                    _lastArchiveRejectFrameIncomplete++;
+                    break;
+                case TimelineRejectReason.TimelineInvalid:
+                    _lastArchiveRejectTimelineInvalid++;
+                    break;
+                case TimelineRejectReason.UnsafeWrite:
+                    _lastArchiveRejectUnsafeWrite++;
+                    _lastArchiveRejectUnsafeOffset = _liveTimelineUnsafeOffset;
+                    _lastArchiveRejectUnsafeIsCopper = _liveTimelineUnsafeIsCopper;
+                    break;
+                case TimelineRejectReason.SegmentCapacity:
+                    _lastArchiveRejectSegmentCapacity++;
+                    break;
+                case TimelineRejectReason.MissingLine:
+                    _lastArchiveRejectMissingLine++;
+                    break;
+                case TimelineRejectReason.UnsafeLine:
+                    _lastArchiveRejectUnsafeLine++;
+                    break;
+                case TimelineRejectReason.MissingBitplaneFetch:
+                    _lastArchiveRejectMissingBitplaneFetch++;
+                    break;
+                case TimelineRejectReason.MissingSpriteFetch:
+                    _lastArchiveRejectMissingSpriteFetch++;
+                    break;
             }
         }
 
@@ -693,6 +941,10 @@ namespace CopperMod.Amiga
 
             var replayCycle = Math.Max(cycle, _liveFrameStartCycle);
             _liveFrameWrites.Add(new PendingCustomWrite(replayCycle, offset, value, isCopper));
+            if (replayCycle > _liveFrameStartCycle && IsTimelineUnsafeFrameWrite(offset, isCopper))
+            {
+                MarkLiveTimelineUnsafe(offset, isCopper);
+            }
         }
 
         private void TrimLiveFrameWritesFrom(long cycle)
@@ -707,7 +959,29 @@ namespace CopperMod.Amiga
             {
                 _liveFrameWrites.RemoveRange(removeIndex, _liveFrameWrites.Count - removeIndex);
                 _liveFrameWriteOverflowed = false;
+                _liveTimelineUnsafeForFrame = false;
+                _liveTimelineUnsafeOffset = 0;
+                _liveTimelineUnsafeIsCopper = false;
+                for (var i = 0; i < _liveFrameWrites.Count; i++)
+                {
+                    if (IsTimelineUnsafeFrameWrite(_liveFrameWrites[i].Offset, _liveFrameWrites[i].IsCopper))
+                    {
+                        MarkLiveTimelineUnsafe(_liveFrameWrites[i].Offset, _liveFrameWrites[i].IsCopper);
+                        break;
+                    }
+                }
             }
+        }
+
+        private void MarkLiveTimelineUnsafe(ushort offset, bool isCopper)
+        {
+            if (!_liveTimelineUnsafeForFrame)
+            {
+                _liveTimelineUnsafeOffset = (ushort)(offset & 0x01FE);
+                _liveTimelineUnsafeIsCopper = isCopper;
+            }
+
+            _liveTimelineUnsafeForFrame = true;
         }
 
         private static bool IsLivePresentationReplayRegister(ushort offset)
@@ -743,13 +1017,19 @@ namespace CopperMod.Amiga
             _liveFrameWrites.Clear();
             _liveFrameWriteOverflowed = false;
             _liveFrameHasLateDisplayWindowWrites = false;
+            _liveTimelineUnsafeForFrame = false;
+            _liveTimelineUnsafeOffset = 0;
+            _liveTimelineUnsafeIsCopper = false;
             AdvanceLiveGeneration();
+            _displayTimeline.Reset(frameStartCycle);
             _spriteFrameCommands.Clear();
+            CaptureInitialManualSpriteFrameCommands();
             _livePaletteSnapshotCount = 0;
             _liveCurrentPaletteSnapshotIndex = -1;
             _livePaletteSnapshotDirty = true;
             Array.Clear(_liveSpriteWordMasks);
             Array.Clear(_liveSpriteDmaExhausted);
+            _renderingArchivedTimeline = false;
             ResetLiveSpriteDmaStates(0);
             _liveNextSpriteRow = 0;
             _liveNextSpriteIndex = 0;
@@ -782,6 +1062,7 @@ namespace CopperMod.Amiga
         {
             _liveNextDisplayEventValid = false;
             _liveNextDisplayEventCycle = long.MaxValue;
+            InvalidateLiveWorkCycle();
         }
 
         private long GetNextLiveDisplayEventCycle()
@@ -839,6 +1120,7 @@ namespace CopperMod.Amiga
                 {
                     CaptureLiveLineState(_liveNextLineStateRow);
                     _liveNextLineStateRow++;
+                    InvalidateLiveWorkCycle();
                     continue;
                 }
 
@@ -854,6 +1136,7 @@ namespace CopperMod.Amiga
             AdvanceLiveDisplayStateTo(targetCycle);
             _liveCycle = Math.Max(_liveCycle, targetCycle);
             _liveCapturedThroughCycle = Math.Max(_liveCapturedThroughCycle, targetCycle);
+            InvalidateLiveWorkCycle();
         }
 
         private void AdvanceLiveDisplayStateTo(long targetCycle)
@@ -899,11 +1182,31 @@ namespace CopperMod.Amiga
             {
                 ApplyPendingWrites(cycle);
                 RefreshLiveLineStateAfterDisplayStateChange(cycle);
+                RecordTimelineFrameWritesAtCycle(cycle);
             }
             finally
             {
                 _currentRenderRow = previousRow;
                 _currentCopperRow = previousCopperRow;
+            }
+        }
+
+        private void RecordTimelineFrameWritesAtCycle(long cycle)
+        {
+            for (var i = _liveFrameWrites.Count - 1; i >= 0; i--)
+            {
+                var write = _liveFrameWrites[i];
+                if (write.Cycle < cycle)
+                {
+                    break;
+                }
+
+                if (write.Cycle != cycle || write.IsCopper)
+                {
+                    continue;
+                }
+
+                RecordTimelineDisplayWrite(write.Cycle, write.Offset, isCopper: false);
             }
         }
 
@@ -1110,6 +1413,7 @@ namespace CopperMod.Amiga
             {
                 _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
                 AdvanceLiveDisplayWindowStateToCycle(dataCycle);
+                EnsureTimelineLineStartedBeforeDisplayWrite(dataCycle);
                 if (dataCycle > _liveFrameStartCycle && register is 0x08E or 0x090)
                 {
                     _liveFrameHasLateDisplayWindowWrites = true;
@@ -1118,6 +1422,7 @@ namespace CopperMod.Amiga
                 ApplyCopperMove(register, value, dataCycle);
                 RecordLiveFrameWrite(dataCycle, register, value, isCopper: true);
                 RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
+                RecordTimelineDisplayWrite(dataCycle, register, isCopper: true);
                 if (register == 0x088)
                 {
                     _liveCopper.JumpTo(_copperListPointer, dataCycle);
@@ -1218,6 +1523,7 @@ namespace CopperMod.Amiga
 
         private void SkipLiveRowsWithoutFetches()
         {
+            var advanced = false;
             while (_liveNextFetchRow < LowResOutputHeight)
             {
                 var state = _liveLineStates[_liveNextFetchRow];
@@ -1238,6 +1544,12 @@ namespace CopperMod.Amiga
                 _liveNextFetchWord = 0;
                 _liveNextFetchPlane = 0;
                 _liveNextFetchSlot = 0;
+                advanced = true;
+            }
+
+            if (advanced)
+            {
+                InvalidateLiveWorkCycle();
             }
         }
 
@@ -1255,6 +1567,12 @@ namespace CopperMod.Amiga
                     if (WouldLiveSpriteSlotFetchIfChannelAvailable(_liveNextSpriteRow, _liveNextSpriteIndex))
                     {
                         RecordMissedSpriteDmaSlot(liveCapture: true);
+                        RecordTimelineSpriteDataFetch(
+                            _liveNextSpriteRow,
+                            _liveNextSpriteIndex,
+                            _liveNextSpriteWord,
+                            0,
+                            granted: false);
                     }
                 }
                 else if (CanLiveSpriteSlotFetch(_liveNextSpriteRow, _liveNextSpriteIndex))
@@ -1323,7 +1641,7 @@ namespace CopperMod.Amiga
             return row == state.ControlRow;
         }
 
-        private void CaptureLiveLineState(int row)
+        private void CaptureLiveLineState(int row, bool recordTimeline = true)
         {
             if ((uint)row >= (uint)LowResOutputHeight)
             {
@@ -1369,6 +1687,10 @@ namespace CopperMod.Amiga
             }
 
             ClearLiveBitplaneWordMasks(row);
+            if (recordTimeline)
+            {
+                RecordTimelineLineStart(row, state);
+            }
         }
 
         private void RefreshLiveLineStateAfterDisplayStateChange(long cycle)
@@ -1386,13 +1708,22 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            CaptureLiveLineState(row);
+            CaptureLiveLineState(row, recordTimeline: !_displayTimeline.HasLine(row));
             if (_liveNextFetchRow >= row)
             {
                 _liveNextFetchRow = row;
                 _liveNextFetchWord = 0;
                 _liveNextFetchPlane = 0;
                 _liveNextFetchSlot = 0;
+                InvalidateLiveWorkCycle();
+            }
+
+            if (_liveNextSpriteRow >= row)
+            {
+                _liveNextSpriteRow = row;
+                _liveNextSpriteIndex = 0;
+                _liveNextSpriteWord = 0;
+                InvalidateLiveWorkCycle();
             }
         }
 
@@ -1527,6 +1858,7 @@ namespace CopperMod.Amiga
         private void CaptureLiveBitplaneFetch(int row, int plane, int word, long fetchCycle, LiveLineState state)
         {
             ushort value = 0;
+            var granted = false;
             if ((state.PlaneHasRowMask & (1 << plane)) != 0)
             {
                 var address = unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2));
@@ -1534,11 +1866,16 @@ namespace CopperMod.Amiga
                 {
                     _liveBitplaneDmaFetches++;
                     RecordLiveDisplayDmaCycle(grantedCycle);
+                    granted = true;
                 }
             }
 
             _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = value;
             _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
+            if (!_liveTimelineUnsafeForFrame)
+            {
+                _displayTimeline.RecordBitplaneFetch(row, plane, word, value, granted);
+            }
             _liveFetchBatchWordCount++;
         }
 
@@ -1584,6 +1921,7 @@ namespace CopperMod.Amiga
             _liveNextFetchSlot++;
             if (_liveNextFetchSlot < state.FetchSlotStride)
             {
+                InvalidateLiveWorkCycle();
                 return;
             }
 
@@ -1592,6 +1930,7 @@ namespace CopperMod.Amiga
             _liveNextFetchWord++;
             if (_liveNextFetchWord < state.FetchWords)
             {
+                InvalidateLiveWorkCycle();
                 return;
             }
 
@@ -1609,6 +1948,7 @@ namespace CopperMod.Amiga
             _liveNextFetchWord = 0;
             _liveNextFetchPlane = 0;
             _liveNextFetchSlot = 0;
+            InvalidateLiveWorkCycle();
         }
 
         private void AdvanceLiveBitplanePointersPastCapturedRow(int row)
@@ -1655,6 +1995,7 @@ namespace CopperMod.Amiga
             _liveNextSpriteWord++;
             if (_liveNextSpriteWord < 2)
             {
+                InvalidateLiveWorkCycle();
                 return;
             }
 
@@ -1662,11 +2003,13 @@ namespace CopperMod.Amiga
             _liveNextSpriteIndex++;
             if (_liveNextSpriteIndex < _sprites.Length)
             {
+                InvalidateLiveWorkCycle();
                 return;
             }
 
             _liveNextSpriteIndex = 0;
             _liveNextSpriteRow++;
+            InvalidateLiveWorkCycle();
         }
 
         public void RenderFrame(Span<uint> bgra)
@@ -1715,6 +2058,11 @@ namespace CopperMod.Amiga
                 }
 
                 if (TryRenderLiveCapturedFrame(bgra, frameStartCycle, frameStopCycle))
+                {
+                    return;
+                }
+
+                if (TryRenderArchivedTimelineFrame(bgra, frameStartCycle, frameStopCycle))
                 {
                     return;
                 }
@@ -1804,12 +2152,1072 @@ namespace CopperMod.Amiga
             return Math.Min(frameEndCycle, naturalFrameStop);
         }
 
+        private bool TryRenderTimelineFrame(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long frameStopCycle,
+            DisplayFrameTimeline timeline,
+            bool useArchivedPalette,
+            bool allowStatefulFallback,
+            bool archivedTimeline)
+        {
+            if (!timeline.IsValidForFrame(frameStartCycle))
+            {
+                _lastTimelineFallbackCount++;
+                return false;
+            }
+
+            CompleteTimelineSpriteFetchOutcomes(timeline, frameStartCycle, frameStopCycle, allowExactCompletionReads: false);
+            _lastTimelineCoalescedSegmentCount += timeline.CoalesceEquivalentSegments();
+            if (!IsTimelineCompleteForRendering(
+                    timeline,
+                    frameStartCycle,
+                    frameStopCycle,
+                    requireCurrentFrameSafe: !archivedTimeline))
+            {
+                _lastTimelineFallbackCount++;
+                return false;
+            }
+
+            var savedCurrentRenderRow = _currentRenderRow;
+            var savedTrackDisplayWindowState = _trackDisplayWindowState;
+            var savedDisplayWindowVerticallyOpen = _displayWindowVerticallyOpen;
+            var savedDisplayWindowStateLine = _displayWindowStateLine;
+            var savedRenderingArchivedTimeline = _renderingArchivedTimeline;
+            _renderingArchivedTimeline = useArchivedPalette;
+            _trackDisplayWindowState = true;
+            try
+            {
+                var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+                for (var row = 0; row < rowStop; row++)
+                {
+                    var line = timeline.GetLine(row);
+                    if (TryRenderTimelineLowResLineFastPath(bgra, row, line, timeline))
+                    {
+                        _lastTimelineFastPathRowCount++;
+                        continue;
+                    }
+
+                    _lastTimelineFastPathMissCount++;
+                    for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+                    {
+                        var segment = line.Segments[segmentIndex];
+                        if (segment.XStop <= segment.XStart)
+                        {
+                            continue;
+                        }
+
+                        var state = timeline.GetState(segment.StateIndex);
+                        ApplyTimelineStateForRendering(state);
+                        _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
+                        _displayWindowStateLine = StandardVStart + row + 1;
+                        _currentRenderRow = row;
+                        CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
+                        FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
+                        if (!TryRenderTimelineCachedBitplanes(bgra, row, segment, state, timeline))
+                        {
+                            if (!allowStatefulFallback)
+                            {
+                                _lastTimelineFallbackCount++;
+                                return false;
+                            }
+
+                            RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
+                        }
+                    }
+                }
+
+                RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
+                RenderTimelineSprites(bgra, timeline);
+                _lastTimelineSegmentCount = timeline.SegmentCount;
+                _lastTimelineSpriteCommandCount = timeline.SpriteCommandCount;
+                _lastPlanarChunkCacheHits = timeline.PlanarChunkCacheHits;
+                _lastPlanarChunkCacheMisses = timeline.PlanarChunkCacheMisses;
+                _lastSpriteDeniedFetchCount = timeline.RecalculateSpriteDeniedFetchCount();
+                if (archivedTimeline)
+                {
+                    _lastArchivedTimelineFrameCount++;
+                }
+                else
+                {
+                    _lastActiveTimelineFrameCount++;
+                }
+
+                return true;
+            }
+            finally
+            {
+                _currentRenderRow = savedCurrentRenderRow;
+                _trackDisplayWindowState = savedTrackDisplayWindowState;
+                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
+                _displayWindowStateLine = savedDisplayWindowStateLine;
+                _renderingArchivedTimeline = savedRenderingArchivedTimeline;
+            }
+        }
+
+        private static int GetTimelineRowStop(long frameStartCycle, long frameStopCycle)
+        {
+            var rowStop = LowResOutputHeight;
+            if (frameStopCycle < frameStartCycle + PalFrameCycles)
+            {
+                rowStop = Math.Clamp(GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1, 0, LowResOutputHeight);
+            }
+
+            return rowStop;
+        }
+
+        private bool IsTimelineCompleteForRendering(
+            DisplayFrameTimeline timeline,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool requireCurrentFrameSafe = true)
+        {
+            return GetTimelineRejectReason(timeline, frameStartCycle, frameStopCycle, requireCurrentFrameSafe) == TimelineRejectReason.None;
+        }
+
+        private TimelineRejectReason GetTimelineRejectReason(
+            DisplayFrameTimeline timeline,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool requireCurrentFrameSafe = true)
+        {
+            if (requireCurrentFrameSafe && _liveTimelineUnsafeForFrame)
+            {
+                return TimelineRejectReason.UnsafeWrite;
+            }
+
+            if (timeline.SegmentCount > MaxTimelineSegmentsPerFrame)
+            {
+                return TimelineRejectReason.SegmentCapacity;
+            }
+
+            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            for (var row = 0; row < rowStop; row++)
+            {
+                var lineStart = GetOutputRowStartCycle(frameStartCycle, row);
+                if (lineStart >= frameStopCycle)
+                {
+                    break;
+                }
+
+                if (!timeline.HasLine(row))
+                {
+                    return TimelineRejectReason.MissingLine;
+                }
+
+                var line = timeline.GetLine(row);
+                if (line.UnsafeForTimelineRender || line.SegmentCount <= 0)
+                {
+                    return TimelineRejectReason.UnsafeLine;
+                }
+
+                for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+                {
+                    var state = timeline.GetState(line.Segments[segmentIndex].StateIndex);
+                    if (!IsTimelineSegmentFetchComplete(row, state, timeline))
+                    {
+                        return TimelineRejectReason.MissingBitplaneFetch;
+                    }
+                }
+            }
+
+            if (!IsTimelineSpriteCompleteForRendering(timeline, frameStartCycle, frameStopCycle))
+            {
+                return TimelineRejectReason.MissingSpriteFetch;
+            }
+
+            return TimelineRejectReason.None;
+        }
+
+        private bool IsTimelineSpriteCompleteForRendering(DisplayFrameTimeline timeline, long frameStartCycle, long frameStopCycle)
+        {
+            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
+            {
+                var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
+                for (var commandIndex = 0; commandIndex < commands.Count; commandIndex++)
+                {
+                    var command = commands[commandIndex];
+                    var sprite = command.Descriptor;
+                    if (!sprite.IsDma)
+                    {
+                        continue;
+                    }
+
+                    var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
+                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
+                    for (var y = yStart; y < yStop; y++)
+                    {
+                        var lineStart = GetOutputRowStartCycle(frameStartCycle, y);
+                        if (lineStart >= frameStopCycle)
+                        {
+                            break;
+                        }
+
+                        var statusA = timeline.GetSpriteFetchStatus(y, spriteIndex, 0);
+                        var statusB = timeline.GetSpriteFetchStatus(y, spriteIndex, 1);
+                        if (statusA == TimelineFetchStatus.NotAttempted ||
+                            statusB == TimelineFetchStatus.NotAttempted)
+                        {
+                            if (statusA == TimelineFetchStatus.NotAttempted &&
+                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 0))
+                            {
+                                timeline.RecordSpriteDataFetch(y, spriteIndex, 0, 0, granted: false);
+                            }
+
+                            if (statusB == TimelineFetchStatus.NotAttempted &&
+                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 1))
+                            {
+                                timeline.RecordSpriteDataFetch(y, spriteIndex, 1, 0, granted: false);
+                            }
+
+                            statusA = timeline.GetSpriteFetchStatus(y, spriteIndex, 0);
+                            statusB = timeline.GetSpriteFetchStatus(y, spriteIndex, 1);
+                            if (statusA != TimelineFetchStatus.NotAttempted &&
+                                statusB != TimelineFetchStatus.NotAttempted)
+                            {
+                                continue;
+                            }
+
+                            var missingWord = statusA == TimelineFetchStatus.NotAttempted ? 0 : 1;
+                            CaptureMissingSpriteRejectDiagnostic(
+                                spriteIndex,
+                                y,
+                                missingWord,
+                                statusA,
+                                statusB,
+                                command,
+                                timeline);
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void CompleteTimelineSpriteFetchOutcomes(
+            DisplayFrameTimeline timeline,
+            long frameStartCycle,
+            long frameStopCycle,
+            bool allowExactCompletionReads)
+        {
+            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
+            {
+                var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
+                for (var commandIndex = 0; commandIndex < commands.Count; commandIndex++)
+                {
+                    var command = commands[commandIndex];
+                    var sprite = command.Descriptor;
+                    if (!sprite.IsDma)
+                    {
+                        continue;
+                    }
+
+                    var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
+                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
+                    for (var y = yStart; y < yStop; y++)
+                    {
+                        var lineStart = GetOutputRowStartCycle(frameStartCycle, y);
+                        if (lineStart >= frameStopCycle)
+                        {
+                            break;
+                        }
+
+                        for (var word = 0; word < LiveSpriteWordsPerChannel; word++)
+                        {
+                            if (timeline.GetSpriteFetchStatus(y, spriteIndex, word) == TimelineFetchStatus.NotAttempted &&
+                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, word))
+                            {
+                                timeline.RecordSpriteDataFetch(y, spriteIndex, word, 0, granted: false);
+                                continue;
+                            }
+
+                            if (allowExactCompletionReads &&
+                                timeline.GetSpriteFetchStatus(y, spriteIndex, word) == TimelineFetchStatus.NotAttempted)
+                            {
+                                CompleteTimelineSpriteFetchFromExactSlot(
+                                    timeline,
+                                    frameStartCycle,
+                                    frameStopCycle,
+                                    command,
+                                    y,
+                                    spriteIndex,
+                                    word);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void CompleteTimelineSpriteFetchFromExactSlot(
+            DisplayFrameTimeline timeline,
+            long frameStartCycle,
+            long frameStopCycle,
+            SpriteFrameCommand command,
+            int row,
+            int spriteIndex,
+            int word)
+        {
+            var fetchCycle = GetSpriteDmaFetchCycle(frameStartCycle, row, spriteIndex, word);
+            if (fetchCycle >= frameStopCycle)
+            {
+                return;
+            }
+
+            var sprite = command.Descriptor;
+            if (!sprite.IsDma ||
+                row < Math.Max(sprite.YStart, command.Row) ||
+                row >= sprite.YStop)
+            {
+                return;
+            }
+
+            var address = AddDmaPointerOffset(sprite.DataAddress, ((row - sprite.YStart) * 4) + (word * 2));
+            if (!_bus.TryReadDisplayDmaWordForPresentation(
+                    AmigaBusRequester.Sprite,
+                    AmigaBusAccessKind.Sprite,
+                    address,
+                    fetchCycle,
+                    out var value,
+                    out var access))
+            {
+                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                return;
+            }
+
+            RecordLiveDisplayDmaCycle(access.GrantedCycle);
+            timeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted: true);
+        }
+
+        private bool TryRecoverTimelineSpriteFetch(
+            DisplayFrameTimeline timeline,
+            long frameStartCycle,
+            long frameStopCycle,
+            SpriteFrameCommand command,
+            int row,
+            int spriteIndex,
+            int word)
+        {
+            _lastSpriteRecoveryAttemptCount++;
+            var fetchCycle = GetSpriteDmaFetchCycle(frameStartCycle, row, spriteIndex, word);
+            if (fetchCycle >= frameStopCycle)
+            {
+                return false;
+            }
+
+            if (IsTimelineSpriteSlotUnavailable(timeline, row, spriteIndex, word))
+            {
+                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                return true;
+            }
+
+            var sprite = command.Descriptor;
+            if (!sprite.IsDma ||
+                row < Math.Max(sprite.YStart, command.Row) ||
+                row >= sprite.YStop)
+            {
+                return false;
+            }
+
+            var address = AddDmaPointerOffset(sprite.DataAddress, ((row - sprite.YStart) * 4) + (word * 2));
+            if (!_bus.TryReadDisplayDmaWordForPresentation(
+                    AmigaBusRequester.Sprite,
+                    AmigaBusAccessKind.Sprite,
+                    address,
+                    fetchCycle,
+                    out var value,
+                    out var access))
+            {
+                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                return true;
+            }
+
+            RecordLiveDisplayDmaCycle(access.GrantedCycle);
+            timeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted: true);
+            return true;
+        }
+
+        private bool IsTimelineSpriteSlotUnavailable(DisplayFrameTimeline timeline, int row, int spriteIndex, int word)
+        {
+            if (!TryGetTimelineStateForSpriteSlot(timeline, row, spriteIndex, word, out var state))
+            {
+                return false;
+            }
+
+            return !IsSpriteDmaEnabled(state.Dmacon) || !IsSpriteDmaChannelAvailable(state, spriteIndex);
+        }
+
+        private bool TryGetTimelineStateForSpriteSlot(
+            DisplayFrameTimeline timeline,
+            int row,
+            int spriteIndex,
+            int word,
+            out DisplayTimelineState state)
+        {
+            state = null!;
+            if (!timeline.HasLine(row))
+            {
+                return false;
+            }
+
+            var line = timeline.GetLine(row);
+            if (line.SegmentCount <= 0)
+            {
+                return false;
+            }
+
+            var horizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal + (spriteIndex * 4) + (word * 2);
+            var x = GetCopperOutputX(horizontal);
+            for (var i = 0; i < line.SegmentCount; i++)
+            {
+                var segment = line.Segments[i];
+                if (x >= segment.XStart && x < segment.XStop)
+                {
+                    state = timeline.GetState(segment.StateIndex);
+                    return true;
+                }
+            }
+
+            state = timeline.GetState(line.Segments[line.SegmentCount - 1].StateIndex);
+            return true;
+        }
+
+        private void CaptureMissingSpriteRejectDiagnostic(
+            int spriteIndex,
+            int row,
+            int word,
+            TimelineFetchStatus statusA,
+            TimelineFetchStatus statusB,
+            SpriteFrameCommand command,
+            DisplayFrameTimeline timeline)
+        {
+            _lastArchiveRejectMissingSpriteIndex = spriteIndex;
+            _lastArchiveRejectMissingSpriteRow = row;
+            _lastArchiveRejectMissingSpriteWord = word;
+            _lastArchiveRejectMissingSpriteStatusA = (int)statusA;
+            _lastArchiveRejectMissingSpriteStatusB = (int)statusB;
+            _lastArchiveRejectMissingSpriteCommandRow = command.Row;
+            _lastArchiveRejectMissingSpriteYStart = command.Descriptor.YStart;
+            _lastArchiveRejectMissingSpriteYStop = command.Descriptor.YStop;
+            _lastArchiveRejectMissingSpritePreviousStatusA = row > 0
+                ? (int)timeline.GetSpriteFetchStatus(row - 1, spriteIndex, 0)
+                : -1;
+            _lastArchiveRejectMissingSpritePreviousStatusB = row > 0
+                ? (int)timeline.GetSpriteFetchStatus(row - 1, spriteIndex, 1)
+                : -1;
+            if (TryGetTimelineStateForSpriteSlot(timeline, row, spriteIndex, word, out var state))
+            {
+                _lastArchiveRejectMissingSpriteUsableChannels = GetUsableSpriteDmaChannelCount(state);
+                _lastArchiveRejectMissingSpriteDdfStart = state.DataFetchStart;
+                _lastArchiveRejectMissingSpriteDmacon = state.Dmacon;
+                _lastArchiveRejectMissingSpriteBplcon0 = state.Bplcon0;
+            }
+        }
+
+        private bool IsTimelineSegmentFetchComplete(int row, DisplayTimelineState state, DisplayFrameTimeline timeline)
+        {
+            if (!IsBitplaneDmaEnabled(state.Dmacon) || state.PlaneCount <= 0 || state.FetchWords <= 0)
+            {
+                return true;
+            }
+
+            if (!state.DisplayWindowVerticallyOpen)
+            {
+                return true;
+            }
+
+            var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
+            var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((state.PlaneHasRowMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
+                for (var word = 0; word < fetchWords; word++)
+                {
+                    if (timeline.GetBitplaneFetchStatus(row, plane, word) == TimelineFetchStatus.NotAttempted)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void ApplyTimelineStateForRendering(DisplayTimelineState state)
+        {
+            _diwStart = state.DiwStart;
+            _diwStop = state.DiwStop;
+            _ddfStart = state.DdfStart;
+            _ddfStop = state.DdfStop;
+            _bplcon0 = state.Bplcon0;
+            _bplcon1 = state.Bplcon1;
+            _bplcon2 = state.Bplcon2;
+            _dmacon = state.Dmacon;
+            _bpl1mod = state.Bpl1Mod;
+            _bpl2mod = state.Bpl2Mod;
+            if (_lastAppliedLivePaletteSnapshotIndex != state.PaletteSnapshotIndex)
+            {
+                var paletteSnapshotCount = _renderingArchivedTimeline
+                    ? _archivedPaletteSnapshotCount
+                    : _livePaletteSnapshotCount;
+                var paletteColors = _renderingArchivedTimeline
+                    ? _archivedPaletteSnapshotColors
+                    : _livePaletteSnapshotColors;
+                var convertedPaletteColors = _renderingArchivedTimeline
+                    ? _archivedPaletteSnapshotConvertedColors
+                    : _livePaletteSnapshotConvertedColors;
+                var paletteIndex = Math.Clamp(state.PaletteSnapshotIndex, 0, Math.Max(0, paletteSnapshotCount - 1));
+                Array.Copy(paletteColors, paletteIndex * _colors.Length, _colors, 0, _colors.Length);
+                Array.Copy(convertedPaletteColors, paletteIndex * PaletteColorCount, _convertedColors, 0, PaletteColorCount);
+                _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
+            }
+
+            Array.Copy(state.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
+            Array.Copy(state.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
+        }
+
+        private bool TryRenderTimelineLowResLineFastPath(
+            Span<uint> bgra,
+            int row,
+            DisplayLineTimeline line,
+            DisplayFrameTimeline timeline)
+        {
+            if (line.SegmentCount <= 0)
+            {
+                return false;
+            }
+
+            for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+            {
+                var segment = line.Segments[segmentIndex];
+                if (segment.XStop <= segment.XStart)
+                {
+                    continue;
+                }
+
+                var state = timeline.GetState(segment.StateIndex);
+                if (!IsTimelineLowResLineFastPathSupported(row, segment, state))
+                {
+                    return false;
+                }
+            }
+
+            for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+            {
+                var segment = line.Segments[segmentIndex];
+                if (segment.XStop <= segment.XStart)
+                {
+                    continue;
+                }
+
+                var state = timeline.GetState(segment.StateIndex);
+                ApplyTimelineStateForRendering(state);
+                _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
+                _displayWindowStateLine = StandardVStart + row + 1;
+                _currentRenderRow = row;
+                CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
+                FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
+                if (!TryRenderTimelineLowResFastBitplanes(bgra, row, segment, state, timeline))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsTimelineLowResLineFastPathSupported(int row, DisplayLineSegment segment, DisplayTimelineState state)
+        {
+            if ((state.Bplcon0 & 0x8804) != 0 ||
+                (state.Bplcon1 & 0x00FF) != 0 ||
+                HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryRenderTimelineLowResFastBitplanes(
+            Span<uint> bgra,
+            int row,
+            DisplayLineSegment segment,
+            DisplayTimelineState state,
+            DisplayFrameTimeline timeline)
+        {
+            if (state.PlaneCount <= 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return true;
+            }
+
+            if (!state.DisplayWindowVerticallyOpen)
+            {
+                return true;
+            }
+
+            var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
+            var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
+            if (planeCount <= 0 || fetchWords <= 0)
+            {
+                return true;
+            }
+
+            var window = GetEffectiveDisplayWindow();
+            if (window.Width <= 0 || window.Height <= 0)
+            {
+                return true;
+            }
+
+            var rowStart = Math.Max(0, window.Y);
+            var rowStop = Math.Min(LowResOutputHeight, window.Y + window.Height);
+            if (row < rowStart || row >= rowStop)
+            {
+                return true;
+            }
+
+            var originX = GetDataFetchStartX(window);
+            var clipLeft = Math.Max(Math.Max(0, window.X), segment.XStart);
+            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), segment.XStop);
+            if (clipRight <= clipLeft)
+            {
+                return true;
+            }
+
+            Array.Clear(_timelineFastPathColorIndexes, clipLeft, clipRight - clipLeft);
+            Array.Clear(_timelineFastPathPriorityMasks, clipLeft, clipRight - clipLeft);
+
+            var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
+            var fetchPixels = fetchWords * PlanarChunkPixels;
+            var firstX = Math.Max(clipLeft, originX);
+            var lastX = Math.Min(clipRight, originX + fetchPixels);
+            if (lastX <= firstX)
+            {
+                return true;
+            }
+
+            var firstWord = Math.Clamp((firstX - originX) >> 4, 0, fetchWords - 1);
+            var lastWord = Math.Clamp((lastX - 1 - originX) >> 4, 0, fetchWords - 1);
+            for (var word = firstWord; word <= lastWord; word++)
+            {
+                if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield, timeline, out var chunk))
+                {
+                    return false;
+                }
+
+                var wordStart = originX + (word * PlanarChunkPixels);
+                var xStart = Math.Max(firstX, wordStart);
+                var xStop = Math.Min(lastX, wordStart + PlanarChunkPixels);
+                for (var x = xStart; x < xStop; x++)
+                {
+                    var offset = x - wordStart;
+                    _timelineFastPathColorIndexes[x] = chunk.ColorIndexes[offset];
+                    _timelineFastPathPriorityMasks[x] = chunk.PriorityMasks[offset];
+                }
+            }
+
+            for (var x = firstX; x < lastX; x++)
+            {
+                var colorIndex = _timelineFastPathColorIndexes[x];
+                var priorityMask = _timelineFastPathPriorityMasks[x];
+                SetPlayfieldPriorityMask(x, row, priorityMask);
+                if (colorIndex != 0)
+                {
+                    RecordBitplanePixel(colorIndex, priorityMask, x, row);
+                }
+
+                WriteLowResolutionOutputPixel(
+                    bgra,
+                    x,
+                    row,
+                    _convertedColors[colorIndex],
+                    highResolutionWidth: false,
+                    highResolutionHeight: false,
+                    interlace: false,
+                    interlaceField: 0);
+            }
+
+            return true;
+        }
+
+        private bool TryRenderTimelineCachedBitplanes(
+            Span<uint> bgra,
+            int row,
+            DisplayLineSegment segment,
+            DisplayTimelineState state,
+            DisplayFrameTimeline timeline)
+        {
+            if (state.PlaneCount <= 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return true;
+            }
+
+            if ((state.Bplcon0 & 0x8804) != 0 ||
+                HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop) ||
+                IsRenderingHighResolutionWidth() ||
+                IsRenderingHighResolutionHeight())
+            {
+                return false;
+            }
+
+            var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
+            var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
+            var window = GetEffectiveDisplayWindow();
+            if (window.Width <= 0 || window.Height <= 0 || fetchWords <= 0)
+            {
+                return true;
+            }
+
+            var fetchPixels = fetchWords * PlanarChunkPixels;
+            var originX = GetDataFetchStartX(window);
+            var clipLeft = Math.Max(Math.Max(0, window.X), segment.XStart);
+            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), segment.XStop);
+            var rowStart = Math.Max(0, window.Y);
+            var rowStop = Math.Min(LowResOutputHeight, window.Y + window.Height);
+            if (row < rowStart || row >= rowStop || clipRight <= clipLeft)
+            {
+                return true;
+            }
+
+            var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
+            var zeroScroll = (state.Bplcon1 & 0x00FF) == 0;
+            for (var x = Math.Max(clipLeft, originX); x < clipRight; x++)
+            {
+                var relativeX = x - originX;
+                if (relativeX < -15 || relativeX >= fetchPixels + 15)
+                {
+                    continue;
+                }
+
+                int colorIndex;
+                byte priorityMask;
+                if (zeroScroll)
+                {
+                    if ((uint)relativeX >= (uint)fetchPixels)
+                    {
+                        continue;
+                    }
+
+                    var word = relativeX >> 4;
+                    if ((uint)word >= (uint)fetchWords)
+                    {
+                        continue;
+                    }
+
+                    if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield, timeline, out var chunk))
+                    {
+                        return false;
+                    }
+
+                    var offset = relativeX & 0x0F;
+                    colorIndex = chunk.ColorIndexes[offset];
+                    priorityMask = chunk.PriorityMasks[offset];
+                }
+                else if (dualPlayfield)
+                {
+                    if (!TryGetTimelineDualPlayfieldPixel(row, x, originX, fetchPixels, fetchWords, state, planeCount, timeline, out var dualPixel))
+                    {
+                        return false;
+                    }
+
+                    colorIndex = dualPixel.ColorIndex;
+                    priorityMask = dualPixel.PriorityMask;
+                }
+                else
+                {
+                    if (!TryGetTimelineBitplaneColorIndex(row, x, originX, fetchPixels, fetchWords, state, planeCount, timeline, out colorIndex))
+                    {
+                        return false;
+                    }
+
+                    colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(colorIndex, planeCount);
+                    priorityMask = colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
+                }
+
+                SetPlayfieldPriorityMask(x, row, priorityMask);
+                if (colorIndex != 0)
+                {
+                    RecordBitplanePixel(colorIndex, priorityMask, x, row);
+                }
+
+                WriteLowResolutionOutputPixel(
+                    bgra,
+                    x,
+                    row,
+                    _convertedColors[colorIndex],
+                    highResolutionWidth: false,
+                    highResolutionHeight: false,
+                    interlace: false,
+                    interlaceField: 0);
+            }
+
+            return true;
+        }
+
+        private bool TryGetTimelineBitplaneColorIndex(
+            int row,
+            int x,
+            int originX,
+            int fetchPixels,
+            int fetchWords,
+            DisplayTimelineState state,
+            int planeCount,
+            DisplayFrameTimeline timeline,
+            out int colorIndex)
+        {
+            colorIndex = 0;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((state.PlaneHasRowMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
+                var relativeX = x - originX - GetPlaneHorizontalScroll(plane);
+                if (relativeX < 0 || relativeX >= fetchPixels)
+                {
+                    continue;
+                }
+
+                var word = relativeX >> 4;
+                if ((uint)word >= (uint)fetchWords)
+                {
+                    continue;
+                }
+
+                if (!TryGetTimelineBitplaneWord(row, plane, word, timeline, out var data))
+                {
+                    return false;
+                }
+
+                var bit = 15 - (relativeX & 0x0F);
+                colorIndex |= ((data >> bit) & 1) << plane;
+            }
+
+            return true;
+        }
+
+        private bool TryGetTimelineDualPlayfieldPixel(
+            int row,
+            int x,
+            int originX,
+            int fetchPixels,
+            int fetchWords,
+            DisplayTimelineState state,
+            int planeCount,
+            DisplayFrameTimeline timeline,
+            out DualPlayfieldPixel pixel)
+        {
+            var rawColorIndex = 0;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((state.PlaneHasRowMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
+                var relativeX = x - originX - GetPlaneHorizontalScroll(plane);
+                if (relativeX < 0 || relativeX >= fetchPixels)
+                {
+                    continue;
+                }
+
+                var word = relativeX >> 4;
+                if ((uint)word >= (uint)fetchWords)
+                {
+                    continue;
+                }
+
+                if (!TryGetTimelineBitplaneWord(row, plane, word, timeline, out var data))
+                {
+                    pixel = default;
+                    return false;
+                }
+
+                var bit = 15 - (relativeX & 0x0F);
+                rawColorIndex |= ((data >> bit) & 1) << plane;
+            }
+
+            pixel = ConvertRawColorIndexToDualPlayfieldPixel(rawColorIndex, planeCount);
+            return true;
+        }
+
+        private static bool TryGetTimelineBitplaneWord(
+            int row,
+            int plane,
+            int word,
+            DisplayFrameTimeline timeline,
+            out ushort data)
+        {
+            var status = timeline.GetBitplaneFetchStatus(row, plane, word);
+            if (status == TimelineFetchStatus.NotAttempted)
+            {
+                data = 0;
+                return false;
+            }
+
+            data = timeline.GetBitplaneWord(row, plane, word);
+            return true;
+        }
+
+        private bool TryGetTimelineDecodedChunk(
+            int row,
+            int word,
+            DisplayTimelineState state,
+            int planeCount,
+            bool dualPlayfield,
+            DisplayFrameTimeline timeline,
+            out PlanarChunkDecoded chunk)
+        {
+            Span<ushort> words = stackalloc ushort[LiveBitplanePlaneCount];
+            var planeHasRowMask = state.PlaneHasRowMask;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((planeHasRowMask & (1 << plane)) == 0)
+                {
+                    words[plane] = 0;
+                    continue;
+                }
+
+                var status = timeline.GetBitplaneFetchStatus(row, plane, word);
+                if (status == TimelineFetchStatus.NotAttempted)
+                {
+                    chunk = null!;
+                    return false;
+                }
+
+                words[plane] = timeline.GetBitplaneWord(row, plane, word);
+            }
+
+            var key = new PlanarChunkKey(
+                state.Bplcon0,
+                state.Bplcon2,
+                planeCount,
+                dualPlayfield,
+                planeHasRowMask,
+                words[0],
+                words[1],
+                words[2],
+                words[3],
+                words[4],
+                words[5]);
+            if (timeline.TryGetPlanarChunk(key, out chunk))
+            {
+                return true;
+            }
+
+            chunk = DecodePlanarChunk(words, planeHasRowMask, planeCount, dualPlayfield);
+            timeline.StorePlanarChunk(key, chunk);
+            return true;
+        }
+
+        private PlanarChunkDecoded DecodePlanarChunk(
+            Span<ushort> words,
+            byte planeHasRowMask,
+            int planeCount,
+            bool dualPlayfield)
+        {
+            var chunk = new PlanarChunkDecoded();
+            for (var pixel = 0; pixel < PlanarChunkPixels; pixel++)
+            {
+                var bit = 15 - pixel;
+                var rawColorIndex = 0;
+                for (var plane = 0; plane < planeCount; plane++)
+                {
+                    if ((planeHasRowMask & (1 << plane)) == 0)
+                    {
+                        continue;
+                    }
+
+                    rawColorIndex |= ((words[plane] >> bit) & 1) << plane;
+                }
+
+                if (dualPlayfield)
+                {
+                    var dual = ConvertRawColorIndexToDualPlayfieldPixel(rawColorIndex, planeCount);
+                    chunk.ColorIndexes[pixel] = (byte)dual.ColorIndex;
+                    chunk.PriorityMasks[pixel] = dual.PriorityMask;
+                    continue;
+                }
+
+                var colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(rawColorIndex, planeCount);
+                chunk.ColorIndexes[pixel] = (byte)colorIndex;
+                chunk.PriorityMasks[pixel] = colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
+            }
+
+            return chunk;
+        }
+
+        private bool TryRenderArchivedTimelineFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
+        {
+            if (!_archivedTimelineValid ||
+                _archivedTimelineFrameStartCycle != frameStartCycle ||
+                _archivedTimelineFrameStopCycle < frameStopCycle)
+            {
+                return false;
+            }
+
+            var saved = SaveDisplayState();
+            ResetFrameCounters();
+            ResetPlayfieldPriorityMasks();
+            _bitplaneDataSpans.Clear();
+            _paletteFrameSpans.Clear();
+            _renderInterlaceField = InterlaceEnabled
+                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                : 0;
+            _renderFrameStartCycle = frameStartCycle;
+            _renderingLiveCapture = false;
+            _useTimedPresentationReads = true;
+            _enforceDmaForFrame = true;
+            _captureSpriteFrameCommands = false;
+            _lastAppliedLivePaletteSnapshotIndex = -1;
+            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
+            var rendered = false;
+
+            try
+            {
+                rendered = TryRenderTimelineFrame(
+                    bgra,
+                    frameStartCycle,
+                    frameStopCycle,
+                    _archivedDisplayTimeline,
+                    useArchivedPalette: true,
+                    allowStatefulFallback: false,
+                    archivedTimeline: true);
+                return rendered;
+            }
+            finally
+            {
+                RestoreDisplayState(saved);
+                _renderingLiveCapture = false;
+                _useTimedPresentationReads = false;
+                _enforceDmaForFrame = false;
+                _lastAppliedLivePaletteSnapshotIndex = -1;
+                if (rendered)
+                {
+                    _bus.ClearPresentationWriteHistory();
+                }
+            }
+        }
+
         private bool TryRenderLiveCapturedFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
         {
             if (!_liveFrameValid ||
                 _liveFrameStartCycle != frameStartCycle ||
-                _liveCapturedThroughCycle < Math.Max(frameStartCycle, frameStopCycle - 1) ||
-                !IsLiveCaptureCompleteForRendering(frameStopCycle))
+                _liveCapturedThroughCycle < Math.Max(frameStartCycle, frameStopCycle - 1))
+            {
+                return false;
+            }
+
+            if (!IsLiveCaptureCompleteForRendering(frameStopCycle) &&
+                !IsTimelineCompleteForRendering(_displayTimeline, frameStartCycle, frameStopCycle))
             {
                 return false;
             }
@@ -1834,67 +3242,83 @@ namespace CopperMod.Amiga
             var savedRenderingCopperFrame = _renderingCopperFrame;
             _trackDisplayWindowState = true;
             bgra = bgra.Slice(0, _renderWidth * _renderHeight);
+            var renderedByTimeline = false;
 
             try
             {
-                if (!_liveFrameHasLateDisplayWindowWrites &&
-                    _liveFrameInitialStateValid &&
-                    !_liveFrameWriteOverflowed)
+                renderedByTimeline = TryRenderTimelineFrame(
+                    bgra,
+                    frameStartCycle,
+                    frameStopCycle,
+                    _displayTimeline,
+                    useArchivedPalette: false,
+                    allowStatefulFallback: true,
+                    archivedTimeline: false);
+                if (!renderedByTimeline)
                 {
-                    RestoreDisplayState(_liveFrameInitialState);
-                    ResetDisplayWindowStateTracking();
-                    _renderingCopperFrame = true;
-                    _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
-                    var renderCursorCycle = frameStartCycle;
-                    var renderCursorPixelDelay = 0;
-                    for (var i = 0; i < _liveFrameWrites.Count; i++)
+                    if (!_liveFrameHasLateDisplayWindowWrites &&
+                        _liveFrameInitialStateValid &&
+                        !_liveFrameWriteOverflowed)
                     {
-                        var write = _liveFrameWrites[i];
-                        if (write.Cycle >= frameStopCycle)
+                        RestoreDisplayState(_liveFrameInitialState);
+                        ResetDisplayWindowStateTracking();
+                        _renderingCopperFrame = true;
+                        _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
+                        var renderCursorCycle = frameStartCycle;
+                        var renderCursorPixelDelay = 0;
+                        for (var i = 0; i < _liveFrameWrites.Count; i++)
                         {
-                            break;
+                            var write = _liveFrameWrites[i];
+                            if (write.Cycle >= frameStopCycle)
+                            {
+                                break;
+                            }
+
+                            if (write.Cycle <= frameStartCycle)
+                            {
+                                continue;
+                            }
+
+                            var writePixelDelay = GetPresentationWritePixelDelay(write);
+                            RenderPresentationSpan(
+                                bgra,
+                                frameStartCycle,
+                                renderCursorCycle,
+                                write.Cycle,
+                                useTimedWrites: true,
+                                renderCursorPixelDelay,
+                                writePixelDelay);
+                            renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
+                            renderCursorPixelDelay = writePixelDelay;
+                            ApplyLivePresentationReplayWrite(write, frameStartCycle);
                         }
 
-                        if (write.Cycle <= frameStartCycle)
-                        {
-                            continue;
-                        }
-
-                        var writePixelDelay = GetPresentationWritePixelDelay(write);
                         RenderPresentationSpan(
                             bgra,
                             frameStartCycle,
                             renderCursorCycle,
-                            write.Cycle,
+                            frameStopCycle,
                             useTimedWrites: true,
                             renderCursorPixelDelay,
-                            writePixelDelay);
-                        renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
-                        renderCursorPixelDelay = writePixelDelay;
-                        ApplyLivePresentationReplayWrite(write, frameStartCycle);
+                            toPixelDelay: 0);
+                        RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
+                        _renderingCopperFrame = savedRenderingCopperFrame;
                     }
-
-                    RenderPresentationSpan(
-                        bgra,
-                        frameStartCycle,
-                        renderCursorCycle,
-                        frameStopCycle,
-                        useTimedWrites: true,
-                        renderCursorPixelDelay,
-                        toPixelDelay: 0);
-                    RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
-                    _renderingCopperFrame = savedRenderingCopperFrame;
-                }
-                else
-                {
-                    RenderLiveCapturedRows(bgra);
+                    else
+                    {
+                        RenderLiveCapturedRows(bgra);
+                    }
                 }
 
                 RestoreDisplayState(saved);
                 _trackDisplayWindowState = savedTrackDisplayWindowState;
                 _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
                 _displayWindowStateLine = savedDisplayWindowStateLine;
-                RenderSprites(bgra);
+                if (!renderedByTimeline)
+                {
+                    RenderSprites(bgra);
+                }
+
                 _lastBitplaneDmaFetches = Math.Max(_liveBitplaneDmaFetches, CountLiveBitplaneFetches());
                 _lastSpriteDmaFetches = Math.Max(_lastSpriteDmaFetches, _liveSpriteDmaFetches);
                 _lastMissedSpriteDmaSlots = Math.Max(_lastMissedSpriteDmaSlots, _liveMissedSpriteDmaSlots);
@@ -2091,7 +3515,7 @@ namespace CopperMod.Amiga
         private static int GetCopperFrameInstructionLimit(long frameStartCycle, long frameStopCycle)
         {
             var frameCycles = Math.Max(1, frameStopCycle - frameStartCycle);
-            var minimumInstructionCycles = Math.Max(1, CopperHpToCpuCycles(CopperMoveHpUnits));
+            var minimumInstructionCycles = CopperHpToCpuCycles(CopperMoveHpUnits);
             return (int)Math.Min(int.MaxValue, (frameCycles / minimumInstructionCycles) + 1024);
         }
 
@@ -2608,7 +4032,8 @@ namespace CopperMod.Amiga
 
         private static long CopperHpToCpuCycles(int hpUnits)
         {
-            return Math.Max(1, hpUnits * CopperHpCycles);
+            System.Diagnostics.Debug.Assert(hpUnits > 0, "Copper HP cycle conversion expects positive units.");
+            return hpUnits * CopperHpCycles;
         }
 
         private static long GetLineStartCycle(long frameStartCycle, int line)
@@ -3183,6 +4608,7 @@ namespace CopperMod.Amiga
                 _liveNextSpriteRow = Math.Min(_liveNextSpriteRow, controlRow);
                 _liveNextSpriteIndex = 0;
                 _liveNextSpriteWord = 0;
+                InvalidateLiveWorkCycle();
             }
         }
 
@@ -3222,6 +4648,7 @@ namespace CopperMod.Amiga
                 _liveNextSpriteRow = Math.Min(_liveNextSpriteRow, state.ControlRow);
                 _liveNextSpriteIndex = 0;
                 _liveNextSpriteWord = 0;
+                InvalidateLiveWorkCycle();
             }
         }
 
@@ -3284,9 +4711,18 @@ namespace CopperMod.Amiga
 
         private bool TryCaptureKnownLiveSpriteDmaSlot(int row, int spriteIndex, int word, long slotCycle)
         {
-            if ((uint)spriteIndex >= (uint)_liveSpriteDmaStates.Length ||
-                !IsSpriteDmaChannelAvailable(spriteIndex))
+            if ((uint)spriteIndex >= (uint)_liveSpriteDmaStates.Length)
             {
+                return false;
+            }
+
+            if (!IsSpriteDmaChannelAvailable(spriteIndex))
+            {
+                if (WouldLiveSpriteSlotFetchIfChannelAvailable(row, spriteIndex))
+                {
+                    RecordTimelineSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                }
+
                 return false;
             }
 
@@ -3353,8 +4789,10 @@ namespace CopperMod.Amiga
             }
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
-            return TryReadSpriteWordForPresentation(address, row, spriteIndex, word, out _, recordLiveCapture: true) &&
-                _bus.IsHrmChipSlotReserved(slotCycle);
+            var captured = TryReadSpriteWordForPresentation(address, row, spriteIndex, word, out var value, recordLiveCapture: true);
+            var granted = captured && _bus.IsHrmChipSlotReserved(slotCycle);
+            RecordTimelineSpriteDataFetch(row, spriteIndex, word, value, granted);
+            return granted;
         }
 
         private bool TryCaptureLiveSpriteControlWord(
@@ -3426,7 +4864,9 @@ namespace CopperMod.Amiga
                 return slotGranted;
             }
 
-            AppendUniqueSpriteFrameCommand(_spriteFrameCommands, new SpriteFrameCommand(spriteIndex, row, descriptor));
+            var command = new SpriteFrameCommand(spriteIndex, row, descriptor);
+            AppendUniqueSpriteFrameCommand(_spriteFrameCommands, command);
+            RecordTimelineSpriteFrameCommand(command);
             state.Descriptor = descriptor;
             state.Active = true;
             state.LastVisibleStop = Math.Max(state.LastVisibleStop, descriptor.YStop);
@@ -3523,11 +4963,17 @@ namespace CopperMod.Amiga
                     _liveFrameHasLateDisplayWindowWrites = true;
                 }
 
+                if (_advancingLiveDma)
+                {
+                    EnsureTimelineLineStartedBeforeDisplayWrite(write.Cycle);
+                }
+
                 ApplyWrite(write.Offset, write.Value, write.Cycle);
                 RefreshLiveFrameInitialStateAfterFrameStartWrite(write.Cycle);
                 if (_advancingLiveDma)
                 {
                     RecordLiveFrameWrite(write.Cycle, write.Offset, write.Value);
+                    RecordTimelineDisplayWrite(write.Cycle, write.Offset, isCopper: false);
                 }
 
                 if (_advancingLiveDma)
@@ -3559,6 +5005,205 @@ namespace CopperMod.Amiga
                     InvalidateLiveDisplayEventCycle();
                 }
             }
+        }
+
+        private void RecordTimelineLineStart(int row, LiveLineState state)
+        {
+            if (!_advancingLiveDma || !_liveFrameValid)
+            {
+                return;
+            }
+
+            if (_liveTimelineUnsafeForFrame)
+            {
+                return;
+            }
+
+            var snapshotIndex = CaptureTimelineStateSnapshot(row, state);
+            _displayTimeline.StartLine(row, snapshotIndex);
+        }
+
+        private void EnsureTimelineLineStartedBeforeDisplayWrite(long cycle)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                _liveTimelineUnsafeForFrame ||
+                cycle < _liveFrameStartCycle ||
+                cycle >= _liveFrameStartCycle + PalFrameCycles)
+            {
+                return;
+            }
+
+            var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                _displayTimeline.HasLine(row))
+            {
+                return;
+            }
+
+            CaptureLiveLineState(row);
+        }
+
+        private void RecordTimelineDisplayWrite(long cycle, ushort offset, bool isCopper)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                cycle < _liveFrameStartCycle ||
+                cycle >= _liveFrameStartCycle + PalFrameCycles)
+            {
+                return;
+            }
+
+            if (_liveTimelineUnsafeForFrame)
+            {
+                return;
+            }
+
+            if (IsTimelineSpritePointerWrite(offset))
+            {
+                return;
+            }
+
+            if (IsTimelineCopperPointerLatchWrite(offset))
+            {
+                return;
+            }
+
+            if (IsTimelineBitplanePointerWrite(offset))
+            {
+                return;
+            }
+
+            var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                !IsLiveLineValid(row) ||
+                !_displayTimeline.HasLine(row))
+            {
+                return;
+            }
+
+            var x = GetOutputXForCycle(_liveFrameStartCycle, cycle);
+            if (isCopper)
+            {
+                x += GetCopperWritePixelDelay(offset);
+            }
+            else
+            {
+                x += GetTimelineCpuWritePixelDelay(offset);
+            }
+
+            var snapshotIndex = CaptureTimelineStateSnapshot(row, _liveLineStates[row]);
+            _displayTimeline.RecordDisplayChange(
+                row,
+                Math.Clamp(x, 0, AmigaConstants.PalLowResWidth),
+                snapshotIndex,
+                IsTimelineUnsafeDisplayWrite(offset));
+            if (_displayTimeline.SegmentCount > MaxTimelineSegmentsPerFrame)
+            {
+                _liveTimelineUnsafeForFrame = true;
+            }
+        }
+
+        private int CaptureTimelineStateSnapshot(int row, LiveLineState fallbackState)
+        {
+            var snapshot = _displayTimeline.AddStateSnapshot();
+            snapshot.LineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
+            snapshot.Bplcon0 = _bplcon0;
+            snapshot.Bplcon1 = _bplcon1;
+            snapshot.Bplcon2 = _bplcon2;
+            snapshot.DiwStart = _diwStart;
+            snapshot.DiwStop = _diwStop;
+            snapshot.DdfStart = _ddfStart;
+            snapshot.DdfStop = _ddfStop;
+            snapshot.Dmacon = _dmacon;
+            snapshot.Bpl1Mod = _bpl1mod;
+            snapshot.Bpl2Mod = _bpl2mod;
+            snapshot.DisplayWindowVerticallyOpen = _liveDisplayWindowVerticallyOpen;
+            snapshot.PlaneCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplanePointers.Length);
+            snapshot.FetchWords = GetDataFetchWordCount();
+            snapshot.DataFetchStart = GetDataFetchStartValue();
+            snapshot.FetchSlotStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
+            snapshot.PaletteSnapshotIndex = CaptureLivePaletteSnapshot();
+            Array.Copy(fallbackState.BitplanePointers, snapshot.BitplanePointers, fallbackState.BitplanePointers.Length);
+            Array.Copy(fallbackState.BitplaneBaseRows, snapshot.BitplaneBaseRows, fallbackState.BitplaneBaseRows.Length);
+            Array.Copy(fallbackState.BitplaneRowAddresses, snapshot.BitplaneRowAddresses, fallbackState.BitplaneRowAddresses.Length);
+            snapshot.PlaneHasRowMask = fallbackState.PlaneHasRowMask;
+
+            return snapshot.Index;
+        }
+
+        private static bool IsTimelineUnsafeDisplayWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            if (offset >= 0x180 && offset < 0x1C0)
+            {
+                return false;
+            }
+
+            if (IsTimelineSpritePointerWrite(offset))
+            {
+                return false;
+            }
+
+            if (IsTimelineCopperPointerLatchWrite(offset))
+            {
+                return false;
+            }
+
+            if (IsTimelineBitplanePointerWrite(offset))
+            {
+                return false;
+            }
+
+            if (offset is 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsTimelineSpritePointerWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            return offset >= 0x120 && offset < 0x140;
+        }
+
+        private static bool IsTimelineCopperPointerLatchWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            return offset is 0x080 or 0x082 or 0x084 or 0x086;
+        }
+
+        private static bool IsTimelineBitplanePointerWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            return offset >= 0x0E0 && offset <= 0x0F6;
+        }
+
+        private static int GetTimelineCpuWritePixelDelay(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            // Pending CPU custom writes are applied at their presentation cycle; scrolled
+            // playfield output samples the new BPLCON1 shifter state slightly before that
+            // low-res span boundary in the existing timed presenter.
+            return offset switch
+            {
+                0x092 or 0x094 => -4,
+                0x08E or 0x090 or 0x102 => -3,
+                _ => 0
+            };
+        }
+
+        private static bool IsTimelineUnsafeFrameWrite(ushort offset, bool isCopper)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            if (isCopper)
+            {
+                return IsTimelineUnsafeDisplayWrite(offset);
+            }
+
+            return IsTimelineUnsafeDisplayWrite(offset);
         }
 
         private static void ApplySetClear(ref ushort register, ushort value)
@@ -4150,6 +5795,18 @@ namespace CopperMod.Amiga
             _lastMissedSpriteDmaSlots = 0;
             _lastFirstDisplayDmaCycle = -1;
             _lastLastDisplayDmaCycle = -1;
+            _lastTimelineSegmentCount = 0;
+            _lastTimelineFallbackCount = 0;
+            _lastTimelineSpriteCommandCount = 0;
+            _lastActiveTimelineFrameCount = 0;
+            _lastArchivedTimelineFrameCount = 0;
+            _lastPlanarChunkCacheHits = 0;
+            _lastPlanarChunkCacheMisses = 0;
+            _lastTimelineCoalescedSegmentCount = 0;
+            _lastTimelineFastPathRowCount = 0;
+            _lastTimelineFastPathMissCount = 0;
+            _lastSpriteRecoveryAttemptCount = 0;
+            _lastSpriteDeniedFetchCount = 0;
         }
 
         private void ResetPlayfieldPriorityMasks()
@@ -4876,6 +6533,11 @@ namespace CopperMod.Amiga
             return (_bplcon0 & 0x8000) != 0;
         }
 
+        private static bool IsHighResolutionEnabled(ushort bplcon0)
+        {
+            return (bplcon0 & 0x8000) != 0;
+        }
+
         private bool IsDualPlayfieldEnabled()
         {
             return (_bplcon0 & 0x0400) != 0;
@@ -4953,6 +6615,62 @@ namespace CopperMod.Amiga
                     }
                 }
             }
+        }
+
+        private void RenderTimelineSprites(Span<uint> bgra, DisplayFrameTimeline timeline)
+        {
+            for (var spriteGroup = (_sprites.Length / 2) - 1; spriteGroup >= 0; spriteGroup--)
+            {
+                var spriteIndex = spriteGroup * 2;
+                var evenSprites = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
+                var oddSprites = GetTimelineSpriteFrameCommands(spriteIndex + 1, timeline);
+                Array.Clear(_evenSpriteAttached, 0, Math.Min(evenSprites.Count, _evenSpriteAttached.Length));
+                Array.Clear(_oddSpriteAttached, 0, Math.Min(oddSprites.Count, _oddSpriteAttached.Length));
+
+                for (var oddIndex = 0; oddIndex < oddSprites.Count; oddIndex++)
+                {
+                    var oddSprite = oddSprites[oddIndex];
+                    if (!oddSprite.Descriptor.Attached)
+                    {
+                        continue;
+                    }
+
+                    var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite);
+                    if (evenIndex < 0)
+                    {
+                        _oddSpriteAttached[oddIndex] = true;
+                        RenderTimelineAttachedOddSpriteWithoutEvenPartner(bgra, spriteIndex, oddSprite, timeline);
+                        continue;
+                    }
+
+                    _evenSpriteAttached[evenIndex] = true;
+                    _oddSpriteAttached[oddIndex] = true;
+                    RenderTimelineAttachedSpritePair(bgra, spriteIndex, evenSprites[evenIndex], oddSprite, timeline);
+                }
+
+                for (var i = 0; i < oddSprites.Count; i++)
+                {
+                    if (!_oddSpriteAttached[i] && !oddSprites[i].Descriptor.Attached)
+                    {
+                        RenderTimelineSprite(bgra, spriteIndex + 1, oddSprites[i], timeline);
+                    }
+                }
+
+                for (var i = 0; i < evenSprites.Count; i++)
+                {
+                    if (!_evenSpriteAttached[i])
+                    {
+                        RenderTimelineSprite(bgra, spriteIndex, evenSprites[i], timeline);
+                    }
+                }
+            }
+        }
+
+        private List<SpriteFrameCommand> GetTimelineSpriteFrameCommands(int spriteIndex, DisplayFrameTimeline timeline)
+        {
+            var commands = _spriteCommandScratch[spriteIndex];
+            timeline.CopySpriteFrameCommands(spriteIndex, commands);
+            return commands;
         }
 
         private List<SpriteFrameCommand> GetSpriteFrameCommands(int spriteIndex)
@@ -5090,7 +6808,7 @@ namespace CopperMod.Amiga
 
         private void CaptureManualSpriteFrameCommandIfArmed(int spriteIndex)
         {
-            if (!_captureSpriteFrameCommands)
+            if (!_captureSpriteFrameCommands && !_advancingLiveDma)
             {
                 return;
             }
@@ -5101,7 +6819,35 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            AddSpriteFrameCommand(spriteIndex, CreateManualSpriteDescriptor(sprite));
+            var descriptor = CreateManualSpriteDescriptor(sprite);
+            if (_captureSpriteFrameCommands)
+            {
+                AddSpriteFrameCommand(spriteIndex, descriptor);
+                return;
+            }
+
+            if (!TryGetCurrentOutputRow(out var row))
+            {
+                row = 0;
+            }
+
+            RecordTimelineSpriteFrameCommand(new SpriteFrameCommand(spriteIndex, row, descriptor));
+        }
+
+        private void CaptureInitialManualSpriteFrameCommands()
+        {
+            for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
+            {
+                var sprite = _sprites[spriteIndex];
+                if (!sprite.ManualArmed || (sprite.Pos | sprite.Ctl | sprite.DataA | sprite.DataB) == 0)
+                {
+                    continue;
+                }
+
+                var command = new SpriteFrameCommand(spriteIndex, 0, CreateManualSpriteDescriptor(sprite));
+                AppendUniqueSpriteFrameCommand(_spriteFrameCommands, command);
+                _displayTimeline.AddSpriteFrameCommand(command);
+            }
         }
 
         private static SpriteDescriptor CreateManualSpriteDescriptor(SpriteState sprite)
@@ -5120,7 +6866,7 @@ namespace CopperMod.Amiga
 
         private void StopManualSpriteFrameCommands(int spriteIndex)
         {
-            if (!_captureSpriteFrameCommands)
+            if (!_captureSpriteFrameCommands && !_advancingLiveDma)
             {
                 return;
             }
@@ -5128,6 +6874,12 @@ namespace CopperMod.Amiga
             if (!TryGetCurrentOutputRow(out var row))
             {
                 row = 0;
+            }
+
+            if (!_captureSpriteFrameCommands)
+            {
+                StopTimelineManualSpriteFrameCommands(spriteIndex, row);
+                return;
             }
 
             for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
@@ -5149,6 +6901,8 @@ namespace CopperMod.Amiga
                     command.Row,
                     command.Descriptor.WithYStop(yStop));
             }
+
+            StopTimelineManualSpriteFrameCommands(spriteIndex, row);
         }
 
         private void AddSpriteFrameCommand(int spriteIndex, SpriteDescriptor descriptor)
@@ -5171,6 +6925,46 @@ namespace CopperMod.Amiga
             }
 
             _spriteFrameCommands.Add(command);
+            RecordTimelineSpriteFrameCommand(command);
+        }
+
+        private void RecordTimelineSpriteFrameCommand(SpriteFrameCommand command)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                _liveTimelineUnsafeForFrame ||
+                !_displayTimeline.IsValidForFrame(_liveFrameStartCycle))
+            {
+                return;
+            }
+
+            _displayTimeline.AddSpriteFrameCommand(command);
+        }
+
+        private void StopTimelineManualSpriteFrameCommands(int spriteIndex, int row)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                _liveTimelineUnsafeForFrame ||
+                !_displayTimeline.IsValidForFrame(_liveFrameStartCycle))
+            {
+                return;
+            }
+
+            _displayTimeline.StopManualSpriteFrameCommands(spriteIndex, row);
+        }
+
+        private void RecordTimelineSpriteDataFetch(int row, int spriteIndex, int word, ushort value, bool granted)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                _liveTimelineUnsafeForFrame ||
+                !_displayTimeline.IsValidForFrame(_liveFrameStartCycle))
+            {
+                return;
+            }
+
+            _displayTimeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted);
         }
 
         private void AppendDmaSpriteFrameCommands(
@@ -5232,9 +7026,19 @@ namespace CopperMod.Amiga
             return (_dmacon & (DmaconMasterEnable | DmaconSpriteEnable)) == (DmaconMasterEnable | DmaconSpriteEnable);
         }
 
+        private static bool IsSpriteDmaEnabled(ushort dmacon)
+        {
+            return (dmacon & (DmaconMasterEnable | DmaconSpriteEnable)) == (DmaconMasterEnable | DmaconSpriteEnable);
+        }
+
         private bool IsSpriteDmaChannelAvailable(int spriteIndex)
         {
             return spriteIndex < GetUsableSpriteDmaChannelCount();
+        }
+
+        private static bool IsSpriteDmaChannelAvailable(DisplayTimelineState state, int spriteIndex)
+        {
+            return spriteIndex < GetUsableSpriteDmaChannelCount(state);
         }
 
         private int GetUsableSpriteDmaChannelCount()
@@ -5249,6 +7053,38 @@ namespace CopperMod.Amiga
             if (ddfStart >= standardStart)
             {
                 return _sprites.Length;
+            }
+
+            if (ddfStart <= 0x0018)
+            {
+                return 0;
+            }
+
+            if (ddfStart <= 0x001C)
+            {
+                return 1;
+            }
+
+            if (ddfStart >= 0x0030)
+            {
+                return 7;
+            }
+
+            return Math.Clamp(((ddfStart - 0x001C) / 4) + 1, 1, 7);
+        }
+
+        private static int GetUsableSpriteDmaChannelCount(DisplayTimelineState state)
+        {
+            if (state.PlaneCount == 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return LiveSpriteChannelCount;
+            }
+
+            var ddfStart = state.DataFetchStart;
+            var standardStart = IsHighResolutionEnabled(state.Bplcon0) ? DefaultHighResDdfStart : DefaultDdfStart;
+            if (ddfStart >= standardStart)
+            {
+                return LiveSpriteChannelCount;
             }
 
             if (ddfStart <= 0x0018)
@@ -5335,6 +7171,34 @@ namespace CopperMod.Amiga
             }
         }
 
+        private void RenderTimelineSprite(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteFrameCommand command,
+            DisplayFrameTimeline timeline)
+        {
+            var sprite = command.Descriptor;
+            if (!sprite.IsDma)
+            {
+                var yStart = Math.Max(sprite.YStart, command.Row);
+                var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
+                for (var y = yStart; y < yStop; y++)
+                {
+                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, sprite.ManualDataA, sprite.ManualDataB);
+                }
+
+                return;
+            }
+
+            for (var y = sprite.YStart; y < sprite.YStop; y++)
+            {
+                if (TryReadTimelineSpriteLine(command, y, timeline, out var dataA, out var dataB))
+                {
+                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, dataA, dataB);
+                }
+            }
+        }
+
         private void RenderAttachedSpritePair(Span<uint> bgra, int spriteIndex, SpriteFrameCommand evenCommand, SpriteFrameCommand oddCommand)
         {
             var evenSprite = evenCommand.Descriptor;
@@ -5358,6 +7222,34 @@ namespace CopperMod.Amiga
             }
         }
 
+        private void RenderTimelineAttachedSpritePair(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteFrameCommand evenCommand,
+            SpriteFrameCommand oddCommand,
+            DisplayFrameTimeline timeline)
+        {
+            var evenSprite = evenCommand.Descriptor;
+            var oddSprite = oddCommand.Descriptor;
+            var yStart = Math.Min(evenSprite.YStart, oddSprite.YStart);
+            var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
+            for (var y = yStart; y < yStop; y++)
+            {
+                _ = TryReadTimelineSpriteLine(evenCommand, y, timeline, out var evenDataA, out var evenDataB);
+                _ = TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB);
+                RenderAttachedSpriteLine(
+                    bgra,
+                    spriteIndex,
+                    evenSprite.X,
+                    oddSprite.X,
+                    y,
+                    evenDataA,
+                    evenDataB,
+                    oddDataA,
+                    oddDataB);
+            }
+        }
+
         private void RenderAttachedOddSpriteWithoutEvenPartner(Span<uint> bgra, int spriteIndex, SpriteFrameCommand oddCommand)
         {
             var oddSprite = oddCommand.Descriptor;
@@ -5374,6 +7266,29 @@ namespace CopperMod.Amiga
                     0,
                     oddData.DataA,
                     oddData.DataB);
+            }
+        }
+
+        private void RenderTimelineAttachedOddSpriteWithoutEvenPartner(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteFrameCommand oddCommand,
+            DisplayFrameTimeline timeline)
+        {
+            var oddSprite = oddCommand.Descriptor;
+            for (var y = oddSprite.YStart; y < oddSprite.YStop; y++)
+            {
+                _ = TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB);
+                RenderAttachedSpriteLine(
+                    bgra,
+                    spriteIndex,
+                    oddSprite.X,
+                    oddSprite.X,
+                    y,
+                    0,
+                    0,
+                    oddDataA,
+                    oddDataB);
             }
         }
 
@@ -5398,6 +7313,48 @@ namespace CopperMod.Amiga
             }
 
             return (dataA, dataB);
+        }
+
+        private static bool TryReadTimelineSpriteLine(
+            SpriteFrameCommand command,
+            int y,
+            DisplayFrameTimeline timeline,
+            out ushort dataA,
+            out ushort dataB)
+        {
+            dataA = 0;
+            dataB = 0;
+            var sprite = command.Descriptor;
+            if (y < Math.Max(sprite.YStart, command.Row) || y >= sprite.YStop)
+            {
+                return true;
+            }
+
+            if (!sprite.IsDma)
+            {
+                if (y == sprite.YStart)
+                {
+                    dataA = sprite.ManualDataA;
+                    dataB = sprite.ManualDataB;
+                }
+
+                return true;
+            }
+
+            var statusA = timeline.GetSpriteFetchStatus(y, command.SpriteIndex, 0);
+            var statusB = timeline.GetSpriteFetchStatus(y, command.SpriteIndex, 1);
+            if (statusA == TimelineFetchStatus.NotAttempted || statusB == TimelineFetchStatus.NotAttempted)
+            {
+                return false;
+            }
+
+            dataA = statusA == TimelineFetchStatus.Granted
+                ? timeline.GetSpriteWord(y, command.SpriteIndex, 0)
+                : (ushort)0;
+            dataB = statusB == TimelineFetchStatus.Granted
+                ? timeline.GetSpriteWord(y, command.SpriteIndex, 1)
+                : (ushort)0;
+            return true;
         }
 
         private void RenderSpriteLine(Span<uint> bgra, int spriteIndex, int x, int y, ushort dataA, ushort dataB)
@@ -6280,6 +8237,704 @@ namespace CopperMod.Amiga
             public readonly uint[] BitplaneRowAddresses = new uint[6];
         }
 
+        private sealed class DisplayFrameTimeline
+        {
+            private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[LowResOutputHeight];
+            private readonly List<DisplayTimelineState> _states = new List<DisplayTimelineState>(1024);
+            private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
+            private readonly Dictionary<PlanarChunkKey, PlanarChunkDecoded> _planarChunkCache = new Dictionary<PlanarChunkKey, PlanarChunkDecoded>(4096);
+            private long _frameStartCycle;
+            private int _generation = 1;
+
+            public DisplayFrameTimeline()
+            {
+                for (var i = 0; i < _lines.Length; i++)
+                {
+                    _lines[i] = new DisplayLineTimeline();
+                }
+            }
+
+            public int SegmentCount { get; private set; }
+
+            public int SpriteCommandCount => _spriteFrameCommands.Count;
+
+            public int PlanarChunkCacheHits { get; private set; }
+
+            public int PlanarChunkCacheMisses { get; private set; }
+
+            public int SpriteDeniedFetchCount { get; private set; }
+
+            public int RecalculateSpriteDeniedFetchCount()
+            {
+                var count = 0;
+                for (var row = 0; row < _lines.Length; row++)
+                {
+                    var line = _lines[row];
+                    if (line.Generation != _generation || !line.Valid)
+                    {
+                        continue;
+                    }
+
+                    for (var spriteIndex = 0; spriteIndex < LiveSpriteChannelCount; spriteIndex++)
+                    {
+                        var denied = line.SpriteDeniedMasks[spriteIndex] & line.SpriteFetchMasks[spriteIndex];
+                        count += BitOperations.PopCount((uint)denied);
+                    }
+                }
+
+                SpriteDeniedFetchCount = count;
+                return count;
+            }
+
+            public void Reset(long frameStartCycle)
+            {
+                _frameStartCycle = frameStartCycle;
+                SegmentCount = 0;
+                PlanarChunkCacheHits = 0;
+                PlanarChunkCacheMisses = 0;
+                SpriteDeniedFetchCount = 0;
+                _states.Clear();
+                _spriteFrameCommands.Clear();
+                _planarChunkCache.Clear();
+                _generation++;
+                if (_generation != int.MaxValue)
+                {
+                    return;
+                }
+
+                _generation = 1;
+                for (var i = 0; i < _lines.Length; i++)
+                {
+                    _lines[i].Clear();
+                }
+            }
+
+            public bool IsValidForFrame(long frameStartCycle)
+            {
+                return _frameStartCycle == frameStartCycle;
+            }
+
+            public void InvalidateFromRow(int row)
+            {
+                row = Math.Clamp(row, 0, LowResOutputHeight);
+                for (var i = row; i < _lines.Length; i++)
+                {
+                    var line = _lines[i];
+                    if (line.Generation != _generation)
+                    {
+                        continue;
+                    }
+
+                    SegmentCount -= line.SegmentCount;
+                    line.Clear();
+                }
+
+                for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+                {
+                    if (_spriteFrameCommands[i].Row >= row)
+                    {
+                        _spriteFrameCommands.RemoveAt(i);
+                    }
+                }
+
+                _planarChunkCache.Clear();
+            }
+
+            public int CoalesceEquivalentSegments()
+            {
+                var removed = 0;
+                for (var row = 0; row < _lines.Length; row++)
+                {
+                    var line = _lines[row];
+                    if (line.Generation != _generation || !line.Valid || line.SegmentCount <= 1)
+                    {
+                        continue;
+                    }
+
+                    var lineRemoved = 0;
+                    var write = 0;
+                    for (var read = 1; read < line.SegmentCount; read++)
+                    {
+                        var previous = line.Segments[write];
+                        var current = line.Segments[read];
+                        if (previous.XStop == current.XStart &&
+                            AreTimelineStatesOutputEquivalent(GetState(previous.StateIndex), GetState(current.StateIndex)))
+                        {
+                            line.Segments[write] = new DisplayLineSegment(previous.XStart, current.XStop, previous.StateIndex);
+                            lineRemoved++;
+                            removed++;
+                            continue;
+                        }
+
+                        write++;
+                        if (write != read)
+                        {
+                            line.Segments[write] = current;
+                        }
+                    }
+
+                    if (lineRemoved > 0 && write + 1 < line.SegmentCount)
+                    {
+                        line.Segments.RemoveRange(write + 1, line.SegmentCount - write - 1);
+                    }
+                }
+
+                if (removed > 0)
+                {
+                    SegmentCount -= removed;
+                    _planarChunkCache.Clear();
+                }
+
+                return removed;
+            }
+
+            private static bool AreTimelineStatesOutputEquivalent(DisplayTimelineState left, DisplayTimelineState right)
+            {
+                return left.PaletteSnapshotIndex == right.PaletteSnapshotIndex &&
+                    left.Bplcon0 == right.Bplcon0 &&
+                    left.Bplcon1 == right.Bplcon1 &&
+                    left.Bplcon2 == right.Bplcon2 &&
+                    left.DiwStart == right.DiwStart &&
+                    left.DiwStop == right.DiwStop &&
+                    left.DisplayWindowVerticallyOpen == right.DisplayWindowVerticallyOpen &&
+                    left.DdfStart == right.DdfStart &&
+                    left.DdfStop == right.DdfStop &&
+                    left.Dmacon == right.Dmacon &&
+                    left.Bpl1Mod == right.Bpl1Mod &&
+                    left.Bpl2Mod == right.Bpl2Mod &&
+                    left.PlaneCount == right.PlaneCount &&
+                    left.FetchWords == right.FetchWords &&
+                    left.DataFetchStart == right.DataFetchStart &&
+                    left.FetchSlotStride == right.FetchSlotStride &&
+                    left.PlaneHasRowMask == right.PlaneHasRowMask;
+            }
+
+            public DisplayTimelineState AddStateSnapshot()
+            {
+                if (_states.Count >= MaxTimelineStateSnapshots)
+                {
+                    var fallback = _states.Count == 0
+                        ? new DisplayTimelineState(0)
+                        : _states[^1];
+                    if (_states.Count == 0)
+                    {
+                        _states.Add(fallback);
+                    }
+
+                    return fallback;
+                }
+
+                var state = new DisplayTimelineState(_states.Count);
+                _states.Add(state);
+                return state;
+            }
+
+            public DisplayTimelineState GetState(int index)
+            {
+                return _states[Math.Clamp(index, 0, Math.Max(0, _states.Count - 1))];
+            }
+
+            public DisplayLineTimeline GetLine(int row)
+            {
+                return _lines[Math.Clamp(row, 0, LowResOutputHeight - 1)];
+            }
+
+            public bool HasLine(int row)
+            {
+                return (uint)row < (uint)_lines.Length &&
+                    _lines[row].Generation == _generation &&
+                    _lines[row].Valid;
+            }
+
+            public void StartLine(int row, int stateIndex)
+            {
+                if ((uint)row >= (uint)_lines.Length)
+                {
+                    return;
+                }
+
+                var line = _lines[row];
+                if (line.Generation == _generation)
+                {
+                    SegmentCount -= line.SegmentCount;
+                }
+
+                line.Clear();
+                line.Generation = _generation;
+                line.Valid = true;
+                line.Segments.Add(new DisplayLineSegment(0, AmigaConstants.PalLowResWidth, stateIndex));
+                SegmentCount++;
+            }
+
+            public void RecordDisplayChange(int row, int x, int stateIndex, bool unsafeForTimelineRender)
+            {
+                if ((uint)row >= (uint)_lines.Length)
+                {
+                    return;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid || line.SegmentCount <= 0)
+                {
+                    return;
+                }
+
+                if (unsafeForTimelineRender)
+                {
+                    line.UnsafeForTimelineRender = true;
+                }
+
+                x = Math.Clamp(x, 0, AmigaConstants.PalLowResWidth);
+                if (x >= AmigaConstants.PalLowResWidth)
+                {
+                    return;
+                }
+
+                if (x <= 0)
+                {
+                    SegmentCount -= line.SegmentCount;
+                    line.Segments.Clear();
+                    line.Segments.Add(new DisplayLineSegment(0, AmigaConstants.PalLowResWidth, stateIndex));
+                    SegmentCount++;
+                    _planarChunkCache.Clear();
+                    return;
+                }
+
+                var insertIndex = line.SegmentCount;
+                for (var i = 0; i < line.SegmentCount; i++)
+                {
+                    var segment = line.Segments[i];
+                    if (x >= segment.XStart && x < segment.XStop)
+                    {
+                        insertIndex = i + 1;
+                        line.Segments[i] = new DisplayLineSegment(segment.XStart, x, segment.StateIndex);
+                        break;
+                    }
+
+                    if (x <= segment.XStart)
+                    {
+                        insertIndex = i;
+                        break;
+                    }
+                }
+
+                if (insertIndex < line.SegmentCount)
+                {
+                    SegmentCount -= line.SegmentCount - insertIndex;
+                    line.Segments.RemoveRange(insertIndex, line.SegmentCount - insertIndex);
+                }
+
+                line.Segments.Add(new DisplayLineSegment(x, AmigaConstants.PalLowResWidth, stateIndex));
+                SegmentCount++;
+                _planarChunkCache.Clear();
+            }
+
+            public void RecordBitplaneFetch(int row, int plane, int word, ushort value, bool granted)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)plane >= LiveBitplanePlaneCount ||
+                    (uint)word >= MaxBitplaneFetchWords)
+                {
+                    return;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return;
+                }
+
+                var bit = 1UL << word;
+                var index = (plane * MaxBitplaneFetchWords) + word;
+                line.BitplaneWords[index] = value;
+                line.BitplaneFetchMasks[plane] |= bit;
+                if (granted)
+                {
+                    line.BitplaneDeniedMasks[plane] &= ~bit;
+                }
+                else
+                {
+                    line.BitplaneDeniedMasks[plane] |= bit;
+                }
+            }
+
+            public TimelineFetchStatus GetBitplaneFetchStatus(int row, int plane, int word)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)plane >= LiveBitplanePlaneCount ||
+                    (uint)word >= MaxBitplaneFetchWords)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                var bit = 1UL << word;
+                if ((line.BitplaneFetchMasks[plane] & bit) == 0)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                return (line.BitplaneDeniedMasks[plane] & bit) != 0
+                    ? TimelineFetchStatus.Denied
+                    : TimelineFetchStatus.Granted;
+            }
+
+            public ushort GetBitplaneWord(int row, int plane, int word)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)plane >= LiveBitplanePlaneCount ||
+                    (uint)word >= MaxBitplaneFetchWords)
+                {
+                    return 0;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return 0;
+                }
+
+                return _lines[row].BitplaneWords[(plane * MaxBitplaneFetchWords) + word];
+            }
+
+            public void AddSpriteFrameCommand(SpriteFrameCommand command)
+            {
+                if (_spriteFrameCommands.Count >= MaxSpriteFrameCommands * LiveSpriteChannelCount)
+                {
+                    return;
+                }
+
+                for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+                {
+                    if (_spriteFrameCommands[i].HasSameRenderingAs(command))
+                    {
+                        return;
+                    }
+                }
+
+                _spriteFrameCommands.Add(command);
+            }
+
+            public void StopManualSpriteFrameCommands(int spriteIndex, int row)
+            {
+                row = Math.Clamp(row, 0, LowResOutputHeight);
+                for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+                {
+                    var command = _spriteFrameCommands[i];
+                    if (command.SpriteIndex != spriteIndex || command.Descriptor.IsDma)
+                    {
+                        continue;
+                    }
+
+                    if (command.Descriptor.YStop <= row)
+                    {
+                        continue;
+                    }
+
+                    var yStop = Math.Max(command.Descriptor.YStart, row);
+                    _spriteFrameCommands[i] = new SpriteFrameCommand(
+                        command.SpriteIndex,
+                        command.Row,
+                        command.Descriptor.WithYStop(yStop));
+                }
+            }
+
+            public void CopySpriteFrameCommands(int spriteIndex, List<SpriteFrameCommand> destination)
+            {
+                destination.Clear();
+                for (var i = 0; i < _spriteFrameCommands.Count; i++)
+                {
+                    var command = _spriteFrameCommands[i];
+                    if (command.SpriteIndex == spriteIndex)
+                    {
+                        AppendUniqueSpriteFrameCommand(destination, command);
+                    }
+                }
+            }
+
+            public void RecordSpriteDataFetch(int row, int spriteIndex, int word, ushort value, bool granted)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)spriteIndex >= LiveSpriteChannelCount ||
+                    (uint)word >= LiveSpriteWordsPerChannel)
+                {
+                    return;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return;
+                }
+
+                var bit = (byte)(1 << word);
+                var index = (spriteIndex * LiveSpriteWordsPerChannel) + word;
+                var wasDenied = (line.SpriteDeniedMasks[spriteIndex] & bit) != 0;
+                if (!granted && !wasDenied)
+                {
+                    SpriteDeniedFetchCount++;
+                }
+                else if (granted && wasDenied)
+                {
+                    SpriteDeniedFetchCount--;
+                }
+
+                line.SpriteWords[index] = value;
+                line.SpriteFetchMasks[spriteIndex] = (byte)(line.SpriteFetchMasks[spriteIndex] | bit);
+                if (granted)
+                {
+                    line.SpriteDeniedMasks[spriteIndex] = (byte)(line.SpriteDeniedMasks[spriteIndex] & ~bit);
+                }
+                else
+                {
+                    line.SpriteDeniedMasks[spriteIndex] = (byte)(line.SpriteDeniedMasks[spriteIndex] | bit);
+                }
+            }
+
+            public TimelineFetchStatus GetSpriteFetchStatus(int row, int spriteIndex, int word)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)spriteIndex >= LiveSpriteChannelCount ||
+                    (uint)word >= LiveSpriteWordsPerChannel)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                var bit = (byte)(1 << word);
+                if ((line.SpriteFetchMasks[spriteIndex] & bit) == 0)
+                {
+                    return TimelineFetchStatus.NotAttempted;
+                }
+
+                return (line.SpriteDeniedMasks[spriteIndex] & bit) != 0
+                    ? TimelineFetchStatus.Denied
+                    : TimelineFetchStatus.Granted;
+            }
+
+            public ushort GetSpriteWord(int row, int spriteIndex, int word)
+            {
+                if ((uint)row >= (uint)_lines.Length ||
+                    (uint)spriteIndex >= LiveSpriteChannelCount ||
+                    (uint)word >= LiveSpriteWordsPerChannel)
+                {
+                    return 0;
+                }
+
+                var line = _lines[row];
+                if (line.Generation != _generation || !line.Valid)
+                {
+                    return 0;
+                }
+
+                return line.SpriteWords[(spriteIndex * LiveSpriteWordsPerChannel) + word];
+            }
+
+            public bool TryGetPlanarChunk(PlanarChunkKey key, out PlanarChunkDecoded chunk)
+            {
+                if (_planarChunkCache.TryGetValue(key, out var cached))
+                {
+                    chunk = cached;
+                    PlanarChunkCacheHits++;
+                    return true;
+                }
+
+                chunk = null!;
+                PlanarChunkCacheMisses++;
+                return false;
+            }
+
+            public void StorePlanarChunk(PlanarChunkKey key, PlanarChunkDecoded chunk)
+            {
+                _planarChunkCache[key] = chunk;
+            }
+        }
+
+        private sealed class DisplayLineTimeline
+        {
+            public readonly List<DisplayLineSegment> Segments = new List<DisplayLineSegment>(4);
+            public readonly ushort[] BitplaneWords = new ushort[LiveBitplaneWordsPerRow];
+            public readonly ulong[] BitplaneFetchMasks = new ulong[LiveBitplanePlaneCount];
+            public readonly ulong[] BitplaneDeniedMasks = new ulong[LiveBitplanePlaneCount];
+            public readonly ushort[] SpriteWords = new ushort[LiveSpriteWordsPerRow];
+            public readonly byte[] SpriteFetchMasks = new byte[LiveSpriteChannelCount];
+            public readonly byte[] SpriteDeniedMasks = new byte[LiveSpriteChannelCount];
+            public int Generation;
+            public bool Valid;
+            public bool UnsafeForTimelineRender;
+
+            public int SegmentCount => Segments.Count;
+
+            public void Clear()
+            {
+                Segments.Clear();
+                Valid = false;
+                UnsafeForTimelineRender = false;
+                Array.Clear(BitplaneFetchMasks);
+                Array.Clear(BitplaneDeniedMasks);
+                Array.Clear(SpriteFetchMasks);
+                Array.Clear(SpriteDeniedMasks);
+            }
+        }
+
+        private readonly struct DisplayLineSegment
+        {
+            public DisplayLineSegment(int xStart, int xStop, int stateIndex)
+            {
+                XStart = xStart;
+                XStop = xStop;
+                StateIndex = stateIndex;
+            }
+
+            public int XStart { get; }
+
+            public int XStop { get; }
+
+            public int StateIndex { get; }
+        }
+
+        private sealed class DisplayTimelineState
+        {
+            public DisplayTimelineState(int index)
+            {
+                Index = index;
+            }
+
+            public int Index { get; }
+
+            public long LineStartCycle;
+            public ushort Bplcon0;
+            public ushort Bplcon1;
+            public ushort Bplcon2;
+            public ushort DiwStart;
+            public ushort DiwStop;
+            public bool DisplayWindowVerticallyOpen;
+            public ushort DdfStart;
+            public ushort DdfStop;
+            public ushort Dmacon;
+            public short Bpl1Mod;
+            public short Bpl2Mod;
+            public int PlaneCount;
+            public int FetchWords;
+            public int DataFetchStart;
+            public int FetchSlotStride;
+            public int PaletteSnapshotIndex;
+            public byte PlaneHasRowMask;
+            public readonly uint[] BitplanePointers = new uint[6];
+            public readonly int[] BitplaneBaseRows = new int[6];
+            public readonly uint[] BitplaneRowAddresses = new uint[6];
+        }
+
+        private enum TimelineFetchStatus : byte
+        {
+            NotAttempted = 0,
+            Granted = 1,
+            Denied = 2
+        }
+
+        private enum TimelineRejectReason : byte
+        {
+            None = 0,
+            FrameIncomplete,
+            TimelineInvalid,
+            UnsafeWrite,
+            SegmentCapacity,
+            MissingLine,
+            UnsafeLine,
+            MissingBitplaneFetch,
+            MissingSpriteFetch
+        }
+
+        private readonly struct PlanarChunkKey : IEquatable<PlanarChunkKey>
+        {
+            private readonly ushort _bplcon0;
+            private readonly ushort _bplcon2;
+            private readonly byte _planeCount;
+            private readonly bool _dualPlayfield;
+            private readonly byte _planeHasRowMask;
+            private readonly ushort _word0;
+            private readonly ushort _word1;
+            private readonly ushort _word2;
+            private readonly ushort _word3;
+            private readonly ushort _word4;
+            private readonly ushort _word5;
+
+            public PlanarChunkKey(
+                ushort bplcon0,
+                ushort bplcon2,
+                int planeCount,
+                bool dualPlayfield,
+                byte planeHasRowMask,
+                ushort word0,
+                ushort word1,
+                ushort word2,
+                ushort word3,
+                ushort word4,
+                ushort word5)
+            {
+                _bplcon0 = bplcon0;
+                _bplcon2 = bplcon2;
+                _planeCount = (byte)planeCount;
+                _dualPlayfield = dualPlayfield;
+                _planeHasRowMask = planeHasRowMask;
+                _word0 = word0;
+                _word1 = word1;
+                _word2 = word2;
+                _word3 = word3;
+                _word4 = word4;
+                _word5 = word5;
+            }
+
+            public bool Equals(PlanarChunkKey other)
+            {
+                return _bplcon0 == other._bplcon0 &&
+                    _bplcon2 == other._bplcon2 &&
+                    _planeCount == other._planeCount &&
+                    _dualPlayfield == other._dualPlayfield &&
+                    _planeHasRowMask == other._planeHasRowMask &&
+                    _word0 == other._word0 &&
+                    _word1 == other._word1 &&
+                    _word2 == other._word2 &&
+                    _word3 == other._word3 &&
+                    _word4 == other._word4 &&
+                    _word5 == other._word5;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is PlanarChunkKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(
+                    _bplcon0,
+                    _bplcon2,
+                    _planeCount,
+                    _dualPlayfield,
+                    _planeHasRowMask,
+                    _word0,
+                    _word1,
+                    HashCode.Combine(_word2, _word3, _word4, _word5));
+            }
+        }
+
+        private sealed class PlanarChunkDecoded
+        {
+            public readonly byte[] ColorIndexes = new byte[PlanarChunkPixels];
+            public readonly byte[] PriorityMasks = new byte[PlanarChunkPixels];
+        }
+
         private sealed class LiveSpriteDmaState
         {
             public uint ControlAddress;
@@ -6400,7 +9055,43 @@ namespace CopperMod.Amiga
             uint[] bitplanePointers,
             int[] bitplaneBaseRows,
             ushort[] colors,
-            int[] bitplaneColorCounts)
+            int[] bitplaneColorCounts,
+            int lastTimelineSegmentCount,
+            int lastTimelineFallbackCount,
+            int lastTimelineSpriteCommandCount,
+            int lastActiveTimelineFrameCount,
+            int lastArchivedTimelineFrameCount,
+            int lastPlanarChunkCacheHits,
+            int lastPlanarChunkCacheMisses,
+            int lastTimelineCoalescedSegmentCount,
+            int lastTimelineFastPathRowCount,
+            int lastTimelineFastPathMissCount,
+            int lastSpriteRecoveryAttemptCount,
+            int lastSpriteDeniedFetchCount,
+            int lastArchiveRejectFrameIncomplete,
+            int lastArchiveRejectTimelineInvalid,
+            int lastArchiveRejectUnsafeWrite,
+            int lastArchiveRejectSegmentCapacity,
+            int lastArchiveRejectMissingLine,
+            int lastArchiveRejectUnsafeLine,
+            int lastArchiveRejectMissingBitplaneFetch,
+            int lastArchiveRejectMissingSpriteFetch,
+            ushort lastArchiveRejectUnsafeOffset,
+            bool lastArchiveRejectUnsafeIsCopper,
+            int lastArchiveRejectMissingSpriteIndex,
+            int lastArchiveRejectMissingSpriteRow,
+            int lastArchiveRejectMissingSpriteWord,
+            int lastArchiveRejectMissingSpriteStatusA,
+            int lastArchiveRejectMissingSpriteStatusB,
+            int lastArchiveRejectMissingSpriteCommandRow,
+            int lastArchiveRejectMissingSpriteYStart,
+            int lastArchiveRejectMissingSpriteYStop,
+            int lastArchiveRejectMissingSpriteUsableChannels,
+            int lastArchiveRejectMissingSpriteDdfStart,
+            ushort lastArchiveRejectMissingSpriteDmacon,
+            ushort lastArchiveRejectMissingSpriteBplcon0,
+            int lastArchiveRejectMissingSpritePreviousStatusA,
+            int lastArchiveRejectMissingSpritePreviousStatusB)
         {
             Bplcon0 = bplcon0;
             Bplcon1 = bplcon1;
@@ -6447,6 +9138,42 @@ namespace CopperMod.Amiga
             BitplaneBaseRows = bitplaneBaseRows;
             Colors = colors;
             BitplaneColorCounts = bitplaneColorCounts;
+            LastTimelineSegmentCount = lastTimelineSegmentCount;
+            LastTimelineFallbackCount = lastTimelineFallbackCount;
+            LastTimelineSpriteCommandCount = lastTimelineSpriteCommandCount;
+            LastActiveTimelineFrameCount = lastActiveTimelineFrameCount;
+            LastArchivedTimelineFrameCount = lastArchivedTimelineFrameCount;
+            LastPlanarChunkCacheHits = lastPlanarChunkCacheHits;
+            LastPlanarChunkCacheMisses = lastPlanarChunkCacheMisses;
+            LastTimelineCoalescedSegmentCount = lastTimelineCoalescedSegmentCount;
+            LastTimelineFastPathRowCount = lastTimelineFastPathRowCount;
+            LastTimelineFastPathMissCount = lastTimelineFastPathMissCount;
+            LastSpriteRecoveryAttemptCount = lastSpriteRecoveryAttemptCount;
+            LastSpriteDeniedFetchCount = lastSpriteDeniedFetchCount;
+            LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
+            LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
+            LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
+            LastArchiveRejectSegmentCapacity = lastArchiveRejectSegmentCapacity;
+            LastArchiveRejectMissingLine = lastArchiveRejectMissingLine;
+            LastArchiveRejectUnsafeLine = lastArchiveRejectUnsafeLine;
+            LastArchiveRejectMissingBitplaneFetch = lastArchiveRejectMissingBitplaneFetch;
+            LastArchiveRejectMissingSpriteFetch = lastArchiveRejectMissingSpriteFetch;
+            LastArchiveRejectUnsafeOffset = lastArchiveRejectUnsafeOffset;
+            LastArchiveRejectUnsafeIsCopper = lastArchiveRejectUnsafeIsCopper;
+            LastArchiveRejectMissingSpriteIndex = lastArchiveRejectMissingSpriteIndex;
+            LastArchiveRejectMissingSpriteRow = lastArchiveRejectMissingSpriteRow;
+            LastArchiveRejectMissingSpriteWord = lastArchiveRejectMissingSpriteWord;
+            LastArchiveRejectMissingSpriteStatusA = lastArchiveRejectMissingSpriteStatusA;
+            LastArchiveRejectMissingSpriteStatusB = lastArchiveRejectMissingSpriteStatusB;
+            LastArchiveRejectMissingSpriteCommandRow = lastArchiveRejectMissingSpriteCommandRow;
+            LastArchiveRejectMissingSpriteYStart = lastArchiveRejectMissingSpriteYStart;
+            LastArchiveRejectMissingSpriteYStop = lastArchiveRejectMissingSpriteYStop;
+            LastArchiveRejectMissingSpriteUsableChannels = lastArchiveRejectMissingSpriteUsableChannels;
+            LastArchiveRejectMissingSpriteDdfStart = lastArchiveRejectMissingSpriteDdfStart;
+            LastArchiveRejectMissingSpriteDmacon = lastArchiveRejectMissingSpriteDmacon;
+            LastArchiveRejectMissingSpriteBplcon0 = lastArchiveRejectMissingSpriteBplcon0;
+            LastArchiveRejectMissingSpritePreviousStatusA = lastArchiveRejectMissingSpritePreviousStatusA;
+            LastArchiveRejectMissingSpritePreviousStatusB = lastArchiveRejectMissingSpritePreviousStatusB;
         }
 
         public ushort Bplcon0 { get; }
@@ -6538,6 +9265,78 @@ namespace CopperMod.Amiga
         public ushort[] Colors { get; }
 
         public int[] BitplaneColorCounts { get; }
+
+        public int LastTimelineSegmentCount { get; }
+
+        public int LastTimelineFallbackCount { get; }
+
+        public int LastTimelineSpriteCommandCount { get; }
+
+        public int LastActiveTimelineFrameCount { get; }
+
+        public int LastArchivedTimelineFrameCount { get; }
+
+        public int LastPlanarChunkCacheHits { get; }
+
+        public int LastPlanarChunkCacheMisses { get; }
+
+        public int LastTimelineCoalescedSegmentCount { get; }
+
+        public int LastTimelineFastPathRowCount { get; }
+
+        public int LastTimelineFastPathMissCount { get; }
+
+        public int LastSpriteRecoveryAttemptCount { get; }
+
+        public int LastSpriteDeniedFetchCount { get; }
+
+        public int LastArchiveRejectFrameIncomplete { get; }
+
+        public int LastArchiveRejectTimelineInvalid { get; }
+
+        public int LastArchiveRejectUnsafeWrite { get; }
+
+        public int LastArchiveRejectSegmentCapacity { get; }
+
+        public int LastArchiveRejectMissingLine { get; }
+
+        public int LastArchiveRejectUnsafeLine { get; }
+
+        public int LastArchiveRejectMissingBitplaneFetch { get; }
+
+        public int LastArchiveRejectMissingSpriteFetch { get; }
+
+        public ushort LastArchiveRejectUnsafeOffset { get; }
+
+        public bool LastArchiveRejectUnsafeIsCopper { get; }
+
+        public int LastArchiveRejectMissingSpriteIndex { get; }
+
+        public int LastArchiveRejectMissingSpriteRow { get; }
+
+        public int LastArchiveRejectMissingSpriteWord { get; }
+
+        public int LastArchiveRejectMissingSpriteStatusA { get; }
+
+        public int LastArchiveRejectMissingSpriteStatusB { get; }
+
+        public int LastArchiveRejectMissingSpriteCommandRow { get; }
+
+        public int LastArchiveRejectMissingSpriteYStart { get; }
+
+        public int LastArchiveRejectMissingSpriteYStop { get; }
+
+        public int LastArchiveRejectMissingSpriteUsableChannels { get; }
+
+        public int LastArchiveRejectMissingSpriteDdfStart { get; }
+
+        public ushort LastArchiveRejectMissingSpriteDmacon { get; }
+
+        public ushort LastArchiveRejectMissingSpriteBplcon0 { get; }
+
+        public int LastArchiveRejectMissingSpritePreviousStatusA { get; }
+
+        public int LastArchiveRejectMissingSpritePreviousStatusB { get; }
     }
 
     internal sealed class AmigaCopper

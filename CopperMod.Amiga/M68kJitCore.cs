@@ -8748,9 +8748,11 @@ namespace CopperMod.Amiga
             };
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AddCycles(int cycles)
         {
-            State.Cycles += Math.Max(1, cycles);
+            Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            State.Cycles += cycles;
         }
 
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
