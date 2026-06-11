@@ -186,7 +186,7 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void NoiseCombinedWithOtherWaveformsTraceLocksAndSilencesNoise()
+	public void Mos6581NoiseCombinedWithOtherWaveformsTraceWritesBackWithoutImmediateLock()
 	{
 		var chip = CreateTracedChip(out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
@@ -195,17 +195,57 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0xA0, frame.Waveform);
-		Assert.Equal(0u, frame.NoiseShiftRegister);
+		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
+		Assert.Equal(0x2ED768u, frame.NoiseShiftRegister);
 		Assert.Equal(0u, frame.NoiseDac);
 		Assert.Equal(0u, frame.WaveformDac);
-		Assert.False(frame.NoiseUsesPostShiftRegister);
-		Assert.Equal(0.0, frame.WaveformOutput);
+		Assert.True(frame.NoiseUsesPostShiftRegister);
+		Assert.InRange(frame.WaveformOutput, -0.44, -0.42);
 	}
 
 	[Fact]
-	public void CombinedWaveformsTraceBitwiseDacCombination()
+	public void Mos6581CombinedWaveformsUseContentionTable()
 	{
 		var chip = CreateTracedChip(out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x3000, control: 0x30);
+
+		chip.Render(1);
+
+		var frame = Frame(trace, cycle: 1, voice: 0);
+		Assert.Equal(0x30, frame.Waveform);
+		Assert.Equal(0x001u, frame.WaveformDac);
+		Assert.NotEqual(
+			SidAnalog.ConvertWaveformDac12(0x002u, SidChipModel.Mos6581) *
+				SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581),
+			frame.WaveformOutput,
+			precision: 12);
+	}
+
+	[Theory]
+	[InlineData(0x60, 0x001u)]
+	[InlineData(0x70, 0x005u)]
+	public void Mos6581PulseCombinedWithOtherWaveformsUsesContentionTable(byte control, uint expectedDac)
+	{
+		var chip = CreateTracedChip(out var trace);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x30);
+		chip.Write(0x02, 0x00);
+		chip.Write(0x03, 0x00);
+		chip.Write(0x04, control);
+
+		chip.Render(1);
+
+		var frame = Frame(trace, cycle: 1, voice: 0);
+		Assert.Equal(control & 0xF0, frame.Waveform);
+		Assert.True(frame.PulseHigh);
+		Assert.Equal(expectedDac, frame.WaveformDac);
+		Assert.True(double.IsFinite(frame.WaveformOutput));
+	}
+
+	[Fact]
+	public void Mos8580CombinedWaveformsKeepBitwiseDacCombination()
+	{
+		var chip = CreateTracedChip(SidChipModel.Mos8580, out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x3000, control: 0x30);
 
 		chip.Render(1);
@@ -250,7 +290,12 @@ public sealed class SidWaveformPipelineTests
 
 	private static SidChip CreateTracedChip(out SidCycleTrace trace)
 	{
-		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		return CreateTracedChip(SidChipModel.Mos6581, out trace);
+	}
+
+	private static SidChip CreateTracedChip(SidChipModel model, out SidCycleTrace trace)
+	{
+		var chip = new SidChip(model, 0xD400);
 		trace = new SidCycleTrace();
 		chip.Trace = trace;
 		return chip;

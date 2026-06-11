@@ -31,6 +31,25 @@ public sealed class C64OutputStageTests
 	}
 
 	[Fact]
+	public void C64ProfileKeepsUpperTrebleOpen()
+	{
+		var stage = new C64OutputStage(C64OutputProfile.C64);
+		const int sampleRate = 44100;
+		const double frequency = 16000.0;
+		var samples = Enumerable.Range(0, sampleRate)
+			.Select(index => (float)(Math.Sin(2.0 * Math.PI * frequency * index / sampleRate) * 0.5))
+			.ToArray();
+		var inputRms = Rms(samples, sampleRate / 4, sampleRate / 2);
+
+		stage.Process(samples, channels: 1, sampleRate);
+
+		var outputRms = Rms(samples, sampleRate / 4, sampleRate / 2);
+		Assert.True(
+			outputRms / inputRms > 0.50,
+			$"Expected C64 output profile to preserve upper treble with headroom, ratio was {outputRms / inputRms:0.000}.");
+	}
+
+	[Fact]
 	public void C64ProfileCouplesDcStepsIntoDecayingTransients()
 	{
 		var stage = new C64OutputStage(C64OutputProfile.C64);
@@ -58,5 +77,17 @@ public sealed class C64OutputStageTests
 		stage.Process(samples, channels: 1, sampleRate: 44100);
 
 		Assert.Equal(original, samples);
+	}
+
+	private static double Rms(float[] samples, int start, int count)
+	{
+		var sumSquares = 0.0;
+		for (var i = 0; i < count; i++)
+		{
+			var sample = samples[start + i];
+			sumSquares += sample * sample;
+		}
+
+		return Math.Sqrt(sumSquares / count);
 	}
 }

@@ -208,6 +208,30 @@ public sealed class ModuleSampleProviderTests
 	}
 
 	[Fact]
+	public void WaveformFollowsConsumedAudioInsteadOfRenderAheadProducer()
+	{
+		var song = new SequentialChunkSong(framesPerTick: 4);
+		using var provider = new ModuleSampleProvider(song, sampleRate: 10, channelCount: 1, AmigaOutputProfile.None)
+		{
+			WaveformEnabled = true
+		};
+		var buffer = new float[4];
+
+		WaitForBufferedAudio(provider);
+
+		Assert.False(provider.TryReadWaveformSnapshot(out _));
+
+		var samplesRead = provider.Read(buffer, 0, buffer.Length);
+
+		Assert.Equal(4, samplesRead);
+		Assert.All(buffer, sample => Assert.Equal(0.25f, sample));
+		Assert.True(provider.TryReadWaveformSnapshot(out var waveform));
+		Assert.Equal(4, waveform.SourceFrameCount);
+		Assert.All(waveform.Minimums, sample => Assert.Equal(0.25f, sample));
+		Assert.All(waveform.Maximums, sample => Assert.Equal(0.25f, sample));
+	}
+
+	[Fact]
 	public void ReadBypassesAmigaOutputStageForC64OutputFamily()
 	{
 		var song = new OutputFamilySong(ModuleOutputFamily.Commodore64);
@@ -329,6 +353,73 @@ public sealed class ModuleSampleProviderTests
 			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
 			_ended = !LoopingEnabled && _ticksRendered >= _ticksBeforeEnd;
 			return new RenderResult(_framesPerTick, samples, Position, _ended);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class SequentialChunkSong : IModuleSong
+	{
+		private readonly int _framesPerTick;
+		private int _ticksRendered;
+		private TimeSpan _position;
+
+		public SequentialChunkSong(int framesPerTick)
+		{
+			_framesPerTick = framesPerTick;
+		}
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(_position);
+
+		public bool LoopingEnabled { get; set; }
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return _framesPerTick;
+		}
+
+		public void Reset()
+		{
+			_ticksRendered = 0;
+			_position = TimeSpan.Zero;
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_ticksRendered = 0;
+			_position = position < TimeSpan.Zero ? TimeSpan.Zero : position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(_framesPerTick);
+			var value = (_ticksRendered + 1) * 0.25f;
+			destination.Slice(0, samples).Fill(value);
+			_ticksRendered++;
+			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
+			return new RenderResult(_framesPerTick, samples, Position);
 		}
 
 		public void Dispose()

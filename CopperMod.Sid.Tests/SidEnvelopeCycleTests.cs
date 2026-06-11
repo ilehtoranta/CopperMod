@@ -167,7 +167,7 @@ public sealed class SidEnvelopeCycleTests
 	}
 
 	[Fact]
-	public void ReleaseStopsAtZeroWithoutUnderflow()
+	public void NormalReleaseHoldsAtZeroWithoutWrap()
 	{
 		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
 		SetEnvelope(chip, envelope: 1, state: Release);
@@ -180,6 +180,85 @@ public sealed class SidEnvelopeCycleTests
 
 		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
 		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
+	}
+
+	[Fact]
+	public void ReleaseRateWriteCanClearZeroHoldAndWrapAfterAdsrDelay()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
+
+		chip.Write(0x06, 0x00);
+		chip.Render(32756);
+
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Render(1);
+
+		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
+	public void DecayRateWriteWaitsForRateCounterWrapWhenCounterAlreadyPassedNewPeriod()
+	{
+		var chip = CreateVoice(attackDecay: 0x0F, sustainRelease: 0x00, control: 0x10);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0x80, state: Decay, rateCounter: 20);
+
+		chip.Write(0x05, 0x00);
+		chip.Render(32756);
+
+		Assert.Equal(0x80, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Render(1);
+
+		Assert.Equal(0x7F, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
+	public void ReleaseRateWriteWaitsForRateCounterWrapWhenCounterAlreadyPassedNewPeriod()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0x60, state: Release, rateCounter: 20);
+
+		chip.Write(0x06, 0x00);
+		chip.Render(32756);
+
+		Assert.Equal(0x60, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Render(1);
+
+		Assert.Equal(0x5F, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
+	public void EnvelopeBugStateMatchesFastAndTracedPaths()
+	{
+		var fast = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
+		var traced = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
+		traced.Trace = new SidCycleTrace();
+		fast.Render(1);
+		traced.Render(1);
+		SetEnvelope(fast, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
+		SetEnvelope(traced, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
+
+		fast.Write(0x06, 0x00);
+		traced.Write(0x06, 0x00);
+		fast.Render(32757);
+		traced.Render(32757);
+
+		Assert.Equal(fast.DebugState.Voices[0].EnvelopeCounter, traced.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(fast.DebugState.Voices[0].RateCounter, traced.DebugState.Voices[0].RateCounter);
+		Assert.Equal(fast.DebugState.Voices[0].ExponentialCounter, traced.DebugState.Voices[0].ExponentialCounter);
+		Assert.Equal(fast.DebugState.Voices[0].EnvelopeState, traced.DebugState.Voices[0].EnvelopeState);
 	}
 
 	private static SidChip CreateVoice(byte attackDecay, byte sustainRelease, byte control)
@@ -196,13 +275,20 @@ public sealed class SidEnvelopeCycleTests
 		chip.Render((RatePeriods[0] * 255) + (RatePeriods[0] * 17));
 	}
 
-	private static void SetEnvelope(SidChip chip, int envelope, int state)
+	private static void SetEnvelope(
+		SidChip chip,
+		int envelope,
+		int state,
+		int rateCounter = 0,
+		bool? zeroHold = null)
 	{
 		var voice = GetVoice(chip);
 		SetField(voice, "_envelopeCounter", envelope);
 		SetField(voice, "_envelopeState", state);
-		SetField(voice, "_rateCounter", 0);
+		SetField(voice, "_rateCounter", rateCounter);
 		SetField(voice, "_exponentialCounter", 0);
+		SetField(voice, "_envelopeZeroHold", zeroHold ?? (state == Release && envelope == 0));
+		SetField(voice, "_envelopeMaxHold", state == Attack && envelope == 0xFF);
 	}
 
 	private static SidVoice GetVoice(SidChip chip)

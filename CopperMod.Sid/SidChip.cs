@@ -21,6 +21,8 @@ namespace CopperMod.Sid
         private readonly double _volumeRegisterTransientLimit;
         private readonly double _volumeRegisterTransientSlew;
         private readonly double _volumeRegisterTransientDecay;
+        private readonly SidMos6581AnalogFilter? _analog6581Filter;
+        private readonly double _analogOutputLowPassAlpha;
         private uint _pendingRegisterBits;
         private double _filterIntegrator1;
         private double _filterIntegrator2;
@@ -44,6 +46,7 @@ namespace CopperMod.Sid
         private double _volumeRegisterTransient;
         private double _volumeRegisterTransientTarget;
         private double _outputLowPassState;
+        private double _analogOutputLowPassVoltage;
         private double _lastOutput;
         private byte _busValue;
         private long _cycle;
@@ -72,6 +75,13 @@ namespace CopperMod.Sid
             _volumeRegisterTransientDecay = SidAnalog.VolumeRegisterTransientDecay(Model, _cpuCyclesPerSecond);
             _masterVolume = SidAnalog.ConvertVolume(0, Model);
             _volumeOffset = SidAnalog.VolumeOffset(0, Model);
+            _analog6581Filter = _filterProfile.UsesAnalog6581Filter
+                ? new SidMos6581AnalogFilter(_filterProfile, _cpuCyclesPerSecond)
+                : null;
+            _analogOutputLowPassAlpha = _analog6581Filter == null
+                ? _outputLowPassAlpha
+                : 1.0 - Math.Exp(-2.0 * Math.PI * _analog6581Filter.OutputLowPassCutoffHz / _cpuCyclesPerSecond);
+            _analogOutputLowPassVoltage = _analog6581Filter?.OutputRestVoltage ?? 0.0;
         }
 
         public SidChipModel Model { get; }
@@ -113,6 +123,7 @@ namespace CopperMod.Sid
             _lastLowPass = 0;
             _lastBandPass = 0;
             _lastHighPass = 0;
+            _analog6581Filter?.Reset();
             _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
             _filterCoefficientsDirty = true;
             _voice3Muted = false;
@@ -121,6 +132,7 @@ namespace CopperMod.Sid
             _volumeRegisterTransient = 0;
             _volumeRegisterTransientTarget = 0;
             _outputLowPassState = 0;
+            _analogOutputLowPassVoltage = _analog6581Filter?.OutputRestVoltage ?? 0.0;
             _lastOutput = 0;
             _busValue = 0;
             _cycle = 0;
@@ -471,6 +483,23 @@ namespace CopperMod.Sid
                 voice3 = 0;
             }
 
+            if (_analog6581Filter != null)
+            {
+                var analogOutput = _analog6581Filter.Process(
+                    voice1,
+                    voice2,
+                    voice3,
+                    _filterRouting,
+                    _filterMode,
+                    _voice3Muted,
+                    _filterCutoffRegister,
+                    _filterResonanceNibble);
+                _lastLowPass = _analog6581Filter.LastLowPass;
+                _lastBandPass = _analog6581Filter.LastBandPass;
+                _lastHighPass = _analog6581Filter.LastHighPass;
+                return ApplyMos6581AnalogOutputStage(_analog6581Filter, analogOutput);
+            }
+
             var filterRouting = _filterRouting;
             var direct = 0.0;
             var filtered = 0.0;
@@ -505,6 +534,12 @@ namespace CopperMod.Sid
             var voiceSignal = (direct + leaked + ApplyFilter(filtered * _filterInputGain)) *
                 _voiceMixGain *
                 _masterVolume;
+            return ApplyOutputStage(voiceSignal);
+        }
+
+        [HotPath]
+        private double ApplyOutputStage(double voiceSignal)
+        {
             var volumeTransient = _volumeRegisterTransient +
                 ((_volumeRegisterTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
             var output = SidAnalog.SoftClip(voiceSignal + _volumeOffset + volumeTransient);
@@ -512,6 +547,22 @@ namespace CopperMod.Sid
             _volumeRegisterTransientTarget *= _volumeRegisterTransientDecay;
             _outputLowPassState += (output - _outputLowPassState) * _outputLowPassAlpha;
             return _outputLowPassState;
+        }
+
+        [HotPath]
+        private double ApplyMos6581AnalogOutputStage(SidMos6581AnalogFilter filter, double mixedVoltage)
+        {
+            var volumeTransient = _volumeRegisterTransient +
+                ((_volumeRegisterTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
+            var outputVoltage = filter.ApplyOutputStageVoltage(
+                mixedVoltage,
+                _masterVolume,
+                _volumeOffset,
+                volumeTransient);
+            _volumeRegisterTransient = volumeTransient;
+            _volumeRegisterTransientTarget *= _volumeRegisterTransientDecay;
+            _analogOutputLowPassVoltage += (outputVoltage - _analogOutputLowPassVoltage) * _analogOutputLowPassAlpha;
+            return filter.OutputVoltageToSample(_analogOutputLowPassVoltage);
         }
 
         [HotPath]
@@ -525,15 +576,56 @@ namespace CopperMod.Sid
                 return 0;
             }
 
-            var high = (input - ((_filterDamping + _filterG) * _filterIntegrator1) - _filterIntegrator2) / _filterDenominator;
-            var band = (_filterG * high) + _filterIntegrator1;
-            var low = (_filterG * band) + _filterIntegrator2;
-            _filterIntegrator1 = (_filterG * high) + band;
-            _filterIntegrator2 = (_filterG * band) + low;
+            return _filterProfile.UsesNonlinearFilter
+                ? ApplyNonlinearFilter(input)
+                : ApplyLinearFilter(input, _filterG, _filterDamping, _filterDenominator);
+        }
+
+        [HotPath]
+        private double ApplyLinearFilter(double input, double g, double damping, double denominator)
+        {
+            var high = (input - ((damping + g) * _filterIntegrator1) - _filterIntegrator2) / denominator;
+            var band = (g * high) + _filterIntegrator1;
+            var low = (g * band) + _filterIntegrator2;
+            _filterIntegrator1 = (g * high) + band;
+            _filterIntegrator2 = (g * band) + low;
             _lastLowPass = low;
             _lastBandPass = band;
             _lastHighPass = high;
 
+            return SelectFilterOutput(low, band, high) * _filterOutputGain;
+        }
+
+        [HotPath]
+        private double ApplyNonlinearFilter(double input)
+        {
+            var drivenInput = Saturate(input * _filterProfile.FilterDrive, _filterProfile.FilterInputSaturation);
+            var signalLevel = NormalizeAgainstLimit(drivenInput, _filterProfile.FilterInputSaturation);
+            var cutoffScale = Math.Clamp(
+                1.0 - (_filterProfile.CutoffSignalModulation * signalLevel * signalLevel),
+                0.65,
+                1.15);
+            var g = _filterG * cutoffScale;
+            var denominator = 1.0 + (_filterDamping * g) + (g * g);
+
+            var high = (drivenInput - ((_filterDamping + g) * _filterIntegrator1) - _filterIntegrator2) / denominator;
+            high = Saturate(high, _filterProfile.FilterOutputSaturation);
+            var band = Saturate((g * high) + _filterIntegrator1, _filterProfile.FilterIntegratorLimit);
+            var low = Saturate((g * band) + _filterIntegrator2, _filterProfile.FilterIntegratorLimit);
+            _filterIntegrator1 = Saturate((g * high) + band, _filterProfile.FilterIntegratorLimit);
+            _filterIntegrator2 = Saturate((g * band) + low, _filterProfile.FilterIntegratorLimit);
+            _lastLowPass = low;
+            _lastBandPass = band;
+            _lastHighPass = high;
+
+            return Saturate(
+                SelectFilterOutput(low, band, high) * _filterOutputGain,
+                _filterProfile.FilterOutputSaturation);
+        }
+
+        [HotPath]
+        private double SelectFilterOutput(double low, double band, double high)
+        {
             var output = _filterMode switch
             {
                 0x10 => low * _filterLowPassGain,
@@ -546,7 +638,35 @@ namespace CopperMod.Sid
                 _ => 0.0
             };
 
-            return output * _filterOutputGain;
+            return output;
+        }
+
+        [HotPath]
+        private static double Saturate(double value, double limit)
+        {
+            if (limit <= 0.0 || double.IsInfinity(limit))
+            {
+                return value;
+            }
+
+            if (Math.Abs(value) <= limit * 0.5)
+            {
+                return value;
+            }
+
+            var normalized = value / limit;
+            return value / Math.Sqrt(1.0 + (normalized * normalized));
+        }
+
+        [HotPath]
+        private static double NormalizeAgainstLimit(double value, double limit)
+        {
+            if (limit <= 0.0 || double.IsInfinity(limit))
+            {
+                return Math.Min(1.0, Math.Abs(value));
+            }
+
+            return Math.Min(1.0, Math.Abs(value) / limit);
         }
 
         [HotPath]

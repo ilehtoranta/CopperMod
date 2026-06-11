@@ -14,7 +14,8 @@ namespace CopperMod.Sid
         TestBitReset = 1 << 4,
         TestBitHeld = 1 << 5,
         SyncReset = 1 << 6,
-        NoiseShift = 1 << 7
+        NoiseShift = 1 << 7,
+        NoiseWriteback = 1 << 8
     }
 
     internal sealed class SidCycleTrace

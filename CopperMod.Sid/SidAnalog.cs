@@ -10,6 +10,9 @@ namespace CopperMod.Sid
         private static readonly double[] Mos8580WaveformDac = BuildWaveformDac(SidChipModel.Mos8580);
         private static readonly double[] Mos6581Envelope = BuildEnvelope(SidChipModel.Mos6581);
         private static readonly double[] Mos8580Envelope = BuildEnvelope(SidChipModel.Mos8580);
+        private static readonly ushort[][] Mos6581CombinedWaveformDac = BuildMos6581CombinedWaveformDacTables();
+        private static readonly double[] Mos6581CombinedWaveformGain = BuildMos6581CombinedWaveformGain();
+        private static readonly double[] Mos6581CombinedWaveformBias = BuildMos6581CombinedWaveformBias();
 
         public static double ConvertWaveformDac12(uint value, SidChipModel model)
         {
@@ -46,6 +49,37 @@ namespace CopperMod.Sid
             return model == SidChipModel.Mos8580
                 ? Math.Pow(0.82, activeWaveforms - 1)
                 : Math.Pow(0.34, activeWaveforms - 1);
+        }
+
+        public static bool UsesCombinedWaveformTable(int waveformMask, SidChipModel model)
+        {
+            return model == SidChipModel.Mos6581 &&
+                waveformMask != 0x50 &&
+                Mos6581CombinedWaveformDac[waveformMask & 0xF0] != null;
+        }
+
+        public static uint MapCombinedWaveformDac12(uint value, int waveformMask, SidChipModel model)
+        {
+            var table = model == SidChipModel.Mos6581
+                ? Mos6581CombinedWaveformDac[waveformMask & 0xF0]
+                : null;
+            return table == null ? value & 0x0FFFu : table[value & 0x0FFFu];
+        }
+
+        public static double ConvertCombinedWaveformDac12(uint value, int waveformMask, SidChipModel model)
+        {
+            if (model != SidChipModel.Mos6581)
+            {
+                return ConvertWaveformDac12(value, model) *
+                    CombinedWaveformScale(CountSelectedWaveforms(waveformMask), model);
+            }
+
+            waveformMask &= 0xF0;
+            return Math.Clamp(
+                (ConvertWaveformDac12(value, model) * Mos6581CombinedWaveformGain[waveformMask]) +
+                    Mos6581CombinedWaveformBias[waveformMask],
+                -1.0,
+                1.0);
         }
 
         public static double SoftClip(double sample)
@@ -151,6 +185,130 @@ namespace CopperMod.Sid
             }
 
             return table;
+        }
+
+        private static ushort[][] BuildMos6581CombinedWaveformDacTables()
+        {
+            var tables = new ushort[256][];
+            ReadOnlySpan<int> masks = stackalloc[] { 0x30, 0x60, 0x70, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
+            for (var i = 0; i < masks.Length; i++)
+            {
+                tables[masks[i]] = BuildMos6581CombinedWaveformDacTable(masks[i]);
+            }
+
+            return tables;
+        }
+
+        private static ushort[] BuildMos6581CombinedWaveformDacTable(int waveformMask)
+        {
+            var activeWaveforms = CountSelectedWaveforms(waveformMask);
+            var hasNoise = (waveformMask & 0x80) != 0;
+            var table = new ushort[1 << 12];
+            var shift = Math.Clamp(activeWaveforms - 1 + (hasNoise ? 1 : 0), 1, 4);
+            var retentionMask = GetMos6581CombinedRetentionMask(waveformMask);
+            var weakMask = GetMos6581CombinedWeakMask(waveformMask);
+            for (var dac = 0; dac < table.Length; dac++)
+            {
+                var value = (uint)dac;
+                var adjacentLeakage = ((value << 1) | (value >> 1)) & (uint)weakMask;
+                var contention = ((value >> shift) | adjacentLeakage) & (uint)retentionMask;
+                if (hasNoise)
+                {
+                    contention &= (value | (value >> 2) | 0x001u) & 0x0FFFu;
+                }
+
+                table[dac] = (ushort)(contention & 0x0FFFu);
+            }
+
+            return table;
+        }
+
+        private static double[] BuildMos6581CombinedWaveformGain()
+        {
+            var gain = new double[256];
+            for (var mask = 0; mask < gain.Length; mask += 0x10)
+            {
+                var active = CountSelectedWaveforms(mask);
+                gain[mask] = active <= 1 ? 1.0 : Math.Pow(0.46, active - 1);
+                if ((mask & 0x80) != 0 && active > 1)
+                {
+                    gain[mask] *= 0.88;
+                }
+            }
+
+            return gain;
+        }
+
+        private static double[] BuildMos6581CombinedWaveformBias()
+        {
+            var bias = new double[256];
+            for (var mask = 0; mask < bias.Length; mask += 0x10)
+            {
+                var active = CountSelectedWaveforms(mask);
+                if (active <= 1)
+                {
+                    continue;
+                }
+
+                bias[mask] = -0.018 * (active - 1);
+                if ((mask & 0x80) != 0)
+                {
+                    bias[mask] -= 0.010;
+                }
+            }
+
+            return bias;
+        }
+
+        private static int GetMos6581CombinedRetentionMask(int waveformMask)
+        {
+            var mask = 0x0FFF;
+            if ((waveformMask & 0x10) != 0)
+            {
+                mask &= 0x0FDF;
+            }
+
+            if ((waveformMask & 0x20) != 0)
+            {
+                mask &= 0x0FBF;
+            }
+
+            if ((waveformMask & 0x40) != 0)
+            {
+                mask &= 0x0F7F;
+            }
+
+            if ((waveformMask & 0x80) != 0)
+            {
+                mask &= 0x0EEF;
+            }
+
+            return mask;
+        }
+
+        private static int GetMos6581CombinedWeakMask(int waveformMask)
+        {
+            var active = CountSelectedWaveforms(waveformMask);
+            var mask = active >= 3 ? 0x0125 : 0x0021;
+            if ((waveformMask & 0x80) != 0)
+            {
+                mask &= 0x0011;
+            }
+
+            return mask;
+        }
+
+        private static int CountSelectedWaveforms(int waveformMask)
+        {
+            waveformMask = (waveformMask >> 4) & 0x0F;
+            var count = 0;
+            while (waveformMask != 0)
+            {
+                count += waveformMask & 1;
+                waveformMask >>= 1;
+            }
+
+            return count;
         }
 
         private static SidAnalogProfile BuildProfile(SidChipModel model)

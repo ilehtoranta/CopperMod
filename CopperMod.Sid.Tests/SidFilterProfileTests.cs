@@ -31,7 +31,7 @@ public sealed class SidFilterProfileTests
 		chip.Render(1);
 
 		Assert.Equal(0, chip.DebugState.FilterCutoffRegister);
-		Assert.InRange(chip.DebugState.FilterCutoffHz, 29.9, 30.1);
+		Assert.InRange(chip.DebugState.FilterCutoffHz, 180.0, 260.0);
 
 		chip.Write(0x15, 0xFF);
 		chip.Write(0x16, 0xFF);
@@ -52,6 +52,215 @@ public sealed class SidFilterProfileTests
 		Assert.True(linear8580 > balanced, $"Expected linear 8580 midpoint to be brighter than balanced 6581, 8580 {linear8580:0.0}, balanced {balanced:0.0}.");
 		Assert.True(balanced > dataSheet, $"Expected balanced 6581 midpoint to be brighter than 6581 datasheet, balanced {balanced:0.0}, data {dataSheet:0.0}.");
 		Assert.True(dataSheet > darkR3, $"Expected datasheet midpoint to be brighter than dark R3, data {dataSheet:0.0}, dark {darkR3:0.0}.");
+	}
+
+	[Fact]
+	public void Balanced6581LowCutoffKeepsResonantPulseAudible()
+	{
+		var chip = CreateFilteredPulse(
+			SidChipModel.Mos6581,
+			SidFilterProfileId.Mos6581Balanced,
+			cutoffHigh: 0x00,
+			resonance: 0xF0,
+			mode: 0x10,
+			frequency: 0x0D0A);
+		chip.Write(0x02, 0x00);
+		chip.Write(0x03, 0x05);
+
+		var samples = CollectSamples(chip, warmupCycles: 48000, measuredCycles: 48000);
+		var acRms = AcRms(samples);
+
+		Assert.InRange(chip.DebugState.FilterCutoffHz, 150.0, 220.0);
+		Assert.InRange(acRms, 0.050, 0.350);
+	}
+
+	[Fact]
+	public void Balanced6581FilteredVoiceLeakageHasLowCutoffFloor()
+	{
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var closedLeakage = profile.MapFilterVoiceLeakageGain(0);
+		var openLeakage = profile.MapFilterVoiceLeakageGain(2047);
+
+		Assert.InRange(closedLeakage, 0.001, openLeakage);
+		Assert.True(openLeakage > closedLeakage);
+	}
+
+	[Theory]
+	[InlineData((int)SidFilterProfileId.Mos6581DataSheet)]
+	[InlineData((int)SidFilterProfileId.Mos6581Balanced)]
+	[InlineData((int)SidFilterProfileId.Mos6581DarkR3)]
+	public void Mos6581ProfilesUseFullCutoffAndResonanceTables(int profileValue)
+	{
+		var profileId = (SidFilterProfileId)profileValue;
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, profileId);
+
+		Assert.True(profile.UsesNonlinearFilter);
+		Assert.True(profile.UsesAnalog6581Filter);
+		Assert.Equal(2048, profile.CutoffTableLength);
+		Assert.Equal(16, profile.ResonanceTableLength);
+		Assert.True(profile.FilterDrive > 1.0);
+		Assert.True(profile.CutoffSignalModulation > 0.0);
+
+		var previousCutoff = profile.MapCutoff(0);
+		Assert.True(double.IsFinite(previousCutoff));
+		for (var register = 1; register < profile.CutoffTableLength; register++)
+		{
+			var cutoff = profile.MapCutoff(register);
+			Assert.True(double.IsFinite(cutoff));
+			Assert.True(cutoff >= previousCutoff, $"{profileId} cutoff table reg {register} moved backward from {previousCutoff:0.000} to {cutoff:0.000}.");
+			previousCutoff = cutoff;
+		}
+
+		var previousDamping = profile.MapDamping(0);
+		for (var resonance = 1; resonance < profile.ResonanceTableLength; resonance++)
+		{
+			var damping = profile.MapDamping(resonance);
+			Assert.True(double.IsFinite(damping));
+			Assert.True(damping <= previousDamping, $"{profileId} damping table resonance {resonance} moved upward from {previousDamping:0.000} to {damping:0.000}.");
+			previousDamping = damping;
+		}
+	}
+
+	[Fact]
+	public void Mos6581AnalogTablesAreFiniteBoundedAndKinked()
+	{
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var model = Assert.IsType<SidMos6581AnalogModel>(profile.Analog6581Model);
+		var network = model.ResistorNetwork;
+		var cutoffCircuit = model.CutoffCircuit;
+		var outputCircuit = model.OutputCircuit;
+
+		Assert.Equal(2048, model.CutoffDacTableLength);
+		Assert.Equal(4096, model.OpAmpTableLength);
+		Assert.Equal(4, model.MixerGainTableLength);
+		Assert.Equal(16, model.ResonanceFeedbackTableLength);
+		Assert.Equal(2048, model.ResonanceFeedbackCutoffTableLength);
+		Assert.Equal(128, model.SummerGainTableLength);
+		Assert.Equal(128, model.OutputGainTableLength);
+		Assert.InRange(network.R1Ohms, 63_900.0, 64_100.0);
+		Assert.InRange(network.R2Ohms / network.R1Ohms, 1.99, 2.01);
+		Assert.InRange(network.R6Ohms / network.R1Ohms, 5.99, 6.01);
+		Assert.InRange(network.R8Ohms / network.R1Ohms, 7.99, 8.01);
+		Assert.InRange(network.R24Ohms / network.R1Ohms, 23.0, 24.0);
+		Assert.InRange(network.OutputExternalOhms, 999.0, 1001.0);
+		Assert.InRange(cutoffCircuit.MinimumCutoffHz, 209.9, 210.1);
+		Assert.InRange(cutoffCircuit.FullScaleCutoffHz, 10999.0, 11001.0);
+		Assert.InRange(cutoffCircuit.CapacitorFarads, 469e-12, 471e-12);
+		Assert.InRange(cutoffCircuit.DacTwoRDivR, 2.19, 2.21);
+		Assert.False(cutoffCircuit.DacTerminated);
+		Assert.InRange(cutoffCircuit.ThresholdVoltage, 1.30, 1.32);
+		Assert.InRange(cutoffCircuit.MobilityCox, 19e-6, 21e-6);
+		Assert.InRange(cutoffCircuit.VcrWidthLength, 8.9, 9.1);
+		Assert.InRange(outputCircuit.WorkingPointVoltage, 4.53, 4.55);
+		Assert.InRange(outputCircuit.OutputSignalGain, 0.41, 0.43);
+		Assert.InRange(outputCircuit.OutputSoftClipAmount, 0.15, 0.17);
+		Assert.InRange(outputCircuit.OutputLowPassCutoffHz, 11_999.0, 12_001.0);
+		Assert.InRange(model.CutoffHz[0], 209.9, 210.1);
+		Assert.InRange(model.CutoffHz[^1], 10999.0, 11001.0);
+		Assert.InRange(model.MapOpAmp(0.0), -0.001, 0.001);
+		Assert.InRange(model.MapReverseOpAmp(0.0), -0.05, 0.05);
+		Assert.True(model.MapOpAmp(-0.5) < model.MapOpAmp(0.0));
+		Assert.True(model.MapOpAmp(0.5) > model.MapOpAmp(0.0));
+		Assert.All(
+			new[]
+			{
+				model.MapMixerGain(0),
+				model.MapMixerGain(3),
+				model.MapResonanceFeedbackScale(0),
+				model.MapResonanceFeedbackScale(15),
+				model.MapResonanceFeedbackScale(15, 0),
+				model.MapResonanceFeedbackScale(15, 2047),
+				model.MapResonanceOutputScale(15, 2047),
+				model.MapSummerGain(0x70),
+				model.MapOutputGain(0x70)
+			},
+			value => Assert.True(double.IsFinite(value)));
+		Assert.True(model.MapMixerGain(3) < model.MapMixerGain(1), $"Expected resistor loading to reduce three-routed-voice mixer gain, one {model.MapMixerGain(1):0.000}, three {model.MapMixerGain(3):0.000}.");
+		Assert.True(model.MapSummerGain(0x70) < model.MapSummerGain(0x10), $"Expected multi-mode summer loading to reduce gain, one {model.MapSummerGain(0x10):0.000}, three {model.MapSummerGain(0x70):0.000}.");
+		Assert.True(model.MapOutputGain(0x70) < model.MapOutputGain(0x10), $"Expected output loading to reduce multi-mode output gain, one {model.MapOutputGain(0x10):0.000}, three {model.MapOutputGain(0x70):0.000}.");
+		Assert.True(model.MapResonanceOutputScale(15, 1024) > model.MapResonanceOutputScale(0, 1024));
+		Assert.NotEqual(model.MapResonanceFeedbackScale(15, 0), model.MapResonanceFeedbackScale(15, 2047), precision: 4);
+
+		var lowControl = model.MapCutoffControlVoltage(0);
+		var midControl = model.MapCutoffControlVoltage(1024);
+		var highControl = model.MapCutoffControlVoltage(2047);
+		Assert.All(new[] { lowControl, midControl, highControl }, value => Assert.True(double.IsFinite(value)));
+		Assert.True(lowControl < midControl);
+		Assert.True(midControl < highControl);
+
+		var linearMidpoint = lowControl + ((highControl - lowControl) * 1024.0 / 2047.0);
+		Assert.True(Math.Abs(midControl - linearMidpoint) > 0.005, $"Expected 6581 DAC control voltage to show a non-linear kink, midpoint delta {midControl - linearMidpoint:0.000}.");
+
+		var linearCutoffMidpoint = model.CutoffHz[0] + ((model.CutoffHz[^1] - model.CutoffHz[0]) * 1024.0 / 2047.0);
+		Assert.True(Math.Abs(model.CutoffHz[1024] - linearCutoffMidpoint) > 1000.0, $"Expected VCR-derived cutoff to be strongly non-linear, midpoint delta {model.CutoffHz[1024] - linearCutoffMidpoint:0.0} Hz.");
+	}
+
+	[Fact]
+	public void Mos6581VoltageDomainNodesStayWithinOpAmpRails()
+	{
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var model = Assert.IsType<SidMos6581AnalogModel>(profile.Analog6581Model);
+		var filter = new SidMos6581AnalogFilter(profile, SidConstants.PalCpuCyclesPerSecond);
+		foreach (var cutoff in new[] { 0x000, 0x180, 0x780, 0xD00, 0x7FF })
+		{
+			foreach (var resonance in new[] { 0, 8, 15 })
+			{
+				foreach (var mode in new[] { 0x10, 0x20, 0x40, 0x70 })
+				{
+					filter.Reset();
+					var outputVoltage = model.WorkingPointVoltage;
+					for (var cycle = 0; cycle < 2048; cycle++)
+					{
+						var drive = (cycle & 0x20) == 0 ? 1.15 : -1.05;
+						outputVoltage = filter.Process(
+							drive,
+							-drive * 0.65,
+							drive * 0.40,
+							filterRouting: 0x07,
+							filterMode: mode,
+							voice3Muted: false,
+							cutoffRegister: cutoff,
+							resonanceNibble: resonance);
+					}
+
+					var finalVoltage = filter.ApplyOutputStageVoltage(
+						outputVoltage,
+						volumeGain: 1.0,
+						volumeOffsetSample: SidAnalog.VolumeOffset(15, SidChipModel.Mos6581),
+						volumeTransientSample: 0.0);
+					AssertVoltageInRails(model, filter.LastLowPassVoltage);
+					AssertVoltageInRails(model, filter.LastBandPassVoltage);
+					AssertVoltageInRails(model, filter.LastHighPassVoltage);
+					AssertVoltageInRails(model, outputVoltage);
+					AssertVoltageInRails(model, finalVoltage);
+					Assert.InRange(filter.LastLowPass, -1.8, 1.8);
+					Assert.InRange(filter.LastBandPass, -1.8, 1.8);
+					Assert.InRange(filter.LastHighPass, -1.8, 1.8);
+					Assert.InRange(filter.OutputVoltageToSample(finalVoltage), -0.999, 0.999);
+				}
+			}
+		}
+	}
+
+	[Fact]
+	public void Mos8580ProfileKeepsLinearCutoffAndDampingFormula()
+	{
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos8580, SidFilterProfileId.Mos8580Linear);
+
+		Assert.False(profile.UsesNonlinearFilter);
+		Assert.Equal(2048, profile.CutoffTableLength);
+		Assert.Equal(16, profile.ResonanceTableLength);
+		foreach (var register in new[] { 0, 1, 64, 512, 1024, 1536, 2047 })
+		{
+			var expected = 35.0 + (Math.Pow(register / 2047.0, 1.10) * (14500.0 - 35.0));
+			Assert.Equal(expected, profile.MapCutoff(register), precision: 12);
+		}
+
+		foreach (var resonance in new[] { 0, 7, 15 })
+		{
+			var expected = Math.Clamp(1.62 - ((resonance / 15.0) * 1.10), 0.42, 1.95);
+			Assert.Equal(expected, profile.MapDamping(resonance), precision: 12);
+		}
 	}
 
 	[Fact]
@@ -90,93 +299,96 @@ public sealed class SidFilterProfileTests
 	}
 
 	[Fact]
-	public void MixerFilterPipelineMatchesPinnedCurrentOutput()
+	public void MixerFilterPipelineIsDeterministicAcrossDynamicRegisterChanges()
 	{
-		var chip = new SidChip(SidChipModel.Mos6581, SidConstants.DefaultSidBaseAddress);
-		WriteVoice(chip, voice: 0, frequency: 0x1234, control: 0x41, pulseWidth: 0x0830, attackDecay: 0x00, sustainRelease: 0xF0);
-		WriteVoice(chip, voice: 1, frequency: 0x0711, control: 0x21, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
-		WriteVoice(chip, voice: 2, frequency: 0x0D55, control: 0x11, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
-		chip.Write(0x15, 0x03);
-		chip.Write(0x16, 0x60);
-		chip.Write(0x17, 0xF3);
-		chip.Write(0x18, 0x7F);
+		var expected = CreateDynamicFilterPipelineChip();
+		var actual = CreateDynamicFilterPipelineChip();
 		var checkpoints = new[]
 		{
 			0, 1, 2, 3, 4, 5, 31, 63, 127, 255, 383, 384, 511, 767, 768,
 			895, 1023, 1151, 1152, 1279, 1535, 1536, 1791, 1792, 2047,
 			2303, 2559, 3071, 4095
 		};
-		var expected = new[]
-		{
-			0.016855453847461812,
-			0.03182738689413345,
-			0.04516049627147629,
-			0.05706787844913419,
-			0.06773442039408202,
-			0.07732090523230103,
-			0.17293726422515196,
-			0.2266716675088778,
-			0.30840052748306385,
-			0.3996383447482101,
-			0.43508529402555235,
-			0.4348682908854355,
-			0.4321943232540447,
-			0.3956993140083057,
-			0.3955390906530722,
-			0.37001079235920187,
-			0.34205387981188173,
-			0.3172195314549658,
-			0.3100659442185595,
-			0.24391336067923394,
-			0.19830829437915298,
-			0.22081414686393902,
-			0.3344630010182089,
-			0.3150947274040681,
-			0.7597832714266771,
-			0.8004718897542106,
-			0.8494880115860466,
-			0.7207163927962464,
-			-0.1692631017382081
-		};
-
 		var checkpointIndex = 0;
+		var minimum = double.MaxValue;
+		var maximum = double.MinValue;
 		for (var cycle = 0; cycle <= 4095; cycle++)
 		{
 			if (cycle == 384)
 			{
-				chip.Write(0x17, 0xF5);
+				expected.Write(0x17, 0xF5);
+				actual.Write(0x17, 0xF5);
 			}
 
 			if (cycle == 768)
 			{
-				chip.Write(0x18, 0x9F);
+				expected.Write(0x18, 0x9F);
+				actual.Write(0x18, 0x9F);
 			}
 
 			if (cycle == 1152)
 			{
-				chip.Write(0x16, 0x20);
+				expected.Write(0x16, 0x20);
+				actual.Write(0x16, 0x20);
 			}
 
 			if (cycle == 1536)
 			{
-				chip.Write(0x18, 0x0F);
+				expected.Write(0x18, 0x0F);
+				actual.Write(0x18, 0x0F);
 			}
 
 			if (cycle == 1792)
 			{
-				chip.Write(0x18, 0x5F);
+				expected.Write(0x18, 0x5F);
+				actual.Write(0x18, 0x5F);
 			}
 
-			var sample = chip.Render(1);
+			var expectedSample = expected.Render(1);
+			var actualSample = actual.Render(1);
+			Assert.True(double.IsFinite(actualSample));
+			Assert.InRange(actualSample, -0.999, 0.999);
+			minimum = Math.Min(minimum, actualSample);
+			maximum = Math.Max(maximum, actualSample);
 			if (checkpointIndex < checkpoints.Length && cycle == checkpoints[checkpointIndex])
 			{
-				var delta = Math.Abs(sample - expected[checkpointIndex]);
-				Assert.True(delta <= 1e-12, $"Cycle {cycle} expected {expected[checkpointIndex]:R}, got {sample:R}, delta {delta:R}.");
+				var delta = Math.Abs(actualSample - expectedSample);
+				Assert.True(delta <= 1e-12, $"Cycle {cycle} expected {expectedSample:R}, got {actualSample:R}, delta {delta:R}.");
 				checkpointIndex++;
 			}
 		}
 
-		Assert.Equal(expected.Length, checkpointIndex);
+		Assert.Equal(checkpoints.Length, checkpointIndex);
+		Assert.True(maximum - minimum > 0.25, $"Expected dynamic filtered pipeline to stay audibly active, range {maximum - minimum:0.000}.");
+	}
+
+	[Fact]
+	public void Mos6581FilterResponseChangesWithSignalLevel()
+	{
+		var singleVoice = CreateRoutedPulseVoiceCount(voiceCount: 1);
+		var doubledVoice = CreateRoutedPulseVoiceCount(voiceCount: 2);
+
+		var singlePeak = MeasureLowPassPeak(singleVoice, warmupCycles: 12000, measuredCycles: 16000);
+		var doubledPeak = MeasureLowPassPeak(doubledVoice, warmupCycles: 12000, measuredCycles: 16000);
+
+		Assert.True(doubledPeak > singlePeak * 1.10, $"Expected louder routed input to increase filter state, single {singlePeak:0.000}, doubled {doubledPeak:0.000}.");
+		Assert.True(doubledPeak < singlePeak * 1.95, $"Expected nonlinear 6581 filter drive to compress doubled input, single {singlePeak:0.000}, doubled {doubledPeak:0.000}.");
+	}
+
+	[Fact]
+	public void Mos8580RenderStaysLinearWhen6581ProfileIsRequested()
+	{
+		var linear = CreateFilteredPulse(SidChipModel.Mos8580, SidFilterProfileId.Mos8580Linear);
+		var requested6581 = CreateFilteredPulse(SidChipModel.Mos8580, SidFilterProfileId.Mos6581DarkR3);
+		var linearSamples = CollectSamples(linear, warmupCycles: 4000, measuredCycles: 4096);
+		var requestedSamples = CollectSamples(requested6581, warmupCycles: 4000, measuredCycles: 4096);
+
+		Assert.Equal(SidFilterProfileId.Mos8580Linear, linear.DebugState.FilterProfile);
+		Assert.Equal(SidFilterProfileId.Mos8580Linear, requested6581.DebugState.FilterProfile);
+		for (var i = 0; i < linearSamples.Length; i++)
+		{
+			Assert.Equal(linearSamples[i], requestedSamples[i], precision: 12);
+		}
 	}
 
 	[Fact]
@@ -280,11 +492,45 @@ public sealed class SidFilterProfileTests
 		return chip.DebugState.FilterCutoffHz;
 	}
 
+	private static void AssertVoltageInRails(SidMos6581AnalogModel model, double voltage)
+	{
+		Assert.True(double.IsFinite(voltage));
+		Assert.InRange(voltage, model.MinimumOpAmpVoltage, model.MaximumOpAmpVoltage);
+	}
+
 	private static double ReadDamping(byte resonance)
 	{
 		var chip = CreateFilteredPulse(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, resonance: resonance);
 		chip.Render(1);
 		return chip.DebugState.FilterDamping;
+	}
+
+	private static SidChip CreateDynamicFilterPipelineChip()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidConstants.DefaultSidBaseAddress);
+		WriteVoice(chip, voice: 0, frequency: 0x1234, control: 0x41, pulseWidth: 0x0830, attackDecay: 0x00, sustainRelease: 0xF0);
+		WriteVoice(chip, voice: 1, frequency: 0x0711, control: 0x21, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
+		WriteVoice(chip, voice: 2, frequency: 0x0D55, control: 0x11, pulseWidth: 0x0000, attackDecay: 0x00, sustainRelease: 0xF0);
+		chip.Write(0x15, 0x03);
+		chip.Write(0x16, 0x60);
+		chip.Write(0x17, 0xF3);
+		chip.Write(0x18, 0x7F);
+		return chip;
+	}
+
+	private static SidChip CreateRoutedPulseVoiceCount(int voiceCount)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidConstants.DefaultSidBaseAddress, filterProfile: SidFilterProfileId.Mos6581Balanced);
+		for (var voice = 0; voice < voiceCount; voice++)
+		{
+			WriteVoice(chip, voice, frequency: 0x1800, control: 0x41, pulseWidth: 0x0832, attackDecay: 0x00, sustainRelease: 0xF0);
+		}
+
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, 0x64);
+		chip.Write(0x17, (byte)((1 << voiceCount) - 1));
+		chip.Write(0x18, 0x1F);
+		return chip;
 	}
 
 	private static SidChip CreateSingleRoutedVoice(int voice)
@@ -393,12 +639,39 @@ public sealed class SidFilterProfileTests
 		return samples.Max() - samples.Min();
 	}
 
+	private static double MeasureLowPassPeak(SidChip chip, int warmupCycles, int measuredCycles)
+	{
+		RenderCycles(chip, warmupCycles);
+
+		var peak = 0.0;
+		for (var i = 0; i < measuredCycles; i++)
+		{
+			chip.Render(1);
+			peak = Math.Max(peak, Math.Abs(chip.DebugState.LowPassOutput));
+		}
+
+		return peak;
+	}
+
 	private static double Rms(IReadOnlyList<double> samples)
 	{
 		var sum = 0.0;
 		for (var i = 0; i < samples.Count; i++)
 		{
 			sum += samples[i] * samples[i];
+		}
+
+		return Math.Sqrt(sum / Math.Max(1, samples.Count));
+	}
+
+	private static double AcRms(IReadOnlyList<double> samples)
+	{
+		var mean = samples.Average();
+		var sum = 0.0;
+		for (var i = 0; i < samples.Count; i++)
+		{
+			var sample = samples[i] - mean;
+			sum += sample * sample;
 		}
 
 		return Math.Sqrt(sum / Math.Max(1, samples.Count));

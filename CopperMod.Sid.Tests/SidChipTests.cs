@@ -454,7 +454,7 @@ public sealed class SidChipTests
 	[Theory]
 	[InlineData(false)]
 	[InlineData(true)]
-	public void NoiseCombinedWithOtherWaveformsLocksUntilTestReset(bool traced)
+	public void Mos6581NoiseCombinedWithOtherWaveformsDegradesWithoutImmediateLfsrClear(bool traced)
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		if (traced)
@@ -466,9 +466,41 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x2ED768u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseDac);
 
 		chip.Write(0x04, 0x80);
+		chip.Render(15);
+
+		Assert.NotEqual(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Render(1);
+
+		Assert.Equal(NextNoise(0x2ED768), chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
+	public void Mos6581NoiseWritebackDuringTestAffectsReleaseLatch()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA8);
+
+		chip.Render(1);
+
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+
+		chip.Write(0x04, 0x80);
+		chip.Render(1);
+
+		Assert.Equal(0x2ED768u, chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
+	public void Mos8580NoiseCombinedWithOtherWaveformsKeepsLegacyImmediateLock()
+	{
+		var chip = new SidChip(SidChipModel.Mos8580, 0xD400);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
+
 		chip.Render(1);
 
 		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
@@ -477,6 +509,18 @@ public sealed class SidChipTests
 		chip.Render(1);
 
 		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
+	public void Mos6581NoiseWritebackMatchesFastAndTracedPaths()
+	{
+		var fast = CreateNoiseWritebackChip(trace: false);
+		var traced = CreateNoiseWritebackChip(trace: true);
+
+		fast.Render(96);
+		traced.Render(96);
+
+		AssertDebugStateEqual(fast.DebugState, traced.DebugState);
 	}
 
 	[Fact]
@@ -647,6 +691,25 @@ public sealed class SidChipTests
 			chip.Render(1);
 		}
 
+		return chip;
+	}
+
+	private static SidChip CreateNoiseWritebackChip(bool trace)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		if (trace)
+		{
+			chip.Trace = new SidCycleTrace();
+		}
+
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x80);
+		chip.Write(0x02, 0x00);
+		chip.Write(0x03, 0x08);
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		chip.Write(0x04, 0xE1);
+		chip.Write(0x18, 0x0F);
 		return chip;
 	}
 
