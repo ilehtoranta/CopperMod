@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -29,6 +30,7 @@ internal sealed class FramebufferPresenter : Control
 
 	public void Update(int[] bgra)
 	{
+		var updateStartTimestamp = Stopwatch.GetTimestamp();
 		if (bgra.Length < _width * _height)
 		{
 			throw new ArgumentException("The framebuffer is too small.", nameof(bgra));
@@ -37,13 +39,20 @@ internal sealed class FramebufferPresenter : Control
 		using var framebuffer = _bitmap.Lock();
 		Marshal.Copy(bgra, 0, framebuffer.Address, _width * _height);
 		InvalidateVisual();
+		LastUpdateMilliseconds = Stopwatch.GetElapsedTime(updateStartTimestamp).TotalMilliseconds;
 	}
+
+	public double LastUpdateMilliseconds { get; private set; }
+
+	public double LastRenderMilliseconds { get; private set; }
 
 	public override void Render(DrawingContext context)
 	{
+		var renderStartTimestamp = Stopwatch.GetTimestamp();
 		base.Render(context);
 		if (!TryCalculateUniformDestination(Bounds.Size, new Size(_sourceRect.Width, _sourceRect.Height), out var destination))
 		{
+			LastRenderMilliseconds = Stopwatch.GetElapsedTime(renderStartTimestamp).TotalMilliseconds;
 			return;
 		}
 
@@ -51,6 +60,7 @@ internal sealed class FramebufferPresenter : Control
 			_bitmap,
 			new Rect(_sourceRect.X, _sourceRect.Y, _sourceRect.Width, _sourceRect.Height),
 			destination);
+		LastRenderMilliseconds = Stopwatch.GetElapsedTime(renderStartTimestamp).TotalMilliseconds;
 	}
 
 	public void SetSourceViewport(int x, int y, int width, int height)

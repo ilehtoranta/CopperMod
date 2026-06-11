@@ -293,14 +293,19 @@ namespace CopperMod.Amiga
                 }
 
                 var cursor = new DecodeCursor(codeReader, programCounter + 2);
-                if (TryDecodeMove(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeLine0(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeLine4(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeLine5(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeBranch(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeMoveq(programCounter, opcode, ref cursor, out instruction) ||
-                    TryDecodeArithmetic(programCounter, opcode, ref cursor, out instruction, out reason) ||
-                    TryDecodeShiftRotate(programCounter, opcode, ref cursor, out instruction, out reason))
+                var decoded = (opcode >> 12) switch
+                {
+                    0x0 => TryDecodeLine0(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0x1 or 0x2 or 0x3 => TryDecodeMove(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0x4 => TryDecodeLine4(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0x5 => TryDecodeLine5(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0x6 => TryDecodeBranch(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0x7 => TryDecodeMoveq(programCounter, opcode, ref cursor, out instruction),
+                    0x8 or 0x9 or 0xB or 0xC or 0xD => TryDecodeArithmetic(programCounter, opcode, ref cursor, out instruction, out reason),
+                    0xE => TryDecodeShiftRotate(programCounter, opcode, ref cursor, out instruction, out reason),
+                    _ => false
+                };
+                if (decoded)
                 {
                     return true;
                 }

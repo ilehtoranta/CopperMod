@@ -9,6 +9,7 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -34,6 +35,7 @@ internal sealed class MainWindow : Window
 	private readonly TextBlock _lastPcStatus;
 	private readonly TextBlock _frameStatus;
 	private readonly TextBlock _perfStatus;
+	private Border _perfStatusBox = null!;
 	private readonly TextBlock[] _driveStatusTexts = new TextBlock[4];
 	private readonly Border[] _driveStatusBoxes = new Border[4];
 	private readonly Button[] _driveStatusButtons = new Button[4];
@@ -66,7 +68,8 @@ internal sealed class MainWindow : Window
 	private Control _generalSettingsPage = null!;
 	private Control _advancedSettingsPage = null!;
 	private int _settingsPageIndex;
-	private ComboBox _profileChooser = null!;
+	private ListBox _profileList = null!;
+	private TextBlock _profileDirectoryText = null!;
 	private TextBox _profileIdBox = null!;
 	private TextBox _profileNameBox = null!;
 	private TextBox _profileDescriptionBox = null!;
@@ -107,9 +110,11 @@ internal sealed class MainWindow : Window
 	private bool _mouseGrabWaitingForCenter;
 	private IPointer? _mouseGrabPointer;
 	private Point? _mouseGrabCenterFramebufferPoint;
-	private Point? _mouseGrabInitialFramebufferPoint;
+	private PixelPoint? _mouseGrabCenterScreenPoint;
 	private CopperScreenDebugSnapshot? _visibleDebugSnapshot;
 	private int _presentationQueued;
+	private double _lastPresenterUpdateMilliseconds;
+	private double _lastPresentationFrameMilliseconds;
 	private bool _isClosed;
 
 	public MainWindow(string[] args)
@@ -203,11 +208,11 @@ internal sealed class MainWindow : Window
 			}
 			else
 			{
-				_presenter.Focus();
+			_presenter.Focus();
 			}
 
 			_runtime?.Start();
-			PresentLatestFrame(forceStatus: true);
+			PresentNextFrame(forceStatus: true);
 		};
 		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
 		_presenter.PointerPressed += (_, args) =>
@@ -299,6 +304,12 @@ internal sealed class MainWindow : Window
 			0,
 			0,
 			0,
+			0,
+			0,
+			2,
+			0,
+			0,
+			0,
 			0);
 	}
 
@@ -311,7 +322,7 @@ internal sealed class MainWindow : Window
 	private void PresentFrame(bool catchUpAudio = true)
 	{
 		_ = catchUpAudio;
-		PresentLatestFrame(forceStatus: true);
+		PresentNextFrame(forceStatus: true);
 	}
 
 	private void QueueFramePresentation()
@@ -332,17 +343,22 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		PresentLatestFrame();
+		PresentNextFrame();
+		if (_runtime?.HasPendingPresentationFrames == true)
+		{
+			QueueFramePresentation();
+		}
 	}
 
-	private void PresentLatestFrame(bool forceStatus = false)
+	private void PresentNextFrame(bool forceStatus = false)
 	{
 		if (_runtime == null)
 		{
 			return;
 		}
 
-		using var frameLease = _runtime.TryAcquireLatestFrame(ref _lastSeenFrameNumber, forceStatus);
+		var presentationStartTimestamp = Stopwatch.GetTimestamp();
+		using var frameLease = _runtime.TryAcquireNextPresentationFrame(ref _lastSeenFrameNumber, forceStatus);
 		if (frameLease == null)
 		{
 			return;
@@ -354,6 +370,7 @@ internal sealed class MainWindow : Window
 		if (state.FrameNumber != _presentedFrames)
 		{
 			_presenter.Update(frameLease.Framebuffer);
+			_lastPresenterUpdateMilliseconds = _presenter.LastUpdateMilliseconds;
 			_presentedFrames = state.FrameNumber;
 		}
 
@@ -374,13 +391,15 @@ internal sealed class MainWindow : Window
 			Title = "CopperScreen - " + state.ProfileName + " - Alt+Enter fullscreen, F10 release mouse, F11 toolbar in fullscreen, F12 next disk, Shift+F12 previous disk, NumLock numpad mode";
 			CopperScreenCrashLog.Heartbeat(() => BuildCrashLogState(state));
 		}
+
+		_lastPresentationFrameMilliseconds = Stopwatch.GetElapsedTime(presentationStartTimestamp).TotalMilliseconds;
 	}
 
 	private string BuildCrashLogState(CopperScreenState state)
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalLowResWidth}x{_runtime?.Height ?? AmigaConstants.PalLowResHeight}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalLowResWidth}x{_runtime?.Height ?? AmigaConstants.PalLowResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -452,22 +471,22 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		var position = args.GetPosition(_presenter);
-		if (_presenter.TryMapPointToFramebufferUnclamped(position, out var framebufferPoint))
+		if (TryGetGrabbedMouseFramebufferPoint(args, out var framebufferPoint, out var screenPoint))
 		{
 			var center = _mouseGrabCenterFramebufferPoint.Value;
 			if (_mouseGrabWaitingForCenter)
 			{
-				if (_mouseGrabInitialFramebufferPoint.HasValue &&
-					ShouldIgnoreInitialMouseGrabPoint(framebufferPoint, _mouseGrabInitialFramebufferPoint.Value, center))
+				if (!IsMouseGrabCenterPoint(framebufferPoint, center) ||
+					(_mouseGrabCenterScreenPoint.HasValue &&
+					screenPoint.HasValue &&
+					!IsNearScreenPoint(screenPoint.Value, _mouseGrabCenterScreenPoint.Value)))
 				{
 					_ = TryRecenterMousePointer();
 					return;
 				}
 
 				_mouseGrabWaitingForCenter = false;
-				_mouseGrabInitialFramebufferPoint = null;
-				_mouseGrabCenterFramebufferPoint = framebufferPoint;
+				_mouseGrabCenterFramebufferPoint = center;
 				_ = TryRecenterMousePointer();
 				return;
 			}
@@ -800,7 +819,8 @@ internal sealed class MainWindow : Window
 		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
 		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
 		topRow.Children.Add(CreateIndicatorBox(_frameStatus, 92, "Published emulator frame counter"));
-		topRow.Children.Add(CreateIndicatorBox(_perfStatus, 76, "Emulation speed and frame timing"));
+		_perfStatusBox = CreateIndicatorBox(_perfStatus, 76, "Emulation speed and frame timing");
+		topRow.Children.Add(_perfStatusBox);
 
 		var drives = new StackPanel
 		{
@@ -1024,20 +1044,34 @@ internal sealed class MainWindow : Window
 	private Control CreateGeneralSettingsPage()
 	{
 		var layout = CreateSettingsForm();
-		_profileChooser = new ComboBox { MinWidth = 320 };
-		_profileChooser.SelectionChanged += (_, _) => LoadSelectedProfile();
-		layout.Children.Add(CreateSettingsRow("Profile", _profileChooser));
+		layout.Children.Add(CreateSettingsSection("Profiles"));
+		_profileDirectoryText = new TextBlock
+		{
+			Foreground = new SolidColorBrush(Color.FromRgb(170, 184, 202)),
+			TextWrapping = TextWrapping.Wrap
+		};
+		layout.Children.Add(CreateSettingsRow("Folder", _profileDirectoryText));
+		_profileList = new ListBox
+		{
+			MinHeight = 140,
+			MaxHeight = 180,
+			HorizontalAlignment = HorizontalAlignment.Stretch
+		};
+		layout.Children.Add(CreateSettingsRow("Choose", _profileList));
+		layout.Children.Add(CreateSettingsSection("Profile"));
 		_profileIdBox = AddTextSetting(layout, "Profile id");
 		_profileNameBox = AddTextSetting(layout, "Display name");
 		_profileDescriptionBox = AddTextSetting(layout, "Description");
 		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom"]);
 		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
 		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "JitM68000"]);
+		layout.Children.Add(CreateSettingsSection("Memory"));
 		_chipRamBox = AddTextSetting(layout, "Chip RAM KB");
 		_pseudoFastRamBox = AddTextSetting(layout, "Pseudo-fast RAM KB");
 		_pseudoFastBaseBox = AddTextSetting(layout, "Pseudo-fast base");
 		_realFastRamBox = AddTextSetting(layout, "Real fast RAM KB");
 		_realFastBaseBox = AddTextSetting(layout, "Real fast base");
+		layout.Children.Add(CreateSettingsSection("Floppy drives"));
 		_floppyDriveCountBox = AddComboSetting(layout, "Floppy drives", ["1", "2", "3", "4"]);
 		for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
 		{
@@ -1116,6 +1150,18 @@ internal sealed class MainWindow : Window
 			Orientation = Orientation.Vertical,
 			Spacing = 7,
 			Margin = new Thickness(0, 2, 12, 2)
+		};
+	}
+
+	private static TextBlock CreateSettingsSection(string text)
+	{
+		return new TextBlock
+		{
+			Text = text,
+			FontSize = 15,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = new SolidColorBrush(Color.FromRgb(232, 240, 248)),
+			Margin = new Thickness(0, 8, 0, 2)
 		};
 	}
 
@@ -1211,9 +1257,11 @@ internal sealed class MainWindow : Window
 		{
 			_settingsPanel.IsVisible = _settingsVisible;
 			_settingsCloseButton.Content = _runtime == null ? "Exit" : "Close";
+			var profilesDirectory = CopperScreenProfileStore.FindProfilesDirectory(AppContext.BaseDirectory);
 			var profiles = CopperScreenProfileStore.ListProfiles(AppContext.BaseDirectory);
-			_profileChooser.ItemsSource = profiles;
-			_profileChooser.SelectedItem = profiles.FirstOrDefault(profile => string.Equals(profile.Id, _settingsDraft.Id, StringComparison.OrdinalIgnoreCase));
+			_profileDirectoryText.Text = profilesDirectory;
+			_profileList.ItemsSource = profiles;
+			_profileList.SelectedItem = profiles.FirstOrDefault(profile => string.Equals(profile.Id, _settingsDraft.Id, StringComparison.OrdinalIgnoreCase));
 			_profileIdBox.Text = _settingsDraft.Id;
 			_profileNameBox.Text = _settingsDraft.DisplayName;
 			_profileDescriptionBox.Text = _settingsDraft.Description;
@@ -1353,8 +1401,14 @@ internal sealed class MainWindow : Window
 
 	private void LoadSelectedProfile()
 	{
-		if (_updatingSettingsUi || _profileChooser.SelectedItem is not CopperScreenProfileSummary summary)
+		if (_updatingSettingsUi)
 		{
+			return;
+		}
+
+		if (_profileList.SelectedItem is not CopperScreenProfileSummary summary)
+		{
+			SetSettingsError("Select a profile to load.");
 			return;
 		}
 
@@ -1449,7 +1503,7 @@ internal sealed class MainWindow : Window
 		await _bench.RefreshAsync(_latestState.DiskPath).ConfigureAwait(true);
 		RefreshDebuggerUi(_latestState.DebugSnapshot);
 		RefreshCopperBenchUi();
-		PresentLatestFrame(forceStatus: true);
+		PresentNextFrame(forceStatus: true);
 		_presenter.Focus();
 	}
 
@@ -2181,9 +2235,6 @@ internal sealed class MainWindow : Window
 		_mouseGrabWaitingForCenter = true;
 		_mouseGrabPointer = args.Pointer;
 		_mouseGrabCenterFramebufferPoint = center;
-		_mouseGrabInitialFramebufferPoint = _presenter.TryMapPointToFramebufferUnclamped(args.GetPosition(_presenter), out var initial)
-			? initial
-			: null;
 		ResetMouseTracking();
 		args.Pointer.Capture(_presenter);
 		if (!TryRecenterMousePointer())
@@ -2206,7 +2257,7 @@ internal sealed class MainWindow : Window
 		_mouseGrabActive = false;
 		_mouseGrabWaitingForCenter = false;
 		_mouseGrabCenterFramebufferPoint = null;
-		_mouseGrabInitialFramebufferPoint = null;
+		_mouseGrabCenterScreenPoint = null;
 		ResetMouseTracking();
 	}
 
@@ -2216,11 +2267,12 @@ internal sealed class MainWindow : Window
 			Math.Abs(left.Y - right.Y) < 0.75;
 	}
 
-	internal static bool ShouldIgnoreInitialMouseGrabPoint(Point framebufferPoint, Point initialFramebufferPoint, Point centerFramebufferPoint)
-	{
-		return !IsNearFramebufferPoint(initialFramebufferPoint, centerFramebufferPoint) &&
-			IsNearFramebufferPoint(framebufferPoint, initialFramebufferPoint);
-	}
+	internal static bool IsMouseGrabCenterPoint(Point framebufferPoint, Point centerFramebufferPoint)
+		=> IsNearFramebufferPoint(framebufferPoint, centerFramebufferPoint);
+
+	internal static bool IsNearScreenPoint(PixelPoint left, PixelPoint right)
+		=> Math.Abs(left.X - right.X) <= 1 &&
+			Math.Abs(left.Y - right.Y) <= 1;
 
 	private bool TryGetPresenterCenterFramebufferPoint(out Point framebufferPoint)
 	{
@@ -2231,6 +2283,19 @@ internal sealed class MainWindow : Window
 		}
 
 		return _presenter.TryMapPointToFramebufferUnclamped(center, out framebufferPoint);
+	}
+
+	private bool TryGetGrabbedMouseFramebufferPoint(PointerEventArgs args, out Point framebufferPoint, out PixelPoint? screenPoint)
+	{
+		if (OperatingSystem.IsWindows() && TryGetCursorScreenPoint(out var currentScreenPoint))
+		{
+			screenPoint = currentScreenPoint;
+			var presenterPoint = _presenter.PointToClient(currentScreenPoint);
+			return _presenter.TryMapPointToFramebufferUnclamped(presenterPoint, out framebufferPoint);
+		}
+
+		screenPoint = null;
+		return _presenter.TryMapPointToFramebufferUnclamped(args.GetPosition(_presenter), out framebufferPoint);
 	}
 
 	private bool TryRecenterMousePointer()
@@ -2248,7 +2313,13 @@ internal sealed class MainWindow : Window
 			}
 
 			var screenPoint = _presenter.PointToScreen(center);
-			return SetCursorPos(screenPoint.X, screenPoint.Y);
+			if (!SetCursorPos(screenPoint.X, screenPoint.Y))
+			{
+				return false;
+			}
+
+			_mouseGrabCenterScreenPoint = screenPoint;
+			return true;
 		}
 		catch (InvalidOperationException)
 		{
@@ -2266,6 +2337,28 @@ internal sealed class MainWindow : Window
 
 	[DllImport("user32.dll")]
 	private static extern bool SetCursorPos(int x, int y);
+
+	private static bool TryGetCursorScreenPoint(out PixelPoint point)
+	{
+		if (GetCursorPos(out var nativePoint))
+		{
+			point = new PixelPoint(nativePoint.X, nativePoint.Y);
+			return true;
+		}
+
+		point = default;
+		return false;
+	}
+
+	[DllImport("user32.dll")]
+	private static extern bool GetCursorPos(out NativePoint point);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct NativePoint
+	{
+		public int X;
+		public int Y;
+	}
 
 	private void ToggleNumpadMode()
 	{
@@ -2579,6 +2672,7 @@ internal sealed class MainWindow : Window
 		SetText(_lastPcStatus, $"LP {state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}");
 		SetText(_frameStatus, $"F {state.FrameNumber}");
 		SetText(_perfStatus, $"Q{state.QueuedAudioBuffers} D{state.DroppedFrames}");
+		SetPerformanceToolTip(state);
 		var primaryDrive = state.Drives.Length > 0
 			? state.Drives[0]
 			: new CopperScreenDriveState(0, false, false, "No disk", null, 0, 0, false, false, false, false);
@@ -2605,6 +2699,24 @@ internal sealed class MainWindow : Window
 			UpdateDriveStatus(drive, state.IsDiskSwapPending && driveIndex == 0);
 		}
 
+	}
+
+	private void SetPerformanceToolTip(CopperScreenState state)
+	{
+		var text =
+			$"Queued audio buffers: {state.QueuedAudioBuffers}\n" +
+			$"Dropped frames: {state.DroppedFrames}\n" +
+			$"Skipped by presenter: {state.PresentationSkippedFrames}\n" +
+			$"Dropped, no free buffer: {state.PresentationBufferDroppedFrames}\n" +
+			$"Video queue: {state.PresentationQueueDepth}/{state.PresentationQueueCapacity}\n" +
+			$"Video queue throttles: {state.PresentationQueueFullThrottleCount}\n" +
+			$"Emulator frame: {state.LastEmulationFrameMilliseconds:F2} ms\n" +
+			$"Runtime publish: {state.LastPublishFrameMilliseconds:F2} ms\n" +
+			$"Presentation callback: {_lastPresentationFrameMilliseconds:F2} ms\n" +
+			$"Framebuffer upload: {_lastPresenterUpdateMilliseconds:F2} ms\n" +
+			$"Framebuffer render: {_presenter.LastRenderMilliseconds:F2} ms";
+		ToolTip.SetTip(_perfStatusBox, text);
+		ToolTip.SetTip(_perfStatus, text);
 	}
 
 	private void UpdateDriveStatus(CopperScreenDriveState drive, bool swapping)

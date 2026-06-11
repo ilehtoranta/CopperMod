@@ -400,13 +400,7 @@ namespace CopperMod.Amiga
 
         public int ExecuteInstruction()
         {
-            if (State.Halted)
-            {
-                State.Cycles++;
-                return 1;
-            }
-
-            if (State.Stopped)
+            if (State.Halted || State.Stopped)
             {
                 State.Cycles++;
                 return 1;
@@ -419,19 +413,7 @@ namespace CopperMod.Amiga
             State.LastInstructionProgramCounter = instructionPc;
             _instructionFrequency.Record(opcode);
 
-            var opcodeLine = opcode & 0xF000;
-            if ((opcodeLine == 0x1000 || opcodeLine == 0x2000 || opcodeLine == 0x3000) && DecodeMove(opcode))
-            {
-                return (int)(State.Cycles - startCycles);
-            }
-
-            if (DecodeLine0(opcode, instructionPc) ||
-                DecodeLine4(opcode, instructionPc) ||
-                DecodeLine5(opcode) ||
-                DecodeBranch(opcode, instructionPc) ||
-                DecodeMoveq(opcode) ||
-                DecodeArithmetic(opcode) ||
-                DecodeShiftRotate(opcode))
+            if (DecodeByOpcodeLine(opcode, instructionPc))
             {
                 return (int)(State.Cycles - startCycles);
             }
@@ -467,6 +449,22 @@ namespace CopperMod.Amiga
             }
 
             throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+        }
+
+        private bool DecodeByOpcodeLine(ushort opcode, uint instructionPc)
+        {
+            return (opcode >> 12) switch
+            {
+                0x0 => DecodeLine0(opcode, instructionPc),
+                0x1 or 0x2 or 0x3 => DecodeMove(opcode),
+                0x4 => DecodeLine4(opcode, instructionPc),
+                0x5 => DecodeLine5(opcode),
+                0x6 => DecodeBranch(opcode, instructionPc),
+                0x7 => DecodeMoveq(opcode),
+                0x8 or 0x9 or 0xB or 0xC or 0xD => DecodeArithmetic(opcode),
+                0xE => DecodeShiftRotate(opcode),
+                _ => false
+            };
         }
 
         public void Reset(uint programCounter, uint stackPointer)
