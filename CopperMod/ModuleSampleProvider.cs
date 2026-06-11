@@ -108,20 +108,10 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 		set
 		{
-			float[]? bufferedWaveform = null;
 			lock (_bufferSync)
 			{
 				_waveformEnabled = value;
 				UpdateChannelWaveformCaptureEnabled();
-				if (value)
-				{
-					bufferedWaveform = GetLatestBufferedSamples();
-				}
-			}
-
-			if (bufferedWaveform != null)
-			{
-				StoreLatestWaveform(bufferedWaveform);
 			}
 		}
 	}
@@ -317,6 +307,11 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		}
 
 		Array.Clear(buffer, offset + samplesWritten, count - samplesWritten);
+		if (samplesWritten > 0 && IsWaveformEnabled())
+		{
+			StoreLatestWaveform(new ReadOnlySpan<float>(buffer, offset, samplesWritten));
+		}
+
 		if (raiseEndEvent)
 		{
 			EndOfSongReached?.Invoke(this, EventArgs.Empty);
@@ -332,35 +327,16 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 	public bool TryReadWaveformSnapshot(out WaveformSnapshot snapshot)
 	{
-		var hasNoStoredWaveform = false;
-		if (TryCopyLatestWaveform(out snapshot, out hasNoStoredWaveform))
+		if (TryCopyLatestWaveform(out snapshot))
 		{
 			return true;
-		}
-
-		float[]? bufferedWaveform = null;
-		if (hasNoStoredWaveform)
-		{
-			lock (_bufferSync)
-			{
-				if (_waveformEnabled)
-				{
-					bufferedWaveform = GetLatestBufferedSamples();
-				}
-			}
-		}
-
-		if (bufferedWaveform != null)
-		{
-			StoreLatestWaveform(bufferedWaveform);
-			return TryCopyLatestWaveform(out snapshot, out _);
 		}
 
 		snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
 		return false;
 	}
 
-	private bool TryCopyLatestWaveform(out WaveformSnapshot snapshot, out bool hasNoStoredWaveform)
+	private bool TryCopyLatestWaveform(out WaveformSnapshot snapshot)
 	{
 		float[] samples;
 		int sampleCount;
@@ -368,7 +344,6 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		int sampleRate;
 		lock (_waveformSync)
 		{
-			hasNoStoredWaveform = _latestWaveformSampleCount == 0;
 			if (_latestWaveformVersion == _consumedWaveformVersion || _latestWaveformSampleCount == 0)
 			{
 				snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
@@ -533,11 +508,6 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 					_amigaHardwareStateProvider?.AmigaHardwareState.AudioFilterEnabled == true);
 			}
 
-			if (IsWaveformEnabled())
-			{
-				StoreLatestWaveform(samples);
-			}
-
 			reachedEnd = result.EndOfSong;
 			return new AudioChunk(samples);
 		}
@@ -616,17 +586,6 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			_latestWaveformSampleRate = _renderOptions.SampleRate;
 			_latestWaveformVersion++;
 		}
-	}
-
-	private float[]? GetLatestBufferedSamples()
-	{
-		AudioChunk? latest = null;
-		foreach (var chunk in _bufferedChunks)
-		{
-			latest = chunk;
-		}
-
-		return latest?.Samples;
 	}
 
 	private void ClearLatestWaveform()

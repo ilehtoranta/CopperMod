@@ -29,6 +29,7 @@ namespace CopperMod.Sid
         private int _envelopeCounter;
         private int _rateCounter;
         private int _exponentialCounter;
+        private int _releaseRatePeriod = RatePeriods[0];
         private int _envelopeState = Release;
         private bool _previousGate;
         private bool _envelopeZeroHold = true;
@@ -76,6 +77,7 @@ namespace CopperMod.Sid
             _envelopeCounter = 0;
             _rateCounter = 0;
             _exponentialCounter = 0;
+            _releaseRatePeriod = RatePeriods[0];
             _envelopeState = Release;
             _previousGate = false;
             _envelopeZeroHold = true;
@@ -328,13 +330,23 @@ namespace CopperMod.Sid
             var gate = (value & 0x01) != 0;
             if (gate && !_previousGate)
             {
+                var attackFromZeroHold = _envelopeState == Release &&
+                    _envelopeCounter == 0 &&
+                    _envelopeZeroHold;
                 _envelopeState = Attack;
                 _envelopeZeroHold = false;
                 _envelopeMaxHold = _envelopeCounter == 0xFF;
+                if (attackFromZeroHold)
+                {
+                    _rateCounter = 0;
+                    _exponentialCounter = 0;
+                }
+
                 _cycleEvents |= SidCycleTraceEvents.GateRising;
             }
             else if (!gate && _previousGate)
             {
+                _releaseRatePeriod = RatePeriods[SustainRelease & 0x0F];
                 _envelopeState = Release;
                 _envelopeMaxHold = false;
                 _envelopeZeroHold = _envelopeCounter == 0;
@@ -770,9 +782,16 @@ namespace CopperMod.Sid
                 Attack => RatePeriods[(AttackDecay >> 4) & 0x0F],
                 Decay => RatePeriods[AttackDecay & 0x0F],
                 Sustain => RatePeriods[AttackDecay & 0x0F],
-                Release => RatePeriods[SustainRelease & 0x0F],
+                Release => GetReleaseRatePeriod(),
                 _ => int.MaxValue
             };
+        }
+
+        private int GetReleaseRatePeriod()
+        {
+            return _envelopeCounter == 0 && _envelopeZeroHold
+                ? RatePeriods[SustainRelease & 0x0F]
+                : _releaseRatePeriod;
         }
 
         private int GetSustainLevel()

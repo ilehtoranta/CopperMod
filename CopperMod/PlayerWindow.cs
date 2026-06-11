@@ -13,7 +13,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private static readonly bool WaveformUiEnabled = true;
 	private static readonly TimeSpan ViewRefreshInterval = TimeSpan.FromMilliseconds(200);
 	private static readonly TimeSpan WaveformRefreshInterval = TimeSpan.FromMilliseconds(16);
-	private const int MaximumPendingWaveforms = 12;
+	private static readonly TimeSpan WaveformDisplayDelay = TimeSpan.FromMilliseconds(250);
+	private const int MaximumPendingWaveforms = 64;
 	private const float WaveformSmoothingAmount = 1.0f;
 	private const int WaveformLabelRow = 13;
 	private const int WaveformViewRow = 14;
@@ -40,7 +41,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private readonly string? _initialPath;
 	private readonly bool _autoPlay;
 	private readonly object _waveformSync = new();
-	private readonly Queue<WaveformSnapshot> _pendingWaveforms = new();
+	private readonly Queue<PendingWaveformSnapshot> _pendingWaveforms = new();
 	private Label? _waveformLabel;
 	private ImageView? _waveformView;
 	private WaveformSnapshot? _targetWaveform;
@@ -75,6 +76,22 @@ internal sealed class PlayerWindow : Window, IDisposable
 			Text = "Load"
 		};
 		loadButton.Accepted += (_, _) => LoadFromField(autoPlay: false);
+
+		var previousFileButton = new Button
+		{
+			X = 1,
+			Y = 2,
+			Text = "Prev file"
+		};
+		previousFileButton.Accepted += (_, _) => LoadAdjacentFile(-1);
+
+		var nextFileButton = new Button
+		{
+			X = 14,
+			Y = 2,
+			Text = "Next file"
+		};
+		nextFileButton.Accepted += (_, _) => LoadAdjacentFile(1);
 
 		_playPauseButton = new Button
 		{
@@ -203,7 +220,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			Width = Dim.Fill(2)
 		};
 
-		Add(_pathField, loadButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _infoButton, quitButton,
+		Add(_pathField, loadButton, previousFileButton, nextFileButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _infoButton, quitButton,
 			_titleLabel, _formatLabel, _subSongLabel, _previousSubSongButton, _nextSubSongButton, _stateLabel, _timeLabel, _progressBar);
 
 		if (WaveformUiEnabled)
@@ -285,21 +302,48 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void LoadPath(string path, bool autoPlay)
 	{
+		RunPlayerAction(() => LoadPathCore(path, autoPlay));
+	}
+
+	private void LoadAdjacentFile(int delta)
+	{
 		RunPlayerAction(() =>
 		{
-			ClearWaveforms();
-			_displayWaveform = null;
-			if (_waveformView != null)
+			var currentPath = _player.FilePath;
+			if (string.IsNullOrWhiteSpace(currentPath))
 			{
-				_waveformView.Image = WaveformImageRenderer.Render(EmptyWaveform);
+				currentPath = _pathField.Text?.ToString();
 			}
 
-			_player.Load(path);
-			if (autoPlay)
+			var nextPath = delta > 0
+				? ModuleFileNavigator.ResolveNextFilePath(currentPath)
+				: ModuleFileNavigator.ResolvePreviousFilePath(currentPath);
+			if (nextPath == null)
 			{
-				_player.Play();
+				var direction = delta > 0 ? "next" : "previous";
+				throw new InvalidOperationException("No " + direction + " file was found.");
 			}
+
+			var autoPlay = _player.PlaybackState == PlaybackState.Playing;
+			LoadPathCore(nextPath, autoPlay);
 		});
+	}
+
+	private void LoadPathCore(string path, bool autoPlay)
+	{
+		ClearWaveforms();
+		_displayWaveform = null;
+		if (_waveformView != null)
+		{
+			_waveformView.Image = WaveformImageRenderer.Render(EmptyWaveform);
+		}
+
+		_player.Load(path);
+		_pathField.Text = _player.FilePath ?? Path.GetFullPath(path);
+		if (autoPlay)
+		{
+			_player.Play();
+		}
 	}
 
 	private void TogglePlayback()
@@ -527,7 +571,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 	{
 		lock (_waveformSync)
 		{
-			_pendingWaveforms.Enqueue(waveform);
+			_pendingWaveforms.Enqueue(new PendingWaveformSnapshot(waveform, DateTimeOffset.UtcNow + WaveformDisplayDelay));
 			while (_pendingWaveforms.Count > MaximumPendingWaveforms)
 			{
 				_pendingWaveforms.Dequeue();
@@ -547,7 +591,14 @@ internal sealed class PlayerWindow : Window, IDisposable
 				return false;
 			}
 
-			waveform = _pendingWaveforms.Dequeue();
+			var pending = _pendingWaveforms.Peek();
+			if (pending.VisibleAt > DateTimeOffset.UtcNow)
+			{
+				waveform = EmptyWaveform;
+				return false;
+			}
+
+			waveform = _pendingWaveforms.Dequeue().Waveform;
 			return true;
 		}
 	}
@@ -673,5 +724,18 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private static string FormatWaveformDisplayMode(WaveformDisplayMode mode)
 	{
 		return mode == WaveformDisplayMode.TrackerChannels ? "channels" : "mixed output";
+	}
+
+	private readonly struct PendingWaveformSnapshot
+	{
+		public PendingWaveformSnapshot(WaveformSnapshot waveform, DateTimeOffset visibleAt)
+		{
+			Waveform = waveform;
+			VisibleAt = visibleAt;
+		}
+
+		public WaveformSnapshot Waveform { get; }
+
+		public DateTimeOffset VisibleAt { get; }
 	}
 }
