@@ -21,24 +21,24 @@ public sealed class AmigaCiaTests
 		bus.WriteByte(0x00BFDD00, 0x81, 0);
 		bus.WriteByte(0x00BFDE00, 0x11, 0);
 
-		Assert.Equal(30, bus.GetNextCiaInterruptCycle(100));
+		Assert.Equal(40, bus.GetNextCiaInterruptCycle(100));
 
-		bus.AdvanceCiasTo(29);
+		bus.AdvanceCiasTo(39);
 		Assert.Empty(bus.DrainCiaInterrupts());
 
-		bus.AdvanceCiasTo(30);
+		bus.AdvanceCiasTo(40);
 		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
 		Assert.Equal(AmigaCiaId.B, interruptEvent.Cia);
 		Assert.Equal(AmigaCia.TimerAInterruptMask, interruptEvent.IcrBits);
-		Assert.Equal(30, interruptEvent.Cycle);
-		Assert.Equal(60, bus.GetNextCiaInterruptCycle(100));
+		Assert.Equal(40, interruptEvent.Cycle);
+		Assert.Equal(70, bus.GetNextCiaInterruptCycle(100));
 	}
 
 	[Fact]
 	public void TimerAZeroLatchUnderflowsAfterFullSixteenBitInterval()
 	{
 		var bus = new AmigaBus();
-		var expectedCycle = 65_536L * AmigaCia.CpuCyclesPerCiaTick;
+		var expectedCycle = 10 + (65_536L * AmigaCia.CpuCyclesPerCiaTick);
 
 		bus.WriteByte(0x00BFD400, 0x00, 0);
 		bus.WriteByte(0x00BFD500, 0x00, 0);
@@ -66,9 +66,11 @@ public sealed class AmigaCiaTests
 
 		var cycle = 19L;
 		Assert.Equal(0x02, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(20, cycle);
 
 		cycle = 20L;
 		Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(30, cycle);
 	}
 
 	[Fact]
@@ -82,6 +84,7 @@ public sealed class AmigaCiaTests
 
 		var cycle = 10L;
 		Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(20, cycle);
 		Assert.Equal(0x00, bus.ReadByte(0x00BFDD00));
 	}
 
@@ -97,7 +100,7 @@ public sealed class AmigaCiaTests
 		bus.AdvanceCiasTo(100);
 
 		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
-		Assert.Equal(20, interruptEvent.Cycle);
+		Assert.Equal(30, interruptEvent.Cycle);
 		Assert.Null(bus.GetNextCiaInterruptCycle(1_000));
 	}
 
@@ -111,16 +114,16 @@ public sealed class AmigaCiaTests
 		bus.WriteByte(0x00BFE601, 0x03, 0);
 		bus.WriteByte(0x00BFE701, 0x00, 0);
 
-		Assert.Equal(30, bus.GetNextCiaInterruptCycle(100));
+		Assert.Equal(40, bus.GetNextCiaInterruptCycle(100));
 
-		bus.AdvanceCiasTo(29);
+		bus.AdvanceCiasTo(39);
 		Assert.Empty(bus.DrainCiaInterrupts());
 
-		bus.AdvanceCiasTo(30);
+		bus.AdvanceCiasTo(40);
 		var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
 		Assert.Equal(AmigaCiaId.A, interruptEvent.Cia);
 		Assert.Equal(AmigaCia.TimerBInterruptMask, interruptEvent.IcrBits);
-		Assert.Equal(30, interruptEvent.Cycle);
+		Assert.Equal(40, interruptEvent.Cycle);
 		Assert.Equal(0x08, bus.CiaA.ReadRegister(0x0F));
 	}
 
@@ -133,7 +136,7 @@ public sealed class AmigaCiaTests
 		bus.WriteByte(0x00BFD500, 0x00, 0);
 		bus.WriteByte(0x00BFDD00, 0x81, 0);
 		bus.WriteByte(0x00BFDE00, 0x11, 0);
-		bus.AdvanceCiasTo(10);
+		bus.AdvanceCiasTo(20);
 
 		Assert.Equal(0x81, bus.ReadByte(0x00BFDD00));
 		Assert.Equal(0x00, bus.ReadByte(0x00BFDD00));

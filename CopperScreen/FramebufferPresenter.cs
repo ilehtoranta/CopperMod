@@ -74,6 +74,18 @@ internal sealed class FramebufferPresenter : Control
 		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, out framebufferPoint);
 	}
 
+	public bool TryGetRenderedImageCenter(out Point center)
+	{
+		if (!TryCalculateUniformDestination(Bounds.Size, new Size(_sourceRect.Width, _sourceRect.Height), out var destination))
+		{
+			center = default;
+			return false;
+		}
+
+		center = destination.Center;
+		return true;
+	}
+
 	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
 	{
 		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
@@ -156,7 +168,7 @@ internal sealed class FramebufferPresenter : Control
 		return true;
 	}
 
-	private static bool TryCalculateUniformDestination(Size bounds, Size source, out Rect destination)
+	internal static bool TryCalculateUniformDestination(Size bounds, Size source, out Rect destination)
 	{
 		destination = default;
 		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)

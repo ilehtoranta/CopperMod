@@ -408,6 +408,71 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void ImmediateBtstDisplacementAddressUsesMemoryEaTiming()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x08, 0x2A, 0x00, 0x06, 0x00, 0x02); // BTST #6,2(A2)
+		bus.Memory[0x2002] = 0x40;
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[2] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(16, cpu.State.Cycles);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void ImmediateBtstAbsoluteLongCiaAddsPeripheralAccessTiming()
+	{
+		var program = new byte[] { 0x08, 0x39, 0x00, 0x06, 0x00, 0xBF, 0xE0, 0x01 }; // BTST #6,$BFE001.L
+		var bus = CreateRomProgramBus(program);
+		bus.GamePort0FirePressed = true;
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x00FC0000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(30, cpu.State.Cycles);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void ImmediateBtstAbsoluteLongCustomRegisterKeepsAgnusBusTiming()
+	{
+		var program = new byte[] { 0x08, 0x39, 0x00, 0x06, 0x00, 0xDF, 0xF0, 0x02 }; // BTST #6,$DFF002.L
+		var bus = CreateRomProgramBus(program);
+		var expectedDataCycle = 0L;
+		_ = new AmigaBus().ReadByte(0x00DFF002, ref expectedDataCycle, AmigaBusAccessKind.CpuDataRead);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x00FC0000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(20 + expectedDataCycle, cpu.State.Cycles);
+		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void CmpiByteAbsoluteLongBeamRegisterUsesMemoryEaAndAgnusBusTiming()
+	{
+		var program = new byte[] { 0x0C, 0x39, 0x00, 0xC8, 0x00, 0xDF, 0xF0, 0x06 }; // CMPI.B #$C8,$DFF006.L
+		var bus = CreateRomProgramBus(program);
+		var expectedDataCycle = 0L;
+		_ = new AmigaBus().ReadByte(0x00DFF006, ref expectedDataCycle, AmigaBusAccessKind.CpuDataRead);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x00FC0000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(20 + expectedDataCycle, cpu.State.Cycles);
+		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void AddqSubqAddressRegistersUseLongArithmeticAndDoNotChangeFlags()
 	{
 		var bus = new TestBus();
@@ -783,6 +848,15 @@ public sealed class M68kInterpreterTests
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
+	}
+
+	private static AmigaBus CreateRomProgramBus(ReadOnlySpan<byte> program)
+	{
+		var bus = new AmigaBus();
+		var rom = new byte[0x40000];
+		program.CopyTo(rom);
+		bus.MapReadOnlyMemory(0x00FC0000, rom);
+		return bus;
 	}
 
 	private sealed class TestBus : IM68kBus

@@ -7,18 +7,26 @@ internal sealed class CopperScreenStartupOptions
 	private CopperScreenStartupOptions(
 		CopperScreenProfile profile,
 		string? diskPath,
+		string?[] driveDiskPaths,
+		bool?[] driveWriteProtected,
 		string? kickstartRomPath,
 		M68kBackendKind? cpuBackendOverride,
 		FloppyDriveAudioOptions floppyDriveAudio,
+		CopperScreenInputOptions input,
 		string baseDirectory,
+		bool hasExplicitProfile,
 		string? error)
 	{
 		Profile = profile;
 		DiskPath = diskPath;
+		DriveDiskPaths = driveDiskPaths;
+		DriveWriteProtected = driveWriteProtected;
 		KickstartRomPath = kickstartRomPath;
 		CpuBackendOverride = cpuBackendOverride;
 		FloppyDriveAudio = floppyDriveAudio;
+		Input = input;
 		BaseDirectory = baseDirectory;
+		HasExplicitProfile = hasExplicitProfile;
 		Error = error;
 	}
 
@@ -26,26 +34,67 @@ internal sealed class CopperScreenStartupOptions
 
 	public string? DiskPath { get; }
 
+	public string?[] DriveDiskPaths { get; }
+
+	public bool?[] DriveWriteProtected { get; }
+
 	public string? KickstartRomPath { get; }
 
 	public M68kBackendKind? CpuBackendOverride { get; }
 
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
 
+	public CopperScreenInputOptions Input { get; }
+
 	public string BaseDirectory { get; }
 
+	public bool HasExplicitProfile { get; }
+
 	public string? Error { get; }
+
+	internal static CopperScreenStartupOptions FromSettings(
+		CopperScreenProfile profile,
+		string?[] driveDiskPaths,
+		bool?[] driveWriteProtected,
+		string? kickstartRomPath,
+		M68kBackendKind? cpuBackendOverride,
+		FloppyDriveAudioOptions floppyDriveAudio,
+		CopperScreenInputOptions input,
+		string baseDirectory,
+		bool hasExplicitProfile = true,
+		string? error = null)
+	{
+		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
+		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
+		return new CopperScreenStartupOptions(
+			profile,
+			normalizedDriveDiskPaths[0],
+			normalizedDriveDiskPaths,
+			normalizedWriteProtected,
+			ResolveOptionalPath(kickstartRomPath, baseDirectory),
+			cpuBackendOverride,
+			floppyDriveAudio,
+			input,
+			baseDirectory,
+			hasExplicitProfile,
+			error);
+	}
 
 	public static CopperScreenStartupOptions Default(string baseDirectory)
 	{
 		var profile = CopperScreenProfile.LoadDefault(baseDirectory, out var error);
+		var driveDiskPaths = CreateDriveDiskPathArray(profile, null, baseDirectory);
 		return new CopperScreenStartupOptions(
 			profile,
 			null,
+			driveDiskPaths,
+			CreateDriveWriteProtectedArray(profile),
 			null,
 			null,
 			profile.FloppyDriveAudio,
+			profile.Input,
 			baseDirectory,
+			false,
 			error);
 	}
 
@@ -239,7 +288,79 @@ internal sealed class CopperScreenStartupOptions
 			floppySoundModeOverride,
 			floppySoundPackOverride,
 			floppySoundVolumeOverride);
-		return new CopperScreenStartupOptions(profile, diskPath, kickstartRomPath, cpuBackendOverride, floppyDriveAudio, baseDirectory, error);
+		var driveDiskPaths = CreateDriveDiskPathArray(profile, diskPath, baseDirectory);
+		var driveWriteProtected = CreateDriveWriteProtectedArray(profile);
+		return new CopperScreenStartupOptions(
+			profile,
+			driveDiskPaths[0],
+			driveDiskPaths,
+			driveWriteProtected,
+			kickstartRomPath,
+			cpuBackendOverride,
+			floppyDriveAudio,
+			profile.Input,
+			baseDirectory,
+			profileExplicit,
+			error);
+	}
+
+	private static string?[] CreateDriveDiskPathArray(CopperScreenProfile profile, string? diskPath, string baseDirectory)
+	{
+		var paths = new string?[4];
+		if (profile.MediaDrives.Count > 0)
+		{
+			for (var i = 0; i < profile.MediaDrives.Count; i++)
+			{
+				var drive = profile.MediaDrives[i];
+				if ((uint)drive.Index < (uint)paths.Length)
+				{
+					paths[drive.Index] = ResolveOptionalPath(drive.DiskPath, baseDirectory);
+				}
+			}
+		}
+
+		if (diskPath != null)
+		{
+			paths[0] = diskPath;
+		}
+
+		return paths;
+	}
+
+	private static bool?[] CreateDriveWriteProtectedArray(CopperScreenProfile profile)
+	{
+		var writeProtected = new bool?[4];
+		foreach (var drive in profile.MediaDrives)
+		{
+			if ((uint)drive.Index < (uint)writeProtected.Length)
+			{
+				writeProtected[drive.Index] = drive.WriteProtected;
+			}
+		}
+
+		return writeProtected;
+	}
+
+	private static string?[] NormalizeDrivePaths(string?[] driveDiskPaths, string baseDirectory)
+	{
+		var paths = new string?[4];
+		for (var i = 0; i < Math.Min(paths.Length, driveDiskPaths.Length); i++)
+		{
+			paths[i] = ResolveOptionalPath(driveDiskPaths[i], baseDirectory);
+		}
+
+		return paths;
+	}
+
+	private static bool?[] NormalizeDriveWriteProtected(bool?[] driveWriteProtected)
+	{
+		var values = new bool?[4];
+		for (var i = 0; i < Math.Min(values.Length, driveWriteProtected.Length); i++)
+		{
+			values[i] = driveWriteProtected[i];
+		}
+
+		return values;
 	}
 
 	private static bool TryParseOnOff(string value, out bool enabled)

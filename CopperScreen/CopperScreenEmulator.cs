@@ -18,7 +18,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly CopperScreenProfile _profile;
 	private readonly string _baseDirectory;
 	private readonly FloppyDriveAudioOptions _floppyDriveAudioOptions;
+	private CopperScreenInputOptions _inputOptions;
 	private readonly string? _startupError;
+	private readonly string?[] _initialDriveDiskPaths;
+	private readonly bool?[] _initialDriveWriteProtected;
 	private readonly float[] _frameAudio;
 	private readonly int[] _previousInterlaceFrame;
 	private readonly Action<long, long> _renderFrameAudioUntil;
@@ -45,12 +48,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private int _outputAudioFrameSampleRate;
 	private bool _mousePrimaryFirePressed;
 	private bool _mouseSecondFirePressed;
-	private bool _joystickUp;
-	private bool _joystickDown;
-	private bool _joystickLeft;
-	private bool _joystickRight;
-	private bool _joystickPrimaryFirePressed;
-	private bool _joystickSecondFirePressed;
+	private readonly CopperScreenJoystickActions[] _joystickActionsByPort = new CopperScreenJoystickActions[2];
 	private readonly string?[] _driveDiskPaths = new string?[4];
 	private readonly string[] _driveDiskNames = ["No disk", "No disk", "No disk", "No disk"];
 	private string _diskName;
@@ -66,15 +64,22 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_profile = startupOptions.Profile;
 		_baseDirectory = startupOptions.BaseDirectory;
 		_floppyDriveAudioOptions = startupOptions.FloppyDriveAudio;
+		_inputOptions = startupOptions.Input;
+		_initialDriveDiskPaths = startupOptions.DriveDiskPaths.ToArray();
+		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
 		_boot.AutoStartWorkbenchDefaultTool = false;
 		_frameAudio = new float[AudioFramesPerAppFrame(DefaultAudioSampleRate) * DefaultAudioChannels];
 		_previousInterlaceFrame = new int[Framebuffer.Length];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
-		DiskPath = startupOptions.DiskPath;
+		DiskPath = startupOptions.DriveDiskPaths.Length > 0 ? startupOptions.DriveDiskPaths[0] : startupOptions.DiskPath;
 		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
-		SetDriveDiskMetadata(0, DiskPath);
+		for (var driveIndex = 0; driveIndex < _driveDiskPaths.Length; driveIndex++)
+		{
+			var path = driveIndex < startupOptions.DriveDiskPaths.Length ? startupOptions.DriveDiskPaths[driveIndex] : null;
+			SetDriveDiskMetadata(driveIndex, path);
+		}
 		_initialDiskImageOverride = initialDiskImageOverride;
 		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
 	}
@@ -98,7 +103,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public bool IsPrimaryFirePressed =>
 		_mousePrimaryFirePressed ||
 		_mousePrimaryFirePulseFrames > 0 ||
-		_joystickPrimaryFirePressed ||
+		_joystickActionsByPort.Any(actions => (actions & CopperScreenJoystickActions.Fire) != 0) ||
 		_firePulseFrames > 0;
 
 	public bool IsDiskSwapPending => _pendingDiskImage != null;
@@ -213,6 +218,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public static CopperScreenEmulator Create(string[] args, string baseDirectory)
 	{
 		return new CopperScreenEmulator(CopperScreenStartupOptions.Parse(args, baseDirectory));
+	}
+
+	internal static CopperScreenEmulator Create(CopperScreenStartupOptions startupOptions)
+	{
+		return new CopperScreenEmulator(startupOptions);
 	}
 
 	internal static CopperScreenEmulator CreateWithLoadedDisk(string[] args, string baseDirectory, AmigaDiskImage disk)
@@ -484,6 +494,44 @@ internal sealed class CopperScreenEmulator : IDisposable
 		InsertAdjacentExternalDisks(diskPath, markChanged);
 	}
 
+	private void ApplyConfiguredBootDriveWriteProtection()
+	{
+		if (_initialDriveWriteProtected.Length > 0 && _initialDriveWriteProtected[0] is bool writeProtected)
+		{
+			_boot.Drive0.SetWriteProtected(writeProtected);
+		}
+	}
+
+	private void InsertConfiguredExternalDisks(string? diskPath, bool markChanged = false)
+	{
+		for (var driveIndex = 1; driveIndex < _machine.Bus.Disk.ConnectedDriveCount; driveIndex++)
+		{
+			var configuredPath = driveIndex < _initialDriveDiskPaths.Length ? _initialDriveDiskPaths[driveIndex] : null;
+			var diskToInsert = string.IsNullOrWhiteSpace(configuredPath)
+				? ResolveAdjacentDiskPath(diskPath, driveIndex)
+				: configuredPath;
+			if (diskToInsert == null)
+			{
+				EjectDrive(driveIndex);
+				continue;
+			}
+
+			try
+			{
+				var writeProtected = driveIndex < _initialDriveWriteProtected.Length ? _initialDriveWriteProtected[driveIndex] : null;
+				GetDrive(driveIndex).Insert(AmigaDiskImage.Load(diskToInsert), markChanged, writeProtected);
+				SetDriveDiskMetadata(driveIndex, diskToInsert);
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+			{
+				StatusText = string.IsNullOrWhiteSpace(configuredPath)
+					? $"Could not auto-insert DF{driveIndex}: {ex.Message}"
+					: $"Could not insert DF{driveIndex}: {ex.Message}";
+				EjectDrive(driveIndex);
+			}
+		}
+	}
+
 	private void InsertAdjacentExternalDisks(string? diskPath, bool markChanged = false)
 	{
 		for (var driveIndex = 1; driveIndex < _machine.Bus.Disk.ConnectedDriveCount; driveIndex++)
@@ -669,7 +717,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public void MoveMousePort(int deltaX, int deltaY)
 	{
-		_machine.Bus.MoveGamePortMouse(0, deltaX, deltaY);
+		for (var portIndex = 0; portIndex < _joystickActionsByPort.Length; portIndex++)
+		{
+			if (_inputOptions.IsMousePort(portIndex))
+			{
+				_machine.Bus.MoveGamePortMouse(portIndex, deltaX, deltaY);
+			}
+		}
 	}
 
 	public void SetMouseButtons(bool primaryFirePressed, bool secondFirePressed)
@@ -696,13 +750,60 @@ internal sealed class CopperScreenEmulator : IDisposable
 		bool right,
 		bool primaryFirePressed,
 		bool secondFirePressed)
+		=> SetJoystickPort(_inputOptions.JoystickPortIndex, up, down, left, right, primaryFirePressed, secondFirePressed);
+
+	public void SetJoystickPort(
+		int portIndex,
+		bool up,
+		bool down,
+		bool left,
+		bool right,
+		bool primaryFirePressed,
+		bool secondFirePressed)
 	{
-		_joystickUp = up;
-		_joystickDown = down;
-		_joystickLeft = left;
-		_joystickRight = right;
-		_joystickPrimaryFirePressed = primaryFirePressed;
-		_joystickSecondFirePressed = secondFirePressed;
+		if ((uint)portIndex >= (uint)_joystickActionsByPort.Length)
+		{
+			return;
+		}
+
+		var actions = CopperScreenJoystickActions.None;
+		if (up)
+		{
+			actions |= CopperScreenJoystickActions.Up;
+		}
+
+		if (down)
+		{
+			actions |= CopperScreenJoystickActions.Down;
+		}
+
+		if (left)
+		{
+			actions |= CopperScreenJoystickActions.Left;
+		}
+
+		if (right)
+		{
+			actions |= CopperScreenJoystickActions.Right;
+		}
+
+		if (primaryFirePressed)
+		{
+			actions |= CopperScreenJoystickActions.Fire;
+		}
+
+		if (secondFirePressed)
+		{
+			actions |= CopperScreenJoystickActions.SecondFire;
+		}
+
+		_joystickActionsByPort[portIndex] = actions;
+		ApplyInputState();
+	}
+
+	public void SetInputOptions(CopperScreenInputOptions inputOptions)
+	{
+		_inputOptions = inputOptions;
 		ApplyInputState();
 	}
 
@@ -764,7 +865,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 					_boot.StartBootFromDisk(disk);
 				}
 
-				InsertAdjacentExternalDisks(DiskPath);
+				ApplyConfiguredBootDriveWriteProtection();
+				InsertConfiguredExternalDisks(DiskPath);
 
 				_targetCycle = 0;
 				_audioCycle = _machine.Cpu.State.Cycles;
@@ -1050,11 +1152,44 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private void ApplyInputState()
 	{
 		var pulsePrimaryFirePressed = _firePulseFrames > 0;
-		_machine.Bus.GamePort0FirePressed = _mousePrimaryFirePressed || _mousePrimaryFirePulseFrames > 0 || pulsePrimaryFirePressed;
-		_machine.Bus.GamePort1FirePressed = _joystickPrimaryFirePressed || pulsePrimaryFirePressed;
-		_machine.Bus.GamePort0SecondFirePressed = _mouseSecondFirePressed || _mouseSecondFirePulseFrames > 0;
-		_machine.Bus.GamePort1SecondFirePressed = _joystickSecondFirePressed;
-		_machine.Bus.SetGamePortJoystick(1, _joystickUp, _joystickDown, _joystickLeft, _joystickRight);
+		_machine.Bus.GamePort0FirePressed = pulsePrimaryFirePressed;
+		_machine.Bus.GamePort1FirePressed = pulsePrimaryFirePressed;
+		_machine.Bus.GamePort0SecondFirePressed = false;
+		_machine.Bus.GamePort1SecondFirePressed = false;
+		_machine.Bus.SetGamePortJoystick(0, false, false, false, false);
+		_machine.Bus.SetGamePortJoystick(1, false, false, false, false);
+
+		for (var portIndex = 0; portIndex < _joystickActionsByPort.Length; portIndex++)
+		{
+			var primaryFirePressed = false;
+			var secondFirePressed = false;
+			if (_inputOptions.IsMousePort(portIndex))
+			{
+				primaryFirePressed |= _mousePrimaryFirePressed || _mousePrimaryFirePulseFrames > 0;
+				secondFirePressed |= _mouseSecondFirePressed || _mouseSecondFirePulseFrames > 0;
+			}
+
+			var actions = _joystickActionsByPort[portIndex];
+			primaryFirePressed |= (actions & CopperScreenJoystickActions.Fire) != 0;
+			secondFirePressed |= (actions & CopperScreenJoystickActions.SecondFire) != 0;
+			if (portIndex == 0)
+			{
+				_machine.Bus.GamePort0FirePressed |= primaryFirePressed;
+				_machine.Bus.GamePort0SecondFirePressed |= secondFirePressed;
+			}
+			else
+			{
+				_machine.Bus.GamePort1FirePressed |= primaryFirePressed;
+				_machine.Bus.GamePort1SecondFirePressed |= secondFirePressed;
+			}
+
+			_machine.Bus.SetGamePortJoystick(
+				portIndex,
+				(actions & CopperScreenJoystickActions.Up) != 0,
+				(actions & CopperScreenJoystickActions.Down) != 0,
+				(actions & CopperScreenJoystickActions.Left) != 0,
+				(actions & CopperScreenJoystickActions.Right) != 0);
+		}
 	}
 
 	private bool HandleBootResult(AmigaBootResult result)

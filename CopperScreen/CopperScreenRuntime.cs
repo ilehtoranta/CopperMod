@@ -165,6 +165,17 @@ internal sealed class CopperScreenRuntime : IDisposable
 		return new CopperScreenRuntime(emulator, audio, disposeAudio: true);
 	}
 
+	public static CopperScreenRuntime Create(CopperScreenStartupOptions startupOptions)
+	{
+		var emulator = CopperScreenEmulator.Create(startupOptions);
+		var audio = WaveOutAudioOutput.TryCreate(
+			AudioSampleRate,
+			AudioChannels,
+			emulator.AudioFramesPerAppFrame(AudioSampleRate),
+			AudioOutputBufferCount);
+		return new CopperScreenRuntime(emulator, audio, disposeAudio: true);
+	}
+
 	internal static CopperScreenRuntime CreateForTests(CopperScreenEmulator emulator, ICopperScreenAudioOutput? audio = null)
 		=> new CopperScreenRuntime(emulator, audio, disposeAudio: false);
 
@@ -291,6 +302,12 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	public void SetJoystickPort(bool up, bool down, bool left, bool right, bool primaryFirePressed, bool secondFirePressed)
 		=> Post(emulator => emulator.SetJoystickPort(up, down, left, right, primaryFirePressed, secondFirePressed));
+
+	public void SetJoystickPort(int portIndex, bool up, bool down, bool left, bool right, bool primaryFirePressed, bool secondFirePressed)
+		=> Post(emulator => emulator.SetJoystickPort(portIndex, up, down, left, right, primaryFirePressed, secondFirePressed));
+
+	public void SetInputOptions(CopperScreenInputOptions inputOptions)
+		=> Post(emulator => emulator.SetInputOptions(inputOptions));
 
 	public Task<CopperScreenCommandResult> TogglePausedAsync()
 		=> EnqueueAsync(emulator =>

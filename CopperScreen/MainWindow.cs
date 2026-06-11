@@ -20,11 +20,12 @@ internal sealed class MainWindow : Window
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
 	private long _presentedFrames;
-	private readonly CopperScreenRuntime _runtime;
+	private CopperScreenRuntime? _runtime;
 	private readonly CopperBenchViewModel _bench;
 	private readonly FramebufferPresenter _presenter;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
+	private readonly Border _settingsPanel;
 	private readonly Border _benchPanel;
 	private readonly Border _debuggerPanel;
 	private readonly TextBlock _diskStatus;
@@ -51,12 +52,51 @@ internal sealed class MainWindow : Window
 	private readonly Button _fullscreenButton;
 	private readonly Button _overscanButton;
 	private readonly Button _writeProtectButton;
+	private readonly Button _settingsButton;
 	private readonly StackPanel _entryList;
+	private readonly CopperScreenStartupOptions _initialStartupOptions;
+	private CopperScreenSettingsDraft _settingsDraft;
+	private CopperScreenInputOptions _inputOptions = CopperScreenInputOptions.Default;
+	private readonly CopperScreenJoystickActions[] _pressedJoystickActionsByPort = new CopperScreenJoystickActions[2];
+	private TextBlock _settingsStatus = null!;
+	private Button _settingsCloseButton = null!;
+	private Button _settingsStartButton = null!;
+	private Border _generalSettingsButton = null!;
+	private Border _advancedSettingsButton = null!;
+	private Control _generalSettingsPage = null!;
+	private Control _advancedSettingsPage = null!;
+	private int _settingsPageIndex;
+	private ComboBox _profileChooser = null!;
+	private TextBox _profileIdBox = null!;
+	private TextBox _profileNameBox = null!;
+	private TextBox _profileDescriptionBox = null!;
+	private ComboBox _kickstartSourceBox = null!;
+	private TextBox _kickstartRomBox = null!;
+	private ComboBox _cpuBackendBox = null!;
+	private TextBox _chipRamBox = null!;
+	private TextBox _pseudoFastRamBox = null!;
+	private TextBox _pseudoFastBaseBox = null!;
+	private TextBox _realFastRamBox = null!;
+	private TextBox _realFastBaseBox = null!;
+	private ComboBox _floppyDriveCountBox = null!;
+	private readonly TextBox[] _drivePathBoxes = new TextBox[4];
+	private readonly CheckBox[] _driveWriteProtectBoxes = new CheckBox[4];
+	private CheckBox _floppySoundsEnabledBox = null!;
+	private ComboBox _floppySoundModeBox = null!;
+	private TextBox _floppySoundPackBox = null!;
+	private TextBox _floppySoundVolumeBox = null!;
+	private ComboBox _port1ControllerBox = null!;
+	private ComboBox _port2ControllerBox = null!;
+	private ComboBox _controllerProfileChooser = null!;
+	private TextBox _controllerProfileNameBox = null!;
+	private ComboBox _controllerProfileKindBox = null!;
+	private readonly TextBox[] _joystickKeyBoxes = new TextBox[6];
+	private bool _settingsVisible;
+	private bool _updatingSettingsUi;
 	private long _lastSeenFrameNumber;
 	private long _lastStatusUpdateTick;
 	private CopperScreenState _latestState;
 	private readonly HashSet<AmigaRawKey> _pressedAmigaKeys = new HashSet<AmigaRawKey>();
-	private JoystickKeys _pressedJoystickKeys;
 	private NumpadInputMode _numpadMode = NumpadInputMode.Joystick;
 	private bool _showFullOverscan = true;
 	private double? _lastMouseX;
@@ -79,11 +119,23 @@ internal sealed class MainWindow : Window
 		Width = 960;
 		Height = 768;
 		Focusable = true;
-		_runtime = CopperScreenRuntime.Create(args, AppContext.BaseDirectory);
-		_latestState = _runtime.CurrentState;
+		_initialStartupOptions = CopperScreenStartupOptions.Parse(args, AppContext.BaseDirectory);
+		_settingsDraft = CopperScreenSettingsDraft.FromStartupOptions(_initialStartupOptions);
+		_inputOptions = _settingsDraft.Input;
+		if (_initialStartupOptions.HasExplicitProfile)
+		{
+			_runtime = CopperScreenRuntime.Create(_initialStartupOptions);
+			_latestState = _runtime.CurrentState;
+		}
+		else
+		{
+			_latestState = CreateIdleState(_settingsDraft);
+			_settingsVisible = true;
+		}
+
 		_bench = new CopperBenchViewModel();
 
-		_presenter = new FramebufferPresenter(_runtime.Width, _runtime.Height)
+		_presenter = new FramebufferPresenter(AmigaConstants.PalLowResWidth, AmigaConstants.PalLowResHeight)
 		{
 			Focusable = true,
 			Cursor = new Cursor(StandardCursorType.None),
@@ -110,6 +162,7 @@ internal sealed class MainWindow : Window
 		_numpadModeButton = CreateToolbarButton("N:Joy", ToggleNumpadMode, "Toggle numpad between joystick emulation and Amiga numpad keys");
 		_fullscreenButton = CreateToolbarButton("Full", ToggleFullscreen, "Toggle fullscreen mode");
 		_overscanButton = CreateToolbarButton("Crop", ToggleOverscan, "Toggle between full overscan and cropped display");
+		_settingsButton = CreateToolbarButton("Settings", ToggleSettings, "Show emulator settings");
 		_writeProtectButton = CreateToolbarButton("WP ON", async () =>
 		{
 			await ToggleWriteProtectAsync().ConfigureAwait(true);
@@ -126,19 +179,34 @@ internal sealed class MainWindow : Window
 		_benchPanel = CreateCopperBenchPanel();
 		_debuggerPanel = CreateDebuggerPanel();
 		_toolbar = CreateToolbar();
+		_settingsPanel = CreateSettingsPanel();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
 		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
+		_root.Children.Add(_settingsPanel);
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
 		RefreshDebuggerUi(_latestState.DebugSnapshot);
-		_runtime.FramePublished += QueueFramePresentation;
+		RefreshSettingsUi();
+		if (_runtime != null)
+		{
+			_runtime.FramePublished += QueueFramePresentation;
+		}
+
 		Opened += (_, _) =>
 		{
-			_presenter.Focus();
-			_runtime.Start();
+			if (_settingsVisible)
+			{
+				_settingsPanel.Focus();
+			}
+			else
+			{
+				_presenter.Focus();
+			}
+
+			_runtime?.Start();
 			PresentLatestFrame(forceStatus: true);
 		};
 		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
@@ -183,9 +251,55 @@ internal sealed class MainWindow : Window
 		Closed += (_, _) =>
 		{
 			_isClosed = true;
-			_runtime.FramePublished -= QueueFramePresentation;
-			_runtime.Dispose();
+			if (_runtime != null)
+			{
+				_runtime.FramePublished -= QueueFramePresentation;
+				_runtime.Dispose();
+			}
 		};
+	}
+
+	private static CopperScreenState CreateIdleState(CopperScreenSettingsDraft draft)
+	{
+		var drives = new CopperScreenDriveState[4];
+		for (var i = 0; i < drives.Length; i++)
+		{
+			var connected = i < draft.FloppyDriveCount;
+			var path = draft.DriveDiskPaths[i];
+			drives[i] = new CopperScreenDriveState(
+				i,
+				connected,
+				connected && !string.IsNullOrWhiteSpace(path),
+				string.IsNullOrWhiteSpace(path) ? "No disk" : Path.GetFileName(path),
+				string.IsNullOrWhiteSpace(path) ? null : path,
+				0,
+				0,
+				false,
+				false,
+				draft.DriveWriteProtected[i] ?? false,
+				false);
+		}
+
+		return new CopperScreenState(
+			draft.DisplayName,
+			string.IsNullOrWhiteSpace(draft.DriveDiskPaths[0]) ? "No disk" : Path.GetFileName(draft.DriveDiskPaths[0]) ?? "No disk",
+			draft.DriveDiskPaths[0],
+			new CopperScreenCpuState(0, 0, 0),
+			drives,
+			null,
+			"settings",
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0);
 	}
 
 	private static WindowIcon LoadWindowIcon()
@@ -223,6 +337,11 @@ internal sealed class MainWindow : Window
 
 	private void PresentLatestFrame(bool forceStatus = false)
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		using var frameLease = _runtime.TryAcquireLatestFrame(ref _lastSeenFrameNumber, forceStatus);
 		if (frameLease == null)
 		{
@@ -261,7 +380,7 @@ internal sealed class MainWindow : Window
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime.Width}x{_runtime.Height}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalLowResWidth}x{_runtime?.Height ?? AmigaConstants.PalLowResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -282,6 +401,12 @@ internal sealed class MainWindow : Window
 
 	private void UpdateMousePort(PointerEventArgs args)
 	{
+		var runtime = _runtime;
+		if (runtime == null || _settingsVisible)
+		{
+			return;
+		}
+
 		if (_mouseGrabActive)
 		{
 			UpdateGrabbedMousePort(args);
@@ -298,7 +423,7 @@ internal sealed class MainWindow : Window
 				var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
-					_runtime.MoveMousePort(deltaX, deltaY);
+					runtime.MoveMousePort(deltaX, deltaY);
 				}
 			}
 
@@ -315,6 +440,12 @@ internal sealed class MainWindow : Window
 
 	private void UpdateGrabbedMousePort(PointerEventArgs args)
 	{
+		var runtime = _runtime;
+		if (runtime == null)
+		{
+			return;
+		}
+
 		if (!_mouseGrabCenterFramebufferPoint.HasValue)
 		{
 			ReleaseMouseGrab();
@@ -327,16 +458,8 @@ internal sealed class MainWindow : Window
 			var center = _mouseGrabCenterFramebufferPoint.Value;
 			if (_mouseGrabWaitingForCenter)
 			{
-				if (IsNearFramebufferPoint(framebufferPoint, center))
-				{
-					_mouseGrabWaitingForCenter = false;
-					_mouseGrabInitialFramebufferPoint = null;
-					_ = TryRecenterMousePointer();
-					return;
-				}
-
 				if (_mouseGrabInitialFramebufferPoint.HasValue &&
-					IsNearFramebufferPoint(framebufferPoint, _mouseGrabInitialFramebufferPoint.Value))
+					ShouldIgnoreInitialMouseGrabPoint(framebufferPoint, _mouseGrabInitialFramebufferPoint.Value, center))
 				{
 					_ = TryRecenterMousePointer();
 					return;
@@ -344,13 +467,16 @@ internal sealed class MainWindow : Window
 
 				_mouseGrabWaitingForCenter = false;
 				_mouseGrabInitialFramebufferPoint = null;
+				_mouseGrabCenterFramebufferPoint = framebufferPoint;
+				_ = TryRecenterMousePointer();
+				return;
 			}
 
 			var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, framebufferPoint.X - center.X);
 			var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - center.Y);
 			if (deltaX != 0 || deltaY != 0)
 			{
-				_runtime.MoveMousePort(deltaX, deltaY);
+				runtime.MoveMousePort(deltaX, deltaY);
 			}
 		}
 
@@ -359,6 +485,11 @@ internal sealed class MainWindow : Window
 
 	private void UpdateMouseButtons(PointerEventArgs args)
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		var properties = args.GetCurrentPoint(_presenter).Properties;
 		_runtime.SetMouseButtons(properties.IsLeftButtonPressed, properties.IsRightButtonPressed);
 	}
@@ -373,6 +504,16 @@ internal sealed class MainWindow : Window
 
 	private async void OnKeyDown(object? sender, KeyEventArgs args)
 	{
+		if (_settingsVisible)
+		{
+			return;
+		}
+
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		if (_mouseGrabActive && (args.Key == Key.F10 || args.PhysicalKey == PhysicalKey.F10))
 		{
 			ReleaseMouseGrab();
@@ -440,10 +581,10 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickKey(args, out var joystickKey))
+		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickActions(args, out var joystickPortIndex, out var joystickActions))
 		{
-			_pressedJoystickKeys |= joystickKey;
-			UpdateJoystickPort();
+			_pressedJoystickActionsByPort[joystickPortIndex] |= joystickActions;
+			UpdateJoystickPort(joystickPortIndex);
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
 			return;
@@ -463,16 +604,21 @@ internal sealed class MainWindow : Window
 
 	private void OnKeyUp(object? sender, KeyEventArgs args)
 	{
+		if (_settingsVisible || _runtime == null)
+		{
+			return;
+		}
+
 		if (args.Key == Key.NumLock || args.PhysicalKey == PhysicalKey.NumLock)
 		{
 			args.Handled = true;
 			return;
 		}
 
-		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickKey(args, out var joystickKey))
+		if (_numpadMode == NumpadInputMode.Joystick && TryGetJoystickActions(args, out var joystickPortIndex, out var joystickActions))
 		{
-			_pressedJoystickKeys &= ~joystickKey;
-			UpdateJoystickPort();
+			_pressedJoystickActionsByPort[joystickPortIndex] &= ~joystickActions;
+			UpdateJoystickPort(joystickPortIndex);
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
 			return;
@@ -490,20 +636,48 @@ internal sealed class MainWindow : Window
 		}
 	}
 
-	private void UpdateJoystickPort()
+	private void UpdateJoystickPort(int portIndex)
 	{
-		var up = IsPressed(JoystickKeys.NumPad8 | JoystickKeys.NumPad7 | JoystickKeys.NumPad9);
-		var down = IsPressed(JoystickKeys.NumPad2 | JoystickKeys.NumPad1 | JoystickKeys.NumPad3);
-		var left = IsPressed(JoystickKeys.NumPad4 | JoystickKeys.NumPad7 | JoystickKeys.NumPad1);
-		var right = IsPressed(JoystickKeys.NumPad6 | JoystickKeys.NumPad9 | JoystickKeys.NumPad3);
-		var primaryFire = IsPressed(JoystickKeys.NumPad5);
-		var secondFire = IsPressed(JoystickKeys.Decimal | JoystickKeys.Delete);
-		_runtime.SetJoystickPort(up, down, left, right, primaryFire, secondFire);
+		if (_runtime == null)
+		{
+			return;
+		}
+
+		var actions = _pressedJoystickActionsByPort[portIndex];
+		_runtime.SetJoystickPort(
+			portIndex,
+			IsPressed(actions, CopperScreenJoystickActions.Up),
+			IsPressed(actions, CopperScreenJoystickActions.Down),
+			IsPressed(actions, CopperScreenJoystickActions.Left),
+			IsPressed(actions, CopperScreenJoystickActions.Right),
+			IsPressed(actions, CopperScreenJoystickActions.Fire),
+			IsPressed(actions, CopperScreenJoystickActions.SecondFire));
 	}
 
-	private bool IsPressed(JoystickKeys keys)
+	private static bool IsPressed(CopperScreenJoystickActions pressed, CopperScreenJoystickActions keys)
 	{
-		return (_pressedJoystickKeys & keys) != 0;
+		return (pressed & keys) != 0;
+	}
+
+	private bool TryGetJoystickActions(KeyEventArgs args, out int portIndex, out CopperScreenJoystickActions joystickActions)
+	{
+		for (portIndex = 0; portIndex < _pressedJoystickActionsByPort.Length; portIndex++)
+		{
+			if (!_inputOptions.TryGetKeyboardJoystickMap(portIndex, out var keyMap))
+			{
+				continue;
+			}
+
+			joystickActions = keyMap.GetActions(args.Key, args.PhysicalKey);
+			if (joystickActions != CopperScreenJoystickActions.None)
+			{
+				return true;
+			}
+		}
+
+		portIndex = -1;
+		joystickActions = CopperScreenJoystickActions.None;
+		return false;
 	}
 
 	private static bool TryGetJoystickKey(KeyEventArgs args, out JoystickKeys joystickKey)
@@ -556,22 +730,34 @@ internal sealed class MainWindow : Window
 
 	private void ReleaseInteractiveInput()
 	{
+		if (_runtime == null)
+		{
+			_pressedAmigaKeys.Clear();
+			Array.Clear(_pressedJoystickActionsByPort);
+			ReleaseMouseGrab();
+			return;
+		}
+
 		foreach (var rawKey in _pressedAmigaKeys)
 		{
 			_runtime.KeyUp(rawKey);
 		}
 
 		_pressedAmigaKeys.Clear();
-		_pressedJoystickKeys = JoystickKeys.None;
+		Array.Clear(_pressedJoystickActionsByPort);
 		ReleaseMouseGrab();
 		_runtime.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
-		_runtime.SetJoystickPort(
-			up: false,
-			down: false,
-			left: false,
-			right: false,
-			primaryFirePressed: false,
-			secondFirePressed: false);
+		for (var portIndex = 0; portIndex < _pressedJoystickActionsByPort.Length; portIndex++)
+		{
+			_runtime.SetJoystickPort(
+				portIndex,
+				up: false,
+				down: false,
+				left: false,
+				right: false,
+				primaryFirePressed: false,
+				secondFirePressed: false);
+		}
 	}
 
 	private Border CreateToolbar()
@@ -592,6 +778,7 @@ internal sealed class MainWindow : Window
 		controls.Children.Add(_fullscreenButton);
 		controls.Children.Add(_overscanButton);
 		controls.Children.Add(_numpadModeButton);
+		controls.Children.Add(_settingsButton);
 		controls.Children.Add(CreateToolbarButton("Prev", async () =>
 		{
 			await InsertPreviousDiskAsync().ConfigureAwait(true);
@@ -662,6 +849,872 @@ internal sealed class MainWindow : Window
 		};
 	}
 
+	private Border CreateSettingsPanel()
+	{
+		var panel = new Grid
+		{
+			RowDefinitions =
+			{
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(new GridLength(1, GridUnitType.Star)),
+				new RowDefinition(GridLength.Auto)
+			},
+			Margin = new Thickness(18)
+		};
+
+		var header = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+				new ColumnDefinition(GridLength.Auto)
+			},
+			Margin = new Thickness(0, 0, 0, 10)
+		};
+		header.Children.Add(new TextBlock
+		{
+			Text = "CopperScreen Settings",
+			FontSize = 22,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = Brushes.White,
+			VerticalAlignment = VerticalAlignment.Center
+		});
+		_settingsCloseButton = CreatePanelButton(_runtime == null ? "Exit" : "Close", HideSettings);
+		Grid.SetColumn(_settingsCloseButton, 1);
+		header.Children.Add(_settingsCloseButton);
+		Grid.SetRow(header, 0);
+		panel.Children.Add(header);
+
+		var pageHost = new Grid
+		{
+			RowDefinitions =
+			{
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(new GridLength(1, GridUnitType.Star))
+			}
+		};
+		var pageButtons = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 6,
+			Margin = new Thickness(0, 0, 0, 10)
+		};
+		_generalSettingsButton = CreateSettingsPageButton("General", 0);
+		_advancedSettingsButton = CreateSettingsPageButton("Advanced", 1);
+		pageButtons.Children.Add(_generalSettingsButton);
+		pageButtons.Children.Add(_advancedSettingsButton);
+		Grid.SetRow(pageButtons, 0);
+		pageHost.Children.Add(pageButtons);
+
+		var pages = new Grid();
+		_generalSettingsPage = CreateGeneralSettingsPage();
+		_advancedSettingsPage = CreateAdvancedSettingsPage();
+		pages.Children.Add(_generalSettingsPage);
+		pages.Children.Add(_advancedSettingsPage);
+		Grid.SetRow(pages, 1);
+		pageHost.Children.Add(pages);
+		ShowSettingsPage(0);
+		Grid.SetRow(pageHost, 1);
+		panel.Children.Add(pageHost);
+
+		var commands = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+				new ColumnDefinition(GridLength.Auto)
+			},
+			Margin = new Thickness(0, 10, 0, 0)
+		};
+		_settingsStatus = new TextBlock
+		{
+			Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+			VerticalAlignment = VerticalAlignment.Center,
+			TextWrapping = TextWrapping.Wrap
+		};
+		commands.Children.Add(_settingsStatus);
+		var buttons = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 6,
+			HorizontalAlignment = HorizontalAlignment.Right
+		};
+		buttons.Children.Add(CreatePanelButton("Load", LoadSelectedProfile));
+		buttons.Children.Add(CreatePanelButton("Save", SaveCurrentProfile));
+		buttons.Children.Add(CreatePanelButton("Save As", SaveCurrentProfileAs));
+		_settingsStartButton = CreatePanelButton("Start / Restart", () => _ = StartRuntimeFromSettingsAsync());
+		buttons.Children.Add(_settingsStartButton);
+		Grid.SetColumn(buttons, 1);
+		commands.Children.Add(buttons);
+		Grid.SetRow(commands, 2);
+		panel.Children.Add(commands);
+
+		return new Border
+		{
+			CornerRadius = new CornerRadius(6),
+			Background = new SolidColorBrush(Color.FromArgb(246, 18, 22, 28)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(92, 108, 132)),
+			BorderThickness = new Thickness(1),
+			Padding = new Thickness(14),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			IsVisible = _settingsVisible,
+			Child = panel
+		};
+	}
+
+	private Border CreateSettingsPageButton(string text, int pageIndex)
+	{
+		var label = new TextBlock
+		{
+			Text = text,
+			Foreground = Brushes.White,
+			FontWeight = FontWeight.SemiBold,
+			Margin = new Thickness(12, 6)
+		};
+		var button = new Border
+		{
+			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Child = label,
+			Cursor = new Cursor(StandardCursorType.Hand)
+		};
+		button.PointerPressed += (_, args) =>
+		{
+			ShowSettingsPage(pageIndex);
+			args.Handled = true;
+		};
+		return button;
+	}
+
+	private void ShowSettingsPage(int pageIndex)
+	{
+		_settingsPageIndex = pageIndex;
+		if (_generalSettingsPage != null)
+		{
+			_generalSettingsPage.IsVisible = pageIndex == 0;
+		}
+
+		if (_advancedSettingsPage != null)
+		{
+			_advancedSettingsPage.IsVisible = pageIndex == 1;
+		}
+
+		StyleSettingsPageButton(_generalSettingsButton, pageIndex == 0);
+		StyleSettingsPageButton(_advancedSettingsButton, pageIndex == 1);
+	}
+
+	private static void StyleSettingsPageButton(Border? button, bool selected)
+	{
+		if (button == null)
+		{
+			return;
+		}
+
+		button.Background = new SolidColorBrush(selected ? Color.FromRgb(54, 75, 105) : Color.FromRgb(34, 40, 50));
+		button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(110, 150, 205) : Color.FromRgb(78, 90, 108));
+		if (button.Child is TextBlock text)
+		{
+			text.Foreground = new SolidColorBrush(selected ? Color.FromRgb(232, 242, 255) : Color.FromRgb(208, 216, 226));
+		}
+	}
+
+	private Control CreateGeneralSettingsPage()
+	{
+		var layout = CreateSettingsForm();
+		_profileChooser = new ComboBox { MinWidth = 320 };
+		_profileChooser.SelectionChanged += (_, _) => LoadSelectedProfile();
+		layout.Children.Add(CreateSettingsRow("Profile", _profileChooser));
+		_profileIdBox = AddTextSetting(layout, "Profile id");
+		_profileNameBox = AddTextSetting(layout, "Display name");
+		_profileDescriptionBox = AddTextSetting(layout, "Description");
+		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom"]);
+		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
+		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "JitM68000"]);
+		_chipRamBox = AddTextSetting(layout, "Chip RAM KB");
+		_pseudoFastRamBox = AddTextSetting(layout, "Pseudo-fast RAM KB");
+		_pseudoFastBaseBox = AddTextSetting(layout, "Pseudo-fast base");
+		_realFastRamBox = AddTextSetting(layout, "Real fast RAM KB");
+		_realFastBaseBox = AddTextSetting(layout, "Real fast base");
+		_floppyDriveCountBox = AddComboSetting(layout, "Floppy drives", ["1", "2", "3", "4"]);
+		for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
+		{
+			var row = new StackPanel
+			{
+				Orientation = Orientation.Horizontal,
+				Spacing = 6
+			};
+			var box = new TextBox
+			{
+				MinWidth = 420,
+				PlaceholderText = $"DF{driveIndex} disk image"
+			};
+			var index = driveIndex;
+			var browse = CreatePanelButton("Browse", () => _ = PickSettingsDiskAsync(index));
+			var writeProtect = new CheckBox
+			{
+				Content = "WP",
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			writeProtect.IsCheckedChanged += async (_, _) =>
+			{
+				_settingsDraft.DriveWriteProtected[index] = writeProtect.IsChecked;
+				if (_runtime != null && index < _latestState.Drives.Length && _latestState.Drives[index].Connected && _latestState.Drives[index].HasDisk)
+				{
+					var result = await _runtime.SetDriveWriteProtectedAsync(index, writeProtect.IsChecked == true).ConfigureAwait(true);
+					_latestState = result.State;
+					UpdateToolbarStatus();
+				}
+			};
+			_drivePathBoxes[driveIndex] = box;
+			_driveWriteProtectBoxes[driveIndex] = writeProtect;
+			row.Children.Add(box);
+			row.Children.Add(browse);
+			row.Children.Add(writeProtect);
+			layout.Children.Add(CreateSettingsRow($"DF{driveIndex}", row));
+		}
+
+		return new ScrollViewer { Content = layout };
+	}
+
+	private Control CreateAdvancedSettingsPage()
+	{
+		var layout = CreateSettingsForm();
+		_floppySoundsEnabledBox = new CheckBox { Content = "Enabled" };
+		layout.Children.Add(CreateSettingsRow("Floppy sounds", _floppySoundsEnabledBox));
+		_floppySoundModeBox = AddComboSetting(layout, "Sound mode", ["Synthetic", "Samples"]);
+		_floppySoundPackBox = AddTextSetting(layout, "Sound pack");
+		_floppySoundVolumeBox = AddTextSetting(layout, "Sound volume");
+		_port1ControllerBox = AddComboSetting(layout, "Port 1 controller", [], markRestart: false);
+		_port1ControllerBox.SelectionChanged += (_, _) => ApplyInputSettingsLive();
+		_port2ControllerBox = AddComboSetting(layout, "Port 2 controller", [], markRestart: false);
+		_port2ControllerBox.SelectionChanged += (_, _) => ApplyInputSettingsLive();
+		_controllerProfileChooser = AddComboSetting(layout, "Edit profile", [], markRestart: false);
+		_controllerProfileChooser.SelectionChanged += (_, _) => RefreshSelectedControllerProfileEditor();
+		_controllerProfileNameBox = AddTextSetting(layout, "Profile name", markRestart: false);
+		_controllerProfileNameBox.LostFocus += (_, _) => ApplyControllerProfileEditor();
+		_controllerProfileKindBox = AddComboSetting(layout, "Profile kind", ["None", "Mouse", "KeyboardJoystick", "Gamepad"], markRestart: false);
+		_controllerProfileKindBox.SelectionChanged += (_, _) => ApplyControllerProfileEditor();
+		var labels = new[] { "Joy up", "Joy down", "Joy left", "Joy right", "Joy fire", "Joy second" };
+		for (var i = 0; i < _joystickKeyBoxes.Length; i++)
+		{
+			var box = AddTextSetting(layout, labels[i], markRestart: false);
+			var index = i;
+			box.LostFocus += (_, _) => ApplyControllerProfileEditor();
+			_joystickKeyBoxes[index] = box;
+		}
+
+		return new ScrollViewer { Content = layout };
+	}
+
+	private static StackPanel CreateSettingsForm()
+	{
+		return new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 7,
+			Margin = new Thickness(0, 2, 12, 2)
+		};
+	}
+
+	private TextBox AddTextSetting(StackPanel layout, string label, bool markRestart = true)
+	{
+		var box = new TextBox { MinWidth = 320 };
+		if (markRestart)
+		{
+			box.TextChanged += (_, _) => MarkSettingsRestartRequired();
+		}
+
+		layout.Children.Add(CreateSettingsRow(label, box));
+		return box;
+	}
+
+	private ComboBox AddComboSetting(StackPanel layout, string label, string[] items, bool markRestart = true)
+	{
+		var combo = new ComboBox
+		{
+			ItemsSource = items,
+			MinWidth = 180
+		};
+		if (markRestart)
+		{
+			combo.SelectionChanged += (_, _) => MarkSettingsRestartRequired();
+		}
+
+		layout.Children.Add(CreateSettingsRow(label, combo));
+		return combo;
+	}
+
+	private static Control CreateSettingsRow(string label, Control control)
+	{
+		var row = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(150)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			}
+		};
+		row.Children.Add(new TextBlock
+		{
+			Text = label,
+			Foreground = new SolidColorBrush(Color.FromRgb(198, 208, 220)),
+			VerticalAlignment = VerticalAlignment.Center
+		});
+		Grid.SetColumn(control, 1);
+		row.Children.Add(control);
+		return row;
+	}
+
+	private void ToggleSettings()
+	{
+		_settingsVisible = !_settingsVisible;
+		if (_settingsVisible)
+		{
+			RefreshSettingsUi();
+			ReleaseInteractiveInput();
+		}
+
+		RefreshCopperBenchUi();
+	}
+
+	private void HideSettings()
+	{
+		if (_runtime == null)
+		{
+			Close();
+			return;
+		}
+
+		_settingsVisible = false;
+		RefreshCopperBenchUi();
+		_presenter.Focus();
+	}
+
+	private void MarkSettingsRestartRequired()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		_settingsDraft.MarkRequiresRestart();
+		UpdateSettingsStatus();
+	}
+
+	private void RefreshSettingsUi()
+	{
+		_updatingSettingsUi = true;
+		try
+		{
+			_settingsPanel.IsVisible = _settingsVisible;
+			_settingsCloseButton.Content = _runtime == null ? "Exit" : "Close";
+			var profiles = CopperScreenProfileStore.ListProfiles(AppContext.BaseDirectory);
+			_profileChooser.ItemsSource = profiles;
+			_profileChooser.SelectedItem = profiles.FirstOrDefault(profile => string.Equals(profile.Id, _settingsDraft.Id, StringComparison.OrdinalIgnoreCase));
+			_profileIdBox.Text = _settingsDraft.Id;
+			_profileNameBox.Text = _settingsDraft.DisplayName;
+			_profileDescriptionBox.Text = _settingsDraft.Description;
+			_kickstartSourceBox.SelectedItem = _settingsDraft.KickstartSource.ToString();
+			_kickstartRomBox.Text = _settingsDraft.KickstartRomPath ?? string.Empty;
+			_cpuBackendBox.SelectedItem = _settingsDraft.CpuBackend.ToString();
+			_chipRamBox.Text = _settingsDraft.ChipRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			_pseudoFastRamBox.Text = _settingsDraft.PseudoFastRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			_pseudoFastBaseBox.Text = _settingsDraft.PseudoFastBase;
+			_realFastRamBox.Text = _settingsDraft.RealFastRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			_realFastBaseBox.Text = _settingsDraft.RealFastBase;
+			_floppyDriveCountBox.SelectedItem = _settingsDraft.FloppyDriveCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
+			{
+				var connected = driveIndex < _settingsDraft.FloppyDriveCount;
+				_drivePathBoxes[driveIndex].Text = _settingsDraft.DriveDiskPaths[driveIndex] ?? string.Empty;
+				_drivePathBoxes[driveIndex].IsEnabled = connected;
+				_driveWriteProtectBoxes[driveIndex].IsChecked = _settingsDraft.DriveWriteProtected[driveIndex];
+				_driveWriteProtectBoxes[driveIndex].IsEnabled = connected;
+			}
+
+			_floppySoundsEnabledBox.IsChecked = _settingsDraft.FloppyDriveAudio.Enabled;
+			_floppySoundModeBox.SelectedItem = _settingsDraft.FloppyDriveAudio.Mode.ToString();
+			_floppySoundPackBox.Text = _settingsDraft.FloppyDriveAudio.SoundPack;
+			_floppySoundVolumeBox.Text = _settingsDraft.FloppyDriveAudio.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			RefreshControllerSelectors();
+		}
+		finally
+		{
+			_updatingSettingsUi = false;
+		}
+
+		ShowSettingsPage(_settingsPageIndex);
+		UpdateSettingsStatus();
+	}
+
+	private void RefreshControllerSelectors()
+	{
+		var wasUpdating = _updatingSettingsUi;
+		_updatingSettingsUi = true;
+		try
+		{
+			var profiles = _settingsDraft.Input.ControllerProfiles.ToArray();
+			_port1ControllerBox.ItemsSource = profiles;
+			_port2ControllerBox.ItemsSource = profiles;
+			_controllerProfileChooser.ItemsSource = profiles;
+			SelectControllerProfile(_port1ControllerBox, _settingsDraft.Input.Port1ProfileId);
+			SelectControllerProfile(_port2ControllerBox, _settingsDraft.Input.Port2ProfileId);
+			if (_controllerProfileChooser.SelectedItem is not CopperScreenControllerProfile selected ||
+				!profiles.Any(profile => string.Equals(profile.Id, selected.Id, StringComparison.OrdinalIgnoreCase)))
+			{
+				_controllerProfileChooser.SelectedItem = profiles.FirstOrDefault(profile => profile.Kind == CopperScreenControllerKind.KeyboardJoystick) ??
+					profiles.FirstOrDefault();
+			}
+
+			RefreshSelectedControllerProfileEditor();
+		}
+		finally
+		{
+			_updatingSettingsUi = wasUpdating;
+		}
+	}
+
+	private static void SelectControllerProfile(ComboBox combo, string profileId)
+	{
+		if (combo.ItemsSource is not IEnumerable<CopperScreenControllerProfile> profiles)
+		{
+			return;
+		}
+
+		combo.SelectedItem = profiles.FirstOrDefault(profile => string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase));
+	}
+
+	private void UpdateSettingsStatus()
+	{
+		if (_settingsStatus == null)
+		{
+			return;
+		}
+
+		_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240));
+		var valid = CanStartFromSettings(out var validationError);
+		if (_settingsStartButton != null)
+		{
+			_settingsStartButton.IsEnabled = valid;
+		}
+
+		if (!valid)
+		{
+			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 194, 194));
+			_settingsStatus.Text = validationError;
+			return;
+		}
+
+		_settingsStatus.Text = _runtime == null
+			? "Choose a profile or edit settings, then start the emulator."
+			: _settingsDraft.RequiresRestart
+				? "Machine settings changed. Restart to apply them; disk and input changes can apply live."
+				: "Settings are current.";
+	}
+
+	private bool CanStartFromSettings(out string error)
+	{
+		error = string.Empty;
+		if (_profileIdBox == null)
+		{
+			return true;
+		}
+
+		if (string.IsNullOrWhiteSpace(_profileIdBox.Text))
+		{
+			error = "Profile id is required.";
+			return false;
+		}
+
+		if (string.IsNullOrWhiteSpace(_profileNameBox.Text))
+		{
+			error = "Display name is required.";
+			return false;
+		}
+
+		try
+		{
+			_ = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
+			_ = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
+			_ = ParseNonNegativeInt(_realFastRamBox.Text, "Real fast RAM KB");
+			_ = ParseFloat(_floppySoundVolumeBox.Text, "Sound volume");
+		}
+		catch (InvalidOperationException ex)
+		{
+			error = ex.Message;
+			return false;
+		}
+
+		return true;
+	}
+
+	private void LoadSelectedProfile()
+	{
+		if (_updatingSettingsUi || _profileChooser.SelectedItem is not CopperScreenProfileSummary summary)
+		{
+			return;
+		}
+
+		if (!CopperScreenProfile.TryLoad(summary.Path, AppContext.BaseDirectory, out var profile, out var error))
+		{
+			SetSettingsError(error ?? "Could not load profile.");
+			return;
+		}
+
+		_settingsDraft = CopperScreenSettingsDraft.FromProfile(profile);
+		_settingsDraft.MarkRequiresRestart();
+		_inputOptions = _settingsDraft.Input;
+		RefreshSettingsUi();
+	}
+
+	private void SaveCurrentProfile()
+	{
+		if (!TryApplySettingsFromUi(out var error))
+		{
+			SetSettingsError(error);
+			return;
+		}
+
+		try
+		{
+			var path = CopperScreenProfileStore.Save(_settingsDraft, AppContext.BaseDirectory);
+			RefreshSettingsUi();
+			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(206, 248, 213));
+			_settingsStatus.Text = "Saved " + path;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+		{
+			SetSettingsError(ex.Message);
+		}
+	}
+
+	private void SaveCurrentProfileAs()
+	{
+		if (!TryApplySettingsFromUi(out var error))
+		{
+			SetSettingsError(error);
+			return;
+		}
+
+		try
+		{
+			var path = CopperScreenProfileStore.SaveAs(_settingsDraft, AppContext.BaseDirectory);
+			RefreshSettingsUi();
+			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(206, 248, 213));
+			_settingsStatus.Text = "Saved copy " + path;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+		{
+			SetSettingsError(ex.Message);
+		}
+	}
+
+	private async Task StartRuntimeFromSettingsAsync()
+	{
+		if (!TryApplySettingsFromUi(out var error))
+		{
+			SetSettingsError(error);
+			return;
+		}
+
+		CopperScreenStartupOptions options;
+		try
+		{
+			options = _settingsDraft.ToStartupOptions(AppContext.BaseDirectory);
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or OverflowException or FormatException)
+		{
+			SetSettingsError(ex.Message);
+			return;
+		}
+
+		ReleaseInteractiveInput();
+		if (_runtime != null)
+		{
+			_runtime.FramePublished -= QueueFramePresentation;
+			_runtime.Dispose();
+		}
+
+		_runtime = CopperScreenRuntime.Create(options);
+		_runtime.FramePublished += QueueFramePresentation;
+		_latestState = _runtime.CurrentState;
+		_lastSeenFrameNumber = 0;
+		_presentedFrames = 0;
+		_settingsDraft.ClearRestartRequired();
+		_settingsVisible = false;
+		_runtime.Start();
+		await _bench.RefreshAsync(_latestState.DiskPath).ConfigureAwait(true);
+		RefreshDebuggerUi(_latestState.DebugSnapshot);
+		RefreshCopperBenchUi();
+		PresentLatestFrame(forceStatus: true);
+		_presenter.Focus();
+	}
+
+	private bool TryApplySettingsFromUi(out string error)
+	{
+		error = string.Empty;
+		try
+		{
+			_settingsDraft.Id = _profileIdBox.Text?.Trim() ?? string.Empty;
+			_settingsDraft.DisplayName = _profileNameBox.Text?.Trim() ?? string.Empty;
+			_settingsDraft.Description = _profileDescriptionBox.Text?.Trim() ?? string.Empty;
+			_settingsDraft.KickstartSource = ParseKickstartSourceSelection(_kickstartSourceBox.SelectedItem);
+			_settingsDraft.KickstartRomPath = string.IsNullOrWhiteSpace(_kickstartRomBox.Text) ? null : _kickstartRomBox.Text.Trim();
+			_settingsDraft.CpuBackend = ParseCpuSelection(_cpuBackendBox.SelectedItem);
+			_settingsDraft.ChipRamKb = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
+			_settingsDraft.PseudoFastRamKb = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
+			_settingsDraft.PseudoFastBase = _pseudoFastBaseBox.Text?.Trim() ?? "$C00000";
+			_settingsDraft.RealFastRamKb = ParseNonNegativeInt(_realFastRamBox.Text, "Real fast RAM KB");
+			_settingsDraft.RealFastBase = _realFastBaseBox.Text?.Trim() ?? "$200000";
+			_settingsDraft.FloppyDriveCount = ParseDriveCount(_floppyDriveCountBox.SelectedItem);
+			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
+			{
+				var drivePathText = _drivePathBoxes[driveIndex].Text;
+				_settingsDraft.DriveDiskPaths[driveIndex] = string.IsNullOrWhiteSpace(drivePathText)
+					? null
+					: drivePathText.Trim();
+				_settingsDraft.DriveWriteProtected[driveIndex] = _driveWriteProtectBoxes[driveIndex].IsChecked;
+			}
+
+			_settingsDraft.FloppyDriveAudio = new FloppyDriveAudioOptions(
+				_floppySoundsEnabledBox.IsChecked == true,
+				ParseFloppyAudioModeSelection(_floppySoundModeBox.SelectedItem),
+				string.IsNullOrWhiteSpace(_floppySoundPackBox.Text)
+					? FloppyDriveAudioOptions.DefaultSoundPack
+					: _floppySoundPackBox.Text.Trim(),
+				FloppyDriveAudioOptions.ClampVolume(ParseFloat(_floppySoundVolumeBox.Text, "Sound volume")));
+			ApplyControllerProfileEditor();
+			_settingsDraft.Input = ReadInputOptionsFromUi();
+			_inputOptions = _settingsDraft.Input;
+			_runtime?.SetInputOptions(_inputOptions);
+			return true;
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException or OverflowException)
+		{
+			error = ex.Message;
+			return false;
+		}
+	}
+
+	private CopperScreenInputOptions ReadInputOptionsFromUi()
+	{
+		var port1Profile = _port1ControllerBox.SelectedItem as CopperScreenControllerProfile;
+		var port2Profile = _port2ControllerBox.SelectedItem as CopperScreenControllerProfile;
+		return CopperScreenInputOptions.Create(
+			port1Profile?.Id,
+			port2Profile?.Id,
+			_settingsDraft.Input.ControllerProfiles);
+	}
+
+	private void RefreshSelectedControllerProfileEditor()
+	{
+		if (_controllerProfileChooser.SelectedItem is not CopperScreenControllerProfile profile)
+		{
+			return;
+		}
+
+		_updatingSettingsUi = true;
+		try
+		{
+			_controllerProfileNameBox.Text = profile.DisplayName;
+			_controllerProfileKindBox.SelectedItem = profile.Kind.ToString();
+			var keyboardProfile = profile.Kind == CopperScreenControllerKind.KeyboardJoystick;
+			for (var i = 0; i < _joystickKeyBoxes.Length; i++)
+			{
+				_joystickKeyBoxes[i].IsEnabled = keyboardProfile;
+			}
+
+			_joystickKeyBoxes[0].Text = string.Join(", ", profile.JoystickKeys.Up);
+			_joystickKeyBoxes[1].Text = string.Join(", ", profile.JoystickKeys.Down);
+			_joystickKeyBoxes[2].Text = string.Join(", ", profile.JoystickKeys.Left);
+			_joystickKeyBoxes[3].Text = string.Join(", ", profile.JoystickKeys.Right);
+			_joystickKeyBoxes[4].Text = string.Join(", ", profile.JoystickKeys.Fire);
+			_joystickKeyBoxes[5].Text = string.Join(", ", profile.JoystickKeys.SecondFire);
+		}
+		finally
+		{
+			_updatingSettingsUi = false;
+		}
+	}
+
+	private void ApplyControllerProfileEditor()
+	{
+		if (_updatingSettingsUi || _controllerProfileChooser.SelectedItem is not CopperScreenControllerProfile profile)
+		{
+			return;
+		}
+
+		try
+		{
+			var updated = profile with
+			{
+				DisplayName = string.IsNullOrWhiteSpace(_controllerProfileNameBox.Text)
+					? profile.DisplayName
+					: _controllerProfileNameBox.Text.Trim(),
+				Kind = ParseControllerKindSelection(_controllerProfileKindBox.SelectedItem),
+				JoystickKeys = CopperScreenJoystickKeyMap.Create(
+					SplitKeyList(_joystickKeyBoxes[0].Text),
+					SplitKeyList(_joystickKeyBoxes[1].Text),
+					SplitKeyList(_joystickKeyBoxes[2].Text),
+					SplitKeyList(_joystickKeyBoxes[3].Text),
+					SplitKeyList(_joystickKeyBoxes[4].Text),
+					SplitKeyList(_joystickKeyBoxes[5].Text))
+			};
+			var profiles = _settingsDraft.Input.ControllerProfiles
+				.Select(existing => string.Equals(existing.Id, updated.Id, StringComparison.OrdinalIgnoreCase) ? updated : existing)
+				.ToArray();
+			_settingsDraft.Input = _settingsDraft.Input.WithControllerProfiles(profiles);
+			_inputOptions = _settingsDraft.Input;
+			_runtime?.SetInputOptions(_inputOptions);
+			RefreshControllerSelectors();
+			_updatingSettingsUi = true;
+			try
+			{
+				_controllerProfileChooser.SelectedItem = _settingsDraft.Input.ControllerProfiles.FirstOrDefault(item =>
+					string.Equals(item.Id, updated.Id, StringComparison.OrdinalIgnoreCase));
+			}
+			finally
+			{
+				_updatingSettingsUi = false;
+			}
+
+			RefreshSelectedControllerProfileEditor();
+			UpdateSettingsStatus();
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
+		{
+			SetSettingsError(ex.Message);
+		}
+	}
+
+	private void ApplyInputSettingsLive()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		try
+		{
+			_settingsDraft.Input = ReadInputOptionsFromUi();
+			_inputOptions = _settingsDraft.Input;
+			_runtime?.SetInputOptions(_inputOptions);
+			UpdateSettingsStatus();
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
+		{
+			SetSettingsError(ex.Message);
+		}
+	}
+
+	private static CopperScreenControllerKind ParseControllerKindSelection(object? value)
+		=> Enum.TryParse<CopperScreenControllerKind>(value?.ToString(), ignoreCase: true, out var kind)
+			? kind
+			: CopperScreenControllerKind.None;
+
+	private async Task PickSettingsDiskAsync(int driveIndex)
+	{
+		var topLevel = TopLevel.GetTopLevel(this);
+		if (topLevel == null)
+		{
+			return;
+		}
+
+		var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+		{
+			Title = $"Select DF{driveIndex} disk image",
+			AllowMultiple = false,
+			FileTypeFilter = new[]
+			{
+				new FilePickerFileType("Amiga disk images")
+				{
+					Patterns = new[] { "*.adf", "*.ipf", "*.zip" }
+				}
+			}
+		});
+		var path = files.Count == 0 ? null : files[0].TryGetLocalPath();
+		if (path == null)
+		{
+			return;
+		}
+
+		_drivePathBoxes[driveIndex].Text = path;
+		_settingsDraft.DriveDiskPaths[driveIndex] = path;
+		if (_runtime != null && driveIndex < _latestState.Drives.Length && _latestState.Drives[driveIndex].Connected)
+		{
+			await InsertDriveDiskAsync(driveIndex, path).ConfigureAwait(true);
+		}
+		else
+		{
+			_latestState = CreateIdleState(_settingsDraft);
+			UpdateToolbarStatus();
+		}
+	}
+
+	private void SetSettingsError(string error)
+	{
+		_settingsStatus.Text = error;
+		_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 194, 194));
+	}
+
+	private static CopperScreenKickstartSource ParseKickstartSourceSelection(object? value)
+		=> string.Equals(value?.ToString(), "Kickstart13Rom", StringComparison.OrdinalIgnoreCase)
+			? CopperScreenKickstartSource.Kickstart13Rom
+			: CopperScreenKickstartSource.CopperStart;
+
+	private static M68kBackendKind ParseCpuSelection(object? value)
+		=> string.Equals(value?.ToString(), "JitM68000", StringComparison.OrdinalIgnoreCase)
+			? M68kBackendKind.JitM68000
+			: M68kBackendKind.AccurateM68000;
+
+	private static FloppyDriveAudioMode ParseFloppyAudioModeSelection(object? value)
+		=> string.Equals(value?.ToString(), "Samples", StringComparison.OrdinalIgnoreCase)
+			? FloppyDriveAudioMode.Samples
+			: FloppyDriveAudioMode.Synthetic;
+
+	private static int ParseDriveCount(object? value)
+		=> int.TryParse(value?.ToString(), out var count) ? Math.Clamp(count, 1, 4) : 1;
+
+	private static int ParsePositiveInt(string? value, string label)
+	{
+		if (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var result) ||
+			result <= 0)
+		{
+			throw new InvalidOperationException(label + " must be positive.");
+		}
+
+		return result;
+	}
+
+	private static int ParseNonNegativeInt(string? value, string label)
+	{
+		if (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var result) ||
+			result < 0)
+		{
+			throw new InvalidOperationException(label + " cannot be negative.");
+		}
+
+		return result;
+	}
+
+	private static float ParseFloat(string? value, string label)
+	{
+		if (!float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var result))
+		{
+			throw new InvalidOperationException(label + " must be a number.");
+		}
+
+		return result;
+	}
+
+	private static IEnumerable<string> SplitKeyList(string? value)
+		=> string.IsNullOrWhiteSpace(value)
+			? Array.Empty<string>()
+			: value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
 	private Border CreateCopperBenchPanel()
 	{
 		var panel = new Grid
@@ -694,11 +1747,21 @@ internal sealed class MainWindow : Window
 		};
 		navigation.Children.Add(CreatePanelButton("Up", async () =>
 		{
+			if (_runtime == null)
+			{
+				return;
+			}
+
 			await _bench.GoUpAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 			RefreshCopperBenchUi();
 		}));
 		navigation.Children.Add(CreatePanelButton("Refresh", async () =>
 		{
+			if (_runtime == null)
+			{
+				return;
+			}
+
 			await _bench.RefreshAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 			RefreshCopperBenchUi();
 		}));
@@ -1013,12 +2076,24 @@ internal sealed class MainWindow : Window
 
 	private async void ToggleCopperBench()
 	{
+		if (_runtime == null)
+		{
+			_settingsVisible = true;
+			RefreshCopperBenchUi();
+			return;
+		}
+
 		await _bench.ToggleOverlayAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 		RefreshCopperBenchUi();
 	}
 
 	private async void TogglePause()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		await ToggleRuntimePauseAsync().ConfigureAwait(true);
 	}
 
@@ -1035,9 +2110,12 @@ internal sealed class MainWindow : Window
 	{
 		var fullscreen = WindowState == WindowState.FullScreen;
 		_toolbar.IsVisible = !fullscreen || _bench.IsToolbarVisible;
+		_settingsPanel.IsVisible = _settingsVisible;
 
 		Grid.SetRow(_toolbar, 0);
 		Grid.SetRowSpan(_toolbar, 1);
+		Grid.SetRow(_settingsPanel, 0);
+		Grid.SetRowSpan(_settingsPanel, 2);
 
 		if (fullscreen)
 		{
@@ -1073,7 +2151,7 @@ internal sealed class MainWindow : Window
 	{
 		if (_showFullOverscan)
 		{
-			_presenter.SetSourceViewport(0, 0, _runtime.Width, _runtime.Height);
+			_presenter.SetSourceViewport(0, 0, AmigaConstants.PalLowResWidth, AmigaConstants.PalLowResHeight);
 		}
 		else
 		{
@@ -1138,9 +2216,20 @@ internal sealed class MainWindow : Window
 			Math.Abs(left.Y - right.Y) < 0.75;
 	}
 
+	internal static bool ShouldIgnoreInitialMouseGrabPoint(Point framebufferPoint, Point initialFramebufferPoint, Point centerFramebufferPoint)
+	{
+		return !IsNearFramebufferPoint(initialFramebufferPoint, centerFramebufferPoint) &&
+			IsNearFramebufferPoint(framebufferPoint, initialFramebufferPoint);
+	}
+
 	private bool TryGetPresenterCenterFramebufferPoint(out Point framebufferPoint)
 	{
-		var center = new Point(_presenter.Bounds.Width / 2.0, _presenter.Bounds.Height / 2.0);
+		if (!_presenter.TryGetRenderedImageCenter(out var center))
+		{
+			framebufferPoint = default;
+			return false;
+		}
+
 		return _presenter.TryMapPointToFramebufferUnclamped(center, out framebufferPoint);
 	}
 
@@ -1153,7 +2242,11 @@ internal sealed class MainWindow : Window
 
 		try
 		{
-			var center = new Point(_presenter.Bounds.Width / 2.0, _presenter.Bounds.Height / 2.0);
+			if (!_presenter.TryGetRenderedImageCenter(out var center))
+			{
+				return false;
+			}
+
 			var screenPoint = _presenter.PointToScreen(center);
 			return SetCursorPos(screenPoint.X, screenPoint.Y);
 		}
@@ -1210,17 +2303,36 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		if ((uint)driveIndex < (uint)_settingsDraft.DriveDiskPaths.Length)
+		{
+			_settingsDraft.DriveDiskPaths[driveIndex] = path;
+			if (_drivePathBoxes[driveIndex] != null)
+			{
+				_drivePathBoxes[driveIndex].Text = path;
+			}
+		}
+
 		await InsertDriveDiskAsync(driveIndex, path).ConfigureAwait(true);
 	}
 
 	private async Task ShowCopperBenchAsync()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		await _bench.ShowOverlayAsync(_runtime.CurrentState.DiskPath).ConfigureAwait(true);
 		RefreshCopperBenchUi();
 	}
 
 	private async Task ToggleRuntimePauseAsync()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		var result = await _runtime.TogglePausedAsync().ConfigureAwait(true);
 		_latestState = result.State;
 		_bench.SetStatusMessage(result.Message);
@@ -1230,6 +2342,11 @@ internal sealed class MainWindow : Window
 
 	private async Task ResetRuntimeAsync()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		var result = await _runtime.ResetAsync().ConfigureAwait(true);
 		_latestState = result.State;
 		_bench.ResetPath();
@@ -1245,19 +2362,24 @@ internal sealed class MainWindow : Window
 	}
 
 	private Task InsertDiskAsync(string path)
-		=> CompleteDiskCommandAsync(_runtime.InsertDiskAsync(path));
+		=> _runtime == null ? Task.CompletedTask : CompleteDiskCommandAsync(_runtime.InsertDiskAsync(path));
 
 	private Task InsertDriveDiskAsync(int driveIndex, string path)
-		=> CompleteDiskCommandAsync(_runtime.InsertDriveDiskAsync(driveIndex, path));
+		=> _runtime == null ? Task.CompletedTask : CompleteDiskCommandAsync(_runtime.InsertDriveDiskAsync(driveIndex, path));
 
 	private Task InsertNextDiskAsync()
-		=> CompleteDiskCommandAsync(_runtime.InsertNextDiskAsync());
+		=> _runtime == null ? Task.CompletedTask : CompleteDiskCommandAsync(_runtime.InsertNextDiskAsync());
 
 	private Task InsertPreviousDiskAsync()
-		=> CompleteDiskCommandAsync(_runtime.InsertPreviousDiskAsync());
+		=> _runtime == null ? Task.CompletedTask : CompleteDiskCommandAsync(_runtime.InsertPreviousDiskAsync());
 
 	private async Task ToggleWriteProtectAsync()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		var drive = _latestState.Drives.Length > 0
 			? _latestState.Drives[0]
 			: new CopperScreenDriveState(0, false, false, "No disk", null, 0, 0, false, false, false, false);
@@ -1275,6 +2397,11 @@ internal sealed class MainWindow : Window
 
 	private async Task CompleteDiskCommandAsync(Task<CopperScreenCommandResult> command)
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		var result = await command.ConfigureAwait(true);
 		_latestState = result.State;
 		if (result.Success)
@@ -1294,6 +2421,11 @@ internal sealed class MainWindow : Window
 
 	private async Task ActivateCopperBenchSelectedAsync()
 	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		await _bench.ActivateSelectedAsync(
 			_runtime.CurrentState.DiskPath,
 			path => _runtime.LaunchCopperBenchPathAsync(path)).ConfigureAwait(true);

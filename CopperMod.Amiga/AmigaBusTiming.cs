@@ -54,6 +54,19 @@ namespace CopperMod.Amiga
         Long = 4
     }
 
+    internal static class CiaPeripheralAccessTiming
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long AlignToCiaPeripheralAccessCycle(long requestedCycle)
+        {
+            var cycle = Math.Max(0, requestedCycle + 1);
+            var remainder = cycle % AmigaConstants.A500PalCpuCyclesPerCiaTick;
+            return remainder == 0
+                ? cycle
+                : cycle + AmigaConstants.A500PalCpuCyclesPerCiaTick - remainder;
+        }
+    }
+
     internal enum AgnusChipSlotPriority
     {
         Cpu = 0,
@@ -312,7 +325,7 @@ namespace CopperMod.Amiga
 
         public static long AlignToSlot(long cycle)
         {
-            cycle = Math.Max(0, cycle);
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var remainder = cycle % SlotCycles;
             return remainder == 0 ? cycle : cycle + (SlotCycles - remainder);
         }
@@ -329,14 +342,14 @@ namespace CopperMod.Amiga
 
         public static int GetHorizontal(long slotCycle)
         {
-            slotCycle = Math.Max(0, AgnusChipSlotScheduler.AlignToSlot(slotCycle));
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(slotCycle);
             var lineCycle = slotCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine;
             return (int)(lineCycle / AgnusChipSlotScheduler.SlotCycles);
         }
 
         public static bool IsCpuAccessibleSlot(long slotCycle)
         {
-            var absoluteSlot = Math.Max(0, AgnusChipSlotScheduler.AlignToSlot(slotCycle) / AgnusChipSlotScheduler.SlotCycles);
+            var absoluteSlot = AgnusChipSlotScheduler.AlignToSlot(slotCycle) / AgnusChipSlotScheduler.SlotCycles;
             return (absoluteSlot & 1) == 0;
         }
 
@@ -384,6 +397,7 @@ namespace CopperMod.Amiga
 
         public static long FindNextFixedDmaSlot(long requestedCycle, AgnusChipSlotOwner owner)
         {
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Agnus DMA request cycles must be non-negative.");
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             if (owner != AgnusChipSlotOwner.Refresh &&
                 owner != AgnusChipSlotOwner.Disk &&
@@ -440,9 +454,45 @@ namespace CopperMod.Amiga
             _beamValid = false;
         }
 
+        public void ClearLiveDisplaySlotsFrom(long cycle)
+        {
+            var firstSlot = FloorToSlot(cycle);
+            var lastSlot = FloorToSlot(Math.Max(firstSlot, _currentCycle));
+            var earliestSlot = Math.Max(
+                0,
+                lastSlot - ((long)((SlotsPerFrame * SlotTableFrames) - 1) * SlotCycles));
+            var startSlot = Math.Max(firstSlot, earliestSlot);
+            for (var slotCycle = startSlot; slotCycle <= lastSlot; slotCycle += SlotCycles)
+            {
+                var index = GetSlotIndex(slotCycle);
+                var slot = _slots[index];
+                if (slot.Valid &&
+                    slot.SlotCycle == slotCycle &&
+                    IsLiveDisplaySlotOwner(slot.Owner))
+                {
+                    _slots[index] = default;
+                }
+            }
+
+            if (_lastGrantedSlot is { GrantedCycle: >= 0 } granted &&
+                granted.GrantedCycle >= firstSlot &&
+                IsLiveDisplaySlotOwner(granted.Owner))
+            {
+                _lastGrantedSlot = null;
+            }
+
+            if (_lastDeniedFixedSlot is { GrantedCycle: var deniedCycle } && deniedCycle >= firstSlot)
+            {
+                _lastDeniedFixedSlot = null;
+                _lastDeniedFixedSlotBlocker = null;
+            }
+
+            _beamValid = false;
+        }
+
         public void AdvanceTo(long targetCycle)
         {
-            targetCycle = Math.Max(0, targetCycle);
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Agnus slot advance cycles must be non-negative.");
             CommitRefreshSlotsThrough(targetCycle);
             if (targetCycle <= _currentCycle)
             {
@@ -528,7 +578,7 @@ namespace CopperMod.Amiga
         [HotPath]
         public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
         {
-            requestedCycle = Math.Max(0, requestedCycle);
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Bitplane DMA request cycles must be non-negative.");
             var request = new AmigaBusAccessRequest(
                 AmigaBusRequester.Bitplane,
                 AmigaBusAccessKind.Bitplane,
@@ -545,7 +595,7 @@ namespace CopperMod.Amiga
         [HotPath]
         public AmigaBusAccessResult ReserveCopperDmaSlot(uint address, long requestedCycle)
         {
-            requestedCycle = Math.Max(0, requestedCycle);
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Copper DMA request cycles must be non-negative.");
             var request = new AmigaBusAccessRequest(
                 AmigaBusRequester.Copper,
                 AmigaBusAccessKind.Copper,
@@ -565,6 +615,7 @@ namespace CopperMod.Amiga
 
         public bool IsReserved(long cycle)
         {
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
             return AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle) || TryGetSlot(slotCycle, out _);
         }
@@ -705,6 +756,7 @@ namespace CopperMod.Amiga
             AgnusChipSlotOwner owner,
             AmigaBusAccessRequest request)
         {
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Agnus slot search cycles must be non-negative.");
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
@@ -822,7 +874,7 @@ namespace CopperMod.Amiga
 
         private static long FloorToSlot(long cycle)
         {
-            cycle = Math.Max(0, cycle);
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             return cycle - (cycle % SlotCycles);
         }
 
@@ -879,7 +931,8 @@ namespace CopperMod.Amiga
 
         private static int GetSlotIndex(long slotCycle)
         {
-            var absoluteSlot = Math.Max(0, slotCycle / SlotCycles);
+            System.Diagnostics.Debug.Assert(slotCycle >= 0, "Agnus slot cycles must be non-negative.");
+            var absoluteSlot = slotCycle / SlotCycles;
             return (int)(absoluteSlot % (SlotsPerFrame * SlotTableFrames));
         }
 
@@ -908,6 +961,13 @@ namespace CopperMod.Amiga
         private static bool RequiresEvenSlot(AgnusChipSlotOwner owner)
         {
             return owner == AgnusChipSlotOwner.Cpu ||
+                owner == AgnusChipSlotOwner.Copper;
+        }
+
+        private static bool IsLiveDisplaySlotOwner(AgnusChipSlotOwner owner)
+        {
+            return owner == AgnusChipSlotOwner.Bitplane ||
+                owner == AgnusChipSlotOwner.Sprite ||
                 owner == AgnusChipSlotOwner.Copper;
         }
 
@@ -1218,7 +1278,7 @@ namespace CopperMod.Amiga
 
         public void AdvanceTo(long targetCycle)
         {
-            targetCycle = Math.Max(0, targetCycle);
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Agnus beam advance cycles must be non-negative.");
             if (targetCycle < _currentCycle)
             {
                 return;

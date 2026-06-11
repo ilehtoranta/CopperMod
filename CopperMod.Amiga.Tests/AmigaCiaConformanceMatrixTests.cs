@@ -210,13 +210,13 @@ public sealed class AmigaCiaConformanceMatrixTests
         bus.WriteByte(0x00BFDD00, 0x81, 0);
         bus.WriteByte(0x00BFDE00, 0x11, 0);
 
-        Assert.Equal(30, bus.GetNextCiaInterruptCycle(100));
-        bus.AdvanceCiasTo(30);
+        Assert.Equal(40, bus.GetNextCiaInterruptCycle(100));
+        bus.AdvanceCiasTo(40);
 
         var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
         Assert.Equal(AmigaCia.TimerAInterruptMask, interruptEvent.IcrBits);
-        Assert.Equal(30, interruptEvent.Cycle);
-        Assert.Equal(60, bus.GetNextCiaInterruptCycle(100));
+        Assert.Equal(40, interruptEvent.Cycle);
+        Assert.Equal(70, bus.GetNextCiaInterruptCycle(100));
     }
 
     private static void CpuReadsAdvanceCiaToAccessCycle()
@@ -229,9 +229,11 @@ public sealed class AmigaCiaConformanceMatrixTests
 
         var cycle = 20L;
         Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+        Assert.Equal(30, cycle);
 
         cycle = 30L;
         Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+        Assert.Equal(40, cycle);
     }
 
     private static void TimerAOneShotStops()
@@ -245,7 +247,7 @@ public sealed class AmigaCiaConformanceMatrixTests
         bus.AdvanceCiasTo(100);
 
         var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
-        Assert.Equal(20, interruptEvent.Cycle);
+        Assert.Equal(30, interruptEvent.Cycle);
         Assert.Null(bus.GetNextCiaInterruptCycle(1_000));
     }
 
@@ -273,7 +275,7 @@ public sealed class AmigaCiaConformanceMatrixTests
         bus.WriteByte(0x00BFD700, 0x00, 0);
         bus.WriteByte(0x00BFDD00, 0x82, 0);
         bus.WriteByte(0x00BFDF00, 0x11, 0);
-        bus.AdvanceCiasTo(20);
+        bus.AdvanceCiasTo(30);
 
         var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
         Assert.Equal(AmigaCiaId.B, interruptEvent.Cia);
@@ -292,13 +294,13 @@ public sealed class AmigaCiaConformanceMatrixTests
         bus.WriteByte(0x00BFD500, 0x00, 0);
         bus.WriteByte(0x00BFDE00, 0x11, 0);
 
-        bus.AdvanceCiasTo(19);
+        bus.AdvanceCiasTo(29);
         Assert.Empty(bus.DrainCiaInterrupts());
 
-        bus.AdvanceCiasTo(20);
+        bus.AdvanceCiasTo(30);
         var interruptEvent = Assert.Single(bus.DrainCiaInterrupts());
         Assert.Equal(AmigaCia.TimerBInterruptMask, interruptEvent.IcrBits);
-        Assert.Equal(20, interruptEvent.Cycle);
+        Assert.Equal(30, interruptEvent.Cycle);
     }
 
     private static void TodIncrementsOnPalVerticalAndHorizontalEvents()

@@ -6,6 +6,21 @@ namespace CopperScreen.Tests;
 public sealed class FramebufferPresenterTests
 {
 	[Fact]
+	public void UniformDestinationUsesRenderedLetterboxRect()
+	{
+		var bounds = new Size(1200, 960);
+		var source = new Size(352, 288);
+		var scale = bounds.Height / source.Height;
+		var offsetX = (bounds.Width - (source.Width * scale)) / 2.0;
+
+		Assert.True(FramebufferPresenter.TryCalculateUniformDestination(bounds, source, out var destination));
+		Assert.Equal(offsetX, destination.X, precision: 6);
+		Assert.Equal(0, destination.Y, precision: 6);
+		Assert.Equal(source.Width * scale, destination.Width, precision: 6);
+		Assert.Equal(bounds.Height, destination.Height, precision: 6);
+	}
+
+	[Fact]
 	public void UniformStretchMouseMappingIgnoresHorizontalLetterbox()
 	{
 		var bounds = new Size(1200, 960);

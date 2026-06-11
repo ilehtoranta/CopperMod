@@ -160,6 +160,183 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void StartupArgumentParserReportsWhetherProfileWasExplicit()
+	{
+		var implicitOptions = CopperScreenStartupOptions.Parse(Array.Empty<string>(), AppContext.BaseDirectory);
+		Assert.False(implicitOptions.HasExplicitProfile);
+
+		var profileOptions = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "vanilla-copperstart" },
+			AppContext.BaseDirectory);
+		Assert.True(profileOptions.HasExplicitProfile);
+
+		var realKickstartOptions = CopperScreenStartupOptions.Parse(
+			new[] { "--real-kickstart" },
+			AppContext.BaseDirectory);
+		Assert.True(realKickstartOptions.HasExplicitProfile);
+	}
+
+	[Fact]
+	public void ProfileStoreRoundTripsMediaAndInputSettings()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		var diskPath = Path.Combine(baseDirectory, "disk.adf");
+		File.WriteAllBytes(diskPath, new byte[AmigaDiskImage.StandardAdfSize]);
+		try
+		{
+			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
+			draft.Id = "roundtrip-settings";
+			draft.DisplayName = "Roundtrip Settings";
+			draft.FloppyDriveCount = 3;
+			draft.DriveDiskPaths[1] = diskPath;
+			draft.DriveWriteProtected[1] = false;
+			draft.Input = CopperScreenInputOptions.Create(
+				2,
+				CopperScreenJoystickKeyMap.Create(
+					["W"],
+					["S"],
+					["A"],
+					["D"],
+					["Space"],
+					["LeftCtrl"]));
+
+			var savedPath = CopperScreenProfileStore.Save(draft, baseDirectory);
+
+			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
+			Assert.Equal("roundtrip-settings", loaded.Id);
+			Assert.Equal(3, loaded.FloppyDriveCount);
+			Assert.Equal(2, loaded.Input.MousePort);
+			Assert.Equal("numpad-joystick", loaded.Input.Port1ProfileId);
+			Assert.Equal("mouse", loaded.Input.Port2ProfileId);
+			Assert.Equal(0, loaded.Input.JoystickPortIndex);
+			Assert.Contains(loaded.Input.ControllerProfiles, profile =>
+				profile.Id == "numpad-joystick" &&
+				profile.JoystickKeys.GetActions(Avalonia.Input.Key.W, Avalonia.Input.PhysicalKey.W) == CopperScreenJoystickActions.Up);
+			var drive = Assert.Single(loaded.MediaDrives);
+			Assert.Equal(1, drive.Index);
+			Assert.Equal(diskPath, drive.DiskPath);
+			Assert.False(drive.WriteProtected);
+			Assert.Contains(CopperScreenProfileStore.ListProfiles(baseDirectory), profile => profile.Id == "roundtrip-settings");
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
+	public void ProfileStoreSaveAsCreatesNonOverwritingCopy()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		try
+		{
+			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
+			draft.Id = "copy-source";
+			draft.DisplayName = "Copy Source";
+			var first = CopperScreenProfileStore.Save(draft, baseDirectory);
+			var copy = CopperScreenProfileStore.SaveAs(draft, baseDirectory);
+
+			Assert.True(File.Exists(first));
+			Assert.True(File.Exists(copy));
+			Assert.NotEqual(first, copy);
+			Assert.EndsWith("copy-source-copy.json", copy);
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
+	public void ProfileSummaryDisplaysNameIdAndPath()
+	{
+		var summary = new CopperScreenProfileSummary("demo-profile", "Demo Profile", @"C:\Profiles\demo-profile.json");
+
+		Assert.Equal(@"Demo Profile (demo-profile) - C:\Profiles\demo-profile.json", summary.ToString());
+	}
+
+	[Fact]
+	public void JoystickKeyMapRejectsReservedHostShortcuts()
+	{
+		var map = CopperScreenJoystickKeyMap.Create(
+			["F10", "W"],
+			["NumLock", "S"],
+			["Alt+Enter", "A"],
+			["D"],
+			["F11", "Space"],
+			["F12", "LeftCtrl"]);
+
+		Assert.Equal(["W"], map.Up);
+		Assert.Equal(["S"], map.Down);
+		Assert.Equal(["A"], map.Left);
+		Assert.Equal(["D"], map.Right);
+		Assert.Equal(["Space"], map.Fire);
+		Assert.Equal(["LeftCtrl"], map.SecondFire);
+	}
+
+	[Fact]
+	public void LegacyInputSettingsMapToControllerPortAssignments()
+	{
+		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-legacy-input-profile.json");
+		File.WriteAllText(
+			profilePath,
+			"""
+			{
+			  "id": "legacy-input",
+			  "displayName": "Legacy Input",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "CopperStart",
+			    "version": "1.3"
+			  },
+			  "input": {
+			    "mousePort": 2,
+			    "joystickKeys": {
+			      "up": [ "W" ],
+			      "down": [ "S" ],
+			      "left": [ "A" ],
+			      "right": [ "D" ],
+			      "fire": [ "Space" ],
+			      "secondFire": [ "LeftCtrl" ]
+			    }
+			  }
+			}
+			""");
+		try
+		{
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+
+			Assert.Equal("numpad-joystick", profile.Input.Port1ProfileId);
+			Assert.Equal("mouse", profile.Input.Port2ProfileId);
+			Assert.Equal(2, profile.Input.MousePort);
+			Assert.True(profile.Input.TryGetKeyboardJoystickMap(0, out var keyMap));
+			Assert.Equal(CopperScreenJoystickActions.Up, keyMap.GetActions(Avalonia.Input.Key.W, Avalonia.Input.PhysicalKey.W));
+		}
+		finally
+		{
+			File.Delete(profilePath);
+		}
+	}
+
+	[Fact]
 	public void StartupArgumentParserCanOverrideCpuBackend()
 	{
 		var options = CopperScreenStartupOptions.Parse(

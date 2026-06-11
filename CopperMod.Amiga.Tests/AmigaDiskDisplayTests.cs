@@ -3054,8 +3054,8 @@ public sealed class AmigaDiskDisplayTests
     public void DiskDmaReadsFromSelectedExternalDrive()
     {
         var bus = new AmigaBus(floppyDriveCount: 2);
-        bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateSingleWordTrackSet(0xABCD)));
-        bus.Disk.Drive1.Insert(AmigaDiskImage.FromEncodedTracks(CreateSingleWordTrackSet(0x1234)));
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateConstantWordTrackSet(0x0000)));
+        bus.Disk.Drive1.Insert(AmigaDiskImage.FromEncodedTracks(CreateConstantWordTrackSet(0xFFFF)));
         var cycle = PrepareDiskDma(bus, driveIndex: 1);
 
         WriteDsklenStartSequence(bus, 0x4000, 0x0001, cycle);
@@ -3064,7 +3064,7 @@ public sealed class AmigaDiskDisplayTests
         var snapshot = bus.Disk.CaptureSnapshot();
         Assert.Equal(1, snapshot.SelectedDrive);
         Assert.Equal(1, snapshot.LastTransferDrive);
-        Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "external drive DMA word"));
+        Assert.Equal(0xFFFF, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "external drive DMA word"));
     }
 
     [Fact]
@@ -3848,6 +3848,22 @@ public sealed class AmigaDiskDisplayTests
         }
 
         BigEndian.WriteUInt16(tracks[0], 0, firstWord);
+        return tracks;
+    }
+
+    private static byte[][] CreateConstantWordTrackSet(ushort word)
+    {
+        var tracks = new byte[AmigaDiskImage.TrackCount][];
+        for (var trackIndex = 0; trackIndex < tracks.Length; trackIndex++)
+        {
+            tracks[trackIndex] = AmigaDosTrackEncoder.CreateUnformattedTrack();
+        }
+
+        for (var offset = 0; offset + 1 < tracks[0].Length; offset += 2)
+        {
+            BigEndian.WriteUInt16(tracks[0], offset, word);
+        }
+
         return tracks;
     }
 

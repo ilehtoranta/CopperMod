@@ -587,6 +587,36 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void MouseControllerAssignedToPortTwoReachesAmigaPortTwoRegisters()
+	{
+		var profile = CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _);
+		var options = CopperScreenStartupOptions.FromSettings(
+			profile,
+			new string?[4],
+			new bool?[4],
+			null,
+			null,
+			profile.FloppyDriveAudio,
+			CopperScreenInputOptions.Create(
+				CopperScreenControllerProfile.NumpadJoystick.Id,
+				CopperScreenControllerProfile.Mouse.Id,
+				CopperScreenInputOptions.DefaultControllerProfiles),
+			AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(options);
+
+		emulator.MoveMousePort(5, -1);
+		emulator.SetMouseButtons(primaryFirePressed: true, secondFirePressed: true);
+		emulator.RenderNextFrame();
+
+		var machine = GetMachine(emulator);
+		Assert.Equal(0xFF05, machine.Bus.ReadWord(0x00DFF00C));
+		Assert.NotEqual(0, machine.Bus.ReadByte(0x00BFE001) & 0x40);
+		Assert.Equal(0, machine.Bus.ReadByte(0x00BFE001) & 0x80);
+		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF016) & 0x0400);
+		Assert.Equal(0, machine.Bus.ReadWord(0x00DFF016) & 0x4000);
+	}
+
+	[Fact]
 	public void QuickMouseButtonClickSurvivesUntilNextRenderedFrame()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
@@ -634,6 +664,29 @@ public sealed class CopperScreenBootTests
         Assert.Equal(0, machine.Bus.ReadByte(0x00BFE001) & 0x80);
         Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF016) & 0x0400);
         Assert.Equal(0, machine.Bus.ReadWord(0x00DFF016) & 0x4000);
+	}
+
+	[Fact]
+	public void KeyboardJoystickAssignedToPortOneReachesAmigaPortOneRegisters()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+
+		emulator.SetJoystickPort(
+			0,
+			up: false,
+			down: true,
+			left: false,
+			right: false,
+			primaryFirePressed: true,
+			secondFirePressed: true);
+		emulator.RenderNextFrame();
+
+		var machine = GetMachine(emulator);
+		Assert.Equal(0x0001, machine.Bus.ReadWord(0x00DFF00A));
+		Assert.Equal(0, machine.Bus.ReadByte(0x00BFE001) & 0x40);
+		Assert.NotEqual(0, machine.Bus.ReadByte(0x00BFE001) & 0x80);
+		Assert.Equal(0, machine.Bus.ReadWord(0x00DFF016) & 0x0400);
+		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF016) & 0x4000);
 	}
 
 	[Fact]

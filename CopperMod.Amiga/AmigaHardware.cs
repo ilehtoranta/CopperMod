@@ -408,12 +408,14 @@ namespace CopperMod.Amiga
 
         public long NextChipSlotCycle(long cycle)
         {
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             return AgnusChipSlotScheduler.AlignToSlot(cycle);
         }
 
         internal long FindHrmDmaCandidate(long requestedCycle)
         {
-            var candidate = NextChipSlotCycle(Math.Max(0, requestedCycle));
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Agnus DMA candidate cycles must be non-negative.");
+            var candidate = NextChipSlotCycle(requestedCycle);
             while (_hrmSlotEngine.IsReserved(candidate))
             {
                 candidate += AgnusChipSlotScheduler.SlotCycles;
@@ -587,10 +589,11 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: false);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawByte(address, fastAccess.GrantedCycle)
                     : ReadRawByte(address);
@@ -604,7 +607,7 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawByte(address, access.GrantedCycle)
                 : ReadRawByte(address);
@@ -626,17 +629,18 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: true);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 WriteRawByte(address, value, fastAccess.GrantedCycle);
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: true);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             WriteRawByte(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -650,17 +654,18 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Word, cycle, accessKind, isWrite: true);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 WriteRawWord(address, value, fastAccess.GrantedCycle);
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: true);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             WriteRawWord(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -683,10 +688,11 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Word, cycle, accessKind, isWrite: false);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawWord(address, fastAccess.GrantedCycle)
                     : ReadRawWord(address);
@@ -695,7 +701,7 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawWord(address, access.GrantedCycle)
                 : ReadRawWord(address);
@@ -721,10 +727,11 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Long, cycle, accessKind, isWrite: false);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawLong(address, fastAccess.GrantedCycle, GetSecondWordCycle(fastAccess))
                     : ReadRawLong(address);
@@ -733,7 +740,7 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: false);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawLong(address, access.GrantedCycle, GetSecondWordCycle(access))
                 : ReadRawLong(address);
@@ -760,17 +767,18 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
+            var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Long, cycle, accessKind, isWrite: true);
-                AdvanceDmaBeforeCpuChipAccess(target, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
                 WriteRawLong(address, value, fastAccess.GrantedCycle, GetSecondWordCycle(fastAccess));
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: true);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
             WriteRawLong(address, value, access.GrantedCycle, GetSecondWordCycle(access));
             cycle = access.CompletedCycle;
         }
@@ -1309,6 +1317,22 @@ namespace CopperMod.Amiga
             }
         }
 
+        private void AdvanceDmaAfterCpuGrantIfNeeded(
+            AmigaBusAccessTarget target,
+            long requestedCycle,
+            long grantedCycle)
+        {
+            if ((target == AmigaBusAccessTarget.ChipRam ||
+                    target == AmigaBusAccessTarget.ExpansionRam ||
+                    target == AmigaBusAccessTarget.CustomRegisters) &&
+                grantedCycle <= requestedCycle)
+            {
+                return;
+            }
+
+            AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+        }
+
         public long? GetNextCiaInterruptCycle(long maxCycle)
         {
             var ciaA = CiaA.GetNextInterruptCycle(maxCycle);
@@ -1517,6 +1541,27 @@ namespace CopperMod.Amiga
 
             requestedCycle = Math.Max(0, requestedCycle);
 
+            if (requester == AmigaBusRequester.Cpu && target == AmigaBusAccessTarget.Cia)
+            {
+                var ciaAccessCycle = CiaPeripheralAccessTiming.AlignToCiaPeripheralAccessCycle(requestedCycle);
+                var ciaRequest = new AmigaBusAccessRequest(
+                    requester,
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite);
+                var ciaResult = new AmigaBusAccessResult(ciaRequest, ciaAccessCycle, ciaAccessCycle);
+                if (_captureBusAccesses)
+                {
+                    _busAccesses.Add(ciaResult);
+                }
+
+                Agnus.RecordCpuChipAccess(ciaResult);
+                return ciaResult;
+            }
+
             if (_useFastZeroWaitAccesses)
             {
                 var fastRequest = new AmigaBusAccessRequest(
@@ -1582,6 +1627,12 @@ namespace CopperMod.Amiga
                 size,
                 requestedCycle,
                 isWrite);
+            if (target == AmigaBusAccessTarget.Cia)
+            {
+                var ciaAccessCycle = CiaPeripheralAccessTiming.AlignToCiaPeripheralAccessCycle(requestedCycle);
+                return new AmigaBusAccessResult(request, ciaAccessCycle, ciaAccessCycle);
+            }
+
             if (!_useChipSlotScheduler || !ShouldUseChipSlotScheduler(target))
             {
                 return new AmigaBusAccessResult(request, requestedCycle, requestedCycle);
@@ -1595,6 +1646,11 @@ namespace CopperMod.Amiga
         private void ClearChipSlots()
         {
             _hrmSlotEngine.Clear();
+        }
+
+        internal void ClearLiveDisplayDmaSlotsFrom(long cycle)
+        {
+            _hrmSlotEngine.ClearLiveDisplaySlotsFrom(cycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4140,12 +4196,12 @@ namespace CopperMod.Amiga
 
     internal sealed class ChipPresentationWriteHistory
     {
-        private const int MaxCapturedWrites = 65536;
+        private const int InitialCapturedWriteCapacity = 65536;
         private readonly int[] _headByOffset;
         private readonly int[] _tailByOffset;
         private readonly int[] _touchedOffsets;
-        private readonly int[] _nextByWrite;
-        private readonly ChipByteWrite[] _writes;
+        private int[] _nextByWrite;
+        private ChipByteWrite[] _writes;
         private readonly bool[] _outOfOrderByOffset;
         private int _touchedOffsetCount;
         private int _writeCount;
@@ -4161,9 +4217,9 @@ namespace CopperMod.Amiga
 
             _headByOffset = new int[chipRamSize];
             _tailByOffset = new int[chipRamSize];
-            _touchedOffsets = new int[Math.Min(chipRamSize, MaxCapturedWrites)];
-            _nextByWrite = new int[MaxCapturedWrites];
-            _writes = new ChipByteWrite[MaxCapturedWrites];
+            _touchedOffsets = new int[chipRamSize];
+            _nextByWrite = new int[InitialCapturedWriteCapacity];
+            _writes = new ChipByteWrite[InitialCapturedWriteCapacity];
             _outOfOrderByOffset = new bool[chipRamSize];
             Array.Fill(_headByOffset, -1);
             Array.Fill(_tailByOffset, -1);
@@ -4171,8 +4227,7 @@ namespace CopperMod.Amiga
 
         public void RecordByte(int offset, byte oldValue, byte newValue, long cycle)
         {
-            if ((uint)offset >= (uint)_headByOffset.Length ||
-                _writeCount >= _writes.Length)
+            if ((uint)offset >= (uint)_headByOffset.Length)
             {
                 return;
             }
@@ -4190,13 +4245,14 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (_writeCount == _writes.Length)
+            {
+                GrowWriteCapacity();
+            }
+
             if (_headByOffset[offset] < 0)
             {
-                if (_touchedOffsetCount < _touchedOffsets.Length)
-                {
-                    _touchedOffsets[_touchedOffsetCount++] = offset;
-                }
-
+                _touchedOffsets[_touchedOffsetCount++] = offset;
                 _headByOffset[offset] = _writeCount;
             }
             else
@@ -4209,6 +4265,13 @@ namespace CopperMod.Amiga
             _nextByWrite[_writeCount] = -1;
             _writeCount++;
             _latestWriteCycle = Math.Max(_latestWriteCycle, cycle);
+        }
+
+        private void GrowWriteCapacity()
+        {
+            var newCapacity = checked(_writes.Length * 2);
+            Array.Resize(ref _writes, newCapacity);
+            Array.Resize(ref _nextByWrite, newCapacity);
         }
 
         public bool HasWrites => _writeCount != 0;

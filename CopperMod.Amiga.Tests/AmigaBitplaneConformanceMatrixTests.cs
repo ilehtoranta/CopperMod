@@ -611,7 +611,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     }
 
     [Fact]
-    public void LiveDmaArchivedTimelineRendersCopperBplcon0Changes()
+    public void LiveDmaArchivedTimelineRejectsCopperBplcon0Changes()
     {
         var presentationBus = CreateCopperBplcon0DisableBus(enableLiveDma: false);
         var liveBus = CreateCopperBplcon0DisableBus(enableLiveDma: true);
@@ -623,16 +623,16 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         liveBus.Display.RenderFrame(actual, 0, FrameCycles());
 
         var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
-        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(actual, StandardX, StandardY + 1));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
+        Assert.Equal(0xFFFF0000u, Pixel(expected, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(expected, StandardX, StandardY + 1));
+        Assert.Equal(0, snapshot.LastTimelineSegmentCount);
         Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
+        Assert.Equal(0, snapshot.LastArchivedTimelineFrameCount);
         Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-        Assert.True(snapshot.LastTimelineFastPathRowCount > 0);
+        Assert.True(snapshot.LastArchiveRejectUnsafeWrite > 0);
+        Assert.Equal(0x100, snapshot.LastArchiveRejectUnsafeOffset);
+        Assert.True(snapshot.LastArchiveRejectUnsafeIsCopper);
+        Assert.Equal(0, snapshot.LastTimelineFastPathMissCount);
         Assert.Equal(0, snapshot.LastSpriteRecoveryAttemptCount);
     }
 
@@ -779,6 +779,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         WriteCopperList(
             bus,
             CopperListBase,
+            (0x0100, 0x1000),
             ((ushort)((disableLine << 8) | 0x11), 0xFFFE),
             (0x0100, 0x0000),
             (0xFFFF, 0xFFFE));

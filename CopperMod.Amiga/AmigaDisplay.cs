@@ -147,6 +147,9 @@ namespace CopperMod.Amiga
         private readonly ushort[] _livePaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _livePaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
         private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
+        private readonly ushort[] _previousLiveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
+        private readonly byte[] _previousLiveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
+        private readonly byte[] _previousLiveSpriteDeniedMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
         private DisplayFrameTimeline _displayTimeline = new DisplayFrameTimeline();
         private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
         private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
@@ -598,7 +601,7 @@ namespace CopperMod.Amiga
 
         internal void AdvanceLiveDmaTo(long targetCycle)
         {
-            targetCycle = Math.Max(0, targetCycle);
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Live display DMA advance cycles must be non-negative.");
             if (targetCycle < _liveCycle)
             {
                 return;
@@ -726,6 +729,8 @@ namespace CopperMod.Amiga
             {
                 _displayTimeline.InvalidateFromRow(row);
             }
+            _bus.ClearLiveDisplayDmaSlotsFrom(cycle);
+            ClearLiveBitplaneWordMasksFrom(row);
             ClearLiveSpriteWordMasksFrom(row);
             ResetLiveSpriteDmaStates(row);
             _liveNextLineStateRow = Math.Min(_liveNextLineStateRow, row);
@@ -846,14 +851,72 @@ namespace CopperMod.Amiga
             {
                 _previousLiveSpriteFrameStartCycle = long.MinValue;
                 _previousLiveSpriteFrameCommands.Clear();
+                ClearPreviousLiveSpriteWords();
                 return;
             }
 
             _previousLiveSpriteFrameStartCycle = _liveFrameStartCycle;
             _previousLiveSpriteFrameCommands.Clear();
+            ClearPreviousLiveSpriteWords();
             for (var i = 0; i < _spriteFrameCommands.Count; i++)
             {
                 _previousLiveSpriteFrameCommands.Add(_spriteFrameCommands[i]);
+            }
+
+            ArchiveLiveSpriteWords(_displayTimeline);
+        }
+
+        private void ClearPreviousLiveSpriteWords()
+        {
+            Array.Clear(_previousLiveSpriteWordMasks);
+            Array.Clear(_previousLiveSpriteDeniedMasks);
+        }
+
+        private void ArchiveLiveSpriteWords(DisplayFrameTimeline timeline)
+        {
+            for (var row = 0; row < LowResOutputHeight; row++)
+            {
+                for (var spriteIndex = 0; spriteIndex < LiveSpriteChannelCount; spriteIndex++)
+                {
+                    for (var word = 0; word < LiveSpriteWordsPerChannel; word++)
+                    {
+                        var status = timeline.GetSpriteFetchStatus(row, spriteIndex, word);
+                        if (status == TimelineFetchStatus.NotAttempted)
+                        {
+                            if (!TryReadLiveCapturedSpriteWord(row, spriteIndex, word, out var liveValue))
+                            {
+                                continue;
+                            }
+
+                            StorePreviousLiveSpriteWord(row, spriteIndex, word, liveValue, denied: false);
+                            continue;
+                        }
+
+                        StorePreviousLiveSpriteWord(
+                            row,
+                            spriteIndex,
+                            word,
+                            status == TimelineFetchStatus.Granted ? timeline.GetSpriteWord(row, spriteIndex, word) : (ushort)0,
+                            denied: status == TimelineFetchStatus.Denied);
+                    }
+                }
+            }
+        }
+
+        private void StorePreviousLiveSpriteWord(int row, int spriteIndex, int word, ushort value, bool denied)
+        {
+            var wordIndex = GetLiveSpriteWordIndex(row, spriteIndex, word);
+            var maskIndex = GetLiveSpriteMaskIndex(row, spriteIndex);
+            var bit = (byte)(1 << word);
+            _previousLiveSpriteWords[wordIndex] = value;
+            _previousLiveSpriteWordMasks[maskIndex] = (byte)(_previousLiveSpriteWordMasks[maskIndex] | bit);
+            if (denied)
+            {
+                _previousLiveSpriteDeniedMasks[maskIndex] = (byte)(_previousLiveSpriteDeniedMasks[maskIndex] | bit);
+            }
+            else
+            {
+                _previousLiveSpriteDeniedMasks[maskIndex] = (byte)(_previousLiveSpriteDeniedMasks[maskIndex] & ~bit);
             }
         }
 
@@ -2695,6 +2758,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            DisplayTimelineState? firstState = null;
             for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
             {
                 var segment = line.Segments[segmentIndex];
@@ -2704,10 +2768,13 @@ namespace CopperMod.Amiga
                 }
 
                 var state = timeline.GetState(segment.StateIndex);
-                if (!IsTimelineLowResLineFastPathSupported(row, segment, state))
+                if (!IsTimelineLowResLineFastPathSupported(row, segment, state) ||
+                    (firstState != null && !HasSameTimelineLowResFastPathShape(firstState, state)))
                 {
                     return false;
                 }
+
+                firstState ??= state;
             }
 
             for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
@@ -2732,6 +2799,26 @@ namespace CopperMod.Amiga
             }
 
             return true;
+        }
+
+        private static bool HasSameTimelineLowResFastPathShape(DisplayTimelineState left, DisplayTimelineState right)
+        {
+            return left.Bplcon0 == right.Bplcon0 &&
+                left.Bplcon1 == right.Bplcon1 &&
+                left.Bplcon2 == right.Bplcon2 &&
+                left.DiwStart == right.DiwStart &&
+                left.DiwStop == right.DiwStop &&
+                left.DisplayWindowVerticallyOpen == right.DisplayWindowVerticallyOpen &&
+                left.DdfStart == right.DdfStart &&
+                left.DdfStop == right.DdfStop &&
+                left.Dmacon == right.Dmacon &&
+                left.Bpl1Mod == right.Bpl1Mod &&
+                left.Bpl2Mod == right.Bpl2Mod &&
+                left.PlaneCount == right.PlaneCount &&
+                left.FetchWords == right.FetchWords &&
+                left.DataFetchStart == right.DataFetchStart &&
+                left.FetchSlotStride == right.FetchSlotStride &&
+                left.PlaneHasRowMask == right.PlaneHasRowMask;
         }
 
         private bool IsTimelineLowResLineFastPathSupported(int row, DisplayLineSegment segment, DisplayTimelineState state)
@@ -2818,8 +2905,8 @@ namespace CopperMod.Amiga
                 for (var x = xStart; x < xStop; x++)
                 {
                     var offset = x - wordStart;
-                    _timelineFastPathColorIndexes[x] = chunk.ColorIndexes[offset];
-                    _timelineFastPathPriorityMasks[x] = chunk.PriorityMasks[offset];
+                    _timelineFastPathColorIndexes[x] = chunk.GetColorIndex(offset);
+                    _timelineFastPathPriorityMasks[x] = chunk.GetPriorityMask(offset);
                 }
             }
 
@@ -2917,8 +3004,8 @@ namespace CopperMod.Amiga
                     }
 
                     var offset = relativeX & 0x0F;
-                    colorIndex = chunk.ColorIndexes[offset];
-                    priorityMask = chunk.PriorityMasks[offset];
+                    colorIndex = chunk.GetColorIndex(offset);
+                    priorityMask = chunk.GetPriorityMask(offset);
                 }
                 else if (dualPlayfield)
                 {
@@ -3089,7 +3176,7 @@ namespace CopperMod.Amiga
                 var status = timeline.GetBitplaneFetchStatus(row, plane, word);
                 if (status == TimelineFetchStatus.NotAttempted)
                 {
-                    chunk = null!;
+                    chunk = default;
                     return false;
                 }
 
@@ -3124,7 +3211,10 @@ namespace CopperMod.Amiga
             int planeCount,
             bool dualPlayfield)
         {
-            var chunk = new PlanarChunkDecoded();
+            var colorIndexesLow = 0UL;
+            var colorIndexesHigh = 0UL;
+            var priorityMasksLow = 0UL;
+            var priorityMasksHigh = 0UL;
             for (var pixel = 0; pixel < PlanarChunkPixels; pixel++)
             {
                 var bit = 15 - pixel;
@@ -3142,17 +3232,50 @@ namespace CopperMod.Amiga
                 if (dualPlayfield)
                 {
                     var dual = ConvertRawColorIndexToDualPlayfieldPixel(rawColorIndex, planeCount);
-                    chunk.ColorIndexes[pixel] = (byte)dual.ColorIndex;
-                    chunk.PriorityMasks[pixel] = dual.PriorityMask;
+                    PackPlanarChunkPixel(
+                        pixel,
+                        (byte)dual.ColorIndex,
+                        dual.PriorityMask,
+                        ref colorIndexesLow,
+                        ref colorIndexesHigh,
+                        ref priorityMasksLow,
+                        ref priorityMasksHigh);
                     continue;
                 }
 
                 var colorIndex = ApplyUndocumentedNormalPlayfieldPriorityQuirk(rawColorIndex, planeCount);
-                chunk.ColorIndexes[pixel] = (byte)colorIndex;
-                chunk.PriorityMasks[pixel] = colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
+                PackPlanarChunkPixel(
+                    pixel,
+                    (byte)colorIndex,
+                    colorIndex == 0 ? (byte)0 : NormalPlayfieldPriorityMask,
+                    ref colorIndexesLow,
+                    ref colorIndexesHigh,
+                    ref priorityMasksLow,
+                    ref priorityMasksHigh);
             }
 
-            return chunk;
+            return new PlanarChunkDecoded(colorIndexesLow, colorIndexesHigh, priorityMasksLow, priorityMasksHigh);
+        }
+
+        private static void PackPlanarChunkPixel(
+            int pixel,
+            byte colorIndex,
+            byte priorityMask,
+            ref ulong colorIndexesLow,
+            ref ulong colorIndexesHigh,
+            ref ulong priorityMasksLow,
+            ref ulong priorityMasksHigh)
+        {
+            var shift = (pixel & 7) * 8;
+            if (pixel < 8)
+            {
+                colorIndexesLow |= (ulong)colorIndex << shift;
+                priorityMasksLow |= (ulong)priorityMask << shift;
+                return;
+            }
+
+            colorIndexesHigh |= (ulong)colorIndex << shift;
+            priorityMasksHigh |= (ulong)priorityMask << shift;
         }
 
         private bool TryRenderArchivedTimelineFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
@@ -4325,6 +4448,14 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (!recordLiveCapture &&
+                _useTimedPresentationReads &&
+                _previousLiveSpriteFrameStartCycle == _renderFrameStartCycle &&
+                _previousLiveSpriteFrameCommands.Count > 0)
+            {
+                return TryReadPreviousLiveSpriteWord(row, spriteIndex, word, out value, out var denied) && !denied;
+            }
+
             if (!IsSpriteDmaChannelAvailable(spriteIndex))
             {
                 value = 0;
@@ -4357,6 +4488,37 @@ namespace CopperMod.Amiga
                 StoreLiveCapturedSpriteWord(row, spriteIndex, word, value);
             }
 
+            return true;
+        }
+
+        private bool TryReadPreviousLiveSpriteWord(
+            int row,
+            int spriteIndex,
+            int word,
+            out ushort value,
+            out bool denied)
+        {
+            value = 0;
+            denied = false;
+            if (_previousLiveSpriteFrameStartCycle != _renderFrameStartCycle ||
+                (uint)row >= (uint)LowResOutputHeight ||
+                (uint)spriteIndex >= LiveSpriteChannelCount ||
+                (uint)word >= LiveSpriteWordsPerChannel)
+            {
+                return false;
+            }
+
+            var maskIndex = GetLiveSpriteMaskIndex(row, spriteIndex);
+            var bit = (byte)(1 << word);
+            if ((_previousLiveSpriteWordMasks[maskIndex] & bit) == 0)
+            {
+                return false;
+            }
+
+            denied = (_previousLiveSpriteDeniedMasks[maskIndex] & bit) != 0;
+            value = denied
+                ? (ushort)0
+                : _previousLiveSpriteWords[GetLiveSpriteWordIndex(row, spriteIndex, word)];
             return true;
         }
 
@@ -4576,6 +4738,13 @@ namespace CopperMod.Amiga
             }
         }
 
+        private void ClearLiveBitplaneWordMasksFrom(int row)
+        {
+            row = Math.Clamp(row, 0, LowResOutputHeight);
+            var offset = row * LiveBitplanePlaneCount;
+            Array.Clear(_liveBitplaneWordMasks, offset, _liveBitplaneWordMasks.Length - offset);
+        }
+
         private void ClearLiveSpriteWordMasksFrom(int row)
         {
             row = Math.Clamp(row, 0, LowResOutputHeight);
@@ -4626,6 +4795,12 @@ namespace CopperMod.Amiga
             }
 
             controlRow = Math.Clamp(controlRow, 0, LowResOutputHeight);
+            if (state.LastVisibleStop >= 0 && controlRow <= state.LastVisibleStop)
+            {
+                state.ControlAddress = _sprites[spriteIndex].Pointer;
+                return;
+            }
+
             if (state.Active || state.HasPendingPos)
             {
                 state.ControlAddress = _sprites[spriteIndex].Pointer;
@@ -5155,7 +5330,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (offset is 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102)
+            if (offset is 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x102)
             {
                 return false;
             }
@@ -6686,6 +6861,24 @@ namespace CopperMod.Amiga
                 }
             }
 
+            if (commands.Count == 0 &&
+                _previousLiveSpriteFrameStartCycle == _renderFrameStartCycle)
+            {
+                for (var i = 0; i < _previousLiveSpriteFrameCommands.Count; i++)
+                {
+                    var command = _previousLiveSpriteFrameCommands[i];
+                    if (command.SpriteIndex == spriteIndex)
+                    {
+                        AppendUniqueSpriteFrameCommand(commands, command);
+                    }
+                }
+
+                if (commands.Count > 0)
+                {
+                    return commands;
+                }
+            }
+
             var sprite = _sprites[spriteIndex];
             var allowStateFallback = !_renderingLiveCapture &&
                 (!_useTimedPresentationReads ||
@@ -6729,6 +6922,29 @@ namespace CopperMod.Amiga
 
             for (var i = commands.Count - 1; i >= 0; i--)
             {
+                if (IsOverlappingRestartOfSameSpriteImage(commands[i], command))
+                {
+                    return;
+                }
+
+                if (IsOverlappingRestartOfSameSpriteImage(command, commands[i]))
+                {
+                    commands[i] = command;
+                    return;
+                }
+
+                if (commands[i].SpriteIndex == command.SpriteIndex &&
+                    commands[i].Descriptor.HasSameRenderingAs(command.Descriptor))
+                {
+                    if (commands[i].Row <= command.Row)
+                    {
+                        return;
+                    }
+
+                    commands[i] = command;
+                    return;
+                }
+
                 if (commands[i].HasSameRenderingAs(command))
                 {
                     return;
@@ -6736,6 +6952,27 @@ namespace CopperMod.Amiga
             }
 
             commands.Add(command);
+        }
+
+        private static bool IsOverlappingRestartOfSameSpriteImage(SpriteFrameCommand earlier, SpriteFrameCommand later)
+        {
+            if (earlier.SpriteIndex != later.SpriteIndex)
+            {
+                return false;
+            }
+
+            var first = earlier.Descriptor;
+            var second = later.Descriptor;
+            return first.X == second.X &&
+                first.YStart <= second.YStart &&
+                second.YStart < first.YStop &&
+                first.YStop == second.YStop &&
+                first.Attached == second.Attached &&
+                first.DataAddress == second.DataAddress &&
+                first.IsDma == second.IsDma &&
+                first.ManualDataA == second.ManualDataA &&
+                first.ManualDataB == second.ManualDataB &&
+                earlier.Row <= later.Row;
         }
 
         private static int FindAttachedEvenSprite(
@@ -8245,6 +8482,7 @@ namespace CopperMod.Amiga
             private readonly Dictionary<PlanarChunkKey, PlanarChunkDecoded> _planarChunkCache = new Dictionary<PlanarChunkKey, PlanarChunkDecoded>(4096);
             private long _frameStartCycle;
             private int _generation = 1;
+            private int _stateCount;
 
             public DisplayFrameTimeline()
             {
@@ -8293,7 +8531,7 @@ namespace CopperMod.Amiga
                 PlanarChunkCacheHits = 0;
                 PlanarChunkCacheMisses = 0;
                 SpriteDeniedFetchCount = 0;
-                _states.Clear();
+                _stateCount = 0;
                 _spriteFrameCommands.Clear();
                 _planarChunkCache.Clear();
                 _generation++;
@@ -8411,27 +8649,29 @@ namespace CopperMod.Amiga
 
             public DisplayTimelineState AddStateSnapshot()
             {
-                if (_states.Count >= MaxTimelineStateSnapshots)
+                if (_stateCount >= MaxTimelineStateSnapshots)
                 {
-                    var fallback = _states.Count == 0
-                        ? new DisplayTimelineState(0)
-                        : _states[^1];
                     if (_states.Count == 0)
                     {
-                        _states.Add(fallback);
+                        _states.Add(new DisplayTimelineState(0));
                     }
 
-                    return fallback;
+                    return _states[Math.Max(0, Math.Min(_stateCount - 1, _states.Count - 1))];
                 }
 
-                var state = new DisplayTimelineState(_states.Count);
-                _states.Add(state);
+                if (_stateCount >= _states.Count)
+                {
+                    _states.Add(new DisplayTimelineState(_states.Count));
+                }
+
+                var state = _states[_stateCount];
+                _stateCount++;
                 return state;
             }
 
             public DisplayTimelineState GetState(int index)
             {
-                return _states[Math.Clamp(index, 0, Math.Max(0, _states.Count - 1))];
+                return _states[Math.Clamp(index, 0, Math.Max(0, _stateCount - 1))];
             }
 
             public DisplayLineTimeline GetLine(int row)
@@ -8749,7 +8989,7 @@ namespace CopperMod.Amiga
                     return true;
                 }
 
-                chunk = null!;
+                chunk = default;
                 PlanarChunkCacheMisses++;
                 return false;
             }
@@ -8929,10 +9169,36 @@ namespace CopperMod.Amiga
             }
         }
 
-        private sealed class PlanarChunkDecoded
+        private readonly struct PlanarChunkDecoded
         {
-            public readonly byte[] ColorIndexes = new byte[PlanarChunkPixels];
-            public readonly byte[] PriorityMasks = new byte[PlanarChunkPixels];
+            private readonly ulong _colorIndexesLow;
+            private readonly ulong _colorIndexesHigh;
+            private readonly ulong _priorityMasksLow;
+            private readonly ulong _priorityMasksHigh;
+
+            public PlanarChunkDecoded(
+                ulong colorIndexesLow,
+                ulong colorIndexesHigh,
+                ulong priorityMasksLow,
+                ulong priorityMasksHigh)
+            {
+                _colorIndexesLow = colorIndexesLow;
+                _colorIndexesHigh = colorIndexesHigh;
+                _priorityMasksLow = priorityMasksLow;
+                _priorityMasksHigh = priorityMasksHigh;
+            }
+
+            public byte GetColorIndex(int pixel)
+            {
+                var shift = (pixel & 7) * 8;
+                return (byte)(((pixel < 8 ? _colorIndexesLow : _colorIndexesHigh) >> shift) & 0xFF);
+            }
+
+            public byte GetPriorityMask(int pixel)
+            {
+                var shift = (pixel & 7) * 8;
+                return (byte)(((pixel < 8 ? _priorityMasksLow : _priorityMasksHigh) >> shift) & 0xFF);
+            }
         }
 
         private sealed class LiveSpriteDmaState
@@ -10142,7 +10408,7 @@ namespace CopperMod.Amiga
 
         public void AdvanceTo(long targetCycle)
         {
-            targetCycle = Math.Max(0, targetCycle);
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Blitter advance cycles must be non-negative.");
             if (!_busy)
             {
                 _currentCycle = Math.Max(_currentCycle, targetCycle);
@@ -10247,6 +10513,7 @@ namespace CopperMod.Amiga
 
         private void StartBlit(ushort bltsize, long cycle)
         {
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter start cycles must be non-negative.");
             AdvanceTo(cycle);
             if (_busy)
             {
@@ -10260,7 +10527,7 @@ namespace CopperMod.Amiga
             _completionPending = false;
             _lastDmaCycle = 0;
             _completedMicroOps = 0;
-            _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, Math.Max(0, cycle)) + ChipSlotCycles);
+            _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, cycle) + ChipSlotCycles);
             _previousA = 0;
             if (_useB)
             {

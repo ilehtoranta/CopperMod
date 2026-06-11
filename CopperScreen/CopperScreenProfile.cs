@@ -34,6 +34,8 @@ internal sealed class CopperScreenProfile
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
+		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
+		CopperScreenInputOptions input,
 		string? configPath)
 	{
 		Id = id;
@@ -48,6 +50,8 @@ internal sealed class CopperScreenProfile
 		CpuBackend = cpuBackend;
 		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
+		MediaDrives = mediaDrives;
+		Input = input;
 		ConfigPath = configPath;
 	}
 
@@ -74,6 +78,10 @@ internal sealed class CopperScreenProfile
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
 
 	public CopperScreenKickstartSource KickstartSource { get; }
+
+	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
+
+	public CopperScreenInputOptions Input { get; }
 
 	public string? ConfigPath { get; }
 
@@ -196,6 +204,8 @@ internal sealed class CopperScreenProfile
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
 		var floppyDriveAudio = ParseFloppyDriveAudio(config.Audio?.FloppyDriveSounds);
+		var mediaDrives = ParseMediaDrives(config.Media);
+		var input = ParseInputOptions(config.Input);
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -219,7 +229,49 @@ internal sealed class CopperScreenProfile
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
+			mediaDrives,
+			input,
 			Path.GetFullPath(path));
+	}
+
+	internal static CopperScreenProfile Create(
+		string id,
+		string displayName,
+		string description,
+		int chipRamSize,
+		int expansionRamSize,
+		uint expansionRamBase,
+		int realFastRamSize,
+		uint realFastRamBase,
+		int floppyDriveCount,
+		M68kBackendKind cpuBackend,
+		FloppyDriveAudioOptions floppyDriveAudio,
+		CopperScreenKickstartSource kickstartSource,
+		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
+		CopperScreenInputOptions input,
+		string? configPath = null)
+	{
+		if (floppyDriveCount is < 1 or > 4)
+		{
+			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
+		}
+
+		return new CopperScreenProfile(
+			Required(id, "id"),
+			Required(displayName, "displayName"),
+			string.IsNullOrWhiteSpace(description) ? Required(displayName, "displayName") : description.Trim(),
+			chipRamSize,
+			expansionRamSize,
+			expansionRamBase,
+			realFastRamSize,
+			realFastRamBase,
+			floppyDriveCount,
+			cpuBackend,
+			floppyDriveAudio,
+			kickstartSource,
+			mediaDrives,
+			input,
+			configPath);
 	}
 
 	private static string? ResolveProfilePath(string specifier, string baseDirectory)
@@ -349,6 +401,97 @@ internal sealed class CopperScreenProfile
 			FloppyDriveAudioOptions.ClampVolume(config.Volume ?? FloppyDriveAudioOptions.DefaultVolume));
 	}
 
+	private static IReadOnlyList<CopperScreenMediaDriveSettings> ParseMediaDrives(MediaFile? config)
+	{
+		if (config?.Drives == null || config.Drives.Length == 0)
+		{
+			return Array.Empty<CopperScreenMediaDriveSettings>();
+		}
+
+		var drives = new List<CopperScreenMediaDriveSettings>(config.Drives.Length);
+		for (var i = 0; i < config.Drives.Length; i++)
+		{
+			var drive = config.Drives[i];
+			var index = drive.Index ?? i;
+			if (index is < 0 or > 3)
+			{
+				throw new InvalidOperationException("media.drives[].index must be between 0 and 3.");
+			}
+
+			drives.Add(new CopperScreenMediaDriveSettings(
+				index,
+				string.IsNullOrWhiteSpace(drive.DiskPath) ? null : drive.DiskPath.Trim(),
+				drive.WriteProtected));
+		}
+
+		return drives;
+	}
+
+	private static CopperScreenInputOptions ParseInputOptions(InputFile? config)
+	{
+		if (config == null)
+		{
+			return CopperScreenInputOptions.Default;
+		}
+
+		if (config.Ports != null || config.ControllerProfiles is { Length: > 0 })
+		{
+			return CopperScreenInputOptions.Create(
+				config.Ports?.Port1?.ProfileId,
+				config.Ports?.Port2?.ProfileId,
+				ParseControllerProfiles(config.ControllerProfiles));
+		}
+
+		return CopperScreenInputOptions.Create(
+			config.MousePort ?? CopperScreenInputOptions.DefaultMousePort,
+			ParseJoystickKeyMap(config.JoystickKeys));
+	}
+
+	private static IReadOnlyList<CopperScreenControllerProfile> ParseControllerProfiles(ControllerProfileFile[]? profiles)
+	{
+		if (profiles == null || profiles.Length == 0)
+		{
+			return CopperScreenInputOptions.DefaultControllerProfiles;
+		}
+
+		var parsed = new List<CopperScreenControllerProfile>(profiles.Length);
+		foreach (var profile in profiles)
+		{
+			var id = CopperScreenInputOptions.NormalizeProfileId(profile.Id);
+			if (string.IsNullOrWhiteSpace(id))
+			{
+				continue;
+			}
+
+			parsed.Add(new CopperScreenControllerProfile(
+				id,
+				string.IsNullOrWhiteSpace(profile.DisplayName) ? id : profile.DisplayName.Trim(),
+				ParseControllerKind(profile.Kind),
+				ParseJoystickKeyMap(profile.JoystickKeys)));
+		}
+
+		return parsed;
+	}
+
+	private static CopperScreenControllerKind ParseControllerKind(string? value)
+	{
+		if (Enum.TryParse<CopperScreenControllerKind>(value, ignoreCase: true, out var kind))
+		{
+			return kind;
+		}
+
+		return CopperScreenControllerKind.None;
+	}
+
+	private static CopperScreenJoystickKeyMap ParseJoystickKeyMap(JoystickKeysFile? keys)
+		=> CopperScreenJoystickKeyMap.Create(
+			keys?.Up,
+			keys?.Down,
+			keys?.Left,
+			keys?.Right,
+			keys?.Fire,
+			keys?.SecondFire);
+
 	private static FloppyDriveAudioMode ParseFloppyDriveAudioMode(string? value)
 	{
 		if (FloppyDriveAudioOptions.TryParseMode(value, out var mode))
@@ -374,6 +517,8 @@ internal sealed class CopperScreenProfile
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
+			Array.Empty<CopperScreenMediaDriveSettings>(),
+			CopperScreenInputOptions.Default,
 			null);
 	}
 
@@ -392,6 +537,10 @@ internal sealed class CopperScreenProfile
 		public AudioFile? Audio { get; set; }
 
 		public KickstartFile? Kickstart { get; set; }
+
+		public MediaFile? Media { get; set; }
+
+		public InputFile? Input { get; set; }
 	}
 
 	private sealed class MachineFile
@@ -437,5 +586,68 @@ internal sealed class CopperScreenProfile
 		public string? Source { get; set; }
 
 		public string? Version { get; set; }
+	}
+
+	private sealed class MediaFile
+	{
+		public MediaDriveFile[]? Drives { get; set; }
+	}
+
+	private sealed class MediaDriveFile
+	{
+		public int? Index { get; set; }
+
+		public string? DiskPath { get; set; }
+
+		public bool? WriteProtected { get; set; }
+	}
+
+	private sealed class InputFile
+	{
+		public int? MousePort { get; set; }
+
+		public JoystickKeysFile? JoystickKeys { get; set; }
+
+		public InputPortsFile? Ports { get; set; }
+
+		public ControllerProfileFile[]? ControllerProfiles { get; set; }
+	}
+
+	private sealed class InputPortsFile
+	{
+		public InputPortFile? Port1 { get; set; }
+
+		public InputPortFile? Port2 { get; set; }
+	}
+
+	private sealed class InputPortFile
+	{
+		public string? ProfileId { get; set; }
+	}
+
+	private sealed class ControllerProfileFile
+	{
+		public string? Id { get; set; }
+
+		public string? DisplayName { get; set; }
+
+		public string? Kind { get; set; }
+
+		public JoystickKeysFile? JoystickKeys { get; set; }
+	}
+
+	private sealed class JoystickKeysFile
+	{
+		public string[]? Up { get; set; }
+
+		public string[]? Down { get; set; }
+
+		public string[]? Left { get; set; }
+
+		public string[]? Right { get; set; }
+
+		public string[]? Fire { get; set; }
+
+		public string[]? SecondFire { get; set; }
 	}
 }

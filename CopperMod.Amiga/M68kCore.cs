@@ -588,6 +588,23 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (condition == 2 || condition == 3)
+            {
+                var carryOrZero = (State.StatusRegister & (M68kCpuState.Carry | M68kCpuState.Zero)) != 0;
+                if (condition == 2 ? !carryOrZero : carryOrZero)
+                {
+                    State.ProgramCounter = (uint)(branchBase + offset);
+                    AddCycles(displacement == 0 ? 10 : 10);
+                }
+                else
+                {
+                    _ = instructionPc;
+                    AddCycles(8);
+                }
+
+                return true;
+            }
+
             if (condition == 6)
             {
                 if ((State.StatusRegister & M68kCpuState.Zero) == 0)
@@ -637,6 +654,11 @@ namespace CopperMod.Amiga
         private bool DecodeLine0(ushort opcode, uint instructionPc)
         {
             if (DecodeImmediateToStatusRegister(opcode, instructionPc))
+            {
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x0800 && TryDecodeImmediateBtst(opcode))
             {
                 return true;
             }
@@ -704,6 +726,16 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (opcode == 0x0C39)
+            {
+                var compareImmediate = FetchWord() & 0xFFu;
+                var compareAddress = FetchLong();
+                var compareDestination = ReadByte(compareAddress);
+                SetCompareByteFlags(compareDestination, compareImmediate);
+                AddCycles(GetCmpiCycles(M68kOperandSize.Byte, 7, 1));
+                return true;
+            }
+
             var high = opcode & 0xFF00;
             if (high != 0x0000 && high != 0x0200 && high != 0x0400 && high != 0x0600 && high != 0x0A00 && high != 0x0C00)
             {
@@ -746,7 +778,7 @@ namespace CopperMod.Amiga
                     break;
             }
 
-            AddCycles(size == M68kOperandSize.Long ? 16 : 8);
+            AddCycles(high == 0x0C00 ? GetCmpiCycles(size, mode, reg) : size == M68kOperandSize.Long ? 16 : 8);
             return true;
         }
 
@@ -1140,6 +1172,109 @@ namespace CopperMod.Amiga
             ea.Write(result);
             AddCycles(size == M68kOperandSize.Long ? 8 : 4);
             return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SetCompareByteFlags(uint destination, uint source)
+        {
+            destination &= 0xFF;
+            source &= 0xFF;
+            var result = (destination - source) & 0xFF;
+            State.SetNegativeZero(result, M68kOperandSize.Byte);
+            State.SetFlag(
+                M68kCpuState.Overflow,
+                ((destination ^ source) & (destination ^ result) & 0x80) != 0);
+            State.SetFlag(M68kCpuState.Carry, source > destination);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryDecodeImmediateBtst(ushort opcode)
+        {
+            var mode = (opcode >> 3) & 7;
+            var reg = opcode & 7;
+            if (!IsValidImmediateBtstEa(mode, reg))
+            {
+                return false;
+            }
+
+            var bit = FetchWord() & 31;
+            var bitSize = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
+            var bitEa = ResolveEa(mode, reg, bitSize);
+            var value = bitEa.Read();
+            var maskedBit = mode == 0 ? bit : bit & 7;
+            State.SetFlag(M68kCpuState.Zero, (value & (1u << maskedBit)) == 0);
+            AddCycles(GetImmediateBtstCycles(mode, reg));
+            return true;
+        }
+
+        private static bool IsValidImmediateBtstEa(int mode, int reg)
+        {
+            return mode switch
+            {
+                0 => true,
+                2 or 3 or 4 or 5 or 6 => true,
+                7 => reg <= 3,
+                _ => false
+            };
+        }
+
+        private static int GetImmediateBtstCycles(int mode, int reg)
+        {
+            return mode == 0 ? 10 : 8 + GetByteWordEaOperandCycles(mode, reg);
+        }
+
+        private static int GetCmpiCycles(M68kOperandSize size, int mode, int reg)
+        {
+            if (mode == 0)
+            {
+                return size == M68kOperandSize.Long ? 16 : 8;
+            }
+
+            var eaCycles = GetEaOperandCycles(mode, reg, size);
+            return (size == M68kOperandSize.Long ? 12 : 8) + eaCycles;
+        }
+
+        private static int GetEaOperandCycles(int mode, int reg, M68kOperandSize size)
+        {
+            return size == M68kOperandSize.Long
+                ? GetLongEaOperandCycles(mode, reg)
+                : GetByteWordEaOperandCycles(mode, reg);
+        }
+
+        private static int GetByteWordEaOperandCycles(int mode, int reg)
+        {
+            return mode switch
+            {
+                2 or 3 => 4,
+                4 => 6,
+                5 => 8,
+                6 => 10,
+                7 => reg switch
+                {
+                    0 or 2 => 8,
+                    1 or 3 => 12,
+                    _ => throw new InvalidOperationException("Invalid byte/word effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid byte/word effective-address timing mode.")
+            };
+        }
+
+        private static int GetLongEaOperandCycles(int mode, int reg)
+        {
+            return mode switch
+            {
+                2 or 3 => 8,
+                4 => 10,
+                5 => 12,
+                6 => 14,
+                7 => reg switch
+                {
+                    0 or 2 => 12,
+                    1 or 3 => 16,
+                    _ => throw new InvalidOperationException("Invalid long effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid long effective-address timing mode.")
+            };
         }
 
         private bool DecodeArithmetic(ushort opcode)
@@ -1910,30 +2045,30 @@ namespace CopperMod.Amiga
             State.SetFlag(M68kCpuState.Carry, false);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CheckCondition(int condition)
         {
-            var c = State.GetFlag(M68kCpuState.Carry);
-            var v = State.GetFlag(M68kCpuState.Overflow);
-            var z = State.GetFlag(M68kCpuState.Zero);
-            var n = State.GetFlag(M68kCpuState.Negative);
+            var status = State.StatusRegister;
             return condition switch
             {
                 0x0 => true,
                 0x1 => false,
-                0x2 => !c && !z,
-                0x3 => c || z,
-                0x4 => !c,
-                0x5 => c,
-                0x6 => !z,
-                0x7 => z,
-                0x8 => !v,
-                0x9 => v,
-                0xA => !n,
-                0xB => n,
-                0xC => n == v,
-                0xD => n != v,
-                0xE => !z && n == v,
-                0xF => z || n != v,
+                0x2 => (status & (M68kCpuState.Carry | M68kCpuState.Zero)) == 0,
+                0x3 => (status & (M68kCpuState.Carry | M68kCpuState.Zero)) != 0,
+                0x4 => (status & M68kCpuState.Carry) == 0,
+                0x5 => (status & M68kCpuState.Carry) != 0,
+                0x6 => (status & M68kCpuState.Zero) == 0,
+                0x7 => (status & M68kCpuState.Zero) != 0,
+                0x8 => (status & M68kCpuState.Overflow) == 0,
+                0x9 => (status & M68kCpuState.Overflow) != 0,
+                0xA => (status & M68kCpuState.Negative) == 0,
+                0xB => (status & M68kCpuState.Negative) != 0,
+                0xC => ((status ^ (status << 2)) & M68kCpuState.Negative) == 0,
+                0xD => ((status ^ (status << 2)) & M68kCpuState.Negative) != 0,
+                0xE => (status & M68kCpuState.Zero) == 0 &&
+                    ((status ^ (status << 2)) & M68kCpuState.Negative) == 0,
+                0xF => (status & M68kCpuState.Zero) != 0 ||
+                    ((status ^ (status << 2)) & M68kCpuState.Negative) != 0,
                 _ => false
             };
         }

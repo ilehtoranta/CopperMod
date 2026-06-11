@@ -1722,16 +1722,19 @@ namespace CopperMod.Amiga
                             plan.CompletionCycle);
                     }
 
-                    AppendDivergenceTrace(
-                        AmigaDiskTraceEventKind.DmaWord,
-                        plan.CompletionCycle,
-                        drive: _activeDmaDrive,
-                        requestedWords: _activeDmaRequestedWords,
-                        transferredWords: word + 1,
-                        sourceBit: plan.SourceBit,
-                        targetAddress: targetAddress,
-                        completionCycle: _activeDmaCompletionCycle,
-                        detail: _activeDmaWriteMode ? $"write=0x{value:X4}" : $"value=0x{value:X4}");
+                    if (_traceRecorder != null)
+                    {
+                        AppendDivergenceTrace(
+                            AmigaDiskTraceEventKind.DmaWord,
+                            plan.CompletionCycle,
+                            drive: _activeDmaDrive,
+                            requestedWords: _activeDmaRequestedWords,
+                            transferredWords: word + 1,
+                            sourceBit: plan.SourceBit,
+                            targetAddress: targetAddress,
+                            completionCycle: _activeDmaCompletionCycle,
+                            detail: _activeDmaWriteMode ? $"write=0x{value:X4}" : $"value=0x{value:X4}");
+                    }
                     _activeDmaNextSourceBit = plan.NextSourceBit;
                     _activeDmaNextWordStartCycle = plan.NextWordStartCycle;
                     _activeDmaTransferredWords++;

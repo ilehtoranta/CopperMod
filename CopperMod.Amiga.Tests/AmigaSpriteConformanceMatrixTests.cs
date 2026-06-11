@@ -826,6 +826,49 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void TimedFallbackUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.AdvanceDmaTo(FrameCycles());
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 15));
+		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
+		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
+		Assert.Equal(0, snapshot.LastArchivedTimelineFrameCount);
+		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
+		Assert.Equal(0, snapshot.LastTimelineSegmentCount);
+	}
+
+	[Fact]
+	public void ArchivedLiveSpriteCommandsCoalesceSameDescriptorWithLaterRows()
+	{
+		var expectedBus = CreateArchivedSpriteFallbackBus(rewritePointer: false);
+		var actualBus = CreateArchivedSpriteFallbackBus(rewritePointer: true);
+		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		var actual = new uint[expected.Length];
+
+		expectedBus.AdvanceDmaTo(FrameCycles());
+		expectedBus.Display.RenderFrame(expected, 0, FrameCycles());
+		actualBus.AdvanceDmaTo(FrameCycles());
+		actualBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+		var snapshot = actualBus.Display.CaptureSnapshot();
+		Assert.Equal(expected, actual);
+		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
+		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
+	}
+
+	[Fact]
 	public void LiveDmaArchivedTimelineAcceptsCopperSpritePointerWrites()
 	{
 		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
@@ -925,6 +968,29 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		}
 	}
 
+	private static void WriteSpriteDmaRows(
+		AmigaBus bus,
+		uint address,
+		int x,
+		int y,
+		int height,
+		ushort dataA,
+		ushort dataB)
+	{
+		var (pos, ctl) = EncodeSpritePosition(x, y, height);
+		WriteChipWord(bus, address, pos);
+		WriteChipWord(bus, address + 2, ctl);
+		for (var row = 0; row < height; row++)
+		{
+			WriteChipWord(bus, address + 4 + (uint)(row * 4), dataA);
+			WriteChipWord(bus, address + 6 + (uint)(row * 4), dataB);
+		}
+
+		var terminator = address + 4 + (uint)(height * 4);
+		WriteChipWord(bus, terminator, 0);
+		WriteChipWord(bus, terminator + 2, 0);
+	}
+
 	private static void WriteChipWord(AmigaBus bus, uint address, ushort value)
 	{
 		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address), value);
@@ -960,6 +1026,24 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.WriteWord(0x00DFF100, 0x1000);
 		EnableSpriteDma(bus, 0x8320);
 		bus.WriteWord(0x00DFF092, 0x0018, RowCycle(StandardY - 1));
+		return bus;
+	}
+
+	private static AmigaBus CreateArchivedSpriteFallbackBus(bool rewritePointer)
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		if (rewritePointer)
+		{
+			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY - 1));
+			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY + 5));
+			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY + 12));
+		}
+
+		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
 		return bus;
 	}
 

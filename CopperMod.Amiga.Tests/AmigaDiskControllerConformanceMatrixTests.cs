@@ -593,12 +593,12 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		var bus = CreateBusWithTrack(0x1234);
 		SelectDriveAndStartMotor(bus, drive: 0);
 
-		var beforeReadyCycle = MotorReadyDelayCycles() - 1;
+		var beforeReadyCycle = MotorReadyCycle() - AmigaConstants.A500PalCpuCyclesPerCiaTick - 1;
 		var cycle = beforeReadyCycle;
 		var beforeReady = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.NotEqual(0, beforeReady & 0x20);
 
-		cycle = MotorReadyDelayCycles();
+		cycle = MotorReadyCycle();
 		var ready = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.Equal(0, ready & 0x20);
 	}
@@ -614,7 +614,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		WriteDsklenStartSequence(bus, words: 2);
 		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
 
-		bus.AdvanceDmaTo(MotorReadyDelayCycles());
+		bus.AdvanceDmaTo(MotorReadyCycle());
 		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
 
 		CompleteDiskDma(bus);
@@ -1101,14 +1101,28 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 	private static long AdvanceToMotorReady(AmigaBus bus, long cycle = 0)
 	{
-		var readyCycle = cycle + MotorReadyDelayCycles();
+		var readyCycle = MotorReadyCycle(cycle);
 		bus.AdvanceDmaTo(readyCycle);
 		return readyCycle;
+	}
+
+	private static long MotorReadyCycle(long cycle = 0)
+	{
+		return ExpectedCiaAccessCycle(cycle) + MotorReadyDelayCycles();
 	}
 
 	private static long MotorReadyDelayCycles()
 	{
 		return Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
+	}
+
+	private static long ExpectedCiaAccessCycle(long requestedCycle)
+	{
+		var cycle = Math.Max(0, requestedCycle + 1);
+		var remainder = cycle % AmigaConstants.A500PalCpuCyclesPerCiaTick;
+		return remainder == 0
+			? cycle
+			: cycle + AmigaConstants.A500PalCpuCyclesPerCiaTick - remainder;
 	}
 
 	private static void SetDiskPointer(AmigaBus bus, uint targetAddress, long cycle = 0)
