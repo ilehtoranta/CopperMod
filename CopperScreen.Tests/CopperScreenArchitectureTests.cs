@@ -270,6 +270,25 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void ProfileStoreListsFallbackDefaultWhenNoProfilesExist()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(baseDirectory);
+		try
+		{
+			var profiles = CopperScreenProfileStore.ListProfiles(baseDirectory);
+
+			var profile = Assert.Single(profiles);
+			Assert.Equal(CopperScreenProfile.DefaultProfileId, profile.Id);
+			Assert.Equal("Fallback default", profile.Path);
+		}
+		finally
+		{
+			Directory.Delete(baseDirectory, recursive: true);
+		}
+	}
+
+	[Fact]
 	public void JoystickKeyMapRejectsReservedHostShortcuts()
 	{
 		var map = CopperScreenJoystickKeyMap.Create(

@@ -1752,9 +1752,9 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
-    public void DisplayCopperMoveToIntreqReachesPaulaInterruptState()
+    public void DisplayCopperMoveToIntreqDoesNotReplayPaulaInterruptState()
     {
-        var bus = new AmigaBus();
+        var bus = new AmigaBus(enableLiveAgnusDma: false);
         BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x009C);
         BigEndian.WriteUInt16(bus.ChipRam, 0x2402, (ushort)(0x8000 | AmigaConstants.IntreqCopper));
         BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0xFFFF);
@@ -1764,12 +1764,14 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF082, 0x2400);
         bus.Paula.AdvanceTo(0);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var writesBeforeRender = bus.CustomRegisterWrites.Count;
 
         bus.Display.RenderFrame(frame);
         bus.Paula.AdvanceTo(10);
 
-        Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
-        Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
+        Assert.Equal(writesBeforeRender, bus.CustomRegisterWrites.Count);
+        Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
+        Assert.Equal(0, bus.Paula.GetHighestPendingInterruptLevel());
     }
 
     [Fact]
@@ -1947,7 +1949,24 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 128, StandardY + 65));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 64, StandardY + 65));
+    }
+
+    [Fact]
+    public void HardwareSpriteHorizontalByteFortyCanReachStandardLeftEdge()
+    {
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF1A2, 0x000F);
+        bus.WriteWord(0x00DFF140, 0x2C40);
+        bus.WriteWord(0x00DFF142, 0x2D00);
+        bus.WriteWord(0x00DFF144, 0x8000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 64, StandardY));
     }
 
     [Fact]
@@ -3631,7 +3650,7 @@ public sealed class AmigaDiskDisplayTests
 
     private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height, bool attached = false)
     {
-        var hStart = x + 64 - AmigaConstants.PalLowResOverscanBorderX;
+        var hStart = x + 128 - AmigaConstants.PalLowResOverscanBorderX;
         var vStart = y + (0x2C - AmigaConstants.PalLowResOverscanBorderY);
         var vStop = vStart + height;
         var pos = (ushort)(((vStart & 0xFF) << 8) | ((hStart >> 1) & 0xFF));

@@ -143,6 +143,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("manual-control", "DATB alone does not arm");
 			yield return SpriteConformanceRow.Executable("manual-control", "DATB before DATAA arms both words");
 			yield return SpriteConformanceRow.Executable("manual-control", "manual sprite repeats on following scan lines until disabled");
+			yield return SpriteConformanceRow.Executable("manual-control", "zero-height control does not render stale manual data");
 			yield return SpriteConformanceRow.Executable("manual-control", "SPRxCTL disarms");
 			yield return SpriteConformanceRow.Executable("manual-control", "SPRxPOS can move armed sprite");
 			yield return SpriteConformanceRow.Executable("dma-list", "zero control words terminate");
@@ -301,11 +302,35 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
-	public void AttachedOddSpriteWithoutEvenPartnerUsesHighColorBits()
+	public void AttachedOddSpriteWithoutEvenPartnerDoesNotRender()
 	{
 		var bus = new AmigaBus();
 		SetColor(bus, 20, 0x0F00);
 		WriteManualSprite(bus, sprite: 1, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void AttachedEvenSpriteWithoutOddPartnerDoesNotRenderAsStandalone()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, 1, 0x00F0);
+		SetColor(bus, 17, 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void EvenSpriteAttachBitAttachesPairOnOcs()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, 21, 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
+		WriteManualSprite(bus, sprite: 1, StandardX, StandardY, 1, 0x8000, 0x0000);
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
@@ -321,6 +346,35 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void AttachedManualSpriteRepeatsFollowingScanLinesUntilCtlDisarmsIt()
+	{
+		var bus = CreateDisplayComponentBus();
+		const ushort color = 0x0F00;
+		SetColor(bus, 21, color);
+		var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
+		var (oddPos, oddCtl) = EncodeSpritePosition(StandardX, StandardY, 1, attached: true);
+		var armCycle = RowCycle(StandardY);
+		var disarmCycle = RowCycle(StandardY + 2);
+		bus.Display.ScheduleWrite(armCycle, 0x140, evenPos);
+		bus.Display.ScheduleWrite(armCycle, 0x142, evenCtl);
+		bus.Display.ScheduleWrite(armCycle, 0x146, 0x0000);
+		bus.Display.ScheduleWrite(armCycle, 0x144, 0x8000);
+		bus.Display.ScheduleWrite(armCycle, 0x148, oddPos);
+		bus.Display.ScheduleWrite(armCycle, 0x14A, oddCtl);
+		bus.Display.ScheduleWrite(armCycle, 0x14E, 0x0000);
+		bus.Display.ScheduleWrite(armCycle, 0x14C, 0x8000);
+		bus.Display.ScheduleWrite(disarmCycle, 0x142, evenCtl);
+		bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(color), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(color), Pixel(frame, StandardX, StandardY + 1));
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY + 2));
 	}
 
 	[Fact]
@@ -493,6 +547,49 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void ManualSpriteZeroHeightControlDoesNotRenderStaleData()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		var (pos, ctl) = EncodeSpritePosition(StandardX, StandardY, 0);
+		bus.WriteWord(0x00DFF140, pos);
+		bus.WriteWord(0x00DFF142, ctl);
+		bus.WriteWord(0x00DFF146, 0x0000);
+		bus.WriteWord(0x00DFF144, 0x8000);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
+	public void LiveTimelineManualSpriteZeroHeightControlDoesNotRenderStaleData()
+	{
+		var presentationBus = CreateDisplayComponentBus();
+		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
+		foreach (var bus in new[] { presentationBus, liveBus })
+		{
+			SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+			var (pos, ctl) = EncodeSpritePosition(StandardX, StandardY, 0);
+			var armCycle = RowCycle(StandardY);
+			bus.Display.ScheduleWrite(armCycle, 0x140, pos);
+			bus.Display.ScheduleWrite(armCycle, 0x142, ctl);
+			bus.Display.ScheduleWrite(armCycle, 0x146, 0x0000);
+			bus.Display.ScheduleWrite(armCycle, 0x144, 0x8000);
+		}
+
+		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		var actual = new uint[expected.Length];
+		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+		liveBus.AdvanceDmaTo(FrameCycles());
+		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+		Assert.Equal(expected, actual);
+		Assert.Equal(ToBgra(0), Pixel(actual, StandardX, StandardY));
+		Assert.Equal(0, liveBus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
 	public void ManualSpriteRepeatsFollowingScanLinesUntilCtlDisarmsIt()
 	{
 		var bus = CreateDisplayComponentBus();
@@ -510,6 +607,29 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.Display.RenderFrame(frame, 0, FrameCycles());
 
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 1));
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY + 2));
+	}
+
+	[Fact]
+	public void ManualSpriteDataWriteAfterHorizontalMatchStartsOnNextScanLine()
+	{
+		var bus = CreateDisplayComponentBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		var (pos, ctl) = EncodeSpritePosition(StandardX, StandardY, 1);
+		var armCycle = RowCycle(StandardY);
+		var lateDataCycle = AfterSpriteMatchCycle(StandardY, StandardX);
+		var disarmCycle = RowCycle(StandardY + 2);
+		bus.Display.ScheduleWrite(armCycle, 0x140, pos);
+		bus.Display.ScheduleWrite(armCycle, 0x142, ctl);
+		bus.Display.ScheduleWrite(lateDataCycle, 0x146, 0x0000);
+		bus.Display.ScheduleWrite(lateDataCycle, 0x144, 0x8000);
+		bus.Display.ScheduleWrite(disarmCycle, 0x142, ctl);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 1));
 		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY + 2));
 	}
@@ -826,6 +946,97 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void LiveDmaArchivedTimelineRendersAttachedManualSpriteRepeats()
+	{
+		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
+		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
+		foreach (var bus in new[] { presentationBus, liveBus })
+		{
+			const ushort color = 0x0F00;
+			SetColor(bus, 21, color);
+			var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
+			var (oddPos, oddCtl) = EncodeSpritePosition(StandardX, StandardY, 1, attached: true);
+			var armCycle = RowCycle(StandardY);
+			var disarmCycle = RowCycle(StandardY + 2);
+			bus.Display.ScheduleWrite(armCycle, 0x140, evenPos);
+			bus.Display.ScheduleWrite(armCycle, 0x142, evenCtl);
+			bus.Display.ScheduleWrite(armCycle, 0x146, 0x0000);
+			bus.Display.ScheduleWrite(armCycle, 0x144, 0x8000);
+			bus.Display.ScheduleWrite(armCycle, 0x148, oddPos);
+			bus.Display.ScheduleWrite(armCycle, 0x14A, oddCtl);
+			bus.Display.ScheduleWrite(armCycle, 0x14E, 0x0000);
+			bus.Display.ScheduleWrite(armCycle, 0x14C, 0x8000);
+			bus.Display.ScheduleWrite(disarmCycle, 0x142, evenCtl);
+			bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
+		}
+
+		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		var actual = new uint[expected.Length];
+		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+		liveBus.AdvanceDmaTo(FrameCycles());
+		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+		var snapshot = liveBus.Display.CaptureSnapshot();
+		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
+		Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
+		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY + 1));
+		Assert.Equal(ToBgra(0), Pixel(actual, StandardX, StandardY + 2));
+		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
+		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
+		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
+		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
+	}
+
+	[Fact]
+	public void LiveDmaArchivedTimelineMatchesMultiLineAttachedManualSpritePair()
+	{
+		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
+		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
+		foreach (var bus in new[] { presentationBus, liveBus })
+		{
+			SetColor(bus, 21, 0x0F00);
+			SetColor(bus, 26, 0x00F0);
+			var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
+			var (oddPos, oddCtl) = EncodeSpritePosition(StandardX, StandardY, 1, attached: true);
+			var row0Cycle = RowCycle(StandardY);
+			var row1Cycle = RowCycle(StandardY + 1);
+			var disarmCycle = RowCycle(StandardY + 2);
+			var (row0EvenA, row0EvenB) = DataWordsForPixel(1, bitOffset: 0);
+			var (row0OddA, row0OddB) = DataWordsForPixel(1, bitOffset: 0);
+			var (row1EvenA, row1EvenB) = DataWordsForPixel(2, bitOffset: 0);
+			var (row1OddA, row1OddB) = DataWordsForPixel(2, bitOffset: 0);
+			bus.Display.ScheduleWrite(row0Cycle, 0x140, evenPos);
+			bus.Display.ScheduleWrite(row0Cycle, 0x142, evenCtl);
+			bus.Display.ScheduleWrite(row0Cycle, 0x148, oddPos);
+			bus.Display.ScheduleWrite(row0Cycle, 0x14A, oddCtl);
+			bus.Display.ScheduleWrite(row0Cycle, 0x146, row0EvenB);
+			bus.Display.ScheduleWrite(row0Cycle, 0x144, row0EvenA);
+			bus.Display.ScheduleWrite(row0Cycle, 0x14E, row0OddB);
+			bus.Display.ScheduleWrite(row0Cycle, 0x14C, row0OddA);
+			bus.Display.ScheduleWrite(row1Cycle, 0x146, row1EvenB);
+			bus.Display.ScheduleWrite(row1Cycle, 0x144, row1EvenA);
+			bus.Display.ScheduleWrite(row1Cycle, 0x14E, row1OddB);
+			bus.Display.ScheduleWrite(row1Cycle, 0x14C, row1OddA);
+			bus.Display.ScheduleWrite(disarmCycle, 0x142, evenCtl);
+			bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
+		}
+
+		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		var actual = new uint[expected.Length];
+		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+		liveBus.AdvanceDmaTo(FrameCycles());
+		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+		var snapshot = liveBus.Display.CaptureSnapshot();
+		Assert.Equal(expected, actual);
+		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x00F0), Pixel(actual, StandardX, StandardY + 1));
+		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
+		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
+	}
+
+	[Fact]
 	public void TimedFallbackUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
@@ -1101,7 +1312,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 
 	private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height, bool attached = false)
 	{
-		var hStart = x + 64 - AmigaConstants.PalLowResOverscanBorderX;
+		var hStart = x + 128 - AmigaConstants.PalLowResOverscanBorderX;
 		var vStart = y + (0x2C - AmigaConstants.PalLowResOverscanBorderY);
 		var vStop = vStart + height;
 		var pos = (ushort)(((vStart & 0xFF) << 8) | ((hStart >> 1) & 0xFF));
@@ -1138,6 +1349,13 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	private static long FrameCycles()
 	{
 		return (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+	}
+
+	private static long AfterSpriteMatchCycle(int row, int x)
+	{
+		const int defaultDdfStart = 0x38;
+		var horizontal = defaultDdfStart + (x / 2) + 1;
+		return RowCycle(row) + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
 	}
 
 	private sealed record SpriteConformanceRow(string Group, string Name, SpriteRowStatus Status, string Reason)

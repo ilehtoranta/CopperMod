@@ -294,7 +294,7 @@ namespace CopperMod.Amiga
                 (int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock),
                 0,
                 AmigaConstants.A500PalColorClocksPerRasterLine - 1);
-            var frame = (int)Math.Min(int.MaxValue, cycle / AmigaConstants.A500PalCpuCyclesPerFrame);
+            var frame = (int)Math.Min(int.MaxValue, cycle / AmigaConstants.A500PalCpuCyclesPerFrame);	// Max 81 years
             return new AgnusPalBeamPosition(cycle, frameStartCycle, frame, line, horizontal);
         }
     }
@@ -588,7 +588,12 @@ namespace CopperMod.Amiga
                 requestedCycle,
                 isWrite: false);
 
-            _ = TryCommitFixedSlot(request, AgnusChipSlotOwner.Bitplane, AgnusChipSlotScheduler.AlignToSlot(requestedCycle), out var result);
+            _ = TryCommitFixedSingleWordSlot(
+                request,
+                AgnusChipSlotOwner.Bitplane,
+                AgnusChipSlotScheduler.AlignToSlot(requestedCycle),
+                AgnusChipSlotPriority.Bitplane,
+                out var result);
             return result;
         }
 
@@ -604,13 +609,38 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Word,
                 requestedCycle,
                 isWrite: false);
-            var granted = FindFreeSlot(requestedCycle, 1, AgnusChipSlotOwner.Copper, request);
+            var granted = FindFreeCopperSlot(requestedCycle, request);
             CommitSlot(granted, request, AgnusChipSlotOwner.Copper, AgnusChipSlotPriority.Copper);
             var result = new AmigaBusAccessResult(request, granted, granted + SlotCycles);
             _lastReservation = result;
             _lastGrantedSlot = new AgnusChipSlotSnapshot(AgnusChipSlotOwner.Copper, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
             AdvanceTo(result.CompletedCycle);
             return result;
+        }
+
+        private long FindFreeCopperSlot(long requestedCycle, AmigaBusAccessRequest request)
+        {
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Copper DMA request cycles must be non-negative.");
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+            while (true)
+            {
+                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate) ||
+                    AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(candidate)) != AgnusChipSlotOwner.Free)
+                {
+                    candidate += SlotCycles;
+                    continue;
+                }
+
+                CommitRefreshSlotsThrough(candidate);
+                if (!TryGetSlot(candidate, out var existing) ||
+                    existing.Matches(request) ||
+                    existing.Priority < AgnusChipSlotPriority.Copper)
+                {
+                    return candidate;
+                }
+
+                candidate += SlotCycles;
+            }
         }
 
         public bool IsReserved(long cycle)
@@ -744,6 +774,35 @@ namespace CopperMod.Amiga
             }
 
             result = new AmigaBusAccessResult(request, granted, GetCompletedCycle(granted, slotCount, slotStride));
+            _lastReservation = result;
+            _lastGrantedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
+            AdvanceTo(result.CompletedCycle);
+            return true;
+        }
+
+        private bool TryCommitFixedSingleWordSlot(
+            AmigaBusAccessRequest request,
+            AgnusChipSlotOwner owner,
+            long granted,
+            AgnusChipSlotPriority priority,
+            out AmigaBusAccessResult result)
+        {
+            granted = AgnusChipSlotScheduler.AlignToSlot(granted);
+            CommitRefreshSlotsThrough(granted);
+            if (TryGetSlot(granted, out var existing) &&
+                !existing.Matches(request) &&
+                existing.Priority >= priority)
+            {
+                result = new AmigaBusAccessResult(request, granted, granted);
+                _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: true);
+                _lastDeniedFixedSlotBlocker = existing.ToSnapshot(denied: false);
+                RecordDeniedFixedSlot(owner, existing.Owner);
+                AdvanceTo(granted);
+                return false;
+            }
+
+            CommitSlot(granted, request, owner, priority);
+            result = new AmigaBusAccessResult(request, granted, granted + SlotCycles);
             _lastReservation = result;
             _lastGrantedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
             AdvanceTo(result.CompletedCycle);

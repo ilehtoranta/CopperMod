@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
 using CopperMod.Amiga;
 using CopperScreen;
 
@@ -15,6 +16,7 @@ var allWorkloads = new[]
     new BenchmarkWorkload("Lemmings SR", "Lemmings (1991)(Psygnosis)(Disk 1 of 2)[cr SR].zip"),
     new BenchmarkWorkload("Full Contact FLT", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip"),
     new BenchmarkWorkload("FC FLT intro", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip", FireFrame: 260),
+    new BenchmarkWorkload("North & South CP intro", "North & South (1989)(Infogrames)(M5)[cr CP].zip", FireFrame: 260),
     new BenchmarkWorkload("Shadow of the Beast IPF", "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip"),
     new BenchmarkWorkload("Workbench 1.3", "Workbench v1.3 rev 34.20 (1988)(Commodore)(A500-A2000)(Disk 1 of 2)(Workbench)[m].zip"),
 };
@@ -116,6 +118,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         : M68kInstructionFrequencySnapshot.Empty;
     if (options.InstructionMatrix)
     {
+        WriteHotLoopDiagnostics(workload, emulator);
         emulator.SetInstructionFrequencyEnabled(false);
     }
 
@@ -376,6 +379,65 @@ static void WriteInstructionMatrix(BenchmarkRunResult result, int topOpcodeCount
     }
 }
 
+static void WriteHotLoopDiagnostics(BenchmarkWorkload workload, CopperScreenEmulator emulator)
+{
+    var machine = GetMachine(emulator);
+    var bus = machine.Bus;
+    var a5 = machine.Cpu.State.A[5];
+    var emitted = 0;
+    ScanHotLoopRegion(workload, "chip", bus.ChipRam, 0, bus, a5, ref emitted);
+    ScanHotLoopRegion(workload, "exp", bus.ExpansionRam, bus.ExpansionRamBase, bus, a5, ref emitted);
+    ScanHotLoopRegion(workload, "real", bus.RealFastRam, bus.RealFastRamBase, bus, a5, ref emitted);
+    if (emitted == 0)
+    {
+        Console.WriteLine($"hot-loop\t{workload.Name}\tnone");
+    }
+}
+
+static void ScanHotLoopRegion(
+    BenchmarkWorkload workload,
+    string regionName,
+    byte[] region,
+    uint baseAddress,
+    AmigaBus bus,
+    uint a5,
+    ref int emitted)
+{
+    const int MaxHotLoopDiagnostics = 8;
+    if (region.Length < 18 || emitted >= MaxHotLoopDiagnostics)
+    {
+        return;
+    }
+
+    for (var offset = 0; offset <= region.Length - 18 && emitted < MaxHotLoopDiagnostics; offset += 2)
+    {
+        var span = region.AsSpan(offset);
+        if (ReadWord(span, 0) != 0x202D ||
+            ReadWord(span, 4) != 0x0280 ||
+            ReadWord(span, 10) != 0xB0BC ||
+            ReadWord(span, 16) != 0x66EE)
+        {
+            continue;
+        }
+
+        var displacement = unchecked((short)ReadWord(span, 2));
+        var andMask = ReadLong(span, 6);
+        var compareValue = ReadLong(span, 12);
+        var pc = baseAddress + (uint)offset;
+        var polledAddress = (uint)(a5 + displacement);
+        var polledValue = bus.ReadHostLong(polledAddress);
+        Console.WriteLine(
+            $"hot-loop\t{workload.Name}\tpc=0x{pc:X6}\tregion={regionName}\ta5=0x{a5:X6}\td16={displacement}\taddr=0x{polledAddress:X6}\tvalue=0x{polledValue:X8}\tand=0x{andMask:X8}\tcmp=0x{compareValue:X8}");
+        emitted++;
+    }
+}
+
+static ushort ReadWord(ReadOnlySpan<byte> span, int offset)
+    => BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, 2));
+
+static uint ReadLong(ReadOnlySpan<byte> span, int offset)
+    => BinaryPrimitives.ReadUInt32BigEndian(span.Slice(offset, 4));
+
 static string PercentText(long value, long total)
     => total == 0 ? "0.00" : $"{(value * 100.0) / total:F2}";
 
@@ -624,25 +686,24 @@ static BenchmarkWorkload[] FilterWorkloads(BenchmarkWorkload[] workloads, string
 
 static OcsDisplay GetDisplay(CopperScreenEmulator emulator)
 {
-    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+    return GetMachine(emulator).Bus.Display;
+}
+
+static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+{
+    return (AmigaMachine)typeof(CopperScreenEmulator)
         .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
         .GetValue(emulator)!;
-    return machine.Bus.Display;
 }
 
 static AgnusBeamDmaSnapshot GetAgnusSnapshot(CopperScreenEmulator emulator)
 {
-    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
-        .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .GetValue(emulator)!;
-    return machine.Bus.Agnus.CaptureSnapshot();
+    return GetMachine(emulator).Bus.Agnus.CaptureSnapshot();
 }
 
 static DiskSummary CaptureDiskSummary(CopperScreenEmulator emulator)
 {
-    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
-        .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
-        .GetValue(emulator)!;
+    var machine = GetMachine(emulator);
     var disk = machine.Bus.Disk.CaptureSnapshot();
     return new DiskSummary(
         disk.TransferCount,

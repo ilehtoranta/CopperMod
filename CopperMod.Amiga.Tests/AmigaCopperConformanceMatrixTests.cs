@@ -89,6 +89,9 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "Copper MOVE can request INTREQ":
                 CopperMoveCanRequestIntreq();
                 break;
+            case "presentation Copper replay does not request INTREQ":
+                PresentationCopperReplayDoesNotRequestIntreq();
+                break;
             case "COPxLC high word masks unused DMA bits":
                 CopperLocationHighWordMasksUnusedDmaBits();
                 break;
@@ -136,6 +139,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("undocumented-ocs", "SKIP-suppressed dangerous MOVE stops Copper"),
         Executable("blitter-wait", "BFD set ignores blitter busy"),
         Executable("interrupts", "Copper MOVE can request INTREQ"),
+        Executable("interrupts", "presentation Copper replay does not request INTREQ"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
         Executable("restricted-registers", "Copper danger register protection via COPCON"),
         Executable("restricted-registers", "MOVE to always-protected register stops Copper"),
@@ -375,12 +379,32 @@ public sealed class AmigaCopperConformanceMatrixTests
         var bus = CreateCopperComponentBus();
         WriteCopperList(bus, CopperList, (0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)), (0xFFFF, 0xFFFE));
         bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
-        SetCopperPointer(bus, 1, CopperList);
-        _ = RenderLowResFrame(bus);
+        new AmigaCopper().ExecuteList(bus, CopperList);
         bus.Paula.AdvanceTo(10);
 
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
         Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
+    }
+
+    private static void PresentationCopperReplayDoesNotRequestIntreq()
+    {
+        var bus = CreateCopperComponentBus();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+            (0x0180, 0x0F00),
+            (0xFFFF, 0xFFFE));
+        bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
+        SetCopperPointer(bus, 1, CopperList);
+        var writesBeforeRender = bus.CustomRegisterWrites.Count;
+
+        var frame = RenderLowResFrame(bus);
+        bus.Paula.AdvanceTo(10);
+
+        Assert.Equal(writesBeforeRender, bus.CustomRegisterWrites.Count);
+        Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
+        Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
     }
 
     private static void CopperLocationHighWordMasksUnusedDmaBits()
@@ -452,7 +476,7 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void BfdClearWaitsForLiveBlitterCompletionCycle()
     {
-        var bus = CreateCopperComponentBus();
+        var bus = CreateSlotCopperBus();
         StartLongBlit(bus);
         var expectedReadyCycle = bus.Blitter.GetPredictedCompletionCycle();
         WriteCopperList(
@@ -464,7 +488,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         SetCopperPointer(bus, 1, CopperList);
         bus.WriteWord(0x00DFF096, 0x8280);
 
-        _ = RenderLowResFrame(bus, 0, FrameCycles());
+        bus.AdvanceDmaTo(FrameCycles());
 
         var intreqWrite = bus.CustomRegisterWrites.Last(write =>
             write.Address == 0x09C &&

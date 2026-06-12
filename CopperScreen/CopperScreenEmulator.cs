@@ -23,10 +23,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly string?[] _initialDriveDiskPaths;
 	private readonly bool?[] _initialDriveWriteProtected;
 	private readonly float[] _frameAudio;
-	private readonly int[] _previousInterlaceFrame;
+	private readonly int[] _interlacePresentationFrame;
 	private readonly Action<long, long> _renderFrameAudioUntil;
 	private bool _bootAttempted;
-	private bool _previousInterlaceFrameValid;
+	private bool _interlacePresentationFrameValid;
 	private bool _workbenchHandoffPending;
 	private bool _copperBenchRequestPending;
 	private AmigaDiskImage? _pendingDiskImage;
@@ -71,7 +71,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_boot = new AmigaBootController(_machine);
 		_boot.AutoStartWorkbenchDefaultTool = false;
 		_frameAudio = new float[AudioFramesPerAppFrame(DefaultAudioSampleRate) * DefaultAudioChannels];
-		_previousInterlaceFrame = new int[Framebuffer.Length];
+		_interlacePresentationFrame = new int[_machine.Bus.Display.Width * _machine.Bus.Display.Height];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DriveDiskPaths.Length > 0 ? startupOptions.DriveDiskPaths[0] : startupOptions.DiskPath;
 		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
@@ -592,7 +592,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		var wasDebuggerStopped = _debugSnapshot != null;
 		_bootAttempted = false;
-		_previousInterlaceFrameValid = false;
+		_interlacePresentationFrameValid = false;
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		_debugSnapshot = null;
@@ -683,7 +683,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			}
 
 			_bootAttempted = true;
-			_previousInterlaceFrameValid = false;
+				_interlacePresentationFrameValid = false;
 			_workbenchHandoffPending = false;
 			_copperBenchRequestPending = false;
 			_firePulseFrames = 0;
@@ -824,7 +824,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (_startupError != null)
 		{
 			_frameAudio.AsSpan().Clear();
-			_previousInterlaceFrameValid = false;
+			_interlacePresentationFrameValid = false;
 			StatusText = _startupError;
 			RenderStatusFrame(StatusText);
 			AdvanceInputPulse();
@@ -834,7 +834,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (DiskPath == null)
 		{
 			_frameAudio.AsSpan().Clear();
-			_previousInterlaceFrameValid = false;
+			_interlacePresentationFrameValid = false;
 			StatusText = "insert disk image";
 			RenderNoDiskFrame();
 			AdvanceInputPulse();
@@ -874,7 +874,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
 			{
 				_frameAudio.AsSpan().Clear();
-				_previousInterlaceFrameValid = false;
+				_interlacePresentationFrameValid = false;
 				StatusText = ex.Message;
 				RenderStatusFrame(StatusText);
 				AdvanceInputPulse();
@@ -897,11 +897,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_machine.Bus.AdvanceRasterTo(_targetCycle);
 		_machine.Bus.AdvanceCiasTo(_targetCycle);
 		_machine.Bus.AdvanceDmaTo(_targetCycle);
-		_machine.Bus.Display.RenderFrame(
-			MemoryMarshal.Cast<int, uint>(Framebuffer.AsSpan()),
-			_targetCycle - PalFrameCycles,
-			_targetCycle);
-		StabilizeInterlaceFrame();
+		RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle);
 
 		AdvanceInputPulse();
 	}
@@ -1096,26 +1092,86 @@ internal sealed class CopperScreenEmulator : IDisposable
 			: "inserted " + _diskName;
 	}
 
-	private void StabilizeInterlaceFrame()
+	private void RenderPresentationFrame(long frameStartCycle, long frameEndCycle)
 	{
 		if (!_machine.Bus.Display.InterlaceEnabled)
 		{
-			_previousInterlaceFrameValid = false;
+			_interlacePresentationFrameValid = false;
+			_machine.Bus.Display.RenderFrame(
+				MemoryMarshal.Cast<int, uint>(Framebuffer.AsSpan()),
+				frameStartCycle,
+				frameEndCycle);
 			return;
 		}
 
-		if (!_previousInterlaceFrameValid)
+		_machine.Bus.Display.RenderFrame(
+			MemoryMarshal.Cast<int, uint>(_interlacePresentationFrame.AsSpan()),
+			frameStartCycle,
+			frameEndCycle);
+		var interlaceField = (int)((frameStartCycle / PalFrameCycles) & 1);
+		if (!_interlacePresentationFrameValid)
 		{
-			Framebuffer.AsSpan().CopyTo(_previousInterlaceFrame);
-			_previousInterlaceFrameValid = true;
-			return;
+			SeedMissingInterlaceFieldRows(
+				_interlacePresentationFrame,
+				_machine.Bus.Display.Width,
+				_machine.Bus.Display.Height,
+				interlaceField);
+			_interlacePresentationFrameValid = true;
 		}
 
-		for (var i = 0; i < Framebuffer.Length; i++)
+		DownsampleInterlacePresentationFrame(
+			_interlacePresentationFrame,
+			Framebuffer,
+			_machine.Bus.Display.Width,
+			_machine.Bus.Display.Height);
+	}
+
+	internal static void SeedMissingInterlaceFieldRows(Span<int> interlaceFrame, int width, int height, int interlaceField)
+	{
+		System.Diagnostics.Debug.Assert(width > 0);
+		System.Diagnostics.Debug.Assert((height & 1) == 0);
+		System.Diagnostics.Debug.Assert((interlaceField & ~1) == 0);
+
+		var missingField = interlaceField ^ 1;
+		var rowPairs = height >> 1;
+		for (var pair = 0; pair < rowPairs; pair++)
 		{
-			var current = Framebuffer[i];
-			Framebuffer[i] = AverageOpaquePixels(current, _previousInterlaceFrame[i]);
-			_previousInterlaceFrame[i] = current;
+			var activeRow = (pair << 1) + interlaceField;
+			var missingRow = (pair << 1) + missingField;
+			var sourceOffset = activeRow * width;
+			var targetOffset = missingRow * width;
+			interlaceFrame.Slice(sourceOffset, width).CopyTo(interlaceFrame.Slice(targetOffset, width));
+		}
+	}
+
+	internal static void DownsampleInterlacePresentationFrame(
+		ReadOnlySpan<int> interlaceFrame,
+		Span<int> framebuffer,
+		int width,
+		int height)
+	{
+		System.Diagnostics.Debug.Assert((width & 1) == 0);
+		System.Diagnostics.Debug.Assert((height & 1) == 0);
+		var outputWidth = width >> 1;
+		var outputHeight = height >> 1;
+		System.Diagnostics.Debug.Assert(framebuffer.Length >= outputWidth * outputHeight);
+
+		for (var outputY = 0; outputY < outputHeight; outputY++)
+		{
+			var topRowOffset = (outputY << 1) * width;
+			var bottomRowOffset = topRowOffset + width;
+			var outputOffset = outputY * outputWidth;
+			for (var outputX = 0; outputX < outputWidth; outputX++)
+			{
+				var sourceX = outputX << 1;
+				var top = AverageOpaquePixels(
+					interlaceFrame[topRowOffset + sourceX],
+					interlaceFrame[topRowOffset + sourceX + 1]);
+				var bottom = AverageOpaquePixels(
+					interlaceFrame[bottomRowOffset + sourceX],
+					interlaceFrame[bottomRowOffset + sourceX + 1]);
+				framebuffer[outputOffset + outputX] = AverageOpaquePixels(top, bottom);
+			}
 		}
 	}
 
@@ -1281,7 +1337,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_frameAudio.AsSpan().Clear();
-		_previousInterlaceFrameValid = false;
+		_interlacePresentationFrameValid = false;
 		IsPaused = true;
 		StatusText = reasonCode + ": " + message;
 		_debugSnapshot = CreateDebugSnapshot(reasonCode, message, diagnostics);

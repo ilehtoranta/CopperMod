@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Avalonia.Input;
 using CopperMod.Amiga;
@@ -984,15 +985,28 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void AudioCatchUpQueuesSeveralBuffersWhenTimerFallsBehind()
+	public void AudioCatchUpQueuesSeveralBuffersOnlyWhenAudioQueueIsCritical()
 	{
 		Assert.Equal(5, MainWindow.CalculateFramesToRender(0, catchUpAudio: true));
-		Assert.Equal(3, MainWindow.CalculateFramesToRender(2, catchUpAudio: true));
+		Assert.Equal(4, MainWindow.CalculateFramesToRender(1, catchUpAudio: true));
+		Assert.Equal(1, MainWindow.CalculateFramesToRender(2, catchUpAudio: true));
+		Assert.Equal(1, MainWindow.CalculateFramesToRender(4, catchUpAudio: true));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(5, catchUpAudio: true));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(8, catchUpAudio: true));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(0, catchUpAudio: false));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(8, catchUpAudio: false));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(null, catchUpAudio: true));
+
+		Assert.False(CopperScreenRuntime.ShouldThrottleSteadyAudioRefill(0, 5));
+		Assert.False(CopperScreenRuntime.ShouldThrottleSteadyAudioRefill(1, 4));
+		Assert.True(CopperScreenRuntime.ShouldThrottleSteadyAudioRefill(2, 1));
+		Assert.True(CopperScreenRuntime.ShouldThrottleSteadyAudioRefill(4, 1));
+
+		var expectedFrameTicks = (long)Math.Round(Stopwatch.Frequency / AmigaConstants.A500PalVBlankHz);
+		Assert.InRange(CopperScreenRuntime.SteadyAudioFrameStopwatchTicks, expectedFrameTicks - 1, expectedFrameTicks + 1);
+		Assert.Equal(0, CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(0));
+		Assert.Equal(0, CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(Stopwatch.Frequency / 2000));
+		Assert.InRange(CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(CopperScreenRuntime.SteadyAudioFrameStopwatchTicks), 1, 5);
 	}
 
 	[Fact]

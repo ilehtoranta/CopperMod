@@ -187,7 +187,7 @@ internal static class CopperScreenProfileStore
 		var profilesDirectory = FindProfilesDirectory(baseDirectory);
 		if (!Directory.Exists(profilesDirectory))
 		{
-			return Array.Empty<CopperScreenProfileSummary>();
+			return CreateFallbackProfileList(baseDirectory);
 		}
 
 		var profiles = new List<CopperScreenProfileSummary>();
@@ -199,7 +199,27 @@ internal static class CopperScreenProfileStore
 			}
 		}
 
+		AddFallbackProfileIfEmpty(profiles, baseDirectory);
+
 		return profiles;
+	}
+
+	private static IReadOnlyList<CopperScreenProfileSummary> CreateFallbackProfileList(string baseDirectory)
+	{
+		var profiles = new List<CopperScreenProfileSummary>();
+		AddFallbackProfileIfEmpty(profiles, baseDirectory);
+		return profiles;
+	}
+
+	private static void AddFallbackProfileIfEmpty(List<CopperScreenProfileSummary> profiles, string baseDirectory)
+	{
+		if (profiles.Count != 0)
+		{
+			return;
+		}
+
+		var fallback = CopperScreenProfile.LoadDefault(baseDirectory, out _);
+		profiles.Add(new CopperScreenProfileSummary(fallback.Id, fallback.DisplayName, fallback.ConfigPath ?? "Fallback default"));
 	}
 
 	public static string Save(CopperScreenSettingsDraft draft, string baseDirectory)

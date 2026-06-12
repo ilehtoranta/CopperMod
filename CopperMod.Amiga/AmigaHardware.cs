@@ -1067,7 +1067,7 @@ namespace CopperMod.Amiga
         public bool TryReadLiveBitplaneDmaWord(uint address, long requestedCycle, out ushort value, out long grantedCycle)
         {
             address = MaskChipDmaAddress(address);
-            requestedCycle = Math.Max(0, requestedCycle);
+            Debug.Assert(requestedCycle >= 0, "Live bitplane DMA request cycles must be non-negative.");
             AmigaBusAccessResult access;
             bool granted;
             if (!_useChipSlotScheduler)
@@ -1108,7 +1108,7 @@ namespace CopperMod.Amiga
         public ushort ReadLiveCopperDmaWord(uint address, long requestedCycle, out AmigaBusAccessResult access)
         {
             address = MaskChipDmaAddress(address);
-            requestedCycle = Math.Max(0, requestedCycle);
+            Debug.Assert(requestedCycle >= 0, "Live copper DMA request cycles must be non-negative.");
             if (!_useChipSlotScheduler)
             {
                 var request = new AmigaBusAccessRequest(

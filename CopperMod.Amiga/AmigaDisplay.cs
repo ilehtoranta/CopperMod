@@ -18,7 +18,9 @@ namespace CopperMod.Amiga
         private const ushort DmaconBitplaneEnable = 0x0100;
         private const ushort DmaconCopperEnable = 0x0080;
         private const ushort DmaconSpriteEnable = 0x0020;
-        private const int StandardSpriteHorizontalOffset = 64 - AmigaConstants.PalLowResOverscanBorderX;
+        // SPRxPOS stores H8-H1 and SPRxCTL stores H0; after reconstruction,
+        // the normal visible left edge is comparator coordinate $80.
+        private const int StandardSpriteHorizontalOffset = 128 - AmigaConstants.PalLowResOverscanBorderX;
         private const int MaxBitplaneFetchWords = 64;
         private const byte Playfield1PriorityMask = 0x01;
         private const byte Playfield2PriorityMask = 0x02;
@@ -1189,17 +1191,34 @@ namespace CopperMod.Amiga
 
                 if (nextSpriteFetchCycle == nextCycle)
                 {
-                    CaptureLiveSpriteFetchBatch(targetCycle);
+                    CaptureLiveSpriteFetchBatch(GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle));
                     continue;
                 }
 
-                CaptureLiveBitplaneFetchBatch(targetCycle);
+                CaptureLiveBitplaneFetchBatch(GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle));
             }
 
             AdvanceLiveDisplayStateTo(targetCycle);
             _liveCycle = Math.Max(_liveCycle, targetCycle);
             _liveCapturedThroughCycle = Math.Max(_liveCapturedThroughCycle, targetCycle);
             InvalidateLiveWorkCycle();
+        }
+
+        private long GetLiveDmaBatchStopCycle(long targetCycle, long nextLineStateCycle)
+        {
+            var stopCycle = targetCycle;
+            var nextDisplayEventCycle = GetNextLiveDisplayEventCycle();
+            if (nextDisplayEventCycle != long.MaxValue)
+            {
+                stopCycle = Math.Min(stopCycle, nextDisplayEventCycle - 1);
+            }
+
+            if (nextLineStateCycle != long.MaxValue)
+            {
+                stopCycle = Math.Min(stopCycle, nextLineStateCycle - 1);
+            }
+
+            return stopCycle;
         }
 
         private void AdvanceLiveDisplayStateTo(long targetCycle)
@@ -1482,7 +1501,7 @@ namespace CopperMod.Amiga
                     _liveFrameHasLateDisplayWindowWrites = true;
                 }
 
-                ApplyCopperMove(register, value, dataCycle);
+                ApplyCopperMove(register, value, dataCycle, applyHardwareSideEffects: true);
                 RecordLiveFrameWrite(dataCycle, register, value, isCopper: true);
                 RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
                 RecordTimelineDisplayWrite(dataCycle, register, isCopper: true);
@@ -1829,7 +1848,7 @@ namespace CopperMod.Amiga
             return index;
         }
 
-        private void CaptureLiveBitplaneFetchBatch(long targetCycle)
+        private void CaptureLiveBitplaneFetchBatch(long stopCycle)
         {
             while (_liveNextFetchRow < LowResOutputHeight)
             {
@@ -1839,7 +1858,6 @@ namespace CopperMod.Amiga
                 }
 
                 var state = _liveLineStates[_liveNextFetchRow];
-                var stopCycle = Math.Min(targetCycle, Math.Min(GetNextLiveDisplayEventCycle() - 1, GetNextLiveLineStateCycle() - 1));
                 var fetchHorizontal = state.DataFetchStart + (_liveNextFetchWord * state.FetchSlotStride) + _liveNextFetchSlot;
                 var fetchCycle = state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
                 if (fetchCycle > stopCycle)
@@ -1852,7 +1870,7 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void CaptureLiveSpriteFetchBatch(long targetCycle)
+        private void CaptureLiveSpriteFetchBatch(long stopCycle)
         {
             while (_liveNextSpriteRow < LowResOutputHeight)
             {
@@ -1864,7 +1882,6 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                var stopCycle = Math.Min(targetCycle, Math.Min(GetNextLiveDisplayEventCycle() - 1, GetNextLiveLineStateCycle() - 1));
                 var fetchCycle = GetNextLiveSpriteFetchCycle();
                 if (fetchCycle > stopCycle)
                 {
@@ -3759,7 +3776,7 @@ namespace CopperMod.Amiga
 
         private long GetCopperBlitterReadyCycle(ushort waitSecond, long currentCycle)
         {
-            if ((waitSecond & 0x8000) != 0 || !_bus.Blitter.CaptureSnapshot().Busy)
+            if ((waitSecond & 0x8000) != 0 || !_bus.Blitter.Busy)
             {
                 return currentCycle;
             }
@@ -3824,7 +3841,7 @@ namespace CopperMod.Amiga
                     if (!suppressMove && CanCopperWriteRegister(register))
                     {
                         _currentCopperRow = GetOutputRowForCycle(frameStartCycle, dataCycle);
-                        ApplyCopperMove(register, second, dataCycle);
+                        ApplyCopperMove(register, second, dataCycle, applyHardwareSideEffects: false);
                         if (register == 0x088)
                         {
                             copper.JumpTo(_copperListPointer, dataCycle);
@@ -4101,18 +4118,17 @@ namespace CopperMod.Amiga
         {
             var targetVertical = (target >> 8) & 0xFF;
             var targetHorizontal = target & 0xFE;
-            for (var line = startLine; line < AmigaConstants.A500PalRasterLines; line++)
+            for (var line = startLine; line < AmigaConstants.A500PalRasterLines;)
             {
                 var vertical = line & 0xFF;
-                var horizontalStart = line == startLine ? startHorizontal : 0;
                 int horizontal;
                 if (vertical > targetVertical)
                 {
-                    horizontal = horizontalStart;
+                    horizontal = line == startLine ? startHorizontal : 0;
                 }
                 else if (vertical == targetVertical)
                 {
-                    horizontal = Math.Max(horizontalStart, targetHorizontal);
+                    horizontal = Math.Max(line == startLine ? startHorizontal : 0, targetHorizontal);
                     if ((horizontal & 1) != 0)
                     {
                         horizontal++;
@@ -4120,11 +4136,19 @@ namespace CopperMod.Amiga
                 }
                 else
                 {
+                    var candidateLine = (line & ~0xFF) + targetVertical;
+                    if (candidateLine <= line)
+                    {
+                        candidateLine += 0x100;
+                    }
+
+                    line = candidateLine;
                     continue;
                 }
 
                 if (horizontal > LastCopperHorizontal)
                 {
+                    line++;
                     continue;
                 }
 
@@ -4240,7 +4264,7 @@ namespace CopperMod.Amiga
 
         private bool IsCopperBlitterFinishedForWait(ushort second)
         {
-            return (second & 0x8000) != 0 || !_bus.Blitter.CaptureSnapshot().Busy;
+            return (second & 0x8000) != 0 || !_bus.Blitter.Busy;
         }
 
         private static bool IsCopperComparisonSatisfied(
@@ -5239,6 +5263,11 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (IsTimelineManualSpriteRegisterWrite(offset))
+            {
+                return;
+            }
+
             if (IsTimelineCopperPointerLatchWrite(offset))
             {
                 return;
@@ -5320,6 +5349,11 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (IsTimelineManualSpriteRegisterWrite(offset))
+            {
+                return false;
+            }
+
             if (IsTimelineCopperPointerLatchWrite(offset))
             {
                 return false;
@@ -5342,6 +5376,12 @@ namespace CopperMod.Amiga
         {
             offset = (ushort)(offset & 0x01FE);
             return offset >= 0x120 && offset < 0x140;
+        }
+
+        private static bool IsTimelineManualSpriteRegisterWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            return offset >= 0x140 && offset < 0x180;
         }
 
         private static bool IsTimelineCopperPointerLatchWrite(ushort offset)
@@ -5604,7 +5644,7 @@ namespace CopperMod.Amiga
 
             if (offset >= 0x120 && offset < 0x180)
             {
-                ApplySpriteWrite(offset, value);
+                ApplySpriteWrite(offset, value, cycle);
             }
         }
 
@@ -5680,10 +5720,10 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private void ApplyCopperMove(ushort offset, ushort value, long cycle)
+        private void ApplyCopperMove(ushort offset, ushort value, long cycle, bool applyHardwareSideEffects)
         {
             ApplyWrite(offset, value, cycle);
-            if (!HasCopperHardwareSideEffect(offset))
+            if (!applyHardwareSideEffects || !HasCopperHardwareSideEffect(offset))
             {
                 return;
             }
@@ -5866,6 +5906,42 @@ namespace CopperMod.Amiga
                 : 0;
         }
 
+        private int GetCurrentManualSpriteCommandRow(SpriteState sprite, long cycle)
+        {
+            if (!TryGetCurrentOutputRow(out var row))
+            {
+                return 0;
+            }
+
+            row = Math.Clamp(row, 0, LowResOutputHeight);
+            if (cycle == long.MinValue)
+            {
+                return row;
+            }
+
+            var frameStartCycle = _renderingCopperFrame
+                ? _renderFrameStartCycle
+                : _liveFrameValid ? _liveFrameStartCycle : long.MinValue;
+            if (frameStartCycle == long.MinValue)
+            {
+                return row;
+            }
+
+            var descriptor = CreateManualSpriteDescriptor(sprite);
+            if (row < descriptor.YStart)
+            {
+                return row;
+            }
+
+            var beamX = GetOutputXForCycle(frameStartCycle, cycle);
+            if (beamX >= descriptor.X)
+            {
+                row++;
+            }
+
+            return Math.Clamp(row, 0, LowResOutputHeight);
+        }
+
         private void SetBitplaneBaseRows(int startPlane, int endPlane, int row)
         {
             startPlane = Math.Clamp(startPlane, 0, _bitplaneBaseRows.Length);
@@ -5876,7 +5952,7 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void ApplySpriteWrite(ushort offset, ushort value)
+        private void ApplySpriteWrite(ushort offset, ushort value, long cycle)
         {
             if (offset >= 0x120 && offset < 0x140)
             {
@@ -5911,25 +5987,25 @@ namespace CopperMod.Amiga
                 switch (register)
                 {
                     case 0:
-                        StopManualSpriteFrameCommands(sprite);
+                        StopManualSpriteFrameCommands(sprite, cycle);
                         _sprites[sprite].Pos = value;
-                        CaptureManualSpriteFrameCommandIfArmed(sprite);
+                        CaptureManualSpriteFrameCommandIfArmed(sprite, cycle);
                         break;
                     case 2:
-                        StopManualSpriteFrameCommands(sprite);
+                        StopManualSpriteFrameCommands(sprite, cycle);
                         _sprites[sprite].Ctl = value;
                         _sprites[sprite].ManualArmed = false;
                         break;
                     case 4:
-                        StopManualSpriteFrameCommands(sprite);
+                        StopManualSpriteFrameCommands(sprite, cycle);
                         _sprites[sprite].DataA = value;
                         _sprites[sprite].ManualArmed = true;
-                        CaptureManualSpriteFrameCommandIfArmed(sprite);
+                        CaptureManualSpriteFrameCommandIfArmed(sprite, cycle);
                         break;
                     case 6:
-                        StopManualSpriteFrameCommands(sprite);
+                        StopManualSpriteFrameCommands(sprite, cycle);
                         _sprites[sprite].DataB = value;
-                        CaptureManualSpriteFrameCommandIfArmed(sprite);
+                        CaptureManualSpriteFrameCommandIfArmed(sprite, cycle);
                         break;
                 }
             }
@@ -6756,16 +6832,14 @@ namespace CopperMod.Amiga
                 for (var oddIndex = 0; oddIndex < oddSprites.Count; oddIndex++)
                 {
                     var oddSprite = oddSprites[oddIndex];
-                    if (!oddSprite.Descriptor.Attached)
-                    {
-                        continue;
-                    }
-
                     var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite);
                     if (evenIndex < 0)
                     {
-                        _oddSpriteAttached[oddIndex] = true;
-                        RenderAttachedOddSpriteWithoutEvenPartner(bgra, spriteIndex, oddSprite);
+                        if (oddSprite.Descriptor.Attached)
+                        {
+                            _oddSpriteAttached[oddIndex] = true;
+                        }
+
                         continue;
                     }
 
@@ -6784,7 +6858,7 @@ namespace CopperMod.Amiga
 
                 for (var i = 0; i < evenSprites.Count; i++)
                 {
-                    if (!_evenSpriteAttached[i])
+                    if (!_evenSpriteAttached[i] && !evenSprites[i].Descriptor.Attached)
                     {
                         RenderSprite(bgra, spriteIndex, evenSprites[i]);
                     }
@@ -6805,16 +6879,14 @@ namespace CopperMod.Amiga
                 for (var oddIndex = 0; oddIndex < oddSprites.Count; oddIndex++)
                 {
                     var oddSprite = oddSprites[oddIndex];
-                    if (!oddSprite.Descriptor.Attached)
-                    {
-                        continue;
-                    }
-
                     var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite);
                     if (evenIndex < 0)
                     {
-                        _oddSpriteAttached[oddIndex] = true;
-                        RenderTimelineAttachedOddSpriteWithoutEvenPartner(bgra, spriteIndex, oddSprite, timeline);
+                        if (oddSprite.Descriptor.Attached)
+                        {
+                            _oddSpriteAttached[oddIndex] = true;
+                        }
+
                         continue;
                     }
 
@@ -6833,7 +6905,7 @@ namespace CopperMod.Amiga
 
                 for (var i = 0; i < evenSprites.Count; i++)
                 {
-                    if (!_evenSpriteAttached[i])
+                    if (!_evenSpriteAttached[i] && !evenSprites[i].Descriptor.Attached)
                     {
                         RenderTimelineSprite(bgra, spriteIndex, evenSprites[i], timeline);
                     }
@@ -6984,7 +7056,9 @@ namespace CopperMod.Amiga
             var bestDistance = int.MaxValue;
             for (var i = 0; i < evenSprites.Count; i++)
             {
-                if (evenAttached[i] || !SpritesOverlapVertically(evenSprites[i].Descriptor, oddSprite.Descriptor))
+                if (evenAttached[i] ||
+                    !IsAttachedSpritePair(evenSprites[i], oddSprite) ||
+                    !SpritesOverlapVertically(evenSprites[i].Descriptor, oddSprite.Descriptor))
                 {
                     continue;
                 }
@@ -7003,6 +7077,11 @@ namespace CopperMod.Amiga
         private static bool SpritesOverlapVertically(SpriteDescriptor left, SpriteDescriptor right)
         {
             return Math.Max(left.YStart, right.YStart) < Math.Min(left.YStop, right.YStop);
+        }
+
+        private static bool IsAttachedSpritePair(SpriteFrameCommand evenSprite, SpriteFrameCommand oddSprite)
+        {
+            return evenSprite.Descriptor.Attached || oddSprite.Descriptor.Attached;
         }
 
         private bool TryGetManualSpriteDescriptor(int spriteIndex, out SpriteDescriptor descriptor)
@@ -7043,7 +7122,7 @@ namespace CopperMod.Amiga
             AppendDmaSpriteFrameCommands(_spriteFrameCommands, spriteIndex, sprite.Pointer, row);
         }
 
-        private void CaptureManualSpriteFrameCommandIfArmed(int spriteIndex)
+        private void CaptureManualSpriteFrameCommandIfArmed(int spriteIndex, long cycle = long.MinValue)
         {
             if (!_captureSpriteFrameCommands && !_advancingLiveDma)
             {
@@ -7057,18 +7136,11 @@ namespace CopperMod.Amiga
             }
 
             var descriptor = CreateManualSpriteDescriptor(sprite);
-            if (_captureSpriteFrameCommands)
+            if (_captureSpriteFrameCommands || _advancingLiveDma)
             {
-                AddSpriteFrameCommand(spriteIndex, descriptor);
+                AddSpriteFrameCommand(spriteIndex, descriptor, cycle);
                 return;
             }
-
-            if (!TryGetCurrentOutputRow(out var row))
-            {
-                row = 0;
-            }
-
-            RecordTimelineSpriteFrameCommand(new SpriteFrameCommand(spriteIndex, row, descriptor));
         }
 
         private void CaptureInitialManualSpriteFrameCommands()
@@ -7090,6 +7162,19 @@ namespace CopperMod.Amiga
         private static SpriteDescriptor CreateManualSpriteDescriptor(SpriteState sprite)
         {
             var baseDescriptor = CreateSpriteDescriptor(sprite.Pos, sprite.Ctl, 0, isDma: false, sprite.DataA, sprite.DataB);
+            if (baseDescriptor.YStop <= baseDescriptor.YStart)
+            {
+                return new SpriteDescriptor(
+                    baseDescriptor.X,
+                    baseDescriptor.YStart,
+                    baseDescriptor.YStart,
+                    baseDescriptor.Attached,
+                    baseDescriptor.DataAddress,
+                    baseDescriptor.IsDma,
+                    baseDescriptor.ManualDataA,
+                    baseDescriptor.ManualDataB);
+            }
+
             return new SpriteDescriptor(
                 baseDescriptor.X,
                 baseDescriptor.YStart,
@@ -7101,23 +7186,14 @@ namespace CopperMod.Amiga
                 baseDescriptor.ManualDataB);
         }
 
-        private void StopManualSpriteFrameCommands(int spriteIndex)
+        private void StopManualSpriteFrameCommands(int spriteIndex, long cycle = long.MinValue)
         {
             if (!_captureSpriteFrameCommands && !_advancingLiveDma)
             {
                 return;
             }
 
-            if (!TryGetCurrentOutputRow(out var row))
-            {
-                row = 0;
-            }
-
-            if (!_captureSpriteFrameCommands)
-            {
-                StopTimelineManualSpriteFrameCommands(spriteIndex, row);
-                return;
-            }
+            var row = GetCurrentManualSpriteCommandRow(_sprites[spriteIndex], cycle);
 
             for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
             {
@@ -7142,17 +7218,16 @@ namespace CopperMod.Amiga
             StopTimelineManualSpriteFrameCommands(spriteIndex, row);
         }
 
-        private void AddSpriteFrameCommand(int spriteIndex, SpriteDescriptor descriptor)
+        private void AddSpriteFrameCommand(int spriteIndex, SpriteDescriptor descriptor, long cycle = long.MinValue)
         {
             if (_spriteFrameCommands.Count >= MaxSpriteFrameCommands * _sprites.Length)
             {
                 return;
             }
 
-            if (!TryGetCurrentOutputRow(out var row))
-            {
-                row = 0;
-            }
+            var row = descriptor.IsDma
+                ? (TryGetCurrentOutputRow(out var currentRow) ? currentRow : 0)
+                : GetCurrentManualSpriteCommandRow(_sprites[spriteIndex], cycle);
 
             var command = new SpriteFrameCommand(spriteIndex, row, descriptor);
             if (_spriteFrameCommands.Count > 0 &&
@@ -7472,8 +7547,12 @@ namespace CopperMod.Amiga
             var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
             for (var y = yStart; y < yStop; y++)
             {
-                _ = TryReadTimelineSpriteLine(evenCommand, y, timeline, out var evenDataA, out var evenDataB);
-                _ = TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB);
+                if (!TryReadTimelineSpriteLine(evenCommand, y, timeline, out var evenDataA, out var evenDataB) ||
+                    !TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB))
+                {
+                    continue;
+                }
+
                 RenderAttachedSpriteLine(
                     bgra,
                     spriteIndex,
@@ -7515,7 +7594,11 @@ namespace CopperMod.Amiga
             var oddSprite = oddCommand.Descriptor;
             for (var y = oddSprite.YStart; y < oddSprite.YStop; y++)
             {
-                _ = TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB);
+                if (!TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB))
+                {
+                    continue;
+                }
+
                 RenderAttachedSpriteLine(
                     bgra,
                     spriteIndex,
@@ -7539,7 +7622,7 @@ namespace CopperMod.Amiga
 
             if (!sprite.IsDma)
             {
-                return y == sprite.YStart ? (sprite.ManualDataA, sprite.ManualDataB) : ((ushort)0, (ushort)0);
+                return (sprite.ManualDataA, sprite.ManualDataB);
             }
 
             var address = AddDmaPointerOffset(sprite.DataAddress, (y - sprite.YStart) * 4);
@@ -7569,12 +7652,8 @@ namespace CopperMod.Amiga
 
             if (!sprite.IsDma)
             {
-                if (y == sprite.YStart)
-                {
-                    dataA = sprite.ManualDataA;
-                    dataB = sprite.ManualDataB;
-                }
-
+                dataA = sprite.ManualDataA;
+                dataB = sprite.ManualDataB;
                 return true;
             }
 
@@ -10336,6 +10415,8 @@ namespace CopperMod.Amiga
                 _completedMicroOps,
                 _kernelCache.CaptureCounters());
         }
+
+        public bool Busy => _busy;
 
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {

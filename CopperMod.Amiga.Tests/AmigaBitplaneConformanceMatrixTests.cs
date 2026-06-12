@@ -1169,7 +1169,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height)
     {
-        var hardwareX = x + 64 - AmigaConstants.PalLowResOverscanBorderX;
+        var hardwareX = x + 128 - AmigaConstants.PalLowResOverscanBorderX;
         var hardwareYStart = y + 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         var hardwareYStop = hardwareYStart + height;
         var pos = (ushort)(((hardwareYStart & 0xFF) << 8) | ((hardwareX >> 1) & 0xFF));

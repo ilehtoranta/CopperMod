@@ -33,14 +33,25 @@ public sealed class MainWindowMouseInputTests
 	}
 
 	[Fact]
-	public void InitialMouseGrabPointIsIgnoredOnlyWhenItIsNotAlreadyCentered()
+	public void MouseGrabCenterHandshakeAcceptsOnlyCenteredPointerEvents()
 	{
 		var center = new Point(176, 144);
 		var initial = new Point(20, 80);
 
-		Assert.True(MainWindow.ShouldIgnoreInitialMouseGrabPoint(initial, initial, center));
-		Assert.False(MainWindow.ShouldIgnoreInitialMouseGrabPoint(new Point(174, 144), initial, center));
-		Assert.False(MainWindow.ShouldIgnoreInitialMouseGrabPoint(center, center, center));
+		Assert.False(MainWindow.IsMouseGrabCenterPoint(initial, center));
+		Assert.False(MainWindow.IsMouseGrabCenterPoint(new Point(174, 144), center));
+		Assert.True(MainWindow.IsMouseGrabCenterPoint(center, center));
+		Assert.True(MainWindow.IsMouseGrabCenterPoint(new Point(176.5, 143.5), center));
+	}
+
+	[Fact]
+	public void MouseGrabScreenCenterHandshakeAllowsRoundedCursorWarpPosition()
+	{
+		var center = new PixelPoint(500, 400);
+
+		Assert.True(MainWindow.IsNearScreenPoint(center, center));
+		Assert.True(MainWindow.IsNearScreenPoint(new PixelPoint(501, 399), center));
+		Assert.False(MainWindow.IsNearScreenPoint(new PixelPoint(503, 400), center));
 	}
 
 	[Fact]
