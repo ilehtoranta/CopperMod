@@ -153,7 +153,7 @@ public sealed class SidFilterProfileTests
 		Assert.InRange(cutoffCircuit.VcrWidthLength, 8.9, 9.1);
 		Assert.InRange(outputCircuit.WorkingPointVoltage, 4.53, 4.55);
 		Assert.InRange(outputCircuit.OutputSignalGain, 0.41, 0.43);
-		Assert.InRange(outputCircuit.OutputSoftClipAmount, 0.15, 0.17);
+		Assert.InRange(outputCircuit.OutputSoftClipAmount, 0.19, 0.21);
 		Assert.InRange(outputCircuit.OutputLowPassCutoffHz, 11_999.0, 12_001.0);
 		Assert.InRange(model.CutoffHz[0], 209.9, 210.1);
 		Assert.InRange(model.CutoffHz[^1], 10999.0, 11001.0);
@@ -240,6 +240,20 @@ public sealed class SidFilterProfileTests
 				}
 			}
 		}
+	}
+
+	[Fact]
+	public void Mos6581DryOutputMixDoesNotClampAtFilterNodeBeforeVolume()
+	{
+		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var filter = new SidMos6581AnalogFilter(profile, SidConstants.PalCpuCyclesPerSecond);
+
+		var singleVoice = RenderDryOutput(filter, voice1: 1.0, voice2: 0.0, voice3: 0.0);
+		filter.Reset();
+		var threeVoices = RenderDryOutput(filter, voice1: 1.0, voice2: 1.0, voice3: 1.0);
+
+		Assert.True(threeVoices > singleVoice * 1.8, $"Expected dry voice summing to reach the output stage before clipping, single {singleVoice:0.000}, three {threeVoices:0.000}.");
+		Assert.InRange(threeVoices, 0.90, 0.999);
 	}
 
 	[Fact]
@@ -496,6 +510,25 @@ public sealed class SidFilterProfileTests
 	{
 		Assert.True(double.IsFinite(voltage));
 		Assert.InRange(voltage, model.MinimumOpAmpVoltage, model.MaximumOpAmpVoltage);
+	}
+
+	private static double RenderDryOutput(SidMos6581AnalogFilter filter, double voice1, double voice2, double voice3)
+	{
+		var mixedVoltage = filter.Process(
+			voice1,
+			voice2,
+			voice3,
+			filterRouting: 0x00,
+			filterMode: 0x00,
+			voice3Muted: false,
+			cutoffRegister: 0,
+			resonanceNibble: 0);
+		var outputVoltage = filter.ApplyOutputStageVoltage(
+			mixedVoltage,
+			volumeGain: 1.0,
+			volumeOffsetSample: 0.0,
+			volumeTransientSample: 0.0);
+		return filter.OutputVoltageToSample(outputVoltage);
 	}
 
 	private static double ReadDamping(byte resonance)

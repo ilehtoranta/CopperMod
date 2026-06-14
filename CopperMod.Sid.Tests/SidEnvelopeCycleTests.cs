@@ -79,6 +79,34 @@ public sealed class SidEnvelopeCycleTests
 	}
 
 	[Fact]
+	public void GateRisingFromZeroHoldResetsStaleRateCounterForAttack()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
+		SetEnvelope(chip, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
+
+		Assert.Equal(20, chip.DebugState.Voices[0].RateCounter);
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
+
+		chip.Write(0x04, 0x11);
+		chip.Render(1);
+
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Attack, chip.DebugState.Voices[0].EnvelopeState);
+		Assert.Equal(1, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Render(RatePeriods[0] - 2);
+
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(RatePeriods[0] - 1, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Render(1);
+
+		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
 	public void FasterRateWriteWaitsForFifteenBitRateCounterWrap()
 	{
 		var chip = CreateVoice(attackDecay: 0xF0, sustainRelease: 0xF0, control: 0x11);
@@ -221,21 +249,20 @@ public sealed class SidEnvelopeCycleTests
 	}
 
 	[Fact]
-	public void ReleaseRateWriteWaitsForRateCounterWrapWhenCounterAlreadyPassedNewPeriod()
+	public void ReleaseRateWriteDuringActiveReleaseUsesNewReleasePeriod()
 	{
 		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0x60, state: Release, rateCounter: 20);
+		SetEnvelope(chip, envelope: 0x80, state: Release, zeroHold: false);
 
 		chip.Write(0x06, 0x00);
-		chip.Render(32756);
+		chip.Render(RatePeriods[0] - 1);
 
-		Assert.Equal(0x60, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
+		Assert.Equal(0x80, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(RatePeriods[0] - 1, chip.DebugState.Voices[0].RateCounter);
 
 		chip.Render(1);
 
-		Assert.Equal(0x5F, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(0x7F, chip.DebugState.Voices[0].EnvelopeCounter);
 		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
 	}
 

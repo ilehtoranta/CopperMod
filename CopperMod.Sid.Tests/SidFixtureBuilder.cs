@@ -154,6 +154,66 @@ internal static class SidFixtureBuilder
 		};
 	}
 
+	public static byte[] CreateVoice3Release9ToZeroPsid()
+	{
+		return CreatePsid(
+			Voice3Release9ToZeroProgram(),
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: 0x1029,
+			songs: 1,
+			startSong: 1,
+			title: "Voice3 Release 9 To 0",
+			author: "CopperMod",
+			released: "2026");
+	}
+
+	private static byte[] Voice3Release9ToZeroProgram()
+	{
+		return new byte[]
+		{
+			0xA9, 0x00,       // init: LDA #$00
+			0x8D, 0x00, 0x02, // STA $0200; one-shot play flag
+			0xA2, 0x18,       // LDX #$18
+			0xA9, 0x00,       // LDA #$00
+			0x9D, 0x00, 0xD4, // clear: STA $D400,X
+			0xCA,             // DEX
+			0x10, 0xFA,       // BPL clear
+			0xA9, 0x0F,       // LDA #$0F
+			0x8D, 0x18, 0xD4, // STA $D418
+			0xA9, 0xA9,       // LDA #$A9
+			0x8D, 0x0E, 0xD4, // STA $D40E
+			0xA9, 0x03,       // LDA #$03
+			0x8D, 0x0F, 0xD4, // STA $D40F
+			0xA9, 0x0A,       // LDA #$0A; attack 0, decay A
+			0x8D, 0x13, 0xD4, // STA $D413
+			0xA9, 0x09,       // LDA #$09; sustain 0, release 9
+			0x8D, 0x14, 0xD4, // STA $D414
+			0x60,             // RTS
+
+			0xAD, 0x00, 0x02, // play: LDA $0200
+			0xD0, 0x25,       // BNE done
+			0xEE, 0x00, 0x02, // INC $0200
+			0xA9, 0x81,       // LDA #$81; noise + gate on
+			0x8D, 0x12, 0xD4, // STA $D412
+			0xA2, 0xD6,       // LDX #$D6; 214
+			0xCA,             // delay1: DEX
+			0xD0, 0xFD,       // BNE delay1
+			0x24, 0x02,       // BIT $02; first delay = 1074 cycles
+			0xA9, 0x80,       // LDA #$80; gate off, keep noise selected
+			0x8D, 0x12, 0xD4, // STA $D412
+			0xA2, 0xC0,       // LDX #$C0; 192
+			0xCA,             // delay2: DEX
+			0xD0, 0xFD,       // BNE delay2
+			0x2C, 0x00, 0x02, // BIT $0200
+			0xEA,             // NOP; second delay = 967 cycles
+			0xA9, 0x00,       // LDA #$00
+			0x8D, 0x13, 0xD4, // STA $D413
+			0x8D, 0x14, 0xD4, // STA $D414
+			0x60              // done: RTS
+		};
+	}
+
 	private static void WriteAscii(byte[] data, int offset, string text)
 	{
 		Encoding.ASCII.GetBytes(text, data.AsSpan(offset, text.Length));

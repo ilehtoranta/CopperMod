@@ -161,7 +161,7 @@ namespace CopperMod.Sid
         public SidMos6581OutputCircuit(
             double workingPointVoltage = 4.54,
             double outputSignalGain = 0.42,
-            double outputSoftClipAmount = 0.16,
+            double outputSoftClipAmount = 0.20,
             double outputLowPassCutoffHz = 12_000.0)
         {
             WorkingPointVoltage = ValidatePositive(workingPointVoltage, nameof(workingPointVoltage));
@@ -456,6 +456,11 @@ namespace CopperMod.Sid
             return voltage > Vmax ? Vmax : voltage;
         }
 
+        public double SignalToOutputNodeVoltage(double signalVoltage)
+        {
+            return WorkingPoint - signalVoltage;
+        }
+
         public double NodeVoltageToSignal(double nodeVoltage)
         {
             if (nodeVoltage < Vmin)
@@ -467,6 +472,11 @@ namespace CopperMod.Sid
                 nodeVoltage = Vmax;
             }
 
+            return WorkingPoint - nodeVoltage;
+        }
+
+        public double OutputNodeVoltageToSignal(double nodeVoltage)
+        {
             return WorkingPoint - nodeVoltage;
         }
 
@@ -493,22 +503,22 @@ namespace CopperMod.Sid
             double volumeTransientSample)
         {
             var signalVoltage =
-                (NodeVoltageToSignal(mixedVoltage) * volumeGain) +
+                (OutputNodeVoltageToSignal(mixedVoltage) * volumeGain) +
                 SampleToOutputSignalVoltage(volumeOffsetSample + volumeTransientSample);
             var normalizedSample = SignalVoltageToSample(signalVoltage);
             var shapedSample = normalizedSample / (1.0 + (Math.Abs(normalizedSample) * _parameters.OutputCircuit.OutputSoftClipAmount));
             shapedSample = Math.Clamp(shapedSample, -0.999, 0.999);
-            return SignalToNodeVoltage(SampleToOutputSignalVoltage(shapedSample));
+            return SignalToOutputNodeVoltage(SampleToOutputSignalVoltage(shapedSample));
         }
 
         public double OutputVoltageToSample(double outputVoltage)
         {
-            return Math.Clamp(SignalVoltageToSample(NodeVoltageToSignal(outputVoltage)), -0.999, 0.999);
+            return Math.Clamp(SignalVoltageToSample(OutputNodeVoltageToSignal(outputVoltage)), -0.999, 0.999);
         }
 
         public double SampleToOutputVoltage(double sample)
         {
-            return SignalToNodeVoltage(SampleToOutputSignalVoltage(sample));
+            return SignalToOutputNodeVoltage(SampleToOutputSignalVoltage(sample));
         }
 
         private double SignalVoltageToSample(double signalVoltage)
@@ -1048,7 +1058,7 @@ namespace CopperMod.Sid
                 _lastHighDebug = 0.0;
                 _lastBandDebug = 0.0;
                 _lastLowDebug = 0.0;
-                return _model.SignalToNodeVoltage(direct);
+                return _model.SignalToOutputNodeVoltage(direct);
             }
 
             if (routedVoiceCount == 0 && IsAtRest())
@@ -1056,13 +1066,13 @@ namespace CopperMod.Sid
                 _lastHighDebug = 0.0;
                 _lastBandDebug = 0.0;
                 _lastLowDebug = 0.0;
-                return _model.SignalToNodeVoltage(direct);
+                return _model.SignalToOutputNodeVoltage(direct);
             }
 
             filtered *= _model.MapMixerGain(routedVoiceCount);
             var filterOutput = ClockFilter(filtered, filterMode, cutoffRegister, resonanceNibble);
             var leakage = filtered * _model.Parameters.FilterLeakageGain;
-            return _model.SignalToNodeVoltage(direct + leakage + filterOutput);
+            return _model.SignalToOutputNodeVoltage(direct + leakage + filterOutput);
         }
 
         private bool IsAtRest()
