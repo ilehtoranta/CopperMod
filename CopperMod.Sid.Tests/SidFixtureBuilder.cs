@@ -168,6 +168,21 @@ internal static class SidFixtureBuilder
 			released: "2026");
 	}
 
+	public static byte[] CreateCommandoLikeDryPulseMixPsid()
+	{
+		var program = CommandoLikeDryPulseMixProgram(out var playOffset);
+		return CreatePsid(
+			program,
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: (ushort)(0x1000 + playOffset),
+			songs: 1,
+			startSong: 1,
+			title: "Commando-Like Dry Pulse Mix",
+			author: "CopperMod",
+			released: "2026");
+	}
+
 	private static byte[] Voice3Release9ToZeroProgram()
 	{
 		return new byte[]
@@ -212,6 +227,64 @@ internal static class SidFixtureBuilder
 			0x8D, 0x14, 0xD4, // STA $D414
 			0x60              // done: RTS
 		};
+	}
+
+	private static byte[] CommandoLikeDryPulseMixProgram(out int playOffset)
+	{
+		var program = new List<byte>
+		{
+			0xA9, 0x00,       // init: LDA #$00
+			0x8D, 0x00, 0x02, // STA $0200; voice 3 pulse-width LFO seed
+			0xA2, 0x18,       // LDX #$18
+			0xA9, 0x00,       // LDA #$00
+			0x9D, 0x00, 0xD4, // clear: STA $D400,X
+			0xCA,             // DEX
+			0x10, 0xFA        // BPL clear
+		};
+
+		AddWrite(0x00, 0xD415); // cutoff low
+		AddWrite(0x00, 0xD416); // cutoff high
+		AddWrite(0x00, 0xD417); // no voices routed through the filter
+		AddWrite(0x0F, 0xD418); // full volume, filter modes off, voice 3 audible
+
+		AddVoice(0xD400, frequency: 0x1220, pulseWidth: 0x0800, control: 0x21); // voice 1 saw lead
+		AddVoice(0xD407, frequency: 0x0A90, pulseWidth: 0x0620, control: 0x41); // voice 2 pulse companion
+		AddVoice(0xD40E, frequency: 0x03A9, pulseWidth: 0x0180, control: 0x41); // voice 3 low pulse bass
+
+		program.Add(0x60); // RTS
+		playOffset = program.Count;
+		program.AddRange(new byte[]
+		{
+			0xAD, 0x00, 0x02, // play: LDA $0200
+			0x18,             // CLC
+			0x69, 0x16,       // ADC #$16
+			0x8D, 0x00, 0x02, // STA $0200
+			0x8D, 0x10, 0xD4, // STA $D410; voice 3 pulse width low byte
+			0xA9, 0x01,       // LDA #$01
+			0x8D, 0x11, 0xD4, // STA $D411; keep voice 3 pulse width in low bass range
+			0x60              // RTS
+		});
+		return program.ToArray();
+
+		void AddVoice(ushort baseAddress, ushort frequency, ushort pulseWidth, byte control)
+		{
+			AddWrite((byte)frequency, baseAddress);
+			AddWrite((byte)(frequency >> 8), (ushort)(baseAddress + 1));
+			AddWrite((byte)pulseWidth, (ushort)(baseAddress + 2));
+			AddWrite((byte)(pulseWidth >> 8), (ushort)(baseAddress + 3));
+			AddWrite(0x00, (ushort)(baseAddress + 5)); // fastest attack, fastest decay
+			AddWrite(0xF0, (ushort)(baseAddress + 6)); // full sustain
+			AddWrite(control, (ushort)(baseAddress + 4));
+		}
+
+		void AddWrite(byte value, ushort address)
+		{
+			program.Add(0xA9);
+			program.Add(value);
+			program.Add(0x8D);
+			program.Add((byte)address);
+			program.Add((byte)(address >> 8));
+		}
 	}
 
 	private static void WriteAscii(byte[] data, int offset, string text)
