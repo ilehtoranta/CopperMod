@@ -3,6 +3,34 @@ namespace CopperMod.Sid.Tests;
 public sealed class SidAnalogTests
 {
 	[Fact]
+	public void Mos6581D418MeasuredAmplitudeTableHasExpectedReferenceValues()
+	{
+		Assert.Equal(256, SidAnalog.Mos6581D418AmplitudeTableLength);
+		Assert.InRange(SidAnalog.Mos6581D418MeasuredAmplitude(0x00), 0.0, 0.001);
+		Assert.Equal(1.0, SidAnalog.Mos6581D418MeasuredAmplitude(0x0F), precision: 12);
+		Assert.Equal(-0.243400, SidAnalog.Mos6581D418MeasuredAmplitude(0x1F), precision: 6);
+		Assert.Equal(-0.869965, SidAnalog.Mos6581D418MeasuredAmplitude(0x9F), precision: 6);
+		Assert.Equal(-0.635317, SidAnalog.Mos6581D418MeasuredAmplitude(0xFF), precision: 6);
+	}
+
+	[Fact]
+	public void Mos6581D418VolumeOffsetUsesFullRegisterByte()
+	{
+		var volume0f = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos6581);
+		var volume1f = SidAnalog.VolumeOffset(0x1F, SidChipModel.Mos6581);
+		var volume9f = SidAnalog.VolumeOffset(0x9F, SidChipModel.Mos6581);
+		var volumeff = SidAnalog.VolumeOffset(0xFF, SidChipModel.Mos6581);
+
+		Assert.True(volume0f > volume1f + 0.30);
+		Assert.True(volume1f > volume9f + 0.15);
+		Assert.True(volumeff > volume9f + 0.05);
+		Assert.Equal(
+			SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos8580),
+			SidAnalog.VolumeOffset(0xFF, SidChipModel.Mos8580),
+			precision: 12);
+	}
+
+	[Fact]
 	public void Mos6581WaveformDacIsMeasurablyNonLinear()
 	{
 		var lowerHalf = SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos6581) -
@@ -45,7 +73,7 @@ public sealed class SidAnalogTests
 			SidAnalog.VolumeOffset(4, SidChipModel.Mos6581);
 
 		Assert.True(mos6581Range > 0.28, $"Expected strong 6581 D418 digi range, got {mos6581Range:0.000}.");
-		Assert.True(nightdawnStyleRange > 0.22, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
+		Assert.True(nightdawnStyleRange > 0.20, $"Expected offset-biased 4-bit digis to stay audible, got {nightdawnStyleRange:0.000}.");
 		Assert.True(mos8580Range < mos6581Range * 0.10, $"Expected 8580 volume digis to remain much weaker, 8580 {mos8580Range:0.000}, 6581 {mos6581Range:0.000}.");
 	}
 

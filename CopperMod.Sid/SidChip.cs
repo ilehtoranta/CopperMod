@@ -516,7 +516,7 @@ namespace CopperMod.Sid
                     else
                     {
                         var volume = value & 0x0F;
-                        var nextVolumeOffset = SidAnalog.VolumeOffset(volume, Model);
+                        var nextVolumeOffset = SidAnalog.VolumeOffset(value, Model);
                         _volumeRegisterTransientTarget += (nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain;
                         _volumeRegisterTransientTarget = Math.Clamp(
                             _volumeRegisterTransientTarget,

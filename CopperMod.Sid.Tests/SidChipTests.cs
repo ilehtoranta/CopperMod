@@ -176,6 +176,20 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void Mos6581VolumeRegisterUsesFullByteMeasuredAmplitude()
+	{
+		var volume0f = MeasureSettledD418Output(0x0F, SidChipModel.Mos6581);
+		var volume1f = MeasureSettledD418Output(0x1F, SidChipModel.Mos6581);
+		var volume9f = MeasureSettledD418Output(0x9F, SidChipModel.Mos6581);
+		var volumeff = MeasureSettledD418Output(0xFF, SidChipModel.Mos6581);
+
+		Assert.True(volume0f > volume1f + 0.25, $"Expected $0F to exceed $1F, got {volume0f:0.000} and {volume1f:0.000}.");
+		Assert.True(volume1f > volume9f + 0.10, $"Expected $1F to exceed $9F, got {volume1f:0.000} and {volume9f:0.000}.");
+		Assert.True(volumeff > volume9f + 0.03, $"Expected $FF to exceed $9F, got {volumeff:0.000} and {volume9f:0.000}.");
+		Assert.All(new[] { volume0f, volume1f, volume9f, volumeff }, sample => Assert.True(double.IsFinite(sample)));
+	}
+
+	[Fact]
 	public void Mos6581VolumeRegisterStepsAddSlewedTransientDigiEnergy()
 	{
 		var mos6581 = MeasureVolumeStepTransient(SidChipModel.Mos6581);
@@ -639,6 +653,14 @@ public sealed class SidChipTests
 		var settled = chip.Render(1);
 		var earlyExcursion = Math.Max(Math.Abs(minimum - settled), Math.Abs(maximum - settled));
 		return (earlyExcursion, settled);
+	}
+
+	private static double MeasureSettledD418Output(byte registerValue, SidChipModel model)
+	{
+		var chip = new SidChip(model, 0xD400);
+		chip.Write(0x18, registerValue);
+		RenderCycles(chip, 24000);
+		return chip.Render(1);
 	}
 
 	private static SidChip CreateTwoSawVoices()
