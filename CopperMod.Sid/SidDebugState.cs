@@ -89,4 +89,51 @@ namespace CopperMod.Sid
 
         public byte Control { get; }
     }
+
+    internal readonly struct SidSystemTimingSnapshot
+    {
+        public SidSystemTimingSnapshot(
+            long audioCycle,
+            long registerCycle,
+            long registerBusCycle,
+            long sampleCycles,
+            double sampleAccumulator,
+            int channelCaptureFrameIndex,
+            int pendingWriteCount,
+            int audioPendingWriteIndex,
+            int registerPendingWriteIndex,
+            int registerBusPendingWriteIndex)
+        {
+            AudioCycle = audioCycle;
+            RegisterCycle = registerCycle;
+            RegisterBusCycle = registerBusCycle;
+            SampleCycles = sampleCycles;
+            SampleAccumulator = sampleAccumulator;
+            ChannelCaptureFrameIndex = channelCaptureFrameIndex;
+            PendingWriteCount = pendingWriteCount;
+            AudioPendingWriteIndex = audioPendingWriteIndex;
+            RegisterPendingWriteIndex = registerPendingWriteIndex;
+            RegisterBusPendingWriteIndex = registerBusPendingWriteIndex;
+        }
+
+        public long AudioCycle { get; }
+
+        public long RegisterCycle { get; }
+
+        public long RegisterBusCycle { get; }
+
+        public long SampleCycles { get; }
+
+        public double SampleAccumulator { get; }
+
+        public int ChannelCaptureFrameIndex { get; }
+
+        public int PendingWriteCount { get; }
+
+        public int AudioPendingWriteIndex { get; }
+
+        public int RegisterPendingWriteIndex { get; }
+
+        public int RegisterBusPendingWriteIndex { get; }
+    }
 }

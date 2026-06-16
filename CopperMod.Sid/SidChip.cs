@@ -138,12 +138,61 @@ namespace CopperMod.Sid
             _cycle = 0;
         }
 
+        public void CopyStateFrom(SidChip source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            Array.Copy(source._registers, _registers, _registers.Length);
+            Array.Copy(source._forwardedRegisters, _forwardedRegisters, _forwardedRegisters.Length);
+            Array.Copy(source._pendingRegisters, _pendingRegisters, _pendingRegisters.Length);
+            _pendingRegisterBits = source._pendingRegisterBits;
+            for (var i = 0; i < _voices.Length; i++)
+            {
+                _voices[i].CopyStateFrom(source._voices[i]);
+            }
+
+            _filterIntegrator1 = source._filterIntegrator1;
+            _filterIntegrator2 = source._filterIntegrator2;
+            _filterG = source._filterG;
+            _filterDamping = source._filterDamping;
+            _filterDenominator = source._filterDenominator;
+            _filterOutputGain = source._filterOutputGain;
+            _filterRouting = source._filterRouting;
+            _filterMode = source._filterMode;
+            _filterCutoffRegister = source._filterCutoffRegister;
+            _filterResonanceNibble = source._filterResonanceNibble;
+            _filterCutoffHz = source._filterCutoffHz;
+            _lastLowPass = source._lastLowPass;
+            _lastBandPass = source._lastBandPass;
+            _lastHighPass = source._lastHighPass;
+            _filterVoiceLeakageGain = source._filterVoiceLeakageGain;
+            _filterCoefficientsDirty = source._filterCoefficientsDirty;
+            _voice3Muted = source._voice3Muted;
+            _masterVolume = source._masterVolume;
+            _volumeOffset = source._volumeOffset;
+            _volumeRegisterTransient = source._volumeRegisterTransient;
+            _volumeRegisterTransientTarget = source._volumeRegisterTransientTarget;
+            _outputLowPassState = source._outputLowPassState;
+            _analogOutputLowPassVoltage = source._analogOutputLowPassVoltage;
+            _lastOutput = source._lastOutput;
+            _busValue = source._busValue;
+            _cycle = source._cycle;
+            if (_analog6581Filter != null && source._analog6581Filter != null)
+            {
+                _analog6581Filter.CopyStateFrom(source._analog6581Filter);
+            }
+        }
+
         public void Write(byte register, byte value)
         {
             register = (byte)(register & 0x1F);
             _registers[register] = value;
             _pendingRegisters[register] = value;
             _pendingRegisterBits |= 1u << register;
+            _busValue = value;
+        }
+
+        public void WriteBusValueOnly(byte value)
+        {
             _busValue = value;
         }
 
@@ -160,6 +209,16 @@ namespace CopperMod.Sid
             };
             _busValue = value;
             return value;
+        }
+
+        [HotPath]
+        public void AdvanceRegisterObservable(long firstCycle, long cycles)
+        {
+            for (var i = 0L; i < cycles; i++)
+            {
+                _cycle = firstCycle + i;
+                ClockRegisterObservableCycle();
+            }
         }
 
         [HotPath]
@@ -372,6 +431,57 @@ namespace CopperMod.Sid
             var voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
             var voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
             return Mix(voice1, voice2, voice3);
+        }
+
+        [HotPath]
+        private void ClockRegisterObservableCycle()
+        {
+            var chipVoice1 = _voices[0];
+            var chipVoice2 = _voices[1];
+            var chipVoice3 = _voices[2];
+
+            CommitPendingRegisters();
+
+            chipVoice1.ClockEnvelope();
+            chipVoice2.ClockEnvelope();
+            chipVoice3.ClockEnvelope();
+
+            var previousPhase1 = chipVoice1.Phase;
+            var previousPhase2 = chipVoice2.Phase;
+            var previousPhase3 = chipVoice3.Phase;
+            chipVoice1.ClockOscillator();
+            chipVoice2.ClockOscillator();
+            chipVoice3.ClockOscillator();
+
+            var advancedPhase1 = chipVoice1.Phase;
+            var advancedPhase2 = chipVoice2.Phase;
+            var advancedPhase3 = chipVoice3.Phase;
+            var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
+            var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
+            var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
+            if (chipVoice1.SyncEnabled && voice3MsbRising)
+            {
+                chipVoice1.ResetOscillator();
+            }
+
+            if (chipVoice2.SyncEnabled && voice1MsbRising)
+            {
+                chipVoice2.ResetOscillator();
+            }
+
+            if (chipVoice3.SyncEnabled && voice2MsbRising)
+            {
+                chipVoice3.ResetOscillator();
+            }
+
+            chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
+            chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
+            chipVoice3.ClockNoise(SidVoice.NoiseClockRising(previousPhase3, chipVoice3.Phase));
+
+            var model = Model;
+            chipVoice1.RefreshRegisterObservableReadback(chipVoice3, model);
+            chipVoice2.RefreshRegisterObservableReadback(chipVoice1, model);
+            chipVoice3.RefreshRegisterObservableReadback(chipVoice2, model);
         }
 
         [HotPath]

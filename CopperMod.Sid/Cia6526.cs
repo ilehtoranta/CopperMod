@@ -124,12 +124,12 @@ namespace CopperMod.Sid
             _timerBPulseActive = false;
         }
 
-        public byte Read(byte register)
+        public byte Read(byte register, byte portAInputMask = 0xFF, byte portBInputMask = 0xFF)
         {
             return (register & 0x0F) switch
             {
-                0x00 => ReadPort(_portA, _ddrA),
-                0x01 => ReadPort(ReadPortBOutput(), _ddrB),
+                0x00 => (byte)(ReadPort(_portA, _ddrA) & portAInputMask),
+                0x01 => (byte)(ReadPort(ReadPortBOutput(), _ddrB) & portBInputMask),
                 0x02 => _ddrA,
                 0x03 => _ddrB,
                 0x04 => (byte)_timerA,

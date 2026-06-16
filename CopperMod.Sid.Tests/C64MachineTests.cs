@@ -298,6 +298,42 @@ public sealed class C64MachineTests
 		Assert.Equal(0x00020000u, machine.Sid.Chips[0].DebugState.Voices[2].Accumulator);
 	}
 
+	[Fact]
+	public void CpuSidPotPollingDoesNotAdvanceMainSidAudioTimeline()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		Assert.True(machine.Sid.TryWrite(0xD418, 0x0F, 4));
+		var before = machine.Sid.CaptureTimingSnapshot();
+
+		Assert.Equal(0x0F, machine.Read(0xD418, cycleOffset: 4));
+		Assert.Equal(0xFF, machine.Read(0xD419, cycleOffset: 4));
+
+		var after = machine.Sid.CaptureTimingSnapshot();
+		Assert.Equal(before.AudioCycle, after.AudioCycle);
+		Assert.Equal(before.SampleCycles, after.SampleCycles);
+		Assert.Equal(before.SampleAccumulator, after.SampleAccumulator);
+		Assert.Equal(0, after.RegisterCycle);
+	}
+
+	[Fact]
+	public void CpuSidOscillatorPollingDoesNotAdvanceMainSidAudioTimeline()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
+		Assert.True(machine.Sid.TryWrite(0xD40E, 0x00, 0));
+		Assert.True(machine.Sid.TryWrite(0xD40F, 0x80, 0));
+		Assert.True(machine.Sid.TryWrite(0xD412, 0x20, 0));
+		var before = machine.Sid.CaptureTimingSnapshot();
+
+		Assert.Equal(0x01, machine.Read(0xD41B, cycleOffset: 4));
+		Assert.Equal(0x01, machine.Read(0xD41B, cycleOffset: 4));
+
+		var after = machine.Sid.CaptureTimingSnapshot();
+		Assert.Equal(before.AudioCycle, after.AudioCycle);
+		Assert.Equal(before.SampleCycles, after.SampleCycles);
+		Assert.Equal(before.SampleAccumulator, after.SampleAccumulator);
+		Assert.Equal(4, after.RegisterCycle);
+	}
+
 	public static IEnumerable<object[]> CpuSidWriteCases()
 	{
 		yield return CpuSidWrite(

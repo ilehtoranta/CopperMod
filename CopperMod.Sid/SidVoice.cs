@@ -92,6 +92,31 @@ namespace CopperMod.Sid
             SustainRelease = 0;
         }
 
+        public void CopyStateFrom(SidVoice source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            _phase = source._phase;
+            _noise = source._noise;
+            _noiseShiftLatch = source._noiseShiftLatch;
+            _envelopeCounter = source._envelopeCounter;
+            _rateCounter = source._rateCounter;
+            _exponentialCounter = source._exponentialCounter;
+            _envelopeState = source._envelopeState;
+            _previousGate = source._previousGate;
+            _envelopeZeroHold = source._envelopeZeroHold;
+            _envelopeMaxHold = source._envelopeMaxHold;
+            _noiseResetHeld = source._noiseResetHeld;
+            _noiseResetReleasePending = source._noiseResetReleasePending;
+            _oscillatorReadLatch = source._oscillatorReadLatch;
+            _oscillatorReadPipeline = source._oscillatorReadPipeline;
+            _control = source._control;
+            _cycleEvents = source._cycleEvents;
+            Frequency = source.Frequency;
+            PulseWidth = source.PulseWidth;
+            AttackDecay = source.AttackDecay;
+            SustainRelease = source.SustainRelease;
+        }
+
         public void BeginCycleTrace()
         {
             _cycleEvents = SidCycleTraceEvents.None;
@@ -291,6 +316,11 @@ namespace CopperMod.Sid
         public byte ReadOscillator(SidVoice? syncSource, SidChipModel model)
         {
             return _oscillatorReadLatch;
+        }
+
+        public void RefreshRegisterObservableReadback(SidVoice? syncSource, SidChipModel model)
+        {
+            RefreshRegisterObservableWaveform(syncSource, model);
         }
 
         public SidVoiceDebugState GetDebugState()
@@ -619,6 +649,85 @@ namespace CopperMod.Sid
                 : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
+        private void RefreshRegisterObservableWaveform(SidVoice? syncSource, SidChipModel model)
+        {
+            var waveformMask = _control & 0xF0;
+            switch (waveformMask)
+            {
+                case 0:
+                    UpdateOscillatorReadLatch(0);
+                    return;
+                case 0x10:
+                    UpdateOscillatorReadLatch(GetTriangleDac(syncSource, out _, out _, out _));
+                    return;
+                case 0x20:
+                    UpdateOscillatorReadLatch(GetSawDac());
+                    return;
+                case 0x40:
+                    UpdateOscillatorReadLatch(GetPulseDac());
+                    return;
+                case 0x50 when model == SidChipModel.Mos6581:
+                    RefreshMos6581TrianglePulseReadback(syncSource);
+                    return;
+                case 0x80:
+                    if (_noise == 0)
+                    {
+                        UpdateOscillatorReadLatch(0);
+                        return;
+                    }
+
+                    UpdateOscillatorReadLatch(GetNoiseDac());
+                    return;
+            }
+
+            var outputs = 0;
+            uint combinedDac = 0x0FFF;
+            if ((waveformMask & 0x10) != 0)
+            {
+                combinedDac &= GetTriangleDac(syncSource, out _, out _, out _);
+                outputs++;
+            }
+
+            if ((waveformMask & 0x20) != 0)
+            {
+                combinedDac &= GetSawDac();
+                outputs++;
+            }
+
+            if ((waveformMask & 0x40) != 0)
+            {
+                combinedDac &= GetPulseDac();
+                outputs++;
+            }
+
+            if ((waveformMask & 0x80) != 0)
+            {
+                if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
+                {
+                    _noise = 0;
+                }
+
+                if (_noise == 0)
+                {
+                    UpdateOscillatorReadLatch(0);
+                    return;
+                }
+
+                combinedDac &= GetNoiseDac();
+                outputs++;
+            }
+
+            if (outputs == 0)
+            {
+                UpdateOscillatorReadLatch(0);
+                return;
+            }
+
+            var selectorDac = SidAnalog.MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+            UpdateOscillatorReadLatch(selectorDac);
+            ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback: true);
+        }
+
         private double RenderMos6581TrianglePulseFast(SidVoice? syncSource)
         {
             var pulseDac = GetPulseDac();
@@ -642,6 +751,27 @@ namespace CopperMod.Sid
             UpdateOscillatorReadLatch(contentionDac);
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
                 SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+        }
+
+        private void RefreshMos6581TrianglePulseReadback(SidVoice? syncSource)
+        {
+            var pulseDac = GetPulseDac();
+            if (pulseDac == 0)
+            {
+                UpdateOscillatorReadLatch(0);
+                return;
+            }
+
+            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
+            var saw = GetSawDac();
+            var contentionMask = (_phase >> 10) & 0x0FFF;
+            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
+            if ((PulseWidth & 0x0FFF) != 0)
+            {
+                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
+            }
+
+            UpdateOscillatorReadLatch(contentionDac);
         }
 
         private double GetMos6581TrianglePulseBias()

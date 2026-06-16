@@ -9,7 +9,7 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController
     {
         private readonly SidModule _module;
         private readonly C64Machine _machine;
@@ -66,6 +66,8 @@ namespace CopperMod.Sid
         public IReadOnlyList<ModuleSubSongMetadata> SubSongs => _subSongs;
 
         internal IReadOnlyList<SidRegisterWrite> SidWrites => _machine.SidWrites;
+
+        internal IReadOnlyList<DigimaxWrite> DigimaxWrites => _machine.DigimaxWrites;
 
         public int MutedVoicesMask
         {
@@ -209,6 +211,17 @@ namespace CopperMod.Sid
         {
         }
 
+        public void ScheduleAutostartKey(string key, TimeSpan delay, TimeSpan hold)
+        {
+            if (!string.Equals(key, "f3", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(key, "space", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Only F3 and Space autostart are supported for C64 cartridge playback.", nameof(key));
+            }
+
+            _machine.ScheduleAutostartKey(key, delay, hold);
+        }
+
         private static ModuleMetadata CreateMetadata(SidModule module)
         {
             var tags = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -224,9 +237,15 @@ namespace CopperMod.Sid
                 ["PlayAddress"] = "$" + module.PlayAddress.ToString("X4", CultureInfo.InvariantCulture)
             };
 
+            if (module.Cartridge != null)
+            {
+                tags["Cartridge"] = module.Cartridge.Type.ToString();
+                tags["CartridgeBanks"] = module.Cartridge.BankCount.ToString(CultureInfo.InvariantCulture);
+            }
+
             return new ModuleMetadata(
                 title: string.IsNullOrWhiteSpace(module.Title) ? null : module.Title,
-                formatName: "SID",
+                formatName: module.IsCartridge ? "C64 CRT" : "SID",
                 formatVersion: $"{module.Kind} v{module.Version}",
                 channelCount: module.Chips.Count * 3,
                 instrumentCount: 0,

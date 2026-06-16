@@ -10,7 +10,8 @@ namespace CopperMod.Sid
     internal enum SidFileKind
     {
         Psid,
-        Rsid
+        Rsid,
+        Crt
     }
 
     /// <summary>
@@ -82,7 +83,8 @@ namespace CopperMod.Sid
             SidChipModel chipModel,
             IReadOnlyList<SidChipPlacement> chips,
             byte[] payload,
-            IReadOnlyList<ModuleDiagnostic> diagnostics)
+            IReadOnlyList<ModuleDiagnostic> diagnostics,
+            C64CartridgeImage? cartridge = null)
         {
             Kind = kind;
             Version = version;
@@ -105,6 +107,7 @@ namespace CopperMod.Sid
             Chips = chips;
             Payload = payload;
             Diagnostics = diagnostics;
+            Cartridge = cartridge;
         }
 
         public SidFileKind Kind { get; }
@@ -149,10 +152,44 @@ namespace CopperMod.Sid
 
         public IReadOnlyList<ModuleDiagnostic> Diagnostics { get; }
 
+        public C64CartridgeImage? Cartridge { get; }
+
         public bool IsRsid => Kind == SidFileKind.Rsid;
+
+        public bool IsCartridge => Kind == SidFileKind.Crt;
 
         public bool IsBasicRsid => IsRsid && ((Flags >> 1) & 1) != 0;
 
+        public bool RunsContinuously => IsRsid || IsCartridge || IsBasicRsid;
+
         public SidChipModel EffectiveChipModel => ChipModel == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
+
+        public static SidModule CreateEasyFlashCartridge(C64CartridgeImage cartridge)
+        {
+            ArgumentNullException.ThrowIfNull(cartridge);
+            return new SidModule(
+                SidFileKind.Crt,
+                version: 0,
+                dataOffset: 0,
+                loadAddress: 0,
+                effectiveLoadAddress: 0,
+                initAddress: 0,
+                playAddress: 0,
+                subSongCount: 1,
+                defaultSubSongIndex: 0,
+                speed: 0,
+                flags: 0,
+                relocationStartPage: 0,
+                relocationPageLength: 0,
+                title: string.IsNullOrWhiteSpace(cartridge.Name) ? "EasyFlash Cartridge" : cartridge.Name,
+                author: "C64 Cartridge",
+                released: "",
+                clock: SidClock.Pal,
+                chipModel: SidChipModel.Mos8580,
+                chips: new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) },
+                payload: Array.Empty<byte>(),
+                diagnostics: Array.Empty<ModuleDiagnostic>(),
+                cartridge: cartridge);
+        }
     }
 }

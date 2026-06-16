@@ -4,16 +4,27 @@ using CopperMod.Abstractions;
 
 namespace CopperMod.Sid
 {
+    internal enum SidRegisterReadAdvanceKind
+    {
+        BusOnly,
+        Digital
+    }
+
     internal sealed class SidSystem
     {
         private const int MaxCapturedWrites = 65536;
         private readonly BoundedSidWriteLog _writes = new BoundedSidWriteLog(MaxCapturedWrites);
         private readonly List<PendingSidWrite> _pendingWrites = new List<PendingSidWrite>(4096);
         private readonly int _channelCount;
+        private readonly SidChip[] _registerChips;
         private long _lastCycle;
+        private long _registerLastCycle;
+        private long _registerBusLastCycle;
         private double _sampleAccumulator;
         private long _sampleCycles;
         private int _pendingWriteIndex;
+        private int _registerPendingWriteIndex;
+        private int _registerBusPendingWriteIndex;
         private double[]? _channelAccumulator;
         private double[]? _channelScratch;
         private float[][]? _captureSamples;
@@ -34,10 +45,13 @@ namespace CopperMod.Sid
             }
 
             Chips = new SidChip[placements.Count];
+            _registerChips = new SidChip[placements.Count];
             for (var i = 0; i < placements.Count; i++)
             {
                 Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile);
                 Chips[i].TraceChipIndex = i;
+                _registerChips[i] = new SidChip(model, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile);
+                _registerChips[i].TraceChipIndex = i;
             }
 
             _channelCount = Chips.Length * 3;
@@ -70,15 +84,24 @@ namespace CopperMod.Sid
                 {
                     chip.MutedVoicesMask = _mutedVoicesMask;
                 }
+
+                foreach (var chip in _registerChips)
+                {
+                    chip.MutedVoicesMask = _mutedVoicesMask;
+                }
             }
         }
 
         public void Reset()
         {
             _lastCycle = 0;
+            _registerLastCycle = 0;
+            _registerBusLastCycle = 0;
             _sampleAccumulator = 0;
             _sampleCycles = 0;
             _pendingWriteIndex = 0;
+            _registerPendingWriteIndex = 0;
+            _registerBusPendingWriteIndex = 0;
             _channelAccumulator = null;
             _channelScratch = null;
             _captureSamples = null;
@@ -91,12 +114,28 @@ namespace CopperMod.Sid
                 chip.Reset();
                 chip.MutedVoicesMask = _mutedVoicesMask;
             }
+
+            foreach (var chip in _registerChips)
+            {
+                chip.Reset();
+                chip.MutedVoicesMask = _mutedVoicesMask;
+            }
         }
 
         public void ResetClock()
         {
             _lastCycle = 0;
+            _registerLastCycle = 0;
+            _registerBusLastCycle = 0;
+            _registerPendingWriteIndex = _pendingWriteIndex;
+            _registerBusPendingWriteIndex = _pendingWriteIndex;
+            for (var i = 0; i < Chips.Length; i++)
+            {
+                _registerChips[i].CopyStateFrom(Chips[i]);
+            }
+
             DiscardAccumulatedOutput();
+            CompactPendingWrites();
         }
 
         public void DiscardAccumulatedOutput()
@@ -127,6 +166,7 @@ namespace CopperMod.Sid
             if (cycle <= _lastCycle)
             {
                 Chips[chipIndex].Write(register, value);
+                _registerChips[chipIndex].Write(register, value);
             }
             else
             {
@@ -152,12 +192,19 @@ namespace CopperMod.Sid
                 return false;
             }
 
-            if (cycle > _lastCycle)
+            if (Trace != null)
             {
-                AdvanceTo(cycle);
+                if (cycle > _lastCycle)
+                {
+                    AdvanceTo(cycle);
+                }
+
+                value = Chips[chipIndex].Read(register);
+                return true;
             }
 
-            value = Chips[chipIndex].Read(register);
+            AdvanceRegisterObservableTo(cycle, GetRegisterReadAdvanceKind(register));
+            value = _registerChips[chipIndex].Read(register);
             return true;
         }
 
@@ -256,6 +303,103 @@ namespace CopperMod.Sid
             return result;
         }
 
+        internal SidSystemTimingSnapshot CaptureTimingSnapshot()
+            => new SidSystemTimingSnapshot(
+                _lastCycle,
+                _registerLastCycle,
+                _registerBusLastCycle,
+                _sampleCycles,
+                _sampleAccumulator,
+                _captureFrameIndex,
+                _pendingWrites.Count,
+                _pendingWriteIndex,
+                _registerPendingWriteIndex,
+                _registerBusPendingWriteIndex);
+
+        internal SidChipDebugState GetRegisterChipDebugState(int chipIndex)
+            => _registerChips[chipIndex].DebugState;
+
+        [HotPath]
+        private static SidRegisterReadAdvanceKind GetRegisterReadAdvanceKind(byte register)
+        {
+            register = (byte)(register & 0x1F);
+            return register is 0x1B or 0x1C
+                ? SidRegisterReadAdvanceKind.Digital
+                : SidRegisterReadAdvanceKind.BusOnly;
+        }
+
+        [HotPath]
+        private void AdvanceRegisterObservableTo(long targetCycle, SidRegisterReadAdvanceKind kind)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            if (kind == SidRegisterReadAdvanceKind.Digital)
+            {
+                AdvanceRegisterDigitalTo(targetCycle);
+            }
+            else
+            {
+                AdvanceRegisterBusWritesTo(targetCycle);
+            }
+
+            CompactPendingWrites();
+        }
+
+        [HotPath]
+        private void AdvanceRegisterBusWritesTo(long targetCycle)
+        {
+            if (targetCycle <= _registerBusLastCycle)
+            {
+                return;
+            }
+
+            while (_registerBusPendingWriteIndex < _pendingWrites.Count &&
+                _pendingWrites[_registerBusPendingWriteIndex].Cycle <= targetCycle)
+            {
+                var write = _pendingWrites[_registerBusPendingWriteIndex++];
+                _registerChips[write.ChipIndex].WriteBusValueOnly(write.Value);
+            }
+
+            _registerBusLastCycle = targetCycle;
+        }
+
+        [HotPath]
+        private void AdvanceRegisterDigitalTo(long targetCycle)
+        {
+            if (targetCycle <= _registerLastCycle)
+            {
+                return;
+            }
+
+            while (_registerPendingWriteIndex < _pendingWrites.Count &&
+                _pendingWrites[_registerPendingWriteIndex].Cycle <= targetCycle)
+            {
+                var write = _pendingWrites[_registerPendingWriteIndex++];
+                AdvanceRegisterChips(write.Cycle - _registerLastCycle);
+                _registerChips[write.ChipIndex].Write(write.Register, write.Value);
+            }
+
+            AdvanceRegisterChips(targetCycle - _registerLastCycle);
+            _registerBusPendingWriteIndex = Math.Max(_registerBusPendingWriteIndex, _registerPendingWriteIndex);
+            _registerBusLastCycle = Math.Max(_registerBusLastCycle, targetCycle);
+        }
+
+        [HotPath]
+        private void AdvanceRegisterChips(long cycles)
+        {
+            if (cycles <= 0)
+            {
+                return;
+            }
+
+            var firstCycle = _registerLastCycle + 1;
+            for (var i = 0; i < _registerChips.Length; i++)
+            {
+                _registerChips[i].AdvanceRegisterObservable(firstCycle, cycles);
+            }
+
+            _registerLastCycle += cycles;
+        }
+
         [HotPath]
         public void AdvanceTo(long targetCycle)
         {
@@ -272,6 +416,7 @@ namespace CopperMod.Sid
             }
 
             AccumulateCycles(targetCycle - _lastCycle);
+            SyncRegisterTimelineToAudioForCompaction();
             CompactPendingWrites();
         }
 
@@ -310,13 +455,43 @@ namespace CopperMod.Sid
         [HotPath]
         private void CompactPendingWrites()
         {
+            var consumed = Math.Min(
+                _pendingWriteIndex,
+                Math.Min(_registerPendingWriteIndex, _registerBusPendingWriteIndex));
+            if (consumed < 64 || consumed * 2 < _pendingWrites.Count)
+            {
+                return;
+            }
+
+            _pendingWrites.RemoveRange(0, consumed);
+            _pendingWriteIndex -= consumed;
+            _registerPendingWriteIndex -= consumed;
+            _registerBusPendingWriteIndex -= consumed;
+        }
+
+        private void SyncRegisterTimelineToAudioForCompaction()
+        {
             if (_pendingWriteIndex < 64 || _pendingWriteIndex * 2 < _pendingWrites.Count)
             {
                 return;
             }
 
-            _pendingWrites.RemoveRange(0, _pendingWriteIndex);
-            _pendingWriteIndex = 0;
+            if (_lastCycle < _registerLastCycle ||
+                _lastCycle < _registerBusLastCycle ||
+                _pendingWriteIndex < _registerBusPendingWriteIndex)
+            {
+                return;
+            }
+
+            for (var i = 0; i < Chips.Length; i++)
+            {
+                _registerChips[i].CopyStateFrom(Chips[i]);
+            }
+
+            _registerLastCycle = _lastCycle;
+            _registerBusLastCycle = _lastCycle;
+            _registerPendingWriteIndex = _pendingWriteIndex;
+            _registerBusPendingWriteIndex = _pendingWriteIndex;
         }
 
         [HotPath]

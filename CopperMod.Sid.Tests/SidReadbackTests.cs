@@ -15,7 +15,7 @@ public sealed class SidReadbackTests
 
 		Assert.Equal(0x00, delayed);
 		Assert.Equal(0x01, caughtUp);
-		Assert.Equal(0x00018000u, sid.Chips[0].DebugState.Voices[2].Accumulator);
+		Assert.Equal(0x00018000u, sid.GetRegisterChipDebugState(0).Voices[2].Accumulator);
 	}
 
 	[Fact]
@@ -117,6 +117,176 @@ public sealed class SidReadbackTests
 	}
 
 	[Fact]
+	public void PotAndOpenBusFutureReadsDoNotAdvanceMainAudioTimeline()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD418, 0x0F, 100));
+		var timingBefore = sid.CaptureTimingSnapshot();
+		var chipBefore = sid.Chips[0].DebugState;
+
+		Assert.True(sid.TryRead(0xD418, cycle: 100, out var openBus));
+		Assert.True(sid.TryRead(0xD419, cycle: 100, out var potX));
+		Assert.True(sid.TryRead(0xD400, cycle: 100, out var openBusAfterPot));
+
+		Assert.Equal(0x0F, openBus);
+		Assert.Equal(0xFF, potX);
+		Assert.Equal(0xFF, openBusAfterPot);
+		var timingAfter = sid.CaptureTimingSnapshot();
+		Assert.Equal(timingBefore.AudioCycle, timingAfter.AudioCycle);
+		Assert.Equal(timingBefore.SampleCycles, timingAfter.SampleCycles);
+		Assert.Equal(timingBefore.SampleAccumulator, timingAfter.SampleAccumulator);
+		Assert.Equal(timingBefore.ChannelCaptureFrameIndex, timingAfter.ChannelCaptureFrameIndex);
+		Assert.Equal(0, timingAfter.RegisterCycle);
+		AssertSidChipDebugStateEqual(chipBefore, sid.Chips[0].DebugState);
+	}
+
+	[Fact]
+	public void OscillatorThreeFutureReadAdvancesRegisterTimelineOnly()
+	{
+		var sid = CreateSid();
+		var reference = CreateSid();
+		foreach (var target in new[] { sid, reference })
+		{
+			Assert.True(target.TryWrite(0xD40E, 0x00, 0));
+			Assert.True(target.TryWrite(0xD40F, 0x80, 0));
+			Assert.True(target.TryWrite(0xD412, 0x20, 0));
+		}
+
+		var timingBefore = sid.CaptureTimingSnapshot();
+		var chipBefore = sid.Chips[0].DebugState;
+
+		Assert.True(sid.TryRead(0xD41B, cycle: 3, out var actual));
+		reference.AdvanceTo(3);
+		Assert.True(reference.TryRead(0xD41B, cycle: 3, out var expected));
+
+		Assert.Equal(expected, actual);
+		var timingAfter = sid.CaptureTimingSnapshot();
+		Assert.Equal(timingBefore.AudioCycle, timingAfter.AudioCycle);
+		Assert.Equal(timingBefore.SampleCycles, timingAfter.SampleCycles);
+		Assert.Equal(timingBefore.SampleAccumulator, timingAfter.SampleAccumulator);
+		Assert.Equal(3, timingAfter.RegisterCycle);
+		AssertSidChipDebugStateEqual(chipBefore, sid.Chips[0].DebugState);
+		Assert.Equal(
+			reference.Chips[0].DebugState.Voices[2].Accumulator,
+			sid.GetRegisterChipDebugState(0).Voices[2].Accumulator);
+	}
+
+	[Fact]
+	public void DigitalReadbackPollingDoesNotChangeLaterAudio()
+	{
+		var polled = CreateSid();
+		var baseline = CreateSid();
+		ScheduleFuturePulse(polled, 100);
+		ScheduleFuturePulse(baseline, 100);
+
+		Assert.True(polled.TryRead(0xD41B, cycle: 120, out _));
+
+		var polledSample = polled.RenderSample(120);
+		var baselineSample = baseline.RenderSample(120);
+
+		Assert.Equal(baselineSample, polledSample);
+		AssertSidChipDebugStateEqual(baseline.Chips[0].DebugState, polled.Chips[0].DebugState);
+	}
+
+	[Fact]
+	public void OpenBusPollingDoesNotChangeLaterAudio()
+	{
+		var polled = CreateSid();
+		var baseline = CreateSid();
+		ScheduleFuturePulse(polled, 100);
+		ScheduleFuturePulse(baseline, 100);
+
+		Assert.True(polled.TryRead(0xD418, cycle: 100, out var openBus));
+		Assert.Equal(0x0F, openBus);
+
+		var polledSample = polled.RenderSample(120);
+		var baselineSample = baseline.RenderSample(120);
+
+		Assert.Equal(baselineSample, polledSample);
+		AssertSidChipDebugStateEqual(baseline.Chips[0].DebugState, polled.Chips[0].DebugState);
+	}
+
+	[Fact]
+	public void PendingWritesAreCompactedOnlyAfterAudioAndReadbackConsumeThem()
+	{
+		var sid = CreateSid();
+		for (var i = 1; i <= 80; i++)
+		{
+			Assert.True(sid.TryWrite(0xD400, (byte)i, i));
+		}
+
+		Assert.True(sid.TryRead(0xD400, cycle: 80, out var openBus));
+		Assert.Equal(80, openBus);
+		var afterBusRead = sid.CaptureTimingSnapshot();
+		Assert.Equal(80, afterBusRead.PendingWriteCount);
+		Assert.Equal(0, afterBusRead.AudioPendingWriteIndex);
+		Assert.Equal(0, afterBusRead.RegisterPendingWriteIndex);
+		Assert.Equal(80, afterBusRead.RegisterBusPendingWriteIndex);
+
+		_ = sid.RenderSample(40);
+		var beforeAudioCatchup = sid.CaptureTimingSnapshot();
+		Assert.Equal(80, beforeAudioCatchup.PendingWriteCount);
+		Assert.Equal(40, beforeAudioCatchup.AudioPendingWriteIndex);
+		Assert.Equal(0, beforeAudioCatchup.RegisterPendingWriteIndex);
+		Assert.Equal(80, beforeAudioCatchup.RegisterBusPendingWriteIndex);
+
+		_ = sid.RenderSample(80);
+		var afterAudioCatchup = sid.CaptureTimingSnapshot();
+		Assert.Equal(0, afterAudioCatchup.PendingWriteCount);
+		Assert.Equal(0, afterAudioCatchup.AudioPendingWriteIndex);
+		Assert.Equal(0, afterAudioCatchup.RegisterPendingWriteIndex);
+		Assert.Equal(0, afterAudioCatchup.RegisterBusPendingWriteIndex);
+	}
+
+	[Fact]
+	public void PendingWritesAreCompactedAfterAudioCatchesDigitalReadback()
+	{
+		var sid = CreateSid();
+		for (var i = 1; i <= 80; i++)
+		{
+			Assert.True(sid.TryWrite(0xD400, (byte)i, i));
+		}
+
+		Assert.True(sid.TryRead(0xD41C, cycle: 80, out _));
+		var afterDigitalRead = sid.CaptureTimingSnapshot();
+		Assert.Equal(80, afterDigitalRead.PendingWriteCount);
+		Assert.Equal(0, afterDigitalRead.AudioPendingWriteIndex);
+		Assert.Equal(80, afterDigitalRead.RegisterPendingWriteIndex);
+		Assert.Equal(80, afterDigitalRead.RegisterBusPendingWriteIndex);
+
+		_ = sid.RenderSample(40);
+		var beforeAudioCatchup = sid.CaptureTimingSnapshot();
+		Assert.Equal(80, beforeAudioCatchup.PendingWriteCount);
+		Assert.Equal(40, beforeAudioCatchup.AudioPendingWriteIndex);
+		Assert.Equal(80, beforeAudioCatchup.RegisterPendingWriteIndex);
+		Assert.Equal(80, beforeAudioCatchup.RegisterBusPendingWriteIndex);
+
+		_ = sid.RenderSample(80);
+		var afterAudioCatchup = sid.CaptureTimingSnapshot();
+		Assert.Equal(0, afterAudioCatchup.PendingWriteCount);
+		Assert.Equal(0, afterAudioCatchup.AudioPendingWriteIndex);
+		Assert.Equal(0, afterAudioCatchup.RegisterPendingWriteIndex);
+		Assert.Equal(0, afterAudioCatchup.RegisterBusPendingWriteIndex);
+	}
+
+	[Fact]
+	public void PendingWritesCompactWhenOnlyAudioConsumesThem()
+	{
+		var sid = CreateSid();
+		for (var i = 1; i <= 80; i++)
+		{
+			Assert.True(sid.TryWrite(0xD400, (byte)i, i));
+		}
+
+		_ = sid.RenderSample(80);
+		var afterAudio = sid.CaptureTimingSnapshot();
+		Assert.Equal(0, afterAudio.PendingWriteCount);
+		Assert.Equal(0, afterAudio.AudioPendingWriteIndex);
+		Assert.Equal(0, afterAudio.RegisterPendingWriteIndex);
+		Assert.Equal(0, afterAudio.RegisterBusPendingWriteIndex);
+	}
+
+	[Fact]
 	public void MirroredDefaultSidReadUsesSameReadbackRegister()
 	{
 		var sid = CreateSid();
@@ -132,5 +302,48 @@ public sealed class SidReadbackTests
 	private static SidSystem CreateSid()
 	{
 		return new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);
+	}
+
+	private static void ScheduleFuturePulse(SidSystem sid, long cycle)
+	{
+		Assert.True(sid.TryWrite(0xD400, 0x00, cycle));
+		Assert.True(sid.TryWrite(0xD401, 0x10, cycle));
+		Assert.True(sid.TryWrite(0xD402, 0x00, cycle));
+		Assert.True(sid.TryWrite(0xD403, 0x08, cycle));
+		Assert.True(sid.TryWrite(0xD405, 0x00, cycle));
+		Assert.True(sid.TryWrite(0xD406, 0xF0, cycle));
+		Assert.True(sid.TryWrite(0xD404, 0x41, cycle));
+		Assert.True(sid.TryWrite(0xD418, 0x0F, cycle));
+	}
+
+	private static void AssertSidChipDebugStateEqual(SidChipDebugState expected, SidChipDebugState actual)
+	{
+		Assert.Equal(expected.ForwardedRegisters, actual.ForwardedRegisters);
+		Assert.Equal(expected.FilterProfile, actual.FilterProfile);
+		Assert.Equal(expected.FilterCutoffRegister, actual.FilterCutoffRegister);
+		Assert.Equal(expected.FilterCutoffHz, actual.FilterCutoffHz);
+		Assert.Equal(expected.FilterResonanceNibble, actual.FilterResonanceNibble);
+		Assert.Equal(expected.FilterMode, actual.FilterMode);
+		Assert.Equal(expected.FilterDamping, actual.FilterDamping);
+		Assert.Equal(expected.LowPassOutput, actual.LowPassOutput);
+		Assert.Equal(expected.BandPassOutput, actual.BandPassOutput);
+		Assert.Equal(expected.HighPassOutput, actual.HighPassOutput);
+		Assert.Equal(expected.Voices.Length, actual.Voices.Length);
+		for (var i = 0; i < expected.Voices.Length; i++)
+		{
+			AssertSidVoiceDebugStateEqual(expected.Voices[i], actual.Voices[i]);
+		}
+	}
+
+	private static void AssertSidVoiceDebugStateEqual(SidVoiceDebugState expected, SidVoiceDebugState actual)
+	{
+		Assert.Equal(expected.Accumulator, actual.Accumulator);
+		Assert.Equal(expected.NoiseShiftRegister, actual.NoiseShiftRegister);
+		Assert.Equal(expected.NoiseDac, actual.NoiseDac);
+		Assert.Equal(expected.EnvelopeCounter, actual.EnvelopeCounter);
+		Assert.Equal(expected.RateCounter, actual.RateCounter);
+		Assert.Equal(expected.ExponentialCounter, actual.ExponentialCounter);
+		Assert.Equal(expected.EnvelopeState, actual.EnvelopeState);
+		Assert.Equal(expected.Control, actual.Control);
 	}
 }

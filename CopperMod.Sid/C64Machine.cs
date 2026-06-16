@@ -16,6 +16,8 @@ namespace CopperMod.Sid
         private readonly Cia6526 _cia2 = new Cia6526();
         private readonly VicII _vic;
         private readonly VicMemoryReader _readVicMemory;
+        private readonly EasyFlashCartridge? _easyFlash;
+        private readonly DigimaxAudio _digimax = new DigimaxAudio();
         private const ushort KernalRomStart = 0xE000;
         private const ushort BasicRomStart = 0xA000;
         private const ushort RamIrqVector = 0x0314;
@@ -43,6 +45,7 @@ namespace CopperMod.Sid
         private long _pendingCpuStallCycles;
         private bool _cpuInstructionActive;
         private int _vicBankBase;
+        private readonly List<ScheduledAutostartKey> _autostartKeys = new List<ScheduledAutostartKey>();
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
@@ -50,6 +53,9 @@ namespace CopperMod.Sid
             _clock = C64ClockProfile.FromSidClock(module.Clock);
             _vic = new VicII(_clock);
             _readVicMemory = ReadVicMemory;
+            _easyFlash = module.Cartridge?.Type == C64CartridgeType.EasyFlash
+                ? new EasyFlashCartridge(module.Cartridge)
+                : null;
             Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile);
             Cpu = new Mos6510(this);
             UpdateVicBankBase();
@@ -67,6 +73,8 @@ namespace CopperMod.Sid
         public byte[] Ram => _ram;
 
         public IReadOnlyList<SidRegisterWrite> SidWrites => Sid.Writes;
+
+        public IReadOnlyList<DigimaxWrite> DigimaxWrites => _digimax.Writes;
 
         internal CpuBusTrace? CpuBusTrace { get; set; }
 
@@ -105,6 +113,18 @@ namespace CopperMod.Sid
             UpdateVicBankBase();
             _vic.Reset();
             Sid.Reset();
+            _digimax.Reset();
+            _easyFlash?.Reset();
+            if (_module.IsCartridge)
+            {
+                Cpu.Reset(_easyFlash != null ? (ushort)0x8000 : ReadResetVector());
+                Cpu.ResetCycles();
+                _hardwareCycle = 0;
+                Sid.ResetClock();
+                RefreshInterruptLines();
+                return;
+            }
+
             LoadPayload();
             InstallRsidEnvironment();
             if (_module.IsBasicRsid)
@@ -143,7 +163,7 @@ namespace CopperMod.Sid
         [HotPath]
         public void BeginFrame()
         {
-            if (_module.IsRsid)
+            if (_module.RunsContinuously)
             {
                 return;
             }
@@ -247,7 +267,7 @@ namespace CopperMod.Sid
                     throw new ArgumentOutOfRangeException(nameof(sampleTargetCycles), targetCycle, "Sample target cycle cannot be after the rendered cycle range.");
                 }
 
-                if (_module.IsRsid)
+                if (_module.RunsContinuously)
                 {
                     RunCycles(Math.Max(0, targetCycle - Cpu.Cycles), advanceSidToFinalCycle: false);
                 }
@@ -264,13 +284,13 @@ namespace CopperMod.Sid
                     AdvanceSidOnly(Math.Max(0, targetCycle - Cpu.Cycles));
                 }
 
-                var sample = Sid.RenderSample(targetCycle);
+                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
                 WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
 
             if (Cpu.Cycles < frameEndCycle)
             {
-                if (_module.IsRsid)
+                if (_module.RunsContinuously)
                 {
                     RunCycles(frameEndCycle - Cpu.Cycles, advanceSidToFinalCycle: false);
                 }
@@ -316,7 +336,7 @@ namespace CopperMod.Sid
                     throw new ArgumentOutOfRangeException(nameof(sampleTargetCycles), targetCycle, "Sample target cycle cannot be after the rendered cycle range.");
                 }
 
-                var sample = Sid.RenderSample(targetCycle);
+                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
                 WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
         }
@@ -324,7 +344,7 @@ namespace CopperMod.Sid
         [HotPath]
         private bool BeginPsidFrame()
         {
-            if (_module.IsRsid || _module.PlayAddress == 0)
+            if (_module.RunsContinuously || _module.PlayAddress == 0)
             {
                 return false;
             }
@@ -337,7 +357,7 @@ namespace CopperMod.Sid
         [HotPath]
         private void FinishPsidPlayRoutine()
         {
-            if (_module.IsRsid || !_psidCiaTimerATouched)
+            if (_module.RunsContinuously || !_psidCiaTimerATouched)
             {
                 return;
             }
@@ -424,14 +444,20 @@ namespace CopperMod.Sid
                 return value;
             }
 
-            if (_module.IsRsid && IsBasicVisible() && address >= 0xA000 && address <= 0xBFFF)
+            if (_easyFlash != null && _easyFlash.TryRead(address, out value))
+            {
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
+            }
+
+            if (IsBasicVisible() && address >= 0xA000 && address <= 0xBFFF)
             {
                 value = _basicRom[address - BasicRomStart];
                 CaptureCpuBusRead(busCycle, address, value, kind);
                 return value;
             }
 
-            if (_module.IsRsid && IsKernalVisible() && address >= 0xE000)
+            if (IsKernalVisible() && address >= 0xE000)
             {
                 value = _kernalRom[address - KernalRomStart];
                 CaptureCpuBusRead(busCycle, address, value, kind);
@@ -541,6 +567,11 @@ namespace CopperMod.Sid
 
         private void LoadPayload()
         {
+            if (_module.IsCartridge)
+            {
+                return;
+            }
+
             var address = _module.EffectiveLoadAddress;
             for (var i = 0; i < _module.Payload.Length; i++)
             {
@@ -829,20 +860,20 @@ namespace CopperMod.Sid
         [HotPath]
         private bool IsKernalVisible()
         {
-            return _module.IsRsid && (ProcessorPortEffectiveValue & 0x02) != 0;
+            return (_module.IsRsid || _module.IsCartridge) && (ProcessorPortEffectiveValue & 0x02) != 0;
         }
 
         [HotPath]
         private bool IsBasicVisible()
         {
-            return _module.IsRsid && (ProcessorPortEffectiveValue & 0x03) == 0x03;
+            return (_module.IsRsid || _module.IsCartridge) && (ProcessorPortEffectiveValue & 0x03) == 0x03;
         }
 
         [HotPath]
         private bool IsCharacterRomVisible()
         {
             var value = ProcessorPortEffectiveValue;
-            return _module.IsRsid && (value & 0x04) == 0 && (value & 0x03) != 0;
+            return (_module.IsRsid || _module.IsCartridge) && (value & 0x04) == 0 && (value & 0x03) != 0;
         }
 
         private byte ProcessorPortEffectiveValue => (byte)((_processorPortValue & _processorPortDirection) | (~_processorPortDirection & 0xFF));
@@ -894,7 +925,7 @@ namespace CopperMod.Sid
 
             if (address >= 0xDC00 && address <= 0xDCFF)
             {
-                var value = _cia1.Read((byte)address);
+                var value = _cia1.Read((byte)address, portBInputMask: GetKeyboardPortBInput(readCycle));
                 RefreshInterruptLines();
                 return value;
             }
@@ -917,6 +948,16 @@ namespace CopperMod.Sid
         [HotPath]
         private void WriteIo(ushort address, byte value, long writeCycle)
         {
+            if (address >= 0xDE00 && address <= 0xDEFF && _easyFlash?.TryWriteIo1(address, value) == true)
+            {
+                return;
+            }
+
+            if (_digimax.TryWrite(address, value, writeCycle))
+            {
+                return;
+            }
+
             if (address >= 0xD000 && address <= 0xD3FF)
             {
                 _vic.Write((byte)address, value);
@@ -965,6 +1006,94 @@ namespace CopperMod.Sid
         private long GetDefaultPsidCiaTimerAIntervalCycles()
         {
             return Math.Max(1, SidIntegerMath.DivRoundNearest(_clock.CpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz));
+        }
+
+        internal void ScheduleAutostartKey(string key, TimeSpan delay, TimeSpan hold)
+        {
+            var clampedDelay = delay < TimeSpan.Zero ? TimeSpan.Zero : delay;
+            var clampedHold = hold <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : hold;
+            var start = SidIntegerMath.TimeSpanToCycles(clampedDelay, _clock.CpuCyclesPerSecond);
+            var length = Math.Max(1, SidIntegerMath.TimeSpanToCycles(clampedHold, _clock.CpuCyclesPerSecond));
+            var keyPosition = GetAutostartKeyPosition(key);
+            _autostartKeys.Add(new ScheduledAutostartKey(start, start + length, keyPosition.PortAColumnMask, keyPosition.PortBRowMask));
+        }
+
+        private ushort ReadResetVector()
+        {
+            var low = Read(0xFFFC, cycleOffset: 0, CpuBusAccessKind.Read);
+            var high = Read(0xFFFD, cycleOffset: 0, CpuBusAccessKind.Read);
+            return (ushort)(low | (high << 8));
+        }
+
+        [HotPath]
+        private float MixDigitalOutputs(float sidSample)
+        {
+            return Math.Clamp(sidSample + _digimax.RenderSample(), -0.999f, 0.999f);
+        }
+
+        [HotPath]
+        private byte GetKeyboardPortBInput(long cycle)
+        {
+            var mask = (byte)0xFF;
+            var selectedColumns = unchecked((byte)~_cia1.EffectivePortA);
+            foreach (var key in _autostartKeys)
+            {
+                if (cycle >= key.StartCycle &&
+                    cycle < key.EndCycle &&
+                    (selectedColumns & key.PortAColumnMask) != 0)
+                {
+                    mask = unchecked((byte)(mask & ~key.PortBRowMask));
+                }
+            }
+
+            return mask;
+        }
+
+        private static AutostartKeyPosition GetAutostartKeyPosition(string key)
+        {
+            if (string.Equals(key, "f3", StringComparison.OrdinalIgnoreCase))
+            {
+                return new AutostartKeyPosition(portAColumnMask: 1 << 0, portBRowMask: 1 << 5);
+            }
+
+            if (string.Equals(key, "space", StringComparison.OrdinalIgnoreCase))
+            {
+                return new AutostartKeyPosition(portAColumnMask: 1 << 7, portBRowMask: 1 << 4);
+            }
+
+            throw new ArgumentException("Unsupported C64 autostart key: " + key, nameof(key));
+        }
+
+        private readonly struct ScheduledAutostartKey
+        {
+            public ScheduledAutostartKey(long startCycle, long endCycle, byte portAColumnMask, byte portBRowMask)
+            {
+                StartCycle = startCycle;
+                EndCycle = endCycle;
+                PortAColumnMask = portAColumnMask;
+                PortBRowMask = portBRowMask;
+            }
+
+            public long StartCycle { get; }
+
+            public long EndCycle { get; }
+
+            public byte PortAColumnMask { get; }
+
+            public byte PortBRowMask { get; }
+        }
+
+        private readonly struct AutostartKeyPosition
+        {
+            public AutostartKeyPosition(int portAColumnMask, int portBRowMask)
+            {
+                PortAColumnMask = (byte)portAColumnMask;
+                PortBRowMask = (byte)portBRowMask;
+            }
+
+            public byte PortAColumnMask { get; }
+
+            public byte PortBRowMask { get; }
         }
 
         [HotPath]

@@ -1023,6 +1023,19 @@ namespace CopperMod.Sid
             _lastLowDebug = 0.0;
         }
 
+        public void CopyStateFrom(SidMos6581AnalogFilter source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            _bandVoltage = source._bandVoltage;
+            _lowVoltage = source._lowVoltage;
+            _lastHighVoltage = source._lastHighVoltage;
+            _lastBandVoltage = source._lastBandVoltage;
+            _lastLowVoltage = source._lastLowVoltage;
+            _lastHighDebug = source._lastHighDebug;
+            _lastBandDebug = source._lastBandDebug;
+            _lastLowDebug = source._lastLowDebug;
+        }
+
         public double Process(
             double voice1,
             double voice2,
