@@ -39,6 +39,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private readonly Button _previousSubSongButton;
 	private readonly Button _nextSubSongButton;
 	private readonly Button _waveformModeButton;
+	private readonly Button _c64FocusButton;
 	private readonly Button _infoButton;
 	private readonly string? _initialPath;
 	private readonly bool _autoPlay;
@@ -56,6 +57,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private readonly Dictionary<C64Key, DateTimeOffset> _syntheticKeyReleases = new();
 	private PlayerDisplayMode _displayMode = PlayerDisplayMode.Auto;
 	private long _lastVideoFrameNumber = -1;
+	private bool _c64KeyboardFocusActive;
+	private bool _disposed;
 
 	public PlayerWindow(IApplication application, PlayerStartupOptions startupOptions, bool autoPlay)
 	{
@@ -164,6 +167,15 @@ internal sealed class PlayerWindow : Window, IDisposable
 		};
 		_waveformModeButton.Accepted += (_, _) => CycleWaveformDisplayMode();
 
+		_c64FocusButton = new Button
+		{
+			X = 1,
+			Y = 4,
+			Text = "Focus C64",
+			Visible = false
+		};
+		_c64FocusButton.Accepted += (_, _) => ToggleC64KeyboardFocus();
+
 		_titleLabel = new Label
 		{
 			X = 1,
@@ -227,7 +239,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			Width = Dim.Fill(2)
 		};
 
-		Add(_pathField, loadButton, previousFileButton, nextFileButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _infoButton, quitButton,
+		Add(_pathField, loadButton, previousFileButton, nextFileButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _waveformModeButton, _c64FocusButton, _infoButton, quitButton,
 			_titleLabel, _formatLabel, _subSongLabel, _previousSubSongButton, _nextSubSongButton, _stateLabel, _timeLabel, _progressBar);
 
 		if (WaveformUiEnabled)
@@ -236,6 +248,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 
 		_player.StateChanged += (_, _) => _application.Invoke(RefreshView);
+		_application.Keyboard.KeyDown += OnApplicationKeyDown;
+		_application.Keyboard.KeyUp += OnApplicationKeyUp;
 		if (WaveformUiEnabled)
 		{
 			TryEnableWaveformDisplay();
@@ -299,6 +313,14 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	public new void Dispose()
 	{
+		if (_disposed)
+		{
+			return;
+		}
+
+		_disposed = true;
+		_application.Keyboard.KeyDown -= OnApplicationKeyDown;
+		_application.Keyboard.KeyUp -= OnApplicationKeyUp;
 		_player.ReleaseAllC64Keys();
 		_player.Dispose();
 		base.Dispose();
@@ -306,7 +328,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	protected override bool OnKeyDown(Key key)
 	{
-		if (TryHandleC64Key(key, pressed: true, synthesizeRelease: true))
+		if (TryHandleC64KeyboardFocusKey(key, pressed: true, synthesizeRelease: true))
 		{
 			return true;
 		}
@@ -316,7 +338,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	protected override bool OnKeyUp(Key key)
 	{
-		if (TryHandleC64Key(key, pressed: false, synthesizeRelease: false))
+		if (TryHandleC64KeyboardFocusKey(key, pressed: false, synthesizeRelease: false))
 		{
 			return true;
 		}
@@ -368,6 +390,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 
 		_player.Load(path, _startupOptions);
+		SetC64KeyboardFocus(false, refresh: false);
 		_displayMode = _player.HasC64Video ? PlayerDisplayMode.C64Video : PlayerDisplayMode.Waveform;
 		_lastVideoFrameNumber = -1;
 		_pathField.Text = _player.FilePath ?? Path.GetFullPath(path);
@@ -495,9 +518,83 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 	}
 
+	private void OnApplicationKeyDown(object? sender, Key key)
+	{
+		if (TryHandleC64KeyboardFocusKey(key, pressed: true, synthesizeRelease: true))
+		{
+			key.Handled = true;
+		}
+	}
+
+	private void OnApplicationKeyUp(object? sender, Key key)
+	{
+		if (TryHandleC64KeyboardFocusKey(key, pressed: false, synthesizeRelease: false))
+		{
+			key.Handled = true;
+		}
+	}
+
+	private void ToggleC64KeyboardFocus()
+	{
+		SetC64KeyboardFocus(!_c64KeyboardFocusActive);
+	}
+
+	private void SetC64KeyboardFocus(bool active, bool refresh = true)
+	{
+		active = active && _player.HasC64Video;
+		if (_c64KeyboardFocusActive == active)
+		{
+			return;
+		}
+
+		_c64KeyboardFocusActive = active;
+		if (active)
+		{
+			_displayMode = PlayerDisplayMode.C64Video;
+			_lastVideoFrameNumber = -1;
+		}
+		else
+		{
+			_syntheticKeyReleases.Clear();
+			_player.ReleaseAllC64Keys();
+		}
+
+		if (refresh)
+		{
+			RefreshView();
+		}
+	}
+
+	private bool TryHandleC64KeyboardFocusKey(Key hostKey, bool pressed, bool synthesizeRelease)
+	{
+		if (!_c64KeyboardFocusActive)
+		{
+			return false;
+		}
+
+		if (!_player.HasC64Video)
+		{
+			SetC64KeyboardFocus(false);
+			return false;
+		}
+
+		if (hostKey == Key.Esc)
+		{
+			if (pressed)
+			{
+				SetC64KeyboardFocus(false);
+			}
+
+			return true;
+		}
+
+		TryHandleC64Key(hostKey, pressed, synthesizeRelease);
+		return true;
+	}
+
 	private bool TryHandleC64Key(Key hostKey, bool pressed, bool synthesizeRelease)
 	{
-		if (!_player.HasC64Video || _pathField.HasFocus || !TryMapC64Key(hostKey, out var c64Key, out var shifted))
+		if (!_c64KeyboardFocusActive || !_player.HasC64Video || !TryMapC64Key(hostKey, out var c64Key, out var shifted))
 		{
 			return false;
 		}
@@ -738,6 +835,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void RefreshView()
 	{
+		if (!_player.HasC64Video && _c64KeyboardFocusActive)
+		{
+			SetC64KeyboardFocus(false, refresh: false);
+		}
+
 		if (WaveformUiEnabled)
 		{
 			TryEnableWaveformDisplay();
@@ -767,9 +869,13 @@ internal sealed class PlayerWindow : Window, IDisposable
 		if (WaveformUiEnabled)
 		{
 			_waveformModeButton.Text = FormatDisplayModeButton(ResolveDisplayMode(), _player.WaveformDisplayMode);
+			_c64FocusButton.Visible = _player.HasC64Video;
+			_c64FocusButton.Text = _c64KeyboardFocusActive ? "Release C64" : "Focus C64";
 			if (_waveformLabel != null)
 			{
-				_waveformLabel.Text = ResolveDisplayMode() == PlayerDisplayMode.C64Video ? "C64 video" : "Waveform";
+				_waveformLabel.Text = ResolveDisplayMode() == PlayerDisplayMode.C64Video
+					? (_c64KeyboardFocusActive ? "C64 video input" : "C64 video")
+					: "Waveform";
 			}
 		}
 

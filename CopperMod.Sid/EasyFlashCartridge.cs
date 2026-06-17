@@ -31,10 +31,10 @@ namespace CopperMod.Sid
         public void Reset()
         {
             _bank = 0;
-            _control = 0x07; // 16K EasyFlash boot: ROML at $8000 and ROMH at $A000.
+            _control = 0x05; // Ultimax reset: ROML at $8000 and ROMH at $E000.
         }
 
-        public bool TryRead(ushort address, out byte value)
+        public bool TryRead(ushort address, bool kernalVisible, out byte value)
         {
             var mode = Mode;
             if (address >= 0x8000 && address <= 0x9FFF && mode is EasyFlashMemoryMode.Ultimax or EasyFlashMemoryMode.Cartridge8K or EasyFlashMemoryMode.Cartridge16K)
@@ -49,7 +49,7 @@ namespace CopperMod.Sid
                 return true;
             }
 
-            if (address >= 0xE000 && mode == EasyFlashMemoryMode.Ultimax)
+            if (address >= 0xE000 && (mode == EasyFlashMemoryMode.Ultimax || (mode == EasyFlashMemoryMode.Cartridge16K && (_control & 0x80) == 0)))
             {
                 value = _image.RomhBanks[_bank][address - 0xE000];
                 return true;

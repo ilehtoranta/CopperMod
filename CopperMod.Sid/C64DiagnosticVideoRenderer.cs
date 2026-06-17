@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Sid
 {
@@ -38,6 +39,7 @@ namespace CopperMod.Sid
             byte[] vicRegisters,
             Func<ushort, byte> readVicMemory,
             int vicBankBase,
+            IReadOnlyList<C64SpriteRegisterSnapshot>? spriteRegisterSnapshots,
             long frameNumber,
             TimeSpan sourceTime)
         {
@@ -61,6 +63,16 @@ namespace CopperMod.Sid
             {
                 RenderText(pixels, colorRam, vicRegisters, readVicMemory, vicBankBase, multicolorMode, extendedColorMode);
             }
+
+            if (spriteRegisterSnapshots != null)
+            {
+                foreach (var snapshot in spriteRegisterSnapshots)
+                {
+                    RenderSprites(pixels, snapshot.Registers, readVicMemory, snapshot.VicBankBase, snapshot.Pointers);
+                }
+            }
+
+            RenderSprites(pixels, vicRegisters, readVicMemory, vicBankBase, spritePointers: null);
 
             return new C64VideoFrame(Width, Height, pixels, frameNumber, sourceTime);
         }
@@ -196,6 +208,154 @@ namespace CopperMod.Sid
                 };
                 pixels[(pixelY * Width) + pixelX + (pair * 2)] = color;
                 pixels[(pixelY * Width) + pixelX + (pair * 2) + 1] = color;
+            }
+        }
+
+        private static void RenderSprites(
+            Argb32[] pixels,
+            byte[] vicRegisters,
+            Func<ushort, byte> readVicMemory,
+            int vicBankBase,
+            byte[]? spritePointers)
+        {
+            var enabled = vicRegisters[0x15];
+            if (enabled == 0)
+            {
+                return;
+            }
+
+            var screenBase = vicBankBase + ((vicRegisters[0x18] & 0xF0) << 6);
+            var sharedMulticolor0 = GetColor(vicRegisters[0x25]);
+            var sharedMulticolor1 = GetColor(vicRegisters[0x26]);
+            for (var sprite = 0; sprite < 8; sprite++)
+            {
+                var mask = 1 << sprite;
+                if ((enabled & mask) == 0)
+                {
+                    continue;
+                }
+
+                var spriteX = vicRegisters[sprite * 2] + (((vicRegisters[0x10] & mask) != 0) ? 256 : 0);
+                var spriteY = vicRegisters[(sprite * 2) + 1];
+                var originX = DisplayX + spriteX - 24;
+                var originY = DisplayY + spriteY - 50;
+                var pointer = spritePointers == null
+                    ? readVicMemory((ushort)((screenBase + 0x03F8 + sprite) & 0xFFFF))
+                    : spritePointers[sprite];
+                var dataBase = (vicBankBase + (pointer * 64)) & 0xFFFF;
+                var multicolor = (vicRegisters[0x1C] & mask) != 0;
+                var expandX = (vicRegisters[0x1D] & mask) != 0;
+                var expandY = (vicRegisters[0x17] & mask) != 0;
+                var spriteColor = GetColor(vicRegisters[0x27 + sprite]);
+
+                if (multicolor)
+                {
+                    DrawMulticolorSprite(
+                        pixels,
+                        readVicMemory,
+                        dataBase,
+                        originX,
+                        originY,
+                        expandX,
+                        expandY,
+                        sharedMulticolor0,
+                        spriteColor,
+                        sharedMulticolor1);
+                }
+                else
+                {
+                    DrawHiresSprite(pixels, readVicMemory, dataBase, originX, originY, expandX, expandY, spriteColor);
+                }
+            }
+        }
+
+        private static void DrawHiresSprite(
+            Argb32[] pixels,
+            Func<ushort, byte> readVicMemory,
+            int dataBase,
+            int originX,
+            int originY,
+            bool expandX,
+            bool expandY,
+            Argb32 color)
+        {
+            var pixelScaleX = expandX ? 2 : 1;
+            var pixelScaleY = expandY ? 2 : 1;
+            for (var row = 0; row < 21; row++)
+            {
+                var b0 = readVicMemory((ushort)((dataBase + (row * 3)) & 0xFFFF));
+                var b1 = readVicMemory((ushort)((dataBase + (row * 3) + 1) & 0xFFFF));
+                var b2 = readVicMemory((ushort)((dataBase + (row * 3) + 2) & 0xFFFF));
+                var bits = (b0 << 16) | (b1 << 8) | b2;
+                for (var bit = 0; bit < 24; bit++)
+                {
+                    if ((bits & (0x800000 >> bit)) == 0)
+                    {
+                        continue;
+                    }
+
+                    DrawScaledPixel(pixels, originX + (bit * pixelScaleX), originY + (row * pixelScaleY), pixelScaleX, pixelScaleY, color);
+                }
+            }
+        }
+
+        private static void DrawMulticolorSprite(
+            Argb32[] pixels,
+            Func<ushort, byte> readVicMemory,
+            int dataBase,
+            int originX,
+            int originY,
+            bool expandX,
+            bool expandY,
+            Argb32 sharedMulticolor0,
+            Argb32 spriteColor,
+            Argb32 sharedMulticolor1)
+        {
+            var pixelScaleX = expandX ? 4 : 2;
+            var pixelScaleY = expandY ? 2 : 1;
+            for (var row = 0; row < 21; row++)
+            {
+                var b0 = readVicMemory((ushort)((dataBase + (row * 3)) & 0xFFFF));
+                var b1 = readVicMemory((ushort)((dataBase + (row * 3) + 1) & 0xFFFF));
+                var b2 = readVicMemory((ushort)((dataBase + (row * 3) + 2) & 0xFFFF));
+                var bits = (b0 << 16) | (b1 << 8) | b2;
+                for (var pair = 0; pair < 12; pair++)
+                {
+                    var code = (bits >> (22 - (pair * 2))) & 0x03;
+                    if (code == 0)
+                    {
+                        continue;
+                    }
+
+                    var color = code switch
+                    {
+                        1 => sharedMulticolor0,
+                        2 => spriteColor,
+                        _ => sharedMulticolor1
+                    };
+                    DrawScaledPixel(pixels, originX + (pair * pixelScaleX), originY + (row * pixelScaleY), pixelScaleX, pixelScaleY, color);
+                }
+            }
+        }
+
+        private static void DrawScaledPixel(Argb32[] pixels, int x, int y, int width, int height, Argb32 color)
+        {
+            for (var yy = 0; yy < height; yy++)
+            {
+                var py = y + yy;
+                if ((uint)py >= Height)
+                {
+                    continue;
+                }
+
+                for (var xx = 0; xx < width; xx++)
+                {
+                    var px = x + xx;
+                    if ((uint)px < Width)
+                    {
+                        pixels[(py * Width) + px] = color;
+                    }
+                }
             }
         }
 

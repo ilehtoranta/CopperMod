@@ -115,6 +115,24 @@ public sealed class C64DiagnosticVideoRendererTests
 		Assert.Equal(Color(2), Pixel(frame, 0, 0));
 	}
 
+	[Fact]
+	public void RenderSpritesUsesPointerDataAndSpriteColor()
+	{
+		var fixture = CreateFixture();
+		fixture.Vic[0x15] = 0x01;
+		fixture.Vic[0x18] = 0x10;
+		fixture.Vic[0x00] = 24;
+		fixture.Vic[0x01] = 50;
+		fixture.Vic[0x27] = 1;
+		fixture.Ram[0x07F8] = 0x20;
+		fixture.Ram[0x0800] = 0x80;
+
+		var frame = Render(fixture);
+
+		Assert.Equal(Color(1), Pixel(frame, DisplayX, DisplayY));
+		Assert.Equal(Color(0), Pixel(frame, DisplayX + 1, DisplayY));
+	}
+
 	private static VideoFixture CreateFixture()
 	{
 		var fixture = new VideoFixture();
@@ -130,6 +148,7 @@ public sealed class C64DiagnosticVideoRendererTests
 			fixture.Vic,
 			address => fixture.Ram[address],
 			vicBankBase,
+			spriteRegisterSnapshots: null,
 			frameNumber: 12,
 			sourceTime: TimeSpan.FromSeconds(1));
 	}

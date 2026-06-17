@@ -172,7 +172,7 @@ public sealed class C64MachineTests
 
 		machine.Write(0xD000, 0x12, 0);
 		machine.Write(0x0001, 0x33, 0);
-		Assert.Equal(0x80, machine.Read(0xD000));
+		Assert.Equal(0x3C, machine.Read(0xD000));
 		Assert.True(machine.DebugState.MemoryBank.CharacterVisible);
 	}
 
@@ -802,7 +802,7 @@ public sealed class C64MachineTests
 
 		Assert.Equal(VicMemoryAccessKind.SpriteData, machine.DebugState.Vic.MemoryAccessKind);
 		Assert.Equal(0x1001, machine.DebugState.Vic.MemoryAddress);
-		Assert.Equal(0x81, machine.DebugState.Vic.MemoryValue);
+		Assert.Equal(0x42, machine.DebugState.Vic.MemoryValue);
 	}
 
 	[Fact]
@@ -839,7 +839,7 @@ public sealed class C64MachineTests
 		Assert.Equal(0x0400, machine.DebugState.Vic.BadlineMatrixAddress);
 		Assert.Equal(0x1000, machine.DebugState.Vic.BadlineGraphicsAddress);
 		Assert.Equal(0x00, machine.DebugState.Vic.BadlineMatrixValue);
-		Assert.Equal(0x80, machine.DebugState.Vic.BadlineGraphicsValue);
+		Assert.Equal(0x3C, machine.DebugState.Vic.BadlineGraphicsValue);
 	}
 
 	[Fact]
@@ -914,7 +914,7 @@ public sealed class C64MachineTests
 		Assert.Contains(machine.SidWrites, write => write.Register == 0x18 && write.Value == 0x0D);
 		Assert.True(
 			(machine.Cpu.ProgramCounter >= 0xFF94 && machine.Cpu.ProgramCounter <= 0xFF98) ||
-			(machine.Cpu.ProgramCounter >= 0xFF80 && machine.Cpu.ProgramCounter <= 0xFF88) ||
+			(machine.Cpu.ProgramCounter >= 0xFF48 && machine.Cpu.ProgramCounter <= 0xFF50) ||
 			(machine.Cpu.ProgramCounter >= 0xEA7E && machine.Cpu.ProgramCounter <= 0xEA86),
 			$"Expected CPU to return through KERNAL IRQ exit, got ${machine.Cpu.ProgramCounter:X4}.");
 	}
@@ -933,7 +933,7 @@ public sealed class C64MachineTests
 		Assert.True(machine.Read(0x00A2) > 0, "Expected the minimal KERNAL IRQ service at $EA31 to update the jiffy clock.");
 		Assert.True(
 			(machine.Cpu.ProgramCounter >= 0xFF94 && machine.Cpu.ProgramCounter <= 0xFF98) ||
-			(machine.Cpu.ProgramCounter >= 0xFF80 && machine.Cpu.ProgramCounter <= 0xFF88) ||
+			(machine.Cpu.ProgramCounter >= 0xFF48 && machine.Cpu.ProgramCounter <= 0xFF50) ||
 			(machine.Cpu.ProgramCounter >= 0xEA31 && machine.Cpu.ProgramCounter <= 0xEA86) ||
 			(machine.Cpu.ProgramCounter >= 0xFFEA && machine.Cpu.ProgramCounter <= 0xFFF7),
 			$"Expected CPU to return through KERNAL IRQ service, got ${machine.Cpu.ProgramCounter:X4}.");

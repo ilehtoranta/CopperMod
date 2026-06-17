@@ -50,6 +50,7 @@ public sealed class C64CartridgeTests
 		machine.Reset(0);
 
 		Assert.Equal(0x8000, machine.Cpu.ProgramCounter);
+		Assert.Equal(0x30, machine.Read(0xE000));
 		machine.Write(0xDE02, 0x05, 0);
 		Assert.Equal(0x30, machine.Read(0xE000));
 
@@ -57,6 +58,10 @@ public sealed class C64CartridgeTests
 		machine.Write(0xDE02, 0x07, 0);
 		Assert.Equal(0x10, machine.Read(0x8000));
 		Assert.Equal(0x20, machine.Read(0xA000));
+		Assert.Equal(0x20, machine.Read(0xE000));
+
+		machine.Write(0xDE02, 0x87, 0);
+		Assert.Equal(0x60, machine.Read(0xE000));
 
 		machine.Write(0x8000, 0x44, 0);
 		machine.Write(0xDE02, 0x04, 0);
@@ -123,6 +128,77 @@ public sealed class C64CartridgeTests
 		Assert.Equal(0xEF, machine.Ram[0x2001]);
 	}
 
+	[Fact]
+	public void EasyFlashTargetZipBootsFromRomhResetVectorWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Tough", "48Khz_hifi_Digi_Player_1_[EASYFLASH].zip");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var module = SidModule.CreateEasyFlashCartridge(C64CartridgeParser.Parse(ReadSingleCrtFromZip(path)));
+		var machine = new C64Machine(module);
+
+		machine.Reset(0);
+
+		Assert.Equal(0xE000, machine.Cpu.ProgramCounter);
+	}
+
+	[Fact]
+	public void EasyFlashTargetZipProducesVisibleDiagnosticVideoWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Tough", "48Khz_hifi_Digi_Player_1_[EASYFLASH].zip");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var module = SidModule.CreateEasyFlashCartridge(C64CartridgeParser.Parse(ReadSingleCrtFromZip(path)));
+		var machine = new C64Machine(module);
+		machine.Reset(0);
+
+		for (var i = 0; i < 20; i++)
+		{
+			machine.RunFrame();
+		}
+
+		var frame = machine.RenderVideoFrame();
+		var distinctColors = frame.Pixels.Select(pixel => pixel.Value).Distinct().Take(4).Count();
+
+		Assert.True(
+			distinctColors >= 3,
+			$"Expected the EasyFlash target to produce visible diagnostic graphics; found {distinctColors} distinct colors.");
+	}
+
+	[Fact]
+	public void EasyFlashTargetZip2RendersPictureAndSpriteTextWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Tough", "48Khz_hifi_Digi_Player_2_[EASYFLASH].zip");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var module = SidModule.CreateEasyFlashCartridge(C64CartridgeParser.Parse(ReadSingleCrtFromZip(path)));
+		var machine = new C64Machine(module);
+		machine.ScheduleAutostartKey("f3", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(0.25));
+		machine.Reset(0);
+
+		for (var i = 0; i < 130; i++)
+		{
+			machine.RunFrame();
+		}
+
+		var frame = machine.RenderVideoFrame();
+		var distinctColors = frame.Pixels.Select(pixel => pixel.Value).Distinct().Take(8).Count();
+		var white = new Argb32(255, 0xFF, 0xFF, 0xFF).Value;
+		var rightPanelWhitePixels = CountPixels(frame, x0: 230, y0: 80, x1: 360, y1: 230, white);
+
+		Assert.True(distinctColors >= 8, $"Expected the EasyFlash picture to use a broad palette; found {distinctColors} colors.");
+		Assert.True(rightPanelWhitePixels > 200, $"Expected readable sprite text on the right panel; found {rightPanelWhitePixels} white pixels.");
+	}
+
 	private static byte[] CreateDigimaxLoopCrt()
 	{
 		return CreateEasyFlashCrt(romlBank0: new byte[]
@@ -155,7 +231,7 @@ public sealed class C64CartridgeTests
 		});
 	}
 
-	private static byte[] CreateEasyFlashCrt(byte[]? romlBank0 = null)
+	private static byte[] CreateEasyFlashCrt(byte[]? romlBank0 = null, ushort resetVector = 0x8000)
 	{
 		using var stream = new MemoryStream();
 		WriteAscii(stream, "C64 CARTRIDGE   ");
@@ -175,8 +251,8 @@ public sealed class C64CartridgeTests
 			var romh = new byte[0x2000];
 			roml[0] = (byte)(bank * 0x10);
 			romh[0] = (byte)(bank * 0x20);
-			romh[0x1FFC] = 0x00;
-			romh[0x1FFD] = 0xE0;
+			romh[0x1FFC] = (byte)resetVector;
+			romh[0x1FFD] = (byte)(resetVector >> 8);
 			if (bank == 0)
 			{
 				romh[0] = 0x30;
@@ -204,6 +280,34 @@ public sealed class C64CartridgeTests
 		}
 
 		return stream.ToArray();
+	}
+
+	private static byte[] ReadSingleCrtFromZip(string path)
+	{
+		using var archive = ZipFile.OpenRead(path);
+		var entries = archive.Entries.Where(entry => entry.Name.EndsWith(".crt", StringComparison.OrdinalIgnoreCase)).ToArray();
+		Assert.Single(entries);
+		using var stream = entries[0].Open();
+		using var memory = new MemoryStream();
+		stream.CopyTo(memory);
+		return memory.ToArray();
+	}
+
+	private static int CountPixels(C64VideoFrame frame, int x0, int y0, int x1, int y1, uint value)
+	{
+		var count = 0;
+		for (var y = y0; y < y1; y++)
+		{
+			for (var x = x0; x < x1; x++)
+			{
+				if (frame.Pixels[(y * frame.Width) + x].Value == value)
+				{
+					count++;
+				}
+			}
+		}
+
+		return count;
 	}
 
 	private static void WriteChip(Stream stream, int bank, ushort address, byte[] data)

@@ -22,16 +22,24 @@ namespace CopperMod.Sid
         private const ushort BasicRomStart = 0xA000;
         private const ushort RamIrqVector = 0x0314;
         private const ushort RamNmiVector = 0x0318;
-        private const ushort KernalIrqEntryAddress = 0xFF80;
-        private const ushort KernalNmiEntryAddress = 0xFF88;
+        private const ushort KernalIrqEntryAddress = 0xFF48;
+        private const ushort KernalNmiEntryAddress = 0xFE47;
         private const ushort RtiStubAddress = 0xFF92;
         private const ushort IdleLoopAddress = 0xFF94;
         private const ushort KernalIrqHandlerAddress = 0xEA31;
         private const ushort KernalIrqExitAddress = 0xEA81;
-        private const ushort KernalNmiHandlerAddress = 0xFE47;
+        private const ushort KernalNmiHandlerAddress = 0xFE50;
         private const ushort KernalUpdateClockAddress = 0xFFEA;
-        private const ushort KernalIrqVectorAddress = 0xFF48;
         private const ushort KernalIrqUserVectorJumpAddress = 0xFF58;
+        private const ushort KernalCintAddress = 0xFF81;
+        private const ushort KernalIoInitAddress = 0xFF84;
+        private const ushort KernalRamTasAddress = 0xFF87;
+        private const ushort KernalRestorAddress = 0xFF8A;
+        private const ushort KernalChrOutAddress = 0xFFD2;
+        private const ushort TextScreenStart = 0x0400;
+        private const int TextScreenColumns = 40;
+        private const int TextScreenRows = 25;
+        private const byte DefaultTextColor = 0x0E;
         private byte _processorPortDirection;
         private byte _processorPortValue;
         private long _hardwareCycle;
@@ -48,7 +56,11 @@ namespace CopperMod.Sid
         private readonly List<ScheduledAutostartKey> _autostartKeys = new List<ScheduledAutostartKey>();
         private readonly HashSet<C64Key> _pressedKeys = new HashSet<C64Key>();
         private readonly byte[] _videoVicRegisters = new byte[0x40];
+        private readonly List<C64SpriteRegisterSnapshot> _spriteRegisterSnapshots = new List<C64SpriteRegisterSnapshot>(32);
         private long _videoFrameNumber;
+        private int _kernalCursorColumn;
+        private int _kernalCursorRow;
+        private byte _kernalTextColor = DefaultTextColor;
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
@@ -104,6 +116,7 @@ namespace CopperMod.Sid
                 _videoVicRegisters,
                 ReadVicMemory,
                 _vicBankBase,
+                _spriteRegisterSnapshots,
                 _videoFrameNumber++,
                 SidIntegerMath.CyclesToTimeSpan(Cpu.Cycles, _clock.CpuCyclesPerSecond));
             return frame;
@@ -133,10 +146,15 @@ namespace CopperMod.Sid
             _digimax.Reset();
             _easyFlash?.Reset();
             _pressedKeys.Clear();
+            _spriteRegisterSnapshots.Clear();
             _videoFrameNumber = 0;
+            _kernalCursorColumn = 0;
+            _kernalCursorRow = 0;
+            _kernalTextColor = DefaultTextColor;
             if (_module.IsCartridge)
             {
-                Cpu.Reset(_easyFlash != null ? (ushort)0x8000 : ReadResetVector());
+                InstallKernalRamVectors();
+                Cpu.Reset(ReadResetVector());
                 Cpu.ResetCycles();
                 _hardwareCycle = 0;
                 Sid.ResetClock();
@@ -463,7 +481,14 @@ namespace CopperMod.Sid
                 return value;
             }
 
-            if (_easyFlash != null && _easyFlash.TryRead(address, out value))
+            var kernalVisible = IsKernalVisible();
+            if (_easyFlash != null && _easyFlash.TryRead(address, kernalVisible, out value))
+            {
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
+            }
+
+            if (kernalVisible && address >= KernalRomStart && TryHandleKernalOpcodeFetch(address, kind, out value))
             {
                 CaptureCpuBusRead(busCycle, address, value, kind);
                 return value;
@@ -476,7 +501,7 @@ namespace CopperMod.Sid
                 return value;
             }
 
-            if (IsKernalVisible() && address >= 0xE000)
+            if (kernalVisible && address >= 0xE000)
             {
                 value = _kernalRom[address - KernalRomStart];
                 CaptureCpuBusRead(busCycle, address, value, kind);
@@ -572,7 +597,22 @@ namespace CopperMod.Sid
         {
             switch (address)
             {
-                case 0xFFD2: // CHROUT
+                case KernalCintAddress:
+                    HostKernalCint();
+                    AdvanceNativeCycles(256);
+                    return true;
+                case KernalIoInitAddress:
+                    HostKernalIoInit();
+                    AdvanceNativeCycles(128);
+                    return true;
+                case KernalRestorAddress:
+                    InstallKernalRamVectors();
+                    AdvanceNativeCycles(64);
+                    return true;
+                case KernalChrOutAddress:
+                    HostKernalChrOut(Cpu.A);
+                    AdvanceNativeCycles(128);
+                    return true;
                 case 0xFFCF: // CHRIN
                 case 0xFFE1: // STOP
                 case 0xFFE4: // GETIN
@@ -605,13 +645,13 @@ namespace CopperMod.Sid
                 return;
             }
 
-            WriteWord(RamIrqVector, KernalIrqHandlerAddress);
-            WriteWord(RamNmiVector, KernalNmiHandlerAddress);
+            InstallKernalRamVectors();
             WriteWord(0xFFFE, KernalIrqEntryAddress);
             WriteWord(0xFFFA, KernalNmiEntryAddress);
 
             WriteRamStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
             WriteRamStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
+            WriteRamStub(KernalNmiHandlerAddress, 0xAD, 0x0D, 0xDD, 0x40);
             WriteRamStub(RtiStubAddress, 0x40); // RTI
 
             _ram[IdleLoopAddress + 0] = 0xEA; // NOP
@@ -621,23 +661,29 @@ namespace CopperMod.Sid
             _ram[IdleLoopAddress + 4] = (byte)(IdleLoopAddress >> 8);
         }
 
+        private void InstallKernalRamVectors()
+        {
+            WriteWord(RamIrqVector, KernalIrqHandlerAddress);
+            WriteWord(RamNmiVector, KernalNmiHandlerAddress);
+        }
+
         private void InstallMinimalRoms()
         {
             Array.Fill(_basicRom, (byte)0x60); // RTS for unimplemented BASIC calls.
             Array.Fill(_kernalRom, (byte)0x60); // RTS for unimplemented KERNAL calls.
-            for (var i = 0; i < _characterRom.Length; i++)
-            {
-                _characterRom[i] = (byte)(0x80 | (i & 0x7F));
-            }
+            C64CharacterRom.Install(_characterRom);
 
             WriteKernalStub(KernalIrqHandlerAddress, 0x20, 0xEA, 0xFF, 0xAD, 0x0D, 0xDC, 0xAD, 0x19, 0xD0, 0x8D, 0x19, 0xD0, 0x4C, 0x81, 0xEA);
             WriteKernalStub(0xEA7E, 0xAD, 0x0D, 0xDC, 0x4C, 0x81, 0xEA); // LDA $DC0D; JMP IRQ exit
             WriteKernalStub(KernalIrqExitAddress, 0x68, 0xA8, 0x68, 0xAA, 0x68, 0x40); // PLA/TAY, PLA/TAX, PLA, RTI
+            WriteKernalStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
             WriteKernalStub(KernalNmiHandlerAddress, 0xAD, 0x0D, 0xDD, 0x40);
-            WriteKernalStub(KernalIrqVectorAddress, 0x4C, 0x80, 0xFF); // JMP $FF80
             WriteKernalStub(KernalIrqUserVectorJumpAddress, 0x6C, 0x14, 0x03); // JMP ($0314)
             WriteKernalStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
-            WriteKernalStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
+            WriteKernalStub(KernalCintAddress, 0x60);
+            WriteKernalStub(KernalIoInitAddress, 0x60);
+            WriteKernalStub(KernalRamTasAddress, 0x60);
+            WriteKernalStub(KernalRestorAddress, 0x60);
             WriteKernalStub(RtiStubAddress, 0x40);
             WriteKernalStub(KernalUpdateClockAddress, 0xEE, 0xA2, 0x00, 0xD0, 0x08, 0xEE, 0xA1, 0x00, 0xD0, 0x03, 0xEE, 0xA0, 0x00, 0x60);
             WriteKernalStub(
@@ -655,6 +701,164 @@ namespace CopperMod.Sid
                 (byte)(IdleLoopAddress >> 8),
                 (byte)(KernalIrqEntryAddress & 0xFF),
                 (byte)(KernalIrqEntryAddress >> 8));
+        }
+
+        private bool TryHandleKernalOpcodeFetch(ushort address, CpuBusAccessKind kind, out byte value)
+        {
+            value = 0;
+            if (kind != CpuBusAccessKind.OpcodeFetch)
+            {
+                return false;
+            }
+
+            switch (address)
+            {
+                case KernalCintAddress:
+                    HostKernalCint();
+                    value = 0x60;
+                    return true;
+                case KernalIoInitAddress:
+                    HostKernalIoInit();
+                    value = 0x60;
+                    return true;
+                case KernalRestorAddress:
+                    InstallKernalRamVectors();
+                    value = 0x60;
+                    return true;
+                case KernalChrOutAddress:
+                    HostKernalChrOut(Cpu.A);
+                    value = 0x60;
+                    return true;
+                case 0xFFCF: // CHRIN
+                case 0xFFE1: // STOP
+                case 0xFFE4: // GETIN
+                    Cpu.A = 0;
+                    value = 0x60;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void HostKernalIoInit()
+        {
+            _cia1.Write(0x0D, 0x7F);
+            _cia2.Write(0x0D, 0x7F);
+            _cia1.Write(0x0E, 0x00);
+            _cia1.Write(0x0F, 0x00);
+            _cia2.Write(0x02, 0x3F);
+            _cia2.Write(0x0E, 0x00);
+            _cia2.Write(0x0F, 0x00);
+            UpdateVicBankBase();
+            RefreshInterruptLines();
+        }
+
+        private void HostKernalCint()
+        {
+            _vic.Write(0x11, 0x1B);
+            _vic.Write(0x16, 0x08);
+            _vic.Write(0x18, 0x14);
+            _vic.Write(0x20, 0x0E);
+            _vic.Write(0x21, 0x06);
+            ClearKernalTextScreen();
+        }
+
+        private void ClearKernalTextScreen()
+        {
+            Array.Fill(_colorRam, DefaultTextColor);
+            for (var i = 0; i < TextScreenColumns * TextScreenRows; i++)
+            {
+                _ram[TextScreenStart + i] = 0x20;
+            }
+
+            _kernalCursorColumn = 0;
+            _kernalCursorRow = 0;
+            _kernalTextColor = DefaultTextColor;
+        }
+
+        private void HostKernalChrOut(byte petscii)
+        {
+            switch (petscii)
+            {
+                case 0x0D:
+                    NewLine();
+                    return;
+                case 0x13:
+                    _kernalCursorColumn = 0;
+                    _kernalCursorRow = 0;
+                    return;
+                case 0x93:
+                    ClearKernalTextScreen();
+                    return;
+            }
+
+            if (petscii < 0x20)
+            {
+                return;
+            }
+
+            var cell = (_kernalCursorRow * TextScreenColumns) + _kernalCursorColumn;
+            _ram[TextScreenStart + cell] = PetsciiToScreenCode(petscii);
+            _colorRam[cell] = _kernalTextColor;
+            _kernalCursorColumn++;
+            if (_kernalCursorColumn >= TextScreenColumns)
+            {
+                NewLine();
+            }
+        }
+
+        private void NewLine()
+        {
+            _kernalCursorColumn = 0;
+            _kernalCursorRow++;
+            if (_kernalCursorRow < TextScreenRows)
+            {
+                return;
+            }
+
+            ScrollTextScreen();
+            _kernalCursorRow = TextScreenRows - 1;
+        }
+
+        private void ScrollTextScreen()
+        {
+            const int screenLength = TextScreenColumns * TextScreenRows;
+            Array.Copy(_ram, TextScreenStart + TextScreenColumns, _ram, TextScreenStart, screenLength - TextScreenColumns);
+            for (var i = screenLength - TextScreenColumns; i < screenLength; i++)
+            {
+                _ram[TextScreenStart + i] = 0x20;
+            }
+
+            Array.Copy(_colorRam, TextScreenColumns, _colorRam, 0, screenLength - TextScreenColumns);
+            for (var i = screenLength - TextScreenColumns; i < screenLength; i++)
+            {
+                _colorRam[i] = _kernalTextColor;
+            }
+        }
+
+        private static byte PetsciiToScreenCode(byte value)
+        {
+            if (value >= (byte)'A' && value <= (byte)'Z')
+            {
+                return (byte)(value - (byte)'A' + 1);
+            }
+
+            if (value >= 0xC1 && value <= 0xDA)
+            {
+                return (byte)(value - 0xC1 + 1);
+            }
+
+            if (value >= 0x20 && value <= 0x3F)
+            {
+                return value;
+            }
+
+            if (value >= 0x60 && value <= 0x7F)
+            {
+                return (byte)(value - 0x40);
+            }
+
+            return 0x20;
         }
 
         private void WriteRamStub(ushort address, params byte[] bytes)
@@ -982,7 +1186,9 @@ namespace CopperMod.Sid
 
             if (address >= 0xD000 && address <= 0xD3FF)
             {
-                _vic.Write((byte)address, value);
+                var register = (byte)address;
+                _vic.Write(register, value);
+                CaptureSpriteRegisterSnapshot(register);
                 RefreshInterruptLines();
                 return;
             }
@@ -1137,6 +1343,71 @@ namespace CopperMod.Sid
             }
 
             throw new ArgumentException("Unsupported C64 autostart key: " + key, nameof(key));
+        }
+
+        private void CaptureSpriteRegisterSnapshot(byte register)
+        {
+            register = (byte)(register & 0x3F);
+            if (register != 0x0F && register != 0x15 && register != 0x10 && register != 0x17 && register != 0x1C && register != 0x1D)
+            {
+                return;
+            }
+
+            _vic.CopyRegisters(_videoVicRegisters);
+            if (_videoVicRegisters[0x15] == 0)
+            {
+                return;
+            }
+
+            foreach (var snapshot in _spriteRegisterSnapshots)
+            {
+                if (SpriteRegistersMatch(snapshot, _videoVicRegisters))
+                {
+                    return;
+                }
+            }
+
+            var registers = new byte[0x40];
+            _videoVicRegisters.CopyTo(registers, 0);
+            var pointers = ReadSpritePointers(registers, _vicBankBase);
+            _spriteRegisterSnapshots.Add(new C64SpriteRegisterSnapshot(registers, pointers, _vicBankBase));
+            if (_spriteRegisterSnapshots.Count > 32)
+            {
+                _spriteRegisterSnapshots.RemoveAt(0);
+            }
+        }
+
+        private byte[] ReadSpritePointers(byte[] registers, int vicBankBase)
+        {
+            var screenBase = vicBankBase + ((registers[0x18] & 0xF0) << 6);
+            var pointers = new byte[8];
+            for (var sprite = 0; sprite < pointers.Length; sprite++)
+            {
+                pointers[sprite] = ReadVicMemory((ushort)((screenBase + 0x03F8 + sprite) & 0xFFFF));
+            }
+
+            return pointers;
+        }
+
+        private static bool SpriteRegistersMatch(C64SpriteRegisterSnapshot left, byte[] right)
+        {
+            for (var i = 0; i <= 0x1D; i++)
+            {
+                if (left.Registers[i] != right[i])
+                {
+                    return false;
+                }
+            }
+
+            for (var i = 0x25; i <= 0x2E; i++)
+            {
+                if (left.Registers[i] != right[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private readonly struct ScheduledAutostartKey
