@@ -162,6 +162,12 @@ internal sealed class CopperScreenStartupOptions
 				continue;
 			}
 
+			if (IsOption(arg, "--m68020") || IsOption(arg, "--68020"))
+			{
+				cpuBackendOverride = M68kBackendKind.AccurateM68020;
+				continue;
+			}
+
 			if (TryReadOptionValue(startupArgs, ref i, arg, "--floppy-sounds", null, out var floppySoundsValue))
 			{
 				if (TryParseOnOff(floppySoundsValue, out var enabled))

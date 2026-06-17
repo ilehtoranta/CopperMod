@@ -5,6 +5,8 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaBusTimingTests
 {
+	private const int HrmLowResPlane1FetchSlot = 7;
+
 	[Fact]
 	public void ZeroWaitArbiterGrantsImmediatelyAndUsesConfiguredAccessCycles()
 	{
@@ -324,8 +326,7 @@ public sealed class AmigaBusTimingTests
 	public void LiveDisplayDmaSlotStallsCpuChipAccess()
 	{
 		var bus = new AmigaBus();
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		bus.WriteWord(0x00DFF180, 0x0000);
 		bus.WriteWord(0x00DFF182, 0x0F00);
 		bus.WriteWord(0x00DFF096, 0x8300);
@@ -348,8 +349,8 @@ public sealed class AmigaBusTimingTests
 		var cpu = bus.BusAccesses.Last(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
 			access.Request.Target == AmigaBusAccessTarget.ChipRam);
-		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cpu.GrantedCycle);
-		Assert.Equal(fetchCycle + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(fetchCycle + AgnusChipSlotScheduler.SlotCycles, cpu.GrantedCycle);
+		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
 		Assert.True(bus.Agnus.CaptureSnapshot().CpuChipStallCycles >= AgnusChipSlotScheduler.SlotCycles);
 	}
 
@@ -359,8 +360,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
 			enableLiveAgnusDma: true);
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		var requestedCycle = fetchCycle - AgnusChipSlotScheduler.SlotCycles;
 		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
 		bus.WriteWord(0x00DFF096, 0x8300);
@@ -400,8 +400,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
 			enableLiveAgnusDma: true);
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xFFFF);
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
@@ -491,8 +490,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000);
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		bus.MapReadOnlyMemory(0x00FC0000, new byte[] { 0x12, 0x34 });
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
@@ -524,8 +522,7 @@ public sealed class AmigaBusTimingTests
 	public void LiveDisplayDmaSlotStallsCpuCustomRegisterAccess()
 	{
 		var bus = new AmigaBus();
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
 		bus.WriteWord(0x00DFF094, 0x0038);
@@ -541,8 +538,8 @@ public sealed class AmigaBusTimingTests
 		var cpuCustom = bus.BusAccesses.Last(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
 			access.Request.Target == AmigaBusAccessTarget.CustomRegisters);
-		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cpuCustom.GrantedCycle);
-		Assert.Equal(fetchCycle + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(fetchCycle + AgnusChipSlotScheduler.SlotCycles, cpuCustom.GrantedCycle);
+		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
 		Assert.True(bus.Agnus.CaptureSnapshot().CpuChipStallCycles >= AgnusChipSlotScheduler.SlotCycles);
 	}
 
@@ -550,8 +547,7 @@ public sealed class AmigaBusTimingTests
 	public void IntreqPollingPreparesLiveBitplaneSlotsWithoutCapturingFetchWords()
 	{
 		var bus = new AmigaBus();
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
 		bus.WriteWord(0x00DFF094, 0x0038);
@@ -567,8 +563,8 @@ public sealed class AmigaBusTimingTests
 		var cpuCustom = bus.BusAccesses.Last(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
 			access.Request.Target == AmigaBusAccessTarget.CustomRegisters);
-		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cpuCustom.GrantedCycle);
-		Assert.Equal(fetchCycle + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(fetchCycle + AgnusChipSlotScheduler.SlotCycles, cpuCustom.GrantedCycle);
+		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
 		Assert.Equal(initialFetchWords, bus.Display.LiveFetchBatchWordCount);
 		var snapshot = bus.Agnus.CaptureSnapshot();
 		Assert.True(snapshot.BitplaneSlotGrantCount > 0);
@@ -584,8 +580,7 @@ public sealed class AmigaBusTimingTests
 	public void IntreqPollingDoesNotPreventLaterLiveBitplaneCapture()
 	{
 		var bus = new AmigaBus();
-		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		var frameStopCycle = AmigaConstants.A500PalCpuCyclesPerFrame - 1;
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
@@ -1363,6 +1358,10 @@ public sealed class AmigaBusTimingTests
 		var line = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
 		return (long)line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 	}
+
+	private static long LowResPlane1FetchCycle(int row)
+		=> OutputRowStartCycle(row) +
+			((0x38 + HrmLowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
 
 	private static AmigaDiskImage CreateSingleWordDisk(ushort word)
 	{

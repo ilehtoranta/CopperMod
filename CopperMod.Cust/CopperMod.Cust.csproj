@@ -25,7 +25,6 @@
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
-    <PackageReference Include="CopperDisk" Version="1.0.0" />
     <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 

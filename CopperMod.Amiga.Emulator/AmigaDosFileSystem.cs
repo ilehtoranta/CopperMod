@@ -22,12 +22,12 @@ namespace CopperMod.Amiga
         private const int SecondaryTypeRoot = 1;
         private const int SecondaryTypeDirectory = 2;
         private const int SecondaryTypeFile = -3;
-        private readonly AmigaDiskImage _disk;
+        private readonly IAmigaDiskImage _disk;
         private readonly List<AmigaDosDirectoryEntry> _entries = new List<AmigaDosDirectoryEntry>();
         private readonly Dictionary<int, int> _headerPhysicalBlocks = new Dictionary<int, int>();
         private int _rootDirectoryKey = StandardRootBlock;
 
-        public AmigaDosFileSystem(AmigaDiskImage disk)
+        public AmigaDosFileSystem(IAmigaDiskImage disk)
         {
             _disk = disk ?? throw new ArgumentNullException(nameof(disk));
             if (!IsSupported(disk))
@@ -40,7 +40,7 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<AmigaDosDirectoryEntry> Entries => _entries;
 
-        public static bool IsSupported(AmigaDiskImage disk)
+        public static bool IsSupported(IAmigaDiskImage disk)
         {
             return disk.HasCompleteSectorData &&
                 disk.Data.Length >= (StandardRootBlock + 1) * BlockSize &&

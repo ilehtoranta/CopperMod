@@ -1042,7 +1042,7 @@ internal sealed class MainWindow : Window
 		_profileDescriptionBox = AddTextSetting(layout, "Description");
 		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom", "DiagRom"]);
 		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
-		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "JitM68000"]);
+		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "AccurateM68020", "JitM68000"]);
 		layout.Children.Add(CreateSettingsSection("Memory"));
 		_chipRamBox = AddTextSetting(layout, "Chip RAM KB");
 		_pseudoFastRamBox = AddTextSetting(layout, "Pseudo-fast RAM KB");
@@ -1879,9 +1879,12 @@ internal sealed class MainWindow : Window
 	}
 
 	private static M68kBackendKind ParseCpuSelection(object? value)
-		=> string.Equals(value?.ToString(), "JitM68000", StringComparison.OrdinalIgnoreCase)
-			? M68kBackendKind.JitM68000
-			: M68kBackendKind.AccurateM68000;
+		=> value?.ToString() switch
+		{
+			string backend when string.Equals(backend, "JitM68000", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.JitM68000,
+			string backend when string.Equals(backend, "AccurateM68020", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68020,
+			_ => M68kBackendKind.AccurateM68000
+		};
 
 	private static FloppyDriveAudioMode ParseFloppyAudioModeSelection(object? value)
 		=> string.Equals(value?.ToString(), "Samples", StringComparison.OrdinalIgnoreCase)

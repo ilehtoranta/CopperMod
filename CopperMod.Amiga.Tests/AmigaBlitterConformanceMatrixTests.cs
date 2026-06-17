@@ -9,6 +9,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	private const uint SourceC = 0x3400;
 	private const uint DestinationD = 0x4000;
 	private const int LineRowStride = 0x20;
+	private static readonly int[] HrmLowResFetchSlotByPlane = [7, 3, 5, 1, 6, 2];
 
 	public static IEnumerable<object[]> AreaMintermRows =>
 		Enumerable.Range(0, 256).Select(minterm => new object[] { new AreaMintermRow((byte)minterm) });
@@ -439,7 +440,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			captureBusAccesses: true,
 			enableLiveAgnusDma: true);
 		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * AgnusChipSlotScheduler.SlotCycles);
+			((0x38 + HrmLowResFetchSlotByPlane[0]) * AgnusChipSlotScheduler.SlotCycles);
 		var destination = 0x1000u;
 		WriteWord(bus, SourceA, 0xCAFE);
 		WriteWord(bus, destination, 0x1234);
@@ -479,9 +480,10 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			enableLiveAgnusDma: true);
 		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var firstThreePlaneSlot = HrmLowResFetchSlotByPlane.Take(3).Min();
 		var fetchCycle = frameCycles +
 			OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
-			(0x38 * slotCycles);
+			((0x38 + firstThreePlaneSlot) * slotCycles);
 		var destination = 0x1800u;
 		WriteWord(bus, SourceA, 0xCAFE);
 		WriteWord(bus, destination, 0x1234);
@@ -510,6 +512,53 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.True(finalWrite.GrantedCycle > fetchCycle);
 	}
 
+	[Theory]
+	[InlineData(1)]
+	[InlineData(3)]
+	[InlineData(6)]
+	public void BlitterWithBlitPriWaitsForHrmLowResBitplaneSlots(int planeCount)
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var firstActiveSlot = HrmLowResFetchSlotByPlane
+			.Take(planeCount)
+			.Min();
+		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			((0x38 + firstActiveSlot) * slotCycles);
+		var destination = (uint)(0x5000 + (planeCount * 0x100));
+		for (var plane = 0; plane < planeCount; plane++)
+		{
+			WritePointer(bus, (uint)(0x00DFF0E0 + (plane * 4)), (uint)(0x2000 + (plane * 0x100)));
+		}
+
+		WriteWord(bus, destination, 0x1234);
+		ConfigureAreaBlit(bus, 0x0100, destinationD: destination);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		bus.WriteWord(0x00DFF100, (ushort)(planeCount << 12));
+		bus.WriteWord(0x00DFF096, 0x8740);
+		bus.EnableLiveAgnusDma();
+
+		bus.Blitter.WriteRegister(0x058, 0x0041, fetchCycle - (2 * slotCycles));
+		bus.AdvanceDmaTo(fetchCycle + (8 * slotCycles));
+
+		var write = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite &&
+				access.Request.Address == destination);
+		Assert.Equal(fetchCycle, write.RequestedCycle);
+		Assert.True(write.GrantedCycle > fetchCycle);
+		Assert.Contains(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.GrantedCycle == fetchCycle);
+	}
+
 	[Fact]
 	public void BlitterLineModeUsesEightHrmTicksPerPixel()
 	{
@@ -530,10 +579,133 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
+	public void BlitterLineModeUsesHrmIdleCIdleDSlotCadence()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var baseAddress = DestinationD + 0x1A00;
+		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0001);
+
+		bus.WriteWord(0x00DFF058, 0x0082);
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		RunBlitterUntilIdle(bus);
+
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var pixelCycles = 4 * slotCycles;
+		var accesses = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter)
+			.ToArray();
+
+		Assert.Equal(4, accesses.Length);
+		for (var pixel = 0; pixel < 2; pixel++)
+		{
+			var pixelStart = startCycle + (pixel * pixelCycles);
+			var cRead = accesses[pixel * 2];
+			var dWrite = accesses[(pixel * 2) + 1];
+			Assert.False(cRead.Request.IsWrite);
+			Assert.True(dWrite.Request.IsWrite);
+			Assert.Equal(pixelStart + slotCycles, cRead.GrantedCycle);
+			Assert.Equal(pixelStart + (3 * slotCycles), dWrite.GrantedCycle);
+		}
+	}
+
+	[Fact]
+	public void BlitterLineBusyClearsAtFinalWriteCompletionWithoutPolling()
+	{
+		var bus = new AmigaBus();
+		var baseAddress = DestinationD + 0x1C00;
+		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
+
+		bus.WriteWord(0x00DFF058, 0x1002);
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		var expectedCompletion = startCycle + (64 * 8);
+
+		bus.AdvanceDmaTo(expectedCompletion - 1);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+
+		bus.AdvanceDmaTo(expectedCompletion);
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(expectedCompletion, bus.Blitter.CaptureSnapshot().CurrentCycle);
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+	}
+
+	[Fact]
+	public void BlitterLineDmaconrPollingObservesBusyUntilFinalWriteCompletion()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var baseAddress = DestinationD + 0x1E00;
+		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
+
+		bus.WriteWord(0x00DFF058, 0x1002);
+		var firstIdleReadCycle = -1L;
+		var cycle = 0L;
+		for (var poll = 0; poll < 512; poll++)
+		{
+			var dmaconr = bus.ReadWord(0x00DFF002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+			if ((dmaconr & 0x4000) == 0)
+			{
+				firstIdleReadCycle = cycle;
+				break;
+			}
+
+			cycle += AgnusChipSlotScheduler.SlotCycles;
+		}
+
+		Assert.True(firstIdleReadCycle >= 0);
+		var finalWrite = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite)
+			.OrderBy(access => access.CompletedCycle)
+			.Last();
+		Assert.True(firstIdleReadCycle >= finalWrite.CompletedCycle);
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+	}
+
+	[Fact]
+	public void BlitterLineBusyWaitsForDelayedFinalWriteSlot()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var baseAddress = DestinationD + 0x2000;
+		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
+
+		bus.WriteWord(0x00DFF058, 0x1002);
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var finalNominalWriteGrant = startCycle + (63 * 8) + (3 * slotCycles);
+		Assert.True(bus.TryReserveDisplayDmaSlot(
+			AmigaBusRequester.Bitplane,
+			AmigaBusAccessKind.Bitplane,
+			0x7000,
+			finalNominalWriteGrant,
+			out var reserved));
+		Assert.Equal(finalNominalWriteGrant, reserved.GrantedCycle);
+
+		var delayedCompletion = startCycle + (64 * 8) + slotCycles;
+		bus.AdvanceDmaTo(delayedCompletion - 1);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+
+		bus.AdvanceDmaTo(delayedCompletion);
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+
+		var finalWrite = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite)
+			.OrderBy(access => access.CompletedCycle)
+			.Last();
+		Assert.Equal(finalNominalWriteGrant + slotCycles, finalWrite.GrantedCycle);
+		Assert.Equal(delayedCompletion, finalWrite.CompletedCycle);
+	}
+
+	[Fact]
 	public void UndocumentedOcsLineModeRequiresCButIgnoresDEnable()
 	{
 		var withoutC = new AmigaBus();
-		var baseAddress = DestinationD + 0x1A00;
+		var baseAddress = DestinationD + 0x2200;
 		ConfigureLineBlit(withoutC, baseAddress, LineRowStride, bltcon1: 0x0001, channelMask: 0x0900);
 		withoutC.WriteWord(0x00DFF058, 0x0041);
 		RunBlitterUntilIdle(withoutC);
@@ -550,8 +722,8 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	public void UndocumentedOcsLineModeUsesDPointerOnlyForFirstPixel()
 	{
 		var bus = new AmigaBus();
-		var baseAddress = DestinationD + 0x1C00;
-		var firstPixelAddress = DestinationD + 0x1E00;
+		var baseAddress = DestinationD + 0x2400;
+		var firstPixelAddress = DestinationD + 0x2600;
 		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0001, destinationD: firstPixelAddress);
 
 		bus.WriteWord(0x00DFF058, 0x0082);
@@ -567,7 +739,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	public void UndocumentedOcsLineModeUsesBltcmodForDestinationStride()
 	{
 		var bus = new AmigaBus();
-		var baseAddress = DestinationD + 0x2000;
+		var baseAddress = DestinationD + 0x2800;
 		ConfigureLineBlit(
 			bus,
 			baseAddress,
@@ -589,7 +761,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	public void UndocumentedOcsLineModeDoesNotUpdateBltaptWhenAIsDisabled()
 	{
 		var bus = new AmigaBus();
-		var baseAddress = DestinationD + 0x2200;
+		var baseAddress = DestinationD + 0x2A00;
 		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0001, initialAccumulator: 0x1234, channelMask: 0x0300);
 
 		bus.WriteWord(0x00DFF058, 0x0041);
@@ -603,7 +775,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	public void UndocumentedOcsLineModeIgnoresBltalwm()
 	{
 		var bus = new AmigaBus();
-		var baseAddress = DestinationD + 0x2400;
+		var baseAddress = DestinationD + 0x2C00;
 		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0001);
 		bus.WriteWord(0x00DFF046, 0x0000);
 
@@ -623,17 +795,17 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 		bus.WriteWord(0x00DFF042, 0x1000);
 		bus.WriteWord(0x00DFF072, 0x0000);
-		ConfigureAreaBlit(bus, 0x01CC, bltcon1: 0x1000, destinationD: DestinationD + 0x2600);
+		ConfigureAreaBlit(bus, 0x01CC, bltcon1: 0x1000, destinationD: DestinationD + 0x2E00);
 		StartBlitAndRun(bus, widthWords: 1, height: 1);
 
-		Assert.Equal(0x8000, ReadWord(bus, DestinationD + 0x2600));
+		Assert.Equal(0x8000, ReadWord(bus, DestinationD + 0x2E00));
 	}
 
 	[Fact]
 	public void UndocumentedOcsLineModeBChannelReloadsPatternWords()
 	{
 		var bus = new AmigaBus();
-		var baseAddress = DestinationD + 0x2800;
+		var baseAddress = DestinationD + 0x3000;
 		WriteWord(bus, SourceB, 0x8000);
 		WriteWord(bus, SourceB + 2, 0x4000);
 		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0001, bModulo: 2, channelMask: 0x0F00);

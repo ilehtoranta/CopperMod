@@ -11,6 +11,8 @@ public sealed class CustBoundaryTests
         var references = typeof(CustFormat).Assembly.GetReferencedAssemblies().Select(reference => reference.Name).ToHashSet();
 
         Assert.DoesNotContain("CopperScreen", references);
+        Assert.DoesNotContain("CopperDisk", references);
+        Assert.DoesNotContain("CopperMod.Amiga.Emulator", references);
     }
 
     [Fact]

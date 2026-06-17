@@ -53,7 +53,8 @@ namespace CopperMod.Amiga
         private const int MaxTimelineStateSnapshots = MaxPendingWrites;
         private const int PlanarChunkPixels = 16;
         private const int MaxTimelineSegmentsPerFrame = LowResOutputHeight + MaxPendingWrites;
-        private static readonly int[] LowResBitplaneFetchSlotsByPlane = [0, 1, 2, 3, 4, 5];
+        private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
+        private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
         private readonly AmigaBus _bus;
         private readonly bool _liveDmaEnabled;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
@@ -5445,7 +5446,9 @@ namespace CopperMod.Amiga
         {
             if (fetchSlotStride <= 4)
             {
-                return Math.Clamp(plane, 0, fetchSlotStride - 1);
+                return (uint)plane < (uint)HighResBitplaneFetchSlotsByPlane.Length
+                    ? HighResBitplaneFetchSlotsByPlane[plane]
+                    : fetchSlotStride - 1;
             }
 
             return (uint)plane < (uint)LowResBitplaneFetchSlotsByPlane.Length
@@ -5457,8 +5460,17 @@ namespace CopperMod.Amiga
         {
             if (fetchSlotStride <= 4)
             {
-                plane = slot;
-                return (uint)plane < (uint)planeCount;
+                for (var candidate = 0; candidate < planeCount && candidate < HighResBitplaneFetchSlotsByPlane.Length; candidate++)
+                {
+                    if (HighResBitplaneFetchSlotsByPlane[candidate] == slot)
+                    {
+                        plane = candidate;
+                        return true;
+                    }
+                }
+
+                plane = -1;
+                return false;
             }
 
             for (var candidate = 0; candidate < planeCount && candidate < LowResBitplaneFetchSlotsByPlane.Length; candidate++)
@@ -6318,7 +6330,7 @@ namespace CopperMod.Amiga
             return offset switch
             {
                 0x092 or 0x094 => -4,
-                0x08E or 0x090 or 0x102 => -3,
+                0x08E or 0x090 => -3,
                 _ => 0
             };
         }

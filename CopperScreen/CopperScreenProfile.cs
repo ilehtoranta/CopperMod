@@ -405,10 +405,11 @@ internal sealed class CopperScreenProfile
 			return M68kBackendKind.AccurateM68000;
 		}
 
-		var backend = value.Trim().ToLowerInvariant().Replace("-", string.Empty);
+		var backend = value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
 		return backend switch
 		{
 			"interpreter" or "accurate" or "accuratem68000" or "m68000" => M68kBackendKind.AccurateM68000,
+			"accuratem68020" or "m68020" or "68020" or "020" or "ocs6802014mhz" => M68kBackendKind.AccurateM68020,
 			"jit" or "jitm68000" => M68kBackendKind.JitM68000,
 			_ => throw new InvalidOperationException($"Unsupported CPU backend '{value}'.")
 		};

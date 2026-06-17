@@ -97,6 +97,7 @@ namespace CopperMod.Amiga
     internal enum M68kBackendKind
     {
         AccurateM68000,
+        AccurateM68020,
         FastM68000,
         JitM68000,
         Cpu32
@@ -118,12 +119,17 @@ namespace CopperMod.Amiga
                 return new M68kInterpreter(bus);
             }
 
+            if (backend == M68kBackendKind.AccurateM68020)
+            {
+                return new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+            }
+
             if (backend == M68kBackendKind.JitM68000)
             {
                 return new M68kJitCore(bus);
             }
 
-            throw new AmigaEmulationException($"The requested MC68000 backend is not implemented: {backend}.");
+            throw new AmigaEmulationException($"The requested M68k backend is not implemented: {backend}.");
         }
     }
 
@@ -134,6 +140,7 @@ namespace CopperMod.Amiga
         public const ushort Zero = 0x0004;
         public const ushort Negative = 0x0008;
         public const ushort Extend = 0x0010;
+        public const ushort Master = 0x1000;
         public const ushort Supervisor = 0x2000;
         private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
@@ -155,7 +162,23 @@ namespace CopperMod.Amiga
 
         public uint SupervisorStackPointer { get; private set; }
 
+        public uint InterruptStackPointer => SupervisorStackPointer;
+
+        public uint MasterStackPointer { get; private set; }
+
+        public uint VectorBaseRegister { get; set; }
+
+        public uint SourceFunctionCode { get; set; }
+
+        public uint DestinationFunctionCode { get; set; }
+
+        public uint CacheControlRegister { get; set; }
+
+        public uint CacheAddressRegister { get; set; }
+
         public long Cycles { get; set; }
+
+        public long NativeCycles { get; set; }
 
         public bool Halted { get; set; }
 
@@ -164,6 +187,14 @@ namespace CopperMod.Amiga
         public ushort LastOpcode { get; set; }
 
         public uint LastInstructionProgramCounter { get; set; }
+
+        public bool M68020StackModeEnabled { get; private set; }
+
+        public void EnableM68020StackMode()
+        {
+            M68020StackModeEnabled = true;
+            SetStatusRegister(_statusRegister);
+        }
 
         public bool GetFlag(ushort flag)
         {
@@ -189,6 +220,7 @@ namespace CopperMod.Amiga
         {
             SupervisorStackPointer = supervisorStackPointer;
             UserStackPointer = userStackPointer;
+            MasterStackPointer = supervisorStackPointer;
             A[7] = supervisorMode ? supervisorStackPointer : userStackPointer;
             _statusRegister = supervisorMode ? Supervisor : (ushort)0;
         }
@@ -196,6 +228,12 @@ namespace CopperMod.Amiga
         public void SetActiveStackPointer(uint stackPointer)
         {
             A[7] = stackPointer;
+            if (M68020StackModeEnabled)
+            {
+                SetActiveM68020StackPointer(stackPointer);
+                return;
+            }
+
             if (GetFlag(Supervisor))
             {
                 SupervisorStackPointer = stackPointer;
@@ -210,6 +248,24 @@ namespace CopperMod.Amiga
         {
             UserStackPointer = stackPointer;
             if (!GetFlag(Supervisor))
+            {
+                A[7] = stackPointer;
+            }
+        }
+
+        public void SetInterruptStackPointer(uint stackPointer)
+        {
+            SupervisorStackPointer = stackPointer;
+            if (M68020StackModeEnabled && UsesInterruptStack(_statusRegister))
+            {
+                A[7] = stackPointer;
+            }
+        }
+
+        public void SetMasterStackPointer(uint stackPointer)
+        {
+            MasterStackPointer = stackPointer;
+            if (M68020StackModeEnabled && UsesMasterStack(_statusRegister))
             {
                 A[7] = stackPointer;
             }
@@ -244,6 +300,12 @@ namespace CopperMod.Amiga
 
         private void SetStatusRegister(ushort value)
         {
+            if (M68020StackModeEnabled)
+            {
+                SetM68020StatusRegister(value);
+                return;
+            }
+
             var wasSupervisor = (_statusRegister & Supervisor) != 0;
             var isSupervisor = (value & Supervisor) != 0;
             if (wasSupervisor != isSupervisor)
@@ -262,6 +324,66 @@ namespace CopperMod.Amiga
 
             _statusRegister = value;
         }
+
+        private void SetM68020StatusRegister(ushort value)
+        {
+            SaveActiveM68020StackPointer(_statusRegister);
+            _statusRegister = value;
+            A[7] = GetActiveM68020StackPointer(value);
+        }
+
+        private void SaveActiveM68020StackPointer(ushort statusRegister)
+        {
+            if (!UsesSupervisorStack(statusRegister))
+            {
+                UserStackPointer = A[7];
+            }
+            else if (UsesMasterStack(statusRegister))
+            {
+                MasterStackPointer = A[7];
+            }
+            else
+            {
+                SupervisorStackPointer = A[7];
+            }
+        }
+
+        private uint GetActiveM68020StackPointer(ushort statusRegister)
+        {
+            if (!UsesSupervisorStack(statusRegister))
+            {
+                return UserStackPointer;
+            }
+
+            return UsesMasterStack(statusRegister)
+                ? MasterStackPointer
+                : SupervisorStackPointer;
+        }
+
+        private void SetActiveM68020StackPointer(uint stackPointer)
+        {
+            if (!UsesSupervisorStack(_statusRegister))
+            {
+                UserStackPointer = stackPointer;
+            }
+            else if (UsesMasterStack(_statusRegister))
+            {
+                MasterStackPointer = stackPointer;
+            }
+            else
+            {
+                SupervisorStackPointer = stackPointer;
+            }
+        }
+
+        private static bool UsesSupervisorStack(ushort statusRegister)
+            => (statusRegister & Supervisor) != 0;
+
+        private static bool UsesMasterStack(ushort statusRegister)
+            => (statusRegister & (Supervisor | Master)) == (Supervisor | Master);
+
+        private static bool UsesInterruptStack(ushort statusRegister)
+            => (statusRegister & Supervisor) != 0 && (statusRegister & Master) == 0;
 
         public void SetNegativeZero(uint value, M68kOperandSize size)
         {

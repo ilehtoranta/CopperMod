@@ -56,7 +56,7 @@ public sealed class CopperScreenArchitectureTests
 
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
 		Assert.Equal("expanded-diagrom", diagRom.Id);
-		Assert.Equal("ROM/DiagROM/diagrom.rom", diagRom.KickstartRomPath);
+		Assert.Equal("ROM/DiagROM/diagrom-a500.rom", diagRom.KickstartRomPath);
 		Assert.True(diagRom.BootsWithoutDisk);
 	}
 
@@ -630,7 +630,7 @@ public sealed class CopperScreenArchitectureTests
 		Assert.True(options.Profile.BootsWithoutDisk);
 		Assert.Null(options.DiskPath);
 		Assert.NotNull(options.KickstartRomPath);
-		Assert.EndsWith(Path.Combine("ROM", "DiagROM", "diagrom.rom"), options.KickstartRomPath);
+		Assert.EndsWith(Path.Combine("ROM", "DiagROM", "diagrom-a500.rom"), options.KickstartRomPath);
 		Assert.Null(options.Error);
 	}
 

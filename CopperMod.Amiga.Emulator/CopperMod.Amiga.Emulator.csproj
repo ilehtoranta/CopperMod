@@ -4,16 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Amiga</PackageId>
-    <Title>CopperMod.Amiga</Title>
+    <PackageId>CopperMod.Amiga.Emulator</PackageId>
+    <Title>CopperMod.Amiga.Emulator</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Internal Amiga hardware emulation core shared by CUST playback and future emulator hosts.</Description>
+    <Description>Full Amiga emulator host services, boot helpers, and disk media adapters layered on CopperMod.Amiga.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;m68000;paula;cia</PackageTags>
+    <PackageTags>amiga;emulation;adf;ipf;disk;boot</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
@@ -23,7 +23,6 @@
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <NoWarn>1701;1702;NU1900</NoWarn>
-    <Optimize>true</Optimize>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
@@ -35,7 +34,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod.PerformanceAnalyzers\CopperMod.PerformanceAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
+    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
   </ItemGroup>
 
 </Project>

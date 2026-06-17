@@ -4,8 +4,10 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Avalonia.Input;
 using CopperMod.Amiga;
-using CopperDisk;
 using CopperScreen;
+using AmigaDosTrackEncoder = CopperDisk.AmigaDosTrackEncoder;
+using IpfDecodeOptions = CopperDisk.IpfDecodeOptions;
+using IpfDecoder = CopperDisk.IpfDecoder;
 
 namespace CopperScreen.Tests;
 

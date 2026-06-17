@@ -8,17 +8,20 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenDiagRomTests
 {
 	private const int ExpectedDiagRomLength = 524_288;
-	private const uint ExpectedDiagRomResetPc = 0x00F8_00D6;
-	private const string ExpectedDiagRomSha256 = "8DA1CF37B74B2BF1BDE3DC725D00A27EB6BD402E859BAFAF9CA2E74BBF0273F6";
+	private const uint ExpectedDiagRomA500ResetPc = 0x00F8_00D2;
+	private const string ExpectedDiagRomA500Sha256 = "1803BFFF5D866DE7605DBCF8445B590F36ED7CB7EE92166B240907E488CF0FF7";
+	private const uint ExpectedDiagRomV20ResetPc = 0x00F8_00D6;
+	private const string ExpectedDiagRomV20Sha256 = "8DA1CF37B74B2BF1BDE3DC725D00A27EB6BD402E859BAFAF9CA2E74BBF0273F6";
 	private const int MainMenuMinimumFrames = 1_000;
 	private const int MainMenuMaxFrames = 1_500;
 	private const int MenuTransitionMaxFrames = 300;
 	private const int StableSamples = 6;
+	private const int CrashScreenRedPixelThreshold = 2_000;
 
 	[Fact]
 	public void DiagRomProfileBootsBundledRomWithoutDiskWhenAvailable()
 	{
-		if (TryFindSupportedDiagRom() == null)
+		if (TryFindSupportedDiagRom(requireProfileDefault: true) == null)
 		{
 			return;
 		}
@@ -112,6 +115,39 @@ public sealed class CopperScreenDiagRomTests
 
 			TapKey(harness, AmigaRawKey.Escape);
 			WaitForStableScreenMatching(harness, main.Hash, MenuTransitionMaxFrames, "DiagROM main menu after leaving keyboard test");
+		}
+	}
+
+	[Fact]
+	public void DiagRomAudioSimpleWaveformDoesNotEnterCrashScreenWhenEnabledAndAvailable()
+	{
+		if (!IsDiagRomMenuTestsEnabled())
+		{
+			return;
+		}
+
+		var harness = TryCreateHarness(requireAudioSimpleWaveform: true);
+		if (harness == null)
+		{
+			return;
+		}
+
+		using (harness)
+		{
+			var main = WaitForStableScreen(harness, MainMenuMaxFrames, MainMenuMinimumFrames, "DiagROM main menu");
+
+			TapKey(harness, AmigaRawKey.Digit1);
+			WaitForStableScreenDifferentFrom(harness, main.Hash, MenuTransitionMaxFrames, "DiagROM audio menu");
+
+			TapKey(harness, AmigaRawKey.Digit1);
+			for (var frame = 1; frame <= 240; frame++)
+			{
+				RenderChecked(harness, frame, null);
+				if (HasDiagRomCrashScreen(harness.Emulator))
+				{
+					throw new Xunit.Sdk.XunitException(BuildFailure("DiagROM simple waveform entered the crash screen.", harness, frame, []));
+				}
+			}
 		}
 	}
 
@@ -287,10 +323,10 @@ public sealed class CopperScreenDiagRomTests
 		return hash;
 	}
 
-	private static DiagRomHarness? TryCreateHarness()
+	private static DiagRomHarness? TryCreateHarness(bool requireAudioSimpleWaveform = false)
 	{
-		var romPath = TryFindSupportedDiagRom();
-		if (romPath == null)
+		var rom = TryFindSupportedDiagRom(requireAudioSimpleWaveform: requireAudioSimpleWaveform);
+		if (rom == null)
 		{
 			return null;
 		}
@@ -302,31 +338,65 @@ public sealed class CopperScreenDiagRomTests
 		File.WriteAllBytes(diskPath, diskBytes);
 
 		var emulator = CopperScreenEmulator.CreateWithLoadedDisk(
-			["--profile", "expanded-kickstart13", "--kickstart-rom", romPath, diskPath],
+			["--profile", "expanded-kickstart13", "--kickstart-rom", rom.Path, diskPath],
 			AppContext.BaseDirectory,
 			AmigaDiskImage.FromAdfBytes(diskBytes, Path.GetFileName(diskPath)));
 		return new DiagRomHarness(emulator, GetMachine(emulator), tempDirectory);
 	}
 
-	private static string? TryFindSupportedDiagRom()
+	private static DiagRomImage? TryFindSupportedDiagRom(
+		bool requireAudioSimpleWaveform = false,
+		bool requireProfileDefault = false)
 	{
-		var path = TryFindWorkspaceFile("CopperScreen", "ROM", "DiagROM", "diagrom.rom");
-		if (path == null)
+		foreach (var candidate in GetSupportedDiagRomCandidates())
 		{
-			return null;
+			if (requireAudioSimpleWaveform && !candidate.SupportsAudioSimpleWaveform)
+			{
+				continue;
+			}
+
+			if (requireProfileDefault && !candidate.IsProfileDefault)
+			{
+				continue;
+			}
+
+			var path = TryFindWorkspaceFile("CopperScreen", "ROM", "DiagROM", candidate.FileName);
+			if (path == null)
+			{
+				continue;
+			}
+
+			var rom = File.ReadAllBytes(path);
+			if (rom.Length != ExpectedDiagRomLength ||
+				BigEndian.ReadUInt32(rom, 4, "DiagROM reset program counter") != candidate.ResetProgramCounter)
+			{
+				continue;
+			}
+
+			var hash = Convert.ToHexString(SHA256.HashData(rom));
+			if (string.Equals(hash, candidate.Sha256, StringComparison.OrdinalIgnoreCase))
+			{
+				return new DiagRomImage(path, candidate.SupportsAudioSimpleWaveform);
+			}
 		}
 
-		var rom = File.ReadAllBytes(path);
-		if (rom.Length != ExpectedDiagRomLength ||
-			BigEndian.ReadUInt32(rom, 4, "DiagROM reset program counter") != ExpectedDiagRomResetPc)
-		{
-			return null;
-		}
+		return null;
+	}
 
-		var hash = Convert.ToHexString(SHA256.HashData(rom));
-		return string.Equals(hash, ExpectedDiagRomSha256, StringComparison.OrdinalIgnoreCase)
-			? path
-			: null;
+	private static IEnumerable<DiagRomCandidate> GetSupportedDiagRomCandidates()
+	{
+		yield return new DiagRomCandidate(
+			"diagrom-a500.rom",
+			ExpectedDiagRomA500ResetPc,
+			ExpectedDiagRomA500Sha256,
+			SupportsAudioSimpleWaveform: true,
+			IsProfileDefault: true);
+		yield return new DiagRomCandidate(
+			"diagrom.rom",
+			ExpectedDiagRomV20ResetPc,
+			ExpectedDiagRomV20Sha256,
+			SupportsAudioSimpleWaveform: false,
+			IsProfileDefault: false);
 	}
 
 	private static string? TryFindWorkspaceFile(params string[] parts)
@@ -378,6 +448,28 @@ public sealed class CopperScreenDiagRomTests
 			statusText.Contains("AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED", StringComparison.Ordinal) ||
 			statusText.Contains("AMIGA_BOOT_NULL_PC", StringComparison.Ordinal);
 
+	private static bool HasDiagRomCrashScreen(CopperScreenEmulator emulator)
+	{
+		return CountCrashScreenRedPixels(emulator) >= CrashScreenRedPixelThreshold;
+	}
+
+	private static int CountCrashScreenRedPixels(CopperScreenEmulator emulator)
+	{
+		var redPixels = 0;
+		foreach (var pixel in emulator.Framebuffer)
+		{
+			var red = (pixel >> 16) & 0xFF;
+			var green = (pixel >> 8) & 0xFF;
+			var blue = pixel & 0xFF;
+			if (red >= 160 && green <= 80 && blue <= 80)
+			{
+				redPixels++;
+			}
+		}
+
+		return redPixels;
+	}
+
 	private static string BuildFailure(string message, DiagRomHarness harness, int frame, IReadOnlyList<uint> recentHashes)
 	{
 		var machine = harness.Machine;
@@ -395,7 +487,7 @@ public sealed class CopperScreenDiagRomTests
 		var stats = SampleFrameStats(harness.Emulator);
 		return $"{message} frame={frame}, status={harness.Emulator.StatusText}, pc=0x{pc:X6}, opcode=0x{opcode:X4}, " +
 			$"sr=0x{machine.Cpu.State.StatusRegister:X4}, cycles={machine.Cpu.State.Cycles}, halted={machine.Cpu.State.Halted}, stopped={machine.Cpu.State.Stopped}, " +
-			$"frameStats={stats}, " +
+			$"frameStats={stats}, crashRedPixels={CountCrashScreenRedPixels(harness.Emulator)}, " +
 			$"vectors=[2:0x{vector2:X8},3:0x{vector3:X8},4:0x{vector4:X8}], stack=[{stack}], " +
 			$"dmacon=0x{machine.Bus.Paula.Dmacon:X4}, dmaconr=0x{dmaconr:X4}, intena=0x{intena:X4}, intreq=0x{intreq:X4}, " +
 			$"disk={disk.LastTransferDrive}:{disk.LastTransferCylinder}.{disk.LastTransferHead}@0x{disk.LastTransferAddress:X6}, transfers={disk.TransferCount}, " +
@@ -464,4 +556,13 @@ public sealed class CopperScreenDiagRomTests
 	private readonly record struct StableScreen(uint Hash, int Frame);
 
 	private readonly record struct FrameStats(int NonBlackSamples, int DifferentSamples, int TotalSamples);
+
+	private readonly record struct DiagRomCandidate(
+		string FileName,
+		uint ResetProgramCounter,
+		string Sha256,
+		bool SupportsAudioSimpleWaveform,
+		bool IsProfileDefault);
+
+	private sealed record DiagRomImage(string Path, bool SupportsAudioSimpleWaveform);
 }

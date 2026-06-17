@@ -12,6 +12,7 @@ public sealed class AmigaArchitectureTests
 		Assert.DoesNotContain("CopperMod", references);
 		Assert.DoesNotContain("CopperMod.Abstractions", references);
 		Assert.DoesNotContain("CopperMod.Cust", references);
+		Assert.DoesNotContain("CopperDisk", references);
 	}
 
 	[Fact]

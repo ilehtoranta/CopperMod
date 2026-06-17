@@ -317,7 +317,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private static string? FindDefaultRomImage(CopperScreenKickstartSource source, string baseDirectory)
 	{
 		return source == CopperScreenKickstartSource.DiagRom
-			? FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "DiagROM", "diagrom.rom"))
+			? FindDefaultRomImage(
+				baseDirectory,
+				Path.Combine("ROM", "DiagROM", "diagrom-a500.rom"),
+				Path.Combine("ROM", "DiagROM", "diagrom.rom"))
 			: FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "Kickstart_13.rom"));
 	}
 
@@ -325,23 +328,31 @@ internal sealed class CopperScreenEmulator : IDisposable
 		=> source == CopperScreenKickstartSource.DiagRom ? "DiagROM" : "Kickstart 1.3 ROM";
 
 	private static string GetDefaultRomHint(CopperScreenKickstartSource source)
-		=> source == CopperScreenKickstartSource.DiagRom ? "ROM\\DiagROM\\diagrom.rom" : "ROM\\Kickstart_13.rom";
+		=> source == CopperScreenKickstartSource.DiagRom
+			? "ROM\\DiagROM\\diagrom-a500.rom or ROM\\DiagROM\\diagrom.rom"
+			: "ROM\\Kickstart_13.rom";
 
 	private static string? FindDefaultRomImage(string baseDirectory, string relativePath)
+		=> FindDefaultRomImage(baseDirectory, [relativePath]);
+
+	private static string? FindDefaultRomImage(string baseDirectory, params string[] relativePaths)
 	{
 		var directory = new DirectoryInfo(baseDirectory);
 		while (directory != null)
 		{
-			var localRom = Path.Combine(directory.FullName, relativePath);
-			if (File.Exists(localRom))
+			foreach (var relativePath in relativePaths)
 			{
-				return localRom;
-			}
+				var localRom = Path.Combine(directory.FullName, relativePath);
+				if (File.Exists(localRom))
+				{
+					return localRom;
+				}
 
-			var projectRom = Path.Combine(directory.FullName, "CopperScreen", relativePath);
-			if (File.Exists(projectRom))
-			{
-				return projectRom;
+				var projectRom = Path.Combine(directory.FullName, "CopperScreen", relativePath);
+				if (File.Exists(projectRom))
+				{
+					return projectRom;
+				}
 			}
 
 			directory = directory.Parent;
@@ -1582,7 +1593,15 @@ internal sealed class CopperScreenEmulator : IDisposable
 			cpu.Halted,
 			cpu.Stopped,
 			dataRegisters,
-			addressRegisters);
+			addressRegisters,
+			cpu.M68020StackModeEnabled,
+			cpu.NativeCycles,
+			cpu.VectorBaseRegister,
+			cpu.SourceFunctionCode,
+			cpu.DestinationFunctionCode,
+			cpu.CacheControlRegister,
+			cpu.CacheAddressRegister,
+			cpu.MasterStackPointer);
 		return new CopperScreenDebugSnapshot(
 			DateTimeOffset.Now,
 			reasonCode,

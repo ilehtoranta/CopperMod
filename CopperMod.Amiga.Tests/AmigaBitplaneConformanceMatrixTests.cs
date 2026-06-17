@@ -8,6 +8,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
     private const uint SpriteListBase = 0x3000;
     private const uint CopperListBase = 0x4000;
+    private static readonly int[] HrmLowResFetchSlotByPlane = [7, 3, 5, 1, 6, 2];
+    private static readonly int[] HrmHighResFetchSlotByPlane = [3, 1, 2, 0];
 
     public static IEnumerable<object[]> MatrixRows => Rows.Select(row => new object[] { row });
 
@@ -110,6 +112,12 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "cycle-exact fetch slot contention at DDF edges":
                 BitplaneFetchesUseDisplayDmaSlots();
                 break;
+            case "HRM lowres bitplane slot order":
+                BitplaneFetchesUseHrmLowResSlotOrder();
+                break;
+            case "HRM hires bitplane slot order":
+                BitplaneFetchesUseHrmHighResSlotOrder();
+                break;
             case "bitplane DMA starvation of late sprite slots":
                 BitplaneDmaStarvesLateSpriteSlots();
                 break;
@@ -171,6 +179,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("palette", "live DMA capture preserves same-line Copper palette spans"),
         Executable("dma-control", "DMAEN and BPLEN gate timed bitplane fetches"),
         Executable("fetch-window", "cycle-exact fetch slot contention at DDF edges"),
+        Executable("fetch-window", "HRM lowres bitplane slot order"),
+        Executable("fetch-window", "HRM hires bitplane slot order"),
         Executable("dma-control", "bitplane DMA starvation of late sprite slots"),
         Executable("custom-registers", "CLXDAT bit 15 is always set"),
         Executable("undocumented-ocs", "undocumented BPLCON2 values affect normal playfield"),
@@ -1019,7 +1029,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF096, 0x8300);
         bus.WriteWord(0x00DFF100, 0x1000);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var expectedFetchCycle = OutputRowStartCycle(StandardY) + (0x38 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+        var expectedFetchCycle = OutputRowStartCycle(StandardY) +
+            ((0x38 + HrmLowResFetchSlotByPlane[0]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
 
         bus.Display.RenderFrame(frame, 0, FrameCycles());
 
@@ -1033,6 +1044,75 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.True(snapshot.LastBitplaneDmaFetches > 0);
         Assert.Equal(expectedFetchCycle, snapshot.LastFirstDisplayDmaCycle);
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+    }
+
+    private static void BitplaneFetchesUseHrmLowResSlotOrder()
+    {
+        foreach (var planeCount in new[] { 1, 3, 6 })
+        {
+            var bus = CreateDisplayBus();
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                var address = (uint)(0x1000 + (plane * 0x100));
+                SetBitplanePointer(bus, plane, address);
+                BigEndian.WriteUInt16(bus.ChipRam, (int)address, (ushort)(0x8000 >> plane));
+            }
+
+            bus.WriteWord(0x00DFF092, 0x0038);
+            bus.WriteWord(0x00DFF094, 0x0038);
+            bus.WriteWord(0x00DFF096, 0x8300);
+            bus.WriteWord(0x00DFF100, (ushort)(planeCount << 12));
+            var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+            bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+            var rowStart = OutputRowStartCycle(StandardY);
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                var address = (uint)(0x1000 + (plane * 0x100));
+                var expected = rowStart +
+                    ((0x38 + HrmLowResFetchSlotByPlane[plane]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+                Assert.Contains(
+                    bus.BusAccesses,
+                    access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+                        access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+                        access.Request.Address == address &&
+                        access.GrantedCycle == expected);
+            }
+        }
+    }
+
+    private static void BitplaneFetchesUseHrmHighResSlotOrder()
+    {
+        var bus = CreateDisplayBus();
+        for (var plane = 0; plane < HrmHighResFetchSlotByPlane.Length; plane++)
+        {
+            var address = (uint)(0x1800 + (plane * 0x100));
+            SetBitplanePointer(bus, plane, address);
+            BigEndian.WriteUInt16(bus.ChipRam, (int)address, (ushort)(0x8000 >> plane));
+        }
+
+        bus.WriteWord(0x00DFF092, 0x003C);
+        bus.WriteWord(0x00DFF094, 0x003C);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.WriteWord(0x00DFF100, 0xC000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        var rowStart = OutputRowStartCycle(StandardY);
+        for (var plane = 0; plane < HrmHighResFetchSlotByPlane.Length; plane++)
+        {
+            var address = (uint)(0x1800 + (plane * 0x100));
+            var expected = rowStart +
+                ((0x3C + HrmHighResFetchSlotByPlane[plane]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+            Assert.Contains(
+                bus.BusAccesses,
+                access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+                    access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+                    access.Request.Address == address &&
+                    access.GrantedCycle == expected);
+        }
     }
 
     private static void BitplaneDmaStarvesLateSpriteSlots()

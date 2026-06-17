@@ -417,7 +417,8 @@ public sealed class AmigaDiskDisplayTests
     public void TimedDisplayReadsBitplaneMemoryAtDataFetchSlotWithinRow()
     {
         var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-        var fetchCycle = CycleForOutputRowHorizontal(StandardY, 0x38, lineCycles);
+        const int hrmLowResPlane1FetchSlot = 7;
+        var fetchCycle = CycleForOutputRowHorizontal(StandardY, 0x38 + hrmLowResPlane1FetchSlot, lineCycles);
         var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 
         var beforeFetchBus = CreateOneBitplaneFetchRaceBus();

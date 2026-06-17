@@ -1121,7 +1121,7 @@ namespace CopperMod.Amiga
             var nextCycle = stepEnd;
             if (_useC && (!_lineSingleDot || _lineY != _lineLastDrawnY))
             {
-                var nextReadCycle = stepStart;
+                var nextReadCycle = _useB ? stepStart : stepStart + ChipSlotCycles;
                 if (_useB)
                 {
                     var firstB = ReadLineBPattern(nextReadCycle);

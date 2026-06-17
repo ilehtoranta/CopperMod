@@ -141,7 +141,15 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 	bool Halted,
 	bool Stopped,
 	uint[] DataRegisters,
-	uint[] AddressRegisters)
+	uint[] AddressRegisters,
+	bool M68020StateEnabled = false,
+	long NativeCycles = 0,
+	uint VectorBaseRegister = 0,
+	uint SourceFunctionCode = 0,
+	uint DestinationFunctionCode = 0,
+	uint CacheControlRegister = 0,
+	uint CacheAddressRegister = 0,
+	uint MasterStackPointer = 0)
 {
 	public string Flags
 	{
@@ -163,6 +171,11 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 		builder.AppendLine($"PC={FormatAddress(ProgramCounter)}  LastPC={FormatAddress(LastInstructionProgramCounter)}  Opcode=${LastOpcode:X4}");
 		builder.AppendLine($"SR=${StatusRegister:X4} {Flags}  USP={FormatAddress(UserStackPointer)}  SSP={FormatAddress(SupervisorStackPointer)}");
 		builder.AppendLine($"Cycles={Cycles}  Halted={Halted}  Stopped={Stopped}");
+		if (M68020StateEnabled)
+		{
+			builder.AppendLine($"68020 NativeCycles={NativeCycles}  VBR={FormatAddress(VectorBaseRegister)}  SFC={SourceFunctionCode}  DFC={DestinationFunctionCode}  CACR=${CacheControlRegister:X8}  CAAR=${CacheAddressRegister:X8}  MSP={FormatAddress(MasterStackPointer)}");
+		}
+
 		for (var i = 0; i < 8; i += 4)
 		{
 			builder.Append("D");
