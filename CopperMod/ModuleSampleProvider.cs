@@ -24,6 +24,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private readonly IModuleChannelWaveformProvider? _channelWaveformProvider;
 	private readonly IC64VideoFrameProvider? _c64VideoFrameProvider;
 	private readonly IC64KeyboardController? _c64KeyboardController;
+	private readonly ISidEmulationProfileController? _sidEmulationProfileController;
 	private readonly Thread _renderThread;
 	private readonly int _renderAheadTargetSamples;
 	private readonly int _renderAheadCapacitySamples;
@@ -64,12 +65,19 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		int channelCount,
 		AmigaOutputProfile outputProfile,
 		TimeSpan initialLeadIn = default,
-		C64OutputProfile c64OutputProfile = C64OutputProfile.C64)
+		C64OutputProfile c64OutputProfile = C64OutputProfile.C64,
+		SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
 	{
 		_song = song ?? throw new ArgumentNullException(nameof(song));
+		_sidEmulationProfileController = _song as ISidEmulationProfileController;
 		_renderOptions = new AudioRenderOptions(sampleRate, channelCount);
 		_outputStage = new AmigaOutputStage(outputProfile);
 		_c64OutputStage = new C64OutputStage(c64OutputProfile);
+		if (_sidEmulationProfileController != null)
+		{
+			_sidEmulationProfileController.SidEmulationProfile = sidEmulationProfile;
+		}
+
 		_amigaHardwareStateProvider = song as IAmigaHardwareStateProvider;
 		_outputFamilyProvider = song as IModuleOutputFamilyProvider;
 		_channelWaveformProvider = song as IModuleChannelWaveformProvider;
@@ -193,6 +201,45 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			{
 				_c64OutputStage.Profile = value;
 				_c64OutputStage.Reset();
+			}
+		}
+	}
+
+	public SidEmulationProfile SidEmulationProfile
+	{
+		get
+		{
+			lock (_renderSync)
+			{
+				return _sidEmulationProfileController?.SidEmulationProfile ?? SidEmulationProfile.Balanced;
+			}
+		}
+
+		set
+		{
+			var changed = false;
+			lock (_renderSync)
+			{
+				if (_sidEmulationProfileController == null)
+				{
+					return;
+				}
+
+				if (_sidEmulationProfileController.SidEmulationProfile == value)
+				{
+					return;
+				}
+
+				_sidEmulationProfileController.SidEmulationProfile = value;
+				_c64OutputStage.Reset();
+				changed = true;
+			}
+
+			if (changed)
+			{
+				ResetBufferedState(TimeSpan.Zero, leadInSamples: 0);
+				ClearLatestWaveform();
+				ClearLatestVideoFrame();
 			}
 		}
 	}

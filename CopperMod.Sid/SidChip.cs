@@ -55,13 +55,15 @@ namespace CopperMod.Sid
             SidChipModel model,
             ushort baseAddress,
             int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
-            SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
+            SidFilterProfileId filterProfile = SidFilterProfileId.Auto,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             Model = model == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
             BaseAddress = baseAddress;
+            SidEmulationProfile = sidEmulationProfile;
             _cpuCyclesPerSecond = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
-            _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile);
-            _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model) / _cpuCyclesPerSecond);
+            _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile, SidEmulationProfile);
+            _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model, SidEmulationProfile) / _cpuCyclesPerSecond);
             _filterInputGain = _filterProfile.FilterInputGain;
             _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
             _voiceMixGain = SidAnalog.VoiceMixGain(Model);
@@ -69,12 +71,12 @@ namespace CopperMod.Sid
             _filterBandPassGain = _filterProfile.BandPassGain;
             _filterHighPassGain = _filterProfile.HighPassGain;
             _filterOutputGain = _filterProfile.MapFilterOutputGain(0, 0);
-            _volumeRegisterTransientGain = SidAnalog.VolumeRegisterTransientGain(Model);
-            _volumeRegisterTransientLimit = SidAnalog.VolumeRegisterTransientLimit(Model);
-            _volumeRegisterTransientSlew = SidAnalog.VolumeRegisterTransientSlew(Model, _cpuCyclesPerSecond);
-            _volumeRegisterTransientDecay = SidAnalog.VolumeRegisterTransientDecay(Model, _cpuCyclesPerSecond);
-            _masterVolume = SidAnalog.ConvertVolume(0, Model);
-            _volumeOffset = SidAnalog.VolumeOffset(0, Model);
+            _volumeRegisterTransientGain = SidAnalog.VolumeRegisterTransientGain(Model, SidEmulationProfile);
+            _volumeRegisterTransientLimit = SidAnalog.VolumeRegisterTransientLimit(Model, SidEmulationProfile);
+            _volumeRegisterTransientSlew = SidAnalog.VolumeRegisterTransientSlew(Model, _cpuCyclesPerSecond, SidEmulationProfile);
+            _volumeRegisterTransientDecay = SidAnalog.VolumeRegisterTransientDecay(Model, _cpuCyclesPerSecond, SidEmulationProfile);
+            _masterVolume = SidAnalog.ConvertVolume(0, Model, SidEmulationProfile);
+            _volumeOffset = SidAnalog.VolumeOffset(0, Model, SidEmulationProfile);
             _analog6581Filter = _filterProfile.UsesAnalog6581Filter
                 ? new SidMos6581AnalogFilter(_filterProfile, _cpuCyclesPerSecond)
                 : null;
@@ -87,6 +89,8 @@ namespace CopperMod.Sid
         public SidChipModel Model { get; }
 
         public ushort BaseAddress { get; }
+
+        public SidEmulationProfile SidEmulationProfile { get; }
 
         public byte[] Registers => _registers;
 
@@ -127,8 +131,8 @@ namespace CopperMod.Sid
             _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
             _filterCoefficientsDirty = true;
             _voice3Muted = false;
-            _masterVolume = SidAnalog.ConvertVolume(0, Model);
-            _volumeOffset = SidAnalog.VolumeOffset(0, Model);
+            _masterVolume = SidAnalog.ConvertVolume(0, Model, SidEmulationProfile);
+            _volumeOffset = SidAnalog.VolumeOffset(0, Model, SidEmulationProfile);
             _volumeRegisterTransient = 0;
             _volumeRegisterTransientTarget = 0;
             _outputLowPassState = 0;
@@ -495,6 +499,7 @@ namespace CopperMod.Sid
                 var register = BitOperations.TrailingZeroCount(pending);
                 pending &= ~(1u << register);
                 var value = _pendingRegisters[register];
+                var previousValue = _forwardedRegisters[register];
                 _forwardedRegisters[register] = value;
                 if (register < 21)
                 {
@@ -510,19 +515,32 @@ namespace CopperMod.Sid
                     }
                     else if (register == 0x17)
                     {
+                        var previousRouting = _filterRouting;
                         _filterRouting = value & 0x07;
+                        AddRegisterTransient(SidAnalog.FilterRoutingTransient(
+                            previousRouting,
+                            _filterRouting,
+                            _filterMode,
+                            Model,
+                            SidEmulationProfile));
                         filterCoefficientsDirty = true;
                     }
                     else
                     {
                         var volume = value & 0x0F;
-                        var nextVolumeOffset = SidAnalog.VolumeOffset(value, Model);
-                        _volumeRegisterTransientTarget += (nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain;
-                        _volumeRegisterTransientTarget = Math.Clamp(
-                            _volumeRegisterTransientTarget,
-                            -_volumeRegisterTransientLimit,
-                            _volumeRegisterTransientLimit);
-                        _masterVolume = SidAnalog.ConvertVolume(volume, Model);
+                        var nextVolumeOffset = SidAnalog.VolumeOffset(value, Model, SidEmulationProfile);
+                        AddRegisterTransient((nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain);
+                        AddRegisterTransient(SidAnalog.D418TransitionTransient(
+                            previousValue,
+                            value,
+                            Model,
+                            SidEmulationProfile));
+                        AddRegisterTransient(SidAnalog.FilterModeTransient(
+                            previousValue,
+                            value,
+                            Model,
+                            SidEmulationProfile));
+                        _masterVolume = SidAnalog.ConvertVolume(volume, Model, SidEmulationProfile);
                         _volumeOffset = nextVolumeOffset;
                         _voice3Muted = (value & 0x80) != 0;
                         filterCoefficientsDirty |= _filterMode != (value & 0x70);
@@ -534,6 +552,20 @@ namespace CopperMod.Sid
             {
                 UpdateFilterCoefficients();
             }
+        }
+
+        [HotPath]
+        private void AddRegisterTransient(double impulse)
+        {
+            if (impulse == 0.0 || _volumeRegisterTransientLimit <= 0.0)
+            {
+                return;
+            }
+
+            _volumeRegisterTransientTarget = Math.Clamp(
+                _volumeRegisterTransientTarget + impulse,
+                -_volumeRegisterTransientLimit,
+                _volumeRegisterTransientLimit);
         }
 
         [HotPath]

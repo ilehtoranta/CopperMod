@@ -7,6 +7,32 @@ namespace CopperMod.Tests;
 public sealed class ModuleSampleProviderTests
 {
 	[Fact]
+	public void ModulePcmRendererAppliesSidEmulationProfileFromSettings()
+	{
+		using var song = new SidProfileSong();
+		var settings = new ModuleRenderSettings(sidEmulationProfile: SidEmulationProfile.ReferenceMeasured);
+
+		using var renderer = new ModulePcmRenderer(song, settings);
+
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, song.SidEmulationProfile);
+	}
+
+	[Fact]
+	public void ModuleSampleProviderAppliesSidEmulationProfile()
+	{
+		using var song = new SidProfileSong();
+		using var provider = new ModuleSampleProvider(
+			song,
+			sampleRate: 44100,
+			channelCount: 1,
+			AmigaOutputProfile.None,
+			sidEmulationProfile: SidEmulationProfile.ReferenceMeasured);
+
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, provider.SidEmulationProfile);
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, song.SidEmulationProfile);
+	}
+
+	[Fact]
 	public void ReadStopsAtEndOfSongInsteadOfPaddingSilenceForever()
 	{
 		var song = new FiniteSong(ticksBeforeEnd: 2, framesPerTick: 2);
@@ -383,6 +409,59 @@ public sealed class ModuleSampleProviderTests
 			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
 			_ended = !LoopingEnabled && _ticksRendered >= _ticksBeforeEnd;
 			return new RenderResult(_framesPerTick, samples, Position, _ended);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class SidProfileSong : IModuleSong, ISidEmulationProfileController
+	{
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(TimeSpan.Zero);
+
+		public bool LoopingEnabled { get; set; }
+
+		public SidEmulationProfile SidEmulationProfile { get; set; }
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return 1;
+		}
+
+		public void Reset()
+		{
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_ = position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(1);
+			destination.Slice(0, samples).Clear();
+			return new RenderResult(1, samples, Position, endOfSong: true);
 		}
 
 		public void Dispose()

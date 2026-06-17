@@ -190,6 +190,59 @@ public sealed class RenderCommandOptionsTests
 	}
 
 	[Fact]
+	public void ParsesSidEmulationProfile()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.sid",
+			"--out",
+			"output.wav",
+			"--sid-profile",
+			"reference"
+		});
+
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, options.SidProfile);
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, options.ToRenderSettings().SidEmulationProfile);
+	}
+
+	[Fact]
+	public void ConfiguresSidEmulationProfile()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.sid",
+			"--out",
+			"output.wav",
+			"--sid-profile",
+			"reference"
+		});
+		using var song = new FakeSidProfileSong();
+
+		CopperModTools.ConfigureSong(song, options);
+
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, song.SidEmulationProfile);
+	}
+
+	[Fact]
+	public void SidEmulationProfileRequiresSidInput()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.mod",
+			"--out",
+			"output.wav",
+			"--sid-profile",
+			"reference"
+		});
+		using var song = new FakeSong(SongDuration.Unknown);
+
+		Assert.Throws<CommandLineException>(() => CopperModTools.ConfigureSong(song, options));
+	}
+
+	[Fact]
 	public void ParsesAndConfiguresC64AutostartKey()
 	{
 		var options = RenderCommandOptions.Parse(new[]
@@ -349,6 +402,16 @@ public sealed class RenderCommandOptionsTests
 		{
 			Keys.Add(new ScheduledAutostartKey(key, delay, hold));
 		}
+	}
+
+	private sealed class FakeSidProfileSong : FakeSong, ISidEmulationProfileController
+	{
+		public FakeSidProfileSong()
+			: base(SongDuration.Unknown)
+		{
+		}
+
+		public SidEmulationProfile SidEmulationProfile { get; set; }
 	}
 
 	private readonly record struct ScheduledAutostartKey(string Key, TimeSpan Delay, TimeSpan Hold);

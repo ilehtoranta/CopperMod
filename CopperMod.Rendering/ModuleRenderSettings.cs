@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.Sid;
 
 namespace CopperMod.Rendering;
 
@@ -10,6 +11,7 @@ public sealed class ModuleRenderSettings
 		ModuleRenderOutputMode outputMode = ModuleRenderOutputMode.Raw,
 		AmigaOutputProfile amigaOutputProfile = AmigaOutputProfile.A500,
 		C64OutputProfile c64OutputProfile = C64OutputProfile.C64,
+		SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced,
 		bool interpolationEnabled = false)
 	{
 		if (sampleRate <= 0)
@@ -27,6 +29,7 @@ public sealed class ModuleRenderSettings
 		OutputMode = outputMode;
 		AmigaOutputProfile = amigaOutputProfile;
 		C64OutputProfile = c64OutputProfile;
+		SidEmulationProfile = sidEmulationProfile;
 		InterpolationEnabled = interpolationEnabled;
 	}
 
@@ -39,6 +42,8 @@ public sealed class ModuleRenderSettings
 	public AmigaOutputProfile AmigaOutputProfile { get; }
 
 	public C64OutputProfile C64OutputProfile { get; }
+
+	public SidEmulationProfile SidEmulationProfile { get; }
 
 	public bool InterpolationEnabled { get; }
 

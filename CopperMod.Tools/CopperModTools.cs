@@ -86,6 +86,16 @@ internal static class CopperModTools
 			selector.SelectSubSong(index);
 		}
 
+		if (options.SidProfile != SidEmulationProfile.Balanced)
+		{
+			if (song is not ISidEmulationProfileController sidEmulationProfileController)
+			{
+				throw new CommandLineException("--sid-profile requires a SID input file.");
+			}
+
+			sidEmulationProfileController.SidEmulationProfile = options.SidProfile;
+		}
+
 		if (options.SidSoloVoice.HasValue)
 		{
 			if (song is not ISidVoiceMuteController sidVoiceMuteController)

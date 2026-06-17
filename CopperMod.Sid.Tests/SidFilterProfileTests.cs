@@ -12,6 +12,23 @@ public sealed class SidFilterProfileTests
 	}
 
 	[Fact]
+	public void AutoProfileSelectsReferenceMeasured6581WhenRequested()
+	{
+		var chip = new SidChip(
+			SidChipModel.Mos6581,
+			SidConstants.DefaultSidBaseAddress,
+			filterProfile: SidFilterProfileId.Auto,
+			sidEmulationProfile: SidEmulationProfile.ReferenceMeasured);
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, 0x80);
+		chip.Write(0x17, 0x01);
+		chip.Write(0x18, 0x1F);
+		chip.Render(1);
+
+		Assert.Equal(SidFilterProfileId.Mos6581ReferenceMeasured, chip.DebugState.FilterProfile);
+	}
+
+	[Fact]
 	public void AutoProfileSelectsLinear8580For8580Model()
 	{
 		var chip = CreateFilteredPulse(SidChipModel.Mos8580, SidFilterProfileId.Auto);
@@ -88,6 +105,7 @@ public sealed class SidFilterProfileTests
 	[Theory]
 	[InlineData((int)SidFilterProfileId.Mos6581DataSheet)]
 	[InlineData((int)SidFilterProfileId.Mos6581Balanced)]
+	[InlineData((int)SidFilterProfileId.Mos6581ReferenceMeasured)]
 	[InlineData((int)SidFilterProfileId.Mos6581DarkR3)]
 	public void Mos6581ProfilesUseFullCutoffAndResonanceTables(int profileValue)
 	{

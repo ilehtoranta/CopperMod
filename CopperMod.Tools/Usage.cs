@@ -13,6 +13,7 @@ internal static class Usage
 		  --sample-rate <hz>         Default: 44100.
 		  --channels <count>         Default: 2.
 		  --sid-solo <1|2|3>         Render only one SID voice.
+		  --sid-profile balanced|reference Default: balanced.
 		  --sid-detect-loop          Use SID write-loop detection as render duration.
 		  --sid-detect-duration      Detect SID duration from loop or sustained silence.
 		  --sid-detect-max-seconds <n> Default: 600. Requires SID detection.

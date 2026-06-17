@@ -93,6 +93,7 @@ The output format is inferred from the output extension when it is `.wav`,
 | `--sample-rate` | positive integer | `44100` | Sets the output sample rate in Hz. |
 | `--channels` | positive integer | `2` | Sets the interleaved output channel count. |
 | `--sid-solo` | `1`, `2`, `3` | none | Renders only one SID voice. This option is SID-specific. |
+| `--sid-profile` | `balanced`, `reference` | `balanced` | Selects the core SID emulation profile. `reference` enables opt-in measured analog behavior. |
 | `--sid-detect-loop` | flag | off | Uses exact SID write-loop detection as the render duration. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-duration`. |
 | `--sid-detect-duration` | flag | off | Detects SID duration from either an exact write-loop restart or sustained silence. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-loop`. |
 | `--sid-detect-max-seconds` | positive number | `600` | Maximum emulated SID playback time to scan for SID loop or duration detection. |
@@ -141,7 +142,9 @@ the CopperMod player:
 - Amiga-family formats use `--amiga-profile`.
 - SID / C64 output uses `--c64-profile`.
 
-Profile options are rejected unless `--output player` is selected.
+Output-stage profile options (`--amiga-profile` and `--c64-profile`) are
+rejected unless `--output player` is selected. `--sid-profile` is independent:
+it changes core SID emulation before raw or player output shaping.
 
 ## Duration Handling
 

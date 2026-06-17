@@ -14,6 +14,30 @@ public sealed class SidRenderTests
 	};
 
 	[Fact]
+	public void SidSongExposesEmulationProfileController()
+	{
+		using var song = new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram()));
+		var controller = Assert.IsAssignableFrom<ISidEmulationProfileController>(song);
+
+		controller.SidEmulationProfile = SidEmulationProfile.ReferenceMeasured;
+
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, controller.SidEmulationProfile);
+	}
+
+	[Fact]
+	public void SidEmulationProfileChangePreservesMutedVoices()
+	{
+		using var song = new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram()));
+		var controller = Assert.IsAssignableFrom<ISidEmulationProfileController>(song);
+		var muteController = Assert.IsAssignableFrom<ISidVoiceMuteController>(song);
+		muteController.MutedVoicesMask = 0x06;
+
+		controller.SidEmulationProfile = SidEmulationProfile.ReferenceMeasured;
+
+		Assert.Equal(0x06, muteController.MutedVoicesMask);
+	}
+
+	[Fact]
 	public void RenderProducesFiniteNonZeroPcmAndAdvancesPosition()
 	{
 		var song = new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram()));

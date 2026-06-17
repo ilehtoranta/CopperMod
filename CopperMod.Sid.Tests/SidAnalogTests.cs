@@ -47,6 +47,31 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void ReferenceMeasuredD418TransitionsAreProfileGated()
+	{
+		var balanced6581 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference6581 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var reference8580 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
+
+		Assert.Equal(0.0, balanced6581, precision: 12);
+		Assert.True(Math.Abs(reference6581) > 0.05, $"Expected measured 6581 transition impulse, got {reference6581:0.000000}.");
+		Assert.InRange(Math.Abs(reference8580), 0.001, Math.Abs(reference6581) * 0.25);
+	}
+
+	[Fact]
+	public void ReferenceMeasuredFilterRegisterTransientsAreProfileGated()
+	{
+		Assert.Equal(0.0, SidAnalog.FilterRoutingTransient(0x00, 0x03, 0x10, SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(0.0, SidAnalog.FilterModeTransient(0x0F, 0x1F, SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+
+		var routingImpulse = SidAnalog.FilterRoutingTransient(0x00, 0x03, 0x10, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var modeImpulse = SidAnalog.FilterModeTransient(0x0F, 0x1F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+
+		Assert.True(Math.Abs(routingImpulse) > 0.010, $"Expected measured filter routing impulse, got {routingImpulse:0.000000}.");
+		Assert.True(Math.Abs(modeImpulse) > 0.010, $"Expected measured filter mode impulse, got {modeImpulse:0.000000}.");
+	}
+
+	[Fact]
 	public void Mos6581WaveformDacIsMeasurablyNonLinear()
 	{
 		var lowerHalf = SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos6581) -

@@ -6,8 +6,10 @@ namespace CopperMod.Sid
     {
         private static readonly double[] Mos6581D418Amplitude = BuildMos6581D418AmplitudeTable();
         private static readonly double[] Mos8580D418Amplitude = BuildMos8580D418AmplitudeTable();
-        private static readonly SidAnalogProfile Mos6581Profile = BuildProfile(SidChipModel.Mos6581);
-        private static readonly SidAnalogProfile Mos8580Profile = BuildProfile(SidChipModel.Mos8580);
+        private static readonly SidAnalogProfile Mos6581BalancedProfile = BuildProfile(SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+        private static readonly SidAnalogProfile Mos8580BalancedProfile = BuildProfile(SidChipModel.Mos8580, SidEmulationProfile.Balanced);
+        private static readonly SidAnalogProfile Mos6581ReferenceProfile = BuildProfile(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+        private static readonly SidAnalogProfile Mos8580ReferenceProfile = BuildProfile(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
         private static readonly double[] Mos6581WaveformDac = BuildWaveformDac(SidChipModel.Mos6581);
         private static readonly double[] Mos8580WaveformDac = BuildWaveformDac(SidChipModel.Mos8580);
         private static readonly double[] Mos6581Envelope = BuildEnvelope(SidChipModel.Mos6581);
@@ -26,14 +28,14 @@ namespace CopperMod.Sid
             return GetEnvelope(model)[Math.Clamp(envelope, 0, 255)];
         }
 
-        public static double ConvertVolume(int volume, SidChipModel model)
+        public static double ConvertVolume(int volume, SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model).VolumeGain[Math.Clamp(volume, 0, 15)];
+            return GetProfile(model, sidEmulationProfile).VolumeGain[Math.Clamp(volume, 0, 15)];
         }
 
-        public static double VolumeOffset(int volume, SidChipModel model)
+        public static double VolumeOffset(int volume, SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            var profile = GetProfile(model);
+            var profile = GetProfile(model, sidEmulationProfile);
             return profile.VolumeDc[Math.Clamp(volume, 0, profile.VolumeDc.Length - 1)];
         }
 
@@ -105,24 +107,24 @@ namespace CopperMod.Sid
             return Math.Clamp(shaped, -0.999, 0.999);
         }
 
-        public static double OutputLowPassCutoffHz(SidChipModel model)
+        public static double OutputLowPassCutoffHz(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model).ChipOutputLowPassCutoffHz;
+            return GetProfile(model, sidEmulationProfile).ChipOutputLowPassCutoffHz;
         }
 
-        public static double VolumeRegisterTransientGain(SidChipModel model)
+        public static double VolumeRegisterTransientGain(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model).VolumeStepTransientGain;
+            return GetProfile(model, sidEmulationProfile).VolumeStepTransientGain;
         }
 
-        public static double VolumeRegisterTransientLimit(SidChipModel model)
+        public static double VolumeRegisterTransientLimit(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model).VolumeStepTransientLimit;
+            return GetProfile(model, sidEmulationProfile).VolumeStepTransientLimit;
         }
 
-        public static double VolumeRegisterTransientSlew(SidChipModel model, int cpuCyclesPerSecond)
+        public static double VolumeRegisterTransientSlew(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            var attackSeconds = GetProfile(model).VolumeStepAttackSeconds;
+            var attackSeconds = GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
             if (attackSeconds <= 0.0)
             {
                 return 1.0;
@@ -132,9 +134,9 @@ namespace CopperMod.Sid
             return 1.0 - Math.Exp(-1.0 / (clock * attackSeconds));
         }
 
-        public static double VolumeRegisterTransientDecay(SidChipModel model, int cpuCyclesPerSecond)
+        public static double VolumeRegisterTransientDecay(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            var decaySeconds = GetProfile(model).VolumeStepDecaySeconds;
+            var decaySeconds = GetProfile(model, sidEmulationProfile).VolumeStepDecaySeconds;
             if (decaySeconds <= 0.0)
             {
                 return 0.0;
@@ -142,6 +144,94 @@ namespace CopperMod.Sid
 
             var clock = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
             return Math.Exp(-1.0 / (clock * decaySeconds));
+        }
+
+        public static double D418TransitionTransient(
+            int previousRegisterValue,
+            int nextRegisterValue,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile)
+        {
+            if (sidEmulationProfile != SidEmulationProfile.ReferenceMeasured ||
+                (previousRegisterValue & 0xFF) == (nextRegisterValue & 0xFF))
+            {
+                return 0.0;
+            }
+
+            var profile = GetProfile(model, sidEmulationProfile);
+            var previousAmplitude = D418MeasuredAmplitude(previousRegisterValue, model);
+            var nextAmplitude = D418MeasuredAmplitude(nextRegisterValue, model);
+            var amplitudeDelta = nextAmplitude - previousAmplitude;
+            var offsetDelta =
+                VolumeOffset(nextRegisterValue, model, sidEmulationProfile) -
+                VolumeOffset(previousRegisterValue, model, sidEmulationProfile);
+            var highNibbleChange = ((previousRegisterValue ^ nextRegisterValue) & 0xF0) != 0 ? 1.0 : 0.0;
+            var lowNibbleChange = Math.Abs((nextRegisterValue & 0x0F) - (previousRegisterValue & 0x0F)) / 15.0;
+            var contextWeight = 0.70 + (0.22 * Math.Min(1.0, Math.Abs(amplitudeDelta))) + (0.08 * lowNibbleChange);
+            var impulse =
+                (offsetDelta * profile.D418TransitionOffsetGain * contextWeight) +
+                (amplitudeDelta * profile.D418TransitionAmplitudeGain) +
+                (Math.Sign(amplitudeDelta) * highNibbleChange * profile.D418HighNibbleTransitionGain);
+            return Math.Clamp(impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
+        }
+
+        public static double FilterRoutingTransient(
+            int previousRouting,
+            int nextRouting,
+            int currentMode,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile)
+        {
+            if (sidEmulationProfile != SidEmulationProfile.ReferenceMeasured)
+            {
+                return 0.0;
+            }
+
+            previousRouting &= 0x07;
+            nextRouting &= 0x07;
+            var changed = previousRouting ^ nextRouting;
+            if (changed == 0)
+            {
+                return 0.0;
+            }
+
+            var profile = GetProfile(model, sidEmulationProfile);
+            var routedIn = CountBits(nextRouting & changed);
+            var routedOut = CountBits(previousRouting & changed);
+            var polarity = routedIn == routedOut ? 1.0 : Math.Sign(routedIn - routedOut);
+            var modeWeight = (currentMode & 0x70) == 0 ? 0.62 : 1.0;
+            var impulse = polarity * CountBits(changed) * profile.FilterRoutingTransientGain * modeWeight;
+            return Math.Clamp(impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
+        }
+
+        public static double FilterModeTransient(
+            int previousD418,
+            int nextD418,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile)
+        {
+            if (sidEmulationProfile != SidEmulationProfile.ReferenceMeasured)
+            {
+                return 0.0;
+            }
+
+            var previousMode = previousD418 & 0x70;
+            var nextMode = nextD418 & 0x70;
+            var modeChanged = previousMode != nextMode;
+            var voice3MuteChanged = ((previousD418 ^ nextD418) & 0x80) != 0;
+            if (!modeChanged && !voice3MuteChanged)
+            {
+                return 0.0;
+            }
+
+            var profile = GetProfile(model, sidEmulationProfile);
+            var selectedDelta = CountBits(nextMode) - CountBits(previousMode);
+            var modePolarity = selectedDelta == 0 ? Math.Sign(nextMode - previousMode) : Math.Sign(selectedDelta);
+            var modeImpulse = modeChanged ? modePolarity * profile.FilterModeTransientGain : 0.0;
+            var voice3Impulse = voice3MuteChanged
+                ? (((nextD418 & 0x80) != 0 ? -1.0 : 1.0) * profile.Voice3MuteTransientGain)
+                : 0.0;
+            return Math.Clamp(modeImpulse + voice3Impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
         }
 
         private static double[] GetWaveformDac(SidChipModel model)
@@ -154,9 +244,21 @@ namespace CopperMod.Sid
             return model == SidChipModel.Mos8580 ? Mos8580Envelope : Mos6581Envelope;
         }
 
-        private static SidAnalogProfile GetProfile(SidChipModel model)
+        private static SidAnalogProfile GetProfile(SidChipModel model, SidEmulationProfile sidEmulationProfile)
         {
-            return model == SidChipModel.Mos8580 ? Mos8580Profile : Mos6581Profile;
+            if (sidEmulationProfile == SidEmulationProfile.ReferenceMeasured)
+            {
+                return model == SidChipModel.Mos8580 ? Mos8580ReferenceProfile : Mos6581ReferenceProfile;
+            }
+
+            return model == SidChipModel.Mos8580 ? Mos8580BalancedProfile : Mos6581BalancedProfile;
+        }
+
+        private static double D418MeasuredAmplitude(int registerValue, SidChipModel model)
+        {
+            return model == SidChipModel.Mos8580
+                ? Mos8580D418MeasuredAmplitude(registerValue)
+                : Mos6581D418MeasuredAmplitude(registerValue);
         }
 
         private static double[] BuildWaveformDac(SidChipModel model)
@@ -328,9 +430,23 @@ namespace CopperMod.Sid
             return count;
         }
 
-        private static SidAnalogProfile BuildProfile(SidChipModel model)
+        private static int CountBits(int value)
+        {
+            value &= 0xFF;
+            var count = 0;
+            while (value != 0)
+            {
+                count += value & 1;
+                value >>= 1;
+            }
+
+            return count;
+        }
+
+        private static SidAnalogProfile BuildProfile(SidChipModel model, SidEmulationProfile sidEmulationProfile)
         {
             bool is6581 = model != SidChipModel.Mos8580;
+            bool referenceMeasured = sidEmulationProfile == SidEmulationProfile.ReferenceMeasured;
             var volumeGain = BuildVolumeGain(model);
             var volumeDc = is6581
                 ? BuildMos6581MeasuredD418Offset()
@@ -339,11 +455,17 @@ namespace CopperMod.Sid
             return new SidAnalogProfile(
                 volumeGain,
                 volumeDc,
-                volumeStepTransientGain: is6581 ? 3.40 : 0.0,
-                volumeStepTransientLimit: is6581 ? 0.62 : 0.0,
-                volumeStepAttackSeconds: is6581 ? 0.00024 : 0.0,
-                volumeStepDecaySeconds: is6581 ? 0.0030 : 0.0,
-                chipOutputLowPassCutoffHz: is6581 ? 22_000.0 : 14_000.0);
+                volumeStepTransientGain: is6581 ? (referenceMeasured ? 3.65 : 3.40) : (referenceMeasured ? 0.18 : 0.0),
+                volumeStepTransientLimit: is6581 ? (referenceMeasured ? 0.70 : 0.62) : (referenceMeasured ? 0.055 : 0.0),
+                volumeStepAttackSeconds: is6581 ? (referenceMeasured ? 0.00018 : 0.00024) : (referenceMeasured ? 0.00016 : 0.0),
+                volumeStepDecaySeconds: is6581 ? (referenceMeasured ? 0.0026 : 0.0030) : (referenceMeasured ? 0.0018 : 0.0),
+                chipOutputLowPassCutoffHz: is6581 ? (referenceMeasured ? 24_000.0 : 22_000.0) : 14_000.0,
+                d418TransitionOffsetGain: is6581 ? (referenceMeasured ? 0.36 : 0.0) : (referenceMeasured ? 0.11 : 0.0),
+                d418TransitionAmplitudeGain: is6581 ? (referenceMeasured ? 0.030 : 0.0) : (referenceMeasured ? 0.0045 : 0.0),
+                d418HighNibbleTransitionGain: is6581 ? (referenceMeasured ? 0.018 : 0.0) : (referenceMeasured ? 0.0025 : 0.0),
+                filterRoutingTransientGain: is6581 ? (referenceMeasured ? 0.012 : 0.0) : (referenceMeasured ? 0.0020 : 0.0),
+                filterModeTransientGain: is6581 ? (referenceMeasured ? 0.015 : 0.0) : (referenceMeasured ? 0.0025 : 0.0),
+                voice3MuteTransientGain: is6581 ? (referenceMeasured ? 0.008 : 0.0) : (referenceMeasured ? 0.0015 : 0.0));
         }
 
         private static double[] BuildVolumeGain(SidChipModel model)
@@ -542,7 +664,13 @@ namespace CopperMod.Sid
                 double volumeStepTransientLimit,
                 double volumeStepAttackSeconds,
                 double volumeStepDecaySeconds,
-                double chipOutputLowPassCutoffHz)
+                double chipOutputLowPassCutoffHz,
+                double d418TransitionOffsetGain,
+                double d418TransitionAmplitudeGain,
+                double d418HighNibbleTransitionGain,
+                double filterRoutingTransientGain,
+                double filterModeTransientGain,
+                double voice3MuteTransientGain)
             {
                 VolumeGain = volumeGain;
                 VolumeDc = volumeDc;
@@ -551,6 +679,12 @@ namespace CopperMod.Sid
                 VolumeStepAttackSeconds = volumeStepAttackSeconds;
                 VolumeStepDecaySeconds = volumeStepDecaySeconds;
                 ChipOutputLowPassCutoffHz = chipOutputLowPassCutoffHz;
+                D418TransitionOffsetGain = d418TransitionOffsetGain;
+                D418TransitionAmplitudeGain = d418TransitionAmplitudeGain;
+                D418HighNibbleTransitionGain = d418HighNibbleTransitionGain;
+                FilterRoutingTransientGain = filterRoutingTransientGain;
+                FilterModeTransientGain = filterModeTransientGain;
+                Voice3MuteTransientGain = voice3MuteTransientGain;
             }
 
             public double[] VolumeGain { get; }
@@ -566,6 +700,18 @@ namespace CopperMod.Sid
             public double VolumeStepDecaySeconds { get; }
 
             public double ChipOutputLowPassCutoffHz { get; }
+
+            public double D418TransitionOffsetGain { get; }
+
+            public double D418TransitionAmplitudeGain { get; }
+
+            public double D418HighNibbleTransitionGain { get; }
+
+            public double FilterRoutingTransientGain { get; }
+
+            public double FilterModeTransientGain { get; }
+
+            public double Voice3MuteTransientGain { get; }
         }
     }
 }

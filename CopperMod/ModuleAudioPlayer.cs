@@ -20,6 +20,7 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	private ModuleSampleProvider? _sampleProvider;
 	private AmigaOutputProfile _outputProfile = AmigaOutputProfile.A500;
 	private C64OutputProfile _c64OutputProfile = C64OutputProfile.C64;
+	private SidEmulationProfile _sidEmulationProfile = SidEmulationProfile.Balanced;
 	private bool _waveformEnabled;
 	private WaveformDisplayMode _waveformDisplayMode = WaveformDisplayMode.MixedOutput;
 	private IWavePlayer? _output;
@@ -97,6 +98,21 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		}
 	}
 
+	public SidEmulationProfile SidEmulationProfile
+	{
+		get => _sampleProvider?.SidEmulationProfile ?? _sidEmulationProfile;
+		set
+		{
+			_sidEmulationProfile = value;
+			if (_sampleProvider != null)
+			{
+				_sampleProvider.SidEmulationProfile = value;
+			}
+
+			OnStateChanged();
+		}
+	}
+
 	public bool WaveformEnabled
 	{
 		get => _sampleProvider?.WaveformEnabled ?? _waveformEnabled;
@@ -148,7 +164,7 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		startupOptions?.Apply(song);
 		_song = song;
 		_song.LoopingEnabled = false;
-		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile);
+		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile, _sidEmulationProfile);
 		_sampleProvider.WaveformEnabled = _waveformEnabled;
 		_sampleProvider.WaveformDisplayMode = _waveformDisplayMode;
 		_sampleProvider.EndOfSongReached += (_, _) => OnStateChanged();

@@ -62,7 +62,10 @@ namespace CopperMod.Sid
         private int _kernalCursorRow;
         private byte _kernalTextColor = DefaultTextColor;
 
-        public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
+        public C64Machine(
+            SidModule module,
+            SidFilterProfileId filterProfile = SidFilterProfileId.Auto,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             _module = module ?? throw new ArgumentNullException(nameof(module));
             _clock = C64ClockProfile.FromSidClock(module.Clock);
@@ -71,7 +74,8 @@ namespace CopperMod.Sid
             _easyFlash = module.Cartridge?.Type == C64CartridgeType.EasyFlash
                 ? new EasyFlashCartridge(module.Cartridge)
                 : null;
-            Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile);
+            SidEmulationProfile = sidEmulationProfile;
+            Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile, sidEmulationProfile);
             Cpu = new Mos6510(this);
             UpdateVicBankBase();
             InstallMinimalRoms();
@@ -80,6 +84,8 @@ namespace CopperMod.Sid
         public Mos6510 Cpu { get; }
 
         public SidSystem Sid { get; }
+
+        public SidEmulationProfile SidEmulationProfile { get; }
 
         public C64ClockProfile Clock => _clock;
 

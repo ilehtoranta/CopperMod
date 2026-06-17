@@ -9,23 +9,24 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController, IC64VideoFrameProvider, IC64KeyboardController
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidEmulationProfileController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController, IC64VideoFrameProvider, IC64KeyboardController
     {
         private readonly SidModule _module;
-        private readonly C64Machine _machine;
         private readonly ModuleMetadata _metadata;
         private readonly ModulePlaybackCapabilities _capabilities;
         private readonly IReadOnlyList<ModuleSubSongMetadata> _subSongs;
+        private C64Machine _machine;
         private TimeSpan _position;
         private SidSampleClock? _sampleClock;
         private long[] _sampleTargetCycles = Array.Empty<long>();
         private int _currentSubSongIndex;
         private bool _channelWaveformCaptureEnabled;
+        private SidEmulationProfile _sidEmulationProfile = SidEmulationProfile.Balanced;
 
         internal SidSong(SidModule module)
         {
             _module = module ?? throw new ArgumentNullException(nameof(module));
-            _machine = new C64Machine(module);
+            _machine = CreateMachine();
             _currentSubSongIndex = module.DefaultSubSongIndex;
             _subSongs = Enumerable.Range(0, module.SubSongCount)
                 .Select(index => new ModuleSubSongMetadata(index, FormatSubSongTitle(index)))
@@ -68,6 +69,29 @@ namespace CopperMod.Sid
         internal IReadOnlyList<SidRegisterWrite> SidWrites => _machine.SidWrites;
 
         internal IReadOnlyList<DigimaxWrite> DigimaxWrites => _machine.DigimaxWrites;
+
+        public SidEmulationProfile SidEmulationProfile
+        {
+            get => _sidEmulationProfile;
+            set
+            {
+                if (value is not SidEmulationProfile.Balanced and not SidEmulationProfile.ReferenceMeasured)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown SID emulation profile.");
+                }
+
+                if (_sidEmulationProfile == value)
+                {
+                    return;
+                }
+
+                _sidEmulationProfile = value;
+                var mutedVoicesMask = _machine.Sid.MutedVoicesMask;
+                _machine = CreateMachine();
+                Reset();
+                _machine.Sid.MutedVoicesMask = mutedVoicesMask;
+            }
+        }
 
         public int MutedVoicesMask
         {
@@ -279,6 +303,11 @@ namespace CopperMod.Sid
                     ? SidConstants.CiaTimerRefreshHz
                     : module.Clock == SidClock.Ntsc ? SidConstants.NtscRefreshHz : SidConstants.PalRefreshHz,
                 tags: tags);
+        }
+
+        private C64Machine CreateMachine()
+        {
+            return new C64Machine(_module, sidEmulationProfile: _sidEmulationProfile);
         }
 
         private static string FormatSubSongTitle(int index)

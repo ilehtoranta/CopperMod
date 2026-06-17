@@ -7,6 +7,7 @@ namespace CopperMod.Sid
         Auto,
         Mos6581DataSheet,
         Mos6581Balanced,
+        Mos6581ReferenceMeasured,
         Mos6581DarkR3,
         Mos8580Linear
     }
@@ -140,7 +141,7 @@ namespace CopperMod.Sid
 
         public double MapFilterOutputGain(int resonanceNibble, int cutoffRegister)
         {
-            if (Id != SidFilterProfileId.Mos6581Balanced)
+            if (!UsesMeasured6581GainShape)
             {
                 return FilterOutputGain;
             }
@@ -152,7 +153,7 @@ namespace CopperMod.Sid
 
         public double MapFilterVoiceLeakageGain(int cutoffRegister)
         {
-            if (Id != SidFilterProfileId.Mos6581Balanced)
+            if (!UsesMeasured6581GainShape)
             {
                 return FilterVoiceLeakageGain;
             }
@@ -161,13 +162,18 @@ namespace CopperMod.Sid
             return FilterVoiceLeakageGain * (0.30 + (0.70 * highCutoffWeight));
         }
 
-        public static SidFilterProfileDefinition Resolve(SidChipModel model, SidFilterProfileId requested)
+        public static SidFilterProfileDefinition Resolve(
+            SidChipModel model,
+            SidFilterProfileId requested,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             if (requested == SidFilterProfileId.Auto)
             {
                 requested = model == SidChipModel.Mos8580
                     ? SidFilterProfileId.Mos8580Linear
-                    : SidFilterProfileId.Mos6581Balanced;
+                    : sidEmulationProfile == SidEmulationProfile.ReferenceMeasured
+                        ? SidFilterProfileId.Mos6581ReferenceMeasured
+                        : SidFilterProfileId.Mos6581Balanced;
             }
 
             if (model == SidChipModel.Mos8580 && requested != SidFilterProfileId.Mos8580Linear)
@@ -178,11 +184,16 @@ namespace CopperMod.Sid
             return requested switch
             {
                 SidFilterProfileId.Mos6581DataSheet => Mos6581DataSheet,
+                SidFilterProfileId.Mos6581ReferenceMeasured => Mos6581ReferenceMeasured,
                 SidFilterProfileId.Mos6581DarkR3 => Mos6581DarkR3,
                 SidFilterProfileId.Mos8580Linear => Mos8580Linear,
                 _ => Mos6581Balanced
             };
         }
+
+        private bool UsesMeasured6581GainShape =>
+            Id == SidFilterProfileId.Mos6581Balanced ||
+            Id == SidFilterProfileId.Mos6581ReferenceMeasured;
 
         private static double[] BuildPowerCutoffTable(double minCutoffHz, double maxCutoffHz, double cutoffExponent)
         {
@@ -344,6 +355,51 @@ namespace CopperMod.Sid
                     resonanceFeedbackTrim: 1.00,
                     resonanceOutputTrim: 1.00,
                     outputGainTrim: 1.00)));
+
+        private static readonly SidFilterProfileDefinition Mos6581ReferenceMeasured = new SidFilterProfileDefinition(
+            SidFilterProfileId.Mos6581ReferenceMeasured,
+            minCutoffHz: 210.0,
+            maxCutoffHz: 11250.0,
+            cutoffExponent: 0.55,
+            filterInputGain: 0.73,
+            filterOutputGain: 1.035,
+            baseDamping: 1.82,
+            resonanceDamping: 1.23,
+            minDamping: 0.40,
+            maxDamping: 1.95,
+            bandPassGain: 0.90,
+            lowCutoffResonanceBoost: 0.54,
+            filterVoiceLeakageGain: 0.027,
+            dampingTable: BuildDampingTable(
+                1.84, 1.78, 1.69, 1.59,
+                1.48, 1.35, 1.20, 1.06,
+                0.92, 0.79, 0.67, 0.56,
+                0.48, 0.43, 0.41, 0.40),
+            filterDrive: 1.20,
+            filterInputSaturation: 1.72,
+            filterIntegratorLimit: 2.00,
+            filterOutputSaturation: 1.64,
+            cutoffSignalModulation: 0.078,
+            analog6581Parameters: new SidMos6581AnalogParameters(
+                cutoffCircuit: new SidMos6581CutoffCircuit(
+                    minimumCutoffHz: 210.0,
+                    fullScaleCutoffHz: 11250.0),
+                voiceVoltageRange: 1.50,
+                voiceDcVoltage: 5.00,
+                filterInputGain: 0.73,
+                filterOutputGain: 0.96,
+                filterLeakageGain: 0.020,
+                opAmpDrive: 1.16,
+                opAmpOutputScale: 2.70,
+                integratorGain: 1.04,
+                vcrSignalModulation: 0.97,
+                resonanceDampingScale: 1.00,
+                resistorNetwork: SidMos6581ResistorNetwork.Default470Pf.WithTrims(
+                    mixerDriveTrim: 1.00,
+                    summerDriveTrim: 1.00,
+                    resonanceFeedbackTrim: 1.01,
+                    resonanceOutputTrim: 1.00,
+                    outputGainTrim: 1.01)));
 
         private static readonly SidFilterProfileDefinition Mos6581DarkR3 = new SidFilterProfileDefinition(
             SidFilterProfileId.Mos6581DarkR3,

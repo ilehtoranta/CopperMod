@@ -215,6 +215,27 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void ReferenceMeasuredProfileAddsD418TransitionContext()
+	{
+		var balanced = MeasureVolumeStepTransient(SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference = MeasureVolumeStepTransient(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+
+		Assert.True(
+			reference.EarlyExcursion > balanced.EarlyExcursion * 1.05,
+			$"Expected reference profile to add measured transition energy, balanced {balanced.EarlyExcursion:0.000}, reference {reference.EarlyExcursion:0.000}.");
+		Assert.InRange(Math.Abs(reference.Settled - balanced.Settled), 0.0, 0.02);
+	}
+
+	[Fact]
+	public void ReferenceMeasuredProfileAddsFilterRoutingClicks()
+	{
+		var balanced = MeasureFilterRoutingClick(SidEmulationProfile.Balanced);
+		var reference = MeasureFilterRoutingClick(SidEmulationProfile.ReferenceMeasured);
+
+		Assert.True(Math.Abs(reference) > Math.Abs(balanced) + 0.004, $"Expected reference routing click to exceed balanced, balanced {balanced:0.000000}, reference {reference:0.000000}.");
+	}
+
+	[Fact]
 	public void MultipleVoicesSumLouderWithoutActiveChannelNormalization()
 	{
 		var oneVoice = CreateSawVoice();
@@ -646,9 +667,11 @@ public sealed class SidChipTests
 		return rendered;
 	}
 
-	private static (double EarlyExcursion, double Settled) MeasureVolumeStepTransient(SidChipModel model)
+	private static (double EarlyExcursion, double Settled) MeasureVolumeStepTransient(
+		SidChipModel model,
+		SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
 	{
-		var chip = new SidChip(model, 0xD400);
+		var chip = new SidChip(model, 0xD400, sidEmulationProfile: sidEmulationProfile);
 		chip.Write(0x18, 0x08);
 		RenderCycles(chip, 12000);
 		_ = chip.Render(1);
@@ -667,6 +690,26 @@ public sealed class SidChipTests
 		var settled = chip.Render(1);
 		var earlyExcursion = Math.Max(Math.Abs(minimum - settled), Math.Abs(maximum - settled));
 		return (earlyExcursion, settled);
+	}
+
+	private static double MeasureFilterRoutingClick(SidEmulationProfile sidEmulationProfile)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400, sidEmulationProfile: sidEmulationProfile);
+		chip.Write(0x18, 0x1F);
+		RenderCycles(chip, 24000);
+		var before = chip.Render(1);
+		chip.Write(0x17, 0x03);
+
+		var min = double.MaxValue;
+		var max = double.MinValue;
+		for (var i = 0; i < 2048; i++)
+		{
+			var sample = chip.Render(1);
+			min = Math.Min(min, sample);
+			max = Math.Max(max, sample);
+		}
+
+		return Math.Max(Math.Abs(min - before), Math.Abs(max - before));
 	}
 
 	private static double MeasureSettledD418Output(byte registerValue, SidChipModel model)

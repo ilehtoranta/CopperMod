@@ -21,6 +21,7 @@ internal sealed class RenderCommandOptions
 		ModuleRenderOutputMode outputMode,
 		AmigaOutputProfile amigaProfile,
 		C64OutputProfile c64Profile,
+		SidEmulationProfile sidProfile,
 		int mp3BitrateKbps,
 		int bitmapWidth,
 		int bitmapHeight,
@@ -45,6 +46,7 @@ internal sealed class RenderCommandOptions
 		OutputMode = outputMode;
 		AmigaProfile = amigaProfile;
 		C64Profile = c64Profile;
+		SidProfile = sidProfile;
 		Mp3BitrateKbps = mp3BitrateKbps;
 		BitmapWidth = bitmapWidth;
 		BitmapHeight = bitmapHeight;
@@ -84,6 +86,8 @@ internal sealed class RenderCommandOptions
 
 	public C64OutputProfile C64Profile { get; }
 
+	public SidEmulationProfile SidProfile { get; }
+
 	public int Mp3BitrateKbps { get; }
 
 	public int BitmapWidth { get; }
@@ -113,7 +117,8 @@ internal sealed class RenderCommandOptions
 			ChannelCount,
 			OutputMode,
 			AmigaProfile,
-			C64Profile);
+			C64Profile,
+			SidProfile);
 	}
 
 	public static RenderCommandOptions Parse(string[] args)
@@ -143,6 +148,7 @@ internal sealed class RenderCommandOptions
 		var outputMode = ModuleRenderOutputMode.Raw;
 		var amigaProfile = AmigaOutputProfile.A500;
 		var c64Profile = C64OutputProfile.C64;
+		var sidProfile = SidEmulationProfile.Balanced;
 		var mp3Bitrate = 192;
 		var bitmapWidth = WaveformBitmapRenderer.DefaultWidth;
 		var bitmapHeight = WaveformBitmapRenderer.DefaultHeight;
@@ -220,6 +226,9 @@ internal sealed class RenderCommandOptions
 				case "--c64-profile":
 					c64Profile = ParseC64Profile(RequireValue(args, ref i, arg));
 					c64ProfileSpecified = true;
+					break;
+				case "--sid-profile":
+					sidProfile = ParseSidProfile(RequireValue(args, ref i, arg));
 					break;
 				case "--mp3-bitrate":
 					mp3Bitrate = ParsePositiveInt(RequireValue(args, ref i, arg), arg);
@@ -307,6 +316,7 @@ internal sealed class RenderCommandOptions
 			outputMode,
 			amigaProfile,
 			c64Profile,
+			sidProfile,
 			mp3Bitrate,
 			bitmapWidth,
 			bitmapHeight,
@@ -388,6 +398,18 @@ internal sealed class RenderCommandOptions
 			"clean" => C64OutputProfile.Clean,
 			"c64" => C64OutputProfile.C64,
 			_ => throw new CommandLineException("Unsupported C64 output profile: " + value)
+		};
+	}
+
+	private static SidEmulationProfile ParseSidProfile(string value)
+	{
+		return value.ToLowerInvariant() switch
+		{
+			"balanced" => SidEmulationProfile.Balanced,
+			"reference" => SidEmulationProfile.ReferenceMeasured,
+			"reference-measured" => SidEmulationProfile.ReferenceMeasured,
+			"measured" => SidEmulationProfile.ReferenceMeasured,
+			_ => throw new CommandLineException("Unsupported SID emulation profile: " + value)
 		};
 	}
 

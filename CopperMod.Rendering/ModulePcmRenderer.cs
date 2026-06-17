@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.Sid;
 
 namespace CopperMod.Rendering;
 
@@ -26,6 +27,10 @@ public sealed class ModulePcmRenderer : IDisposable
 		_c64OutputStage = new C64OutputStage(_settings.C64OutputProfile);
 		_amigaHardwareStateProvider = song as IAmigaHardwareStateProvider;
 		_outputFamilyProvider = song as IModuleOutputFamilyProvider;
+		if (song is ISidEmulationProfileController sidProfileController)
+		{
+			sidProfileController.SidEmulationProfile = _settings.SidEmulationProfile;
+		}
 	}
 
 	public IModuleSong Song => _song;
