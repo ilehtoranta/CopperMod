@@ -1,7 +1,7 @@
 {
   "id": "expanded-diagrom",
   "displayName": "Expanded A500 + DiagROM",
-  "description": "A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, DiagROM diagnostic ROM.",
+  "description": "A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, DiagROM 1.3 diagnostic ROM.",
   "machine": {
     "model": "A500PAL",
     "chipRamKb": 512,
@@ -12,8 +12,8 @@
   },
   "kickstart": {
     "source": "DiagRom",
-    "version": "2.0",
-    "path": "ROM/DiagROM/diagrom.rom"
+    "version": "1.3",
+    "path": "ROM/DiagROM/diagrom-a500.rom"
   },
   "audio": {
     "floppyDriveSounds": {
