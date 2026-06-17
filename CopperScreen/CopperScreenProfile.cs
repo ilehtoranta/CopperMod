@@ -30,12 +30,14 @@ internal sealed class CopperScreenProfile
 		uint expansionRamBase,
 		int realFastRamSize,
 		uint realFastRamBase,
+		bool rtcEnabled,
 		int floppyDriveCount,
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		CopperScreenInputOptions input,
+		CopperScreenPresentationOptions presentationOptions,
 		string? configPath)
 	{
 		Id = id;
@@ -46,12 +48,14 @@ internal sealed class CopperScreenProfile
 		ExpansionRamBase = expansionRamBase;
 		RealFastRamSize = realFastRamSize;
 		RealFastRamBase = realFastRamBase;
+		RtcEnabled = rtcEnabled;
 		FloppyDriveCount = floppyDriveCount;
 		CpuBackend = cpuBackend;
 		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
 		MediaDrives = mediaDrives;
 		Input = input;
+		PresentationOptions = presentationOptions;
 		ConfigPath = configPath;
 	}
 
@@ -71,6 +75,8 @@ internal sealed class CopperScreenProfile
 
 	public uint RealFastRamBase { get; }
 
+	public bool RtcEnabled { get; }
+
 	public int FloppyDriveCount { get; }
 
 	public M68kBackendKind CpuBackend { get; }
@@ -82,6 +88,8 @@ internal sealed class CopperScreenProfile
 	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
 
 	public CopperScreenInputOptions Input { get; }
+
+	public CopperScreenPresentationOptions PresentationOptions { get; }
 
 	public string? ConfigPath { get; }
 
@@ -98,6 +106,7 @@ internal sealed class CopperScreenProfile
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
 			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
+			.WithRealTimeClock(RtcEnabled)
 			.WithFloppyDriveCount(FloppyDriveCount)
 			.WithCpu(M68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
@@ -201,11 +210,13 @@ internal sealed class CopperScreenProfile
 		var expansionRamBase = ParseAddress(machine.PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase);
 		var realFastRamSize = CheckedKilobytes(machine.RealFastRamKb, "machine.realFastRamKb");
 		var realFastRamBase = ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
+		var rtcEnabled = machine.RtcEnabled ?? expansionRamSize > 0;
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
 		var floppyDriveAudio = ParseFloppyDriveAudio(config.Audio?.FloppyDriveSounds);
 		var mediaDrives = ParseMediaDrives(config.Media);
 		var input = ParseInputOptions(config.Input);
+		var presentationOptions = ParsePresentationOptions(config.Presentation);
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -225,12 +236,14 @@ internal sealed class CopperScreenProfile
 			expansionRamBase,
 			realFastRamSize,
 			realFastRamBase,
+			rtcEnabled,
 			floppyDriveCount,
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
 			mediaDrives,
 			input,
+			presentationOptions,
 			Path.GetFullPath(path));
 	}
 
@@ -243,13 +256,15 @@ internal sealed class CopperScreenProfile
 		uint expansionRamBase,
 		int realFastRamSize,
 		uint realFastRamBase,
+		bool rtcEnabled,
 		int floppyDriveCount,
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		CopperScreenInputOptions input,
-		string? configPath = null)
+		string? configPath = null,
+		CopperScreenPresentationOptions? presentationOptions = null)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -265,12 +280,14 @@ internal sealed class CopperScreenProfile
 			expansionRamBase,
 			realFastRamSize,
 			realFastRamBase,
+			rtcEnabled,
 			floppyDriveCount,
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
 			mediaDrives,
 			input,
+			presentationOptions ?? CopperScreenPresentationOptions.Default,
 			configPath);
 	}
 
@@ -447,6 +464,12 @@ internal sealed class CopperScreenProfile
 			ParseJoystickKeyMap(config.JoystickKeys));
 	}
 
+	private static CopperScreenPresentationOptions ParsePresentationOptions(PresentationFile? config)
+	{
+		return new CopperScreenPresentationOptions(
+			CopperScreenPresentationOptions.ParseLacedMode(config?.LacedMode));
+	}
+
 	private static IReadOnlyList<CopperScreenControllerProfile> ParseControllerProfiles(ControllerProfileFile[]? profiles)
 	{
 		if (profiles == null || profiles.Length == 0)
@@ -513,12 +536,14 @@ internal sealed class CopperScreenProfile
 			AmigaConstants.A500BootPseudoFastRamBase,
 			0,
 			AmigaConstants.A500RealFastRamBase,
+			true,
 			2,
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
 			Array.Empty<CopperScreenMediaDriveSettings>(),
 			CopperScreenInputOptions.Default,
+			CopperScreenPresentationOptions.Default,
 			null);
 	}
 
@@ -541,6 +566,8 @@ internal sealed class CopperScreenProfile
 		public MediaFile? Media { get; set; }
 
 		public InputFile? Input { get; set; }
+
+		public PresentationFile? Presentation { get; set; }
 	}
 
 	private sealed class MachineFile
@@ -556,6 +583,8 @@ internal sealed class CopperScreenProfile
 		public int RealFastRamKb { get; set; }
 
 		public string? RealFastBase { get; set; }
+
+		public bool? RtcEnabled { get; set; }
 
 		public int? FloppyDriveCount { get; set; }
 	}
@@ -611,6 +640,11 @@ internal sealed class CopperScreenProfile
 		public InputPortsFile? Ports { get; set; }
 
 		public ControllerProfileFile[]? ControllerProfiles { get; set; }
+	}
+
+	private sealed class PresentationFile
+	{
+		public string? LacedMode { get; set; }
 	}
 
 	private sealed class InputPortsFile

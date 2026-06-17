@@ -31,6 +31,8 @@ namespace CopperMod.Amiga
 
         public int FloppyDriveCount { get; private set; } = 1;
 
+        public bool RealTimeClockEnabled { get; private set; }
+
         public IAmigaBusArbiter BusArbiter { get; private set; } = new ZeroWaitBusArbiter();
 
         public bool CaptureBusAccesses { get; private set; } = true;
@@ -68,6 +70,7 @@ namespace CopperMod.Amiga
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
                 options.ExpansionRamSize = AmigaConstants.A500BootPseudoFastRamSize;
                 options.FloppyDriveCount = 2;
+                options.RealTimeClockEnabled = true;
             }
 
             return options;
@@ -183,6 +186,12 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithRealTimeClock(bool enabled)
+        {
+            RealTimeClockEnabled = enabled;
+            return this;
+        }
+
         private static bool IsPowerOfTwo(int value)
         {
             return value > 0 && (value & (value - 1)) == 0;
@@ -206,7 +215,8 @@ namespace CopperMod.Amiga
                 options.AudioDmaMinimumPeriod,
                 options.RealFastRamSize,
                 options.RealFastRamBase,
-                options.HardwareSpecializationEnabled);
+                options.HardwareSpecializationEnabled,
+                options.RealTimeClockEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {
@@ -256,12 +266,7 @@ namespace CopperMod.Amiga
                 var intreqBit = ciaEvent.Cia == AmigaCiaId.A
                     ? AmigaConstants.IntreqPorts
                     : AmigaConstants.IntreqExternal;
-                Bus.WriteDeviceWord(
-                    AmigaBusRequester.Cia,
-                    AmigaBusAccessKind.CustomRegister,
-                    0x00DFF09C,
-                    (ushort)(0x8000 | intreqBit),
-                    ciaEvent.Cycle);
+                Bus.RequestHardwareInterrupt(intreqBit, ciaEvent.Cycle);
             }
 
             var level = Bus.Paula.GetHighestPendingInterruptLevel();

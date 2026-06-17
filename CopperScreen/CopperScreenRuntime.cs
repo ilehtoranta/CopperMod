@@ -88,7 +88,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private const int AudioSampleRate = 44_100;
 	private const int AudioChannels = 2;
 	private const int AudioOutputBufferCount = 8;
-	private const int TargetQueuedAudioBuffers = 5;
+	private const int TargetQueuedAudioBuffers = 3;
 	private const int CriticalQueuedAudioBuffers = 2;
 	private const int MaxFramesPerTick = 5;
 	private const int TargetQueuedPresentationFrames = 1;
@@ -383,6 +383,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public void SetInputOptions(CopperScreenInputOptions inputOptions)
 		=> Post(emulator => emulator.SetInputOptions(inputOptions));
 
+	public void SetPresentationOptions(CopperScreenPresentationOptions options)
+		=> Post(emulator => emulator.SetPresentationOptions(options), publishAfterExecute: true);
+
 	public Task<CopperScreenCommandResult> TogglePausedAsync()
 		=> EnqueueAsync(emulator =>
 		{
@@ -496,8 +499,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		Post(_ =>
 		{
 			_pendingCopperBenchRequest = false;
-			PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0);
-		});
+		}, publishAfterExecute: true);
 	}
 
 	public void Dispose()
@@ -526,9 +528,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 			return new CopperScreenCommandResult(false, message, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		});
 
-	private void Post(Action<CopperScreenEmulator> action)
+	private void Post(Action<CopperScreenEmulator> action, bool publishAfterExecute = false)
 	{
-		_commands.Enqueue(new CopperScreenCommand(action, null));
+		_commands.Enqueue(new CopperScreenCommand(action, null, publishAfterExecute));
 		_wake.Set();
 	}
 
@@ -541,7 +543,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 				var result = action(emulator);
 				completion.TrySetResult(result);
 			},
-			completion));
+			completion,
+			publishAfterExecute: true));
 		_wake.Set();
 		return completion.Task;
 	}
@@ -592,11 +595,6 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 			var queued = _audio.QueuedBufferCount;
 			var framesToRender = CalculateFramesToRender(queued, catchUpAudio: true);
-			if (WaitForPresentationQueueCapacity(queued))
-			{
-				continue;
-			}
-
 			if (framesToRender <= 0)
 			{
 				_wake.WaitOne(1);
@@ -641,7 +639,10 @@ internal sealed class CopperScreenRuntime : IDisposable
 			try
 			{
 				command.Execute(_emulator);
-				PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0);
+				if (command.PublishAfterExecute)
+				{
+					PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0);
+				}
 			}
 			catch (Exception ex)
 			{
@@ -704,7 +705,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 				return;
 			}
 
-			if (WaitForPresentationQueueCapacity(_audio?.QueuedBufferCount ?? queuedAudioBuffers))
+			if (_audio == null && WaitForPresentationQueueCapacity(null))
 			{
 				return;
 			}
@@ -750,6 +751,15 @@ internal sealed class CopperScreenRuntime : IDisposable
 		long frameNumber;
 		lock (_presentationSync)
 		{
+			if (ShouldReplaceQueuedPresentationFrames(queuedAudioBuffers))
+			{
+				var queueCapacity = GetPublishPresentationQueueCapacity(queuedAudioBuffers);
+				while (_presentationQueueCount >= queueCapacity && TryDropOldestPresentationFrameNoLock())
+				{
+					_presentationQueueFullThrottleCount++;
+				}
+			}
+
 			if (_presentationQueueCount >= MaxQueuedPresentationFrames)
 			{
 				_presentationQueueFullThrottleCount++;
@@ -820,10 +830,16 @@ internal sealed class CopperScreenRuntime : IDisposable
 			PresentationSkippedFrames = _presentationSkippedFrames,
 			PresentationBufferDroppedFrames = _presentationBufferDroppedFrames,
 			PresentationQueueDepth = _presentationQueueCount,
-			PresentationQueueCapacity = MaxQueuedPresentationFrames,
+			PresentationQueueCapacity = GetPublishPresentationQueueCapacity(state.QueuedAudioBuffers),
 			PresentationQueueFullThrottleCount = _presentationQueueFullThrottleCount,
 			LastPublishFrameMilliseconds = _lastPublishFrameMilliseconds
 		};
+
+	private int GetPublishPresentationQueueCapacity(int queuedAudioBuffers)
+		=> _audio == null ? MaxQueuedPresentationFrames : CalculatePresentationQueueCapacity(queuedAudioBuffers);
+
+	private bool ShouldReplaceQueuedPresentationFrames(int queuedAudioBuffers)
+		=> _audio == null || queuedAudioBuffers < CriticalQueuedAudioBuffers;
 
 	private int SelectWritableFrameBufferNoLock()
 	{
@@ -914,6 +930,19 @@ internal sealed class CopperScreenRuntime : IDisposable
 		return entry;
 	}
 
+	private bool TryDropOldestPresentationFrameNoLock()
+	{
+		if (_presentationQueueCount <= 0)
+		{
+			return false;
+		}
+
+		_presentationQueue[_presentationQueueHead] = default;
+		_presentationQueueHead = (_presentationQueueHead + 1) % _presentationQueue.Length;
+		_presentationQueueCount--;
+		return true;
+	}
+
 	private bool IsPresentationBufferQueuedNoLock(int bufferIndex)
 	{
 		for (var offset = 0; offset < _presentationQueueCount; offset++)
@@ -930,15 +959,21 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	private sealed class CopperScreenCommand
 	{
-		public CopperScreenCommand(Action<CopperScreenEmulator> execute, TaskCompletionSource<CopperScreenCommandResult>? completion)
+		public CopperScreenCommand(
+			Action<CopperScreenEmulator> execute,
+			TaskCompletionSource<CopperScreenCommandResult>? completion,
+			bool publishAfterExecute)
 		{
 			Execute = execute;
 			Completion = completion;
+			PublishAfterExecute = publishAfterExecute;
 		}
 
 		public Action<CopperScreenEmulator> Execute { get; }
 
 		public TaskCompletionSource<CopperScreenCommandResult>? Completion { get; }
+
+		public bool PublishAfterExecute { get; }
 	}
 
 	private readonly record struct PresentationFrameEntry(int BufferIndex, long FrameNumber, CopperScreenState State);

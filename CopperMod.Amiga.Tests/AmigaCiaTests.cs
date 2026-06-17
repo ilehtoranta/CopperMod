@@ -258,6 +258,26 @@ public sealed class AmigaCiaTests
 	}
 
 	[Fact]
+	public void KeyboardSerialInterruptImmediatelyDispatchesPortsIntreq()
+	{
+		var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		machine.Bus.WriteLong(0x68, 0x0000_2000);
+		machine.Cpu.Reset(0x1000, 0x3000);
+		machine.Bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqPorts));
+		machine.Bus.Paula.AdvanceTo(0);
+		machine.Bus.AbleCiaInterrupts(AmigaCiaId.A, 0x80 | AmigaCia.SerialInterruptMask, 0);
+
+		machine.Bus.Keyboard.KeyDown(AmigaRawKey.Digit1, 100);
+
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqPorts);
+		Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);
+		Assert.Equal(2, (machine.Cpu.State.StatusRegister >> 8) & 7);
+	}
+
+	[Fact]
 	public void CiaFlagPulseQueuesInterruptWhenEnabled()
 	{
 		var cia = new AmigaCia(AmigaCiaId.B);

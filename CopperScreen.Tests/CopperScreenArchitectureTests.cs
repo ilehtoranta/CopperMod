@@ -83,11 +83,156 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal(512 * 1024, profile.ChipRamSize);
 			Assert.Equal(0, profile.ExpansionRamSize);
 			Assert.Equal(0, profile.RealFastRamSize);
+			Assert.False(profile.RtcEnabled);
 			Assert.Equal(M68kBackendKind.AccurateM68000, profile.CpuBackend);
 			Assert.False(profile.FloppyDriveAudio.Enabled);
 			Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
+			Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
+		}
+		finally
+		{
+			File.Delete(profilePath);
+		}
+	}
+
+	[Fact]
+	public void StartupProfileCanSelectCrtFlickerLacedPresentation()
+	{
+		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-crt-flicker-profile.json");
+		File.WriteAllText(
+			profilePath,
+			"""
+			{
+			  "id": "custom-crt-flicker",
+			  "displayName": "Custom CRT Flicker",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "CopperStart",
+			    "version": "1.3"
+			  },
+			  "presentation": {
+			    "lacedMode": "CrtFlicker"
+			  }
+			}
+			""");
+		try
+		{
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+
+			Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
+		}
+		finally
+		{
+			File.Delete(profilePath);
+		}
+	}
+
+	[Fact]
+	public void StartupProfileCanSelectStableWeaveLacedPresentation()
+	{
+		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-stable-weave-profile.json");
+		File.WriteAllText(
+			profilePath,
+			"""
+			{
+			  "id": "custom-stable-weave",
+			  "displayName": "Custom Stable Weave",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "CopperStart",
+			    "version": "1.3"
+			  },
+			  "presentation": {
+			    "lacedMode": "StableWeave"
+			  }
+			}
+			""");
+		try
+		{
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+
+			Assert.Equal(CopperScreenLacedPresentationMode.StableWeave, profile.PresentationOptions.LacedMode);
+		}
+		finally
+		{
+			File.Delete(profilePath);
+		}
+	}
+
+	[Fact]
+	public void StartupProfileRejectsInvalidLacedPresentationMode()
+	{
+		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-invalid-presentation-profile.json");
+		File.WriteAllText(
+			profilePath,
+			"""
+			{
+			  "id": "invalid-presentation",
+			  "displayName": "Invalid Presentation",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "CopperStart",
+			    "version": "1.3"
+			  },
+			  "presentation": {
+			    "lacedMode": "sparkle"
+			  }
+			}
+			""");
+		try
+		{
+			Assert.False(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out _, out var error));
+
+			Assert.Contains("presentation.lacedMode", error);
+		}
+		finally
+		{
+			File.Delete(profilePath);
+		}
+	}
+
+	[Fact]
+	public void StartupProfileCanDisableExpandedRealTimeClock()
+	{
+		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-no-rtc-profile.json");
+		File.WriteAllText(
+			profilePath,
+			"""
+			{
+			  "id": "custom-no-rtc",
+			  "displayName": "Custom No RTC",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512,
+			    "rtcEnabled": false
+			  },
+			  "kickstart": {
+			    "source": "CopperStart",
+			    "version": "1.3"
+			  }
+			}
+			""");
+		try
+		{
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+
+			Assert.False(profile.RtcEnabled);
+			Assert.False(profile.CreateMachineOptions().RealTimeClockEnabled);
 		}
 		finally
 		{
@@ -128,6 +273,7 @@ public sealed class CopperScreenArchitectureTests
 		{
 			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
 
+			Assert.True(profile.RtcEnabled);
 			Assert.True(profile.FloppyDriveAudio.Enabled);
 			Assert.Equal(FloppyDriveAudioMode.Samples, profile.FloppyDriveAudio.Mode);
 			Assert.Equal("bench-pack", profile.FloppyDriveAudio.SoundPack);
@@ -188,7 +334,9 @@ public sealed class CopperScreenArchitectureTests
 			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
 			draft.Id = "roundtrip-settings";
 			draft.DisplayName = "Roundtrip Settings";
+			draft.RtcEnabled = false;
 			draft.FloppyDriveCount = 3;
+			draft.PresentationOptions = new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.StableWeave);
 			draft.DriveDiskPaths[1] = diskPath;
 			draft.DriveWriteProtected[1] = false;
 			draft.Input = CopperScreenInputOptions.Create(
@@ -205,7 +353,9 @@ public sealed class CopperScreenArchitectureTests
 
 			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
 			Assert.Equal("roundtrip-settings", loaded.Id);
+			Assert.False(loaded.RtcEnabled);
 			Assert.Equal(3, loaded.FloppyDriveCount);
+			Assert.Equal(CopperScreenLacedPresentationMode.StableWeave, loaded.PresentationOptions.LacedMode);
 			Assert.Equal(2, loaded.Input.MousePort);
 			Assert.Equal("numpad-joystick", loaded.Input.Port1ProfileId);
 			Assert.Equal("mouse", loaded.Input.Port2ProfileId);
@@ -498,14 +648,17 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(512 * 1024, profile.ChipRamSize);
 		Assert.Equal(expectedExpansionRamSize, profile.ExpansionRamSize);
 		Assert.Equal(expectedRealFastRamSize, profile.RealFastRamSize);
+		Assert.Equal(expectedExpansionRamSize > 0, profile.RtcEnabled);
 		Assert.Equal(expectedCpuBackend, profile.CpuBackend);
 		Assert.Equal(expectedFloppyDriveCount, profile.FloppyDriveCount);
-		Assert.False(profile.FloppyDriveAudio.Enabled);
+		Assert.True(profile.FloppyDriveAudio.Enabled);
 		Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
+		Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
 		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);
 		Assert.Equal(expectedCpuBackend, profile.CreateMachineOptions().CpuBackend);
 		Assert.Equal(expectedRealFastRamSize, profile.CreateMachineOptions().RealFastRamSize);
+		Assert.Equal(expectedExpansionRamSize > 0, profile.CreateMachineOptions().RealTimeClockEnabled);
 	}
 }

@@ -413,7 +413,8 @@ namespace CopperMod.Amiga
             State.LastInstructionProgramCounter = instructionPc;
             _instructionFrequency.Record(opcode);
 
-            if (DecodeByOpcodeLine(opcode, instructionPc))
+            var decoded = DecodeByOpcodeLine(opcode, instructionPc);
+            if (decoded)
             {
                 return (int)(State.Cycles - startCycles);
             }
@@ -673,6 +674,27 @@ namespace CopperMod.Amiga
                 }
 
                 var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
+                if (bitMode == 7 && bitReg == 1)
+                {
+                    var address = FetchLong();
+                    var absoluteValue = (uint)ReadByte(address);
+                    var absoluteMask = 1u << (int)(bit & 7);
+                    State.SetFlag(M68kCpuState.Zero, (absoluteValue & absoluteMask) == 0);
+                    if (operation != 0)
+                    {
+                        absoluteValue = operation switch
+                        {
+                            1 => absoluteValue ^ absoluteMask,
+                            2 => absoluteValue & ~absoluteMask,
+                            _ => absoluteValue | absoluteMask
+                        };
+                        WriteByte(address, (byte)absoluteValue);
+                    }
+
+                    AddCycles(14);
+                    return true;
+                }
+
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();
                 var mask = 1u << (int)(bitMode == 0 ? bit : bit & 7);
@@ -1196,6 +1218,16 @@ namespace CopperMod.Amiga
             }
 
             var bit = FetchWord() & 31;
+            if (mode == 7 && reg == 1)
+            {
+                var address = FetchLong();
+                var absoluteMaskedBit = bit & 7;
+                var absoluteValue = ReadByte(address);
+                State.SetFlag(M68kCpuState.Zero, (absoluteValue & (1u << absoluteMaskedBit)) == 0);
+                AddCycles(GetImmediateBtstCycles(mode, reg));
+                return true;
+            }
+
             var bitSize = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
             var bitEa = ResolveEa(mode, reg, bitSize);
             var value = bitEa.Read();

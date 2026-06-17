@@ -33,6 +33,23 @@ public sealed class MainWindowMouseInputTests
 	}
 
 	[Fact]
+	public void HighResolutionPresentationCoordinatesMapToOriginalAmigaMouseDeltas()
+	{
+		var previous = MainWindow.MapPresentationPointToAmigaMousePoint(new Point(352, 288));
+		var current = MainWindow.MapPresentationPointToAmigaMousePoint(new Point(354, 286));
+		var remainderX = 0.0;
+		var remainderY = 0.0;
+
+		var deltaX = MainWindow.ConsumeWholeMouseDelta(ref remainderX, current.X - previous.X);
+		var deltaY = MainWindow.ConsumeWholeMouseDelta(ref remainderY, current.Y - previous.Y);
+
+		Assert.Equal(1, deltaX);
+		Assert.Equal(-1, deltaY);
+		Assert.Equal(0, remainderX, precision: 6);
+		Assert.Equal(0, remainderY, precision: 6);
+	}
+
+	[Fact]
 	public void MouseGrabCenterHandshakeAcceptsOnlyCenteredPointerEvents()
 	{
 		var center = new Point(176, 144);
@@ -52,6 +69,29 @@ public sealed class MainWindowMouseInputTests
 		Assert.True(MainWindow.IsNearScreenPoint(center, center));
 		Assert.True(MainWindow.IsNearScreenPoint(new PixelPoint(501, 399), center));
 		Assert.False(MainWindow.IsNearScreenPoint(new PixelPoint(503, 400), center));
+	}
+
+	[Fact]
+	public void MouseGrabRecenterEchoMatchesOnlyNearCenteredWarpEvents()
+	{
+		var center = new Point(176, 144);
+		var centerScreen = new PixelPoint(500, 400);
+
+		Assert.True(MainWindow.IsMouseGrabRecenterEcho(
+			new Point(176.5, 143.5),
+			center,
+			centerScreen,
+			centerScreen));
+		Assert.False(MainWindow.IsMouseGrabRecenterEcho(
+			new Point(178, 144),
+			center,
+			centerScreen,
+			centerScreen));
+		Assert.False(MainWindow.IsMouseGrabRecenterEcho(
+			center,
+			center,
+			new PixelPoint(501, 400),
+			centerScreen));
 	}
 
 	[Fact]

@@ -26,6 +26,8 @@ internal sealed class CopperScreenSettingsDraft
 
 	public string RealFastBase { get; set; } = "$200000";
 
+	public bool RtcEnabled { get; set; } = true;
+
 	public int FloppyDriveCount { get; set; } = 2;
 
 	public M68kBackendKind CpuBackend { get; set; } = M68kBackendKind.AccurateM68000;
@@ -37,6 +39,8 @@ internal sealed class CopperScreenSettingsDraft
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; set; } = FloppyDriveAudioOptions.Default;
 
 	public CopperScreenInputOptions Input { get; set; } = CopperScreenInputOptions.Default;
+
+	public CopperScreenPresentationOptions PresentationOptions { get; set; } = CopperScreenPresentationOptions.Default;
 
 	public string?[] DriveDiskPaths { get; } = new string?[4];
 
@@ -73,11 +77,13 @@ internal sealed class CopperScreenSettingsDraft
 			PseudoFastBase = FormatAddress(profile.ExpansionRamBase),
 			RealFastRamKb = profile.RealFastRamSize / Kilobyte,
 			RealFastBase = FormatAddress(profile.RealFastRamBase),
+			RtcEnabled = profile.RtcEnabled,
 			FloppyDriveCount = profile.FloppyDriveCount,
 			CpuBackend = profile.CpuBackend,
 			KickstartSource = profile.KickstartSource,
 			FloppyDriveAudio = profile.FloppyDriveAudio,
-			Input = profile.Input
+			Input = profile.Input,
+			PresentationOptions = profile.PresentationOptions
 		};
 		foreach (var drive in profile.MediaDrives)
 		{
@@ -126,13 +132,15 @@ internal sealed class CopperScreenSettingsDraft
 			ParseAddress(PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase),
 			checked(RealFastRamKb * Kilobyte),
 			ParseAddress(RealFastBase, AmigaConstants.A500RealFastRamBase),
+			RtcEnabled,
 			FloppyDriveCount,
 			CpuBackend,
 			FloppyDriveAudio,
 			KickstartSource,
 			CreateMediaDrives(),
 			Input,
-			configPath);
+			configPath,
+			PresentationOptions);
 	}
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> CreateMediaDrives()
@@ -311,6 +319,8 @@ internal static class CopperScreenProfileStore
 
 		public InputFile? Input { get; set; }
 
+		public PresentationFile? Presentation { get; set; }
+
 		public static ProfileFile FromDraft(CopperScreenSettingsDraft draft)
 		{
 			return new ProfileFile
@@ -326,6 +336,7 @@ internal static class CopperScreenProfileStore
 					PseudoFastBase = draft.PseudoFastBase,
 					RealFastRamKb = draft.RealFastRamKb == 0 ? null : draft.RealFastRamKb,
 					RealFastBase = draft.RealFastRamKb == 0 ? null : draft.RealFastBase,
+					RtcEnabled = draft.RtcEnabled,
 					FloppyDriveCount = draft.FloppyDriveCount
 				},
 				Cpu = draft.CpuBackend == M68kBackendKind.AccurateM68000 ? null : new CpuFile { Backend = draft.CpuBackend.ToString() },
@@ -388,7 +399,11 @@ internal static class CopperScreenProfileStore
 									: null
 							})
 							.ToArray()
-					}
+					},
+				Presentation = new PresentationFile
+				{
+					LacedMode = draft.PresentationOptions.LacedMode.ToString()
+				}
 			};
 		}
 
@@ -425,6 +440,8 @@ internal static class CopperScreenProfileStore
 		public int? RealFastRamKb { get; set; }
 
 		public string? RealFastBase { get; set; }
+
+		public bool? RtcEnabled { get; set; }
 
 		public int FloppyDriveCount { get; set; }
 	}
@@ -476,6 +493,11 @@ internal static class CopperScreenProfileStore
 		public InputPortsFile? Ports { get; set; }
 
 		public ControllerProfileFile[]? ControllerProfiles { get; set; }
+	}
+
+	private sealed class PresentationFile
+	{
+		public string LacedMode { get; set; } = CopperScreenLacedPresentationMode.CrtFlicker.ToString();
 	}
 
 	private sealed class InputPortsFile

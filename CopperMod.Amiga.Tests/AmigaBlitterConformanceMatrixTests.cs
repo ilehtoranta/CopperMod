@@ -186,6 +186,21 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
+	public void BlitterDisabledAllOnesSourceAUsesActiveShiftForMasks()
+	{
+		var bus = new AmigaBus();
+
+		bus.WriteWord(0x00DFF040, 0xB1F0);
+		bus.WriteWord(0x00DFF074, 0xFFFF);
+		bus.WriteWord(0x00DFF040, 0x01F0);
+		bus.WriteWord(0x00DFF044, 0x07FF);
+		WritePointer(bus, 0x00DFF054, DestinationD);
+		StartBlitAndRun(bus, widthWords: 1, height: 1);
+
+		Assert.Equal(0x07FF, ReadWord(bus, DestinationD));
+	}
+
+	[Fact]
 	public void BlitterSizeFieldsUseHrmZeroAliases()
 	{
 		var widthBus = new AmigaBus();
@@ -417,7 +432,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
-	public void BlitterBusyRemainsSetWhenBitplaneDmaDelaysFinalWriteSlot()
+	public void BlitterBusyClearsWhenBitplaneDmaDelaysFinalWriteSlot()
 	{
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
@@ -442,13 +457,17 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		var nominalCompletion = startCycle + 4;
 		bus.AdvanceDmaTo(nominalCompletion);
 
-		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
-		Assert.Equal(0xCAFE, bus.ReadChipWordForPresentation(destination, nominalCompletion));
-		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqBlitter);
-
-		bus.AdvanceDmaTo(nominalCompletion + AgnusChipSlotScheduler.SlotCycles);
 		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
-		Assert.Equal(0xCAFE, bus.ReadChipWordForPresentation(destination, nominalCompletion + AgnusChipSlotScheduler.SlotCycles));
+		Assert.Equal(0xCAFE, bus.ReadChipWordForPresentation(destination, nominalCompletion));
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqBlitter);
+
+		var finalWrite = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite &&
+				access.Request.Address == destination);
+		Assert.True(finalWrite.CompletedCycle > nominalCompletion);
 	}
 
 	[Fact]

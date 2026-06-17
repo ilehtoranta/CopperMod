@@ -98,11 +98,17 @@ namespace CopperMod.Amiga
         private const int BitMapDepthOffset = 0x05;
         private const int BitMapPlanesOffset = 0x08;
         private const ushort ViewModeInterlace = 0x0004;
+        private const int SyntheticScreenDepth = 2;
+        private const int SyntheticScreenHeight = 256;
+        private const int SyntheticScreenBytesPerRow = AmigaConstants.PalLowResWidth / 8;
+        private const int SyntheticScreenPlaneSize = SyntheticScreenBytesPerRow * SyntheticScreenHeight;
+        private const int SyntheticScreenTitleHeight = 24;
+        private const uint NoTitleChange = 0xFFFF_FFFF;
 
         private readonly AmigaMachine _machine;
         private readonly IAmigaDiskDmaEngine _diskDma;
         private readonly BootInstructionBoundary _instructionBoundary;
-        private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>();
+        private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>(16);
         private readonly Dictionary<uint, BootDosHandle> _dosHandles = new Dictionary<uint, BootDosHandle>();
         private readonly Dictionary<uint, AmigaDosDirectoryEntry> _dosLocks = new Dictionary<uint, AmigaDosDirectoryEntry>();
         private bool _bootDiskReadCompleted;
@@ -117,6 +123,7 @@ namespace CopperMod.Amiga
         private int _execDiagnosticCount;
         private int _hostFreeDiagnosticCount;
         private int _dosWriteDiagnosticCount;
+        private int _intuitionTitleDiagnosticCount;
         private int _nextAllocatedSignalBit;
         private uint _allocatedSignalMask;
         private uint _syntheticSignalMask;
@@ -132,6 +139,9 @@ namespace CopperMod.Amiga
         private uint _syntheticMessageAddress;
         private uint _syntheticHostObjectAddress;
         private uint _syntheticViewAddress;
+        private uint _syntheticRasInfoAddress;
+        private uint _syntheticBitMapAddress;
+        private uint _syntheticPlaneAddress;
         private uint _currentViewAddress;
         private int _pendingSyntheticMessages;
         private uint _nextDosHandle;
@@ -253,6 +263,7 @@ namespace CopperMod.Amiga
             _execDiagnosticCount = 0;
             _hostFreeDiagnosticCount = 0;
             _dosWriteDiagnosticCount = 0;
+            _intuitionTitleDiagnosticCount = 0;
             _nextAllocatedSignalBit = 0;
             _allocatedSignalMask = 0;
             _syntheticSignalMask = 0;
@@ -268,6 +279,9 @@ namespace CopperMod.Amiga
             _syntheticMessageAddress = 0;
             _syntheticHostObjectAddress = 0;
             _syntheticViewAddress = 0;
+            _syntheticRasInfoAddress = 0;
+            _syntheticBitMapAddress = 0;
+            _syntheticPlaneAddress = 0;
             _currentViewAddress = 0;
             _pendingSyntheticMessages = 0;
             _nextDosHandle = 0x0000_5000;
@@ -364,7 +378,7 @@ namespace CopperMod.Amiga
         private void InstallBootHostTraps()
         {
             var bus = _machine.Bus;
-            _machine.Kickstart.Install(bus, CreateHostTrapTable());
+            _machine.Kickstart.InstallHostShim(bus, CreateHostTrapTable());
             InstallSafeAutovectors(bus);
             for (var displacement = -6; displacement >= -600; displacement -= 6)
             {
@@ -627,9 +641,10 @@ namespace CopperMod.Amiga
 
                 _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
                 _owner._machine.Bus.AdvanceRasterTo(currentCycle);
-                _owner._machine.Bus.AdvanceCiasTo(currentCycle);
-                _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: false);
+                _owner._machine.Bus.AdvanceCiaTimersTo(currentCycle);
+                _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: false, advancePassiveDiskInput: false);
                 _owner._machine.DispatchPendingHardwareInterrupt();
+
                 _instructions += instructionCount;
                 if (_owner._bootDiskReadCompleted && _runMode == AmigaBootRunMode.StopAfterBootDiskRead)
                 {
@@ -883,42 +898,43 @@ namespace CopperMod.Amiga
 
         private void HostOpenLibrary(M68kCpuState state)
         {
-            var name = ReadNullTerminatedString(state.A[1], 96);
+            var shouldRecordDiagnostic = _openLibraryDiagnosticCount < 24;
+            var name = shouldRecordDiagnostic ? ReadNullTerminatedString(state.A[1], 96) : null;
             if (_openLibraryDiagnosticCount < 24)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_OPEN_LIBRARY", $"OpenLibrary requested '{name}'."));
                 _openLibraryDiagnosticCount++;
             }
 
-            if (name.IndexOf("graphics", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (ContainsNullTerminatedString(name, state.A[1], 96, "graphics"))
             {
                 state.D[0] = AmigaKickstartHost.GraphicsLibraryBase;
             }
-            else if (name.IndexOf("intuition", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "intuition"))
             {
                 state.D[0] = AmigaKickstartHost.IntuitionLibraryBase;
             }
-            else if (name.IndexOf("expansion", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "expansion"))
             {
                 state.D[0] = AmigaKickstartHost.ExpansionLibraryBase;
             }
-            else if (name.IndexOf("dos", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "dos"))
             {
                 state.D[0] = AmigaKickstartHost.DosLibraryBase;
             }
-            else if (name.IndexOf("ciaa", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "ciaa"))
             {
                 state.D[0] = AmigaKickstartHost.CiaAResourceBase;
             }
-            else if (name.IndexOf("ciab", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "ciab"))
             {
                 state.D[0] = AmigaKickstartHost.CiaBResourceBase;
             }
-            else if (name.IndexOf("cia", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "cia"))
             {
                 state.D[0] = AmigaKickstartHost.CiaBResourceBase;
             }
-            else if (name.IndexOf("icon", StringComparison.OrdinalIgnoreCase) >= 0)
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "icon"))
             {
                 state.D[0] = AmigaKickstartHost.IconLibraryBase;
             }
@@ -1195,6 +1211,11 @@ namespace CopperMod.Amiga
                     return;
                 case -204:
                     state.D[0] = EnsureSyntheticWindow();
+                    _ = EnsureSyntheticScreen();
+                    return;
+                case -276: // SetWindowTitles(Window, WindowTitle, ScreenTitle)
+                    HostIntuitionSetWindowTitles(state);
+                    state.D[0] = 0;
                     return;
                 case -378: // MakeScreen
                 case -384: // RemakeDisplay
@@ -1211,6 +1232,50 @@ namespace CopperMod.Amiga
                     state.D[0] = EnsureSyntheticHostObject();
                     return;
             }
+        }
+
+        private void HostIntuitionSetWindowTitles(M68kCpuState state)
+        {
+            var windowTitle = ReadOptionalIntuitionTitle(state.A[1], 80);
+            var screenTitle = ReadOptionalIntuitionTitle(state.A[2], 80);
+            var title = !string.IsNullOrWhiteSpace(windowTitle)
+                ? windowTitle
+                : screenTitle;
+
+            LogIntuitionTitle(windowTitle, screenTitle);
+
+            _ = EnsureSyntheticScreen();
+            if (string.IsNullOrWhiteSpace(title) || !EnsureSyntheticScreenBitmap())
+            {
+                return;
+            }
+
+            RenderSyntheticScreenTitle(title);
+            _ = HostRethinkDisplay(state.Cycles);
+            state.Cycles += AmigaConstants.A500PalCpuCyclesPerFrame;
+        }
+
+        private void LogIntuitionTitle(string windowTitle, string screenTitle)
+        {
+            if (_intuitionTitleDiagnosticCount >= 4)
+            {
+                return;
+            }
+
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_INTUITION_TITLE",
+                $"SetWindowTitles window='{windowTitle}' screen='{screenTitle}'."));
+            _intuitionTitleDiagnosticCount++;
+        }
+
+        private string ReadOptionalIntuitionTitle(uint address, int maxLength)
+        {
+            if (address == 0 || address == NoTitleChange || !_machine.Bus.IsMappedMemoryRange(address, 1))
+            {
+                return string.Empty;
+            }
+
+            return ReadNullTerminatedString(address, maxLength);
         }
 
         private void HostExpansionGeneric(M68kCpuState state, int displacement)
@@ -1415,7 +1480,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            copperList = AllocateProgramMemory(0x100);
+            copperList = AllocateChipProgramMemory(0x100);
             var offset = copperList;
             WriteCopperMove(ref offset, 0x08E, EncodeDiwStart(dx, dy));
             WriteCopperMove(ref offset, 0x090, EncodeDiwStop(dx, dy, width, height));
@@ -1434,10 +1499,22 @@ namespace CopperMod.Amiga
             }
 
             WriteCopperMove(ref offset, 0x180, 0x0000);
-            WriteCopperMove(ref offset, 0x182, 0x0FFF);
+            WriteCopperMove(ref offset, 0x182, IsSyntheticViewPort(viewPort) ? (ushort)0x0238 : (ushort)0x0FFF);
+            if (IsSyntheticViewPort(viewPort))
+            {
+                WriteCopperMove(ref offset, 0x184, 0x0FFF);
+                WriteCopperMove(ref offset, 0x186, 0x0FFF);
+            }
+
             _machine.Bus.WriteWord(offset, 0xFFFF);
             _machine.Bus.WriteWord(offset + 2, 0xFFFE);
             return true;
+        }
+
+        private bool IsSyntheticViewPort(uint viewPort)
+        {
+            return _syntheticScreenAddress != 0 &&
+                viewPort == _syntheticScreenAddress + ScreenViewPortOffset;
         }
 
         private bool TryPublishCopperListFromView(uint view, long cycle)
@@ -1547,6 +1624,7 @@ namespace CopperMod.Amiga
 
         private void LoadCopperList(uint copperList, long cycle)
         {
+            _machine.Bus.WriteWord(0x00DFF096, 0x8380, cycle);
             _machine.Bus.WriteWord(0x00DFF080, (ushort)(copperList >> 16), cycle);
             _machine.Bus.WriteWord(0x00DFF082, (ushort)copperList, cycle);
             _machine.Bus.WriteWord(0x00DFF088, 0, cycle);
@@ -1645,6 +1723,7 @@ namespace CopperMod.Amiga
 
             _machine.Bus.WriteLong(_syntheticScreenAddress + ScreenFirstWindowOffset, EnsureSyntheticWindow());
             InitializeSyntheticViewPort(GetSyntheticScreenViewPortAddress());
+            _ = EnsureSyntheticScreenBitmap();
             EnsureSyntheticView();
             return _syntheticScreenAddress;
         }
@@ -1679,6 +1758,204 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteWord(viewPort + ViewPortDxOffsetOffset, 0);
             _machine.Bus.WriteWord(viewPort + ViewPortDyOffsetOffset, 0);
             _machine.Bus.WriteWord(viewPort + ViewPortModesOffset, 0);
+        }
+
+        private bool EnsureSyntheticScreenBitmap()
+        {
+            if (_syntheticScreenAddress == 0)
+            {
+                _ = EnsureSyntheticScreen();
+                return _syntheticPlaneAddress != 0;
+            }
+
+            if (_syntheticPlaneAddress != 0)
+            {
+                return true;
+            }
+
+            var planeBytes = SyntheticScreenPlaneSize * SyntheticScreenDepth;
+            _syntheticPlaneAddress = AllocateMemoryFromMemList(
+                planeBytes,
+                MemfPublic | MemfChip | MemfClear);
+            if (_syntheticPlaneAddress == 0)
+            {
+                return false;
+            }
+
+            _syntheticRasInfoAddress = AllocateProgramMemory(0x10);
+            _syntheticBitMapAddress = AllocateProgramMemory(BitMapPlanesOffset + 6 * 4);
+            _machine.Bus.ClearMemory(_syntheticRasInfoAddress, 0x10);
+            _machine.Bus.ClearMemory(_syntheticBitMapAddress, BitMapPlanesOffset + 6 * 4);
+            _machine.Bus.WriteLong(_syntheticRasInfoAddress + RasInfoBitMapOffset, _syntheticBitMapAddress);
+            _machine.Bus.WriteWord(_syntheticBitMapAddress + BitMapBytesPerRowOffset, SyntheticScreenBytesPerRow);
+            _machine.Bus.WriteWord(_syntheticBitMapAddress + BitMapRowsOffset, SyntheticScreenHeight);
+            _machine.Bus.WriteByte(_syntheticBitMapAddress + BitMapDepthOffset, SyntheticScreenDepth, 0);
+            for (var plane = 0; plane < SyntheticScreenDepth; plane++)
+            {
+                var planeAddress = _syntheticPlaneAddress + (uint)(plane * SyntheticScreenPlaneSize);
+                _machine.Bus.WriteLong(_syntheticBitMapAddress + BitMapPlanesOffset + (uint)(plane * 4), planeAddress);
+            }
+
+            _machine.Bus.WriteLong(GetSyntheticScreenViewPortAddress() + ViewPortRasInfoOffset, _syntheticRasInfoAddress);
+            RenderSyntheticScreenTitle("Loading");
+            return true;
+        }
+
+        private void RenderSyntheticScreenTitle(string title)
+        {
+            ClearSyntheticScreenBitmap();
+            FillSyntheticRect(0, 0, AmigaConstants.PalLowResWidth, SyntheticScreenTitleHeight, 1);
+            DrawSyntheticText(title, 8, 6, 2);
+        }
+
+        private void ClearSyntheticScreenBitmap()
+        {
+            if (_syntheticPlaneAddress == 0)
+            {
+                return;
+            }
+
+            _machine.Bus.ClearMemory(_syntheticPlaneAddress, SyntheticScreenPlaneSize * SyntheticScreenDepth);
+        }
+
+        private void FillSyntheticRect(int x, int y, int width, int height, int color)
+        {
+            var x0 = Math.Clamp(x, 0, AmigaConstants.PalLowResWidth);
+            var y0 = Math.Clamp(y, 0, SyntheticScreenHeight);
+            var x1 = Math.Clamp(x + Math.Max(0, width), 0, AmigaConstants.PalLowResWidth);
+            var y1 = Math.Clamp(y + Math.Max(0, height), 0, SyntheticScreenHeight);
+            for (var py = y0; py < y1; py++)
+            {
+                for (var px = x0; px < x1; px++)
+                {
+                    WriteSyntheticPixel(px, py, color);
+                }
+            }
+        }
+
+        private void DrawSyntheticText(string text, int x, int y, int color)
+        {
+            var cursorX = x;
+            var scale = text.Length <= 28 ? 2 : 1;
+            var characterWidth = (5 * scale) + scale;
+            var maxCharacters = Math.Max(1, (AmigaConstants.PalLowResWidth - x - 8) / characterWidth);
+            var count = Math.Min(text.Length, maxCharacters);
+            for (var index = 0; index < count; index++)
+            {
+                var glyph = SyntheticGlyph(text[index]);
+                for (var row = 0; row < 7; row++)
+                {
+                    var bits = (int)((glyph >> ((6 - row) * 5)) & 0x1F);
+                    for (var column = 0; column < 5; column++)
+                    {
+                        if ((bits & (0x10 >> column)) == 0)
+                        {
+                            continue;
+                        }
+
+                        for (var sy = 0; sy < scale; sy++)
+                        {
+                            for (var sx = 0; sx < scale; sx++)
+                            {
+                                WriteSyntheticPixel(
+                                    cursorX + column * scale + sx,
+                                    y + row * scale + sy,
+                                    color);
+                            }
+                        }
+                    }
+                }
+
+                cursorX += characterWidth;
+            }
+        }
+
+        private void WriteSyntheticPixel(int x, int y, int color)
+        {
+            if (_syntheticPlaneAddress == 0 ||
+                x < 0 ||
+                x >= AmigaConstants.PalLowResWidth ||
+                y < 0 ||
+                y >= SyntheticScreenHeight)
+            {
+                return;
+            }
+
+            var byteOffset = (y * SyntheticScreenBytesPerRow) + (x >> 3);
+            var mask = (byte)(0x80 >> (x & 7));
+            for (var plane = 0; plane < SyntheticScreenDepth; plane++)
+            {
+                var address = _syntheticPlaneAddress + (uint)(plane * SyntheticScreenPlaneSize + byteOffset);
+                var value = _machine.Bus.ReadByte(address);
+                value = ((color >> plane) & 1) != 0
+                    ? (byte)(value | mask)
+                    : (byte)(value & (byte)~mask);
+                _machine.Bus.WriteByte(address, value, 0);
+            }
+        }
+
+        private static ulong SyntheticGlyph(char character)
+        {
+            return char.ToUpperInvariant(character) switch
+            {
+                'A' => PackSyntheticGlyph(0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
+                'B' => PackSyntheticGlyph(0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E),
+                'C' => PackSyntheticGlyph(0x0F, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0F),
+                'D' => PackSyntheticGlyph(0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E),
+                'E' => PackSyntheticGlyph(0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F),
+                'F' => PackSyntheticGlyph(0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10),
+                'G' => PackSyntheticGlyph(0x0F, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0F),
+                'H' => PackSyntheticGlyph(0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
+                'I' => PackSyntheticGlyph(0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F),
+                'J' => PackSyntheticGlyph(0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0E),
+                'K' => PackSyntheticGlyph(0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11),
+                'L' => PackSyntheticGlyph(0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F),
+                'M' => PackSyntheticGlyph(0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11),
+                'N' => PackSyntheticGlyph(0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11),
+                'O' => PackSyntheticGlyph(0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
+                'P' => PackSyntheticGlyph(0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10),
+                'Q' => PackSyntheticGlyph(0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D),
+                'R' => PackSyntheticGlyph(0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11),
+                'S' => PackSyntheticGlyph(0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E),
+                'T' => PackSyntheticGlyph(0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04),
+                'U' => PackSyntheticGlyph(0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
+                'V' => PackSyntheticGlyph(0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04),
+                'W' => PackSyntheticGlyph(0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A),
+                'X' => PackSyntheticGlyph(0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11),
+                'Y' => PackSyntheticGlyph(0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04),
+                'Z' => PackSyntheticGlyph(0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F),
+                '0' => PackSyntheticGlyph(0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E),
+                '1' => PackSyntheticGlyph(0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E),
+                '2' => PackSyntheticGlyph(0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F),
+                '3' => PackSyntheticGlyph(0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E),
+                '4' => PackSyntheticGlyph(0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02),
+                '5' => PackSyntheticGlyph(0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E),
+                '6' => PackSyntheticGlyph(0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E),
+                '7' => PackSyntheticGlyph(0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08),
+                '8' => PackSyntheticGlyph(0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E),
+                '9' => PackSyntheticGlyph(0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E),
+                ':' => PackSyntheticGlyph(0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00),
+                '.' => PackSyntheticGlyph(0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C),
+                '-' => PackSyntheticGlyph(0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00),
+                '/' => PackSyntheticGlyph(0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10),
+                '\\' => PackSyntheticGlyph(0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01),
+                '(' => PackSyntheticGlyph(0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02),
+                ')' => PackSyntheticGlyph(0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08),
+                '\'' => PackSyntheticGlyph(0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00),
+                ' ' => 0,
+                _ => PackSyntheticGlyph(0x1F, 0x11, 0x02, 0x04, 0x04, 0x00, 0x04),
+            };
+        }
+
+        private static ulong PackSyntheticGlyph(uint row0, uint row1, uint row2, uint row3, uint row4, uint row5, uint row6)
+        {
+            return ((ulong)(row0 & 0x1Fu) << 30) |
+                ((ulong)(row1 & 0x1Fu) << 25) |
+                ((ulong)(row2 & 0x1Fu) << 20) |
+                ((ulong)(row3 & 0x1Fu) << 15) |
+                ((ulong)(row4 & 0x1Fu) << 10) |
+                ((ulong)(row5 & 0x1Fu) << 5) |
+                (ulong)(row6 & 0x1Fu);
         }
 
         private uint EnsureSyntheticWindow()
@@ -1972,14 +2249,15 @@ namespace CopperMod.Amiga
 
         private void HostFindResident(M68kCpuState state)
         {
-            var name = ReadNullTerminatedString(state.A[1], 96);
+            var shouldRecordDiagnostic = _execDiagnosticCount < 16;
+            var name = shouldRecordDiagnostic ? ReadNullTerminatedString(state.A[1], 96) : null;
             if (_execDiagnosticCount < 16)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_FIND_RESIDENT", $"FindResident requested '{name}'."));
                 _execDiagnosticCount++;
             }
 
-            if (name.IndexOf("dos", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (ContainsNullTerminatedString(name, state.A[1], 96, "dos"))
             {
                 EnsureDosResident();
                 state.D[0] = DosResidentAddress;
@@ -1987,6 +2265,77 @@ namespace CopperMod.Amiga
             }
 
             state.D[0] = 0;
+        }
+
+        private bool ContainsNullTerminatedString(string? cached, uint address, int maxLength, string value)
+        {
+            if (cached != null)
+            {
+                return cached.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            return ContainsNullTerminatedAscii(address, maxLength, value);
+        }
+
+        private bool ContainsNullTerminatedAscii(uint address, int maxLength, string value)
+        {
+            if (address == 0 || maxLength <= 0 || value.Length == 0)
+            {
+                return false;
+            }
+
+            for (var start = 0; start < maxLength; start++)
+            {
+                var current = _machine.Bus.ReadByte(address + (uint)start);
+                if (current == 0)
+                {
+                    return false;
+                }
+
+                if (AsciiEqualsIgnoreCase(current, value[0]) &&
+                    NullTerminatedAsciiMatchesAt(address, maxLength, start, value))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool NullTerminatedAsciiMatchesAt(uint address, int maxLength, int start, string value)
+        {
+            for (var offset = 0; offset < value.Length; offset++)
+            {
+                var index = start + offset;
+                if (index >= maxLength)
+                {
+                    return false;
+                }
+
+                var current = _machine.Bus.ReadByte(address + (uint)index);
+                if (current == 0 || !AsciiEqualsIgnoreCase(current, value[offset]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AsciiEqualsIgnoreCase(byte left, char right)
+        {
+            var leftChar = (char)left;
+            if (leftChar is >= 'A' and <= 'Z')
+            {
+                leftChar = (char)(leftChar + ('a' - 'A'));
+            }
+
+            if (right is >= 'A' and <= 'Z')
+            {
+                right = (char)(right + ('a' - 'A'));
+            }
+
+            return leftChar == right;
         }
 
         private static void HostFindName(M68kCpuState state)
@@ -2176,7 +2525,13 @@ namespace CopperMod.Amiga
 
         private static string ExtractStartupCommandPath(string line)
         {
-            var end = line.IndexOfAny(new[] { ' ', '\t' });
+            var space = line.IndexOf(' ');
+            var tab = line.IndexOf('\t');
+            var end = space < 0
+                ? tab
+                : tab < 0
+                    ? space
+                    : Math.Min(space, tab);
             return end < 0 ? line : line[..end];
         }
 
@@ -2973,6 +3328,17 @@ namespace CopperMod.Amiga
             return address;
         }
 
+        private uint AllocateChipProgramMemory(int byteCount)
+        {
+            var address = AllocateMemoryFromMemList(Math.Max(4, byteCount), MemfPublic | MemfChip);
+            if (address == 0)
+            {
+                throw new AmigaEmulationException("The boot program does not fit in the available emulated chip memory.");
+            }
+
+            return address;
+        }
+
         private uint WriteProgramString(string value)
         {
             var bytes = Encoding.ASCII.GetBytes(value);
@@ -3012,22 +3378,29 @@ namespace CopperMod.Amiga
 
         private string ReadDosPath(uint value)
         {
-            foreach (var candidate in new[] { value, value << 2 })
+            if (TryReadDosPathCandidate(value, out var path))
             {
-                var bstr = ReadBstr(candidate, 255);
-                if (!string.IsNullOrWhiteSpace(bstr))
-                {
-                    return bstr;
-                }
+                return path;
+            }
 
-                var cstr = ReadNullTerminatedString(candidate, 255);
-                if (!string.IsNullOrWhiteSpace(cstr))
-                {
-                    return cstr;
-                }
+            if (TryReadDosPathCandidate(value << 2, out path))
+            {
+                return path;
             }
 
             return string.Empty;
+        }
+
+        private bool TryReadDosPathCandidate(uint candidate, out string path)
+        {
+            path = ReadBstr(candidate, 255);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return true;
+            }
+
+            path = ReadNullTerminatedString(candidate, 255);
+            return !string.IsNullOrWhiteSpace(path);
         }
 
         private string ReadBstr(uint address, int maxLength)

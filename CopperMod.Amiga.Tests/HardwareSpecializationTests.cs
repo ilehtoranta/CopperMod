@@ -79,8 +79,8 @@ public sealed class HardwareSpecializationTests
 
         for (var offset = -19; offset < track.BitLength + 32; offset++)
         {
-            Assert.Equal(track.ReadByte(offset), prepared.ReadByte(offset));
-            Assert.Equal(track.ReadUInt16(offset), prepared.ReadUInt16(offset));
+            Assert.Equal(track.ReadByteAtBit(offset), prepared.ReadByte(offset));
+            Assert.Equal(track.ReadUInt16AtBit(offset), prepared.ReadUInt16(offset));
         }
     }
 

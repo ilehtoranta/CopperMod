@@ -10,34 +10,41 @@ namespace CopperScreen;
 
 internal sealed class FramebufferPresenter : Control
 {
-	private readonly WriteableBitmap _bitmap;
+	private const int PresentationBitmapCount = 3;
+	private readonly WriteableBitmap[] _bitmaps;
 	private readonly int _width;
 	private readonly int _height;
 	private PixelRect _sourceRect;
+	private int _frontBitmapIndex;
+	private bool _devicePixelExactLayout;
 
 	public FramebufferPresenter(int width, int height)
 	{
 		_width = width;
 		_height = height;
+		UseLayoutRounding = true;
 		RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.None);
-		_bitmap = new WriteableBitmap(
-			new PixelSize(width, height),
-			new Vector(96, 96),
-			PixelFormat.Bgra8888,
-			AlphaFormat.Opaque);
+		_bitmaps = new WriteableBitmap[PresentationBitmapCount];
+		for (var i = 0; i < _bitmaps.Length; i++)
+		{
+			_bitmaps[i] = CreateBitmap(width, height);
+		}
+
 		_sourceRect = new PixelRect(0, 0, width, height);
 	}
 
 	public void Update(int[] bgra)
 	{
 		var updateStartTimestamp = Stopwatch.GetTimestamp();
-		if (bgra.Length < _width * _height)
+		ValidateFramebufferLength(bgra, _width, _height);
+
+		var nextBitmapIndex = (_frontBitmapIndex + 1) % _bitmaps.Length;
+		using (var framebuffer = _bitmaps[nextBitmapIndex].Lock())
 		{
-			throw new ArgumentException("The framebuffer is too small.", nameof(bgra));
+			CopyBgraRows(bgra, _width, _height, framebuffer.Address, framebuffer.RowBytes);
 		}
 
-		using var framebuffer = _bitmap.Lock();
-		Marshal.Copy(bgra, 0, framebuffer.Address, _width * _height);
+		_frontBitmapIndex = nextBitmapIndex;
 		InvalidateVisual();
 		LastUpdateMilliseconds = Stopwatch.GetElapsedTime(updateStartTimestamp).TotalMilliseconds;
 	}
@@ -46,18 +53,39 @@ internal sealed class FramebufferPresenter : Control
 
 	public double LastRenderMilliseconds { get; private set; }
 
+	public bool DevicePixelExactLayout
+	{
+		get => _devicePixelExactLayout;
+		set
+		{
+			if (_devicePixelExactLayout == value)
+			{
+				return;
+			}
+
+			_devicePixelExactLayout = value;
+			InvalidateMeasure();
+			InvalidateVisual();
+		}
+	}
+
 	public override void Render(DrawingContext context)
 	{
 		var renderStartTimestamp = Stopwatch.GetTimestamp();
 		base.Render(context);
-		if (!TryCalculateUniformDestination(Bounds.Size, new Size(_sourceRect.Width, _sourceRect.Height), out var destination))
+		context.FillRectangle(Brushes.Black, Bounds);
+		if (!TryCalculateUniformDestination(
+				Bounds.Size,
+				new Size(_sourceRect.Width, _sourceRect.Height),
+				GetRenderScaling(),
+				out var destination))
 		{
 			LastRenderMilliseconds = Stopwatch.GetElapsedTime(renderStartTimestamp).TotalMilliseconds;
 			return;
 		}
 
 		context.DrawImage(
-			_bitmap,
+			_bitmaps[_frontBitmapIndex],
 			new Rect(_sourceRect.X, _sourceRect.Y, _sourceRect.Width, _sourceRect.Height),
 			destination);
 		LastRenderMilliseconds = Stopwatch.GetElapsedTime(renderStartTimestamp).TotalMilliseconds;
@@ -76,12 +104,12 @@ internal sealed class FramebufferPresenter : Control
 
 	public bool TryMapPointToFramebuffer(Point position, out Point framebufferPoint)
 	{
-		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, out framebufferPoint);
+		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, GetRenderScaling(), out framebufferPoint);
 	}
 
 	public bool TryMapPointToFramebufferUnclamped(Point position, out Point framebufferPoint)
 	{
-		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, out framebufferPoint);
+		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, GetRenderScaling(), out framebufferPoint);
 	}
 
 	public bool TryGetRenderedImageCenter(out Point center)
@@ -97,8 +125,11 @@ internal sealed class FramebufferPresenter : Control
 	}
 
 	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
+		=> TryMapUniformStretchPoint(bounds, sourceRect, position, renderScaling: 1.0, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, double renderScaling, out Point framebufferPoint)
 	{
-		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
+		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, renderScaling, out var sourcePoint))
 		{
 			framebufferPoint = default;
 			return false;
@@ -109,8 +140,11 @@ internal sealed class FramebufferPresenter : Control
 	}
 
 	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, PixelRect sourceRect, Point position, out Point framebufferPoint)
+		=> TryMapUniformStretchPointUnclamped(bounds, sourceRect, position, renderScaling: 1.0, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, PixelRect sourceRect, Point position, double renderScaling, out Point framebufferPoint)
 	{
-		if (!TryMapUniformStretchPointUnclamped(bounds, new Size(sourceRect.Width, sourceRect.Height), position, out var sourcePoint))
+		if (!TryMapUniformStretchPointUnclamped(bounds, new Size(sourceRect.Width, sourceRect.Height), position, renderScaling, out var sourcePoint))
 		{
 			framebufferPoint = default;
 			return false;
@@ -121,67 +155,81 @@ internal sealed class FramebufferPresenter : Control
 	}
 
 	protected override Size MeasureOverride(Size availableSize)
-		=> new(_sourceRect.Width, _sourceRect.Height);
+	{
+		var source = new Size(_sourceRect.Width, _sourceRect.Height);
+		return _devicePixelExactLayout
+			? CalculateDevicePixelExactLogicalSize(source, GetRenderScaling())
+			: source;
+	}
 
 	internal static bool TryMapUniformStretchPoint(Size bounds, Size source, Point position, out Point framebufferPoint)
+		=> TryMapUniformStretchPoint(bounds, source, position, renderScaling: 1.0, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPoint(Size bounds, Size source, Point position, double renderScaling, out Point framebufferPoint)
 	{
 		framebufferPoint = default;
-		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		if (!TryCalculateUniformDestination(bounds, source, renderScaling, out var destination))
 		{
 			return false;
 		}
 
-		var scale = Math.Min(bounds.Width / source.Width, bounds.Height / source.Height);
-		if (scale <= 0)
-		{
-			return false;
-		}
-
-		var imageWidth = source.Width * scale;
-		var imageHeight = source.Height * scale;
-		var offsetX = (bounds.Width - imageWidth) / 2.0;
-		var offsetY = (bounds.Height - imageHeight) / 2.0;
-		var imageX = position.X - offsetX;
-		var imageY = position.Y - offsetY;
-		if (imageX < 0 || imageY < 0 || imageX >= imageWidth || imageY >= imageHeight)
+		var imageX = position.X - destination.X;
+		var imageY = position.Y - destination.Y;
+		if (imageX < 0 || imageY < 0 || imageX >= destination.Width || imageY >= destination.Height)
 		{
 			return false;
 		}
 
 		framebufferPoint = new Point(
-			Math.Clamp(imageX / scale, 0, source.Width - 1),
-			Math.Clamp(imageY / scale, 0, source.Height - 1));
+			Math.Clamp(imageX / (destination.Width / source.Width), 0, source.Width - 1),
+			Math.Clamp(imageY / (destination.Height / source.Height), 0, source.Height - 1));
 		return true;
 	}
 
 	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, Size source, Point position, out Point framebufferPoint)
+		=> TryMapUniformStretchPointUnclamped(bounds, source, position, renderScaling: 1.0, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, Size source, Point position, double renderScaling, out Point framebufferPoint)
 	{
 		framebufferPoint = default;
-		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		if (!TryCalculateUniformDestination(bounds, source, renderScaling, out var destination))
 		{
 			return false;
 		}
 
-		var scale = Math.Min(bounds.Width / source.Width, bounds.Height / source.Height);
-		if (scale <= 0)
-		{
-			return false;
-		}
-
-		var imageWidth = source.Width * scale;
-		var imageHeight = source.Height * scale;
-		var offsetX = (bounds.Width - imageWidth) / 2.0;
-		var offsetY = (bounds.Height - imageHeight) / 2.0;
 		framebufferPoint = new Point(
-			(position.X - offsetX) / scale,
-			(position.Y - offsetY) / scale);
+			(position.X - destination.X) / (destination.Width / source.Width),
+			(position.Y - destination.Y) / (destination.Height / source.Height));
 		return true;
 	}
 
 	internal static bool TryCalculateUniformDestination(Size bounds, Size source, out Rect destination)
+		=> TryCalculateUniformDestination(bounds, source, renderScaling: 1.0, out destination);
+
+	internal static Size CalculateDevicePixelExactLogicalSize(Size source, double renderScaling)
+	{
+		if (source.Width <= 0 ||
+			source.Height <= 0 ||
+			renderScaling <= 0 ||
+			double.IsNaN(renderScaling) ||
+			double.IsInfinity(renderScaling))
+		{
+			return source;
+		}
+
+		return new Size(source.Width / renderScaling, source.Height / renderScaling);
+	}
+
+	internal static bool TryCalculateUniformDestination(Size bounds, Size source, double renderScaling, out Rect destination)
 	{
 		destination = default;
-		if (bounds.Width <= 0 || bounds.Height <= 0 || source.Width <= 0 || source.Height <= 0)
+		if (bounds.Width <= 0 ||
+			bounds.Height <= 0 ||
+			source.Width <= 0 ||
+			source.Height <= 0 ||
+			renderScaling <= 0 ||
+			double.IsNaN(renderScaling) ||
+			double.IsInfinity(renderScaling))
 		{
 			return false;
 		}
@@ -192,13 +240,95 @@ internal sealed class FramebufferPresenter : Control
 			return false;
 		}
 
-		var imageWidth = source.Width * scale;
-		var imageHeight = source.Height * scale;
+		var snappedScale = SnapUniformScaleToDevicePixels(scale, source, renderScaling);
+		var imageWidth = Math.Min(bounds.Width, source.Width * snappedScale);
+		var imageHeight = Math.Min(bounds.Height, source.Height * snappedScale);
+		if (imageWidth <= 0 || imageHeight <= 0)
+		{
+			return false;
+		}
+
 		destination = new Rect(
-			(bounds.Width - imageWidth) / 2.0,
-			(bounds.Height - imageHeight) / 2.0,
+			SnapOffsetToDevicePixel((bounds.Width - imageWidth) / 2.0, renderScaling),
+			SnapOffsetToDevicePixel((bounds.Height - imageHeight) / 2.0, renderScaling),
 			imageWidth,
 			imageHeight);
 		return true;
+	}
+
+	private double GetRenderScaling()
+		=> TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+
+	private static WriteableBitmap CreateBitmap(int width, int height)
+		=> new(
+			new PixelSize(width, height),
+			new Vector(96, 96),
+			PixelFormat.Bgra8888,
+			AlphaFormat.Opaque);
+
+	private static double SnapUniformScaleToDevicePixels(double scale, Size source, double renderScaling)
+	{
+		var width = GetIntegralSourceDimension(source.Width);
+		var height = GetIntegralSourceDimension(source.Height);
+		var divisor = GreatestCommonDivisor(width, height);
+		var snappedDeviceScale = Math.Floor(scale * renderScaling * divisor) / divisor;
+		if (snappedDeviceScale > 0)
+		{
+			return snappedDeviceScale / renderScaling;
+		}
+
+		return scale;
+	}
+
+	private static double SnapOffsetToDevicePixel(double value, double renderScaling)
+		=> Math.Round(Math.Max(0, value) * renderScaling) / renderScaling;
+
+	private static int GetIntegralSourceDimension(double value)
+		=> Math.Max(1, (int)Math.Round(value));
+
+	private static int GreatestCommonDivisor(int left, int right)
+	{
+		left = Math.Abs(left);
+		right = Math.Abs(right);
+		while (right != 0)
+		{
+			var remainder = left % right;
+			left = right;
+			right = remainder;
+		}
+
+		return Math.Max(1, left);
+	}
+
+	internal static void CopyBgraRows(int[] bgra, int width, int height, IntPtr destination, int destinationRowBytes)
+	{
+		ValidateFramebufferLength(bgra, width, height);
+		if (destination == IntPtr.Zero)
+		{
+			throw new ArgumentException("The destination pointer must be non-zero.", nameof(destination));
+		}
+
+		var sourceRowBytes = checked(width * sizeof(int));
+		if (destinationRowBytes < sourceRowBytes)
+		{
+			throw new ArgumentException("The destination row stride is too small for the framebuffer width.", nameof(destinationRowBytes));
+		}
+
+		for (var y = 0; y < height; y++)
+		{
+			Marshal.Copy(
+				bgra,
+				y * width,
+				IntPtr.Add(destination, y * destinationRowBytes),
+				width);
+		}
+	}
+
+	private static void ValidateFramebufferLength(int[] bgra, int width, int height)
+	{
+		if (bgra.Length < checked(width * height))
+		{
+			throw new ArgumentException("The framebuffer is too small.", nameof(bgra));
+		}
 	}
 }

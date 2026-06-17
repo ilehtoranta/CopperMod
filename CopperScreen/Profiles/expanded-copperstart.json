@@ -7,10 +7,17 @@
     "chipRamKb": 512,
     "pseudoFastRamKb": 512,
     "pseudoFastBase": "$C00000",
+    "rtcEnabled": true,
     "floppyDriveCount": 2
   },
   "kickstart": {
     "source": "CopperStart",
     "version": "1.3"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "synthetic"
+    }
   }
 }

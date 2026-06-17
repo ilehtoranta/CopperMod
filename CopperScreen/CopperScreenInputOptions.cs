@@ -101,8 +101,16 @@ internal sealed record CopperScreenInputOptions(
 	public CopperScreenControllerProfile GetProfileForPort(int port)
 	{
 		var profileId = port == 1 ? Port1ProfileId : Port2ProfileId;
-		return ControllerProfiles.FirstOrDefault(profile => string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase)) ??
-			CopperScreenControllerProfile.None;
+		for (var i = 0; i < ControllerProfiles.Count; i++)
+		{
+			var profile = ControllerProfiles[i];
+			if (string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase))
+			{
+				return profile;
+			}
+		}
+
+		return CopperScreenControllerProfile.None;
 	}
 
 	public bool IsMousePort(int portIndex)

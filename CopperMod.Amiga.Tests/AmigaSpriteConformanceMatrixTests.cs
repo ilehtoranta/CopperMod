@@ -98,6 +98,8 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			{
 				yield return SpriteConformanceRow.Executable("dma-pointers", $"SPR{((SpriteIndexRow)row[0]).Sprite}PTH/PTL");
 			}
+			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPT address zero is valid");
+			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPT address zero terminator");
 
 			foreach (var row in SingleSpritePaletteRows)
 			{
@@ -147,10 +149,16 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("manual-control", "SPRxCTL disarms");
 			yield return SpriteConformanceRow.Executable("manual-control", "SPRxPOS can move armed sprite");
 			yield return SpriteConformanceRow.Executable("dma-list", "zero control words terminate");
+			yield return SpriteConformanceRow.Executable("dma-list", "live DMA SPRxCTL terminator disarms manual state");
+			yield return SpriteConformanceRow.Executable("dma-list", "DMA terminator prevents stale manual state after DMA is disabled");
 			yield return SpriteConformanceRow.Executable("dma-list", "zero height control block terminates");
 			yield return SpriteConformanceRow.Executable("dma-list", "multiple control blocks reuse a channel");
 			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPTL bit 0 ignored");
 			yield return SpriteConformanceRow.Executable("dma-timing", "extra-wide playfield fetches can consume late sprite DMA slots");
+			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive carries stationary command across missed capture frame");
+			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry across captured terminator");
+			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry stale command after control block rewrite");
+			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA pending sprite pointer rewrite replaces previous pending X");
 			yield return SpriteConformanceRow.Executable("attached-colors", "odd attached sprite with transparent or missing even partner");
 			yield return SpriteConformanceRow.Executable("dma-list", "hardware one-line gap requirement between reused sprite images");
 			yield return SpriteConformanceRow.Pending("undocumented-ocs", "BPLxDAT latch enables sprites outside normal bitplane area", "Requires a latch-level Denise/BPLxDAT model.");
@@ -235,6 +243,34 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX + row.Sprite, StandardY));
 	}
 
+	[Fact]
+	public void SpriteDmaPointerZeroIsValidChipRamAddress()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		EnableSpriteDma(bus, 0x8220);
+		WriteSpriteDmaBlock(bus, 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, 0);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void SpriteDmaPointerZeroReadsTerminatorWithoutOutput()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		EnableSpriteDma(bus, 0x8220);
+		WriteChipWord(bus, 0, 0);
+		WriteChipWord(bus, 2, 0);
+		SetSpritePointer(bus, sprite: 0, 0);
+		var frame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
 	[Theory]
 	[MemberData(nameof(SingleSpritePaletteRows))]
 	public void SingleSpritesUseHrmPaletteGroups(object rowObject)
@@ -313,27 +349,27 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
-	public void AttachedEvenSpriteWithoutOddPartnerDoesNotRenderAsStandalone()
+	public void EvenSpriteAttachBitAloneIsIgnoredAndRendersStandalone()
 	{
 		var bus = new AmigaBus();
-		SetColor(bus, 1, 0x00F0);
 		SetColor(bus, 17, 0x0F00);
 		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
 		var frame = RenderLowResFrame(bus);
 
-		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
 	}
 
 	[Fact]
-	public void EvenSpriteAttachBitAttachesPairOnOcs()
+	public void EvenSpriteAttachBitDoesNotAttachPairWithoutOddAttachBit()
 	{
 		var bus = new AmigaBus();
+		SetColor(bus, 17, 0x00F0);
 		SetColor(bus, 21, 0x0F00);
 		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000, attached: true);
 		WriteManualSprite(bus, sprite: 1, StandardX, StandardY, 1, 0x8000, 0x0000);
 		var frame = RenderLowResFrame(bus);
 
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x00F0), Pixel(frame, StandardX, StandardY));
 	}
 
 	[Fact]
@@ -702,6 +738,49 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void LiveDmaTimelineSpriteTerminatorDisarmsInitialManualSpriteState()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		WriteChipWord(bus, SpriteListBase, 0);
+		WriteChipWord(bus, SpriteListBase + 2, 0);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		EnableSpriteDma(bus, 0x8220);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.AdvanceDmaTo(FrameCycles());
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
+	public void SpriteDmaTerminatorPreventsStaleManualStateAfterDmaIsDisabled()
+	{
+		var bus = new AmigaBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		var manualFrame = RenderLowResFrame(bus);
+		Assert.Equal(ToBgra(0x0F00), Pixel(manualFrame, StandardX, StandardY));
+
+		WriteChipWord(bus, SpriteListBase, 0);
+		WriteChipWord(bus, SpriteListBase + 2, 0);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		EnableSpriteDma(bus, 0x8220);
+		var terminatedFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(terminatedFrame, 0, FrameCycles());
+		Assert.Equal(ToBgra(0), Pixel(terminatedFrame, StandardX, StandardY));
+
+		EnableSpriteDma(bus, 0x8200);
+		var afterDmaDisabledFrame = RenderLowResFrame(bus);
+
+		Assert.Equal(ToBgra(0), Pixel(afterDmaDisabledFrame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
 	public void SpriteDmaZeroHeightControlBlockTerminatesListWithoutOutput()
 	{
 		var bus = new AmigaBus();
@@ -946,6 +1025,97 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void ArchivedSpriteFallbackUsesTimelineCompletedSpriteWords()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.AdvanceDmaTo(FrameCycles() - 1);
+		ClearPrivateArray(bus.Display, "_liveSpriteWordMasks");
+		bus.AdvanceDmaTo(FrameCycles());
+		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		for (var row = 0; row < 4; row++)
+		{
+			Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + row));
+		}
+	}
+
+	[Fact]
+	public void ArchivedSpriteFallbackCarriesStationaryCommandAcrossMissedCaptureFrame()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.AdvanceDmaTo(FrameCycles());
+		SetPrivateField(bus.Display, "_liveCapturedThroughCycle", (FrameCycles() * 2) - 1);
+		InvokePrivateMethod(bus.Display, "ArchiveLiveSpriteFrameBeforeStarting", FrameCycles() * 2);
+		Assert.Equal(1, GetPrivateCollectionCount(bus.Display, "_previousLiveSpriteFrameCommands"));
+		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
+		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
+	}
+
+	[Fact]
+	public void ArchivedSpriteFallbackDoesNotCarryStationaryCommandAcrossCapturedTerminator()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.AdvanceDmaTo(FrameCycles());
+		WriteChipWord(bus, SpriteListBase, 0);
+		WriteChipWord(bus, SpriteListBase + 2, 0);
+		bus.AdvanceDmaTo(FrameCycles() * 2);
+		Assert.Equal(0, GetPrivateCollectionCount(bus.Display, "_previousLiveSpriteFrameCommands"));
+		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
+	public void ArchivedSpriteFallbackDoesNotCarryStaleCommandAfterControlBlockRewrite()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.AdvanceDmaTo(FrameCycles());
+		var (movedPos, movedCtl) = EncodeSpritePosition(StandardX + 12, StandardY, 4);
+		WriteChipWord(bus, SpriteListBase, movedPos);
+		WriteChipWord(bus, SpriteListBase + 2, movedCtl);
+		SetPrivateField(bus.Display, "_liveCapturedThroughCycle", (FrameCycles() * 2) - 1);
+		InvokePrivateMethod(bus.Display, "ArchiveLiveSpriteFrameBeforeStarting", FrameCycles() * 2);
+		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX + 12, StandardY));
+		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
+	}
+
+	[Fact]
 	public void LiveDmaArchivedTimelineRendersAttachedManualSpriteRepeats()
 	{
 		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
@@ -1044,7 +1214,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
 		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
+		bus.WriteWord(0x00DFF088, 0x0000, RowCycle(StandardY + 1));
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
 		bus.AdvanceDmaTo(FrameCycles());
@@ -1075,6 +1245,33 @@ public sealed class AmigaSpriteConformanceMatrixTests
 
 		var snapshot = actualBus.Display.CaptureSnapshot();
 		Assert.Equal(expected, actual);
+		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
+		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
+	}
+
+	[Fact]
+	public void ArchivedLiveSpritePendingPointerRewriteReplacesPreviousPendingHorizontalPosition()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		const int movedX = StandardX + 12;
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var (movedPos, movedCtl) = EncodeSpritePosition(movedX, StandardY, 16);
+		bus.WriteWord(SpriteListBase, movedPos, RowCycle(StandardY - 10));
+		bus.WriteWord(SpriteListBase + 2, movedCtl, RowCycle(StandardY - 10));
+		bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY - 10));
+		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.AdvanceDmaTo(FrameCycles());
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, movedX, StandardY));
+		Assert.InRange(snapshot.LastSpriteNonZeroPixels, 1, 16);
 		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
 		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
 	}
@@ -1154,6 +1351,44 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.WriteWord(register + 2, ctl);
 		bus.WriteWord(register + 6, dataB);
 		bus.WriteWord(register + 4, dataA);
+	}
+
+	private static void ClearPrivateArray(object instance, string fieldName)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(field);
+		var value = Assert.IsAssignableFrom<Array>(field.GetValue(instance));
+		Array.Clear(value);
+	}
+
+	private static void SetPrivateField(object instance, string fieldName, object value)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(field);
+		field.SetValue(instance, value);
+	}
+
+	private static int GetPrivateCollectionCount(object instance, string fieldName)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(field);
+		var value = Assert.IsAssignableFrom<System.Collections.ICollection>(field.GetValue(instance));
+		return value.Count;
+	}
+
+	private static void InvokePrivateMethod(object instance, string methodName, params object[] arguments)
+	{
+		var method = instance.GetType().GetMethod(
+			methodName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(method);
+		method.Invoke(instance, arguments);
 	}
 
 	private static void WriteSpriteDmaBlock(

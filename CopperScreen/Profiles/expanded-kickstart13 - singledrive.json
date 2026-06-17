@@ -8,7 +8,7 @@
     "pseudoFastRamKb": 512,
     "pseudoFastBase": "$C00000",
     "rtcEnabled": true,
-    "floppyDriveCount": 2
+    "floppyDriveCount": 1
   },
   "kickstart": {
     "source": "Kickstart13Rom",

@@ -30,6 +30,8 @@ namespace CopperMod.Cust
         private readonly uint _hostAppendPathOrOkAddress = CustConstants.HostCallbackBaseAddress + 0x40;
         private readonly uint _hostAudioAllocAddress = CustConstants.HostCallbackBaseAddress + 0x50;
         private readonly uint _hostAudioFreeAddress = CustConstants.HostCallbackBaseAddress + 0x60;
+        private readonly uint _hostWaitAudioDmaAddress = CustConstants.HostCallbackBaseAddress + 0x70;
+        private readonly uint _hostNoOpAddress = CustConstants.HostCallbackBaseAddress + 0x80;
         private IReadOnlyDictionary<uint, uint> _tags = new Dictionary<uint, uint>();
         private uint _nextExternalAllocationAddress = 0x0010_0000;
         private uint _nextFileHandle = 0x100;
@@ -140,6 +142,7 @@ namespace CopperMod.Cust
             ApplyRelocations();
             _tags = BuildAbsoluteTags();
             InstallHostEnvironment();
+            PublishDeliBasePointer();
             Cpu.Reset(0, CustConstants.StackTopAddress);
             CallIfPresent(
                 CustConstants.DtpInitPlayer,
@@ -147,10 +150,6 @@ namespace CopperMod.Cust
                 advanceTimedHardwareDuringRun: false);
             UpdateSubSongRange();
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
-            CallIfPresent(
-                CustConstants.DtpInitSound,
-                dispatchHostInterrupts: false,
-                advanceTimedHardwareDuringRun: false);
             CallIfPresent(
                 CustConstants.DtpVolume,
                 dispatchHostInterrupts: false,
@@ -160,17 +159,20 @@ namespace CopperMod.Cust
                     state.D[0] = 64;
                     state.D[1] = 64;
                 });
+            CallIfPresent(
+                CustConstants.DtpInitSound,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false);
             // Some players expose DtpBalance as a UI adjustment, not startup state.
             // The host block already carries neutral balance, and invoking the
             // callback here can collapse players that naturally use Paula stereo.
-            CallIfPresent(
-                CustConstants.DtpVoices,
-                dispatchHostInterrupts: false,
-                advanceTimedHardwareDuringRun: false,
-                prepare: state =>
-                {
-                    state.D[0] = 0x0F;
-                });
+            if (!ShouldUseDeliTimerInterrupt())
+            {
+                CallIfPresent(
+                    CustConstants.DtpStartInt,
+                    dispatchHostInterrupts: false,
+                    advanceTimedHardwareDuringRun: true);
+            }
 
             AdvanceTimedHardwareTo(Cpu.State.Cycles);
         }
@@ -198,6 +200,11 @@ namespace CopperMod.Cust
 
         public void End()
         {
+            if (!ShouldUseDeliTimerInterrupt())
+            {
+                CallIfPresent(CustConstants.DtpStopInt, HostInterruptCycleBudget);
+            }
+
             CallIfPresent(CustConstants.DtpEndSound, HostInterruptCycleBudget);
             CallIfPresent(CustConstants.DtpEndPlayer, HostInterruptCycleBudget);
         }
@@ -216,7 +223,7 @@ namespace CopperMod.Cust
                 Bus.Paula.BeginChannelCapture(frames, sampleRate);
             }
 
-            if (_tags.ContainsKey(CustConstants.DtpInterrupt))
+            if (ShouldUseDeliTimerInterrupt())
             {
                 CallIfPresent(
                     CustConstants.DtpInterrupt,
@@ -280,6 +287,24 @@ namespace CopperMod.Cust
             }
         }
 
+        private bool ShouldUseDeliTimerInterrupt()
+        {
+            if (!_tags.ContainsKey(CustConstants.DtpInterrupt))
+            {
+                return false;
+            }
+
+            var hasCustomInterruptPair =
+                _tags.ContainsKey(CustConstants.DtpStartInt) &&
+                _tags.ContainsKey(CustConstants.DtpStopInt);
+            if (!hasCustomInterruptPair)
+            {
+                return true;
+            }
+
+            return _tags.TryGetValue(CustConstants.DtpRequestDtVersion, out var version) && version >= 19;
+        }
+
         private void ApplyRelocations()
         {
             foreach (var segment in _hunk.Segments)
@@ -325,6 +350,14 @@ namespace CopperMod.Cust
             return result;
         }
 
+        private void PublishDeliBasePointer()
+        {
+            if (_tags.TryGetValue(CustConstants.DtpDeliBase, out var address) && address != 0)
+            {
+                Bus.WriteHostLong(address, CustConstants.HostBlockAddress);
+            }
+        }
+
         private void InstallHostEnvironment()
         {
             Bus.RegisterHostTrapStub(_hostGetListDataAddress, HostGetListData);
@@ -334,6 +367,8 @@ namespace CopperMod.Cust
             Bus.RegisterHostTrapStub(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
             Bus.RegisterHostTrapStub(_hostAudioAllocAddress, HostAudioAlloc);
             Bus.RegisterHostTrapStub(_hostAudioFreeAddress, HostAudioFree);
+            Bus.RegisterHostTrapStub(_hostWaitAudioDmaAddress, HostWaitAudioDma);
+            Bus.RegisterHostTrapStub(_hostNoOpAddress, HostNoOp);
             Machine.Kickstart.Install(
                 Bus,
                 new AmigaKickstartTrapTable(
@@ -356,26 +391,56 @@ namespace CopperMod.Cust
 
             WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, string.Empty, AmigaKickstartHost.HostPathBufferLength);
 
+            WriteHostLong(CustConstants.DtgAslBaseOffset, 0);
             WriteHostLong(CustConstants.DtgDosBaseOffset, AmigaKickstartHost.DosLibraryBase);
-            WriteHostLong(CustConstants.DtgExecBaseOffset, AmigaKickstartHost.ExecLibraryBase);
-            WriteHostLong(CustConstants.DtgPathBufferOffset, AmigaKickstartHost.HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgIntuitionBaseOffset, AmigaKickstartHost.IntuitionLibraryBase);
+            WriteHostLong(CustConstants.DtgGfxBaseOffset, AmigaKickstartHost.GraphicsLibraryBase);
+            WriteHostLong(CustConstants.DtgGadToolsBaseOffset, 0);
+            WriteHostLong(CustConstants.DtgReservedLibraryBaseOffset, 0);
+            WriteHostLong(CustConstants.DtgDirArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgFileArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgPathArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgCheckDataOffset, _segmentBases[_listDataSegmentIndex]);
+            WriteHostLong(CustConstants.DtgCheckSizeOffset, (uint)_hunk.Segments[_listDataSegmentIndex].DeclaredSizeBytes);
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
             WriteHostWord(CustConstants.DtgSoundVolumeOffset, 64);
             WriteHostWord(CustConstants.DtgSoundLeftBalanceOffset, 64);
             WriteHostWord(CustConstants.DtgSoundRightBalanceOffset, 64);
-            WriteHostLong(CustConstants.DtgResetPathOffset, _hostResetPathAddress);
-            WriteHostLong(CustConstants.DtgAudioAllocOffset, _hostAudioAllocAddress);
-            WriteHostLong(CustConstants.DtgGetListDataOffset, _hostGetListDataAddress);
-            WriteHostLong(CustConstants.DtgAudioFreeOffset, _hostAudioFreeAddress);
-            WriteHostLong(CustConstants.DtgSongEndOffset, _hostSongEndAddress);
+            WriteHostWord(CustConstants.DtgLedOffset, 0);
             WriteHostWord(CustConstants.DtgTimerOffset, 0);
+            WriteHostLong(CustConstants.DtgGetListDataOffset, _hostGetListDataAddress);
+            WriteHostLong(CustConstants.DtgLoadFileOffset, _hostOkAddress);
+            WriteHostLong(CustConstants.DtgCopyDirOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgCopyFileOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgCopyStringOffset, _hostAppendPathOrOkAddress);
+            WriteHostLong(CustConstants.DtgAudioAllocOffset, _hostAudioAllocAddress);
+            WriteHostLong(CustConstants.DtgAudioFreeOffset, _hostAudioFreeAddress);
+            WriteHostLong(CustConstants.DtgStartIntOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgStopIntOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgSongEndOffset, _hostSongEndAddress);
+            WriteHostLong(CustConstants.DtgCutSuffixOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgSetTimerOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgWaitAudioDmaOffset, _hostWaitAudioDmaAddress);
+            WriteHostLong(CustConstants.DtgLockScreenOffset, _hostOkAddress);
+            WriteHostLong(CustConstants.DtgUnlockScreenOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgNotePlayerOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgAllocListDataOffset, _hostAudioAllocAddress);
+            WriteHostLong(CustConstants.DtgFreeListDataOffset, _hostAudioFreeAddress);
         }
 
         private void HostGetListData(M68kCpuState state)
         {
+            if (state.D[0] != 0)
+            {
+                state.A[0] = 0;
+                state.D[0] = 0;
+                return;
+            }
+
+            var segment = _hunk.Segments[_listDataSegmentIndex];
             var address = _segmentBases[_listDataSegmentIndex];
             state.A[0] = address;
-            state.D[0] = address;
+            state.D[0] = (uint)segment.DeclaredSizeBytes;
         }
 
         private void HostOk(M68kCpuState state)
@@ -599,12 +664,23 @@ namespace CopperMod.Cust
 
         private void HostAudioAlloc(M68kCpuState state)
         {
-            state.D[0] = 1;
+            state.D[0] = 0;
         }
 
         private void HostAudioFree(M68kCpuState state)
         {
             state.D[0] = 0;
+        }
+
+        private static void HostNoOp(M68kCpuState state)
+        {
+            _ = state;
+        }
+
+        private void HostWaitAudioDma(M68kCpuState state)
+        {
+            state.Cycles += AmigaConstants.A500PalMinimumAudioDmaPeriod;
+            AdvanceTimedHardwareTo(state.Cycles);
         }
 
         private void HostDosOpen(M68kCpuState state)
@@ -753,7 +829,7 @@ namespace CopperMod.Cust
 
         private void DispatchCiaInterruptsUpTo(long targetCycle)
         {
-            if (_tags.ContainsKey(CustConstants.DtpInterrupt))
+            if (ShouldUseDeliTimerInterrupt())
             {
                 Bus.AdvanceCiasTo(targetCycle);
                 Bus.DrainCiaInterrupts();
@@ -1006,7 +1082,10 @@ namespace CopperMod.Cust
             }
             catch (UnsupportedM68kOpcodeException ex)
             {
-                AddDiagnostic(ModuleDiagnosticSeverity.Warning, ex.Message, "CUST_UNSUPPORTED_OPCODE");
+                AddDiagnostic(
+                    ModuleDiagnosticSeverity.Warning,
+                    ex.Message + $" Last opcode 0x{Cpu.State.LastOpcode:X4} at PC 0x{Cpu.State.LastInstructionProgramCounter:X8}, current PC 0x{Cpu.State.ProgramCounter:X8}.",
+                    "CUST_UNSUPPORTED_OPCODE");
                 Cpu.State.Halted = true;
             }
             catch (AmigaEmulationException ex)
@@ -1037,7 +1116,7 @@ namespace CopperMod.Cust
 
         private bool TryRecoverHostInterruptWait()
         {
-            if (_insideHostInterrupt || _tags.ContainsKey(CustConstants.DtpInterrupt) || _installedInterrupts.Count == 0)
+            if (_insideHostInterrupt || ShouldUseDeliTimerInterrupt() || _installedInterrupts.Count == 0)
             {
                 return false;
             }
@@ -1199,7 +1278,7 @@ namespace CopperMod.Cust
 
         private bool ShouldRenderFallbackPcm()
         {
-            if (_tags.ContainsKey(CustConstants.DtpInterrupt))
+            if (ShouldUseDeliTimerInterrupt())
             {
                 return false;
             }

@@ -46,10 +46,25 @@ public sealed class AmigaArchitectureTests
 
 		Assert.Equal(AmigaConstants.A500BootChipRamSize, chipOnly.Bus.ChipRam.Length);
 		Assert.Empty(chipOnly.Bus.ExpansionRam);
+		Assert.False(chipOnly.Options.RealTimeClockEnabled);
+		Assert.False(chipOnly.Bus.RealTimeClockEnabled);
 		Assert.Equal(AmigaConstants.A500BootChipRamSize, defaultBoot.Bus.ChipRam.Length);
 		Assert.Equal(AmigaConstants.A500BootPseudoFastRamSize, defaultBoot.Bus.ExpansionRam.Length);
 		Assert.Equal(AmigaConstants.A500BootPseudoFastRamBase, defaultBoot.Bus.ExpansionRamBase);
 		Assert.Empty(defaultBoot.Bus.RealFastRam);
+		Assert.True(defaultBoot.Options.RealTimeClockEnabled);
+		Assert.True(defaultBoot.Bus.RealTimeClockEnabled);
+	}
+
+	[Fact]
+	public void MachineOptionsCanDisableDefaultBootRealTimeClock()
+	{
+		var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithRealTimeClock(false));
+
+		Assert.False(machine.Options.RealTimeClockEnabled);
+		Assert.False(machine.Bus.RealTimeClockEnabled);
 	}
 
 	[Fact]

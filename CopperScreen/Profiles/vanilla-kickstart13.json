@@ -12,5 +12,11 @@
   "kickstart": {
     "source": "Kickstart13Rom",
     "version": "1.3"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "synthetic"
+    }
   }
 }

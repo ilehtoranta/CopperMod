@@ -174,8 +174,11 @@ namespace CopperMod.Amiga
             InstallHostShim(bus, traps);
         }
 
-        private void InstallHostShim(AmigaBus bus, AmigaKickstartTrapTable traps)
+        public void InstallHostShim(AmigaBus bus, AmigaKickstartTrapTable traps)
         {
+            ArgumentNullException.ThrowIfNull(bus);
+            ArgumentNullException.ThrowIfNull(traps);
+
             bus.MapReadOnlyMemory(AmigaKickstartRomFont.BaseAddress, AmigaKickstartRomFont.CreateTopazCompatibleFont());
             bus.WriteLong(0, ExecStructAddress);
             bus.WriteLong(4, ExecLibraryBase);

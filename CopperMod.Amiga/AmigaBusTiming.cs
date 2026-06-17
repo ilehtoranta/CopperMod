@@ -40,6 +40,7 @@ namespace CopperMod.Amiga
         ChipRam,
         ExpansionRam,
         RealFastRam,
+        RealTimeClock,
         CustomRegisters,
         Cia,
         Rom,
@@ -624,8 +625,7 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate) ||
-                    AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(candidate)) != AgnusChipSlotOwner.Free)
+                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
                 {
                     candidate += SlotCycles;
                     continue;
@@ -816,17 +816,15 @@ namespace CopperMod.Amiga
             AmigaBusAccessRequest request)
         {
             System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Agnus slot search cycles must be non-negative.");
+            if (owner == AgnusChipSlotOwner.Cpu && slotCount == 1)
+            {
+                return FindFreeCpuSingleSlot(requestedCycle, request);
+            }
+
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
                 if (RequiresEvenSlot(owner) && !AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
-                if (owner == AgnusChipSlotOwner.Copper &&
-                    AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(candidate)) != AgnusChipSlotOwner.Free)
                 {
                     candidate += SlotCycles;
                     continue;
@@ -840,6 +838,28 @@ namespace CopperMod.Amiga
                 }
 
                 candidate += SlotCycles;
+            }
+        }
+
+        private long FindFreeCpuSingleSlot(long requestedCycle, AmigaBusAccessRequest request)
+        {
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+            if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
+            {
+                candidate += SlotCycles;
+            }
+
+            while (true)
+            {
+                CommitRefreshSlotsThrough(candidate);
+                if (!TryGetSlot(candidate, out var existing) ||
+                    existing.Matches(request) ||
+                    existing.Priority < AgnusChipSlotPriority.Cpu)
+                {
+                    return candidate;
+                }
+
+                candidate += SlotCycles * 2;
             }
         }
 
@@ -914,20 +934,16 @@ namespace CopperMod.Amiga
             var targetSlot = FloorToSlot(targetCycle);
             while (_nextRefreshCommitCycle <= targetSlot)
             {
-                if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(_nextRefreshCommitCycle))
-                {
-                    var request = new AmigaBusAccessRequest(
-                        AmigaBusRequester.Host,
-                        AmigaBusAccessKind.HostTrap,
-                        AmigaBusAccessTarget.ChipRam,
-                        0,
-                        AmigaBusAccessSize.Word,
-                        _nextRefreshCommitCycle,
-                        isWrite: false);
-                    CommitSlot(_nextRefreshCommitCycle, request, AgnusChipSlotOwner.Refresh, AgnusChipSlotPriority.Refresh);
-                }
-
-                _nextRefreshCommitCycle += SlotCycles;
+                var request = new AmigaBusAccessRequest(
+                    AmigaBusRequester.Host,
+                    AmigaBusAccessKind.HostTrap,
+                    AmigaBusAccessTarget.ChipRam,
+                    0,
+                    AmigaBusAccessSize.Word,
+                    _nextRefreshCommitCycle,
+                    isWrite: false);
+                CommitSlot(_nextRefreshCommitCycle, request, AgnusChipSlotOwner.Refresh, AgnusChipSlotPriority.Refresh);
+                _nextRefreshCommitCycle = GetNextRefreshSlotAtOrAfter(_nextRefreshCommitCycle + SlotCycles);
             }
         }
 
@@ -935,6 +951,26 @@ namespace CopperMod.Amiga
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             return cycle - (cycle % SlotCycles);
+        }
+
+        private static long GetNextRefreshSlotAtOrAfter(long cycle)
+        {
+            cycle = FloorToSlot(Math.Max(0, cycle));
+            var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+            var lineStart = cycle - (cycle % lineCycles);
+            var horizontal = (int)((cycle - lineStart) / SlotCycles);
+            var refreshHorizontal = horizontal <= 0
+                ? 0
+                : horizontal <= 2
+                    ? 2
+                    : horizontal <= 4
+                        ? 4
+                        : horizontal <= 6
+                            ? 6
+                            : -1;
+            return refreshHorizontal >= 0
+                ? lineStart + ((long)refreshHorizontal * SlotCycles)
+                : lineStart + lineCycles;
         }
 
         private void CommitSlot(
@@ -999,6 +1035,7 @@ namespace CopperMod.Amiga
         {
             return request.Target == AmigaBusAccessTarget.ChipRam ||
                 request.Target == AmigaBusAccessTarget.ExpansionRam ||
+                request.Target == AmigaBusAccessTarget.RealTimeClock ||
                 request.Target == AmigaBusAccessTarget.CustomRegisters;
         }
 
@@ -1357,6 +1394,7 @@ namespace CopperMod.Amiga
 
             if (access.Request.Target != AmigaBusAccessTarget.ChipRam &&
                 access.Request.Target != AmigaBusAccessTarget.ExpansionRam &&
+                access.Request.Target != AmigaBusAccessTarget.RealTimeClock &&
                 access.Request.Target != AmigaBusAccessTarget.CustomRegisters)
             {
                 return;

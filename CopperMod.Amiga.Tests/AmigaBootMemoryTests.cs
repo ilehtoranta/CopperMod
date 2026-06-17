@@ -106,6 +106,25 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void WorkbenchSessionInstallsHostShimForRomConfiguredMachine()
+	{
+		var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, new byte[8]))
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+
+		boot.StartWorkbenchSession(CreateBootableDisk());
+
+		Assert.Equal(AmigaKickstartBackendKind.RomImage, machine.Kickstart.Configuration.Backend);
+		Assert.Equal(AmigaKickstartHost.ExecStructAddress, machine.Bus.ReadLong(0));
+		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Bus.ReadLong(4));
+		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Cpu.State.A[6]);
+		Assert.True(machine.Bus.HasHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -408)));
+		Assert.True(machine.Bus.HasHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -30)));
+	}
+
+	[Fact]
 	public void ChipOnlyBootProfileKeepsMemListMetadataOutOfPublicLowMemory()
 	{
 		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KChipOnlyBoot);
@@ -394,6 +413,39 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
 		bus.Display.RenderFrame(frame);
 		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+	}
+
+	[Fact]
+	public void SetWindowTitlesPublishesSyntheticIntuitionTitleBitmap()
+	{
+		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var openScreenState = new M68kCpuState();
+		var openWindowState = new M68kCpuState();
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198), openScreenState));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -204), openWindowState));
+		var titleAddress = InvokeAllocMem(bus, 64, 0);
+		WriteCString(bus, titleAddress, "Loading Hired Guns");
+
+		var titleState = new M68kCpuState();
+		titleState.A[0] = openWindowState.D[0];
+		titleState.A[1] = titleAddress;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -276), titleState));
+
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(frame);
+
+		Assert.NotEqual(0u, openScreenState.D[0]);
+		Assert.NotEqual(0u, openWindowState.D[0]);
+		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerFrame, titleState.Cycles);
+		var display = bus.Display.CaptureSnapshot();
+		var nonBlackPixels = CountPixelsExcept(frame, 0xFF000000u);
+		var whitePixels = CountColorPixels(frame, 0xFFFFFFFFu);
+		Assert.True(
+			nonBlackPixels > 100 && whitePixels > 100,
+			$"Expected a visible synthetic title bitmap; nonBlack={nonBlackPixels}, white={whitePixels}, " +
+			$"bplcon0=0x{display.Bplcon0:X4}, color00=0x{display.Colors[0]:X4}, bitplanePixels={display.LastBitplaneNonZeroPixels}.");
 	}
 
 	[Fact]
@@ -755,8 +807,46 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(plane, 0x8000);
 	}
 
+	private static void WriteCString(AmigaBus bus, uint address, string value)
+	{
+		for (var i = 0; i < value.Length; i++)
+		{
+			bus.WriteByte(address + (uint)i, (byte)value[i], 0);
+		}
+
+		bus.WriteByte(address + (uint)value.Length, 0, 0);
+	}
+
 	private static uint Pixel(uint[] frame, int x, int y)
 	{
 		return frame[(y * AmigaConstants.PalLowResWidth) + x];
+	}
+
+	private static int CountColorPixels(uint[] frame, uint color)
+	{
+		var count = 0;
+		for (var i = 0; i < frame.Length; i++)
+		{
+			if (frame[i] == color)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	private static int CountPixelsExcept(uint[] frame, uint color)
+	{
+		var count = 0;
+		for (var i = 0; i < frame.Length; i++)
+		{
+			if (frame[i] != color)
+			{
+				count++;
+			}
+		}
+
+		return count;
 	}
 }

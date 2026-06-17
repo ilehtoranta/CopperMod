@@ -63,11 +63,9 @@ internal sealed class MainWindow : Window
 	private TextBlock _settingsStatus = null!;
 	private Button _settingsCloseButton = null!;
 	private Button _settingsStartButton = null!;
-	private Border _generalSettingsButton = null!;
-	private Border _advancedSettingsButton = null!;
-	private Control _generalSettingsPage = null!;
-	private Control _advancedSettingsPage = null!;
+	private TabControl _settingsTabs = null!;
 	private int _settingsPageIndex;
+	private string? _settingsStartupError;
 	private ListBox _profileList = null!;
 	private TextBlock _profileDirectoryText = null!;
 	private TextBox _profileIdBox = null!;
@@ -81,13 +79,16 @@ internal sealed class MainWindow : Window
 	private TextBox _pseudoFastBaseBox = null!;
 	private TextBox _realFastRamBox = null!;
 	private TextBox _realFastBaseBox = null!;
+	private CheckBox _rtcEnabledBox = null!;
 	private ComboBox _floppyDriveCountBox = null!;
 	private readonly TextBox[] _drivePathBoxes = new TextBox[4];
+	private readonly Button[] _driveBrowseButtons = new Button[4];
 	private readonly CheckBox[] _driveWriteProtectBoxes = new CheckBox[4];
 	private CheckBox _floppySoundsEnabledBox = null!;
 	private ComboBox _floppySoundModeBox = null!;
 	private TextBox _floppySoundPackBox = null!;
 	private TextBox _floppySoundVolumeBox = null!;
+	private ComboBox _lacedPresentationModeBox = null!;
 	private ComboBox _port1ControllerBox = null!;
 	private ComboBox _port2ControllerBox = null!;
 	private ComboBox _controllerProfileChooser = null!;
@@ -108,6 +109,7 @@ internal sealed class MainWindow : Window
 	private double _mouseDeltaRemainderY;
 	private bool _mouseGrabActive;
 	private bool _mouseGrabWaitingForCenter;
+	private bool _mouseGrabRecenterPending;
 	private IPointer? _mouseGrabPointer;
 	private Point? _mouseGrabCenterFramebufferPoint;
 	private PixelPoint? _mouseGrabCenterScreenPoint;
@@ -121,11 +123,11 @@ internal sealed class MainWindow : Window
 	{
 		Title = "CopperScreen";
 		Icon = LoadWindowIcon();
-		Width = 960;
-		Height = 768;
+		SizeToContent = SizeToContent.WidthAndHeight;
 		Focusable = true;
 		_initialStartupOptions = CopperScreenStartupOptions.Parse(args, AppContext.BaseDirectory);
 		_settingsDraft = CopperScreenSettingsDraft.FromStartupOptions(_initialStartupOptions);
+		_settingsStartupError = _initialStartupOptions.Error;
 		_inputOptions = _settingsDraft.Input;
 		if (_initialStartupOptions.HasExplicitProfile)
 		{
@@ -140,7 +142,7 @@ internal sealed class MainWindow : Window
 
 		_bench = new CopperBenchViewModel();
 
-		_presenter = new FramebufferPresenter(AmigaConstants.PalLowResWidth, AmigaConstants.PalLowResHeight)
+		_presenter = new FramebufferPresenter(AmigaConstants.PalHighResWidth, AmigaConstants.PalHighResHeight)
 		{
 			Focusable = true,
 			Cursor = new Cursor(StandardCursorType.None),
@@ -202,6 +204,7 @@ internal sealed class MainWindow : Window
 
 		Opened += (_, _) =>
 		{
+			ApplyWindowPresentationMode();
 			if (_settingsVisible)
 			{
 				_settingsPanel.Focus();
@@ -399,7 +402,7 @@ internal sealed class MainWindow : Window
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalLowResWidth}x{_runtime?.Height ?? AmigaConstants.PalLowResHeight}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -436,18 +439,19 @@ internal sealed class MainWindow : Window
 		var position = args.GetPosition(_presenter);
 		if (_presenter.TryMapPointToFramebuffer(position, out var framebufferPoint))
 		{
+			var mousePoint = MapPresentationPointToAmigaMousePoint(framebufferPoint);
 			if (_lastMouseX.HasValue && _lastMouseY.HasValue)
 			{
-				var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, framebufferPoint.X - _lastMouseX.Value);
-				var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - _lastMouseY.Value);
+				var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, mousePoint.X - _lastMouseX.Value);
+				var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, mousePoint.Y - _lastMouseY.Value);
 				if (deltaX != 0 || deltaY != 0)
 				{
 					runtime.MoveMousePort(deltaX, deltaY);
 				}
 			}
 
-			_lastMouseX = framebufferPoint.X;
-			_lastMouseY = framebufferPoint.Y;
+			_lastMouseX = mousePoint.X;
+			_lastMouseY = mousePoint.Y;
 		}
 		else
 		{
@@ -481,25 +485,36 @@ internal sealed class MainWindow : Window
 					screenPoint.HasValue &&
 					!IsNearScreenPoint(screenPoint.Value, _mouseGrabCenterScreenPoint.Value)))
 				{
-					_ = TryRecenterMousePointer();
+					_ = RecenterMouseGrabPointer();
 					return;
 				}
 
 				_mouseGrabWaitingForCenter = false;
+				_mouseGrabRecenterPending = false;
 				_mouseGrabCenterFramebufferPoint = center;
-				_ = TryRecenterMousePointer();
+				_ = RecenterMouseGrabPointer();
 				return;
 			}
 
-			var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, framebufferPoint.X - center.X);
-			var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, framebufferPoint.Y - center.Y);
+			if (_mouseGrabRecenterPending &&
+				IsMouseGrabRecenterEcho(framebufferPoint, center, screenPoint, _mouseGrabCenterScreenPoint))
+			{
+				_mouseGrabRecenterPending = false;
+				return;
+			}
+
+			_mouseGrabRecenterPending = false;
+			var mousePoint = MapPresentationPointToAmigaMousePoint(framebufferPoint);
+			var centerMousePoint = MapPresentationPointToAmigaMousePoint(center);
+			var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, mousePoint.X - centerMousePoint.X);
+			var deltaY = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderY, mousePoint.Y - centerMousePoint.Y);
 			if (deltaX != 0 || deltaY != 0)
 			{
 				runtime.MoveMousePort(deltaX, deltaY);
 			}
 		}
 
-		_ = TryRecenterMousePointer();
+		_ = RecenterMouseGrabPointer();
 	}
 
 	private void UpdateMouseButtons(PointerEventArgs args)
@@ -520,6 +535,9 @@ internal sealed class MainWindow : Window
 		remainder = accumulated - whole;
 		return whole;
 	}
+
+	internal static Point MapPresentationPointToAmigaMousePoint(Point framebufferPoint)
+		=> new(framebufferPoint.X * 0.5, framebufferPoint.Y * 0.5);
 
 	private async void OnKeyDown(object? sender, KeyEventArgs args)
 	{
@@ -808,19 +826,26 @@ internal sealed class MainWindow : Window
 		}, "Insert the next disk image in the set"));
 
 		_ledFilterBox = CreateIndicatorBox(_ledFilterStatus, 64, "Power LED and audio filter state");
-		var topRow = new StackPanel
+		var controlRow = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
 			Spacing = 5,
 			VerticalAlignment = VerticalAlignment.Center
 		};
-		topRow.Children.Add(controls);
-		topRow.Children.Add(CreateIndicatorBox(_diskStatus, 180, "Current disk image"));
-		topRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
-		topRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
-		topRow.Children.Add(CreateIndicatorBox(_frameStatus, 92, "Published emulator frame counter"));
+		controlRow.Children.Add(controls);
+
+		var statusRow = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 5,
+			VerticalAlignment = VerticalAlignment.Center
+		};
+		statusRow.Children.Add(CreateIndicatorBox(_diskStatus, 180, "Current disk image"));
+		statusRow.Children.Add(CreateIndicatorBox(_cpuPcStatus, 76, "Current 68000 program counter"));
+		statusRow.Children.Add(CreateIndicatorBox(_lastPcStatus, 76, "Previous 68000 program counter"));
+		statusRow.Children.Add(CreateIndicatorBox(_frameStatus, 92, "Published emulator frame counter"));
 		_perfStatusBox = CreateIndicatorBox(_perfStatus, 76, "Emulation speed and frame timing");
-		topRow.Children.Add(_perfStatusBox);
+		statusRow.Children.Add(_perfStatusBox);
 
 		var drives = new StackPanel
 		{
@@ -854,7 +879,8 @@ internal sealed class MainWindow : Window
 			Orientation = Orientation.Vertical,
 			Spacing = 4
 		};
-		layout.Children.Add(topRow);
+		layout.Children.Add(controlRow);
+		layout.Children.Add(statusRow);
 		layout.Children.Add(bottomRow);
 
 		return new Border
@@ -878,8 +904,7 @@ internal sealed class MainWindow : Window
 				new RowDefinition(GridLength.Auto),
 				new RowDefinition(new GridLength(1, GridUnitType.Star)),
 				new RowDefinition(GridLength.Auto)
-			},
-			Margin = new Thickness(18)
+			}
 		};
 
 		var header = new Grid
@@ -905,37 +930,25 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(header, 0);
 		panel.Children.Add(header);
 
-		var pageHost = new Grid
+		_settingsTabs = new TabControl
 		{
-			RowDefinitions =
+			Background = Brushes.Transparent,
+			Foreground = Brushes.White,
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch
+		};
+		_settingsTabs.Items.Add(CreateSettingsTab("General", CreateGeneralSettingsPage()));
+		_settingsTabs.Items.Add(CreateSettingsTab("Advanced", CreateAdvancedSettingsPage()));
+		_settingsTabs.SelectedIndex = _settingsPageIndex;
+		_settingsTabs.SelectionChanged += (_, _) =>
+		{
+			if (_settingsTabs.SelectedIndex >= 0)
 			{
-				new RowDefinition(GridLength.Auto),
-				new RowDefinition(new GridLength(1, GridUnitType.Star))
+				_settingsPageIndex = _settingsTabs.SelectedIndex;
 			}
 		};
-		var pageButtons = new StackPanel
-		{
-			Orientation = Orientation.Horizontal,
-			Spacing = 6,
-			Margin = new Thickness(0, 0, 0, 10)
-		};
-		_generalSettingsButton = CreateSettingsPageButton("General", 0);
-		_advancedSettingsButton = CreateSettingsPageButton("Advanced", 1);
-		pageButtons.Children.Add(_generalSettingsButton);
-		pageButtons.Children.Add(_advancedSettingsButton);
-		Grid.SetRow(pageButtons, 0);
-		pageHost.Children.Add(pageButtons);
-
-		var pages = new Grid();
-		_generalSettingsPage = CreateGeneralSettingsPage();
-		_advancedSettingsPage = CreateAdvancedSettingsPage();
-		pages.Children.Add(_generalSettingsPage);
-		pages.Children.Add(_advancedSettingsPage);
-		Grid.SetRow(pages, 1);
-		pageHost.Children.Add(pages);
-		ShowSettingsPage(0);
-		Grid.SetRow(pageHost, 1);
-		panel.Children.Add(pageHost);
+		Grid.SetRow(_settingsTabs, 1);
+		panel.Children.Add(_settingsTabs);
 
 		var commands = new Grid
 		{
@@ -975,7 +988,9 @@ internal sealed class MainWindow : Window
 			Background = new SolidColorBrush(Color.FromArgb(246, 18, 22, 28)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(92, 108, 132)),
 			BorderThickness = new Thickness(1),
-			Padding = new Thickness(14),
+			Padding = new Thickness(12),
+			Margin = new Thickness(12, 78, 12, 12),
+			MaxWidth = 1120,
 			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Stretch,
 			IsVisible = _settingsVisible,
@@ -983,62 +998,25 @@ internal sealed class MainWindow : Window
 		};
 	}
 
-	private Border CreateSettingsPageButton(string text, int pageIndex)
+	private static TabItem CreateSettingsTab(string text, Control content)
 	{
-		var label = new TextBlock
+		return new TabItem
 		{
-			Text = text,
-			Foreground = Brushes.White,
-			FontWeight = FontWeight.SemiBold,
-			Margin = new Thickness(12, 6)
-		};
-		var button = new Border
-		{
+			Header = new TextBlock
+			{
+				Text = text,
+				Foreground = new SolidColorBrush(Color.FromRgb(232, 242, 255)),
+				FontWeight = FontWeight.SemiBold,
+				Margin = new Thickness(8, 3)
+			},
+			Content = content,
 			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
+			Foreground = new SolidColorBrush(Color.FromRgb(232, 242, 255)),
 			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
 			BorderThickness = new Thickness(1),
-			CornerRadius = new CornerRadius(4),
-			Child = label,
-			Cursor = new Cursor(StandardCursorType.Hand)
+			Padding = new Thickness(4, 2),
+			Margin = new Thickness(0, 0, 6, 0)
 		};
-		button.PointerPressed += (_, args) =>
-		{
-			ShowSettingsPage(pageIndex);
-			args.Handled = true;
-		};
-		return button;
-	}
-
-	private void ShowSettingsPage(int pageIndex)
-	{
-		_settingsPageIndex = pageIndex;
-		if (_generalSettingsPage != null)
-		{
-			_generalSettingsPage.IsVisible = pageIndex == 0;
-		}
-
-		if (_advancedSettingsPage != null)
-		{
-			_advancedSettingsPage.IsVisible = pageIndex == 1;
-		}
-
-		StyleSettingsPageButton(_generalSettingsButton, pageIndex == 0);
-		StyleSettingsPageButton(_advancedSettingsButton, pageIndex == 1);
-	}
-
-	private static void StyleSettingsPageButton(Border? button, bool selected)
-	{
-		if (button == null)
-		{
-			return;
-		}
-
-		button.Background = new SolidColorBrush(selected ? Color.FromRgb(54, 75, 105) : Color.FromRgb(34, 40, 50));
-		button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(110, 150, 205) : Color.FromRgb(78, 90, 108));
-		if (button.Child is TextBlock text)
-		{
-			text.Foreground = new SolidColorBrush(selected ? Color.FromRgb(232, 242, 255) : Color.FromRgb(208, 216, 226));
-		}
 	}
 
 	private Control CreateGeneralSettingsPage()
@@ -1071,8 +1049,12 @@ internal sealed class MainWindow : Window
 		_pseudoFastBaseBox = AddTextSetting(layout, "Pseudo-fast base");
 		_realFastRamBox = AddTextSetting(layout, "Real fast RAM KB");
 		_realFastBaseBox = AddTextSetting(layout, "Real fast base");
+		_rtcEnabledBox = new CheckBox { Content = "Enabled" };
+		_rtcEnabledBox.IsCheckedChanged += (_, _) => ApplyRtcEnabledSetting();
+		layout.Children.Add(CreateSettingsRow("RTC clock", _rtcEnabledBox));
 		layout.Children.Add(CreateSettingsSection("Floppy drives"));
-		_floppyDriveCountBox = AddComboSetting(layout, "Floppy drives", ["1", "2", "3", "4"]);
+		_floppyDriveCountBox = AddComboSetting(layout, "Floppy drives", ["1", "2", "3", "4"], markRestart: false);
+		_floppyDriveCountBox.SelectionChanged += (_, _) => ApplyFloppyDriveCountSetting();
 		for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
 		{
 			var row = new StackPanel
@@ -1087,6 +1069,7 @@ internal sealed class MainWindow : Window
 			};
 			var index = driveIndex;
 			var browse = CreatePanelButton("Browse", () => _ = PickSettingsDiskAsync(index));
+			box.TextChanged += (_, _) => ApplyDrivePathTextSetting(index);
 			var writeProtect = new CheckBox
 			{
 				Content = "WP",
@@ -1094,6 +1077,12 @@ internal sealed class MainWindow : Window
 			};
 			writeProtect.IsCheckedChanged += async (_, _) =>
 			{
+				if (_updatingSettingsUi)
+				{
+					return;
+				}
+
+				ClearSettingsStartupError();
 				_settingsDraft.DriveWriteProtected[index] = writeProtect.IsChecked;
 				if (_runtime != null && index < _latestState.Drives.Length && _latestState.Drives[index].Connected && _latestState.Drives[index].HasDisk)
 				{
@@ -1101,8 +1090,16 @@ internal sealed class MainWindow : Window
 					_latestState = result.State;
 					UpdateToolbarStatus();
 				}
+				else if (_runtime == null)
+				{
+					_latestState = CreateIdleState(_settingsDraft);
+					UpdateToolbarStatus();
+				}
+
+				UpdateSettingsStatus();
 			};
 			_drivePathBoxes[driveIndex] = box;
+			_driveBrowseButtons[driveIndex] = browse;
 			_driveWriteProtectBoxes[driveIndex] = writeProtect;
 			row.Children.Add(box);
 			row.Children.Add(browse);
@@ -1116,11 +1113,17 @@ internal sealed class MainWindow : Window
 	private Control CreateAdvancedSettingsPage()
 	{
 		var layout = CreateSettingsForm();
+		layout.Children.Add(CreateSettingsSection("Display"));
+		_lacedPresentationModeBox = AddComboSetting(layout, "Laced display", ["CRT flicker", "Stable weave"], markRestart: false);
+		_lacedPresentationModeBox.SelectionChanged += (_, _) => ApplyPresentationSettingsLive();
+		layout.Children.Add(CreateSettingsSection("Audio"));
 		_floppySoundsEnabledBox = new CheckBox { Content = "Enabled" };
+		_floppySoundsEnabledBox.IsCheckedChanged += (_, _) => ApplyFloppySoundsEnabledSetting();
 		layout.Children.Add(CreateSettingsRow("Floppy sounds", _floppySoundsEnabledBox));
 		_floppySoundModeBox = AddComboSetting(layout, "Sound mode", ["Synthetic", "Samples"]);
 		_floppySoundPackBox = AddTextSetting(layout, "Sound pack");
 		_floppySoundVolumeBox = AddTextSetting(layout, "Sound volume");
+		layout.Children.Add(CreateSettingsSection("Input"));
 		_port1ControllerBox = AddComboSetting(layout, "Port 1 controller", [], markRestart: false);
 		_port1ControllerBox.SelectionChanged += (_, _) => ApplyInputSettingsLive();
 		_port2ControllerBox = AddComboSetting(layout, "Port 2 controller", [], markRestart: false);
@@ -1246,8 +1249,116 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		ClearSettingsStartupError();
 		_settingsDraft.MarkRequiresRestart();
 		UpdateSettingsStatus();
+	}
+
+	private void ClearSettingsStartupError()
+	{
+		_settingsStartupError = null;
+	}
+
+	private void ApplyFloppyDriveCountSetting()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		ClearSettingsStartupError();
+		_settingsDraft.FloppyDriveCount = ParseDriveCount(_floppyDriveCountBox.SelectedItem);
+		_settingsDraft.MarkRequiresRestart();
+		UpdateDriveSettingsEnabled();
+		if (_runtime == null)
+		{
+			_latestState = CreateIdleState(_settingsDraft);
+			UpdateToolbarStatus();
+		}
+
+		UpdateSettingsStatus();
+	}
+
+	private void ApplyRtcEnabledSetting()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		_settingsDraft.RtcEnabled = _rtcEnabledBox.IsChecked == true;
+		MarkSettingsRestartRequired();
+	}
+
+	private void ApplyDrivePathTextSetting(int driveIndex)
+	{
+		if ((uint)driveIndex >= (uint)_settingsDraft.DriveDiskPaths.Length)
+		{
+			return;
+		}
+
+		var text = _drivePathBoxes[driveIndex].Text;
+		_settingsDraft.DriveDiskPaths[driveIndex] = string.IsNullOrWhiteSpace(text)
+			? null
+			: text.Trim();
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		ClearSettingsStartupError();
+		_settingsDraft.MarkRequiresRestart();
+		if (_runtime == null)
+		{
+			_latestState = CreateIdleState(_settingsDraft);
+			UpdateToolbarStatus();
+		}
+
+		UpdateSettingsStatus();
+	}
+
+	private void ApplyFloppySoundsEnabledSetting()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		_settingsDraft.FloppyDriveAudio = _settingsDraft.FloppyDriveAudio with
+		{
+			Enabled = _floppySoundsEnabledBox.IsChecked == true
+		};
+		MarkSettingsRestartRequired();
+	}
+
+	private void UpdateDriveSettingsEnabled()
+	{
+		for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
+		{
+			var connected = driveIndex < _settingsDraft.FloppyDriveCount;
+			_drivePathBoxes[driveIndex].IsEnabled = connected;
+			_driveBrowseButtons[driveIndex].IsEnabled = connected;
+			_driveWriteProtectBoxes[driveIndex].IsEnabled = connected;
+		}
+	}
+
+	private void SetDrivePathTextSilently(int driveIndex, string path)
+	{
+		if ((uint)driveIndex >= (uint)_drivePathBoxes.Length)
+		{
+			return;
+		}
+
+		var wasUpdating = _updatingSettingsUi;
+		_updatingSettingsUi = true;
+		try
+		{
+			_drivePathBoxes[driveIndex].Text = path;
+		}
+		finally
+		{
+			_updatingSettingsUi = wasUpdating;
+		}
 	}
 
 	private void RefreshSettingsUi()
@@ -1273,28 +1384,28 @@ internal sealed class MainWindow : Window
 			_pseudoFastBaseBox.Text = _settingsDraft.PseudoFastBase;
 			_realFastRamBox.Text = _settingsDraft.RealFastRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_realFastBaseBox.Text = _settingsDraft.RealFastBase;
+			_rtcEnabledBox.IsChecked = _settingsDraft.RtcEnabled;
 			_floppyDriveCountBox.SelectedItem = _settingsDraft.FloppyDriveCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
 			{
-				var connected = driveIndex < _settingsDraft.FloppyDriveCount;
 				_drivePathBoxes[driveIndex].Text = _settingsDraft.DriveDiskPaths[driveIndex] ?? string.Empty;
-				_drivePathBoxes[driveIndex].IsEnabled = connected;
 				_driveWriteProtectBoxes[driveIndex].IsChecked = _settingsDraft.DriveWriteProtected[driveIndex];
-				_driveWriteProtectBoxes[driveIndex].IsEnabled = connected;
 			}
+			UpdateDriveSettingsEnabled();
 
 			_floppySoundsEnabledBox.IsChecked = _settingsDraft.FloppyDriveAudio.Enabled;
 			_floppySoundModeBox.SelectedItem = _settingsDraft.FloppyDriveAudio.Mode.ToString();
 			_floppySoundPackBox.Text = _settingsDraft.FloppyDriveAudio.SoundPack;
 			_floppySoundVolumeBox.Text = _settingsDraft.FloppyDriveAudio.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			_lacedPresentationModeBox.SelectedItem = FormatLacedPresentationMode(_settingsDraft.PresentationOptions.LacedMode);
 			RefreshControllerSelectors();
+			_settingsTabs.SelectedIndex = Math.Clamp(_settingsPageIndex, 0, _settingsTabs.ItemCount - 1);
 		}
 		finally
 		{
 			_updatingSettingsUi = false;
 		}
 
-		ShowSettingsPage(_settingsPageIndex);
 		UpdateSettingsStatus();
 	}
 
@@ -1353,6 +1464,13 @@ internal sealed class MainWindow : Window
 		{
 			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 194, 194));
 			_settingsStatus.Text = validationError;
+			return;
+		}
+
+		if (!string.IsNullOrWhiteSpace(_settingsStartupError))
+		{
+			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 194, 194));
+			_settingsStatus.Text = _settingsStartupError;
 			return;
 		}
 
@@ -1418,9 +1536,11 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		ClearSettingsStartupError();
 		_settingsDraft = CopperScreenSettingsDraft.FromProfile(profile);
 		_settingsDraft.MarkRequiresRestart();
 		_inputOptions = _settingsDraft.Input;
+		_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
 		RefreshSettingsUi();
 	}
 
@@ -1523,6 +1643,7 @@ internal sealed class MainWindow : Window
 			_settingsDraft.PseudoFastBase = _pseudoFastBaseBox.Text?.Trim() ?? "$C00000";
 			_settingsDraft.RealFastRamKb = ParseNonNegativeInt(_realFastRamBox.Text, "Real fast RAM KB");
 			_settingsDraft.RealFastBase = _realFastBaseBox.Text?.Trim() ?? "$200000";
+			_settingsDraft.RtcEnabled = _rtcEnabledBox.IsChecked == true;
 			_settingsDraft.FloppyDriveCount = ParseDriveCount(_floppyDriveCountBox.SelectedItem);
 			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
 			{
@@ -1542,8 +1663,11 @@ internal sealed class MainWindow : Window
 				FloppyDriveAudioOptions.ClampVolume(ParseFloat(_floppySoundVolumeBox.Text, "Sound volume")));
 			ApplyControllerProfileEditor();
 			_settingsDraft.Input = ReadInputOptionsFromUi();
+			_settingsDraft.PresentationOptions = ReadPresentationOptionsFromUi();
 			_inputOptions = _settingsDraft.Input;
 			_runtime?.SetInputOptions(_inputOptions);
+			_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
+			ClearSettingsStartupError();
 			return true;
 		}
 		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException or OverflowException)
@@ -1561,6 +1685,12 @@ internal sealed class MainWindow : Window
 			port1Profile?.Id,
 			port2Profile?.Id,
 			_settingsDraft.Input.ControllerProfiles);
+	}
+
+	private CopperScreenPresentationOptions ReadPresentationOptionsFromUi()
+	{
+		return new CopperScreenPresentationOptions(
+			ParseLacedPresentationModeSelection(_lacedPresentationModeBox.SelectedItem));
 	}
 
 	private void RefreshSelectedControllerProfileEditor()
@@ -1603,6 +1733,7 @@ internal sealed class MainWindow : Window
 
 		try
 		{
+			ClearSettingsStartupError();
 			var updated = profile with
 			{
 				DisplayName = string.IsNullOrWhiteSpace(_controllerProfileNameBox.Text)
@@ -1653,9 +1784,30 @@ internal sealed class MainWindow : Window
 
 		try
 		{
+			ClearSettingsStartupError();
 			_settingsDraft.Input = ReadInputOptionsFromUi();
 			_inputOptions = _settingsDraft.Input;
 			_runtime?.SetInputOptions(_inputOptions);
+			UpdateSettingsStatus();
+		}
+		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
+		{
+			SetSettingsError(ex.Message);
+		}
+	}
+
+	private void ApplyPresentationSettingsLive()
+	{
+		if (_updatingSettingsUi)
+		{
+			return;
+		}
+
+		try
+		{
+			ClearSettingsStartupError();
+			_settingsDraft.PresentationOptions = ReadPresentationOptionsFromUi();
+			_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
 			UpdateSettingsStatus();
 		}
 		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
@@ -1695,8 +1847,9 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		_drivePathBoxes[driveIndex].Text = path;
+		ClearSettingsStartupError();
 		_settingsDraft.DriveDiskPaths[driveIndex] = path;
+		SetDrivePathTextSilently(driveIndex, path);
 		if (_runtime != null && driveIndex < _latestState.Drives.Length && _latestState.Drives[driveIndex].Connected)
 		{
 			await InsertDriveDiskAsync(driveIndex, path).ConfigureAwait(true);
@@ -1706,6 +1859,7 @@ internal sealed class MainWindow : Window
 			_latestState = CreateIdleState(_settingsDraft);
 			UpdateToolbarStatus();
 		}
+		UpdateSettingsStatus();
 	}
 
 	private void SetSettingsError(string error)
@@ -1728,6 +1882,16 @@ internal sealed class MainWindow : Window
 		=> string.Equals(value?.ToString(), "Samples", StringComparison.OrdinalIgnoreCase)
 			? FloppyDriveAudioMode.Samples
 			: FloppyDriveAudioMode.Synthetic;
+
+	private static CopperScreenLacedPresentationMode ParseLacedPresentationModeSelection(object? value)
+		=> string.Equals(value?.ToString(), "CRT flicker", StringComparison.OrdinalIgnoreCase)
+			? CopperScreenLacedPresentationMode.CrtFlicker
+			: CopperScreenLacedPresentationMode.StableWeave;
+
+	private static string FormatLacedPresentationMode(CopperScreenLacedPresentationMode mode)
+		=> mode == CopperScreenLacedPresentationMode.CrtFlicker
+			? "CRT flicker"
+			: "Stable weave";
 
 	private static int ParseDriveCount(object? value)
 		=> int.TryParse(value?.ToString(), out var count) ? Math.Clamp(count, 1, 4) : 1;
@@ -2163,8 +2327,16 @@ internal sealed class MainWindow : Window
 	private void ApplyWindowPresentationMode()
 	{
 		var fullscreen = WindowState == WindowState.FullScreen;
+		SizeToContent = fullscreen ? SizeToContent.Manual : SizeToContent.WidthAndHeight;
 		_toolbar.IsVisible = !fullscreen || _bench.IsToolbarVisible;
 		_settingsPanel.IsVisible = _settingsVisible;
+		_root.RowDefinitions[1].Height = fullscreen
+			? new GridLength(1, GridUnitType.Star)
+			: GridLength.Auto;
+		_presenter.DevicePixelExactLayout = !fullscreen;
+		_presenter.HorizontalAlignment = fullscreen ? HorizontalAlignment.Stretch : HorizontalAlignment.Center;
+		_presenter.VerticalAlignment = fullscreen ? VerticalAlignment.Stretch : VerticalAlignment.Center;
+		_presenter.InvalidateMeasure();
 
 		Grid.SetRow(_toolbar, 0);
 		Grid.SetRowSpan(_toolbar, 1);
@@ -2205,19 +2377,27 @@ internal sealed class MainWindow : Window
 	{
 		if (_showFullOverscan)
 		{
-			_presenter.SetSourceViewport(0, 0, AmigaConstants.PalLowResWidth, AmigaConstants.PalLowResHeight);
+			var viewport = FullOverscanPresentationViewport;
+			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 		else
 		{
-			_presenter.SetSourceViewport(
-				AmigaConstants.PalLowResOverscanBorderX,
-				AmigaConstants.PalLowResOverscanBorderY,
-				AmigaConstants.PalLowResStandardWidth,
-				AmigaConstants.PalLowResStandardHeight);
+			var viewport = CroppedPresentationViewport;
+			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 
 		ReleaseMouseGrab();
 	}
+
+	internal static PixelRect FullOverscanPresentationViewport { get; } =
+		new(0, 0, AmigaConstants.PalHighResWidth, AmigaConstants.PalHighResHeight);
+
+	internal static PixelRect CroppedPresentationViewport { get; } =
+		new(
+			AmigaConstants.PalLowResOverscanBorderX * 2,
+			AmigaConstants.PalLowResOverscanBorderY * 2,
+			AmigaConstants.PalLowResStandardWidth * 2,
+			AmigaConstants.PalLowResStandardHeight * 2);
 
 	private bool BeginMouseGrab(PointerEventArgs args)
 	{
@@ -2237,7 +2417,7 @@ internal sealed class MainWindow : Window
 		_mouseGrabCenterFramebufferPoint = center;
 		ResetMouseTracking();
 		args.Pointer.Capture(_presenter);
-		if (!TryRecenterMousePointer())
+		if (!RecenterMouseGrabPointer())
 		{
 			ReleaseMouseGrab();
 			return false;
@@ -2256,6 +2436,7 @@ internal sealed class MainWindow : Window
 
 		_mouseGrabActive = false;
 		_mouseGrabWaitingForCenter = false;
+		_mouseGrabRecenterPending = false;
 		_mouseGrabCenterFramebufferPoint = null;
 		_mouseGrabCenterScreenPoint = null;
 		ResetMouseTracking();
@@ -2273,6 +2454,23 @@ internal sealed class MainWindow : Window
 	internal static bool IsNearScreenPoint(PixelPoint left, PixelPoint right)
 		=> Math.Abs(left.X - right.X) <= 1 &&
 			Math.Abs(left.Y - right.Y) <= 1;
+
+	internal static bool IsMouseGrabRecenterEcho(
+		Point framebufferPoint,
+		Point centerFramebufferPoint,
+		PixelPoint? screenPoint,
+		PixelPoint? centerScreenPoint)
+	{
+		if (!IsMouseGrabCenterPoint(framebufferPoint, centerFramebufferPoint))
+		{
+			return false;
+		}
+
+		return !centerScreenPoint.HasValue ||
+			(screenPoint.HasValue &&
+			screenPoint.Value.X == centerScreenPoint.Value.X &&
+			screenPoint.Value.Y == centerScreenPoint.Value.Y);
+	}
 
 	private bool TryGetPresenterCenterFramebufferPoint(out Point framebufferPoint)
 	{
@@ -2319,12 +2517,28 @@ internal sealed class MainWindow : Window
 			}
 
 			_mouseGrabCenterScreenPoint = screenPoint;
+			if (_presenter.TryMapPointToFramebufferUnclamped(_presenter.PointToClient(screenPoint), out var framebufferPoint))
+			{
+				_mouseGrabCenterFramebufferPoint = framebufferPoint;
+			}
+
 			return true;
 		}
 		catch (InvalidOperationException)
 		{
 			return false;
 		}
+	}
+
+	private bool RecenterMouseGrabPointer()
+	{
+		if (!TryRecenterMousePointer())
+		{
+			return false;
+		}
+
+		_mouseGrabRecenterPending = true;
+		return true;
 	}
 
 	private void ResetMouseTracking()
@@ -2401,7 +2615,7 @@ internal sealed class MainWindow : Window
 			_settingsDraft.DriveDiskPaths[driveIndex] = path;
 			if (_drivePathBoxes[driveIndex] != null)
 			{
-				_drivePathBoxes[driveIndex].Text = path;
+				SetDrivePathTextSilently(driveIndex, path);
 			}
 		}
 

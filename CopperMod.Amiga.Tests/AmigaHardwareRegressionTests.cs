@@ -47,7 +47,7 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteWord(0x00DFF096, 0x8201, 0);
 		var buffer = new float[2];
 
-		bus.Paula.RenderSample(4, buffer, 0, 2);
+		bus.Paula.RenderSample(38, buffer, 0, 2);
 
 		Assert.True(buffer[0] > 0.01f);
 		Assert.Equal(0.0f, buffer[1]);
@@ -67,7 +67,7 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteWord(0x6CDFF096, 0x8201, 0);
 		var buffer = new float[2];
 
-		bus.Paula.RenderSample(4, buffer, 0, 2);
+		bus.Paula.RenderSample(34, buffer, 0, 2);
 
 		Assert.True(buffer[0] > 0.01f);
 		Assert.Equal(0.0f, buffer[1]);

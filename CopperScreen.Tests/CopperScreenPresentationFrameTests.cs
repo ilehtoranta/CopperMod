@@ -6,12 +6,12 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenPresentationFrameTests
 {
 	[Fact]
-	public void EmulatorUsesLowResolutionPresentationFramebuffer()
+	public void EmulatorUsesHighResolutionPresentationFramebuffer()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
 
-		Assert.Equal(AmigaConstants.PalLowResWidth, emulator.Width);
-		Assert.Equal(AmigaConstants.PalLowResHeight, emulator.Height);
+		Assert.Equal(AmigaConstants.PalHighResWidth, emulator.Width);
+		Assert.Equal(AmigaConstants.PalHighResHeight, emulator.Height);
 		Assert.Equal(emulator.Width * emulator.Height, emulator.Framebuffer.Length);
 	}
 
@@ -54,23 +54,28 @@ public sealed class CopperScreenPresentationFrameTests
 	}
 
 	[Fact]
-	public void InterlaceDownsampleProducesStableLowResolutionPixelsFromWovenRows()
+	public void CrtFlickerDimsInactiveFieldRowsAndLeavesActiveFieldRowsBright()
 	{
-		var red = unchecked((int)0xFFFF0000);
-		var green = unchecked((int)0xFF00FF00);
-		var blue = unchecked((int)0xFF0000FF);
-		var white = unchecked((int)0xFFFFFFFF);
-		var interlace = new int[]
+		var active = unchecked((int)0xFF204080);
+		var inactive = unchecked((int)0xFFE0A040);
+		var fieldHistory = new int[]
 		{
-			red, red, green, green,
-			red, red, green, green,
-			blue, blue, white, white,
-			blue, blue, white, white
+			inactive, inactive, inactive, inactive,
+			active, active, active, active,
+			inactive, inactive, inactive, inactive,
+			active, active, active, active
 		};
-		var output = new int[4];
+		var output = new int[fieldHistory.Length];
 
-		CopperScreenEmulator.DownsampleInterlacePresentationFrame(interlace, output, width: 4, height: 4);
+		CopperScreenEmulator.ComposeCrtFlickerInterlaceFrame(fieldHistory, output, width: 4, height: 4, interlaceField: 1);
 
-		Assert.Equal(new[] { red, green, blue, white }, output);
+		var dimInactive = unchecked((int)0xFF705020);
+		Assert.Equal(new[]
+		{
+			dimInactive, dimInactive, dimInactive, dimInactive,
+			active, active, active, active,
+			dimInactive, dimInactive, dimInactive, dimInactive,
+			active, active, active, active
+		}, output);
 	}
 }

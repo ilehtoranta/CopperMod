@@ -139,6 +139,15 @@ public sealed class PaulaConformanceMatrixTests
         bus.WriteWord(0x00DFF096, 0x0001, 0);
         bus.Paula.AdvanceTo(0);
         Assert.Equal(0x0200, bus.ReadWord(0x00DFF002) & 0x0201);
+
+        bus.WriteWord(0x00DFF096, 0x8000, 0);
+        bus.Paula.AdvanceTo(0);
+        Assert.Equal(0x0200, bus.ReadWord(0x00DFF002) & 0x0201);
+        Assert.False(bus.Paula.GetChannelSnapshot(0).DmaEnabled);
+
+        bus.WriteWord(0x00DFF096, 0xF800, 0);
+        bus.Paula.AdvanceTo(0);
+        Assert.Equal(0x0200, bus.Paula.Dmacon);
     }
 
     private static void DmaconMasterGatesAudioDma()
@@ -177,6 +186,11 @@ public sealed class PaulaConformanceMatrixTests
     {
         var bus = CreatePaulaComponentBus();
 
+        bus.WriteWord(0x00DFF09C, 0xC000, 0);
+        bus.Paula.AdvanceTo(0);
+        Assert.Equal(0, bus.Paula.Intreq & 0x4000);
+        Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x4000);
+
         bus.WriteWord(0x00DFF0AA, 0x0102, 0);
         bus.Paula.AdvanceTo(0);
         Assert.Empty(bus.Paula.DrainInterrupts());
@@ -214,13 +228,13 @@ public sealed class PaulaConformanceMatrixTests
         var afterEnable = bus.Paula.GetChannelSnapshot(0);
         var buffer = new float[4];
 
-        bus.Paula.RenderSample(225, buffer, 0, 2);
-        bus.Paula.RenderSample(226, buffer, 1, 2);
+        bus.Paula.RenderSample(263, buffer, 0, 2);
+        bus.Paula.RenderSample(264, buffer, 1, 2);
 
-        Assert.Equal(226, afterEnable.NextSampleCycle);
+        Assert.Equal(34, afterEnable.NextSampleCycle);
         Assert.True(buffer[0] > 0.20f);
         Assert.True(buffer[2] < -0.20f);
-        Assert.Equal(452, bus.Paula.GetChannelSnapshot(0).NextSampleCycle);
+        Assert.Equal(490, bus.Paula.GetChannelSnapshot(0).NextSampleCycle);
     }
 
     private static void ManualAudioPlaysHighThenLowByte()
@@ -265,7 +279,7 @@ public sealed class PaulaConformanceMatrixTests
             BigEndian.WriteUInt16(bus.ChipRam, (int)address, 0x7F81);
 
             bus.WriteWord(0x00DFF096, (ushort)(0x8200 | (1 << channel)), 0);
-            bus.Paula.AdvanceTo(0);
+            bus.Paula.AdvanceTo(38);
 
             var snapshot = bus.Paula.GetChannelSnapshot(channel);
             Assert.True(snapshot.DmaEnabled);
@@ -282,7 +296,7 @@ public sealed class PaulaConformanceMatrixTests
         bus.WriteWord(0x00DFF09A, 0xC080, 0);
         bus.WriteWord(0x00DFF096, 0x8201, 0);
 
-        bus.Paula.AdvanceTo(4);
+        bus.Paula.AdvanceTo(42);
         var snapshot = bus.Paula.GetChannelSnapshot(0);
 
         Assert.Equal(0x1002u, snapshot.CurrentAddress);
@@ -298,7 +312,7 @@ public sealed class PaulaConformanceMatrixTests
         bus.WriteWord(0x00DFF09A, 0xC080, 0);
 
         bus.WriteWord(0x00DFF096, 0x8201, 0);
-        bus.Paula.AdvanceTo(0);
+        bus.Paula.AdvanceTo(34);
 
         Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Channel == 0);
         Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);

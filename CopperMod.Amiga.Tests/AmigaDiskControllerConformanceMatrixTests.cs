@@ -719,7 +719,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		var canonicalTrack = target.ReadEncodedTrack(0, 0);
 		Assert.Equal(sourceTrack.BitLength, canonicalTrack.BitLength);
-		Assert.Equal(sourceTrack.Data.ToArray(), canonicalTrack.Data.ToArray());
+		Assert.Equal(sourceTrack.EncodedData.ToArray(), canonicalTrack.EncodedData.ToArray());
 		var postWriteOffset = bus.Disk.CaptureDmaTrace()
 			.Last(entry => entry.Kind == AmigaDiskDmaTraceKind.Completed)
 			.SourceBit;
@@ -728,10 +728,10 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		WriteDsklenStartSequence(bus, words: 4, afterWriteCycle);
 		CompleteDiskDma(bus);
 
-		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset), ReadChipWord(bus, DmaBase + 0x2000));
-		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 16), ReadChipWord(bus, DmaBase + 0x2002));
-		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 32), ReadChipWord(bus, DmaBase + 0x2004));
-		Assert.Equal(canonicalTrack.ReadUInt16(postWriteOffset + 48), ReadChipWord(bus, DmaBase + 0x2006));
+		Assert.Equal(canonicalTrack.ReadUInt16AtBit(postWriteOffset), ReadChipWord(bus, DmaBase + 0x2000));
+		Assert.Equal(canonicalTrack.ReadUInt16AtBit(postWriteOffset + 16), ReadChipWord(bus, DmaBase + 0x2002));
+		Assert.Equal(canonicalTrack.ReadUInt16AtBit(postWriteOffset + 32), ReadChipWord(bus, DmaBase + 0x2004));
+		Assert.Equal(canonicalTrack.ReadUInt16AtBit(postWriteOffset + 48), ReadChipWord(bus, DmaBase + 0x2006));
 	}
 
 	[Fact]
@@ -772,7 +772,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		CompleteDiskDma(bus);
 
 		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
-		Assert.Equal(0xAAAA, disk.ReadEncodedTrack(0, 0).ReadUInt16(0));
+		Assert.Equal(0xAAAA, disk.ReadEncodedTrack(0, 0).ReadUInt16AtBit(0));
 	}
 
 	[Fact]
@@ -1224,7 +1224,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 	private static void WriteTrackToChip(AmigaBus bus, uint address, AmigaEncodedTrack track)
 	{
-		var data = track.Data.Span;
+		var data = track.EncodedData.Span;
 		for (var offset = 0; offset < track.ByteLength; offset += 2)
 		{
 			var value = BigEndian.ReadUInt16(data, offset, "encoded track DMA word");
@@ -1234,7 +1234,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 	private static long DiskByteCycleCount(int byteCount)
 	{
-		return DiskByteCycleCount(AmigaDosTrackEncoder.EncodedTrackBytes, byteCount);
+		return DiskByteCycleCount(AmigaDosTrackEncoder.EncodedTrackByteCount, byteCount);
 	}
 
 	private static long DiskByteCycleCount(int trackByteLength, int byteCount)
@@ -1355,7 +1355,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	{
 		var bitLength = source.Length * 8;
 		var shifted = new byte[source.Length];
-		shiftBits = AmigaEncodedTrack.Mod(shiftBits, bitLength);
+		shiftBits = AmigaEncodedTrack.WrapBitOffset(shiftBits, bitLength);
 		for (var bit = 0; bit < bitLength; bit++)
 		{
 			if (!ReadBit(source, bit))

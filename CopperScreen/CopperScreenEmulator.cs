@@ -27,6 +27,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly Action<long, long> _renderFrameAudioUntil;
 	private bool _bootAttempted;
 	private bool _interlacePresentationFrameValid;
+	private CopperScreenPresentationOptions _presentationOptions;
 	private bool _workbenchHandoffPending;
 	private bool _copperBenchRequestPending;
 	private AmigaDiskImage? _pendingDiskImage;
@@ -57,21 +58,22 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
 	{
 		var machineOptions = CreateMachineOptions(startupOptions, out _startupError);
-		Width = AmigaConstants.PalLowResWidth;
-		Height = AmigaConstants.PalLowResHeight;
-		Framebuffer = new int[Width * Height];
-		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
 		_profile = startupOptions.Profile;
 		_baseDirectory = startupOptions.BaseDirectory;
 		_floppyDriveAudioOptions = startupOptions.FloppyDriveAudio;
 		_inputOptions = startupOptions.Input;
+		_presentationOptions = startupOptions.Profile.PresentationOptions;
 		_initialDriveDiskPaths = startupOptions.DriveDiskPaths.ToArray();
 		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
 		_boot.AutoStartWorkbenchDefaultTool = false;
+		Width = _machine.Bus.Display.Width;
+		Height = _machine.Bus.Display.Height;
+		Framebuffer = new int[Width * Height];
+		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
 		_frameAudio = new float[AudioFramesPerAppFrame(DefaultAudioSampleRate) * DefaultAudioChannels];
-		_interlacePresentationFrame = new int[_machine.Bus.Display.Width * _machine.Bus.Display.Height];
+		_interlacePresentationFrame = new int[Framebuffer.Length];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DriveDiskPaths.Length > 0 ? startupOptions.DriveDiskPaths[0] : startupOptions.DiskPath;
 		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
@@ -135,7 +137,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 			: M68kInstructionFrequencySnapshot.Empty;
 
 	public void Dispose()
-		=> _machine.Dispose();
+	{
+		_machine.Dispose();
+	}
 
 	public string ProgramCounterText => $"PC=${_machine.Cpu.State.ProgramCounter:X6}";
 
@@ -245,6 +249,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		startupError = startupOptions.Error;
 		var machineOptions = startupOptions.Profile.CreateMachineOptions();
+		var startupFloppyDriveCount = GetStartupFloppyDriveCount(startupOptions);
+		if (startupFloppyDriveCount > machineOptions.FloppyDriveCount)
+		{
+			machineOptions.WithFloppyDriveCount(startupFloppyDriveCount);
+		}
+
 		if (startupOptions.CpuBackendOverride.HasValue)
 		{
 			machineOptions.WithCpu(M68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
@@ -274,6 +284,34 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		return machineOptions;
+	}
+
+	private static int GetStartupFloppyDriveCount(CopperScreenStartupOptions startupOptions)
+	{
+		var driveCount = startupOptions.Profile.FloppyDriveCount;
+		for (var driveIndex = 0; driveIndex < startupOptions.DriveDiskPaths.Length; driveIndex++)
+		{
+			if (!string.IsNullOrWhiteSpace(startupOptions.DriveDiskPaths[driveIndex]))
+			{
+				driveCount = Math.Max(driveCount, driveIndex + 1);
+			}
+		}
+
+		var startupDiskPath = startupOptions.DriveDiskPaths.Length > 0
+			? startupOptions.DriveDiskPaths[0]
+			: startupOptions.DiskPath;
+		if (startupOptions.Profile.FloppyDriveCount > 1)
+		{
+			for (var driveIndex = 1; driveIndex < 4; driveIndex++)
+			{
+				if (ResolveAdjacentDiskPath(startupDiskPath, driveIndex) != null)
+				{
+					driveCount = Math.Max(driveCount, driveIndex + 1);
+				}
+			}
+		}
+
+		return Math.Clamp(driveCount, 1, 4);
 	}
 
 	private static string? FindDefaultKickstart13Rom(string baseDirectory)
@@ -463,7 +501,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return null;
 		}
 
-		var match = Regex.Match(fileName, @"(?<prefix>Disk\s*)(?<number>\d+)(?<suffix>\s*of\s*(?<total>\d+))", RegexOptions.IgnoreCase);
+		var match = MatchDiskNumber(fileName);
 		if (!match.Success ||
 			!int.TryParse(match.Groups["number"].Value, out var number) ||
 			!int.TryParse(match.Groups["total"].Value, out var total))
@@ -484,7 +522,60 @@ internal sealed class CopperScreenEmulator : IDisposable
 		var nextName = fileName.Remove(match.Groups["number"].Index, match.Groups["number"].Length)
 			.Insert(match.Groups["number"].Index, replacement);
 		var candidate = Path.Combine(directory, nextName);
-		return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
+		if (File.Exists(candidate))
+		{
+			return Path.GetFullPath(candidate);
+		}
+
+		return ResolveUniqueAdjacentDiskSibling(directory, fileName, match, target, total);
+	}
+
+	private static Match MatchDiskNumber(string fileName)
+		=> Regex.Match(fileName, @"(?<prefix>Disk\s*)(?<number>\d+)(?<suffix>\s*of\s*(?<total>\d+))", RegexOptions.IgnoreCase);
+
+	private static string? ResolveUniqueAdjacentDiskSibling(
+		string directory,
+		string fileName,
+		Match sourceMatch,
+		int target,
+		int total)
+	{
+		if (!Directory.Exists(directory))
+		{
+			return null;
+		}
+
+		var sourceNumberPrefix = fileName[..sourceMatch.Groups["number"].Index];
+		var extension = Path.GetExtension(fileName);
+		var matches = new List<string>();
+		foreach (var path in Directory.EnumerateFiles(directory))
+		{
+			var siblingName = Path.GetFileName(path);
+			if (!string.Equals(Path.GetExtension(siblingName), extension, StringComparison.OrdinalIgnoreCase))
+			{
+				continue;
+			}
+
+			var siblingMatch = MatchDiskNumber(siblingName);
+			if (!siblingMatch.Success ||
+				!int.TryParse(siblingMatch.Groups["number"].Value, out var siblingNumber) ||
+				!int.TryParse(siblingMatch.Groups["total"].Value, out var siblingTotal) ||
+				siblingNumber != target ||
+				siblingTotal != total)
+			{
+				continue;
+			}
+
+			var siblingNumberPrefix = siblingName[..siblingMatch.Groups["number"].Index];
+			if (!string.Equals(siblingNumberPrefix, sourceNumberPrefix, StringComparison.OrdinalIgnoreCase))
+			{
+				continue;
+			}
+
+			matches.Add(path);
+		}
+
+		return matches.Count == 1 ? Path.GetFullPath(matches[0]) : null;
 	}
 
 	private void InsertDiskSet(AmigaDiskImage disk, string? diskPath, bool markChanged)
@@ -592,7 +683,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		var wasDebuggerStopped = _debugSnapshot != null;
 		_bootAttempted = false;
-		_interlacePresentationFrameValid = false;
+		InvalidateInterlacePresentationHistory();
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		_debugSnapshot = null;
@@ -683,7 +774,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			}
 
 			_bootAttempted = true;
-				_interlacePresentationFrameValid = false;
+				InvalidateInterlacePresentationHistory();
 			_workbenchHandoffPending = false;
 			_copperBenchRequestPending = false;
 			_firePulseFrames = 0;
@@ -807,6 +898,21 @@ internal sealed class CopperScreenEmulator : IDisposable
 		ApplyInputState();
 	}
 
+	public void SetPresentationOptions(CopperScreenPresentationOptions options)
+	{
+		if (_presentationOptions.Equals(options))
+		{
+			return;
+		}
+
+		if (_presentationOptions.LacedMode != options.LacedMode)
+		{
+			InvalidateInterlacePresentationHistory();
+		}
+
+		_presentationOptions = options;
+	}
+
 	public void KeyDown(AmigaRawKey key)
 	{
 		_machine.Bus.Keyboard.KeyDown(key, _machine.Cpu.State.Cycles);
@@ -824,7 +930,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (_startupError != null)
 		{
 			_frameAudio.AsSpan().Clear();
-			_interlacePresentationFrameValid = false;
+			InvalidateInterlacePresentationHistory();
 			StatusText = _startupError;
 			RenderStatusFrame(StatusText);
 			AdvanceInputPulse();
@@ -834,7 +940,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (DiskPath == null)
 		{
 			_frameAudio.AsSpan().Clear();
-			_interlacePresentationFrameValid = false;
+			InvalidateInterlacePresentationHistory();
 			StatusText = "insert disk image";
 			RenderNoDiskFrame();
 			AdvanceInputPulse();
@@ -874,7 +980,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
 			{
 				_frameAudio.AsSpan().Clear();
-				_interlacePresentationFrameValid = false;
+				InvalidateInterlacePresentationHistory();
 				StatusText = ex.Message;
 				RenderStatusFrame(StatusText);
 				AdvanceInputPulse();
@@ -1096,7 +1202,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		if (!_machine.Bus.Display.InterlaceEnabled)
 		{
-			_interlacePresentationFrameValid = false;
+			InvalidateInterlacePresentationHistory();
 			_machine.Bus.Display.RenderFrame(
 				MemoryMarshal.Cast<int, uint>(Framebuffer.AsSpan()),
 				frameStartCycle,
@@ -1119,11 +1225,53 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_interlacePresentationFrameValid = true;
 		}
 
-		DownsampleInterlacePresentationFrame(
-			_interlacePresentationFrame,
-			Framebuffer,
-			_machine.Bus.Display.Width,
-			_machine.Bus.Display.Height);
+		ComposeInterlacePresentationFrame(interlaceField);
+	}
+
+	private void ComposeInterlacePresentationFrame(int interlaceField)
+	{
+		switch (_presentationOptions.LacedMode)
+		{
+			case CopperScreenLacedPresentationMode.CrtFlicker:
+				ComposeCrtFlickerInterlaceFrame(
+					_interlacePresentationFrame,
+					Framebuffer,
+					_machine.Bus.Display.Width,
+					_machine.Bus.Display.Height,
+					interlaceField);
+				break;
+			default:
+				_interlacePresentationFrame.AsSpan().CopyTo(Framebuffer);
+				break;
+		}
+	}
+
+	private void StabilizeInterlaceFrame()
+	{
+		if (!_machine.Bus.Display.InterlaceEnabled)
+		{
+			InvalidateInterlacePresentationHistory();
+			return;
+		}
+
+		Framebuffer.AsSpan().CopyTo(_interlacePresentationFrame);
+		var interlaceField = (int)(((_targetCycle - PalFrameCycles) / PalFrameCycles) & 1);
+		if (!_interlacePresentationFrameValid)
+		{
+			SeedMissingInterlaceFieldRows(
+				_interlacePresentationFrame,
+				_machine.Bus.Display.Width,
+				_machine.Bus.Display.Height,
+				interlaceField);
+			_interlacePresentationFrameValid = true;
+		}
+
+		ComposeInterlacePresentationFrame(interlaceField);
+	}
+
+	private void InvalidateInterlacePresentationHistory()
+	{
+		_interlacePresentationFrameValid = false;
 	}
 
 	internal static void SeedMissingInterlaceFieldRows(Span<int> interlaceFrame, int width, int height, int interlaceField)
@@ -1144,44 +1292,43 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 	}
 
-	internal static void DownsampleInterlacePresentationFrame(
-		ReadOnlySpan<int> interlaceFrame,
+	internal static void ComposeCrtFlickerInterlaceFrame(
+		ReadOnlySpan<int> fieldHistory,
 		Span<int> framebuffer,
 		int width,
-		int height)
+		int height,
+		int interlaceField)
 	{
 		System.Diagnostics.Debug.Assert((width & 1) == 0);
 		System.Diagnostics.Debug.Assert((height & 1) == 0);
-		var outputWidth = width >> 1;
-		var outputHeight = height >> 1;
-		System.Diagnostics.Debug.Assert(framebuffer.Length >= outputWidth * outputHeight);
+		System.Diagnostics.Debug.Assert((interlaceField & ~1) == 0);
+		System.Diagnostics.Debug.Assert(fieldHistory.Length >= width * height);
+		System.Diagnostics.Debug.Assert(framebuffer.Length >= width * height);
 
-		for (var outputY = 0; outputY < outputHeight; outputY++)
+		for (var y = 0; y < height; y++)
 		{
-			var topRowOffset = (outputY << 1) * width;
-			var bottomRowOffset = topRowOffset + width;
-			var outputOffset = outputY * outputWidth;
-			for (var outputX = 0; outputX < outputWidth; outputX++)
+			var offset = y * width;
+			var source = fieldHistory.Slice(offset, width);
+			var destination = framebuffer.Slice(offset, width);
+			if ((y & 1) == interlaceField)
 			{
-				var sourceX = outputX << 1;
-				var top = AverageOpaquePixels(
-					interlaceFrame[topRowOffset + sourceX],
-					interlaceFrame[topRowOffset + sourceX + 1]);
-				var bottom = AverageOpaquePixels(
-					interlaceFrame[bottomRowOffset + sourceX],
-					interlaceFrame[bottomRowOffset + sourceX + 1]);
-				framebuffer[outputOffset + outputX] = AverageOpaquePixels(top, bottom);
+				source.CopyTo(destination);
+				continue;
+			}
+
+			for (var x = 0; x < width; x++)
+			{
+				destination[x] = DimOpaquePixel50(source[x]);
 			}
 		}
 	}
 
-	private static int AverageOpaquePixels(int left, int right)
+	private static int DimOpaquePixel50(int pixel)
 	{
-		var a = unchecked((uint)left);
-		var b = unchecked((uint)right);
-		var r = (((a >> 16) & 0xFF) + ((b >> 16) & 0xFF)) >> 1;
-		var g = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) >> 1;
-		var blue = ((a & 0xFF) + (b & 0xFF)) >> 1;
+		var value = unchecked((uint)pixel);
+		var r = ((value >> 16) & 0xFF) >> 1;
+		var g = ((value >> 8) & 0xFF) >> 1;
+		var blue = (value & 0xFF) >> 1;
 		return unchecked((int)(0xFF00_0000u | (r << 16) | (g << 8) | blue));
 	}
 
@@ -1250,7 +1397,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	private bool HandleBootResult(AmigaBootResult result)
 	{
-		if (result.Diagnostics.Any(diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_WORKBENCH_HANDOFF"))
+		if (HasWorkbenchHandoffDiagnostic(result.Diagnostics))
 		{
 			_workbenchHandoffPending = true;
 			_copperBenchRequestPending = true;
@@ -1273,6 +1420,19 @@ internal sealed class CopperScreenEmulator : IDisposable
 			FormatDiagnostics(result.Diagnostics));
 		RenderStatusFrame(StatusText);
 		return true;
+	}
+
+	private static bool HasWorkbenchHandoffDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_WORKBENCH_HANDOFF")
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private static string? BuildFatalStatus(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
@@ -1337,7 +1497,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_frameAudio.AsSpan().Clear();
-		_interlacePresentationFrameValid = false;
+		InvalidateInterlacePresentationHistory();
 		IsPaused = true;
 		StatusText = reasonCode + ": " + message;
 		_debugSnapshot = CreateDebugSnapshot(reasonCode, message, diagnostics);

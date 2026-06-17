@@ -5,22 +5,6 @@ using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
-    internal readonly struct CustomRegisterWrite
-    {
-        public CustomRegisterWrite(long cycle, ushort address, ushort value)
-        {
-            Cycle = cycle;
-            Address = address;
-            Value = value;
-        }
-
-        public long Cycle { get; }
-
-        public ushort Address { get; }
-
-        public ushort Value { get; }
-    }
-
     internal readonly struct HostTrapStub
     {
         public HostTrapStub(uint address, ushort trapId, Action<M68kCpuState> callback)
@@ -37,162 +21,15 @@ namespace CopperMod.Amiga
         public Action<M68kCpuState> Callback { get; }
     }
 
-    internal readonly struct M68kCodeGenerationStamp
+    internal enum CustomRegisterReadAdvanceKind
     {
-        public M68kCodeGenerationStamp(uint[] pages, uint[] generations)
-        {
-            Pages = pages;
-            Generations = generations;
-        }
-
-        public uint[] Pages { get; }
-
-        public uint[] Generations { get; }
-
-        public bool IsEmpty => Pages == null || Generations == null || Pages.Length == 0;
-    }
-
-    internal readonly struct M68kJitCodeSnapshot
-    {
-        public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostTrapStubAddresses)
-        {
-            Root = root;
-            Bytes = bytes;
-            GenerationStamp = generationStamp;
-            HostTrapStubAddresses = hostTrapStubAddresses;
-        }
-
-        public uint Root { get; }
-
-        public byte[] Bytes { get; }
-
-        public M68kCodeGenerationStamp GenerationStamp { get; }
-
-        public uint[] HostTrapStubAddresses { get; }
-
-        public bool IsEmpty => Bytes == null || Bytes.Length == 0;
-    }
-
-    internal sealed class M68kSnapshotCodeReader : IM68kCodeReader
-    {
-        private const int CodeGenerationPageSize = 1 << 8;
-        private readonly M68kJitCodeSnapshot _snapshot;
-
-        public M68kSnapshotCodeReader(M68kJitCodeSnapshot snapshot)
-        {
-            _snapshot = snapshot;
-        }
-
-        public uint Root => _snapshot.Root;
-
-        public int ByteLength => _snapshot.Bytes?.Length ?? 0;
-
-        public bool HasHostTrapStub(uint address)
-        {
-            address = NormalizeAddress(address);
-            if (!TryGetOffset(address, 2, out _))
-            {
-                return true;
-            }
-
-            var trapStubs = _snapshot.HostTrapStubAddresses;
-            if (trapStubs == null)
-            {
-                return false;
-            }
-
-            for (var i = 0; i < trapStubs.Length; i++)
-            {
-                if (trapStubs[i] == address)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        public ushort ReadHostWord(uint address)
-        {
-            if (!TryGetOffset(address, 2, out var offset))
-            {
-                throw M68kCodeReadException.Instance;
-            }
-
-            var bytes = _snapshot.Bytes;
-            return (ushort)((bytes[offset] << 8) | bytes[offset + 1]);
-        }
-
-        public bool TryCaptureWords(uint address, int byteLength, out ushort[] words)
-        {
-            words = Array.Empty<ushort>();
-            if (byteLength <= 0 || !TryGetOffset(address, byteLength, out var offset))
-            {
-                return false;
-            }
-
-            var wordCount = (byteLength + 1) / 2;
-            words = new ushort[wordCount];
-            for (var i = 0; i < words.Length; i++)
-            {
-                var byteOffset = offset + (i * 2);
-                var high = byteOffset < _snapshot.Bytes.Length ? _snapshot.Bytes[byteOffset] : 0;
-                var low = byteOffset + 1 < _snapshot.Bytes.Length ? _snapshot.Bytes[byteOffset + 1] : 0;
-                words[i] = (ushort)((high << 8) | low);
-            }
-
-            return true;
-        }
-
-        public bool TryGetGeneration(uint address, out uint generation)
-        {
-            address = NormalizeAddress(address);
-            var page = address & ~(uint)(CodeGenerationPageSize - 1);
-            var stamp = _snapshot.GenerationStamp;
-            if (stamp.Pages == null || stamp.Generations == null)
-            {
-                generation = 0;
-                return false;
-            }
-
-            for (var i = 0; i < stamp.Pages.Length && i < stamp.Generations.Length; i++)
-            {
-                if (stamp.Pages[i] == page)
-                {
-                    generation = stamp.Generations[i];
-                    return true;
-                }
-            }
-
-            generation = 0;
-            return false;
-        }
-
-        public bool ContainsRange(uint address, int byteLength)
-            => TryGetOffset(address, byteLength, out _);
-
-        private bool TryGetOffset(uint address, int byteLength, out int offset)
-        {
-            offset = 0;
-            if (_snapshot.Bytes == null || byteLength < 0)
-            {
-                return false;
-            }
-
-            address = NormalizeAddress(address);
-            var root = NormalizeAddress(_snapshot.Root);
-            var distance = NormalizeAddress(address - root);
-            if (distance > int.MaxValue)
-            {
-                return false;
-            }
-
-            offset = (int)distance;
-            return offset >= 0 && offset + byteLength <= _snapshot.Bytes.Length;
-        }
-
-        private static uint NormalizeAddress(uint address)
-            => address & 0x00FF_FFFF;
+        RegisterWritesOnly,
+        BeamPosition,
+        InputOnly,
+        BlitterStatus,
+        InterruptSources,
+        DiskEventOnly,
+        DiskPassiveInput
     }
 
     internal sealed class AmigaBus : IM68kBus, IM68kCodeReader
@@ -211,7 +48,7 @@ namespace CopperMod.Amiga
         private readonly uint[] _realFastCodePageGenerations;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
         private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
-        private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>();
+        private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>(16);
         private readonly AmigaCiaInterruptEvent[] _drainedCiaInterruptBuffer = new AmigaCiaInterruptEvent[MaxPendingInterruptEvents];
         private readonly ReusableReadOnlyList<AmigaCiaInterruptEvent> _drainedCiaInterrupts = new ReusableReadOnlyList<AmigaCiaInterruptEvent>();
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
@@ -222,6 +59,7 @@ namespace CopperMod.Amiga
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
         private readonly bool _liveAgnusDmaDefault;
+        private readonly AmigaRealTimeClock? _realTimeClock;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
         private readonly bool[] _pendingCustomByteWritten = new bool[0x200];
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
@@ -251,7 +89,9 @@ namespace CopperMod.Amiga
             int audioDmaMinimumPeriod = AmigaConstants.A500PalMinimumAudioDmaPeriod,
             int realFastRamSize = 0,
             uint realFastRamBase = AmigaConstants.A500RealFastRamBase,
-            bool enableHardwareSpecialization = false)
+            bool enableHardwareSpecialization = false,
+            bool realTimeClockEnabled = false,
+            Func<DateTimeOffset>? realTimeClockNowProvider = null)
         {
             if (chipRamSize <= 0)
             {
@@ -293,6 +133,7 @@ namespace CopperMod.Amiga
             _presentationWriteHistory = new ChipPresentationWriteHistory(chipRamSize);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
+            _realTimeClock = realTimeClockEnabled ? new AmigaRealTimeClock(realTimeClockNowProvider) : null;
             _chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
             ChipDmaAddressMask = ((uint)chipRamSize - 1u) & 0x00FF_FFFEu;
             ExpansionRamBase = NormalizeAddress(expansionRamBase);
@@ -379,6 +220,8 @@ namespace CopperMod.Amiga
 
         public uint RealFastRamBase { get; }
 
+        public bool RealTimeClockEnabled => _realTimeClock != null;
+
         public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => Paula.Writes;
 
         public IReadOnlyList<AmigaBusAccessResult> BusAccesses => _busAccesses;
@@ -445,6 +288,7 @@ namespace CopperMod.Amiga
             _busAccesses.Clear();
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
+            _realTimeClock?.ResetControlRegisters();
             CiaA.Reset(0x02);
             CiaB.Reset();
             Keyboard.Reset();
@@ -588,12 +432,17 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             address = NormalizeAddress(address);
+            if (TryGetCiaRegister(address, out var directCia, out var directCiaRegister))
+            {
+                return ReadCpuCiaByte(address, directCia, directCiaRegister, ref cycle, accessKind);
+            }
+
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: false);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: false);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawByte(address, fastAccess.GrantedCycle)
                     : ReadRawByte(address);
@@ -607,12 +456,33 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawByte(address, access.GrantedCycle)
                 : ReadRawByte(address);
             cycle = access.CompletedCycle;
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister) && cia == CiaA && ciaRegister == 0x0C)
+            {
+                Keyboard.AcknowledgeSerialDataRead(cycle);
+            }
+
+            return value;
+        }
+
+        private byte ReadCpuCiaByte(
+            uint address,
+            AmigaCia cia,
+            int ciaRegister,
+            ref long cycle,
+            AmigaBusAccessKind accessKind)
+        {
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(AmigaBusAccessTarget.Cia, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: false)
+                : Arbitrate(AmigaBusRequester.Cpu, accessKind, AmigaBusAccessTarget.Cia, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
+            AdvanceCiaRegisterObservableEventsTo(access.GrantedCycle);
+            var value = ReadCiaRegisterValue(cia, ciaRegister);
+            cycle = access.CompletedCycle;
+            if (cia == CiaA && ciaRegister == 0x0C)
             {
                 Keyboard.AcknowledgeSerialDataRead(cycle);
             }
@@ -633,14 +503,14 @@ namespace CopperMod.Amiga
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: true);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: true);
                 WriteRawByte(address, value, fastAccess.GrantedCycle);
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
             WriteRawByte(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -658,14 +528,14 @@ namespace CopperMod.Amiga
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Word, cycle, accessKind, isWrite: true);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: true);
                 WriteRawWord(address, value, fastAccess.GrantedCycle);
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
             WriteRawWord(address, value, access.GrantedCycle);
             cycle = access.CompletedCycle;
         }
@@ -692,7 +562,7 @@ namespace CopperMod.Amiga
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Word, cycle, accessKind, isWrite: false);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: false);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawWord(address, fastAccess.GrantedCycle)
                     : ReadRawWord(address);
@@ -701,7 +571,7 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawWord(address, access.GrantedCycle)
                 : ReadRawWord(address);
@@ -731,7 +601,7 @@ namespace CopperMod.Amiga
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Long, cycle, accessKind, isWrite: false);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: false);
                 var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                     ? ReadRawLong(address, fastAccess.GrantedCycle, GetSecondWordCycle(fastAccess))
                     : ReadRawLong(address);
@@ -740,7 +610,7 @@ namespace CopperMod.Amiga
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: false);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
             var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
                 ? ReadRawLong(address, access.GrantedCycle, GetSecondWordCycle(access))
                 : ReadRawLong(address);
@@ -771,14 +641,14 @@ namespace CopperMod.Amiga
             if (_useFastZeroWaitAccesses)
             {
                 var fastAccess = GrantFastCpuAccess(target, address, AmigaBusAccessSize.Long, cycle, accessKind, isWrite: true);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, fastAccess.GrantedCycle);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: true);
                 WriteRawLong(address, value, fastAccess.GrantedCycle, GetSecondWordCycle(fastAccess));
                 cycle = fastAccess.CompletedCycle;
                 return;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, requestedCycle, access.GrantedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
             WriteRawLong(address, value, access.GrantedCycle, GetSecondWordCycle(access));
             cycle = access.CompletedCycle;
         }
@@ -1278,20 +1148,49 @@ namespace CopperMod.Amiga
 
         public void AdvanceCiasTo(long targetCycle)
         {
-            Disk.AdvanceTo(targetCycle);
+            targetCycle = Math.Max(0, targetCycle);
+            Disk.AdvanceEventsTo(targetCycle);
+            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+        }
+
+        public void AdvanceCiaTimersTo(long targetCycle)
+        {
+            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+        }
+
+        internal void AdvanceCiaRegisterObservableEventsTo(long targetCycle)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            AdvanceRasterTo(targetCycle);
+            Disk.AdvanceCiaEventsTo(targetCycle);
             CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
             CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
         }
 
         public void AdvanceDmaTo(long targetCycle)
         {
-            AdvanceDmaTo(targetCycle, advanceLiveAgnus: true);
+            AdvanceDmaTo(targetCycle, advanceLiveAgnus: true, advancePassiveDiskInput: true);
         }
 
         public void AdvanceDmaTo(long targetCycle, bool advanceLiveAgnus)
         {
+            AdvanceDmaTo(targetCycle, advanceLiveAgnus, advancePassiveDiskInput: true);
+        }
+
+        public void AdvanceDmaTo(long targetCycle, bool advanceLiveAgnus, bool advancePassiveDiskInput)
+        {
             Paula.AdvanceTo(targetCycle);
-            Disk.AdvanceTo(targetCycle);
+            if (advancePassiveDiskInput)
+            {
+                Disk.AdvanceTo(targetCycle);
+            }
+            else
+            {
+                Disk.AdvanceEventsTo(targetCycle);
+            }
+
             if (advanceLiveAgnus && LiveAgnusDmaEnabled)
             {
                 Agnus.AdvanceTo(targetCycle);
@@ -1301,37 +1200,130 @@ namespace CopperMod.Amiga
             Paula.AdvanceTo(targetCycle);
         }
 
-        private void AdvanceDmaBeforeCpuChipAccess(AmigaBusAccessTarget target, long grantedCycle)
+        internal void AdvanceRegisterObservableEventsTo(long targetCycle, uint customRegisterAddress)
         {
+            targetCycle = Math.Max(0, targetCycle);
+            switch (GetCustomRegisterReadAdvanceKind(customRegisterAddress))
+            {
+                case CustomRegisterReadAdvanceKind.BeamPosition:
+                    UpdateBeamPosition(targetCycle);
+                    return;
+
+                case CustomRegisterReadAdvanceKind.InputOnly:
+                    return;
+
+                case CustomRegisterReadAdvanceKind.BlitterStatus:
+                    Paula.AdvanceRegisterWritesTo(targetCycle);
+                    Blitter.AdvanceTo(targetCycle);
+                    return;
+
+                case CustomRegisterReadAdvanceKind.InterruptSources:
+                    AdvanceRasterTo(targetCycle);
+                    CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+                    CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+                    Paula.AdvanceRegisterObservableTo(targetCycle);
+                    Disk.AdvanceEventsTo(targetCycle);
+                    Blitter.AdvanceTo(targetCycle);
+                    Paula.AdvanceRegisterObservableTo(targetCycle);
+                    return;
+
+                case CustomRegisterReadAdvanceKind.DiskEventOnly:
+                    Paula.AdvanceRegisterWritesTo(targetCycle);
+                    Disk.AdvanceEventsTo(targetCycle);
+                    return;
+
+                case CustomRegisterReadAdvanceKind.DiskPassiveInput:
+                    Paula.AdvanceRegisterWritesTo(targetCycle);
+                    Disk.AdvanceTo(targetCycle);
+                    return;
+
+                default:
+                    Paula.AdvanceRegisterWritesTo(targetCycle);
+                    return;
+            }
+        }
+
+        private static CustomRegisterReadAdvanceKind GetCustomRegisterReadAdvanceKind(uint customRegisterAddress)
+        {
+            var offset = (ushort)(customRegisterAddress & 0x01FE);
+            switch (offset)
+            {
+                case 0x002:
+                    return CustomRegisterReadAdvanceKind.BlitterStatus;
+                case 0x004:
+                case 0x006:
+                    return CustomRegisterReadAdvanceKind.BeamPosition;
+                case 0x008:
+                case 0x01A:
+                    return CustomRegisterReadAdvanceKind.DiskPassiveInput;
+                case 0x00A:
+                case 0x00C:
+                case 0x016:
+                    return CustomRegisterReadAdvanceKind.InputOnly;
+                case 0x01E:
+                    return CustomRegisterReadAdvanceKind.InterruptSources;
+                case 0x020:
+                case 0x022:
+                case 0x024:
+                case 0x07E:
+                    return CustomRegisterReadAdvanceKind.DiskEventOnly;
+                default:
+                    return CustomRegisterReadAdvanceKind.RegisterWritesOnly;
+            }
+        }
+
+        private void AdvanceDmaBeforeCpuChipAccess(
+            AmigaBusAccessTarget target,
+            uint address,
+            long grantedCycle,
+            bool isWrite)
+        {
+            if (target == AmigaBusAccessTarget.CustomRegisters && !isWrite)
+            {
+                AdvanceRegisterObservableEventsTo(grantedCycle, address);
+                return;
+            }
+
             if (target == AmigaBusAccessTarget.ChipRam ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
+                target == AmigaBusAccessTarget.RealTimeClock ||
                 target == AmigaBusAccessTarget.CustomRegisters)
             {
-                AdvanceDmaTo(grantedCycle);
+                AdvanceDmaTo(
+                    grantedCycle,
+                    advanceLiveAgnus: true,
+                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
                 return;
             }
 
             if (target == AmigaBusAccessTarget.Cia)
             {
-                AdvanceCiasTo(grantedCycle);
+                AdvanceCiaRegisterObservableEventsTo(grantedCycle);
             }
         }
 
         private void AdvanceDmaAfterCpuGrantIfNeeded(
             AmigaBusAccessTarget target,
+            uint address,
             long requestedCycle,
-            long grantedCycle)
+            long grantedCycle,
+            bool isWrite)
         {
             if ((target == AmigaBusAccessTarget.ChipRam ||
                     target == AmigaBusAccessTarget.ExpansionRam ||
+                    target == AmigaBusAccessTarget.RealTimeClock ||
                     target == AmigaBusAccessTarget.CustomRegisters) &&
                 grantedCycle <= requestedCycle)
             {
                 return;
             }
 
-            AdvanceDmaBeforeCpuChipAccess(target, grantedCycle);
+            AdvanceDmaBeforeCpuChipAccess(target, address, grantedCycle, isWrite);
         }
+
+        private static bool ShouldAdvancePassiveDiskInputForCpuAccess(AmigaBusAccessTarget target, uint address)
+            => target == AmigaBusAccessTarget.CustomRegisters &&
+                AmigaDiskController.RequiresPassiveInputAdvance(address);
 
         public long? GetNextCiaInterruptCycle(long maxCycle)
         {
@@ -1531,11 +1523,22 @@ namespace CopperMod.Amiga
             bool isWrite)
         {
             if (requester == AmigaBusRequester.Cpu &&
+                target == AmigaBusAccessTarget.CustomRegisters &&
+                !isWrite)
+            {
+                AdvanceRegisterObservableEventsTo(requestedCycle, address);
+                requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
+            }
+            else if (requester == AmigaBusRequester.Cpu &&
                 (target == AmigaBusAccessTarget.ChipRam ||
                     target == AmigaBusAccessTarget.ExpansionRam ||
+                    target == AmigaBusAccessTarget.RealTimeClock ||
                     target == AmigaBusAccessTarget.CustomRegisters))
             {
-                AdvanceDmaTo(requestedCycle);
+                AdvanceDmaTo(
+                    requestedCycle,
+                    advanceLiveAgnus: true,
+                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
 
@@ -1612,9 +1615,18 @@ namespace CopperMod.Amiga
         {
             if (target == AmigaBusAccessTarget.ChipRam ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
-                target == AmigaBusAccessTarget.CustomRegisters)
+                target == AmigaBusAccessTarget.RealTimeClock ||
+                (target == AmigaBusAccessTarget.CustomRegisters && isWrite))
             {
-                AdvanceDmaTo(requestedCycle);
+                AdvanceDmaTo(
+                    requestedCycle,
+                    advanceLiveAgnus: true,
+                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
+                requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
+            }
+            else if (target == AmigaBusAccessTarget.CustomRegisters)
+            {
+                AdvanceRegisterObservableEventsTo(requestedCycle, address);
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
 
@@ -1661,7 +1673,15 @@ namespace CopperMod.Amiga
                 Display.HasLiveDisplayWork() &&
                 ShouldPrepareDisplayBeforeHrmGrant(request))
             {
-                Display.CaptureLiveDisplayDmaBeforeHrmGrant(Math.Max(baseResult.GrantedCycle, request.RequestedCycle));
+                var grantCycle = Math.Max(baseResult.GrantedCycle, request.RequestedCycle);
+                if (ShouldPrepareDisplaySlotsOnlyBeforeHrmGrant(request))
+                {
+                    Display.PrepareLiveDisplaySlotsBeforeHrmGrant(grantCycle);
+                }
+                else
+                {
+                    Display.CaptureLiveDisplayDmaBeforeHrmGrant(grantCycle);
+                }
             }
 
             return _hrmSlotEngine.Arbitrate(request, baseResult);
@@ -1699,7 +1719,8 @@ namespace CopperMod.Amiga
             }
 
             if (target == AmigaBusAccessTarget.ChipRam ||
-                target == AmigaBusAccessTarget.ExpansionRam)
+                target == AmigaBusAccessTarget.ExpansionRam ||
+                target == AmigaBusAccessTarget.RealTimeClock)
             {
                 return LiveAgnusDmaEnabled || !_useFastZeroWaitAccesses;
             }
@@ -1717,6 +1738,11 @@ namespace CopperMod.Amiga
                 request.Requester == AmigaBusRequester.Host;
         }
 
+        private static bool ShouldPrepareDisplaySlotsOnlyBeforeHrmGrant(AmigaBusAccessRequest request)
+            => request.Requester == AmigaBusRequester.Cpu &&
+                request.Target == AmigaBusAccessTarget.CustomRegisters &&
+                !request.IsWrite;
+
         private AmigaBusAccessTarget ClassifyTarget(uint address)
         {
             if (IsRomOverlayAddress(address))
@@ -1732,6 +1758,11 @@ namespace CopperMod.Amiga
             if (IsRealFastRamAddress(address))
             {
                 return AmigaBusAccessTarget.RealFastRam;
+            }
+
+            if (_realTimeClock != null && AmigaRealTimeClock.ContainsAddress(address))
+            {
+                return AmigaBusAccessTarget.RealTimeClock;
             }
 
             if (IsExpansionRamAddress(address))
@@ -1788,6 +1819,11 @@ namespace CopperMod.Amiga
                 return _chipRam[chipOffset];
             }
 
+            if (_realTimeClock != null && _realTimeClock.TryReadByte(address, out var realTimeClockValue))
+            {
+                return realTimeClockValue;
+            }
+
             if (TryGetExpansionRamOffset(address, out var expansionOffset))
             {
                 return _expansionRam[expansionOffset];
@@ -1817,14 +1853,7 @@ namespace CopperMod.Amiga
 
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
-                if (cia == CiaA && ciaRegister == 0)
-                {
-                    var inputPins = Disk.ReadCiaAPortA(0xFF);
-                    inputPins = ApplyGamePortFireBits(inputPins);
-                    return cia.ReadPortRegister(ciaRegister, inputPins);
-                }
-
-                return cia.ReadRegister(ciaRegister);
+                return ReadCiaRegisterValue(cia, ciaRegister);
             }
 
             for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
@@ -1836,6 +1865,18 @@ namespace CopperMod.Amiga
             }
 
             return 0;
+        }
+
+        private byte ReadCiaRegisterValue(AmigaCia cia, int ciaRegister)
+        {
+            if (cia == CiaA && ciaRegister == 0)
+            {
+                var inputPins = Disk.ReadCiaAPortA(0xFF);
+                inputPins = ApplyGamePortFireBits(inputPins);
+                return cia.ReadPortRegister(ciaRegister, inputPins);
+            }
+
+            return cia.ReadRegister(ciaRegister);
         }
 
         private bool TryReadHostTrapStubByte(uint address, out byte value)
@@ -1902,10 +1943,26 @@ namespace CopperMod.Amiga
                 return hostTrapWord;
             }
 
+            if (TryReadRomOverlayWord(address, out var overlayWord))
+            {
+                return overlayWord;
+            }
+
+            if (IsCustomRegisterWordAddress(address))
+            {
+                return ReadCustomWord((ushort)(address - 0x00DFF000), long.MinValue);
+            }
+
             if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
             {
                 var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
                 return (ushort)((_chipRam[chipOffset] << 8) | _chipRam[nextOffset]);
+            }
+
+            if (_realTimeClock != null &&
+                (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
+            {
+                return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
             }
 
             if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
@@ -1931,10 +1988,27 @@ namespace CopperMod.Amiga
                 return hostTrapWord;
             }
 
+            if (TryReadRomOverlayWord(address, out var overlayWord))
+            {
+                return overlayWord;
+            }
+
+            if (IsCustomRegisterWordAddress(address))
+            {
+                return ReadCustomWord((ushort)(address - 0x00DFF000), sampleCycle);
+            }
+
             if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
             {
                 var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
                 return (ushort)((_chipRam[chipOffset] << 8) | _chipRam[nextOffset]);
+            }
+
+            if (_realTimeClock != null &&
+                (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
+            {
+                return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
+                    ReadRawByte(address + 1, sampleCycle));
             }
 
             if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
@@ -1951,6 +2025,51 @@ namespace CopperMod.Amiga
 
             return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
                 ReadRawByte(address + 1, sampleCycle));
+        }
+
+        private static bool IsCustomRegisterWordAddress(uint address)
+            => address >= 0x00DFF000 && address < 0x00DFF1FF;
+
+        private ushort ReadCustomWord(ushort offset, long sampleCycle)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            UpdateBeamPositionForCustomRead(offset, sampleCycle);
+            switch (offset)
+            {
+                case 0x002:
+                    return (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
+                case 0x00A:
+                    return ReadGamePortData(0);
+                case 0x00C:
+                    return ReadGamePortData(1);
+                case 0x010:
+                    return Paula.Adkcon;
+                case 0x016:
+                    return ReadPotGoData();
+                case 0x01C:
+                    return Paula.Intena;
+                case 0x01E:
+                    return Paula.Intreq;
+            }
+
+            if (Disk.TryReadWord(offset, out var diskValue))
+            {
+                return diskValue;
+            }
+
+            if (TryReadGamePortCustomByte(offset, out var highGamePortValue) ||
+                Display.TryReadByte(offset, out highGamePortValue))
+            {
+                var lowOffset = (ushort)(offset + 1);
+                var low = TryReadGamePortCustomByte(lowOffset, out var lowGamePortValue)
+                    ? lowGamePortValue
+                    : Display.TryReadByte(lowOffset, out var lowDisplayValue)
+                        ? lowDisplayValue
+                        : Paula.ReadByte(lowOffset);
+                return (ushort)((highGamePortValue << 8) | low);
+            }
+
+            return (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)));
         }
 
         private uint ReadRawLong(uint address)
@@ -2230,7 +2349,6 @@ namespace CopperMod.Amiga
 
         internal uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
         {
-            AdvanceCiasTo(cycle);
             if (size == M68kOperandSize.Byte)
             {
                 return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
@@ -2249,7 +2367,6 @@ namespace CopperMod.Amiga
 
         internal void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
         {
-            AdvanceCiasTo(cycle);
             if (size == M68kOperandSize.Byte)
             {
                 WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
@@ -2275,7 +2392,7 @@ namespace CopperMod.Amiga
             var access = _useFastZeroWaitAccesses
                 ? GrantFastCpuAccess(target, address, accessSize, cycle, AmigaBusAccessKind.CpuDataRead, isWrite: false)
                 : Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataRead, target, address, accessSize, cycle, isWrite: false);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaBeforeCpuChipAccess(target, address, access.GrantedCycle, isWrite: false);
 
             var value = TryReadJitMappedMemory(target, address, size, out var mappedValue)
                 ? mappedValue
@@ -2301,7 +2418,7 @@ namespace CopperMod.Amiga
             var access = _useFastZeroWaitAccesses
                 ? GrantFastCpuAccess(target, address, accessSize, cycle, AmigaBusAccessKind.CpuDataWrite, isWrite: true)
                 : Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataWrite, target, address, accessSize, cycle, isWrite: true);
-            AdvanceDmaBeforeCpuChipAccess(target, access.GrantedCycle);
+            AdvanceDmaBeforeCpuChipAccess(target, address, access.GrantedCycle, isWrite: true);
             if (!TryWriteJitMappedMemory(target, address, value, size))
             {
                 if (size == M68kOperandSize.Byte)
@@ -2516,6 +2633,11 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (_realTimeClock != null && _realTimeClock.TryWriteByte(address, value))
+            {
+                return;
+            }
+
             if (TryGetExpansionRamOffset(address, out var expansionOffset))
             {
                 _expansionRam[expansionOffset] = value;
@@ -2585,6 +2707,14 @@ namespace CopperMod.Amiga
                 _chipRam[nextOffset] = (byte)value;
                 TouchCodePage(address);
                 TouchCodePage(address + 1);
+                return;
+            }
+
+            if (_realTimeClock != null &&
+                (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
+            {
+                WriteRawByte(address, (byte)(value >> 8), grantedCycle);
+                WriteRawByte(address + 1, (byte)value, grantedCycle);
                 return;
             }
 
@@ -2939,6 +3069,30 @@ namespace CopperMod.Amiga
             return _romOverlayRegion.TryReadByte(romAddress, out value);
         }
 
+        private bool TryReadRomOverlayWord(uint address, out ushort value)
+        {
+            address = NormalizeAddress(address);
+            if (!_romOverlayEnabled ||
+                _romOverlayRegion == null ||
+                address >= 0x0008_0000 ||
+                address + 1 >= 0x0008_0000)
+            {
+                value = 0;
+                return false;
+            }
+
+            var offset = checked((int)(address % (uint)_romOverlayRegion.Length));
+            if (offset + 1 >= _romOverlayRegion.Length)
+            {
+                value = 0;
+                return false;
+            }
+
+            var data = _romOverlayRegion.Data;
+            value = (ushort)((data[offset] << 8) | data[offset + 1]);
+            return true;
+        }
+
         private byte ApplyGamePortFireBits(byte value)
         {
             if (GamePort0FirePressed)
@@ -3159,1325 +3313,6 @@ namespace CopperMod.Amiga
                 _data[offset] = value;
                 return true;
             }
-        }
-    }
-
-    internal sealed class Paula
-    {
-        private const ushort IntenaMasterEnable = 0x4000;
-        private const ushort AudioInterruptMask = 0x0780;
-        private const float VoiceScale = 0.25f;
-        private const int MaxCapturedWrites = 65536;
-        private const int MaxPendingInterruptEvents = 65536;
-        private readonly AmigaBus _bus;
-        private readonly PaulaChannel[] _channels = new PaulaChannel[AmigaConstants.PaulaChannelCount];
-        private readonly List<PendingWrite> _pendingWrites = new List<PendingWrite>();
-        private readonly List<PaulaInterruptEvent> _pendingInterrupts = new List<PaulaInterruptEvent>();
-        private readonly PaulaInterruptEvent[] _drainedInterruptBuffer = new PaulaInterruptEvent[MaxPendingInterruptEvents];
-        private readonly ReusableReadOnlyList<PaulaInterruptEvent> _drainedInterrupts = new ReusableReadOnlyList<PaulaInterruptEvent>();
-        private readonly BoundedWriteLog _writes = new BoundedWriteLog(MaxCapturedWrites);
-        private readonly byte[] _registerBytes = new byte[0x200];
-        private int _pendingWriteIndex;
-        private ushort _adkcon;
-        private ushort _dmacon;
-        private ushort _intena;
-        private ushort _intreq;
-        private ushort _vposr;
-        private ushort _vhposr;
-        private ushort _lastAudioDmaMask;
-        private long _lastCycle;
-        private float[][]? _captureSamples;
-        private int _captureFrameIndex;
-        private int _captureSampleRate;
-
-        public Paula(AmigaBus bus)
-        {
-            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-            for (var i = 0; i < _channels.Length; i++)
-            {
-                _channels[i] = new PaulaChannel(i);
-            }
-        }
-
-        public IReadOnlyList<CustomRegisterWrite> Writes => _writes;
-
-        public ushort Adkcon => _adkcon;
-
-        public ushort Dmacon => _dmacon;
-
-        public ushort Intena => _intena;
-
-        public ushort Intreq => _intreq;
-
-        public ushort ActiveInterruptBits
-        {
-            get
-            {
-                if ((_intena & IntenaMasterEnable) == 0)
-                {
-                    return 0;
-                }
-
-                return (ushort)(_intreq & _intena & 0x3FFF);
-            }
-        }
-
-        public void Reset()
-        {
-            Array.Clear(_registerBytes);
-            _pendingWrites.Clear();
-            _pendingInterrupts.Clear();
-            _writes.Clear();
-            _pendingWriteIndex = 0;
-            _adkcon = 0;
-            _dmacon = 0;
-            _intena = 0;
-            _intreq = 0;
-            _vposr = 0;
-            _vhposr = 0;
-            _lastAudioDmaMask = 0;
-            _lastCycle = 0;
-            _captureSamples = null;
-            _captureFrameIndex = 0;
-            _captureSampleRate = 0;
-            foreach (var channel in _channels)
-            {
-                channel.Reset();
-            }
-        }
-
-        public byte ReadByte(ushort offset)
-        {
-            if (offset == 0x004)
-            {
-                return (byte)(_vposr >> 8);
-            }
-
-            if (offset == 0x005)
-            {
-                return (byte)_vposr;
-            }
-
-            if (offset == 0x010)
-            {
-                return (byte)(_adkcon >> 8);
-            }
-
-            if (offset == 0x011)
-            {
-                return (byte)_adkcon;
-            }
-
-            if (offset == 0x002)
-            {
-                return (byte)((_dmacon | _bus.Blitter.DmaconStatusBits) >> 8);
-            }
-
-            if (offset == 0x003)
-            {
-                return (byte)(_dmacon | _bus.Blitter.DmaconStatusBits);
-            }
-
-            if (offset == 0x006)
-            {
-                return (byte)(_vhposr >> 8);
-            }
-
-            if (offset == 0x007)
-            {
-                return (byte)_vhposr;
-            }
-
-            if (offset == 0x01C)
-            {
-                return (byte)(_intena >> 8);
-            }
-
-            if (offset == 0x01D)
-            {
-                return (byte)_intena;
-            }
-
-            if (offset == 0x01E)
-            {
-                return (byte)(_intreq >> 8);
-            }
-
-            if (offset == 0x01F)
-            {
-                return (byte)_intreq;
-            }
-
-            return offset < _registerBytes.Length ? _registerBytes[offset] : (byte)0;
-        }
-
-        public void SetBeamPosition(int verticalLine, int horizontalPosition, bool longFrame)
-        {
-            verticalLine = Math.Clamp(verticalLine, 0, 0x1FF);
-            horizontalPosition = Math.Clamp(horizontalPosition, 0, 0xFF);
-            _vposr = (ushort)(((longFrame ? 1 : 0) << 15) | ((verticalLine >> 8) & 0x0001));
-            _vhposr = (ushort)(((verticalLine & 0x00FF) << 8) | horizontalPosition);
-        }
-
-        public void ScheduleWrite(long cycle, ushort offset, ushort value)
-        {
-            offset = (ushort)(offset & 0x01FE);
-            var pending = new PendingWrite(cycle, offset, value);
-            _writes.Add(new CustomRegisterWrite(cycle, offset, value));
-            var insertIndex = _pendingWrites.Count;
-            while (insertIndex > _pendingWriteIndex && _pendingWrites[insertIndex - 1].Cycle > cycle)
-            {
-                insertIndex--;
-            }
-
-            _pendingWrites.Insert(insertIndex, pending);
-        }
-
-        public IReadOnlyList<PaulaInterruptEvent> DrainInterrupts()
-        {
-            if (_pendingInterrupts.Count == 0)
-            {
-                return Array.Empty<PaulaInterruptEvent>();
-            }
-
-            var count = Math.Min(_pendingInterrupts.Count, _drainedInterruptBuffer.Length);
-            for (var i = 0; i < count; i++)
-            {
-                _drainedInterruptBuffer[i] = _pendingInterrupts[i];
-            }
-
-            SortPaulaInterrupts(_drainedInterruptBuffer, count);
-            _pendingInterrupts.Clear();
-            _drainedInterrupts.Reset(_drainedInterruptBuffer, count);
-            return _drainedInterrupts;
-        }
-
-        private static void SortPaulaInterrupts(PaulaInterruptEvent[] events, int count)
-        {
-            for (var i = 1; i < count; i++)
-            {
-                var value = events[i];
-                var j = i - 1;
-                while (j >= 0 && ComparePaulaInterrupts(events[j], value) > 0)
-                {
-                    events[j + 1] = events[j];
-                    j--;
-                }
-
-                events[j + 1] = value;
-            }
-        }
-
-        private static int ComparePaulaInterrupts(PaulaInterruptEvent left, PaulaInterruptEvent right)
-        {
-            var cycleCompare = left.Cycle.CompareTo(right.Cycle);
-            return cycleCompare != 0 ? cycleCompare : left.Channel.CompareTo(right.Channel);
-        }
-
-        public int GetHighestPendingInterruptLevel()
-        {
-            var active = ActiveInterruptBits;
-            if ((active & 0x2000) != 0)
-            {
-                return 6;
-            }
-
-            if ((active & 0x1800) != 0)
-            {
-                return 5;
-            }
-
-            if ((active & 0x0780) != 0)
-            {
-                return 4;
-            }
-
-            if ((active & 0x0070) != 0)
-            {
-                return 3;
-            }
-
-            if ((active & 0x0008) != 0)
-            {
-                return 2;
-            }
-
-            return (active & 0x0007) != 0 ? 1 : 0;
-        }
-
-        public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)
-        {
-            if (targetCycle <= currentCycle)
-            {
-                return null;
-            }
-
-            long? candidate = null;
-            if (_pendingWriteIndex < _pendingWrites.Count)
-            {
-                candidate = MinWakeCandidate(candidate, _pendingWrites[_pendingWriteIndex].Cycle);
-            }
-
-            for (var i = 0; i < _channels.Length; i++)
-            {
-                candidate = MinWakeCandidate(candidate, _channels[i].GetNextWakeCandidateCycle());
-            }
-
-            return ClampWakeCandidate(candidate, currentCycle, targetCycle);
-        }
-
-        public PaulaChannelSnapshot GetChannelSnapshot(int channel)
-        {
-            if ((uint)channel >= _channels.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channel), channel, "Paula channel index is outside the supported range.");
-            }
-
-            return _channels[channel].GetSnapshot();
-        }
-
-        public void BeginChannelCapture(int frames, int sampleRate)
-        {
-            if (frames <= 0 || sampleRate <= 0)
-            {
-                _captureSamples = null;
-                _captureFrameIndex = 0;
-                _captureSampleRate = 0;
-                return;
-            }
-
-            _captureSamples = new float[_channels.Length][];
-            for (var i = 0; i < _captureSamples.Length; i++)
-            {
-                _captureSamples[i] = new float[frames];
-            }
-
-            _captureFrameIndex = 0;
-            _captureSampleRate = sampleRate;
-        }
-
-        public AmigaChannelWaveform? FinishChannelCapture()
-        {
-            if (_captureSamples == null)
-            {
-                return null;
-            }
-
-            var channels = new AmigaChannelWaveformChannel[_captureSamples.Length];
-            for (var i = 0; i < channels.Length; i++)
-            {
-                channels[i] = new AmigaChannelWaveformChannel(i, _captureSamples[i], IsActive(_captureSamples[i]));
-            }
-
-            var result = new AmigaChannelWaveform(channels, _captureFrameIndex, _captureSampleRate);
-            _captureSamples = null;
-            _captureFrameIndex = 0;
-            _captureSampleRate = 0;
-            return result;
-        }
-
-        public void RenderSample(long targetCycle, Span<float> destination, int frame, int channels)
-        {
-            AdvanceTo(targetCycle);
-            var left = 0.0f;
-            var right = 0.0f;
-            var capture = _captureSamples;
-            for (var i = 0; i < _channels.Length; i++)
-            {
-                if (IsAttachedSource(i))
-                {
-                    if (capture != null && _captureFrameIndex < capture[i].Length)
-                    {
-                        capture[i][_captureFrameIndex] = 0.0f;
-                    }
-
-                    continue;
-                }
-
-                var raw = _channels[i].CurrentSample / 128.0f;
-                var sample = raw * (_channels[i].Volume / 64.0f) * VoiceScale;
-                if (capture != null && _captureFrameIndex < capture[i].Length)
-                {
-                    capture[i][_captureFrameIndex] = sample;
-                }
-
-                if (i == 0 || i == 3)
-                {
-                    left += sample;
-                }
-                else
-                {
-                    right += sample;
-                }
-            }
-
-            var offset = frame * channels;
-            if (channels == 1)
-            {
-                destination[offset] = Math.Clamp((left + right) * 0.5f, -1.0f, 1.0f);
-            }
-            else
-            {
-                destination[offset] = Math.Clamp(left, -1.0f, 1.0f);
-                destination[offset + 1] = Math.Clamp(right, -1.0f, 1.0f);
-                for (var extra = 2; extra < channels; extra++)
-                {
-                    destination[offset + extra] = Math.Clamp((left + right) * 0.5f, -1.0f, 1.0f);
-                }
-            }
-
-            if (capture != null)
-            {
-                _captureFrameIndex++;
-            }
-        }
-
-        public void AdvanceTo(long targetCycle)
-        {
-            if (targetCycle < _lastCycle)
-            {
-                return;
-            }
-
-            while (_pendingWriteIndex < _pendingWrites.Count && _pendingWrites[_pendingWriteIndex].Cycle <= targetCycle)
-            {
-                var write = _pendingWrites[_pendingWriteIndex++];
-                AdvanceChannels(write.Cycle - _lastCycle);
-                ApplyWrite(write.Offset, write.Value);
-            }
-
-            AdvanceChannels(targetCycle - _lastCycle);
-            CompactPendingWrites();
-        }
-
-        private void AdvanceChannels(long cpuCycles)
-        {
-            if (cpuCycles <= 0)
-            {
-                return;
-            }
-
-            var targetCycle = _lastCycle + cpuCycles;
-            foreach (var channel in _channels)
-            {
-                channel.AdvanceTo(targetCycle, _bus, this);
-            }
-
-            _lastCycle = targetCycle;
-        }
-
-        private void ApplyWrite(ushort offset, ushort value)
-        {
-            if (offset + 1 < _registerBytes.Length)
-            {
-                _registerBytes[offset] = (byte)(value >> 8);
-                _registerBytes[offset + 1] = (byte)value;
-            }
-
-            if (offset == 0x096)
-            {
-                var old = _dmacon;
-                var mask = (ushort)(value & 0x7FFF);
-                var audioMask = (ushort)(mask & 0x000F);
-                if (audioMask != 0)
-                {
-                    _lastAudioDmaMask = audioMask;
-                }
-
-                if ((value & 0x8000) != 0)
-                {
-                    if (mask == 0 && _lastAudioDmaMask != 0)
-                    {
-                        mask = _lastAudioDmaMask;
-                    }
-
-                    _dmacon |= mask;
-                }
-                else
-                {
-                    _dmacon &= (ushort)~mask;
-                }
-
-                WriteRegisterWord(0x002, _dmacon);
-
-                for (var i = 0; i < _channels.Length; i++)
-                {
-                    var bit = (ushort)(1 << i);
-                    var wasEnabled = IsAudioDmaEnabled(old, bit);
-                    var enabled = IsAudioDmaEnabled(_dmacon, bit);
-                    if (enabled && !wasEnabled)
-                    {
-                        _channels[i].SetDmaEnabled(true, _lastCycle, _bus, this);
-                    }
-                    else if (!enabled && wasEnabled)
-                    {
-                        _channels[i].SetDmaEnabled(false, _lastCycle, _bus, this);
-                    }
-                }
-
-                return;
-            }
-
-            if (offset == 0x09A)
-            {
-                ApplySetClear(ref _intena, value);
-                WriteRegisterWord(0x01C, _intena);
-                QueuePendingEnabledAudioInterrupts(_lastCycle);
-                return;
-            }
-
-            if (offset == 0x09C)
-            {
-                var mask = (ushort)(value & 0x7FFF);
-                if ((value & 0x8000) != 0)
-                {
-                    _intreq |= mask;
-                    QueuePendingEnabledAudioInterrupts(_lastCycle, mask);
-                }
-                else
-                {
-                    _intreq &= (ushort)~mask;
-                }
-
-                WriteRegisterWord(0x01E, _intreq);
-
-                return;
-            }
-
-            if (offset == 0x09E)
-            {
-                ApplySetClear(ref _adkcon, value);
-                WriteRegisterWord(0x010, _adkcon);
-                return;
-            }
-
-            var channelIndex = GetAudioChannelIndex(offset);
-            if (channelIndex < 0)
-            {
-                return;
-            }
-
-            var channel = _channels[channelIndex];
-            var register = offset - (0x0A0 + (channelIndex * 0x10));
-            switch (register)
-            {
-                case 0x00:
-                    channel.Location = _bus.WriteChipDmaPointerHigh(channel.Location, value);
-                    break;
-                case 0x02:
-                    channel.Location = _bus.WriteChipDmaPointerLow(channel.Location, value);
-                    break;
-                case 0x04:
-                    channel.LengthWords = Math.Max(1, (int)value);
-                    break;
-                case 0x06:
-                    channel.Period = value;
-                    break;
-                case 0x08:
-                    var volume = value & 0x7F;
-                    if (volume == 0 && (value & 0x7F00) != 0)
-                    {
-                        volume = (value >> 8) & 0x7F;
-                    }
-
-                    channel.Volume = Math.Min(64, volume);
-                    break;
-                case 0x0A:
-                    channel.WriteData(value, _lastCycle, this);
-                    break;
-            }
-        }
-
-        private static int GetAudioChannelIndex(ushort offset)
-        {
-            if (offset < 0x0A0 || offset > 0x0DA)
-            {
-                return -1;
-            }
-
-            var channel = (offset - 0x0A0) / 0x10;
-            var register = (offset - 0x0A0) % 0x10;
-            return channel < AmigaConstants.PaulaChannelCount && register <= 0x0A ? channel : -1;
-        }
-
-        private static bool IsAudioDmaEnabled(ushort dmacon, ushort channelBit)
-        {
-            return (dmacon & 0x0200) != 0 && (dmacon & channelBit) != 0;
-        }
-
-        private void RequestAudioInterrupt(int channel, long cycle)
-        {
-            if ((uint)channel < AmigaConstants.PaulaChannelCount)
-            {
-                var bit = GetAudioInterruptBit(channel);
-                RequestInterrupt(bit, cycle);
-            }
-        }
-
-        internal void RequestInterrupt(ushort bit, long cycle)
-        {
-            bit = (ushort)(bit & 0x3FFF);
-            if (bit == 0)
-            {
-                return;
-            }
-
-            _intreq |= bit;
-            WriteRegisterWord(0x01E, _intreq);
-            QueuePendingEnabledAudioInterrupts(cycle, bit);
-        }
-
-        private void ApplyModulationFrom(int sourceChannel, ushort value)
-        {
-            var targetChannel = sourceChannel + 1;
-            if (sourceChannel < 0 || targetChannel >= _channels.Length)
-            {
-                return;
-            }
-
-            if (IsVolumeAttached(sourceChannel))
-            {
-                _channels[targetChannel].Volume = Math.Min(64, value & 0x7F);
-            }
-
-            if (IsPeriodAttached(sourceChannel))
-            {
-                _channels[targetChannel].Period = value;
-            }
-        }
-
-        private bool IsAttachedSource(int channel)
-        {
-            return IsVolumeAttached(channel) || IsPeriodAttached(channel);
-        }
-
-        private bool IsVolumeAttached(int sourceChannel)
-        {
-            return sourceChannel is >= 0 and <= 2 && (_adkcon & (1 << sourceChannel)) != 0;
-        }
-
-        private bool IsPeriodAttached(int sourceChannel)
-        {
-            return sourceChannel is >= 0 and <= 2 && (_adkcon & (1 << (sourceChannel + 4))) != 0;
-        }
-
-        public bool IsInterruptEnabled(ushort bit)
-        {
-            return (_intena & IntenaMasterEnable) != 0 && (_intena & bit) != 0;
-        }
-
-        private void QueuePendingEnabledAudioInterrupts(long cycle, ushort mask = AudioInterruptMask)
-        {
-            var active = (ushort)(_intreq & _intena & mask & AudioInterruptMask);
-            if ((_intena & IntenaMasterEnable) == 0 || active == 0)
-            {
-                return;
-            }
-
-            for (var channel = 0; channel < _channels.Length; channel++)
-            {
-                var bit = GetAudioInterruptBit(channel);
-                if ((active & bit) != 0)
-                {
-                    _pendingInterrupts.Add(new PaulaInterruptEvent(channel, bit, cycle));
-                }
-            }
-        }
-
-        private void WriteRegisterWord(ushort offset, ushort value)
-        {
-            if (offset + 1 >= _registerBytes.Length)
-            {
-                return;
-            }
-
-            _registerBytes[offset] = (byte)(value >> 8);
-            _registerBytes[offset + 1] = (byte)value;
-        }
-
-        private static void ApplySetClear(ref ushort register, ushort value)
-        {
-            var mask = (ushort)(value & 0x7FFF);
-            if ((value & 0x8000) != 0)
-            {
-                register |= mask;
-            }
-            else
-            {
-                register &= (ushort)~mask;
-            }
-        }
-
-        private static ushort GetAudioInterruptBit(int channel)
-        {
-            return (ushort)(0x0080 << channel);
-        }
-
-        private static long GetPeriodCycles(int period)
-        {
-            return GetEffectivePeriod(period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
-        }
-
-        private static long GetDmaPeriodCycles(int period, AmigaBus bus)
-        {
-            var effectivePeriod = GetEffectivePeriod(period);
-            var dmaPeriod = UsesPartialPlaybackDmaMinimum(bus)
-                ? Math.Max(effectivePeriod, bus.AudioDmaMinimumPeriod)
-                : effectivePeriod;
-            return dmaPeriod * AmigaConstants.A500PalCpuCyclesPerColorClock;
-        }
-
-        private static long GetEffectivePeriod(int period)
-        {
-            if (period == 0)
-            {
-                return 65_536L;
-            }
-
-            Debug.Assert(period > 0, "Paula audio period must be a raw non-negative register value.");
-            return period;
-        }
-
-        private static bool UsesPartialPlaybackDmaMinimum(AmigaBus bus)
-        {
-            return bus.LiveAgnusDmaEnabled && !bus.LiveDisplayDmaEnabled;
-        }
-
-        private static long? MinWakeCandidate(long? candidate, long? eventCycle)
-        {
-            if (!eventCycle.HasValue)
-            {
-                return candidate;
-            }
-
-            if (!candidate.HasValue)
-            {
-                return eventCycle;
-            }
-
-            return Math.Min(candidate.Value, eventCycle.Value);
-        }
-
-        private static long? ClampWakeCandidate(long? candidate, long currentCycle, long targetCycle)
-        {
-            if (!candidate.HasValue || candidate.Value > targetCycle)
-            {
-                return null;
-            }
-
-            return candidate.Value <= currentCycle ? currentCycle + 1 : candidate.Value;
-        }
-
-        private void CompactPendingWrites()
-        {
-            if (_pendingWriteIndex < 64 || _pendingWriteIndex * 2 < _pendingWrites.Count)
-            {
-                return;
-            }
-
-            _pendingWrites.RemoveRange(0, _pendingWriteIndex);
-            _pendingWriteIndex = 0;
-        }
-
-        private static bool IsActive(ReadOnlySpan<float> samples)
-        {
-            for (var i = 0; i < samples.Length; i++)
-            {
-                if (Math.Abs(samples[i]) > 0.001f)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private readonly struct PendingWrite
-        {
-            public PendingWrite(long cycle, ushort offset, ushort value)
-            {
-                Cycle = cycle;
-                Offset = offset;
-                Value = value;
-            }
-
-            public long Cycle { get; }
-
-            public ushort Offset { get; }
-
-            public ushort Value { get; }
-        }
-
-        private sealed class PaulaChannel
-        {
-            private ushort _dataWord;
-            private bool _hasDataWord;
-            private bool _nextByteIsLow;
-            private long _nextSampleCycle;
-            private long _nextDmaFetchCycle;
-            private uint _currentAddress;
-            private int _remainingWords;
-
-            public PaulaChannel(int index)
-            {
-                Index = index;
-                Reset();
-            }
-
-            public int Index { get; }
-
-            public uint Location { get; set; }
-
-            public int LengthWords { get; set; }
-
-            public int Period { get; set; }
-
-            public int Volume { get; set; }
-
-            public sbyte CurrentSample { get; set; }
-
-            public bool DmaEnabled { get; set; }
-
-            public void Reset()
-            {
-                Location = 0;
-                LengthWords = 1;
-                Period = 428;
-                Volume = 64;
-                CurrentSample = 0;
-                DmaEnabled = false;
-                _dataWord = 0;
-                _hasDataWord = false;
-                _nextByteIsLow = false;
-                _nextSampleCycle = 0;
-                _nextDmaFetchCycle = long.MaxValue;
-                _currentAddress = 0;
-                _remainingWords = 0;
-            }
-
-            public void SetDmaEnabled(bool enabled, long cycle, AmigaBus bus, Paula paula)
-            {
-                if (!enabled)
-                {
-                    DmaEnabled = false;
-                    _hasDataWord = false;
-                    _nextByteIsLow = false;
-                    _nextDmaFetchCycle = long.MaxValue;
-                    return;
-                }
-
-                DmaEnabled = true;
-                _currentAddress = bus.MaskChipDmaAddress(Location);
-                _remainingWords = Math.Max(1, LengthWords);
-                FetchDmaWord(bus, cycle, paula, forceInterrupt: true);
-            }
-
-            public void WriteData(ushort value, long cycle, Paula paula)
-            {
-                _dataWord = value;
-                _hasDataWord = true;
-                _nextByteIsLow = true;
-                CurrentSample = unchecked((sbyte)(value >> 8));
-                _nextSampleCycle = cycle + GetPeriodCycles(Period);
-                _nextDmaFetchCycle = long.MaxValue;
-                paula.RequestAudioInterrupt(Index, cycle);
-            }
-
-            public void AdvanceTo(long targetCycle, AmigaBus bus, Paula paula)
-            {
-                if (!_hasDataWord && !DmaEnabled)
-                {
-                    return;
-                }
-
-                while (_nextSampleCycle <= targetCycle)
-                {
-                    if (_hasDataWord && _nextByteIsLow)
-                    {
-                        CurrentSample = unchecked((sbyte)_dataWord);
-                        _nextByteIsLow = false;
-                        paula.ApplyModulationFrom(Index, _dataWord);
-                        _nextSampleCycle += GetPeriodCycles(Period);
-                        if (DmaEnabled && UsesPartialPlaybackDmaMinimum(bus))
-                        {
-                            _nextSampleCycle = Math.Max(_nextSampleCycle, _nextDmaFetchCycle);
-                        }
-
-                        continue;
-                    }
-
-                    if (DmaEnabled)
-                    {
-                        FetchDmaWord(bus, _nextSampleCycle, paula, forceInterrupt: false);
-                    }
-                    else
-                    {
-                        _hasDataWord = false;
-                        break;
-                    }
-                }
-            }
-
-            public long? GetNextWakeCandidateCycle()
-            {
-                if (DmaEnabled || _hasDataWord)
-                {
-                    return _nextSampleCycle;
-                }
-
-                return null;
-            }
-
-            public PaulaChannelSnapshot GetSnapshot()
-            {
-                return new PaulaChannelSnapshot(
-                    Index,
-                    Location,
-                    _currentAddress,
-                    LengthWords,
-                    _remainingWords,
-                    Period,
-                    Volume,
-                    CurrentSample,
-                    DmaEnabled,
-                    _dataWord,
-                    _hasDataWord,
-                    _nextByteIsLow,
-                    _nextSampleCycle);
-            }
-
-            private void FetchDmaWord(AmigaBus bus, long cycle, Paula paula, bool forceInterrupt)
-            {
-                if (_remainingWords <= 0)
-                {
-                    _currentAddress = bus.MaskChipDmaAddress(Location);
-                    _remainingWords = Math.Max(1, LengthWords);
-                    paula.RequestAudioInterrupt(Index, cycle);
-                }
-
-                var dmaRead = bus.ReadPaulaDmaWord(_currentAddress, cycle);
-                _dataWord = dmaRead.Value;
-                _currentAddress = bus.AddChipDmaPointerOffset(_currentAddress, 2);
-                _remainingWords--;
-                _hasDataWord = true;
-                _nextByteIsLow = true;
-                CurrentSample = unchecked((sbyte)(_dataWord >> 8));
-                _nextSampleCycle = cycle + GetPeriodCycles(Period);
-                _nextDmaFetchCycle = cycle + (GetDmaPeriodCycles(Period, bus) * 2);
-
-                if (forceInterrupt || _remainingWords == 0)
-                {
-                    paula.RequestAudioInterrupt(Index, cycle);
-                }
-            }
-
-        }
-    }
-
-    internal readonly struct PaulaInterruptEvent
-    {
-        public PaulaInterruptEvent(int channel, ushort intreqBit, long cycle)
-        {
-            Channel = channel;
-            IntreqBit = intreqBit;
-            Cycle = cycle;
-        }
-
-        public int Channel { get; }
-
-        public ushort IntreqBit { get; }
-
-        public long Cycle { get; }
-    }
-
-    internal readonly struct PaulaChannelSnapshot
-    {
-        public PaulaChannelSnapshot(
-            int index,
-            uint location,
-            uint currentAddress,
-            int lengthWords,
-            int remainingWords,
-            int period,
-            int volume,
-            sbyte currentSample,
-            bool dmaEnabled,
-            ushort dataWord,
-            bool hasDataWord,
-            bool nextByteIsLow,
-            long nextSampleCycle)
-        {
-            Index = index;
-            Location = location;
-            CurrentAddress = currentAddress;
-            LengthWords = lengthWords;
-            RemainingWords = remainingWords;
-            Period = period;
-            Volume = volume;
-            CurrentSample = currentSample;
-            DmaEnabled = dmaEnabled;
-            DataWord = dataWord;
-            HasDataWord = hasDataWord;
-            NextByteIsLow = nextByteIsLow;
-            NextSampleCycle = nextSampleCycle;
-        }
-
-        public int Index { get; }
-
-        public uint Location { get; }
-
-        public uint CurrentAddress { get; }
-
-        public int LengthWords { get; }
-
-        public int RemainingWords { get; }
-
-        public int Period { get; }
-
-        public int Volume { get; }
-
-        public sbyte CurrentSample { get; }
-
-        public bool DmaEnabled { get; }
-
-        public ushort DataWord { get; }
-
-        public bool HasDataWord { get; }
-
-        public bool NextByteIsLow { get; }
-
-        public long NextSampleCycle { get; }
-    }
-
-    internal sealed class ReusableReadOnlyList<T> : IReadOnlyList<T>
-    {
-        private T[] _items = Array.Empty<T>();
-        private int _count;
-
-        public int Count => _count;
-
-        public T this[int index]
-        {
-            get
-            {
-                if ((uint)index >= (uint)_count)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(index));
-                }
-
-                return _items[index];
-            }
-        }
-
-        public void Reset(T[] items, int count)
-        {
-            if ((uint)count > (uint)items.Length)
-            {
-                throw new ArgumentOutOfRangeException(nameof(count));
-            }
-
-            _items = items;
-            _count = count;
-        }
-
-        public IEnumerator<T> GetEnumerator()
-        {
-            for (var i = 0; i < _count; i++)
-            {
-                yield return _items[i];
-            }
-        }
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-        {
-            return GetEnumerator();
-        }
-    }
-
-    internal sealed class ChipPresentationWriteHistory
-    {
-        private const int InitialCapturedWriteCapacity = 65536;
-        private readonly int[] _headByOffset;
-        private readonly int[] _tailByOffset;
-        private readonly int[] _touchedOffsets;
-        private int[] _nextByWrite;
-        private ChipByteWrite[] _writes;
-        private readonly bool[] _outOfOrderByOffset;
-        private int _touchedOffsetCount;
-        private int _writeCount;
-        private long _latestWriteCycle = long.MinValue;
-        private bool _hasOutOfOrderWrites;
-
-        public ChipPresentationWriteHistory(int chipRamSize)
-        {
-            if (chipRamSize <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be positive.");
-            }
-
-            _headByOffset = new int[chipRamSize];
-            _tailByOffset = new int[chipRamSize];
-            _touchedOffsets = new int[chipRamSize];
-            _nextByWrite = new int[InitialCapturedWriteCapacity];
-            _writes = new ChipByteWrite[InitialCapturedWriteCapacity];
-            _outOfOrderByOffset = new bool[chipRamSize];
-            Array.Fill(_headByOffset, -1);
-            Array.Fill(_tailByOffset, -1);
-        }
-
-        public void RecordByte(int offset, byte oldValue, byte newValue, long cycle)
-        {
-            if ((uint)offset >= (uint)_headByOffset.Length)
-            {
-                return;
-            }
-
-            var tailIndex = _tailByOffset[offset];
-            if (tailIndex >= 0 && cycle < _writes[tailIndex].Cycle)
-            {
-                _outOfOrderByOffset[offset] = true;
-                _hasOutOfOrderWrites = true;
-            }
-
-            oldValue = GetValueAtCycle(offset, cycle, oldValue);
-            if (oldValue == newValue)
-            {
-                return;
-            }
-
-            if (_writeCount == _writes.Length)
-            {
-                GrowWriteCapacity();
-            }
-
-            if (_headByOffset[offset] < 0)
-            {
-                _touchedOffsets[_touchedOffsetCount++] = offset;
-                _headByOffset[offset] = _writeCount;
-            }
-            else
-            {
-                _nextByWrite[_tailByOffset[offset]] = _writeCount;
-            }
-
-            _tailByOffset[offset] = _writeCount;
-            _writes[_writeCount] = new ChipByteWrite(cycle, oldValue, newValue);
-            _nextByWrite[_writeCount] = -1;
-            _writeCount++;
-            _latestWriteCycle = Math.Max(_latestWriteCycle, cycle);
-        }
-
-        private void GrowWriteCapacity()
-        {
-            var newCapacity = checked(_writes.Length * 2);
-            Array.Resize(ref _writes, newCapacity);
-            Array.Resize(ref _nextByWrite, newCapacity);
-        }
-
-        public bool HasWrites => _writeCount != 0;
-
-        public bool MayNeedPresentationRead(long cycle)
-        {
-            return _writeCount != 0 && (_hasOutOfOrderWrites || _latestWriteCycle > cycle);
-        }
-
-        public bool NeedsPresentationRead(int offset, long cycle)
-        {
-            if ((uint)offset >= (uint)_headByOffset.Length)
-            {
-                return false;
-            }
-
-            var headIndex = _headByOffset[offset];
-            if (headIndex < 0)
-            {
-                return false;
-            }
-
-            if (_outOfOrderByOffset[offset])
-            {
-                return true;
-            }
-
-            var tailIndex = _tailByOffset[offset];
-            return tailIndex >= 0 && _writes[tailIndex].Cycle > cycle;
-        }
-
-        public byte ReadByte(byte[] currentMemory, int offset, long cycle)
-        {
-            if ((uint)offset >= (uint)currentMemory.Length)
-            {
-                return 0;
-            }
-
-            if ((uint)offset >= (uint)_headByOffset.Length)
-            {
-                return currentMemory[offset];
-            }
-
-            return GetValueAtCycle(offset, cycle, currentMemory[offset]);
-        }
-
-        private byte GetValueAtCycle(int offset, long cycle, byte fallbackValue)
-        {
-            var index = _headByOffset[offset];
-            if (index < 0)
-            {
-                return fallbackValue;
-            }
-
-            if (!_outOfOrderByOffset[offset])
-            {
-                var tailIndex = _tailByOffset[offset];
-                if (tailIndex >= 0 && _writes[tailIndex].Cycle <= cycle)
-                {
-                    return fallbackValue;
-                }
-
-                while (index >= 0)
-                {
-                    var write = _writes[index];
-                    if (write.Cycle > cycle)
-                    {
-                        return write.OldValue;
-                    }
-
-                    index = _nextByWrite[index];
-                }
-
-                return fallbackValue;
-            }
-
-            var latestPastCycle = long.MinValue;
-            var latestPastValue = (byte)0;
-            var hasPast = false;
-            var earliestFutureCycle = long.MaxValue;
-            var earliestFutureOldValue = (byte)0;
-            var hasFuture = false;
-            while (index >= 0)
-            {
-                var write = _writes[index];
-                if (write.Cycle <= cycle)
-                {
-                    if (!hasPast || write.Cycle >= latestPastCycle)
-                    {
-                        latestPastCycle = write.Cycle;
-                        latestPastValue = write.NewValue;
-                        hasPast = true;
-                    }
-                }
-                else if (!hasFuture || write.Cycle < earliestFutureCycle)
-                {
-                    earliestFutureCycle = write.Cycle;
-                    earliestFutureOldValue = write.OldValue;
-                    hasFuture = true;
-                }
-
-                index = _nextByWrite[index];
-            }
-
-            if (hasPast)
-            {
-                return latestPastValue;
-            }
-
-            return hasFuture ? earliestFutureOldValue : fallbackValue;
-        }
-
-        public void Clear()
-        {
-            for (var i = 0; i < _touchedOffsetCount; i++)
-            {
-                var offset = _touchedOffsets[i];
-                _headByOffset[offset] = -1;
-                _tailByOffset[offset] = -1;
-                _outOfOrderByOffset[offset] = false;
-            }
-
-            _touchedOffsetCount = 0;
-            _writeCount = 0;
-            _latestWriteCycle = long.MinValue;
-            _hasOutOfOrderWrites = false;
-        }
-
-        private readonly struct ChipByteWrite
-        {
-            public ChipByteWrite(long cycle, byte oldValue, byte newValue)
-            {
-                Cycle = cycle;
-                OldValue = oldValue;
-                NewValue = newValue;
-            }
-
-            public long Cycle { get; }
-
-            public byte OldValue { get; }
-
-            public byte NewValue { get; }
-        }
-    }
-
-    internal sealed class BoundedWriteLog : IReadOnlyList<CustomRegisterWrite>
-    {
-        private readonly CustomRegisterWrite[] _buffer;
-        private int _start;
-        private int _count;
-
-        public BoundedWriteLog(int capacity)
-        {
-            if (capacity <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Capacity must be positive.");
-            }
-
-            _buffer = new CustomRegisterWrite[capacity];
-        }
-
-        public int Count => _count;
-
-        public CustomRegisterWrite this[int index]
-        {
-            get
-            {
-                if (index < 0 || index >= _count)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(index));
-                }
-
-                return _buffer[(_start + index) % _buffer.Length];
-            }
-        }
-
-        public void Add(CustomRegisterWrite write)
-        {
-            if (_count < _buffer.Length)
-            {
-                _buffer[(_start + _count) % _buffer.Length] = write;
-                _count++;
-                return;
-            }
-
-            _buffer[_start] = write;
-            _start = (_start + 1) % _buffer.Length;
-        }
-
-        public void Clear()
-        {
-            _start = 0;
-            _count = 0;
-        }
-
-        public IEnumerator<CustomRegisterWrite> GetEnumerator()
-        {
-            for (var i = 0; i < _count; i++)
-            {
-                yield return this[i];
-            }
-        }
-
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-        {
-            return GetEnumerator();
         }
     }
 }

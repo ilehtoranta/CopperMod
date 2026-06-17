@@ -500,6 +500,48 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void NextDiskResolutionFallsBackWhenDiskOneHasUniqueExtraSuffix()
+	{
+		var directory = CreateTempDirectory();
+		try
+		{
+			var diskOnePath = Path.Combine(directory, "Game (Disk 1 of 2)[manual code].zip");
+			var diskTwoPath = Path.Combine(directory, "Game (Disk 2 of 2).zip");
+			File.WriteAllBytes(diskOnePath, Array.Empty<byte>());
+			File.WriteAllBytes(diskTwoPath, Array.Empty<byte>());
+
+			var resolved = CopperScreenEmulator.ResolveNextDiskPath(diskOnePath);
+
+			Assert.Equal(Path.GetFullPath(diskTwoPath), resolved);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void NextDiskResolutionIgnoresAmbiguousSuffixFallbacks()
+	{
+		var directory = CreateTempDirectory();
+		try
+		{
+			var diskOnePath = Path.Combine(directory, "Game (Disk 1 of 2)[manual code].zip");
+			File.WriteAllBytes(diskOnePath, Array.Empty<byte>());
+			File.WriteAllBytes(Path.Combine(directory, "Game (Disk 2 of 2).zip"), Array.Empty<byte>());
+			File.WriteAllBytes(Path.Combine(directory, "Game (Disk 2 of 2)[alternate].zip"), Array.Empty<byte>());
+
+			var resolved = CopperScreenEmulator.ResolveNextDiskPath(diskOnePath);
+
+			Assert.Null(resolved);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
+	[Fact]
 	public void InsertNextDiskUpdatesCurrentImageWhenMatchingDiskExists()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
@@ -861,6 +903,81 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void NorthAndSouthCracktroProducesMultiChannelPaulaAudioWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "North & South (1989)(Infogrames)(M5)[cr CP].zip");
+		if (diskPath == null)
+		{
+			return;
+		}
+
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var audio = new float[emulator.AudioFramesPerAppFrame(44_100) * 2];
+		var channelActive = new bool[4];
+		var quantizedLeftLevels = new HashSet<int>();
+		var quantizedRightLevels = new HashSet<int>();
+		var leftPeak = 0.0f;
+		var rightPeak = 0.0f;
+		var stereoDifferenceFrames = 0;
+
+		for (var frame = 0; frame < 1_200; frame++)
+		{
+			if (frame == 260)
+			{
+				emulator.PulsePrimaryFire(frames: 30);
+			}
+
+			machine.Bus.Paula.BeginChannelCapture(audio.Length / 2, 44_100);
+			emulator.RenderNextFrame();
+			var waveform = machine.Bus.Paula.FinishChannelCapture();
+			if (waveform != null)
+			{
+				for (var channel = 0; channel < channelActive.Length && channel < waveform.Channels.Count; channel++)
+				{
+					channelActive[channel] |= waveform.Channels[channel].IsActive;
+				}
+			}
+
+			var frames = emulator.RenderAudio(audio, 44_100, 2);
+			for (var i = 0; i < frames; i++)
+			{
+				var left = audio[i * 2];
+				var right = audio[(i * 2) + 1];
+				leftPeak = Math.Max(leftPeak, Math.Abs(left));
+				rightPeak = Math.Max(rightPeak, Math.Abs(right));
+				if (Math.Abs(left) > 0.0001f)
+				{
+					quantizedLeftLevels.Add((int)MathF.Round(left * 4096.0f));
+				}
+
+				if (Math.Abs(right) > 0.0001f)
+				{
+					quantizedRightLevels.Add((int)MathF.Round(right * 4096.0f));
+				}
+
+				if (Math.Abs(left - right) > 0.0001f)
+				{
+					stereoDifferenceFrames++;
+				}
+			}
+		}
+
+		if (IsWaitingOnUnavailableOrNotReadyDrive(machine))
+		{
+			return;
+		}
+
+		var activeChannels = channelActive.Count(active => active);
+		Assert.True(leftPeak > 0.0001f, $"Expected audible left-side Paula output, peak was {leftPeak}.");
+		Assert.True(rightPeak > 0.0001f, $"Expected audible right-side Paula output, peak was {rightPeak}.");
+		Assert.True(stereoDifferenceFrames > 128, $"Expected stereo Paula output, got {stereoDifferenceFrames} differing frames.");
+		Assert.True(quantizedLeftLevels.Count > 16, $"Expected time-varying left output, got {quantizedLeftLevels.Count} sample levels.");
+		Assert.True(quantizedRightLevels.Count > 16, $"Expected time-varying right output, got {quantizedRightLevels.Count} sample levels.");
+		Assert.True(activeChannels >= 3, $"Expected at least three active Paula channels, got {activeChannels}: {string.Join(", ", channelActive.Select((active, channel) => $"ch{channel}={active}"))}.");
+	}
+
+	[Fact]
 	public void CrackedDiskIntroDoesNotLeakBitplanePixelsOnCopperDisabledLineWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip");
@@ -987,10 +1104,10 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void AudioCatchUpQueuesSeveralBuffersOnlyWhenAudioQueueIsCritical()
 	{
-		Assert.Equal(5, MainWindow.CalculateFramesToRender(0, catchUpAudio: true));
-		Assert.Equal(4, MainWindow.CalculateFramesToRender(1, catchUpAudio: true));
+		Assert.Equal(3, MainWindow.CalculateFramesToRender(0, catchUpAudio: true));
+		Assert.Equal(2, MainWindow.CalculateFramesToRender(1, catchUpAudio: true));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(2, catchUpAudio: true));
-		Assert.Equal(1, MainWindow.CalculateFramesToRender(4, catchUpAudio: true));
+		Assert.Equal(0, MainWindow.CalculateFramesToRender(4, catchUpAudio: true));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(5, catchUpAudio: true));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(8, catchUpAudio: true));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(0, catchUpAudio: false));
@@ -1635,6 +1752,74 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void CopperBenchLaunchConnectsAvailableAdjacentExternalDisksBeyondProfileDriveCount()
+	{
+		var sourceDiskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		if (sourceDiskPath == null)
+		{
+			return;
+		}
+
+		var tempDirectory = Path.Combine(Path.GetTempPath(), "CopperScreenTests-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(tempDirectory);
+		try
+		{
+			var diskOnePath = Path.Combine(tempDirectory, Path.GetFileName(sourceDiskPath));
+			File.Copy(sourceDiskPath, diskOnePath);
+			for (var diskNumber = 2; diskNumber <= 4; diskNumber++)
+			{
+				var adjacentPath = diskOnePath.Replace("Disk 1 of 5", $"Disk {diskNumber} of 5", StringComparison.OrdinalIgnoreCase);
+				File.Copy(sourceDiskPath, adjacentPath);
+			}
+
+			var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskOnePath }, AppContext.BaseDirectory);
+			BootToCopperBenchAndLaunchWorkbenchDefaultTool(emulator, diskOnePath);
+
+			var machine = GetMachine(emulator);
+			Assert.Equal(4, machine.Bus.Disk.ConnectedDriveCount);
+			Assert.NotNull(machine.Bus.Disk.Drive1.Disk);
+			Assert.NotNull(machine.Bus.Disk.Drive2.Disk);
+			Assert.NotNull(machine.Bus.Disk.Drive3.Disk);
+		}
+		finally
+		{
+			Directory.Delete(tempDirectory, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void ExplicitSingleDriveProfileDoesNotAutoConnectAdjacentExternalDisk()
+	{
+		var sourceDiskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		var singleDriveProfile = TryFindWorkspaceFile("CopperScreen", "Profiles", "expanded-copperstart - singledrive.json");
+		if (sourceDiskPath == null || singleDriveProfile == null)
+		{
+			return;
+		}
+
+		var tempDirectory = Path.Combine(Path.GetTempPath(), "CopperScreenTests-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(tempDirectory);
+		try
+		{
+			var diskOnePath = Path.Combine(tempDirectory, Path.GetFileName(sourceDiskPath));
+			var diskTwoPath = diskOnePath.Replace("Disk 1 of 5", "Disk 2 of 5", StringComparison.OrdinalIgnoreCase);
+			File.Copy(sourceDiskPath, diskOnePath);
+			File.Copy(sourceDiskPath, diskTwoPath);
+
+			using var emulator = CopperScreenEmulator.Create(new[] { "--profile", singleDriveProfile, diskOnePath }, AppContext.BaseDirectory);
+			emulator.RenderNextFrame();
+
+			var machine = GetMachine(emulator);
+			Assert.Equal(1, machine.Bus.Disk.ConnectedDriveCount);
+			Assert.False(emulator.CaptureDriveStates()[1].Connected);
+		}
+		finally
+		{
+			Directory.Delete(tempDirectory, recursive: true);
+		}
+	}
+
+	[Fact]
 	public void HiredGunsSystemTakeoverUsesSelectedWorkbenchLanguageWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
@@ -1660,6 +1845,63 @@ public sealed class CopperScreenBootTests
 		Assert.False(machine.Cpu.State.Halted, diagnostics);
 		Assert.Equal(0, machine.Bus.ReadByte(0x00C02756));
 		Assert.DoesNotContain(boot.Diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT");
+	}
+
+	[Fact]
+	public void RealKickstartProfileManualCopperBenchLaunchUsesHostShimWorkbenchSessionWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "Kickstart_13.rom");
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		if (romPath == null || diskPath == null)
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", "--kickstart-rom", romPath, diskPath }, AppContext.BaseDirectory);
+		var fileSystem = new AmigaDosFileSystem(AmigaDiskImage.Load(diskPath));
+		Assert.True(fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out _), "Expected a Workbench default tool on DF0:.");
+
+		Assert.True(emulator.LaunchCopperBenchPath(projectPath, out var message), $"{message} ({projectPath} -> {toolPath})");
+		Assert.StartsWith("CopperBench launched ", emulator.StatusText);
+		for (var frame = 0; frame < 8; frame++)
+		{
+			emulator.RenderNextFrame();
+		}
+
+		var diagnostics = string.Join(Environment.NewLine, GetDiagnostics(emulator).Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.StartsWith("boot program running:", emulator.StatusText);
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), $"{emulator.StatusText}{Environment.NewLine}{diagnostics}");
+	}
+
+	[Fact]
+	public void HiredGunsSystemTakeoverShowsSyntheticLoadingTitleWhenAvailable()
+	{
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip");
+		var singleDriveProfile = TryFindWorkspaceFile("CopperScreen", "Profiles", "expanded-copperstart - singledrive.json");
+		if (diskPath == null || singleDriveProfile == null)
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", singleDriveProfile, diskPath }, AppContext.BaseDirectory);
+		BootToCopperBenchAndLaunchWorkbenchDefaultTool(emulator, diskPath);
+		var bestBluePixels = 0;
+		var bestWhitePixels = 0;
+		for (var frame = 0; frame < 450; frame++)
+		{
+			emulator.RenderNextFrame();
+			bestBluePixels = Math.Max(bestBluePixels, CountBlueDominantPixels(emulator.Framebuffer));
+			bestWhitePixels = Math.Max(bestWhitePixels, CountWhitePixels(emulator.Framebuffer));
+			if (bestBluePixels > 20_000 && bestWhitePixels > 1_000)
+			{
+				break;
+			}
+		}
+
+		var diagnostics = string.Join(Environment.NewLine, GetDiagnostics(emulator).Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.True(
+			bestBluePixels > 20_000 && bestWhitePixels > 1_000,
+			$"Expected the synthetic SystemTakeover loading title to be visible; blue={bestBluePixels}, white={bestWhitePixels}.{Environment.NewLine}{diagnostics}");
 	}
 
 	[Fact]
@@ -2073,6 +2315,13 @@ public sealed class CopperScreenBootTests
 		return string.Join(Path.DirectorySeparatorChar, parts);
 	}
 
+	private static string CreateTempDirectory()
+	{
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-test-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		return directory;
+	}
+
 	private static AmigaMachine GetMachine(CopperScreenEmulator emulator)
 	{
 		return (AmigaMachine)typeof(CopperScreenEmulator)
@@ -2372,6 +2621,40 @@ public sealed class CopperScreenBootTests
 			var green = (pixel >> 8) & 0xFF;
 			var blue = pixel & 0xFF;
 			if (red > 140 && green < 90 && blue < 90)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	private static int CountBlueDominantPixels(IReadOnlyList<int> framebuffer)
+	{
+		var count = 0;
+		foreach (var pixel in framebuffer)
+		{
+			var red = (pixel >> 16) & 0xFF;
+			var green = (pixel >> 8) & 0xFF;
+			var blue = pixel & 0xFF;
+			if (blue > 110 && green > 35 && red < 90)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	private static int CountWhitePixels(IReadOnlyList<int> framebuffer)
+	{
+		var count = 0;
+		foreach (var pixel in framebuffer)
+		{
+			var red = (pixel >> 16) & 0xFF;
+			var green = (pixel >> 8) & 0xFF;
+			var blue = pixel & 0xFF;
+			if (red > 220 && green > 220 && blue > 220)
 			{
 				count++;
 			}
@@ -2754,9 +3037,9 @@ public sealed class CopperScreenBootTests
 
 			var data = variant switch
 			{
-				ShadowIpfOrientationVariant.RotateForward => RotateTrackBits(track.Data, track.BitLength, track.StartBit),
-				ShadowIpfOrientationVariant.RotateBackward => RotateTrackBits(track.Data, track.BitLength, -track.StartBit),
-				_ => track.Data
+				ShadowIpfOrientationVariant.RotateForward => RotateTrackBits(track.EncodedData, track.BitLength, track.StartBit),
+				ShadowIpfOrientationVariant.RotateBackward => RotateTrackBits(track.EncodedData, track.BitLength, -track.StartBit),
+				_ => track.EncodedData
 			};
 			tracks[(track.Cylinder * AmigaDiskImage.HeadCount) + track.Head] = new AmigaEncodedTrack(data, track.BitLength);
 		}
@@ -2789,13 +3072,14 @@ public sealed class CopperScreenBootTests
 		return output.ToArray();
 	}
 
-	private static byte[] RotateTrackBits(byte[] source, int bitLength, int shiftBits)
+	private static byte[] RotateTrackBits(ReadOnlyMemory<byte> source, int bitLength, int shiftBits)
 	{
 		var rotated = new byte[(bitLength + 7) / 8];
+		var sourceSpan = source.Span;
 		shiftBits = Mod(shiftBits, bitLength);
 		for (var bit = 0; bit < bitLength; bit++)
 		{
-			if (((source[bit >> 3] >> (7 - (bit & 7))) & 1) == 0)
+			if (((sourceSpan[bit >> 3] >> (7 - (bit & 7))) & 1) == 0)
 			{
 				continue;
 			}

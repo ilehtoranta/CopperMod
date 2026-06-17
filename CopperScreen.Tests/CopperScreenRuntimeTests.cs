@@ -7,6 +7,20 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenRuntimeTests
 {
 	[Fact]
+	public void RuntimePresentationBuffersUseHighResolutionDimensions()
+	{
+		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk());
+		var lastSeenFrameNumber = 0L;
+
+		using var lease = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber, force: true);
+
+		Assert.NotNull(lease);
+		Assert.Equal(AmigaConstants.PalHighResWidth, runtime.Width);
+		Assert.Equal(AmigaConstants.PalHighResHeight, runtime.Height);
+		Assert.Equal(runtime.Width * runtime.Height, lease.Framebuffer.Length);
+	}
+
+	[Fact]
 	public async Task CommandQueuePreservesToggleOrder()
 	{
 		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), new FakeAudioOutput());
@@ -69,9 +83,9 @@ public sealed class CopperScreenRuntimeTests
 		Assert.True(SpinWait.SpinUntil(() =>
 		{
 			DrainPresentationFrames(runtime, ref lastSeen);
-			return audio.QueuedBufferCount >= 5;
+			return audio.QueuedBufferCount >= 3;
 		}, TimeSpan.FromSeconds(1)));
-		Assert.InRange(audio.SubmitCount, 5, 8);
+		Assert.InRange(audio.SubmitCount, 3, 8);
 	}
 
 	[Fact]
@@ -204,7 +218,7 @@ public sealed class CopperScreenRuntimeTests
 	}
 
 	[Fact]
-	public void FullPresentationQueuePreventsPublishingWithoutReplacingOldestFrame()
+	public void FullPresentationQueueReplacesOldestQueuedFrameWithNewestFrame()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
 		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
@@ -213,19 +227,73 @@ public sealed class CopperScreenRuntimeTests
 
 		PublishFrame(emulator, runtime, unchecked((int)0xFF010203));
 		PublishFrame(emulator, runtime, unchecked((int)0xFF040506));
-		var frameBeforeRejectedPublish = runtime.CurrentState.FrameNumber;
 		PublishFrame(emulator, runtime, unchecked((int)0xFF070809));
 
-		Assert.Equal(frameBeforeRejectedPublish, runtime.CurrentState.FrameNumber);
 		Assert.Equal(2, runtime.CurrentState.PresentationQueueDepth);
 		Assert.True(runtime.CurrentState.PresentationQueueFullThrottleCount > 0);
+		using var first = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber);
+		Assert.NotNull(first);
+		Assert.Equal(unchecked((int)0xFF040506), first.Framebuffer[0]);
+		using var second = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber);
+		Assert.NotNull(second);
+		Assert.Equal(unchecked((int)0xFF070809), second.Framebuffer[0]);
+	}
+
+	[Fact]
+	public void HealthyAudioPublishingPreservesQueuedPresentationFrameOrder()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		using var audio = new FakeAudioOutput(initialQueued: 2);
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator, audio);
+		var lastSeenFrameNumber = 0L;
+		DrainPresentationFrames(runtime, ref lastSeenFrameNumber);
+
+		PublishFrame(emulator, runtime, unchecked((int)0xFF010203), queuedAudioBuffers: 2);
+		PublishFrame(emulator, runtime, unchecked((int)0xFF040506), queuedAudioBuffers: 2);
+
 		using var first = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber);
 		Assert.NotNull(first);
 		Assert.Equal(unchecked((int)0xFF010203), first.Framebuffer[0]);
 		using var second = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber);
 		Assert.NotNull(second);
 		Assert.Equal(unchecked((int)0xFF040506), second.Framebuffer[0]);
+		Assert.Equal(0, second.State.PresentationSkippedFrames);
+		Assert.Equal(0, second.State.DroppedFrames);
 	}
+
+	[Fact]
+	public void MouseInputCommandsDoNotPublishPresentationFrames()
+	{
+		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk());
+		var lastSeenFrameNumber = 0L;
+		DrainPresentationFrames(runtime, ref lastSeenFrameNumber);
+		var initialFrameNumber = runtime.CurrentState.FrameNumber;
+
+		runtime.MoveMousePort(8, -4);
+		runtime.MoveMousePort(-3, 6);
+		runtime.SetMouseButtons(primaryFirePressed: true, secondFirePressed: false);
+		runtime.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
+		InvokePrivateMethod(runtime, "ProcessCommands");
+
+		Assert.Equal(initialFrameNumber, runtime.CurrentState.FrameNumber);
+		Assert.False(runtime.HasPendingPresentationFrames);
+		Assert.Equal(0, runtime.CurrentState.DroppedFrames);
+	}
+
+	[Fact]
+	public void PresentationOptionsCommandUpdatesEmulatorLive()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
+
+		runtime.SetPresentationOptions(new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.CrtFlicker));
+		InvokePrivateMethod(runtime, "ProcessCommands");
+
+		Assert.Equal(
+			CopperScreenLacedPresentationMode.CrtFlicker,
+			GetPrivateField<CopperScreenPresentationOptions>(emulator, "_presentationOptions").LacedMode);
+	}
+
 
 	[Fact]
 	public void ForceStatusReturnsCurrentFrameWhenNoQueuedFrameExists()
@@ -275,34 +343,29 @@ public sealed class CopperScreenRuntimeTests
 	}
 
 	[Fact]
-	public void HealthyAudioThrottlesWhenTargetVideoQueueDepthIsReached()
+	public void HealthyAudioContinuesWhenTargetVideoQueueDepthIsReached()
 	{
 		using var audio = new FakeAudioOutput(initialQueued: 2);
 		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
 		Assert.Equal(1, runtime.CurrentState.PresentationQueueDepth);
 
 		runtime.Start();
-		Thread.Sleep(50);
 
-		Assert.Equal(0, audio.SubmitCount);
-		Assert.True(runtime.CurrentState.PresentationQueueFullThrottleCount > 0);
-		Assert.Equal(1, runtime.CurrentState.PresentationQueueDepth);
+		Assert.True(SpinWait.SpinUntil(() => audio.SubmitCount > 0 && audio.QueuedBufferCount >= 3, TimeSpan.FromSeconds(1)));
+		Assert.InRange(runtime.CurrentState.PresentationQueueDepth, 0, 2);
 	}
 
 	[Fact]
-	public void CriticalAudioMayFillSecondVideoQueueSlotButDoesNotOverwriteIt()
+	public void CriticalAudioCatchUpCollapsesStaleVideoQueueAfterRefill()
 	{
 		using var audio = new FakeAudioOutput(initialQueued: 0);
 		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
 
 		runtime.Start();
 
-		Assert.True(SpinWait.SpinUntil(() => runtime.CurrentState.PresentationQueueDepth == 2, TimeSpan.FromSeconds(1)));
-		var submitCountAfterQueueFilled = audio.SubmitCount;
-		Thread.Sleep(50);
-
-		Assert.Equal(2, runtime.CurrentState.PresentationQueueDepth);
-		Assert.Equal(submitCountAfterQueueFilled, audio.SubmitCount);
+		Assert.True(SpinWait.SpinUntil(() => audio.QueuedBufferCount >= 3, TimeSpan.FromSeconds(1)));
+		Assert.True(audio.SubmitCount >= 3);
+		Assert.InRange(runtime.CurrentState.PresentationQueueDepth, 0, 2);
 		Assert.True(runtime.CurrentState.PresentationQueueFullThrottleCount > 0);
 	}
 
@@ -313,12 +376,29 @@ public sealed class CopperScreenRuntimeTests
 		return Assert.IsType<T>(field.GetValue(runtime));
 	}
 
+	private static T GetPrivateField<T>(CopperScreenEmulator emulator, string fieldName)
+	{
+		var field = typeof(CopperScreenEmulator).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		return Assert.IsType<T>(field.GetValue(emulator));
+	}
+
+	private static void InvokePrivateMethod(CopperScreenRuntime runtime, string methodName, params object[] arguments)
+	{
+		var method = typeof(CopperScreenRuntime).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(method);
+		method.Invoke(runtime, arguments);
+	}
+
 	private static void PublishFrame(CopperScreenEmulator emulator, CopperScreenRuntime runtime, int pixel)
+		=> PublishFrame(emulator, runtime, pixel, queuedAudioBuffers: 0);
+
+	private static void PublishFrame(CopperScreenEmulator emulator, CopperScreenRuntime runtime, int pixel, int queuedAudioBuffers)
 	{
 		var publish = typeof(CopperScreenRuntime).GetMethod("PublishCurrentFrame", BindingFlags.Instance | BindingFlags.NonPublic);
 		Assert.NotNull(publish);
 		Array.Fill(emulator.Framebuffer, pixel);
-		publish.Invoke(runtime, [1, 0]);
+		publish.Invoke(runtime, [1, queuedAudioBuffers]);
 	}
 
 	private static void DrainPresentationFrames(CopperScreenRuntime runtime, ref long lastSeenFrameNumber)

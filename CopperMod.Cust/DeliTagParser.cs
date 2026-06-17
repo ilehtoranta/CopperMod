@@ -27,24 +27,41 @@ namespace CopperMod.Cust
     {
         private static readonly uint[] RequiredTags =
         {
-            CustConstants.DtpPlayerVersion,
+            CustConstants.DtpCustomPlayer,
             CustConstants.DtpInitPlayer,
             CustConstants.DtpInitSound
         };
 
         private static readonly uint[] SupportedIdentityTags =
         {
+            CustConstants.DtpRequestDtVersion,
+            CustConstants.DtpRequestKickVersion,
+            CustConstants.DtpPlayerVersion,
+            CustConstants.DtpPlayerName,
+            CustConstants.DtpCreator,
             CustConstants.DtpCheck,
-            CustConstants.DtpInterrupt,
             CustConstants.DtpCheck2,
+            CustConstants.DtpExtLoad,
+            CustConstants.DtpInterrupt,
+            CustConstants.DtpStop,
+            CustConstants.DtpConfig,
+            CustConstants.DtpUserConfig,
             CustConstants.DtpSubSongRange,
             CustConstants.DtpEndPlayer,
             CustConstants.DtpEndSound,
+            CustConstants.DtpStartInt,
+            CustConstants.DtpStopInt,
             CustConstants.DtpVolume,
             CustConstants.DtpBalance,
-            CustConstants.DtpVoices,
-            CustConstants.DtpModuleInfo,
-            CustConstants.DtpSampleInfo,
+            CustConstants.DtpFaster,
+            CustConstants.DtpSlower,
+            CustConstants.DtpNextPattern,
+            CustConstants.DtpPreviousPattern,
+            CustConstants.DtpNextSong,
+            CustConstants.DtpPreviousSong,
+            CustConstants.DtpSubSongTest,
+            CustConstants.DtpNewSubSongRange,
+            CustConstants.DtpDeliBase,
             CustConstants.DtpFlags
         };
 
@@ -60,7 +77,7 @@ namespace CopperMod.Cust
                 var data = segment.Data;
                 for (var offset = 0; offset <= data.Length - 16; offset += 2)
                 {
-                    if (BigEndian.ReadUInt32(data, offset, "tag") != CustConstants.DtpPlayerVersion)
+                    if (BigEndian.ReadUInt32(data, offset, "tag") != CustConstants.DtpCustomPlayer)
                     {
                         continue;
                     }

@@ -8408,7 +8408,6 @@ namespace CopperMod.Amiga
 
         private uint ReadMemoryValueForV2BatchSlow(uint address, M68kOperandSize size)
         {
-            _amigaBus?.AdvanceCiasTo(State.Cycles);
             return ReadMemoryValue(address, size);
         }
 
@@ -8439,7 +8438,6 @@ namespace CopperMod.Amiga
 
         private void WriteMemoryValueForV2Batch(uint address, uint value, M68kOperandSize size)
         {
-            _amigaBus?.AdvanceCiasTo(State.Cycles);
             WriteMemoryValue(address, value, size);
         }
 
