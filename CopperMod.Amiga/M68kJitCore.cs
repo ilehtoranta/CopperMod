@@ -162,6 +162,9 @@ namespace CopperMod.Amiga
         private static readonly MethodInfo ExecuteV2DivideByZeroMethod =
             typeof(M68kJitCore).GetMethod(nameof(ExecuteV2DivideByZero), BindingFlags.Instance | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteV2DivideByZero));
+        private static readonly MethodInfo BeginCompiledInstructionCycleFloorMethod =
+            typeof(M68kJitCore).GetMethod(nameof(BeginCompiledInstructionCycleFloor), BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(BeginCompiledInstructionCycleFloor));
         private static readonly MethodInfo ExecuteCompiledMovemForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ExecuteCompiledMovemForV2Batch),
@@ -259,6 +262,7 @@ namespace CopperMod.Amiga
             throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.CompleteJitZeroWaitWrite));
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
+        private bool _compiledInstructionCycleFloorActive;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -4437,7 +4441,7 @@ namespace CopperMod.Amiga
             }
 
             context.EmitSetPendingLogic(value, instruction.Size);
-            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
         private static void EmitV2Movea(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -4452,7 +4456,7 @@ namespace CopperMod.Amiga
 
             il.Emit(OpCodes.Stloc, value);
             context.EmitStoreAddressRegister(instruction.Destination.Register, value);
-            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
         private static void EmitV2Lea(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -5045,6 +5049,7 @@ namespace CopperMod.Amiga
             Label exit)
         {
             context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, (int)instruction.Operation);
             il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.Source.Immediate));
@@ -5062,6 +5067,7 @@ namespace CopperMod.Amiga
         private static void EmitV2Pea(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
         {
             context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, (int)instruction.Source.Kind);
             il.Emit(OpCodes.Ldc_I4, instruction.Source.Register);
@@ -5079,6 +5085,7 @@ namespace CopperMod.Amiga
             Label exit)
         {
             context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, (int)instruction.Source.Kind);
             il.Emit(OpCodes.Ldc_I4, instruction.Source.Register);
@@ -5151,6 +5158,7 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Brtrue, nonZero);
 
             context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, ExecuteV2DivideByZeroMethod);
             context.EmitReloadState();
@@ -5249,6 +5257,7 @@ namespace CopperMod.Amiga
             EmitV2ResolveAddress(il, context, instruction.Source);
             il.Emit(OpCodes.Stloc, target);
             context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, target);
             il.Emit(OpCodes.Ldc_I4_1);
@@ -7264,7 +7273,14 @@ namespace CopperMod.Amiga
             State.LastInstructionProgramCounter = programCounter;
             State.ProgramCounter = Normalize(nextProgramCounter);
             _instructionFrequency.Record(expectedOpcode);
+            _compiledInstructionCycleFloorActive = true;
             return true;
+        }
+
+        private void BeginCompiledInstructionCycleFloor(long startCycle)
+        {
+            _compiledInstructionPreviousCycle = startCycle;
+            _compiledInstructionCycleFloorActive = true;
         }
 
         private void FinishCompiledInstruction(IM68kInstructionBoundary boundary)
@@ -7276,6 +7292,7 @@ namespace CopperMod.Amiga
         {
             State.ProgramCounter = Normalize(programCounter);
             State.Cycles = _compiledInstructionPreviousCycle;
+            _compiledInstructionCycleFloorActive = false;
             _counters.Invalidations++;
             _counters.SelfModifiedCodeExits++;
             RemoveTrace(Normalize(programCounter));
@@ -7529,6 +7546,7 @@ namespace CopperMod.Amiga
                 default:
                     State.ProgramCounter = State.LastInstructionProgramCounter;
                     State.Cycles = _compiledInstructionPreviousCycle;
+                    _compiledInstructionCycleFloorActive = false;
                     _counters.UnsupportedOpcode++;
                     return false;
             }
@@ -7643,6 +7661,7 @@ namespace CopperMod.Amiga
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
                 State.Cycles = _compiledInstructionPreviousCycle;
+                _compiledInstructionCycleFloorActive = false;
                 _counters.HostTrapBailouts++;
                 return false;
             }
@@ -7667,6 +7686,7 @@ namespace CopperMod.Amiga
             if (_amigaBus != null && _amigaBus.HasHostTrapStub(target))
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
+                _compiledInstructionCycleFloorActive = false;
                 _counters.HostTrapBailouts++;
                 _counters.V2SideExitHostTrap++;
                 return false;
@@ -7766,7 +7786,7 @@ namespace CopperMod.Amiga
             var value = ReadEaValue(source, size);
             WriteEaValue(destination, size, value);
             SetLogicFlags(value, size);
-            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+            AddCycles(EstimateMoveCycles(source, destination, size));
             return true;
         }
 
@@ -7779,7 +7799,7 @@ namespace CopperMod.Amiga
             }
 
             SetAddressRegister(register, value);
-            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+            AddCycles(EstimateMoveCycles(source, new M68kDecodedEa(M68kJitEaKind.AddressRegister, register, 0, 0, 0, 0), size));
             return true;
         }
 
@@ -8044,6 +8064,7 @@ namespace CopperMod.Amiga
             {
                 State.ProgramCounter = State.LastInstructionProgramCounter;
                 State.Cycles = _compiledInstructionPreviousCycle;
+                _compiledInstructionCycleFloorActive = false;
                 _counters.HostTrapBailouts++;
                 return false;
             }
@@ -8751,7 +8772,26 @@ namespace CopperMod.Amiga
         private void AddCycles(int cycles)
         {
             Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            if (_compiledInstructionCycleFloorActive)
+            {
+                CompleteCompiledInstructionCycles(cycles);
+                return;
+            }
+
             State.Cycles += cycles;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteCompiledInstructionCycles(int cycles)
+        {
+            Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            var floor = _compiledInstructionPreviousCycle + cycles;
+            if (State.Cycles < floor)
+            {
+                State.Cycles = floor;
+            }
+
+            _compiledInstructionCycleFloorActive = false;
         }
 
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
@@ -9405,6 +9445,56 @@ namespace CopperMod.Amiga
         private static uint GetBranchTarget(M68kDecodedInstruction instruction)
             => Normalize(instruction.BranchBase + unchecked((uint)instruction.Displacement));
 
+        internal static int EstimateMoveCycles(M68kDecodedEa source, M68kDecodedEa destination, M68kOperandSize size)
+        {
+            var cycles = size == M68kOperandSize.Long ? 12 : 8;
+            if (destination.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister)
+            {
+                cycles = Math.Max(cycles, 4 + GetEaOperandCycles(source, size));
+            }
+
+            return cycles;
+        }
+
+        private static int GetEaOperandCycles(M68kDecodedEa ea, M68kOperandSize size)
+        {
+            return size == M68kOperandSize.Long
+                ? GetLongEaOperandCycles(ea)
+                : GetByteWordEaOperandCycles(ea);
+        }
+
+        private static int GetByteWordEaOperandCycles(M68kDecodedEa ea)
+        {
+            return ea.Kind switch
+            {
+                M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister => 0,
+                M68kJitEaKind.Immediate => 4,
+                M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement => 4,
+                M68kJitEaKind.AddressPredecrement => 6,
+                M68kJitEaKind.AddressDisplacement => 8,
+                M68kJitEaKind.AddressIndex => 10,
+                M68kJitEaKind.AbsoluteWord or M68kJitEaKind.PcDisplacement => 8,
+                M68kJitEaKind.AbsoluteLong or M68kJitEaKind.PcIndex => 12,
+                _ => 0
+            };
+        }
+
+        private static int GetLongEaOperandCycles(M68kDecodedEa ea)
+        {
+            return ea.Kind switch
+            {
+                M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister => 0,
+                M68kJitEaKind.Immediate => 8,
+                M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement => 8,
+                M68kJitEaKind.AddressPredecrement => 10,
+                M68kJitEaKind.AddressDisplacement => 12,
+                M68kJitEaKind.AddressIndex => 14,
+                M68kJitEaKind.AbsoluteWord or M68kJitEaKind.PcDisplacement => 12,
+                M68kJitEaKind.AbsoluteLong or M68kJitEaKind.PcIndex => 16,
+                _ => 0
+            };
+        }
+
         private delegate int CompiledTrace(M68kJitCore core, int maxInstructions, long targetCycle, IM68kInstructionBoundary boundary);
 
         private enum V2PendingFlags
@@ -9509,6 +9599,8 @@ namespace CopperMod.Amiga
                 PendingSize = il.DeclareLocal(typeof(int));
                 PendingSetExtend = il.DeclareLocal(typeof(bool));
                 Executed = il.DeclareLocal(typeof(int));
+                InstructionStartCycles = il.DeclareLocal(typeof(long));
+                InstructionCycleFloor = il.DeclareLocal(typeof(long));
                 LastOpcode = il.DeclareLocal(typeof(int));
                 LastInstructionProgramCounter = il.DeclareLocal(typeof(uint));
                 PreviousLastOpcode = il.DeclareLocal(typeof(int));
@@ -9550,6 +9642,10 @@ namespace CopperMod.Amiga
             public LocalBuilder PendingSetExtend { get; }
 
             public LocalBuilder Executed { get; }
+
+            public LocalBuilder InstructionStartCycles { get; }
+
+            public LocalBuilder InstructionCycleFloor { get; }
 
             public LocalBuilder LastOpcode { get; }
 
@@ -9672,6 +9768,8 @@ namespace CopperMod.Amiga
 
             public void EmitStartInstruction(M68kDecodedInstruction instruction)
             {
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Stloc, InstructionStartCycles);
                 EmitLoadUIntConstant(_il, instruction.ProgramCounter);
                 _il.Emit(OpCodes.Stloc, LastInstructionProgramCounter);
                 _il.Emit(OpCodes.Ldc_I4, instruction.Opcode);
@@ -9873,6 +9971,13 @@ namespace CopperMod.Amiga
                 _il.Emit(OpCodes.Call, CyclesProperty.SetMethod!);
             }
 
+            public void EmitBeginCoreInstructionCycleFloor()
+            {
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldloc, InstructionStartCycles);
+                _il.Emit(OpCodes.Call, BeginCompiledInstructionCycleFloorMethod);
+            }
+
             public void EmitLoadDataRegister(int register, M68kOperandSize size)
             {
                 _il.Emit(OpCodes.Ldloc, DataRegisters[register]);
@@ -9980,10 +10085,17 @@ namespace CopperMod.Amiga
 
             public void EmitAddCycles(int cycles)
             {
-                _il.Emit(OpCodes.Ldloc, Cycles);
+                var done = _il.DefineLabel();
+                _il.Emit(OpCodes.Ldloc, InstructionStartCycles);
                 _il.Emit(OpCodes.Ldc_I8, (long)cycles);
                 _il.Emit(OpCodes.Add);
+                _il.Emit(OpCodes.Stloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Bge, done);
+                _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
                 _il.Emit(OpCodes.Stloc, Cycles);
+                _il.MarkLabel(done);
             }
 
             public void EmitSetProgramCounter(uint value)

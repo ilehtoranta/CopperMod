@@ -3,14 +3,15 @@ using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    internal class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private const ushort Format0ExceptionFrame = 0x0000;
         private readonly IM68kBus _bus;
         private readonly M68020CpuProfile _profile;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
-        private readonly M68kInterpreter _m68000Fallback;
+        private readonly M68kTimingEngine _timing;
+        private readonly M68kAcceleratorBusBridge _busBridge;
 
         public M68020Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : this(bus, profile, new M68kCpuState())
@@ -28,12 +29,15 @@ namespace CopperMod.Amiga
             State = state ?? throw new ArgumentNullException(nameof(state));
             State.EnableM68020StackMode();
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
-            _m68000Fallback = new M68kInterpreter(bus, State, _instructionFrequency);
+            _timing = new M68kTimingEngine(_profile, State);
+            _busBridge = new M68kAcceleratorBusBridge(_bus, _profile, State, _timing);
         }
 
         public M68kCpuState State { get; }
 
         public M68020CpuProfile Profile => _profile;
+
+        public M68kTimingEngine Timing => _timing;
 
         public bool InstructionFrequencyEnabled
         {
@@ -92,15 +96,13 @@ namespace CopperMod.Amiga
             var startCycles = State.Cycles;
             if (State.Halted || State.Stopped)
             {
-                AddNativeCycles(2);
+                CompleteTiming(M68kInstructionTimingKey.Idle);
                 return (int)(State.Cycles - startCycles);
             }
 
             if (!TryPeekOpcode(State.ProgramCounter, out var opcode))
             {
-                var fallbackCycles = _m68000Fallback.ExecuteInstruction();
-                SynchronizeNativeToMachine();
-                return fallbackCycles;
+                throw new UnsupportedM68kTimingException(0, State.ProgramCounter, _profile);
             }
 
             if (TryExecuteM68020Instruction(opcode))
@@ -108,9 +110,7 @@ namespace CopperMod.Amiga
                 return (int)(State.Cycles - startCycles);
             }
 
-            var executed = _m68000Fallback.ExecuteInstruction();
-            SynchronizeNativeToMachine();
-            return executed;
+            throw new UnsupportedM68kTimingException(opcode, State.ProgramCounter, _profile);
         }
 
         public void Reset(uint programCounter, uint stackPointer)
@@ -131,6 +131,7 @@ namespace CopperMod.Amiga
             State.Stopped = false;
             State.LastOpcode = 0;
             State.LastInstructionProgramCounter = 0;
+            _timing.Reset();
         }
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
@@ -163,7 +164,7 @@ namespace CopperMod.Amiga
             PushLong(State.ProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = vectorTarget;
-            AddNativeCycles(44);
+            CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
         }
 
         private bool TryExecuteM68020Instruction(ushort opcode)
@@ -172,7 +173,7 @@ namespace CopperMod.Amiga
             {
                 BeginInstruction(opcode);
                 _ = FetchWord();
-                RaiseFormat0Exception(10, State.LastInstructionProgramCounter, 34);
+                RaiseFormat0Exception(10, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineAException);
                 return true;
             }
 
@@ -180,7 +181,7 @@ namespace CopperMod.Amiga
             {
                 BeginInstruction(opcode);
                 _ = FetchWord();
-                RaiseFormat0Exception(11, State.LastInstructionProgramCounter, 34);
+                RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
                 return true;
             }
 
@@ -188,7 +189,13 @@ namespace CopperMod.Amiga
             {
                 BeginInstruction(opcode);
                 _ = FetchWord();
-                RaiseFormat0Exception(4, State.LastInstructionProgramCounter, 20);
+                RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return true;
+            }
+
+            if (opcode == 0x4E71)
+            {
+                ExecuteNop();
                 return true;
             }
 
@@ -231,6 +238,13 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        private void ExecuteNop()
+        {
+            BeginInstruction(0x4E71);
+            _ = FetchWord();
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
         private void ExecuteMovec(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -239,7 +253,7 @@ namespace CopperMod.Amiga
             if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
                 _ = FetchWord();
-                RaiseFormat0Exception(8, instructionPc, 20);
+                RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
                 return;
             }
 
@@ -259,7 +273,7 @@ namespace CopperMod.Amiga
                 WriteControlRegister(controlRegister, value, instructionPc);
             }
 
-            AddNativeCycles(12);
+            CompleteTiming(M68kInstructionTimingKey.Movec);
         }
 
         private void ExecuteRte()
@@ -269,7 +283,7 @@ namespace CopperMod.Amiga
             _ = FetchWord();
             if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
-                RaiseFormat0Exception(8, instructionPc, 20);
+                RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
                 return;
             }
 
@@ -279,14 +293,14 @@ namespace CopperMod.Amiga
             var format = ReadWord(framePointer + 6);
             if ((format & 0xF000) != Format0ExceptionFrame)
             {
-                RaiseFormat0Exception(14, instructionPc, 20);
+                RaiseFormat0Exception(14, instructionPc, M68kInstructionTimingKey.FormatError);
                 return;
             }
 
             State.SetActiveStackPointer(framePointer + 8);
             State.ProgramCounter = restoredPc;
             State.StatusRegister = restoredStatus;
-            AddNativeCycles(20);
+            CompleteTiming(M68kInstructionTimingKey.Rte);
         }
 
         private void ExecuteRtd()
@@ -297,7 +311,7 @@ namespace CopperMod.Amiga
             var target = PullLong();
             State.SetActiveStackPointer(State.A[7] + unchecked((uint)displacement));
             State.ProgramCounter = target;
-            AddNativeCycles(16);
+            CompleteTiming(M68kInstructionTimingKey.Rtd);
         }
 
         private void ExecuteLinkLong(ushort opcode)
@@ -309,7 +323,7 @@ namespace CopperMod.Amiga
             PushLong(State.A[register]);
             State.A[register] = State.A[7];
             State.SetActiveStackPointer(State.A[7] + unchecked((uint)displacement));
-            AddNativeCycles(16);
+            CompleteTiming(M68kInstructionTimingKey.LinkLong);
         }
 
         private void ExecuteExtbLong(ushort opcode)
@@ -322,7 +336,7 @@ namespace CopperMod.Amiga
             State.SetNegativeZero(value, M68kOperandSize.Long);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
-            AddNativeCycles(4);
+            CompleteTiming(M68kInstructionTimingKey.ExtbLong);
         }
 
         private void ExecuteLongBranch(ushort opcode)
@@ -337,18 +351,18 @@ namespace CopperMod.Amiga
             {
                 PushLong(branchBase);
                 State.ProgramCounter = unchecked((uint)(branchBase + displacement));
-                AddNativeCycles(18);
+                CompleteTiming(M68kInstructionTimingKey.BsrLong);
                 return;
             }
 
             if (CheckCondition(condition))
             {
                 State.ProgramCounter = unchecked((uint)(branchBase + displacement));
-                AddNativeCycles(10);
+                CompleteTiming(M68kInstructionTimingKey.BranchLongTaken);
                 return;
             }
 
-            AddNativeCycles(8);
+            CompleteTiming(M68kInstructionTimingKey.BranchLongNotTaken);
         }
 
         private void BeginInstruction(ushort opcode)
@@ -358,7 +372,7 @@ namespace CopperMod.Amiga
             _instructionFrequency.Record(opcode);
         }
 
-        private void RaiseFormat0Exception(int vector, uint stackedProgramCounter, int nativeCycles)
+        private void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
         {
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
@@ -366,7 +380,7 @@ namespace CopperMod.Amiga
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
-            AddNativeCycles(nativeCycles);
+            CompleteTiming(timingKey);
         }
 
         private uint ReadControlRegister(int register, uint instructionPc)
@@ -396,12 +410,14 @@ namespace CopperMod.Amiga
                     break;
                 case 0x002:
                     State.CacheControlRegister = value;
+                    _timing.ApplyCacheControl(State.CacheControlRegister, State.CacheAddressRegister);
                     break;
                 case 0x801:
                     State.VectorBaseRegister = value;
                     break;
                 case 0x802:
                     State.CacheAddressRegister = value;
+                    _timing.ApplyCacheControl(State.CacheControlRegister, State.CacheAddressRegister);
                     break;
                 case 0x803:
                     State.SetMasterStackPointer(value);
@@ -417,7 +433,7 @@ namespace CopperMod.Amiga
 
         private uint RaiseIllegalControlRegister(uint instructionPc)
         {
-            RaiseFormat0Exception(4, instructionPc, 20);
+            RaiseFormat0Exception(4, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
             return 0;
         }
 
@@ -445,7 +461,10 @@ namespace CopperMod.Amiga
 
         private ushort FetchWord()
         {
-            var value = ReadWord(State.ProgramCounter, AmigaBusAccessKind.CpuInstructionFetch);
+            var address = State.ProgramCounter;
+            var value = _bus is IM68kCodeReader codeReader && _timing.ProbeInstructionCache(address)
+                ? codeReader.ReadHostWord(address)
+                : ReadWord(address, AmigaBusAccessKind.CpuInstructionFetch);
             State.ProgramCounter += 2;
             return value;
         }
@@ -459,32 +478,22 @@ namespace CopperMod.Amiga
 
         private ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
         {
-            var cycle = Math.Max(State.Cycles, _profile.NativeToMachineCycles(State.NativeCycles));
-            var value = _bus.ReadWord(address, ref cycle, accessKind);
-            State.Cycles = cycle;
-            SynchronizeNativeToMachine();
-            return value;
+            return _busBridge.ReadWord(address, accessKind);
         }
 
         private uint ReadLong(uint address)
         {
-            var high = ReadWord(address);
-            var low = ReadWord(address + 2);
-            return ((uint)high << 16) | low;
+            return _busBridge.ReadLong(address, AmigaBusAccessKind.CpuDataRead);
         }
 
         private void WriteWord(uint address, ushort value)
         {
-            var cycle = Math.Max(State.Cycles, _profile.NativeToMachineCycles(State.NativeCycles));
-            _bus.WriteWord(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
-            State.Cycles = cycle;
-            SynchronizeNativeToMachine();
+            _busBridge.WriteWord(address, value, AmigaBusAccessKind.CpuDataWrite);
         }
 
         private void WriteLong(uint address, uint value)
         {
-            WriteWord(address, (ushort)(value >> 16));
-            WriteWord(address + 2, (ushort)value);
+            _busBridge.WriteLong(address, value, AmigaBusAccessKind.CpuDataWrite);
         }
 
         private void PushWord(ushort value)
@@ -506,25 +515,15 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void AddNativeCycles(int nativeCycles)
+        private void CompleteTiming(M68kInstructionTimingKey key)
         {
-            State.NativeCycles += nativeCycles;
-            var machineCycles = _profile.NativeToMachineCycles(State.NativeCycles);
-            if (State.Cycles < machineCycles)
-            {
-                State.Cycles = machineCycles;
-            }
+            _timing.CompleteInstruction(_timing.GetPlan(key));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void SynchronizeNativeToMachine()
         {
-            var nativeCycles = _profile.MachineToNativeCycles(State.Cycles);
-            if (State.NativeCycles < nativeCycles)
-            {
-                State.NativeCycles = nativeCycles;
-            }
+            _timing.SynchronizeNativeToMachine();
         }
 
         private bool TryPeekOpcode(uint address, out ushort opcode)

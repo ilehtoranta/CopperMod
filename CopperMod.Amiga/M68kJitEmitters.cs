@@ -106,6 +106,10 @@ namespace CopperMod.Amiga
         private static readonly MethodInfo PushLong = RequiredMethod(typeof(M68kJitCore), "PushLong", typeof(uint));
         private static readonly MethodInfo PullLong = RequiredMethod(typeof(M68kJitCore), "PullLong");
         private static readonly MethodInfo ResolveIndex = RequiredMethod(typeof(M68kJitCore), "ResolveIndex", typeof(ushort));
+        private static readonly MethodInfo CompleteCompiledInstructionCycles = RequiredMethod(
+            typeof(M68kJitCore),
+            "CompleteCompiledInstructionCycles",
+            typeof(int));
 
         private static readonly PropertyInfo StateProperty = RequiredProperty(typeof(M68kJitCore), nameof(M68kJitCore.State));
         private static readonly PropertyInfo DataRegistersProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.D));
@@ -501,7 +505,7 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Stloc, value);
             EmitStoreDataRegister(il, context, instruction.Destination.Register, value, instruction.Size);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
         private static void EmitQuickDataRegisterArithmetic(
@@ -595,7 +599,7 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Stloc, value);
             EmitStoreEaValue(il, context, instruction.Destination, instruction.Size, value);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
         private static void EmitMovea(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -610,7 +614,7 @@ namespace CopperMod.Amiga
 
             il.Emit(OpCodes.Stloc, value);
             EmitStoreAddressRegister(il, instruction.Destination.Register, value);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
         private static void EmitLea(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -1674,12 +1678,10 @@ namespace CopperMod.Amiga
 
         private static void EmitAddCycles(ILGenerator il, TraceEmitContext context, int cycles)
         {
-            il.Emit(OpCodes.Ldloc, context.State);
-            il.Emit(OpCodes.Ldloc, context.State);
-            il.Emit(OpCodes.Call, CyclesProperty.GetMethod!);
-            il.Emit(OpCodes.Ldc_I8, (long)cycles);
-            il.Emit(OpCodes.Add);
-            il.Emit(OpCodes.Call, CyclesProperty.SetMethod!);
+            _ = context;
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, cycles);
+            il.Emit(OpCodes.Call, CompleteCompiledInstructionCycles);
         }
 
         private static void EmitLoadUIntConstant(ILGenerator il, uint value)

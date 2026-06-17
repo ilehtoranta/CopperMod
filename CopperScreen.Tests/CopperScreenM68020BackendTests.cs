@@ -16,6 +16,17 @@ public sealed class CopperScreenM68020BackendTests
 		Assert.Equal(M68kBackendKind.AccurateM68020, CopperScreenProfile.ParseCpuBackend(backend));
 	}
 
+	[Theory]
+	[InlineData("AccurateM68030")]
+	[InlineData("m68030")]
+	[InlineData("68030")]
+	[InlineData("030")]
+	[InlineData("Ocs68030_14MHz")]
+	public void CpuBackendParserAcceptsM68030Aliases(string backend)
+	{
+		Assert.Equal(M68kBackendKind.AccurateM68030, CopperScreenProfile.ParseCpuBackend(backend));
+	}
+
 	[Fact]
 	public void StartupArgumentParserCanSelectM68020Backend()
 	{
@@ -25,6 +36,17 @@ public sealed class CopperScreenM68020BackendTests
 
 		Assert.Null(options.Error);
 		Assert.Equal(M68kBackendKind.AccurateM68020, options.CpuBackendOverride);
+	}
+
+	[Fact]
+	public void StartupArgumentParserCanSelectM68030Backend()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", "--m68030" },
+			AppContext.BaseDirectory);
+
+		Assert.Null(options.Error);
+		Assert.Equal(M68kBackendKind.AccurateM68030, options.CpuBackendOverride);
 	}
 
 	[Fact]
@@ -40,5 +62,20 @@ public sealed class CopperScreenM68020BackendTests
 
 		Assert.Equal(M68kBackendKind.AccurateM68020, profile.CpuBackend);
 		Assert.Equal(M68kBackendKind.AccurateM68020, profile.CreateMachineOptions().CpuBackend);
+	}
+
+	[Fact]
+	public void BundledM68030ProfileCreatesM68030MachineOptions()
+	{
+		Assert.True(
+			CopperScreenProfile.TryLoad(
+				"expanded-m68030-copperstart",
+				AppContext.BaseDirectory,
+				out var profile,
+				out var error),
+			error);
+
+		Assert.Equal(M68kBackendKind.AccurateM68030, profile.CpuBackend);
+		Assert.Equal(M68kBackendKind.AccurateM68030, profile.CreateMachineOptions().CpuBackend);
 	}
 }

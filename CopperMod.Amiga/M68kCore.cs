@@ -96,11 +96,12 @@ namespace CopperMod.Amiga
 
     internal enum M68kBackendKind
     {
-        AccurateM68000,
-        AccurateM68020,
-        FastM68000,
-        JitM68000,
-        Cpu32
+        AccurateM68000 = 0,
+        AccurateM68020 = 1,
+        FastM68000 = 2,
+        JitM68000 = 3,
+        Cpu32 = 4,
+        AccurateM68030 = 5
     }
 
     internal interface IM68kCoreFactory
@@ -122,6 +123,11 @@ namespace CopperMod.Amiga
             if (backend == M68kBackendKind.AccurateM68020)
             {
                 return new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+            }
+
+            if (backend == M68kBackendKind.AccurateM68030)
+            {
+                return new M68030Interpreter(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz);
             }
 
             if (backend == M68kBackendKind.JitM68000)
@@ -474,6 +480,9 @@ namespace CopperMod.Amiga
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
+        private bool _instructionCycleFloorActive;
+        private long _instructionCycleStart;
+        private long _instructionCycleFloor;
 
         public M68kInterpreter(IM68kBus bus)
             : this(bus, new M68kCpuState())
@@ -549,6 +558,7 @@ namespace CopperMod.Amiga
             }
 
             var startCycles = State.Cycles;
+            BeginInstructionCycleFloor(startCycles);
             try
             {
                 var instructionPc = State.ProgramCounter;
@@ -560,13 +570,13 @@ namespace CopperMod.Amiga
                 var decoded = DecodeByOpcodeLine(opcode, instructionPc);
                 if (decoded)
                 {
-                    return (int)(State.Cycles - startCycles);
+                    return CompleteInstruction(startCycles);
                 }
 
                 if ((opcode & 0xF000) == 0xA000)
                 {
                     RaiseException(10, instructionPc, 34);
-                    return (int)(State.Cycles - startCycles);
+                    return CompleteInstruction(startCycles);
                 }
 
                 if ((opcode & 0xF000) == 0xF000)
@@ -583,25 +593,29 @@ namespace CopperMod.Amiga
                                 State.ProgramCounter = PullLong();
                             }
 
-                            return (int)(State.Cycles - startCycles);
+                            return CompleteInstruction(startCycles);
                         }
 
                         State.ProgramCounter = returnProgramCounter;
                     }
 
                     RaiseException(11, instructionPc, 34);
-                    return (int)(State.Cycles - startCycles);
+                    return CompleteInstruction(startCycles);
                 }
 
                 throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
             }
             catch (M68kAddressErrorException)
             {
-                return (int)(State.Cycles - startCycles);
+                return CompleteInstruction(startCycles);
             }
             catch (M68kIllegalInstructionException)
             {
-                return (int)(State.Cycles - startCycles);
+                return CompleteInstruction(startCycles);
+            }
+            finally
+            {
+                _instructionCycleFloorActive = false;
             }
         }
 
@@ -2082,7 +2096,7 @@ namespace CopperMod.Amiga
                 case 1:
                     return EaOperand.AddressRegister(this, reg, size);
                 case 2:
-                    return EaOperand.Memory(this, State.A[reg], size);
+                    return EaOperand.Memory(this, State.A[reg], size, GetEaOperandCycles(mode, reg, size));
                 case 3:
                 {
                     var address = State.A[reg];
@@ -2091,17 +2105,17 @@ namespace CopperMod.Amiga
                         SetAddressRegister(reg, State.A[reg] + AddressIncrement(reg, size));
                     }
 
-                    return EaOperand.Memory(this, address, size);
+                    return EaOperand.Memory(this, address, size, GetEaOperandCycles(mode, reg, size));
                 }
                 case 4:
                 {
                     SetAddressRegister(reg, State.A[reg] - AddressIncrement(reg, size));
-                    return EaOperand.Memory(this, State.A[reg], size);
+                    return EaOperand.Memory(this, State.A[reg], size, GetEaOperandCycles(mode, reg, size));
                 }
                 case 5:
                 {
                     var displacement = unchecked((short)FetchWord());
-                    return EaOperand.Memory(this, (uint)(State.A[reg] + displacement), size);
+                    return EaOperand.Memory(this, (uint)(State.A[reg] + displacement), size, GetEaOperandCycles(mode, reg, size));
                 }
                 case 6:
                 {
@@ -2114,7 +2128,7 @@ namespace CopperMod.Amiga
                         indexValue = M68kCpuState.SignExtend(indexValue, M68kOperandSize.Word);
                     }
 
-                    return EaOperand.Memory(this, (uint)(State.A[reg] + indexValue + displacement), size);
+                    return EaOperand.Memory(this, (uint)(State.A[reg] + indexValue + displacement), size, GetEaOperandCycles(mode, reg, size));
                 }
                 case 7:
                     return ResolveMode7(reg, size);
@@ -2127,8 +2141,8 @@ namespace CopperMod.Amiga
         {
             return reg switch
             {
-                0 => EaOperand.Memory(this, (uint)(short)FetchWord(), size),
-                1 => EaOperand.Memory(this, FetchLong(), size),
+                0 => EaOperand.Memory(this, (uint)(short)FetchWord(), size, GetEaOperandCycles(7, reg, size)),
+                1 => EaOperand.Memory(this, FetchLong(), size, GetEaOperandCycles(7, reg, size)),
                 2 => ResolvePcRelative(size),
                 3 => ResolvePcIndexed(size),
                 4 => EaOperand.Immediate(this, FetchImmediate(size), size),
@@ -2146,7 +2160,7 @@ namespace CopperMod.Amiga
         {
             var extensionAddress = State.ProgramCounter;
             var displacement = unchecked((short)FetchWord());
-            return EaOperand.Memory(this, (uint)(extensionAddress + displacement), size);
+            return EaOperand.Memory(this, (uint)(extensionAddress + displacement), size, GetEaOperandCycles(7, 2, size));
         }
 
         private EaOperand ResolvePcIndexed(M68kOperandSize size)
@@ -2161,7 +2175,7 @@ namespace CopperMod.Amiga
                 indexValue = M68kCpuState.SignExtend(indexValue, M68kOperandSize.Word);
             }
 
-            return EaOperand.Memory(this, (uint)(extensionAddress + indexValue + displacement), size);
+            return EaOperand.Memory(this, (uint)(extensionAddress + indexValue + displacement), size, GetEaOperandCycles(7, 3, size));
         }
 
         private uint ReadEaValue(EaOperand operand)
@@ -2516,7 +2530,30 @@ namespace CopperMod.Amiga
         private void AddCycles(int cycles)
         {
             System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            if (_instructionCycleFloorActive)
+            {
+                _instructionCycleFloor = Math.Max(_instructionCycleFloor, _instructionCycleStart + cycles);
+                return;
+            }
+
             State.Cycles += cycles;
+        }
+
+        private void BeginInstructionCycleFloor(long startCycle)
+        {
+            _instructionCycleFloorActive = true;
+            _instructionCycleStart = startCycle;
+            _instructionCycleFloor = startCycle;
+        }
+
+        private int CompleteInstruction(long startCycle)
+        {
+            if (State.Cycles < _instructionCycleFloor)
+            {
+                State.Cycles = _instructionCycleFloor;
+            }
+
+            return (int)(State.Cycles - startCycle);
         }
 
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
@@ -2583,7 +2620,13 @@ namespace CopperMod.Amiga
             _ = source;
             _ = destination;
             _ = write;
-            return size == M68kOperandSize.Long ? 12 : 8;
+            var baseCycles = size == M68kOperandSize.Long ? 12 : 8;
+            if (destination.IsRegister)
+            {
+                baseCycles = Math.Max(baseCycles, 4 + source.EaCycles);
+            }
+
+            return baseCycles;
         }
 
         private static int CountBits(int value)
@@ -2605,7 +2648,7 @@ namespace CopperMod.Amiga
             private readonly int _reg;
             private readonly uint _immediate;
 
-            private EaOperand(M68kInterpreter cpu, int kind, int reg, uint address, uint immediate, M68kOperandSize size)
+            private EaOperand(M68kInterpreter cpu, int kind, int reg, uint address, uint immediate, M68kOperandSize size, int eaCycles)
             {
                 _cpu = cpu;
                 _kind = kind;
@@ -2613,30 +2656,35 @@ namespace CopperMod.Amiga
                 Address = address;
                 _immediate = immediate;
                 Size = size;
+                EaCycles = eaCycles;
             }
 
             public uint Address { get; }
 
             public M68kOperandSize Size { get; }
 
+            public int EaCycles { get; }
+
+            public bool IsRegister => _kind is 0 or 1;
+
             public static EaOperand DataRegister(M68kInterpreter cpu, int reg, M68kOperandSize size)
             {
-                return new EaOperand(cpu, 0, reg, 0, 0, size);
+                return new EaOperand(cpu, 0, reg, 0, 0, size, eaCycles: 0);
             }
 
             public static EaOperand AddressRegister(M68kInterpreter cpu, int reg, M68kOperandSize size)
             {
-                return new EaOperand(cpu, 1, reg, 0, 0, size);
+                return new EaOperand(cpu, 1, reg, 0, 0, size, eaCycles: 0);
             }
 
-            public static EaOperand Memory(M68kInterpreter cpu, uint address, M68kOperandSize size)
+            public static EaOperand Memory(M68kInterpreter cpu, uint address, M68kOperandSize size, int eaCycles)
             {
-                return new EaOperand(cpu, 2, 0, address, 0, size);
+                return new EaOperand(cpu, 2, 0, address, 0, size, eaCycles);
             }
 
             public static EaOperand Immediate(M68kInterpreter cpu, uint value, M68kOperandSize size)
             {
-                return new EaOperand(cpu, 3, 0, 0, value, size);
+                return new EaOperand(cpu, 3, 0, 0, value, size, eaCycles: size == M68kOperandSize.Long ? 8 : 4);
             }
 
             public uint Read()

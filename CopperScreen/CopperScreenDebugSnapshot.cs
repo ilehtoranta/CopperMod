@@ -173,7 +173,7 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 		builder.AppendLine($"Cycles={Cycles}  Halted={Halted}  Stopped={Stopped}");
 		if (M68020StateEnabled)
 		{
-			builder.AppendLine($"68020 NativeCycles={NativeCycles}  VBR={FormatAddress(VectorBaseRegister)}  SFC={SourceFunctionCode}  DFC={DestinationFunctionCode}  CACR=${CacheControlRegister:X8}  CAAR=${CacheAddressRegister:X8}  MSP={FormatAddress(MasterStackPointer)}");
+			builder.AppendLine($"68020/030 NativeCycles={NativeCycles}  VBR={FormatAddress(VectorBaseRegister)}  SFC={SourceFunctionCode}  DFC={DestinationFunctionCode}  CACR=${CacheControlRegister:X8}  CAAR=${CacheAddressRegister:X8}  MSP={FormatAddress(MasterStackPointer)}");
 		}
 
 		for (var i = 0; i < 8; i += 4)

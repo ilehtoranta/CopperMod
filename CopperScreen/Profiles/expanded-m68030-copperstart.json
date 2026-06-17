@@ -1,0 +1,27 @@
+{
+  "id": "expanded-m68030-copperstart",
+  "displayName": "Expanded A500 + 68030 14 MHz + CopperStart",
+  "description": "A500 PAL OCS, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, EC030-style 14 MHz integer accelerator, CopperStart Kickstart 1.3 shim.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000",
+    "realFastRamKb": 2048,
+    "realFastBase": "$200000",
+    "rtcEnabled": true,
+    "floppyDriveCount": 2
+  },
+  "cpu": {
+    "backend": "AccurateM68030"
+  },
+  "kickstart": {
+    "source": "CopperStart"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "Synthetic"
+    }
+  }
+}

@@ -28,6 +28,103 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void NopUsesDocumentedCyclesWithoutAddingFetchTime()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71); // NOP
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cycles);
+		Assert.Equal(24, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void DbraTakenUsesDocumentedCyclesWithoutAddingFetchTime()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,*-2
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 1;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(10, cycles);
+		Assert.Equal(30, cpu.State.Cycles);
+		Assert.Equal(0u, cpu.State.D[0] & 0xFFFF);
+		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void MoveWordDisplacementSourceToDataRegisterUsesDocumentedCycles()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x30, 0x28, 0x00, 0x02); // MOVE.W 2(A0),D0
+		Write(bus.ChipRam, 0x2002, 0x12, 0x34);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		cpu.State.A[0] = 0x2000;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(12, cycles);
+		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFF);
+	}
+
+	[Fact]
+	public void ImmediateBtstDataRegisterUsesDocumentedCyclesWithoutAddingExtensionFetchTime()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x08, 0x00, 0x00, 0x0E); // BTST #14,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0x4000;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(10, cycles);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void WaitBlitPollingLoopUsesDocumentedCpuCadence()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x70, 0x04); // MOVEQ #4,D0
+		Write(bus.Memory, 0x1002, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,.wpre
+		Write(bus.Memory, 0x1006, 0x30, 0x2E, 0x00, 0x02); // MOVE.W 2(A6),D0
+		Write(bus.Memory, 0x100A, 0x08, 0x00, 0x00, 0x0E); // BTST #14,D0
+		Write(bus.Memory, 0x100E, 0x66, 0xF6); // BNE .wbusy
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[6] = 0x00DFF000;
+		bus.WriteWordRaw(0x00DFF002, 0x4000);
+
+		for (var i = 0; i < 64 && bus.DataReadCycles.Count(read => (read.Address & 0x00FF_FFFE) == 0x00DFF002) < 2; i++)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var dmaconrReadCycles = bus.DataReadCycles
+			.Where(read => (read.Address & 0x00FF_FFFE) == 0x00DFF002)
+			.Select(read => read.Cycle)
+			.ToArray();
+		Assert.True(
+			dmaconrReadCycles.Length >= 2,
+			"Expected at least two DMACONR reads; data reads were " +
+			string.Join(", ", bus.DataReadCycles.Select(read => $"0x{read.Address:X8}@{read.Cycle}")));
+		Assert.Equal(62, dmaconrReadCycles[0]);
+		Assert.Equal(32, dmaconrReadCycles[1] - dmaconrReadCycles[0]);
+	}
+
+	[Fact]
 	public void MoveaDoesNotAlterConditionCodes()
 	{
 		var bus = new TestBus();
@@ -542,7 +639,7 @@ public sealed class M68kInterpreterTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(30, cpu.State.Cycles);
+		Assert.Equal(20, cpu.State.Cycles);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
 	}
@@ -559,7 +656,7 @@ public sealed class M68kInterpreterTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(20 + expectedDataCycle, cpu.State.Cycles);
+		Assert.Equal(Math.Max(20, expectedDataCycle), cpu.State.Cycles);
 		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
 	}
 
@@ -575,7 +672,7 @@ public sealed class M68kInterpreterTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(20 + expectedDataCycle, cpu.State.Cycles);
+		Assert.Equal(Math.Max(20, expectedDataCycle), cpu.State.Cycles);
 		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
 	}
 
@@ -1158,6 +1255,90 @@ public sealed class M68kInterpreterTests
 			Memory[address + 1] = (byte)(value >> 16);
 			Memory[address + 2] = (byte)(value >> 8);
 			Memory[address + 3] = (byte)value;
+		}
+	}
+
+	private sealed class CycleCountingBus : IM68kBus
+	{
+		private const int AccessCycles = 2;
+
+		public byte[] Memory { get; } = new byte[0x0100_0000];
+
+		public List<(uint Address, long Cycle)> DataReadCycles { get; } = new();
+
+		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			var value = Memory[address];
+			cycle += AccessCycles;
+			return value;
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			var value = (ushort)((Memory[address] << 8) | Memory[address + 1]);
+			if (accessKind == AmigaBusAccessKind.CpuDataRead)
+			{
+				DataReadCycles.Add((address, cycle));
+			}
+
+			cycle += AccessCycles;
+			return value;
+		}
+
+		public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			var value = ((uint)Memory[address] << 24) |
+				((uint)Memory[address + 1] << 16) |
+				((uint)Memory[address + 2] << 8) |
+				Memory[address + 3];
+			cycle += AccessCycles * 2;
+			return value;
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			Memory[address] = value;
+			cycle += AccessCycles;
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			WriteWordRaw(address, value);
+			cycle += AccessCycles;
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
+		{
+			Memory[address] = (byte)(value >> 24);
+			Memory[address + 1] = (byte)(value >> 16);
+			Memory[address + 2] = (byte)(value >> 8);
+			Memory[address + 3] = (byte)value;
+			cycle += AccessCycles * 2;
+		}
+
+		public bool HasHostTrapStub(uint address)
+		{
+			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
+			_ = state;
+			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
+		}
+
+		public void WriteWordRaw(uint address, ushort value)
+		{
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
 		}
 	}
 }

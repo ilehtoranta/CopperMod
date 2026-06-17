@@ -17,6 +17,16 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
+	public void FactoryCreatesAccurateM68030Backend()
+	{
+		using var cpu = M68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68030, new AmigaBus());
+
+		var interpreter = Assert.IsType<M68030Interpreter>(cpu);
+		Assert.Same(M68020CpuProfile.Ocs68030Accelerator14Mhz, interpreter.Profile);
+		Assert.True(interpreter.State.M68020StackModeEnabled);
+	}
+
+	[Fact]
 	public void MovecTransfersVectorBaseRegister()
 	{
 		var bus = new ZeroWaitCodeBus();
@@ -145,6 +155,122 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x300Cu, cpu.State.A[7]);
 	}
 
+	[Fact]
+	public void M68030HeadTailOverlapReducesAdjacentInstructionCycles()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x49C0, 0x49C1); // EXTB.L D0; EXTB.L D1
+		var cpu = new M68030Interpreter(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(0, cpu.Timing.LastInstructionTiming.OverlapCycles);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(6, cpu.State.NativeCycles);
+		Assert.Equal(3, cpu.State.Cycles);
+		Assert.Equal(2, cpu.Timing.LastInstructionTiming.OverlapCycles);
+	}
+
+	[Fact]
+	public void M68030TakenBranchSuppressesNextHeadTailOverlap()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x49C0, // EXTB.L D0
+			0x60FF, 0x0000, 0x0000, // BRA.L to next instruction
+			0x49C1); // EXTB.L D1
+		var cpu = new M68030Interpreter(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(18, cpu.State.NativeCycles);
+		Assert.Equal(0, cpu.Timing.LastInstructionTiming.OverlapCycles);
+	}
+
+	[Fact]
+	public void NopSynchronizesPendingPostedWrite()
+	{
+		var bus = new ZeroWaitCodeBus { WriteMachineDelay = 20 };
+		WriteWords(bus, CodeBase, 0x480E, 0x0000, 0x0000, 0x4E71); // LINK.L A6,#0; NOP
+		var cpu = new M68030Interpreter(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[6] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(16, cpu.State.NativeCycles);
+		Assert.Equal(40, cpu.Timing.BusControllerAvailableNativeCycle);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(44, cpu.State.NativeCycles);
+		Assert.Equal(22, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void EnabledInstructionCacheAvoidsSecondFetchWithinLine()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x4E7B, 0x0002, // MOVEC D0,CACR
+			0x4E71, // NOP
+			0x4E71); // NOP, same 4-byte cache line as previous NOP
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0001;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(3, bus.InstructionFetchWords);
+		Assert.True(cpu.Timing.InstructionCache.Enabled);
+	}
+
+	[Fact]
+	public void ProfileWaitStatesDelayBlockingInstructionFetch()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4E71); // NOP
+		var profile = M68020CpuProfile.CreateForTesting(
+			"test-wait",
+			M68kAcceleratorModel.M68020,
+			2,
+			new M68020BusTimingRule(M68020MemoryTarget.ChipRam, M68020BusWidth.Word, 3));
+		var cpu = new M68020Interpreter(bus, profile);
+		cpu.Reset(CodeBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(10, cpu.State.NativeCycles);
+		Assert.Equal(5, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void UnsupportedExactOpcodeFailsInsteadOfFallingBackToM68000Timing()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x303C, 0x1234); // MOVE.W #$1234,D0
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+
+		var exception = Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+
+		Assert.Equal(0x303C, exception.Opcode);
+		Assert.Equal(CodeBase, exception.ProgramCounter);
+	}
+
 	private static void WriteWords(ZeroWaitCodeBus bus, uint address, params ushort[] words)
 	{
 		for (var i = 0; i < words.Length; i++)
@@ -157,6 +283,10 @@ public sealed class M68020InterpreterTests
 	{
 		private readonly byte[] _memory = new byte[0x0100_0000];
 
+		public int InstructionFetchWords { get; private set; }
+
+		public int WriteMachineDelay { get; init; }
+
 		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
 		{
 			_ = cycle;
@@ -166,8 +296,11 @@ public sealed class M68020InterpreterTests
 
 		public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
 		{
-			_ = cycle;
-			_ = accessKind;
+			if (accessKind == AmigaBusAccessKind.CpuInstructionFetch)
+			{
+				InstructionFetchWords++;
+			}
+
 			return ReadWord(address);
 		}
 
@@ -180,23 +313,23 @@ public sealed class M68020InterpreterTests
 
 		public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
 		{
-			_ = cycle;
 			_ = accessKind;
 			_memory[Normalize(address)] = value;
+			cycle += WriteMachineDelay;
 		}
 
 		public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
 		{
-			_ = cycle;
 			_ = accessKind;
 			WriteWord(address, value);
+			cycle += WriteMachineDelay;
 		}
 
 		public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
 		{
-			_ = cycle;
 			_ = accessKind;
 			WriteLong(address, value);
+			cycle += WriteMachineDelay;
 		}
 
 		public bool HasHostTrapStub(uint address)

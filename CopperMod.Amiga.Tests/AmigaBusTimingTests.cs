@@ -816,7 +816,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void CpuCyclesIncludeDelayedInstructionFetchCompletion()
+	public void CpuCyclesUseDocumentedInstructionFloorAndDelayedFetchCompletion()
 	{
 		var arbiter = new FixedDelayArbiter(waitCycles: 5, accessCycles: 3);
 		var bus = new AmigaBus(arbiter: arbiter);
@@ -830,7 +830,7 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, fetch.RequestedCycle);
 		Assert.Equal(5, fetch.GrantedCycle);
 		Assert.Equal(8, fetch.CompletedCycle);
-		Assert.Equal(12, cpu.State.Cycles);
+		Assert.Equal(8, cpu.State.Cycles);
 	}
 
 	[Fact]
