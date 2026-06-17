@@ -105,6 +105,9 @@ namespace CopperMod.Amiga
         private static readonly MethodInfo DivideV2RegisterMethod =
             typeof(M68kJitCore).GetMethod(nameof(DivideV2Register), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(DivideV2Register));
+        private static readonly MethodInfo GetMultiplyCoreCyclesMethod =
+            typeof(M68kJitCore).GetMethod(nameof(GetMultiplyCoreCycles), BindingFlags.Static | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetMultiplyCoreCycles));
         private static readonly MethodInfo ReadMemoryValueForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ReadMemoryValueForV2Batch),
@@ -5109,6 +5112,7 @@ namespace CopperMod.Amiga
             var source = il.DeclareLocal(typeof(uint));
             var destination = il.DeclareLocal(typeof(uint));
             var result = il.DeclareLocal(typeof(uint));
+            var cycles = il.DeclareLocal(typeof(int));
             EmitV2LoadSourceValue(il, context, instruction.Source, M68kOperandSize.Word);
             EmitLoadUIntConstant(il, 0xFFFF);
             il.Emit(OpCodes.And);
@@ -5134,7 +5138,13 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Stloc, result);
             context.EmitStoreDataRegister(instruction.Register, result, M68kOperandSize.Long);
             context.EmitSetPendingLogic(result, M68kOperandSize.Long);
-            context.EmitAddCycles(70);
+            il.Emit(OpCodes.Ldloc, source);
+            il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, GetMultiplyCoreCyclesMethod);
+            il.Emit(OpCodes.Ldc_I4, GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Stloc, cycles);
+            context.EmitAddCycles(cycles);
         }
 
         private static void EmitV2Divide(
@@ -7713,7 +7723,7 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private bool ExecuteCompiledMultiplyDivideValue(uint sourceValue, int register, bool signed, bool divide)
+        private bool ExecuteCompiledMultiplyDivideValue(uint sourceValue, int register, bool signed, bool divide, int sourceEaCycles)
         {
             if (!divide)
             {
@@ -7727,7 +7737,7 @@ namespace CopperMod.Amiga
                 }
 
                 SetLogicFlags(State.D[register], M68kOperandSize.Long);
-                AddCycles(70);
+                AddCycles(GetMultiplyCycles(sourceEaCycles, sourceValue, signed));
                 return true;
             }
 
@@ -7883,19 +7893,20 @@ namespace CopperMod.Amiga
 
         private void ExecuteMultiply(M68kDecodedEa source, int register, bool signed)
         {
+            uint sourceValue;
             if (signed)
             {
-                var sourceValue = unchecked((short)ReadEaValue(source, M68kOperandSize.Word));
-                State.D[register] = unchecked((uint)(unchecked((short)State.D[register]) * sourceValue));
+                sourceValue = ReadEaValue(source, M68kOperandSize.Word);
+                State.D[register] = unchecked((uint)(unchecked((short)State.D[register]) * unchecked((short)sourceValue)));
             }
             else
             {
-                var sourceValue = ReadEaValue(source, M68kOperandSize.Word) & 0xFFFF;
+                sourceValue = ReadEaValue(source, M68kOperandSize.Word) & 0xFFFF;
                 State.D[register] = (uint)((ushort)State.D[register] * (ushort)sourceValue);
             }
 
             SetLogicFlags(State.D[register], M68kOperandSize.Long);
-            AddCycles(70);
+            AddCycles(GetMultiplyCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), sourceValue, signed));
         }
 
         private void ExecuteDivide(M68kDecodedEa source, int register, bool signed)
@@ -9450,17 +9461,46 @@ namespace CopperMod.Amiga
             var cycles = size == M68kOperandSize.Long ? 12 : 8;
             if (destination.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister)
             {
-                cycles = Math.Max(cycles, 4 + GetEaOperandCycles(source, size));
+                cycles = Math.Max(cycles, 4 + GetEaOperandCyclesForTiming(source, size));
             }
 
             return cycles;
         }
 
-        private static int GetEaOperandCycles(M68kDecodedEa ea, M68kOperandSize size)
+        internal static int GetEaOperandCyclesForTiming(M68kDecodedEa ea, M68kOperandSize size)
         {
             return size == M68kOperandSize.Long
                 ? GetLongEaOperandCycles(ea)
                 : GetByteWordEaOperandCycles(ea);
+        }
+
+        internal static int GetMultiplyCycles(int sourceEaCycles, uint sourceValue, bool signed)
+            => sourceEaCycles + GetMultiplyCoreCycles(sourceValue, signed);
+
+        private static int GetMultiplyCoreCycles(uint sourceValue, bool signed)
+        {
+            sourceValue &= 0xFFFF;
+            return signed
+                ? 38 + (CountSignedMultiplyTransitions((ushort)sourceValue) * 2)
+                : 38 + (CountBits((int)sourceValue) * 2);
+        }
+
+        private static int CountSignedMultiplyTransitions(ushort sourceValue)
+        {
+            var transitions = 0;
+            var previous = 0;
+            for (var bitIndex = 0; bitIndex < 16; bitIndex++)
+            {
+                var bit = (sourceValue >> bitIndex) & 1;
+                if (bit != previous)
+                {
+                    transitions++;
+                }
+
+                previous = bit;
+            }
+
+            return transitions;
         }
 
         private static int GetByteWordEaOperandCycles(M68kDecodedEa ea)
@@ -10088,6 +10128,22 @@ namespace CopperMod.Amiga
                 var done = _il.DefineLabel();
                 _il.Emit(OpCodes.Ldloc, InstructionStartCycles);
                 _il.Emit(OpCodes.Ldc_I8, (long)cycles);
+                _il.Emit(OpCodes.Add);
+                _il.Emit(OpCodes.Stloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Bge, done);
+                _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Stloc, Cycles);
+                _il.MarkLabel(done);
+            }
+
+            public void EmitAddCycles(LocalBuilder cycles)
+            {
+                var done = _il.DefineLabel();
+                _il.Emit(OpCodes.Ldloc, InstructionStartCycles);
+                _il.Emit(OpCodes.Ldloc, cycles);
+                _il.Emit(OpCodes.Conv_I8);
                 _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, InstructionCycleFloor);
                 _il.Emit(OpCodes.Ldloc, Cycles);

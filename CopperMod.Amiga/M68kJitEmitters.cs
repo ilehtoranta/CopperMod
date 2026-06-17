@@ -86,7 +86,8 @@ namespace CopperMod.Amiga
             typeof(uint),
             typeof(int),
             typeof(bool),
-            typeof(bool));
+            typeof(bool),
+            typeof(int));
         private static readonly MethodInfo ReadMemoryValue = RequiredMethod(
             typeof(M68kJitCore),
             "ReadMemoryValue",
@@ -965,6 +966,7 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Ldc_I4, instruction.Register);
             il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
             il.Emit(divide ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Ldc_I4, M68kJitCore.GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
             il.Emit(OpCodes.Call, ExecuteMultiplyDivideValue);
         }
 

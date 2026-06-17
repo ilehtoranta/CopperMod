@@ -1526,23 +1526,25 @@ namespace CopperMod.Amiga
 
             if (line == 0xC && opmode == 3)
             {
-                var source = ResolveEa(mode, eaReg, M68kOperandSize.Word).Read();
+                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var source = sourceEa.Read();
                 State.D[reg] = (uint)((ushort)State.D[reg] * (ushort)source);
                 State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
-                AddCycles(70);
+                AddCycles(GetMultiplyCycles(sourceEa.EaCycles, source, signed: false));
                 return true;
             }
 
             if (line == 0xC && opmode == 7)
             {
-                var source = unchecked((short)ResolveEa(mode, eaReg, M68kOperandSize.Word).Read());
+                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var source = unchecked((short)sourceEa.Read());
                 State.D[reg] = (uint)(unchecked((short)State.D[reg]) * source);
                 State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
-                AddCycles(70);
+                AddCycles(GetMultiplyCycles(sourceEa.EaCycles, (ushort)source, signed: true));
                 return true;
             }
 
@@ -2627,6 +2629,35 @@ namespace CopperMod.Amiga
             }
 
             return baseCycles;
+        }
+
+        private static int GetMultiplyCycles(int sourceEaCycles, uint sourceValue, bool signed)
+            => sourceEaCycles + GetMultiplyCoreCycles(sourceValue, signed);
+
+        private static int GetMultiplyCoreCycles(uint sourceValue, bool signed)
+        {
+            sourceValue &= 0xFFFF;
+            return signed
+                ? 38 + (CountSignedMultiplyTransitions((ushort)sourceValue) * 2)
+                : 38 + (CountBits((int)sourceValue) * 2);
+        }
+
+        private static int CountSignedMultiplyTransitions(ushort sourceValue)
+        {
+            var transitions = 0;
+            var previous = 0;
+            for (var bitIndex = 0; bitIndex < 16; bitIndex++)
+            {
+                var bit = (sourceValue >> bitIndex) & 1;
+                if (bit != previous)
+                {
+                    transitions++;
+                }
+
+                previous = bit;
+            }
+
+            return transitions;
         }
 
         private static int CountBits(int value)

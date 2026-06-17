@@ -94,6 +94,63 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void MuluImmediateUsesSourceBitCountTiming()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0xC0, 0xFC, 0x55, 0x55); // MULU.W #$5555,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 3;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(58, cycles);
+		Assert.Equal(0x0000_FFFFu, cpu.State.D[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void MuluRegisterSourceUsesSourceBitCountTimingWithoutEaExtension()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0xC0, 0xC1); // MULU.W D1,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 3;
+		cpu.State.D[1] = 0x5555;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(54, cycles);
+		Assert.Equal(0x0000_FFFFu, cpu.State.D[0]);
+	}
+
+	[Fact]
+	public void MuluImmediateZeroSourceUsesMinimumTiming()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0xC0, 0xFC, 0x00, 0x00); // MULU.W #0,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0x1234;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(42, cycles);
+		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
 	public void WaitBlitPollingLoopUsesDocumentedCpuCadence()
 	{
 		var bus = new CycleCountingBus();
