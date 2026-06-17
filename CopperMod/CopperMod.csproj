@@ -17,7 +17,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
     <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
+    <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
   </ItemGroup>
 
   <ItemGroup>

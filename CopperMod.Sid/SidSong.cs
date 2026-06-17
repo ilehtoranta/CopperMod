@@ -9,7 +9,7 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController, IC64VideoFrameProvider, IC64KeyboardController
     {
         private readonly SidModule _module;
         private readonly C64Machine _machine;
@@ -220,6 +220,30 @@ namespace CopperMod.Sid
             }
 
             _machine.ScheduleAutostartKey(key, delay, hold);
+        }
+
+        public bool HasVideoFrameSource => _module.IsCartridge || _module.IsRsid;
+
+        public bool TryGetLatestVideoFrame(out C64VideoFrame frame)
+        {
+            if (!HasVideoFrameSource)
+            {
+                frame = new C64VideoFrame(1, 1, new[] { new Argb32(255, 0, 0, 0) }, 0, TimeSpan.Zero);
+                return false;
+            }
+
+            frame = _machine.RenderVideoFrame();
+            return true;
+        }
+
+        public void SetKeyPressed(C64Key key, bool pressed)
+        {
+            _machine.SetKeyPressed(key, pressed);
+        }
+
+        public void ReleaseAllKeys()
+        {
+            _machine.ReleaseAllKeys();
         }
 
         private static ModuleMetadata CreateMetadata(SidModule module)

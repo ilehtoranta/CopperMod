@@ -1,5 +1,6 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Sid;
 using NAudio.Wave;
 
 namespace CopperMod;
@@ -19,6 +20,8 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private readonly IAmigaHardwareStateProvider? _amigaHardwareStateProvider;
 	private readonly IModuleOutputFamilyProvider? _outputFamilyProvider;
 	private readonly IModuleChannelWaveformProvider? _channelWaveformProvider;
+	private readonly IC64VideoFrameProvider? _c64VideoFrameProvider;
+	private readonly IC64KeyboardController? _c64KeyboardController;
 	private readonly Thread _renderThread;
 	private readonly int _renderAheadTargetSamples;
 	private readonly int _renderAheadCapacitySamples;
@@ -27,8 +30,15 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private int _latestWaveformSampleCount;
 	private int _latestWaveformChannelCount;
 	private int _latestWaveformSampleRate;
+	private WaveformSnapshot? _latestChannelWaveformSnapshot;
 	private long _latestWaveformVersion;
 	private long _consumedWaveformVersion;
+	private long _latestChannelWaveformVersion;
+	private long _consumedChannelWaveformVersion;
+	private readonly object _videoSync = new();
+	private C64VideoFrame? _latestVideoFrame;
+	private long _latestVideoFrameVersion;
+	private long _consumedVideoFrameVersion;
 	private int _queuedSamples;
 	private int _leadInSamplesRemaining;
 	private int _generation;
@@ -58,6 +68,10 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		_amigaHardwareStateProvider = song as IAmigaHardwareStateProvider;
 		_outputFamilyProvider = song as IModuleOutputFamilyProvider;
 		_channelWaveformProvider = song as IModuleChannelWaveformProvider;
+		_c64VideoFrameProvider = song is IC64VideoFrameProvider { HasVideoFrameSource: true } videoFrameProvider
+			? videoFrameProvider
+			: null;
+		_c64KeyboardController = song as IC64KeyboardController;
 		UpdateChannelWaveformCaptureEnabled();
 
 		WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channelCount);
@@ -227,6 +241,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 		ResetBufferedState(TimeSpan.Zero, leadInSamples: 0);
 		ClearLatestWaveform();
+		ClearLatestVideoFrame();
 	}
 
 	public void Seek(TimeSpan position)
@@ -245,6 +260,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 		ResetBufferedState(position, leadInSamples: 0);
 		ClearLatestWaveform();
+		ClearLatestVideoFrame();
 	}
 
 	public void SelectSubSong(int index)
@@ -259,10 +275,12 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			selector.SelectSubSong(index);
 			_outputStage.Reset();
 			_c64OutputStage.Reset();
+			_c64KeyboardController?.ReleaseAllKeys();
 		}
 
 		ResetBufferedState(TimeSpan.Zero, leadInSamples: 0);
 		ClearLatestWaveform();
+		ClearLatestVideoFrame();
 	}
 
 	public int Read(float[] buffer, int offset, int count)
@@ -307,7 +325,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		}
 
 		Array.Clear(buffer, offset + samplesWritten, count - samplesWritten);
-		if (samplesWritten > 0 && IsWaveformEnabled())
+		if (samplesWritten > 0 && IsMixedWaveformEnabled())
 		{
 			StoreLatestWaveform(new ReadOnlySpan<float>(buffer, offset, samplesWritten));
 		}
@@ -327,6 +345,11 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 	public bool TryReadWaveformSnapshot(out WaveformSnapshot snapshot)
 	{
+		if (IsTrackerChannelWaveformEnabled() && TryCopyLatestChannelWaveform(out snapshot))
+		{
+			return true;
+		}
+
 		if (TryCopyLatestWaveform(out snapshot))
 		{
 			return true;
@@ -334,6 +357,38 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 		snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
 		return false;
+	}
+
+	public bool TryReadC64VideoFrame(out C64VideoFrame frame)
+	{
+		lock (_videoSync)
+		{
+			if (_latestVideoFrame == null || _latestVideoFrameVersion == _consumedVideoFrameVersion)
+			{
+				frame = new C64VideoFrame(1, 1, new[] { new Argb32(255, 0, 0, 0) }, 0, TimeSpan.Zero);
+				return false;
+			}
+
+			frame = _latestVideoFrame;
+			_consumedVideoFrameVersion = _latestVideoFrameVersion;
+			return true;
+		}
+	}
+
+	public void SetC64KeyPressed(C64Key key, bool pressed)
+	{
+		lock (_renderSync)
+		{
+			_c64KeyboardController?.SetKeyPressed(key, pressed);
+		}
+	}
+
+	public void ReleaseAllC64Keys()
+	{
+		lock (_renderSync)
+		{
+			_c64KeyboardController?.ReleaseAllKeys();
+		}
 	}
 
 	private bool TryCopyLatestWaveform(out WaveformSnapshot snapshot)
@@ -360,6 +415,23 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 		snapshot = WaveformSampler.CreateSnapshot(samples, channelCount, sampleRate);
 		return true;
+	}
+
+	private bool TryCopyLatestChannelWaveform(out WaveformSnapshot snapshot)
+	{
+		lock (_waveformSync)
+		{
+			if (_latestChannelWaveformVersion == _consumedChannelWaveformVersion ||
+				_latestChannelWaveformSnapshot == null)
+			{
+				snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, WaveFormat.SampleRate);
+				return false;
+			}
+
+			snapshot = _latestChannelWaveformSnapshot;
+			_consumedChannelWaveformVersion = _latestChannelWaveformVersion;
+			return true;
+		}
 	}
 
 	public void Dispose()
@@ -417,6 +489,15 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 				if (chunk.Remaining == 0)
 				{
 					_bufferedChunks.Dequeue();
+				}
+
+				if (!chunk.ChannelWaveformPublished &&
+					_waveformEnabled &&
+					_waveformDisplayMode == WaveformDisplayMode.TrackerChannels &&
+					chunk.ChannelWaveform != null)
+				{
+					StoreLatestChannelWaveform(chunk.ChannelWaveform);
+					chunk.ChannelWaveformPublished = true;
 				}
 			}
 
@@ -489,6 +570,11 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			var frames = _song.GetCurrentTickFrameCount(_renderOptions);
 			var samples = new float[_renderOptions.GetSampleCount(frames)];
 			var result = _song.RenderTick(samples, _renderOptions);
+			if (_c64VideoFrameProvider != null && _c64VideoFrameProvider.TryGetLatestVideoFrame(out var videoFrame))
+			{
+				StoreLatestVideoFrame(videoFrame);
+			}
+
 			var samplesWritten = Math.Min(result.SamplesWritten, samples.Length);
 			if (samplesWritten != samples.Length)
 			{
@@ -509,7 +595,10 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			}
 
 			reachedEnd = result.EndOfSong;
-			return new AudioChunk(samples);
+			var channelWaveform = IsTrackerChannelWaveformEnabled()
+				? _channelWaveformProvider?.LastChannelWaveform
+				: null;
+			return new AudioChunk(samples, channelWaveform);
 		}
 	}
 
@@ -545,11 +634,21 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		}
 	}
 
-	private bool IsWaveformEnabled()
+	private bool IsMixedWaveformEnabled()
 	{
 		lock (_bufferSync)
 		{
-			return _waveformEnabled;
+			return _waveformEnabled && _waveformDisplayMode == WaveformDisplayMode.MixedOutput;
+		}
+	}
+
+	private bool IsTrackerChannelWaveformEnabled()
+	{
+		lock (_bufferSync)
+		{
+			return _waveformEnabled &&
+				_waveformDisplayMode == WaveformDisplayMode.TrackerChannels &&
+				_channelWaveformProvider != null;
 		}
 	}
 
@@ -588,12 +687,33 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		}
 	}
 
+	private void StoreLatestVideoFrame(C64VideoFrame frame)
+	{
+		lock (_videoSync)
+		{
+			_latestVideoFrame = frame;
+			_latestVideoFrameVersion++;
+		}
+	}
+
+	private void ClearLatestVideoFrame()
+	{
+		lock (_videoSync)
+		{
+			_latestVideoFrame = null;
+			_latestVideoFrameVersion++;
+			_consumedVideoFrameVersion = _latestVideoFrameVersion;
+		}
+	}
+
 	private void ClearLatestWaveform()
 	{
 		lock (_waveformSync)
 		{
 			_latestWaveformSampleCount = 0;
+			_latestChannelWaveformSnapshot = null;
 			_latestWaveformVersion++;
+			_latestChannelWaveformVersion++;
 		}
 	}
 
@@ -601,7 +721,19 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	{
 		if (_channelWaveformProvider != null)
 		{
-			_channelWaveformProvider.ChannelWaveformCaptureEnabled = false;
+			_channelWaveformProvider.ChannelWaveformCaptureEnabled =
+				!_disposed &&
+				_waveformEnabled &&
+				_waveformDisplayMode == WaveformDisplayMode.TrackerChannels;
+		}
+	}
+
+	private void StoreLatestChannelWaveform(ModuleChannelWaveform channelWaveform)
+	{
+		lock (_waveformSync)
+		{
+			_latestChannelWaveformSnapshot = WaveformSampler.CreateSnapshot(channelWaveform);
+			_latestChannelWaveformVersion++;
 		}
 	}
 
@@ -641,12 +773,17 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 
 	private sealed class AudioChunk
 	{
-		public AudioChunk(float[] samples)
+		public AudioChunk(float[] samples, ModuleChannelWaveform? channelWaveform)
 		{
 			Samples = samples;
+			ChannelWaveform = channelWaveform;
 		}
 
 		public float[] Samples { get; }
+
+		public ModuleChannelWaveform? ChannelWaveform { get; }
+
+		public bool ChannelWaveformPublished { get; set; }
 
 		public int Offset { get; set; }
 

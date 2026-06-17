@@ -46,6 +46,9 @@ namespace CopperMod.Sid
         private bool _cpuInstructionActive;
         private int _vicBankBase;
         private readonly List<ScheduledAutostartKey> _autostartKeys = new List<ScheduledAutostartKey>();
+        private readonly HashSet<C64Key> _pressedKeys = new HashSet<C64Key>();
+        private readonly byte[] _videoVicRegisters = new byte[0x40];
+        private long _videoFrameNumber;
 
         public C64Machine(SidModule module, SidFilterProfileId filterProfile = SidFilterProfileId.Auto)
         {
@@ -92,6 +95,20 @@ namespace CopperMod.Sid
             _cia2NmiLine,
             _lastInterruptSource);
 
+        public C64VideoFrame RenderVideoFrame()
+        {
+            _vic.CopyRegisters(_videoVicRegisters);
+            var frame = C64DiagnosticVideoRenderer.Render(
+                _ram,
+                _colorRam,
+                _videoVicRegisters,
+                ReadVicMemory,
+                _vicBankBase,
+                _videoFrameNumber++,
+                SidIntegerMath.CyclesToTimeSpan(Cpu.Cycles, _clock.CpuCyclesPerSecond));
+            return frame;
+        }
+
         public void Reset(int subSongIndex)
         {
             Array.Clear(_ram);
@@ -115,6 +132,8 @@ namespace CopperMod.Sid
             Sid.Reset();
             _digimax.Reset();
             _easyFlash?.Reset();
+            _pressedKeys.Clear();
+            _videoFrameNumber = 0;
             if (_module.IsCartridge)
             {
                 Cpu.Reset(_easyFlash != null ? (ushort)0x8000 : ReadResetVector());
@@ -925,7 +944,10 @@ namespace CopperMod.Sid
 
             if (address >= 0xDC00 && address <= 0xDCFF)
             {
-                var value = _cia1.Read((byte)address, portBInputMask: GetKeyboardPortBInput(readCycle));
+                var value = _cia1.Read(
+                    (byte)address,
+                    portAInputMask: GetKeyboardPortAInput(readCycle),
+                    portBInputMask: GetKeyboardPortBInput(readCycle));
                 RefreshInterruptLines();
                 return value;
             }
@@ -1014,8 +1036,25 @@ namespace CopperMod.Sid
             var clampedHold = hold <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : hold;
             var start = SidIntegerMath.TimeSpanToCycles(clampedDelay, _clock.CpuCyclesPerSecond);
             var length = Math.Max(1, SidIntegerMath.TimeSpanToCycles(clampedHold, _clock.CpuCyclesPerSecond));
-            var keyPosition = GetAutostartKeyPosition(key);
-            _autostartKeys.Add(new ScheduledAutostartKey(start, start + length, keyPosition.PortAColumnMask, keyPosition.PortBRowMask));
+            var keyPosition = C64KeyboardMatrix.GetPosition(ParseAutostartKey(key));
+            _autostartKeys.Add(new ScheduledAutostartKey(start, start + length, keyPosition.ColumnMask, keyPosition.RowMask));
+        }
+
+        internal void SetKeyPressed(C64Key key, bool pressed)
+        {
+            if (pressed)
+            {
+                _pressedKeys.Add(key);
+            }
+            else
+            {
+                _pressedKeys.Remove(key);
+            }
+        }
+
+        internal void ReleaseAllKeys()
+        {
+            _pressedKeys.Clear();
         }
 
         private ushort ReadResetVector()
@@ -1029,6 +1068,33 @@ namespace CopperMod.Sid
         private float MixDigitalOutputs(float sidSample)
         {
             return Math.Clamp(sidSample + _digimax.RenderSample(), -0.999f, 0.999f);
+        }
+
+        [HotPath]
+        private byte GetKeyboardPortAInput(long cycle)
+        {
+            var mask = (byte)0xFF;
+            var selectedRows = unchecked((byte)~_cia1.EffectivePortB);
+            foreach (var key in _autostartKeys)
+            {
+                if (cycle >= key.StartCycle &&
+                    cycle < key.EndCycle &&
+                    (selectedRows & key.PortBRowMask) != 0)
+                {
+                    mask = unchecked((byte)(mask & ~key.PortAColumnMask));
+                }
+            }
+
+            foreach (var key in _pressedKeys)
+            {
+                var position = C64KeyboardMatrix.GetPosition(key);
+                if ((selectedRows & position.RowMask) != 0)
+                {
+                    mask = unchecked((byte)(mask & ~position.ColumnMask));
+                }
+            }
+
+            return mask;
         }
 
         [HotPath]
@@ -1046,19 +1112,28 @@ namespace CopperMod.Sid
                 }
             }
 
+            foreach (var key in _pressedKeys)
+            {
+                var position = C64KeyboardMatrix.GetPosition(key);
+                if ((selectedColumns & position.ColumnMask) != 0)
+                {
+                    mask = unchecked((byte)(mask & ~position.RowMask));
+                }
+            }
+
             return mask;
         }
 
-        private static AutostartKeyPosition GetAutostartKeyPosition(string key)
+        private static C64Key ParseAutostartKey(string key)
         {
             if (string.Equals(key, "f3", StringComparison.OrdinalIgnoreCase))
             {
-                return new AutostartKeyPosition(portAColumnMask: 1 << 0, portBRowMask: 1 << 5);
+                return C64Key.F3;
             }
 
             if (string.Equals(key, "space", StringComparison.OrdinalIgnoreCase))
             {
-                return new AutostartKeyPosition(portAColumnMask: 1 << 7, portBRowMask: 1 << 4);
+                return C64Key.Space;
             }
 
             throw new ArgumentException("Unsupported C64 autostart key: " + key, nameof(key));
@@ -1077,19 +1152,6 @@ namespace CopperMod.Sid
             public long StartCycle { get; }
 
             public long EndCycle { get; }
-
-            public byte PortAColumnMask { get; }
-
-            public byte PortBRowMask { get; }
-        }
-
-        private readonly struct AutostartKeyPosition
-        {
-            public AutostartKeyPosition(int portAColumnMask, int portBRowMask)
-            {
-                PortAColumnMask = (byte)portAColumnMask;
-                PortBRowMask = (byte)portBRowMask;
-            }
 
             public byte PortAColumnMask { get; }
 

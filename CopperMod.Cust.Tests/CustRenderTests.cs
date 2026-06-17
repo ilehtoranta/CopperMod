@@ -69,6 +69,24 @@ public sealed class CustRenderTests
 	}
 
 	[Fact]
+	public void DeliTrackerTagConstantsMatchDeveloperInclude()
+	{
+		Assert.Equal(0x8000_4455u, CustConstants.DtpCustomPlayer);
+		Assert.Equal(0x8000_4456u, CustConstants.DtpRequestDtVersion);
+		Assert.Equal(0x8000_4458u, CustConstants.DtpPlayerVersion);
+		Assert.Equal(0x8000_445Eu, CustConstants.DtpInterrupt);
+		Assert.Equal(0x8000_4467u, CustConstants.DtpStartInt);
+		Assert.Equal(0x8000_4468u, CustConstants.DtpStopInt);
+		Assert.Equal(0x8000_4469u, CustConstants.DtpVolume);
+		Assert.Equal(0x8000_446Au, CustConstants.DtpBalance);
+		Assert.Equal(0x8000_4474u, CustConstants.DtpFlags);
+		Assert.Equal(0x38, CustConstants.DtgGetListDataOffset);
+		Assert.Equal(0x4C, CustConstants.DtgAudioAllocOffset);
+		Assert.Equal(0x5C, CustConstants.DtgSongEndOffset);
+		Assert.Equal(0x68, CustConstants.DtgWaitAudioDmaOffset);
+	}
+
+	[Fact]
 	public void ChannelWaveformCaptureExposesFourPaulaChannels()
 	{
 		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "AlteredBeast.CUST")));
@@ -193,6 +211,65 @@ public sealed class CustRenderTests
 	}
 
 	[Fact]
+	public void BionicCommandoFixtureRendersAudio()
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "BionicCommando.CUS")));
+		var result = RenderForTicks(song, 24);
+
+		Assert.True(result.Finite, "Bionic Commando produced non-finite PCM. Diagnostics: " + FormatDiagnostics(song.Diagnostics));
+		Assert.True(result.Peak > 0.0001f, "Bionic Commando stayed silent. Diagnostics: " + FormatDiagnostics(song.Diagnostics) + " writes=" + SummarizeWrites(song.CustomRegisterWrites));
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
+	}
+
+	[Theory]
+	[InlineData("BionicCommando.CUS")]
+	[InlineData("Batman_The_Movie-Lvl_5.CUST")]
+	public void ReportedCustFixturesRenderMultiplePaulaChannels(string fileName)
+	{
+		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", fileName)));
+		var provider = (IModuleChannelWaveformProvider)song;
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+		var activeChannels = new bool[4];
+		var leftPeak = 0.0f;
+		var rightPeak = 0.0f;
+
+		provider.ChannelWaveformCaptureEnabled = true;
+		for (var tick = 0; tick < 200; tick++)
+		{
+			var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+			song.RenderTick(buffer, options);
+			for (var frame = 0; frame < buffer.Length / 2; frame++)
+			{
+				leftPeak = Math.Max(leftPeak, Math.Abs(buffer[frame * 2]));
+				rightPeak = Math.Max(rightPeak, Math.Abs(buffer[(frame * 2) + 1]));
+			}
+
+			var waveform = provider.LastChannelWaveform;
+			if (waveform == null)
+			{
+				continue;
+			}
+
+			foreach (var channel in waveform.Channels)
+			{
+				if ((uint)channel.ChannelIndex < activeChannels.Length && channel.IsActive)
+				{
+					activeChannels[channel.ChannelIndex] = true;
+				}
+			}
+		}
+
+		Assert.True(activeChannels.Count(active => active) >= 3, $"{fileName} produced too few active Paula channels: {string.Join(",", activeChannels.Select(active => active ? "1" : "0"))}. Diagnostics: {FormatDiagnostics(song.Diagnostics)}");
+		Assert.True(leftPeak > 0.0001f, $"{fileName} left Paula output stayed silent. Diagnostics: {FormatDiagnostics(song.Diagnostics)}");
+		Assert.True(rightPeak > 0.0001f, $"{fileName} right Paula output stayed silent. Diagnostics: {FormatDiagnostics(song.Diagnostics)}");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
+	}
+
+	[Fact]
 	public void CiaTimerPlaybackIsDeterministicAcrossReset()
 	{
 		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "CUST.Imploder4")));
@@ -288,7 +365,7 @@ public sealed class CustRenderTests
 	private static byte[] CreateLoopingInitPlayerHunk()
 	{
 		var bytes = new byte[0x30];
-		WriteLong(bytes, 0x00, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x00, CustConstants.DtpCustomPlayer);
 		WriteLong(bytes, 0x04, 1);
 		WriteLong(bytes, 0x08, CustConstants.DtpInitPlayer);
 		WriteLong(bytes, 0x0C, CustConstants.DefaultModuleBaseAddress + 0x28);
@@ -308,7 +385,7 @@ public sealed class CustRenderTests
 	private static byte[] CreateNoInterruptFallbackHunk()
 	{
 		var bytes = new byte[0x2400];
-		WriteLong(bytes, 0x00, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x00, CustConstants.DtpCustomPlayer);
 		WriteLong(bytes, 0x04, 1);
 		WriteLong(bytes, 0x08, CustConstants.DtpFlags);
 		WriteLong(bytes, 0x0C, 1);

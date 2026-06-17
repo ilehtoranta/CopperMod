@@ -95,6 +95,23 @@ internal static class CopperModTools
 
 			sidVoiceMuteController.MutedVoicesMask = 0x07 & ~(1 << (options.SidSoloVoice.Value - 1));
 		}
+
+		if (options.C64AutostartKeys.Count > 0)
+		{
+			if (song is not IC64AutostartController c64AutostartController)
+			{
+				throw new CommandLineException("The loaded module does not support C64 autostart keys.");
+			}
+
+			var delay = TimeSpan.FromSeconds(options.C64AutostartDelaySeconds);
+			var hold = TimeSpan.FromSeconds(options.C64AutostartHoldSeconds);
+			var gap = TimeSpan.FromSeconds(options.C64AutostartGapSeconds);
+			foreach (var key in options.C64AutostartKeys)
+			{
+				c64AutostartController.ScheduleAutostartKey(key, delay, hold);
+				delay += hold + gap;
+			}
+		}
 	}
 
 	internal static TimeSpan? ResolveFixedDuration(IModuleSong song, RenderCommandOptions options, TextWriter? output = null)

@@ -19,6 +19,10 @@ internal static class Usage
 		  --output raw|player        Default: raw.
 		  --amiga-profile clean|a500|led
 		  --c64-profile clean|c64
+		  --c64-autostart-key f3[,space] Schedule C64 cartridge startup keys.
+		  --c64-autostart-delay-seconds <n> Default: 1.
+		  --c64-autostart-hold-seconds <n> Default: 0.25.
+		  --c64-autostart-gap-seconds <n> Default: 0.75.
 		  --mp3-bitrate <kbps>       Default: 192.
 		  --bitmap-width <pixels>    Default: 1024. BMP output only.
 		  --bitmap-height <pixels>   Default: 256. BMP output only.

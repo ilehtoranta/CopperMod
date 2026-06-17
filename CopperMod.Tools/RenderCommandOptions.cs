@@ -24,6 +24,11 @@ internal sealed class RenderCommandOptions
 		int mp3BitrateKbps,
 		int bitmapWidth,
 		int bitmapHeight,
+		string? c64AutostartKey,
+		IReadOnlyList<string> c64AutostartKeys,
+		double c64AutostartDelaySeconds,
+		double c64AutostartHoldSeconds,
+		double c64AutostartGapSeconds,
 		bool overwrite)
 	{
 		InputPath = inputPath;
@@ -43,6 +48,11 @@ internal sealed class RenderCommandOptions
 		Mp3BitrateKbps = mp3BitrateKbps;
 		BitmapWidth = bitmapWidth;
 		BitmapHeight = bitmapHeight;
+		C64AutostartKey = c64AutostartKey;
+		C64AutostartKeys = c64AutostartKeys;
+		C64AutostartDelaySeconds = c64AutostartDelaySeconds;
+		C64AutostartHoldSeconds = c64AutostartHoldSeconds;
+		C64AutostartGapSeconds = c64AutostartGapSeconds;
 		Overwrite = overwrite;
 	}
 
@@ -79,6 +89,16 @@ internal sealed class RenderCommandOptions
 	public int BitmapWidth { get; }
 
 	public int BitmapHeight { get; }
+
+	public string? C64AutostartKey { get; }
+
+	public IReadOnlyList<string> C64AutostartKeys { get; }
+
+	public double C64AutostartDelaySeconds { get; }
+
+	public double C64AutostartHoldSeconds { get; }
+
+	public double C64AutostartGapSeconds { get; }
 
 	public bool Overwrite { get; }
 
@@ -126,6 +146,11 @@ internal sealed class RenderCommandOptions
 		var mp3Bitrate = 192;
 		var bitmapWidth = WaveformBitmapRenderer.DefaultWidth;
 		var bitmapHeight = WaveformBitmapRenderer.DefaultHeight;
+		string? c64AutostartKey = null;
+		IReadOnlyList<string> c64AutostartKeys = Array.Empty<string>();
+		var c64AutostartDelaySeconds = 1.0;
+		var c64AutostartHoldSeconds = 0.25;
+		var c64AutostartGapSeconds = 0.75;
 		var overwrite = false;
 		var amigaProfileSpecified = false;
 		var c64ProfileSpecified = false;
@@ -207,6 +232,19 @@ internal sealed class RenderCommandOptions
 					bitmapHeight = ParseBitmapDimension(RequireValue(args, ref i, arg), arg, WaveformBitmapRenderer.MinimumHeight, WaveformBitmapRenderer.MaximumHeight);
 					bitmapSizeSpecified = true;
 					break;
+				case "--c64-autostart-key":
+					c64AutostartKeys = ParseC64AutostartKeys(RequireValue(args, ref i, arg));
+					c64AutostartKey = string.Join(",", c64AutostartKeys);
+					break;
+				case "--c64-autostart-delay-seconds":
+					c64AutostartDelaySeconds = ParseNonNegativeDouble(RequireValue(args, ref i, arg), arg);
+					break;
+				case "--c64-autostart-hold-seconds":
+					c64AutostartHoldSeconds = ParsePositiveDouble(RequireValue(args, ref i, arg), arg);
+					break;
+				case "--c64-autostart-gap-seconds":
+					c64AutostartGapSeconds = ParseNonNegativeDouble(RequireValue(args, ref i, arg), arg);
+					break;
 				case "--overwrite":
 					overwrite = true;
 					break;
@@ -272,6 +310,11 @@ internal sealed class RenderCommandOptions
 			mp3Bitrate,
 			bitmapWidth,
 			bitmapHeight,
+			c64AutostartKey,
+			c64AutostartKeys,
+			c64AutostartDelaySeconds,
+			c64AutostartHoldSeconds,
+			c64AutostartGapSeconds,
 			overwrite);
 	}
 
@@ -366,6 +409,38 @@ internal sealed class RenderCommandOptions
 		}
 
 		return result;
+	}
+
+	private static double ParseNonNegativeDouble(string value, string option)
+	{
+		if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) || result < 0)
+		{
+			throw new CommandLineException(option + " must be a non-negative number.");
+		}
+
+		return result;
+	}
+
+	private static IReadOnlyList<string> ParseC64AutostartKeys(string value)
+	{
+		var keys = value
+			.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+			.Select(key => key.ToLowerInvariant())
+			.ToArray();
+		if (keys.Length == 0)
+		{
+			throw new CommandLineException("--c64-autostart-key requires at least one key.");
+		}
+
+		foreach (var key in keys)
+		{
+			if (key != "f3" && key != "space")
+			{
+				throw new CommandLineException("--c64-autostart-key currently supports f3 and space.");
+			}
+		}
+
+		return keys;
 	}
 
 	private static int ParseBitmapDimension(string value, string option, int minimum, int maximum)

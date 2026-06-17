@@ -1,6 +1,8 @@
 using CopperMod.Abstractions;
+using CopperMod.Sid;
 using NAudio.Wave;
 using Terminal.Gui.App;
+using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -50,11 +52,16 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private int _waveformImageHeight;
 	private string? _lastErrorText;
 	private volatile bool _waveformNeedsRender;
+	private readonly PlayerStartupOptions _startupOptions;
+	private readonly Dictionary<C64Key, DateTimeOffset> _syntheticKeyReleases = new();
+	private PlayerDisplayMode _displayMode = PlayerDisplayMode.Auto;
+	private long _lastVideoFrameNumber = -1;
 
-	public PlayerWindow(IApplication application, string? initialPath, bool autoPlay)
+	public PlayerWindow(IApplication application, PlayerStartupOptions startupOptions, bool autoPlay)
 	{
 		_application = application ?? throw new ArgumentNullException(nameof(application));
-		_initialPath = initialPath;
+		_startupOptions = startupOptions ?? throw new ArgumentNullException(nameof(startupOptions));
+		_initialPath = startupOptions.InitialPath;
 		_autoPlay = autoPlay;
 
 		Title = "CopperMod";
@@ -66,7 +73,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			X = 1,
 			Y = 1,
 			Width = Dim.Fill(14),
-			Text = initialPath ?? string.Empty
+			Text = _initialPath ?? string.Empty
 		};
 
 		var loadButton = new Button
@@ -244,7 +251,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 		{
 			_application.AddTimeout(WaveformRefreshInterval, () =>
 			{
-				RefreshWaveform();
+				ReleaseExpiredSyntheticC64Keys();
+				RefreshDisplayImage();
 				return true;
 			});
 		}
@@ -271,7 +279,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			X = 1,
 			Y = WaveformLabelRow,
 			Width = Dim.Fill(2),
-			Text = "Waveform"
+			Text = "Display"
 		};
 
 		_waveformView = new ImageView
@@ -283,7 +291,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			UseSixel = true,
 			SixelEncoder = WaveformSixelEncoder.Create()
 		};
-		_waveformView.Image = WaveformImageRenderer.Render(EmptyWaveform);
+		_waveformView.Image = C64VideoImageRenderer.Render(null);
 
 		Add(_waveformLabel, _waveformView);
 		SetNeedsDraw();
@@ -291,8 +299,29 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	public new void Dispose()
 	{
+		_player.ReleaseAllC64Keys();
 		_player.Dispose();
 		base.Dispose();
+	}
+
+	protected override bool OnKeyDown(Key key)
+	{
+		if (TryHandleC64Key(key, pressed: true, synthesizeRelease: true))
+		{
+			return true;
+		}
+
+		return base.OnKeyDown(key);
+	}
+
+	protected override bool OnKeyUp(Key key)
+	{
+		if (TryHandleC64Key(key, pressed: false, synthesizeRelease: false))
+		{
+			return true;
+		}
+
+		return base.OnKeyUp(key);
 	}
 
 	private void LoadFromField(bool autoPlay)
@@ -338,7 +367,9 @@ internal sealed class PlayerWindow : Window, IDisposable
 			_waveformView.Image = WaveformImageRenderer.Render(EmptyWaveform);
 		}
 
-		_player.Load(path);
+		_player.Load(path, _startupOptions);
+		_displayMode = _player.HasC64Video ? PlayerDisplayMode.C64Video : PlayerDisplayMode.Waveform;
+		_lastVideoFrameNumber = -1;
 		_pathField.Text = _player.FilePath ?? Path.GetFullPath(path);
 		if (autoPlay)
 		{
@@ -420,16 +451,31 @@ internal sealed class PlayerWindow : Window, IDisposable
 	{
 		RunPlayerAction(() =>
 		{
-			_player.WaveformDisplayMode = _player.WaveformDisplayMode switch
+			if (_player.HasC64Video)
 			{
-				WaveformDisplayMode.MixedOutput => WaveformDisplayMode.TrackerChannels,
-				_ => WaveformDisplayMode.MixedOutput
-			};
+				_displayMode = ResolveDisplayMode() == PlayerDisplayMode.C64Video
+					? PlayerDisplayMode.Waveform
+					: PlayerDisplayMode.C64Video;
+				_lastVideoFrameNumber = -1;
+			}
+			else
+			{
+				_player.WaveformDisplayMode = _player.WaveformDisplayMode switch
+				{
+					WaveformDisplayMode.MixedOutput => WaveformDisplayMode.TrackerChannels,
+					_ => WaveformDisplayMode.MixedOutput
+				};
+			}
+
+			_waveformImageWidth = 0;
+			_waveformImageHeight = 0;
 			ClearWaveforms();
 			_displayWaveform = null;
 			if (_waveformView != null)
 			{
-				_waveformView.Image = WaveformImageRenderer.Render(EmptyWaveform);
+				_waveformView.Image = ResolveDisplayMode() == PlayerDisplayMode.C64Video
+					? C64VideoImageRenderer.Render(null)
+					: WaveformImageRenderer.Render(EmptyWaveform);
 			}
 		});
 	}
@@ -447,6 +493,247 @@ internal sealed class PlayerWindow : Window, IDisposable
 			_stateLabel.Text = "Error: " + ex.Message;
 			MessageBox.ErrorQuery(_application, "Error", ex.Message, "OK");
 		}
+	}
+
+	private bool TryHandleC64Key(Key hostKey, bool pressed, bool synthesizeRelease)
+	{
+		if (!_player.HasC64Video || _pathField.HasFocus || !TryMapC64Key(hostKey, out var c64Key, out var shifted))
+		{
+			return false;
+		}
+
+		if (shifted.HasValue)
+		{
+			SetC64KeyState(shifted.Value, pressed, synthesizeRelease);
+		}
+
+		SetC64KeyState(c64Key, pressed, synthesizeRelease);
+		return true;
+	}
+
+	private void SetC64KeyState(C64Key key, bool pressed, bool synthesizeRelease)
+	{
+		_player.SetC64KeyPressed(key, pressed);
+		if (!pressed)
+		{
+			_syntheticKeyReleases.Remove(key);
+			return;
+		}
+
+		if (synthesizeRelease)
+		{
+			_syntheticKeyReleases[key] = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(120);
+		}
+	}
+
+	private void ReleaseExpiredSyntheticC64Keys()
+	{
+		if (_syntheticKeyReleases.Count == 0)
+		{
+			return;
+		}
+
+		var now = DateTimeOffset.UtcNow;
+		foreach (var key in _syntheticKeyReleases.Where(pair => pair.Value <= now).Select(pair => pair.Key).ToArray())
+		{
+			_syntheticKeyReleases.Remove(key);
+			_player.SetC64KeyPressed(key, pressed: false);
+		}
+	}
+
+	private static bool TryMapC64Key(Key hostKey, out C64Key c64Key, out C64Key? shifted)
+	{
+		shifted = null;
+		if (hostKey == Key.F1)
+		{
+			c64Key = C64Key.F1;
+			return true;
+		}
+
+		if (hostKey == Key.F2)
+		{
+			c64Key = C64Key.F1;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.F3)
+		{
+			c64Key = C64Key.F3;
+			return true;
+		}
+
+		if (hostKey == Key.F4)
+		{
+			c64Key = C64Key.F3;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.F5)
+		{
+			c64Key = C64Key.F5;
+			return true;
+		}
+
+		if (hostKey == Key.F6)
+		{
+			c64Key = C64Key.F5;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.F7)
+		{
+			c64Key = C64Key.F7;
+			return true;
+		}
+
+		if (hostKey == Key.F8)
+		{
+			c64Key = C64Key.F7;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.CursorRight)
+		{
+			c64Key = C64Key.CursorRight;
+			return true;
+		}
+
+		if (hostKey == Key.CursorLeft)
+		{
+			c64Key = C64Key.CursorRight;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.CursorDown)
+		{
+			c64Key = C64Key.CursorDown;
+			return true;
+		}
+
+		if (hostKey == Key.CursorUp)
+		{
+			c64Key = C64Key.CursorDown;
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		if (hostKey == Key.Enter)
+		{
+			c64Key = C64Key.Return;
+			return true;
+		}
+
+		if (hostKey == Key.Delete || hostKey == Key.DeleteChar || hostKey == Key.Backspace)
+		{
+			c64Key = C64Key.Delete;
+			return true;
+		}
+
+		if (hostKey == Key.Home)
+		{
+			c64Key = C64Key.Home;
+			return true;
+		}
+
+		if (hostKey == Key.Esc)
+		{
+			c64Key = C64Key.RunStop;
+			return true;
+		}
+
+		var grapheme = hostKey.AsGrapheme;
+		if (!string.IsNullOrEmpty(grapheme))
+		{
+			return TryMapC64Character(grapheme[0], out c64Key, out shifted);
+		}
+
+		c64Key = default;
+		return false;
+	}
+
+	private static bool TryMapC64Character(char ch, out C64Key c64Key, out C64Key? shifted)
+	{
+		shifted = null;
+		if (ch >= 'a' && ch <= 'z')
+		{
+			c64Key = (C64Key)Enum.Parse(typeof(C64Key), char.ToUpperInvariant(ch).ToString());
+			return true;
+		}
+
+		if (ch >= 'A' && ch <= 'Z')
+		{
+			c64Key = (C64Key)Enum.Parse(typeof(C64Key), ch.ToString());
+			shifted = C64Key.LeftShift;
+			return true;
+		}
+
+		c64Key = ch switch
+		{
+			'0' => C64Key.Zero,
+			'1' => C64Key.One,
+			'2' => C64Key.Two,
+			'3' => C64Key.Three,
+			'4' => C64Key.Four,
+			'5' => C64Key.Five,
+			'6' => C64Key.Six,
+			'7' => C64Key.Seven,
+			'8' => C64Key.Eight,
+			'9' => C64Key.Nine,
+			' ' => C64Key.Space,
+			'\r' or '\n' => C64Key.Return,
+			'+' => C64Key.Plus,
+			'-' => C64Key.Minus,
+			'.' => C64Key.Period,
+			':' => C64Key.Colon,
+			'@' => C64Key.At,
+			',' => C64Key.Comma,
+			'*' => C64Key.Asterisk,
+			';' => C64Key.Semicolon,
+			'=' => C64Key.Equals,
+			'/' => C64Key.Slash,
+			_ => default
+		};
+
+		if (!EqualityComparer<C64Key>.Default.Equals(c64Key, default) || ch == '0')
+		{
+			return true;
+		}
+
+		return TryMapShiftedC64Character(ch, out c64Key, out shifted);
+	}
+
+	private static bool TryMapShiftedC64Character(char ch, out C64Key c64Key, out C64Key? shifted)
+	{
+		shifted = C64Key.LeftShift;
+		c64Key = ch switch
+		{
+			'!' => C64Key.One,
+			'"' => C64Key.Two,
+			'#' => C64Key.Three,
+			'$' => C64Key.Four,
+			'%' => C64Key.Five,
+			'&' => C64Key.Six,
+			'\'' => C64Key.Seven,
+			'(' => C64Key.Eight,
+			')' => C64Key.Nine,
+			'<' => C64Key.Comma,
+			'>' => C64Key.Period,
+			'?' => C64Key.Slash,
+			_ => default
+		};
+
+		if (!EqualityComparer<C64Key>.Default.Equals(c64Key, default))
+		{
+			return true;
+		}
+
+		shifted = null;
+		return false;
 	}
 
 	private void RefreshView()
@@ -479,7 +766,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 			: FormatOutputProfile(_player.OutputProfile);
 		if (WaveformUiEnabled)
 		{
-			_waveformModeButton.Text = FormatWaveformDisplayModeButton(_player.WaveformDisplayMode);
+			_waveformModeButton.Text = FormatDisplayModeButton(ResolveDisplayMode(), _player.WaveformDisplayMode);
+			if (_waveformLabel != null)
+			{
+				_waveformLabel.Text = ResolveDisplayMode() == PlayerDisplayMode.C64Video ? "C64 video" : "Waveform";
+			}
 		}
 
 		var position = _player.Position.Time;
@@ -491,10 +782,67 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 		if (WaveformUiEnabled)
 		{
-			RefreshWaveform();
+			RefreshDisplayImage();
 		}
 
 		SetNeedsDraw();
+	}
+
+	private PlayerDisplayMode ResolveDisplayMode()
+	{
+		if (_displayMode == PlayerDisplayMode.Auto)
+		{
+			return _player.HasC64Video ? PlayerDisplayMode.C64Video : PlayerDisplayMode.Waveform;
+		}
+
+		if (_displayMode == PlayerDisplayMode.C64Video && !_player.HasC64Video)
+		{
+			return PlayerDisplayMode.Waveform;
+		}
+
+		return _displayMode;
+	}
+
+	private void RefreshDisplayImage()
+	{
+		if (ResolveDisplayMode() == PlayerDisplayMode.C64Video)
+		{
+			RefreshC64Video();
+			return;
+		}
+
+		RefreshWaveform();
+	}
+
+	private void RefreshC64Video()
+	{
+		if (_waveformView == null)
+		{
+			return;
+		}
+
+		if (!_player.TryReadC64VideoFrame(out var frame))
+		{
+			if (_lastVideoFrameNumber >= 0)
+			{
+				_lastVideoFrameNumber = -1;
+				_waveformView.Image = C64VideoImageRenderer.Render(null);
+				_waveformView.SetNeedsDraw();
+			}
+
+			return;
+		}
+
+		if (frame.FrameNumber == _lastVideoFrameNumber)
+		{
+			return;
+		}
+
+		_lastVideoFrameNumber = frame.FrameNumber;
+		_waveformView.Image = C64VideoImageRenderer.Render(frame);
+		_waveformImageWidth = frame.Width;
+		_waveformImageHeight = frame.Height;
+		_waveformView.SetNeedsDraw();
 	}
 
 	private void RefreshWaveform()
@@ -664,7 +1012,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 		if (WaveformUiEnabled)
 		{
-			lines.Insert(lines.Count - 2, "Scope: " + FormatWaveformDisplayMode(_player.WaveformDisplayMode));
+			lines.Insert(lines.Count - 2, "Display: " + FormatDisplayMode(ResolveDisplayMode(), _player.WaveformDisplayMode));
 		}
 
 		if (!string.IsNullOrWhiteSpace(_lastErrorText))
@@ -721,9 +1069,23 @@ internal sealed class PlayerWindow : Window, IDisposable
 		return mode == WaveformDisplayMode.TrackerChannels ? "Ch" : "Mix";
 	}
 
+	private static string FormatDisplayModeButton(PlayerDisplayMode displayMode, WaveformDisplayMode waveformMode)
+	{
+		return displayMode == PlayerDisplayMode.C64Video
+			? "C64"
+			: FormatWaveformDisplayModeButton(waveformMode);
+	}
+
 	private static string FormatWaveformDisplayMode(WaveformDisplayMode mode)
 	{
 		return mode == WaveformDisplayMode.TrackerChannels ? "channels" : "mixed output";
+	}
+
+	private static string FormatDisplayMode(PlayerDisplayMode displayMode, WaveformDisplayMode waveformMode)
+	{
+		return displayMode == PlayerDisplayMode.C64Video
+			? "C64 video"
+			: FormatWaveformDisplayMode(waveformMode);
 	}
 
 	private readonly struct PendingWaveformSnapshot

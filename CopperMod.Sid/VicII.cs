@@ -1,3 +1,5 @@
+using System;
+
 namespace CopperMod.Sid
 {
     [HotPath]
@@ -168,6 +170,20 @@ namespace CopperMod.Sid
                 0x1A => _irqMask,
                 _ => _registers[register & 0x3F]
             };
+        }
+
+        public void CopyRegisters(Span<byte> destination)
+        {
+            if (destination.Length < _registers.Length)
+            {
+                throw new ArgumentException("Destination is too small for VIC-II registers.", nameof(destination));
+            }
+
+            _registers.CopyTo(destination);
+            destination[0x11] = (byte)((_registers[0x11] & 0x7F) | ((_rasterLine & 0x100) >> 1));
+            destination[0x12] = (byte)_rasterLine;
+            destination[0x19] = (byte)(_irqFlags | 0x70 | (InterruptLineAsserted ? 0x80 : 0x00));
+            destination[0x1A] = _irqMask;
         }
 
         public void Write(byte register, byte value)

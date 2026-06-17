@@ -78,6 +78,8 @@ namespace CopperMod.Sid
 
         public byte EffectivePortA => ReadPort(_portA, _ddrA);
 
+        public byte EffectivePortB => ReadPort(ReadPortBOutput(), _ddrB);
+
         public ushort TimerALatch => _timerALatch;
 
         public void Reset(

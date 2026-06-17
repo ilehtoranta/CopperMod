@@ -169,25 +169,28 @@ public sealed class ModuleSampleProviderTests
 	}
 
 	[Fact]
-	public void ReadKeepsRealtimeWaveformMixedWhenTrackerChannelsConfigured()
+	public void ReadPublishesTrackerChannelsWhenTrackerChannelsConfigured()
 	{
 		var song = new ChannelWaveformSong(framesPerTick: 4);
-		using var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None)
-		{
-			WaveformEnabled = true,
-			WaveformDisplayMode = WaveformDisplayMode.TrackerChannels
-		};
+		using var provider = new ModuleSampleProvider(song, sampleRate: 44100, channelCount: 1, AmigaOutputProfile.None);
+		provider.WaveformEnabled = true;
+		provider.WaveformDisplayMode = WaveformDisplayMode.TrackerChannels;
+		provider.Reset();
 		var buffer = new float[4];
 
 		WaitForBufferedAudio(provider);
 		var samplesRead = provider.Read(buffer, 0, buffer.Length);
 
 		Assert.Equal(4, samplesRead);
-		Assert.False(song.ChannelWaveformCaptureEnabled);
+		Assert.True(song.ChannelWaveformCaptureEnabled);
 		Assert.True(provider.TryReadWaveformSnapshot(out var waveform));
-		Assert.Equal(1, waveform.ChannelCount);
-		Assert.All(waveform.Minimums, sample => Assert.Equal(0.125f, sample));
-		Assert.All(waveform.Maximums, sample => Assert.Equal(0.125f, sample));
+		Assert.Equal(2, waveform.ChannelCount);
+		Assert.Equal(0, waveform.Channels[0].ChannelIndex);
+		Assert.Equal(1, waveform.Channels[1].ChannelIndex);
+		Assert.Equal(-1.0f, waveform.Channels[0].Minimums.Min());
+		Assert.Equal(1.0f, waveform.Channels[0].Maximums.Max());
+		Assert.Equal(-0.5f, waveform.Channels[1].Minimums.Min());
+		Assert.Equal(0.5f, waveform.Channels[1].Maximums.Max());
 	}
 
 	[Fact]

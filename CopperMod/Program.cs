@@ -7,11 +7,21 @@ internal class Program
 
 	private static void Main(string[] args)
 	{
-		var initialPath = args.Length > 0 ? args[0] : FindWorkspaceFileOrNull(DefaultTunePath);
-		var autoPlay = args.Length > 0;
+		PlayerStartupOptions startupOptions;
+		try
+		{
+			startupOptions = PlayerStartupOptions.Parse(args, FindWorkspaceFileOrNull(DefaultTunePath));
+		}
+		catch (ArgumentException ex)
+		{
+			Console.Error.WriteLine(ex.Message);
+			return;
+		}
+
+		var autoPlay = args.Length > 0 && !string.IsNullOrWhiteSpace(startupOptions.InitialPath);
 
 		using var application = Application.Create().Init();
-		using var window = new PlayerWindow(application, initialPath, autoPlay);
+		using var window = new PlayerWindow(application, startupOptions, autoPlay);
 		application.Run(window);
 	}
 

@@ -190,6 +190,73 @@ public sealed class RenderCommandOptionsTests
 	}
 
 	[Fact]
+	public void ParsesAndConfiguresC64AutostartKey()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.crt",
+			"--out",
+			"output.wav",
+			"--seconds",
+			"1",
+			"--c64-autostart-key",
+			"f3,space",
+			"--c64-autostart-delay-seconds",
+			"0.5",
+			"--c64-autostart-hold-seconds",
+			"0.125",
+			"--c64-autostart-gap-seconds",
+			"0.25"
+		});
+		using var song = new FakeAutostartSong();
+
+		CopperModTools.ConfigureSong(song, options);
+
+		Assert.Equal("f3,space", options.C64AutostartKey);
+		Assert.Equal(new[] { "f3", "space" }, options.C64AutostartKeys);
+		Assert.Equal(0.5, options.C64AutostartDelaySeconds);
+		Assert.Equal(0.125, options.C64AutostartHoldSeconds);
+		Assert.Equal(0.25, options.C64AutostartGapSeconds);
+		Assert.Equal(new[]
+		{
+			new ScheduledAutostartKey("f3", TimeSpan.FromSeconds(0.5), TimeSpan.FromSeconds(0.125)),
+			new ScheduledAutostartKey("space", TimeSpan.FromSeconds(0.875), TimeSpan.FromSeconds(0.125))
+		}, song.Keys);
+	}
+
+	[Fact]
+	public void C64AutostartRejectsUnsupportedKeys()
+	{
+		Assert.Throws<CommandLineException>(() =>
+			RenderCommandOptions.Parse(new[] { "render", "input.crt", "--out", "output.wav", "--c64-autostart-key", "return" }));
+	}
+
+	[Fact]
+	public void C64AutostartSequenceUsesDefaultGap()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.crt",
+			"--out",
+			"output.wav",
+			"--c64-autostart-key",
+			"f3,space"
+		});
+		using var song = new FakeAutostartSong();
+
+		CopperModTools.ConfigureSong(song, options);
+
+		Assert.Equal(0.75, options.C64AutostartGapSeconds);
+		Assert.Equal(new[]
+		{
+			new ScheduledAutostartKey("f3", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(0.25)),
+			new ScheduledAutostartKey("space", TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(0.25))
+		}, song.Keys);
+	}
+
+	[Fact]
 	public void ExistingOutputRequiresOverwrite()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -204,7 +271,7 @@ public sealed class RenderCommandOptionsTests
 		Assert.Contains("--overwrite", stderr.ToString());
 	}
 
-	private sealed class FakeSong : IModuleSong, IModuleSubSongSelector
+	private class FakeSong : IModuleSong, IModuleSubSongSelector
 	{
 		private readonly SongDuration _duration;
 
@@ -268,6 +335,23 @@ public sealed class RenderCommandOptionsTests
 		{
 		}
 	}
+
+	private sealed class FakeAutostartSong : FakeSong, IC64AutostartController
+	{
+		public FakeAutostartSong()
+			: base(SongDuration.Unknown)
+		{
+		}
+
+		public List<ScheduledAutostartKey> Keys { get; } = new List<ScheduledAutostartKey>();
+
+		public void ScheduleAutostartKey(string key, TimeSpan delay, TimeSpan hold)
+		{
+			Keys.Add(new ScheduledAutostartKey(key, delay, hold));
+		}
+	}
+
+	private readonly record struct ScheduledAutostartKey(string Key, TimeSpan Delay, TimeSpan Hold);
 
 	private static byte[] CreateLoopingPsid()
 	{

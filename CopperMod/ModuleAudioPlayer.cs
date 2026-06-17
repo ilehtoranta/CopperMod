@@ -1,5 +1,6 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Sid;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -46,6 +47,7 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 	public ModuleOutputFamily OutputFamily => (_song as IModuleOutputFamilyProvider)?.OutputFamily ?? ModuleOutputFamily.Amiga;
 
+	public bool HasC64Video => _song is IC64VideoFrameProvider { HasVideoFrameSource: true };
 
 	public IModuleSubSongSelector? SubSongs => _song as IModuleSubSongSelector;
 
@@ -127,6 +129,11 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 	public void Load(string path)
 	{
+		Load(path, null);
+	}
+
+	public void Load(string path, PlayerStartupOptions? startupOptions)
+	{
 		ThrowIfDisposed();
 		if (string.IsNullOrWhiteSpace(path))
 		{
@@ -138,6 +145,7 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 		DisposePlaybackObjects();
 
+		startupOptions?.Apply(song);
 		_song = song;
 		_song.LoopingEnabled = false;
 		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile);
@@ -219,6 +227,27 @@ internal sealed class ModuleAudioPlayer : IDisposable
 
 		snapshot = new WaveformSnapshot(Array.Empty<float>(), Array.Empty<float>(), 0, SampleRate);
 		return false;
+	}
+
+	public bool TryReadC64VideoFrame(out C64VideoFrame frame)
+	{
+		if (_sampleProvider != null)
+		{
+			return _sampleProvider.TryReadC64VideoFrame(out frame);
+		}
+
+		frame = new C64VideoFrame(1, 1, new[] { new Argb32(255, 0, 0, 0) }, 0, TimeSpan.Zero);
+		return false;
+	}
+
+	public void SetC64KeyPressed(C64Key key, bool pressed)
+	{
+		_sampleProvider?.SetC64KeyPressed(key, pressed);
+	}
+
+	public void ReleaseAllC64Keys()
+	{
+		_sampleProvider?.ReleaseAllC64Keys();
 	}
 
 	public void Dispose()
