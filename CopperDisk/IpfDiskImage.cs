@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace CopperDisk;
@@ -18,7 +19,7 @@ public sealed class IpfDiskImage
         MaxCylinder = maxCylinder;
         MinHead = minHead;
         MaxHead = maxHead;
-        Tracks = tracks;
+        Tracks = Array.AsReadOnly(new List<IpfTrack>(tracks).ToArray());
     }
 
     /// <summary>
@@ -44,5 +45,6 @@ public sealed class IpfDiskImage
     /// <summary>
     /// Gets the decoded track streams.
     /// </summary>
+    /// <remarks>The list is an immutable snapshot of the decoder output.</remarks>
     public IReadOnlyList<IpfTrack> Tracks { get; }
 }

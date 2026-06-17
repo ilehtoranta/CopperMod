@@ -15,6 +15,8 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>amiga;emulation;adf;ipf;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>copperdisk-icon.png</PackageIcon>
+    <PackageReleaseNotes>Initial public CopperDisk package with ADF, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable ADF media; ReadOnlySpan IPF input; package README and XML API documentation.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
@@ -22,15 +24,16 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="copperdisk-icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

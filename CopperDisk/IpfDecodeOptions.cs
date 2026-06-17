@@ -3,6 +3,9 @@ namespace CopperDisk;
 /// <summary>
 /// Controls how IPF track streams are materialized for an emulator.
 /// </summary>
+/// <remarks>
+/// Options are immutable after construction. <see cref="Default"/> is safe to share across callers.
+/// </remarks>
 public sealed class IpfDecodeOptions
 {
     /// <summary>
@@ -11,12 +14,12 @@ public sealed class IpfDecodeOptions
     public static IpfDecodeOptions Default { get; } = new IpfDecodeOptions();
 
     /// <summary>
-    /// Gets or sets a value indicating whether tracks are rounded up to a 16-bit boundary.
+    /// Gets a value indicating whether tracks are rounded up to a 16-bit boundary.
     /// </summary>
-    public bool AlignTracksToWord { get; set; } = true;
+    public bool AlignTracksToWord { get; init; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether decoding starts at the index position.
+    /// Gets a value indicating whether decoding starts at the index position.
     /// </summary>
-    public bool StartAtIndex { get; set; } = true;
+    public bool StartAtIndex { get; init; } = true;
 }

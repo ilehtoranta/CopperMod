@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using CopperDisk;
 
 namespace CopperDisk.Tests;
@@ -16,7 +17,7 @@ public sealed class IpfDecoderTests
         Assert.Equal(0, track.Head);
         Assert.Equal(32, track.BitLength);
         Assert.Equal(AmigaTrackFeatures.PreservedTrackData, track.Features);
-        Assert.Equal(new byte[] { 0x44, 0x89, 0x44, 0xA9 }, track.Data);
+        Assert.Equal(new byte[] { 0x44, 0x89, 0x44, 0xA9 }, track.EncodedData.ToArray());
     }
 
     [Fact]
@@ -25,6 +26,38 @@ public sealed class IpfDecoderTests
         var media = AmigaDiskLoader.FromIpfBytes(CreateSingleTrackIpf());
 
         Assert.False(media is IWritableAmigaDiskMedia);
+    }
+
+    [Fact]
+    public void IpfLoaderAcceptsReadOnlySpanInput()
+    {
+        var padded = new byte[CreateSingleTrackIpf().Length + 4];
+        var image = CreateSingleTrackIpf();
+        image.CopyTo(padded.AsSpan(2));
+
+        var media = AmigaDiskLoader.FromIpfBytes(padded.AsSpan(2, image.Length));
+
+        Assert.Equal(32, media.ReadTrack(0, 0).BitLength);
+    }
+
+    [Fact]
+    public void DecodeExposesReadOnlyTrackOutputs()
+    {
+        var disk = IpfDecoder.Decode(CreateSingleTrackIpf());
+        var track = Assert.Single(disk.Tracks);
+
+        Assert.False(disk.Tracks is IpfTrack[]);
+        Assert.IsType<ReadOnlyMemory<byte>>(track.EncodedData);
+        Assert.Throws<NotSupportedException>(() => ((IList<IpfTrack>)disk.Tracks)[0] = track);
+    }
+
+    [Fact]
+    public void DefaultOptionsUseInitOnlyProperties()
+    {
+        Assert.True(HasInitOnlySetter(nameof(IpfDecodeOptions.AlignTracksToWord)));
+        Assert.True(HasInitOnlySetter(nameof(IpfDecodeOptions.StartAtIndex)));
+        Assert.True(IpfDecodeOptions.Default.AlignTracksToWord);
+        Assert.True(IpfDecodeOptions.Default.StartAtIndex);
     }
 
     [Fact]
@@ -37,7 +70,7 @@ public sealed class IpfDecoderTests
         var track = Assert.Single(disk.Tracks);
         Assert.Equal(48, track.BitLength);
         Assert.Equal(8, track.StartBit);
-        Assert.Equal(new byte[] { 0xA5, 0xDE, 0xAD, 0xBE, 0xEF, 0xA5 }, track.Data);
+        Assert.Equal(new byte[] { 0xA5, 0xDE, 0xAD, 0xBE, 0xEF, 0xA5 }, track.EncodedData.ToArray());
     }
 
     [Fact]
@@ -50,7 +83,7 @@ public sealed class IpfDecoderTests
         var track = Assert.Single(disk.Tracks);
         Assert.Equal(48, track.BitLength);
         Assert.Equal(0, track.StartBit);
-        Assert.Equal(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF, 0xA5, 0xA5 }, track.Data);
+        Assert.Equal(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF, 0xA5, 0xA5 }, track.EncodedData.ToArray());
     }
 
     [Fact]
@@ -63,8 +96,8 @@ public sealed class IpfDecoderTests
         var track = Assert.Single(disk.Tracks);
         Assert.Equal(48, track.BitLength);
         Assert.Equal(5, track.StartBit);
-        Assert.Equal(0x4489u, ReadBits(track.Data.AsSpan(), track.BitLength, 5, 16));
-        Assert.Equal(0x1234u, ReadBits(track.Data.AsSpan(), track.BitLength, 21, 16));
+        Assert.Equal(0x4489u, ReadBits(track.EncodedData.Span, track.BitLength, 5, 16));
+        Assert.Equal(0x1234u, ReadBits(track.EncodedData.Span, track.BitLength, 21, 16));
     }
 
     [Fact]
@@ -77,8 +110,8 @@ public sealed class IpfDecoderTests
         var track = Assert.Single(disk.Tracks);
         Assert.Equal(48, track.BitLength);
         Assert.Equal(0, track.StartBit);
-        Assert.Equal(0x4489u, ReadBits(track.Data.AsSpan(), track.BitLength, 0, 16));
-        Assert.Equal(0x1234u, ReadBits(track.Data.AsSpan(), track.BitLength, 16, 16));
+        Assert.Equal(0x4489u, ReadBits(track.EncodedData.Span, track.BitLength, 0, 16));
+        Assert.Equal(0x1234u, ReadBits(track.EncodedData.Span, track.BitLength, 16, 16));
     }
 
     [Fact]
@@ -90,9 +123,31 @@ public sealed class IpfDecoderTests
 
         var track = Assert.Single(disk.Tracks);
         Assert.Equal(48, track.BitLength);
-        Assert.Equal(0xAAA9u, ReadBits(track.Data.AsSpan(), track.BitLength, 0, 16));
-        Assert.Equal(0x2Au, ReadBits(track.Data.AsSpan(), track.BitLength, 16, 8));
-        Assert.Equal(0x4489u, ReadBits(track.Data.AsSpan(), track.BitLength, 24, 16));
+        Assert.Equal(0xAAA9u, ReadBits(track.EncodedData.Span, track.BitLength, 0, 16));
+        Assert.Equal(0x2Au, ReadBits(track.EncodedData.Span, track.BitLength, 16, 8));
+        Assert.Equal(0x4489u, ReadBits(track.EncodedData.Span, track.BitLength, 24, 16));
+    }
+
+    [Fact]
+    public void LoadPassesIpfOptionsToDirectIpfImages()
+    {
+        using var temp = new TempDiskFile(".ipf");
+        File.WriteAllBytes(temp.Path, CreateSingleRawTrackIpf(startBit: 8));
+
+        var result = AmigaDiskLoader.Load(temp.Path, new IpfDecodeOptions { StartAtIndex = false });
+
+        Assert.Equal(0, result.Media.ReadTrack(0, 0).StartBit);
+    }
+
+    [Fact]
+    public void LoadPassesIpfOptionsToZipWrappedIpfImages()
+    {
+        using var temp = new TempDiskFile(".zip");
+        WriteZip(temp.Path, ("disk.ipf", CreateSingleRawTrackIpf(startBit: 8)));
+
+        var result = AmigaDiskLoader.Load(temp.Path, new IpfDecodeOptions { StartAtIndex = false });
+
+        Assert.Equal(0, result.Media.ReadTrack(0, 0).StartBit);
     }
 
     private static byte[] CreateSingleTrackIpf()
@@ -300,6 +355,13 @@ public sealed class IpfDecoderTests
         return value;
     }
 
+    private static bool HasInitOnlySetter(string propertyName)
+    {
+        var property = typeof(IpfDecodeOptions).GetProperty(propertyName);
+        var modifiers = property?.SetMethod?.ReturnParameter.GetRequiredCustomModifiers();
+        return modifiers?.Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)) == true;
+    }
+
     private static void WriteChunk(Stream stream, string id, byte[] payload, byte[]? trailingData = null)
     {
         var chunkSize = 12 + payload.Length;
@@ -313,11 +375,44 @@ public sealed class IpfDecoderTests
         }
     }
 
+    private static void WriteZip(string path, params (string Name, byte[] Data)[] entries)
+    {
+        using var file = File.Open(path, FileMode.Create, FileAccess.ReadWrite);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Create);
+        foreach (var entry in entries)
+        {
+            var zipEntry = archive.CreateEntry(entry.Name);
+            using var stream = zipEntry.Open();
+            stream.Write(entry.Data);
+        }
+    }
+
     private static void WriteUInt32(Stream stream, uint value)
     {
         stream.WriteByte((byte)(value >> 24));
         stream.WriteByte((byte)(value >> 16));
         stream.WriteByte((byte)(value >> 8));
         stream.WriteByte((byte)value);
+    }
+
+    private sealed class TempDiskFile : IDisposable
+    {
+        public TempDiskFile(string extension)
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                File.Delete(Path);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 }

@@ -3,17 +3,17 @@ using System;
 namespace CopperDisk;
 
 /// <summary>
-/// A single decoded floppy track.
+/// A single decoded IPF floppy track.
 /// </summary>
 public sealed class IpfTrack : IAmigaTrack
 {
-    internal IpfTrack(int cylinder, int head, int bitLength, int startBit, byte[] data, AmigaTrackFeatures features)
+    internal IpfTrack(int cylinder, int head, int bitLength, int startBit, byte[] encodedData, AmigaTrackFeatures features)
     {
         Cylinder = cylinder;
         Head = head;
         BitLength = bitLength;
         StartBit = startBit;
-        Data = data;
+        EncodedData = encodedData;
         Features = features;
     }
 
@@ -28,7 +28,7 @@ public sealed class IpfTrack : IAmigaTrack
     public int Head { get; }
 
     /// <summary>
-    /// Gets the number of meaningful bits in <see cref="Data"/>.
+    /// Gets the number of meaningful bits in <see cref="EncodedData"/>.
     /// </summary>
     public int BitLength { get; }
 
@@ -38,11 +38,10 @@ public sealed class IpfTrack : IAmigaTrack
     public int StartBit { get; }
 
     /// <summary>
-    /// Gets the decoded track bytes.
+    /// Gets the decoded encoded-track bytes.
     /// </summary>
-    public byte[] Data { get; }
-
-    ReadOnlyMemory<byte> IAmigaTrack.Data => Data;
+    /// <remarks>The returned memory is a read-only view over decoder-owned backing storage.</remarks>
+    public ReadOnlyMemory<byte> EncodedData { get; }
 
     /// <summary>
     /// Gets feature flags exposed by the decoder for this track.

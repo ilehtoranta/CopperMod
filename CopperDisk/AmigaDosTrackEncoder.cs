@@ -3,14 +3,33 @@ using System.Linq;
 
 namespace CopperDisk;
 
+/// <summary>
+/// Expert API for encoding decoded AmigaDOS sectors into canonical MFM track bytes.
+/// </summary>
+/// <remarks>
+/// This helper generates standard AmigaDOS sector tracks. It is intended for emulators and disk tools that need
+/// raw floppy-controller input rather than a filesystem-level view.
+/// </remarks>
 public static class AmigaDosTrackEncoder
 {
     private const int EncodedSectorBytes = 0x440;
     private const int EncodedTrackGapBytes = 0x140;
-    public const int EncodedTrackBytes = (EncodedSectorBytes * AmigaDiskGeometry.SectorsPerTrack) + EncodedTrackGapBytes;
+
+    /// <summary>
+    /// The number of bytes in a generated standard AmigaDOS encoded track.
+    /// </summary>
+    public const int EncodedTrackByteCount = (EncodedSectorBytes * AmigaDiskGeometry.SectorsPerTrack) + EncodedTrackGapBytes;
+
     private const uint MfmDataMask = 0x5555_5555;
     private static readonly int[] PhysicalSectorOrder = { 9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8 };
 
+    /// <summary>
+    /// Encodes one physical track from decoded sector media.
+    /// </summary>
+    /// <param name="disk">The source sector media.</param>
+    /// <param name="cylinder">The zero-based cylinder number.</param>
+    /// <param name="head">The zero-based head number.</param>
+    /// <returns>A newly allocated encoded track byte array.</returns>
     public static byte[] EncodeTrack(IAmigaSectorDiskMedia disk, int cylinder, int head)
     {
         ArgumentNullException.ThrowIfNull(disk);
@@ -24,7 +43,7 @@ public static class AmigaDosTrackEncoder
             throw new ArgumentOutOfRangeException(nameof(head));
         }
 
-        var track = Enumerable.Repeat((byte)0xAA, EncodedTrackBytes).ToArray();
+        var track = Enumerable.Repeat((byte)0xAA, EncodedTrackByteCount).ToArray();
         var trackNumber = (cylinder * AmigaDiskGeometry.HeadCount) + head;
         for (var physicalIndex = 0; physicalIndex < PhysicalSectorOrder.Length; physicalIndex++)
         {
@@ -41,9 +60,13 @@ public static class AmigaDosTrackEncoder
         return track;
     }
 
+    /// <summary>
+    /// Creates an unformatted encoded track filled with standard gap bytes.
+    /// </summary>
+    /// <returns>A newly allocated unformatted track byte array.</returns>
     public static byte[] CreateUnformattedTrack()
     {
-        return Enumerable.Repeat((byte)0xAA, EncodedTrackBytes).ToArray();
+        return Enumerable.Repeat((byte)0xAA, EncodedTrackByteCount).ToArray();
     }
 
     private static void EncodeSector(ReadOnlySpan<byte> source, Span<byte> destination, int trackNumber, int sector, int sectorsUntilGap)

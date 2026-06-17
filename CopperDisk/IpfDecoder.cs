@@ -9,6 +9,12 @@ namespace CopperDisk;
 /// <summary>
 /// Decodes Software Preservation Society IPF disk images into raw track byte streams.
 /// </summary>
+/// <remarks>
+/// This is an expert API for emulator and disk-tool hosts that need direct access to decoded track streams.
+/// The decoder currently materializes weak data deterministically and reports
+/// <see cref="AmigaTrackFeatures.ApproximateWeakData"/>; stored IPF gap streams and unknown block encoders
+/// are rejected with <see cref="IpfDecodeException"/>.
+/// </remarks>
 public static class IpfDecoder
 {
     private const string CapsChunkId = "CAPS";
@@ -29,6 +35,9 @@ public static class IpfDecoder
     /// <summary>
     /// Decodes an IPF image into raw track streams.
     /// </summary>
+    /// <param name="image">The IPF image bytes.</param>
+    /// <param name="options">Optional decode options.</param>
+    /// <returns>The decoded IPF disk image.</returns>
     public static IpfDiskImage Decode(ReadOnlySpan<byte> image, IpfDecodeOptions? options = null)
     {
         options ??= IpfDecodeOptions.Default;

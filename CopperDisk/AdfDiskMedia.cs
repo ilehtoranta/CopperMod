@@ -2,7 +2,7 @@ using System;
 
 namespace CopperDisk;
 
-internal sealed class AdfDiskMedia : IAmigaSectorDiskMedia, IWritableAmigaDiskMedia
+internal sealed class AdfDiskMedia : IWritableAmigaSectorDiskMedia
 {
     private readonly byte[][] _encodedTracks = new byte[AmigaDiskGeometry.TrackCount][];
 
@@ -20,13 +20,13 @@ internal sealed class AdfDiskMedia : IAmigaSectorDiskMedia, IWritableAmigaDiskMe
 
     public int Heads => AmigaDiskGeometry.HeadCount;
 
-    public bool HasCompleteSectorData => true;
+    public bool HasCompleteDecodedSectorData => true;
 
     public bool IsDirty { get; private set; }
 
     public byte[] DataBytes { get; }
 
-    public ReadOnlyMemory<byte> Data => DataBytes;
+    public ReadOnlyMemory<byte> SectorData => DataBytes;
 
     public ReadOnlyMemory<byte> BootBlock => DataBytes.AsMemory(0, 1024);
 

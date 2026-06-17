@@ -10,26 +10,26 @@ internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia
     public TrackBackedDiskMedia(IReadOnlyList<IAmigaTrack> encodedTracks)
     {
         _encodedTracks = BuildTrackSet(encodedTracks);
-        DataBytes = AmigaDosTrackDecoder.DecodeBestEffort(_encodedTracks, out var hasCompleteSectorData);
-        HasCompleteSectorData = hasCompleteSectorData;
+        DataBytes = AmigaDosTrackDecoder.DecodeBestEffort(_encodedTracks, out var hasCompleteDecodedSectorData);
+        HasCompleteDecodedSectorData = hasCompleteDecodedSectorData;
     }
 
     public TrackBackedDiskMedia(IReadOnlyList<AmigaEncodedTrack> encodedTracks)
     {
         _encodedTracks = BuildTrackSet(encodedTracks);
-        DataBytes = AmigaDosTrackDecoder.DecodeBestEffort(_encodedTracks, out var hasCompleteSectorData);
-        HasCompleteSectorData = hasCompleteSectorData;
+        DataBytes = AmigaDosTrackDecoder.DecodeBestEffort(_encodedTracks, out var hasCompleteDecodedSectorData);
+        HasCompleteDecodedSectorData = hasCompleteDecodedSectorData;
     }
 
     public int Cylinders => AmigaDiskGeometry.CylinderCount;
 
     public int Heads => AmigaDiskGeometry.HeadCount;
 
-    public bool HasCompleteSectorData { get; }
+    public bool HasCompleteDecodedSectorData { get; }
 
     public byte[] DataBytes { get; }
 
-    public ReadOnlyMemory<byte> Data => DataBytes;
+    public ReadOnlyMemory<byte> SectorData => DataBytes;
 
     public ReadOnlyMemory<byte> BootBlock => DataBytes.AsMemory(0, 1024);
 
@@ -79,7 +79,7 @@ internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia
         {
             var track = encodedTracks[index];
             tracks[index] = new AmigaEncodedTrack(
-                track.Data,
+                track.EncodedData,
                 track.BitLength,
                 track.StartBit,
                 track.Features | AmigaTrackFeatures.PreservedTrackData);

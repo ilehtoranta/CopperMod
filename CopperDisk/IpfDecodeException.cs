@@ -10,6 +10,7 @@ public sealed class IpfDecodeException : Exception
     /// <summary>
     /// Initializes a new instance of the <see cref="IpfDecodeException"/> class.
     /// </summary>
+    /// <param name="message">The error message.</param>
     public IpfDecodeException(string message)
         : base(message)
     {

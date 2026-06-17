@@ -81,6 +81,13 @@ ADF and IPF loading:
 dotnet add package CopperDisk
 ```
 
+CopperDisk package automation lives under `scripts\nuget`:
+
+```powershell
+.\scripts\nuget\pack-copperdisk.ps1
+.\scripts\nuget\publish-copperdisk.ps1 -PackagePath .\artifacts\packages\CopperDisk.1.0.0.nupkg -WhatIf
+```
+
 ## Run
 
 ```powershell

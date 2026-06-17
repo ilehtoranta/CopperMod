@@ -18,17 +18,18 @@ public sealed class AmigaDiskLoaderTests
 
         var media = AmigaDiskLoader.FromAdfBytes(data);
         var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
+        Assert.IsAssignableFrom<IWritableAmigaSectorDiskMedia>(media);
 
         Assert.Equal(AmigaDiskGeometry.CylinderCount, media.Cylinders);
         Assert.Equal(AmigaDiskGeometry.HeadCount, media.Heads);
-        Assert.True(sectorMedia.HasCompleteSectorData);
+        Assert.True(sectorMedia.HasCompleteDecodedSectorData);
         Assert.Equal((byte)'D', sectorMedia.BootBlock.Span[0]);
         var sector = sectorMedia.ReadSector(3, 1, 7).Span;
         Assert.Equal(0x42, sector[0]);
         Assert.Equal(0x99, sector[^1]);
 
         var track = Assert.IsType<AmigaEncodedTrack>(media.ReadTrack(0, 0));
-        Assert.Equal(AmigaDosTrackEncoder.EncodedTrackBytes * 8, track.BitLength);
+        Assert.Equal(AmigaDosTrackEncoder.EncodedTrackByteCount * 8, track.BitLength);
         Assert.Equal(0, track.StartBit);
         Assert.Equal(AmigaTrackFeatures.None, track.Features);
         Assert.True(ContainsWord(track, 0x4489));
@@ -54,7 +55,7 @@ public sealed class AmigaDiskLoaderTests
         var media = AmigaDiskLoader.FromEncodedTracks(tracks);
         var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
 
-        Assert.False(sectorMedia.HasCompleteSectorData);
+        Assert.False(sectorMedia.HasCompleteDecodedSectorData);
         var preservedTrack = media.ReadTrack(0, 0);
         Assert.True((preservedTrack.Features & AmigaTrackFeatures.PreservedTrackData) != 0);
         var decoded = sectorMedia.ReadSector(0, 0, 1).Span;
@@ -76,7 +77,7 @@ public sealed class AmigaDiskLoaderTests
         var target = AmigaDiskLoader.FromAdfBytes(CreateStandardAdf());
         var targetSectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(target);
         var writable = Assert.IsAssignableFrom<IWritableAmigaDiskMedia>(target);
-        var cachedTrack = target.ReadTrack(0, 0).Data.ToArray();
+        var cachedTrack = target.ReadTrack(0, 0).EncodedData.ToArray();
         var sourceData = CreateStandardAdf();
         sourceData[3 * AmigaDiskGeometry.SectorSize] = 0x4C;
         sourceData[(3 * AmigaDiskGeometry.SectorSize) + 511] = 0xA7;
@@ -88,7 +89,7 @@ public sealed class AmigaDiskLoaderTests
         var sector = targetSectorMedia.ReadSector(0, 0, 3).Span;
         Assert.Equal(0x4C, sector[0]);
         Assert.Equal(0xA7, sector[^1]);
-        Assert.NotEqual(cachedTrack, target.ReadTrack(0, 0).Data.ToArray());
+        Assert.NotEqual(cachedTrack, target.ReadTrack(0, 0).EncodedData.ToArray());
     }
 
     [Fact]
@@ -111,10 +112,10 @@ public sealed class AmigaDiskLoaderTests
             Assert.Equal(expected, actual);
         }
 
-        var expectedTrack = AmigaDiskLoader.FromAdfBytes(targetSectorMedia.Data.ToArray()).ReadTrack(7, 1);
+        var expectedTrack = AmigaDiskLoader.FromAdfBytes(targetSectorMedia.SectorData.ToArray()).ReadTrack(7, 1);
         var actualTrack = target.ReadTrack(7, 1);
         Assert.Equal(expectedTrack.BitLength, actualTrack.BitLength);
-        Assert.Equal(expectedTrack.Data.ToArray(), actualTrack.Data.ToArray());
+        Assert.Equal(expectedTrack.EncodedData.ToArray(), actualTrack.EncodedData.ToArray());
     }
 
     [Fact]
@@ -143,6 +144,20 @@ public sealed class AmigaDiskLoaderTests
         var media = AmigaDiskLoader.FromEncodedTracks(tracks);
 
         Assert.False(media is IWritableAmigaDiskMedia);
+    }
+
+    [Fact]
+    public void FromEncodedTrackBytesTreatsNullEntriesAsUnformattedTracks()
+    {
+        var tracks = new byte[]?[AmigaDiskGeometry.TrackCount];
+
+        var media = AmigaDiskLoader.FromEncodedTrackBytes(tracks);
+        var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
+
+        Assert.False(sectorMedia.HasCompleteDecodedSectorData);
+        Assert.Equal(
+            AmigaDosTrackEncoder.CreateUnformattedTrack(),
+            media.ReadTrack(0, 0).EncodedData.ToArray());
     }
 
     [Fact]
@@ -224,7 +239,7 @@ public sealed class AmigaDiskLoaderTests
     {
         for (var offset = 0; offset < track.BitLength; offset++)
         {
-            if (track.ReadUInt16(offset) == expected)
+            if (track.ReadUInt16AtBit(offset) == expected)
             {
                 return true;
             }

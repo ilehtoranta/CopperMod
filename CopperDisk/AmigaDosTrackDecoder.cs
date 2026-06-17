@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace CopperDisk;
 
+/// <summary>
+/// Expert API for best-effort decoding of standard AmigaDOS sectors from encoded track streams.
+/// </summary>
+/// <remarks>
+/// This helper scans for standard AmigaDOS sync/header/checksum structures. It preserves unreadable sectors as
+/// zero-filled data and is not a filesystem validator.
+/// </remarks>
 public static class AmigaDosTrackDecoder
 {
     private const ushort SyncWord = 0x4489;
@@ -11,19 +18,32 @@ public static class AmigaDosTrackDecoder
     private const int EncodedSectorBytesAfterSync = 0x43C;
     private const int EncodedSectorBitsAfterSync = EncodedSectorBytesAfterSync * 8;
 
-    public static byte[] DecodeBestEffort(byte[][] encodedTracks, out bool hasCompleteSectorData)
+    /// <summary>
+    /// Decodes a full disk of encoded track bytes into an AmigaDOS sector image.
+    /// </summary>
+    /// <param name="ownedTrackBytes">Exactly <see cref="AmigaDiskGeometry.TrackCount"/> encoded track byte arrays. Null entries are treated as unformatted tracks.</param>
+    /// <param name="hasCompleteDecodedSectorData">Set to <see langword="true"/> when every sector was decoded.</param>
+    /// <returns>A decoded 880 KiB sector image. Missing sectors are zero-filled.</returns>
+    public static byte[] DecodeBestEffort(IReadOnlyList<byte[]?> ownedTrackBytes, out bool hasCompleteDecodedSectorData)
     {
-        ArgumentNullException.ThrowIfNull(encodedTracks);
-        var tracks = new AmigaEncodedTrack[encodedTracks.Length];
-        for (var index = 0; index < encodedTracks.Length; index++)
+        ArgumentNullException.ThrowIfNull(ownedTrackBytes);
+        var tracks = new AmigaEncodedTrack[ownedTrackBytes.Count];
+        for (var index = 0; index < ownedTrackBytes.Count; index++)
         {
-            tracks[index] = AmigaEncodedTrack.FromBytes(encodedTracks[index] ?? AmigaDosTrackEncoder.CreateUnformattedTrack());
+            tracks[index] = AmigaEncodedTrack.FromBytes(ownedTrackBytes[index] ?? AmigaDosTrackEncoder.CreateUnformattedTrack());
         }
 
-        return DecodeBestEffort(tracks, out hasCompleteSectorData);
+        return DecodeBestEffort(tracks, out hasCompleteDecodedSectorData);
     }
 
-    public static byte[] DecodeBestEffort<T>(IReadOnlyList<T> encodedTracks, out bool hasCompleteSectorData)
+    /// <summary>
+    /// Decodes a full disk of encoded tracks into an AmigaDOS sector image.
+    /// </summary>
+    /// <typeparam name="T">The encoded track type.</typeparam>
+    /// <param name="encodedTracks">Exactly <see cref="AmigaDiskGeometry.TrackCount"/> encoded tracks.</param>
+    /// <param name="hasCompleteDecodedSectorData">Set to <see langword="true"/> when every sector was decoded.</param>
+    /// <returns>A decoded 880 KiB sector image. Missing sectors are zero-filled.</returns>
+    public static byte[] DecodeBestEffort<T>(IReadOnlyList<T> encodedTracks, out bool hasCompleteDecodedSectorData)
         where T : IAmigaTrack
     {
         ArgumentNullException.ThrowIfNull(encodedTracks);
@@ -46,10 +66,18 @@ public static class AmigaDosTrackDecoder
             DecodeTrack(track, trackNumber, data, decodedSectors, ref decodedSectorCount);
         }
 
-        hasCompleteSectorData = decodedSectorCount == decodedSectors.Length;
+        hasCompleteDecodedSectorData = decodedSectorCount == decodedSectors.Length;
         return data;
     }
 
+    /// <summary>
+    /// Decodes sectors from one encoded track into an existing one-track destination buffer.
+    /// </summary>
+    /// <param name="track">The encoded track stream.</param>
+    /// <param name="cylinder">The zero-based cylinder number expected in sector headers.</param>
+    /// <param name="head">The zero-based head number expected in sector headers.</param>
+    /// <param name="destinationTrackData">The destination buffer for exactly one decoded track of sectors.</param>
+    /// <returns>The number of sectors decoded into <paramref name="destinationTrackData"/>.</returns>
     public static int DecodeTrackBestEffort(IAmigaTrack track, int cylinder, int head, Span<byte> destinationTrackData)
     {
         ArgumentNullException.ThrowIfNull(track);
@@ -79,8 +107,8 @@ public static class AmigaDosTrackDecoder
 
         for (var offset = 0; offset < encoded.BitLength; offset++)
         {
-            if (encoded.ReadUInt16(offset) != SyncWord ||
-                encoded.ReadUInt16(offset + 16) != SyncWord)
+            if (encoded.ReadUInt16AtBit(offset) != SyncWord ||
+                encoded.ReadUInt16AtBit(offset + 16) != SyncWord)
             {
                 continue;
             }
@@ -105,8 +133,8 @@ public static class AmigaDosTrackDecoder
 
         for (var offset = 0; offset < track.BitLength; offset++)
         {
-            if (track.ReadUInt16(offset) != SyncWord ||
-                track.ReadUInt16(offset + 16) != SyncWord)
+            if (track.ReadUInt16AtBit(offset) != SyncWord ||
+                track.ReadUInt16AtBit(offset + 16) != SyncWord)
             {
                 continue;
             }
@@ -246,7 +274,7 @@ public static class AmigaDosTrackDecoder
 
     private static uint ReadMfmLong(AmigaEncodedTrack track, int bitOffset)
     {
-        return track.ReadUInt32(bitOffset) & MfmDataMask;
+        return track.ReadUInt32AtBit(bitOffset) & MfmDataMask;
     }
 
     private static uint DecodeOddEven(uint odd, uint even)
@@ -258,6 +286,6 @@ public static class AmigaDosTrackDecoder
     {
         return track is AmigaEncodedTrack encoded
             ? encoded
-            : new AmigaEncodedTrack(track.Data, track.BitLength, track.StartBit, track.Features);
+            : new AmigaEncodedTrack(track.EncodedData, track.BitLength, track.StartBit, track.Features);
     }
 }
