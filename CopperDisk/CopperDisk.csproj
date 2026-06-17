@@ -8,7 +8,7 @@
     <Title>CopperDisk</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Managed Amiga ADF and IPF disk image library.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>2.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
@@ -16,7 +16,7 @@
     <PackageTags>amiga;emulation;adf;ipf;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copperdisk-icon.png</PackageIcon>
-    <PackageReleaseNotes>Initial public CopperDisk package with ADF, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable ADF media; ReadOnlySpan IPF input; package README and XML API documentation.</PackageReleaseNotes>
+    <PackageReleaseNotes>ADF, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable ADF media; ReadOnlySpan IPF input; package icon, README, and XML API documentation.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>

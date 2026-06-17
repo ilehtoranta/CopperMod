@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "Medium")]
 param(
     [Parameter(Mandatory = $true)]
     [string] $PackagePath,
@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$cmdlet = $PSCmdlet
 
 $resolvedPackage = Resolve-Path -LiteralPath $PackagePath
 $packageFile = Get-Item -LiteralPath $resolvedPackage.Path
@@ -46,11 +47,15 @@ function Invoke-NuGetPush {
         $Source
     )
 
+    if ($Path.EndsWith(".nupkg", [StringComparison]::OrdinalIgnoreCase)) {
+        $arguments += "--no-symbols"
+    }
+
     if (-not $NoSkipDuplicate) {
         $arguments += "--skip-duplicate"
     }
 
-    if ($PSCmdlet.ShouldProcess($Path, "Publish $Label to $Source")) {
+    if ($cmdlet.ShouldProcess($Path, "Publish $Label to $Source")) {
         & dotnet @arguments
     }
 }
