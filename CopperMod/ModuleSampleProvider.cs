@@ -10,6 +10,8 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private const int RenderAheadTargetMilliseconds = 5000;
 	private const int RenderAheadCapacityMilliseconds = 15000;
 	private const int ReadWaitMilliseconds = 2;
+	private const int C64VideoFrameIntervalMilliseconds = 250;
+	private const int C64VideoMinimumQueuedMilliseconds = 1000;
 	private readonly object _renderSync = new();
 	private readonly object _bufferSync = new();
 	private readonly object _waveformSync = new();
@@ -25,6 +27,8 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private readonly Thread _renderThread;
 	private readonly int _renderAheadTargetSamples;
 	private readonly int _renderAheadCapacitySamples;
+	private readonly int _c64VideoFrameIntervalSamples;
+	private readonly int _c64VideoMinimumQueuedSamples;
 	private IModuleSong _song;
 	private float[] _latestWaveformSamples = Array.Empty<float>();
 	private int _latestWaveformSampleCount;
@@ -44,6 +48,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 	private int _generation;
 	private long _underrunCount;
 	private long _playedSamples;
+	private long _nextC64VideoFrameCaptureSample;
 	private TimeSpan _positionBaseTime;
 	private bool _renderEndOfSong;
 	private bool _endOfSong;
@@ -78,6 +83,8 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 		_leadInSamplesRemaining = CalculateLeadInSamples(initialLeadIn, WaveFormat);
 		_renderAheadTargetSamples = CalculateBufferSamples(RenderAheadTargetMilliseconds, WaveFormat);
 		_renderAheadCapacitySamples = CalculateBufferSamples(RenderAheadCapacityMilliseconds, WaveFormat);
+		_c64VideoFrameIntervalSamples = CalculateBufferSamples(C64VideoFrameIntervalMilliseconds, WaveFormat);
+		_c64VideoMinimumQueuedSamples = CalculateBufferSamples(C64VideoMinimumQueuedMilliseconds, WaveFormat);
 		_renderThread = new Thread(RenderLoop)
 		{
 			IsBackground = true,
@@ -570,15 +577,17 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			var frames = _song.GetCurrentTickFrameCount(_renderOptions);
 			var samples = new float[_renderOptions.GetSampleCount(frames)];
 			var result = _song.RenderTick(samples, _renderOptions);
-			if (_c64VideoFrameProvider != null && _c64VideoFrameProvider.TryGetLatestVideoFrame(out var videoFrame))
-			{
-				StoreLatestVideoFrame(videoFrame);
-			}
-
 			var samplesWritten = Math.Min(result.SamplesWritten, samples.Length);
 			if (samplesWritten != samples.Length)
 			{
 				Array.Resize(ref samples, samplesWritten);
+			}
+
+			if (_c64VideoFrameProvider != null &&
+				ShouldCaptureC64VideoFrame(samplesWritten) &&
+				_c64VideoFrameProvider.TryGetLatestVideoFrame(out var videoFrame))
+			{
+				StoreLatestVideoFrame(videoFrame);
 			}
 
 			if ((_outputFamilyProvider?.OutputFamily ?? ModuleOutputFamily.Amiga) == ModuleOutputFamily.Commodore64)
@@ -661,6 +670,7 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			_leadInSamplesRemaining = leadInSamples;
 			_positionBaseTime = positionBase;
 			_playedSamples = 0;
+			_nextC64VideoFrameCaptureSample = 0;
 			_underrunCount = 0;
 			_renderEndOfSong = false;
 			_endOfSong = false;
@@ -684,6 +694,31 @@ internal sealed class ModuleSampleProvider : ISampleProvider, IDisposable
 			_latestWaveformChannelCount = _renderOptions.ChannelCount;
 			_latestWaveformSampleRate = _renderOptions.SampleRate;
 			_latestWaveformVersion++;
+		}
+	}
+
+	private bool ShouldCaptureC64VideoFrame(int samplesWritten)
+	{
+		if (samplesWritten <= 0)
+		{
+			return false;
+		}
+
+		lock (_bufferSync)
+		{
+			if (_queuedSamples < _c64VideoMinimumQueuedSamples)
+			{
+				return false;
+			}
+
+			var renderedSamplePosition = _playedSamples + _queuedSamples + samplesWritten;
+			if (renderedSamplePosition < _nextC64VideoFrameCaptureSample)
+			{
+				return false;
+			}
+
+			_nextC64VideoFrameCaptureSample = renderedSamplePosition + _c64VideoFrameIntervalSamples;
+			return true;
 		}
 	}
 

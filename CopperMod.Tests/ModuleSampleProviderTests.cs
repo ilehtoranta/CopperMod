@@ -1,5 +1,6 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Sid;
 
 namespace CopperMod.Tests;
 
@@ -252,6 +253,32 @@ public sealed class ModuleSampleProviderTests
 		Assert.Equal(4, samplesRead);
 		Assert.All(buffer, sample => Assert.Equal(0.25f, sample));
 		Assert.Equal(0, provider.BufferStatus.UnderrunCount);
+	}
+
+	[Fact]
+	public void C64VideoRenderingIsThrottledBehindAudioRenderAhead()
+	{
+		var song = new C64VideoSong(framesPerTick: 10);
+		using var provider = new ModuleSampleProvider(
+			song,
+			sampleRate: 1000,
+			channelCount: 1,
+			AmigaOutputProfile.None,
+			c64OutputProfile: C64OutputProfile.Clean);
+
+		Assert.True(
+			SpinWait.SpinUntil(
+				() => provider.BufferStatus.QueuedDuration >= TimeSpan.FromSeconds(4.5),
+				TimeSpan.FromSeconds(2)));
+
+		var renderedTicks = song.RenderedTicks;
+		var videoFrameRequests = song.VideoFrameRequests;
+
+		Assert.True(renderedTicks >= 400, $"Expected the audio render-ahead queue to fill, rendered {renderedTicks} ticks.");
+		Assert.InRange(videoFrameRequests, 1, 30);
+		Assert.True(
+			videoFrameRequests < renderedTicks / 10,
+			$"Video captured too often: {videoFrameRequests} requests for {renderedTicks} audio ticks.");
 	}
 
 	[Fact]
@@ -565,6 +592,91 @@ public sealed class ModuleSampleProviderTests
 			destination.Slice(0, samples).Fill(0.25f);
 			_position += TimeSpan.FromSeconds(4 / (double)options.SampleRate);
 			return new RenderResult(4, samples, Position, false);
+		}
+
+		public void Dispose()
+		{
+		}
+	}
+
+	private sealed class C64VideoSong : IModuleSong, IC64VideoFrameProvider
+	{
+		private readonly int _framesPerTick;
+		private int _renderedTicks;
+		private int _videoFrameRequests;
+		private TimeSpan _position;
+
+		public C64VideoSong(int framesPerTick)
+		{
+			_framesPerTick = framesPerTick;
+		}
+
+		public ModuleMetadata Metadata => ModuleMetadata.Empty;
+
+		public ModulePlaybackCapabilities Capabilities => ModulePlaybackCapabilities.Minimal;
+
+		public IReadOnlyList<ModuleDiagnostic> Diagnostics => Array.Empty<ModuleDiagnostic>();
+
+		public SongDuration Duration => SongDuration.Unknown;
+
+		public PlaybackPosition Position => PlaybackPosition.FromTime(_position);
+
+		public bool LoopingEnabled { get; set; }
+
+		public bool HasVideoFrameSource => true;
+
+		public int RenderedTicks => Volatile.Read(ref _renderedTicks);
+
+		public int VideoFrameRequests => Volatile.Read(ref _videoFrameRequests);
+
+		public int GetCurrentTickFrameCount(AudioRenderOptions? options = null)
+		{
+			return _framesPerTick;
+		}
+
+		public void Reset()
+		{
+			Interlocked.Exchange(ref _renderedTicks, 0);
+			Interlocked.Exchange(ref _videoFrameRequests, 0);
+			_position = TimeSpan.Zero;
+		}
+
+		public void Seek(TimeSpan position)
+		{
+			_position = position < TimeSpan.Zero ? TimeSpan.Zero : position;
+		}
+
+		public void Seek(TrackerPosition position)
+		{
+			_ = position;
+			Reset();
+		}
+
+		public RenderResult Render(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			return RenderTick(destination, options);
+		}
+
+		public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
+		{
+			options ??= AudioRenderOptions.Default;
+			var samples = options.GetSampleCount(_framesPerTick);
+			destination.Slice(0, samples).Fill(0.25f);
+			Interlocked.Increment(ref _renderedTicks);
+			_position += TimeSpan.FromSeconds(_framesPerTick / (double)options.SampleRate);
+			return new RenderResult(_framesPerTick, samples, Position);
+		}
+
+		public bool TryGetLatestVideoFrame(out C64VideoFrame frame)
+		{
+			var frameNumber = Interlocked.Increment(ref _videoFrameRequests);
+			frame = new C64VideoFrame(
+				1,
+				1,
+				new[] { new Argb32(255, 255, 255, 255) },
+				frameNumber,
+				_position);
+			return true;
 		}
 
 		public void Dispose()
