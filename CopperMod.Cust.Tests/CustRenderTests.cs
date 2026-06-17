@@ -315,6 +315,34 @@ public sealed class CustRenderTests
 		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
 	}
 
+	[Fact]
+	public void InstalledInterruptServerMayReturnWithRte()
+	{
+		var data = CreateRteInterruptServerHunk();
+		var format = new CustFormat();
+		Assert.True(format.CanLoad(data));
+
+		using var song = (CustSong)format.Load(data);
+
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
+	}
+
+	[Fact]
+	public void IntuitionAllocRememberReturnsWritableMemoryDuringInitSound()
+	{
+		var data = CreateIntuitionAllocRememberHunk();
+		var format = new CustFormat();
+		Assert.True(format.CanLoad(data));
+
+		using var song = (CustSong)format.Load(data);
+
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_UNSUPPORTED_OPCODE");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_FAULT");
+		Assert.DoesNotContain(song.Diagnostics, diagnostic => diagnostic.Code == "CUST_CPU_OVERRUN");
+	}
+
 	private static string SummarizeWrites(IReadOnlyList<CustomRegisterWrite> writes)
 	{
 		return "count=" + writes.Count + " " + string.Join(", ", writes.TakeLast(Math.Min(24, writes.Count)).Select(write => $"@{write.Cycle}:{write.Address:X3}={write.Value:X4}"));
@@ -406,6 +434,106 @@ public sealed class CustRenderTests
 		return WrapSingleCodeHunk(bytes);
 	}
 
+	private static byte[] CreateRteInterruptServerHunk()
+	{
+		const int initPlayerOffset = 0x80;
+		const int initSoundOffset = 0x82;
+		const int startIntOffset = 0x84;
+		const int interruptStructOffset = 0xC0;
+		const int interruptCodeOffset = 0xE0;
+		var bytes = new byte[0x100];
+		WriteLong(bytes, 0x00, CustConstants.DtpCustomPlayer);
+		WriteLong(bytes, 0x04, 1);
+		WriteLong(bytes, 0x08, CustConstants.DtpInitPlayer);
+		WriteLong(bytes, 0x0C, CustConstants.DefaultModuleBaseAddress + initPlayerOffset);
+		WriteLong(bytes, 0x10, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x14, CustConstants.DefaultModuleBaseAddress + initSoundOffset);
+		WriteLong(bytes, 0x18, CustConstants.DtpStartInt);
+		WriteLong(bytes, 0x1C, CustConstants.DefaultModuleBaseAddress + startIntOffset);
+		WriteLong(bytes, 0x20, CustConstants.TagDone);
+
+		WriteWord(bytes, initPlayerOffset, 0x4E75);
+		WriteWord(bytes, initSoundOffset, 0x4E75);
+
+		var cursor = startIntOffset;
+		WriteWord(bytes, cursor, 0x227C);
+		WriteLong(bytes, cursor + 2, CustConstants.DefaultModuleBaseAddress + interruptStructOffset);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x7007);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0x2C7C);
+		WriteLong(bytes, cursor + 2, AmigaKickstartHost.ExecLibraryBase);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x4EAE);
+		WriteWord(bytes, cursor + 2, 0xFF58);
+		cursor += 4;
+		WriteWord(bytes, cursor, 0x227C);
+		WriteLong(bytes, cursor + 2, CustConstants.DefaultModuleBaseAddress + interruptStructOffset);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x2C7C);
+		WriteLong(bytes, cursor + 2, AmigaKickstartHost.ExecLibraryBase);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x4EAE);
+		WriteWord(bytes, cursor + 2, 0xFF4C);
+		cursor += 4;
+		WriteWord(bytes, cursor, 0x4E75);
+
+		WriteLong(bytes, interruptStructOffset + 14, 0);
+		WriteLong(bytes, interruptStructOffset + 18, CustConstants.DefaultModuleBaseAddress + interruptCodeOffset);
+		WriteWord(bytes, interruptCodeOffset, 0x4E73);
+
+		return WrapSingleCodeHunk(bytes);
+	}
+
+	private static byte[] CreateIntuitionAllocRememberHunk()
+	{
+		const int initPlayerOffset = 0x80;
+		const int initSoundOffset = 0x82;
+		const int rememberKeyOffset = 0xC0;
+		var bytes = new byte[0x100];
+		WriteLong(bytes, 0x00, CustConstants.DtpCustomPlayer);
+		WriteLong(bytes, 0x04, 1);
+		WriteLong(bytes, 0x08, CustConstants.DtpInitPlayer);
+		WriteLong(bytes, 0x0C, CustConstants.DefaultModuleBaseAddress + initPlayerOffset);
+		WriteLong(bytes, 0x10, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x14, CustConstants.DefaultModuleBaseAddress + initSoundOffset);
+		WriteLong(bytes, 0x18, CustConstants.DtpFlags);
+		WriteLong(bytes, 0x1C, 1);
+		WriteLong(bytes, 0x20, CustConstants.TagDone);
+
+		WriteWord(bytes, initPlayerOffset, 0x4E75);
+
+		var cursor = initSoundOffset;
+		WriteWord(bytes, cursor, 0x2C6D);
+		WriteWord(bytes, cursor + 2, CustConstants.DtgIntuitionBaseOffset);
+		cursor += 4;
+		WriteWord(bytes, cursor, 0x41F9);
+		WriteLong(bytes, cursor + 2, CustConstants.DefaultModuleBaseAddress + rememberKeyOffset);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x203C);
+		WriteLong(bytes, cursor + 2, 0x20);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x7202);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0x4EAE);
+		WriteWord(bytes, cursor + 2, 0xFE74);
+		cursor += 4;
+		WriteWord(bytes, cursor, 0x4A80);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0x670A);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0x4AB9);
+		WriteLong(bytes, cursor + 2, CustConstants.DefaultModuleBaseAddress + rememberKeyOffset);
+		cursor += 6;
+		WriteWord(bytes, cursor, 0x6702);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0x4E75);
+		cursor += 2;
+		WriteWord(bytes, cursor, 0xF000);
+
+		return WrapSingleCodeHunk(bytes);
+	}
+
 	private static byte[] WrapSingleCodeHunk(byte[] bytes)
 	{
 		var words = new List<uint>
@@ -428,6 +556,12 @@ public sealed class CustRenderTests
 		Array.Copy(bytes, 0, result, words.Count * 4, bytes.Length);
 		WriteLong(result, (words.Count * 4) + bytes.Length, HunkParser.HunkEnd);
 		return result;
+	}
+
+	private static void WriteWord(byte[] bytes, int offset, ushort value)
+	{
+		bytes[offset] = (byte)(value >> 8);
+		bytes[offset + 1] = (byte)value;
 	}
 
 	private static void WriteLong(byte[] bytes, int offset, uint value)

@@ -35,6 +35,7 @@ public sealed class CopperScreenArchitectureTests
 		AssertProfile("expanded-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 		AssertProfile("vanilla-kickstart13", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0, 1);
 		AssertProfile("expanded-kickstart13", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
+		AssertProfile("expanded-diagrom", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.DiagRom, 512 * 1024, 2);
 		AssertProfile(
 			"expanded-jit-realfast-copperstart",
 			AmigaMachineProfile.A500Pal512KBoot,
@@ -52,6 +53,11 @@ public sealed class CopperScreenArchitectureTests
 			M68kBackendKind.JitM68000,
 			2 * 1024 * 1024);
 		AssertProfile("diagnostic-hrm-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
+
+		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
+		Assert.Equal("expanded-diagrom", diagRom.Id);
+		Assert.Equal("ROM/DiagROM/diagrom.rom", diagRom.KickstartRomPath);
+		Assert.True(diagRom.BootsWithoutDisk);
 	}
 
 	[Fact]
@@ -382,6 +388,38 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void ProfileStoreRoundTripsKickstartRomPath()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		try
+		{
+			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
+			draft.Id = "roundtrip-diagrom";
+			draft.DisplayName = "Roundtrip DiagROM";
+			draft.KickstartSource = CopperScreenKickstartSource.DiagRom;
+			draft.KickstartRomPath = "ROM/DiagROM/diagrom.rom";
+
+			var savedPath = CopperScreenProfileStore.Save(draft, baseDirectory);
+
+			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
+			Assert.Equal(CopperScreenKickstartSource.DiagRom, loaded.KickstartSource);
+			Assert.Equal("ROM/DiagROM/diagrom.rom", loaded.KickstartRomPath);
+			Assert.True(loaded.BootsWithoutDisk);
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
 	public void ProfileStoreSaveAsCreatesNonOverwritingCopy()
 	{
 		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -576,6 +614,23 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal("expanded-kickstart13", options.Profile.Id);
 		Assert.True(options.Profile.UsesKickstartRom);
 		Assert.EndsWith(Path.Combine("ROM", "Kickstart_13.rom"), options.KickstartRomPath);
+		Assert.Null(options.Error);
+	}
+
+	[Fact]
+	public void DiagRomProfileResolvesBundledRomAndDoesNotRequireDiskArgument()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "diagrom" },
+			AppContext.BaseDirectory);
+
+		Assert.Equal("expanded-diagrom", options.Profile.Id);
+		Assert.Equal(CopperScreenKickstartSource.DiagRom, options.Profile.KickstartSource);
+		Assert.True(options.Profile.UsesKickstartRom);
+		Assert.True(options.Profile.BootsWithoutDisk);
+		Assert.Null(options.DiskPath);
+		Assert.NotNull(options.KickstartRomPath);
+		Assert.EndsWith(Path.Combine("ROM", "DiagROM", "diagrom.rom"), options.KickstartRomPath);
 		Assert.Null(options.Error);
 	}
 

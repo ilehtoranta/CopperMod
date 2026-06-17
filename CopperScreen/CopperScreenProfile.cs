@@ -7,7 +7,8 @@ namespace CopperScreen;
 internal enum CopperScreenKickstartSource
 {
 	CopperStart,
-	Kickstart13Rom
+	Kickstart13Rom,
+	DiagRom
 }
 
 internal sealed class CopperScreenProfile
@@ -35,6 +36,7 @@ internal sealed class CopperScreenProfile
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
+		string? kickstartRomPath,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		CopperScreenInputOptions input,
 		CopperScreenPresentationOptions presentationOptions,
@@ -53,6 +55,7 @@ internal sealed class CopperScreenProfile
 		CpuBackend = cpuBackend;
 		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
+		KickstartRomPath = kickstartRomPath;
 		MediaDrives = mediaDrives;
 		Input = input;
 		PresentationOptions = presentationOptions;
@@ -85,6 +88,8 @@ internal sealed class CopperScreenProfile
 
 	public CopperScreenKickstartSource KickstartSource { get; }
 
+	public string? KickstartRomPath { get; }
+
 	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
 
 	public CopperScreenInputOptions Input { get; }
@@ -93,7 +98,9 @@ internal sealed class CopperScreenProfile
 
 	public string? ConfigPath { get; }
 
-	public bool UsesKickstartRom => KickstartSource == CopperScreenKickstartSource.Kickstart13Rom;
+	public bool UsesKickstartRom => KickstartSource != CopperScreenKickstartSource.CopperStart;
+
+	public bool BootsWithoutDisk => KickstartSource == CopperScreenKickstartSource.DiagRom;
 
 	public AmigaMachineProfile MachineProfile => ExpansionRamSize == 0
 		? AmigaMachineProfile.A500Pal512KChipOnlyBoot
@@ -182,6 +189,7 @@ internal sealed class CopperScreenProfile
 			"vanilla" => "vanilla-copperstart",
 			"expanded-rom" or "expanded-kickstart" or "expanded-kickstart-13" => "expanded-kickstart13",
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
+			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized
 		};
 	}
@@ -241,6 +249,7 @@ internal sealed class CopperScreenProfile
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
+			string.IsNullOrWhiteSpace(kickstart.Path) ? null : kickstart.Path.Trim(),
 			mediaDrives,
 			input,
 			presentationOptions,
@@ -264,7 +273,8 @@ internal sealed class CopperScreenProfile
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		CopperScreenInputOptions input,
 		string? configPath = null,
-		CopperScreenPresentationOptions? presentationOptions = null)
+		CopperScreenPresentationOptions? presentationOptions = null,
+		string? kickstartRomPath = null)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -285,6 +295,7 @@ internal sealed class CopperScreenProfile
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
+			string.IsNullOrWhiteSpace(kickstartRomPath) ? null : kickstartRomPath.Trim(),
 			mediaDrives,
 			input,
 			presentationOptions ?? CopperScreenPresentationOptions.Default,
@@ -382,6 +393,7 @@ internal sealed class CopperScreenProfile
 		{
 			"copperstart" => CopperScreenKickstartSource.CopperStart,
 			"kickstart13rom" or "kickstart13" or "rom" => CopperScreenKickstartSource.Kickstart13Rom,
+			"diagrom" or "diagromv2" => CopperScreenKickstartSource.DiagRom,
 			_ => throw new InvalidOperationException($"Unsupported kickstart source '{source}'.")
 		};
 	}
@@ -541,6 +553,7 @@ internal sealed class CopperScreenProfile
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
+			null,
 			Array.Empty<CopperScreenMediaDriveSettings>(),
 			CopperScreenInputOptions.Default,
 			CopperScreenPresentationOptions.Default,
@@ -615,6 +628,8 @@ internal sealed class CopperScreenProfile
 		public string? Source { get; set; }
 
 		public string? Version { get; set; }
+
+		public string? Path { get; set; }
 	}
 
 	private sealed class MediaFile

@@ -1404,8 +1404,8 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 44, 0));
-        Assert.Equal(0xFF000000u, Pixel(frame, 45, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 48, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 49, 0));
     }
 
     [Fact]
@@ -1497,8 +1497,8 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 25, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 44, 0));
-        Assert.Equal(0xFF000000u, Pixel(frame, 45, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 48, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 49, 0));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 0, 1));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 1, 1));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 24, 1));
@@ -2781,9 +2781,14 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF056, 0x4000);
         EnableBlitterDma(bus);
         bus.WriteWord(0x00DFF058, 0x0041);
+        var interruptCycle = bus.Blitter.GetPredictedCompletionCycle();
         RunBlitterUntilIdle(bus);
 
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqBlitter);
+        Assert.False(machine.DispatchPendingHardwareInterrupt());
+        var releaseCycle = interruptCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+        machine.Cpu.State.Cycles = releaseCycle;
+        bus.Paula.AdvanceTo(releaseCycle);
         Assert.True(machine.DispatchPendingHardwareInterrupt());
         Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);
         Assert.Equal(3, (machine.Cpu.State.StatusRegister >> 8) & 7);
@@ -3665,6 +3670,9 @@ public sealed class AmigaDiskDisplayTests
         machine.Bus.WriteWord(0x00DFF09C, 0x8002);
         machine.Bus.Paula.AdvanceTo(0);
 
+        Assert.False(machine.DispatchPendingHardwareInterrupt());
+        machine.Cpu.State.Cycles = AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+        machine.Bus.Paula.AdvanceTo(machine.Cpu.State.Cycles);
         Assert.True(machine.DispatchPendingHardwareInterrupt());
         Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);
         Assert.Equal(1, (machine.Cpu.State.StatusRegister >> 8) & 7);

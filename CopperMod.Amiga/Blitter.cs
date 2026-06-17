@@ -1351,6 +1351,11 @@ namespace CopperMod.Amiga
                 ticks += 2;
             }
 
+            if (_fillEnabled && !_useC)
+            {
+                ticks += 2;
+            }
+
             return ticks;
         }
 

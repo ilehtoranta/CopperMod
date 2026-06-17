@@ -41,6 +41,7 @@ namespace CopperMod.Amiga
         CiaTimer,
         Disk,
         Paula,
+        Copper,
         Blitter
     }
 
@@ -327,8 +328,27 @@ namespace CopperMod.Amiga
         public uint ProgramCounter { get; }
     }
 
+    internal sealed class M68kAddressErrorException : Exception
+    {
+        public static M68kAddressErrorException Instance { get; } = new M68kAddressErrorException();
+
+        private M68kAddressErrorException()
+        {
+        }
+    }
+
+    internal sealed class M68kIllegalInstructionException : Exception
+    {
+        public static M68kIllegalInstructionException Instance { get; } = new M68kIllegalInstructionException();
+
+        private M68kIllegalInstructionException()
+        {
+        }
+    }
+
     internal sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
+        private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
@@ -407,49 +427,60 @@ namespace CopperMod.Amiga
             }
 
             var startCycles = State.Cycles;
-            var instructionPc = State.ProgramCounter;
-            var opcode = FetchWord();
-            State.LastOpcode = opcode;
-            State.LastInstructionProgramCounter = instructionPc;
-            _instructionFrequency.Record(opcode);
-
-            var decoded = DecodeByOpcodeLine(opcode, instructionPc);
-            if (decoded)
+            try
             {
-                return (int)(State.Cycles - startCycles);
-            }
+                var instructionPc = State.ProgramCounter;
+                var opcode = FetchWord();
+                State.LastOpcode = opcode;
+                State.LastInstructionProgramCounter = instructionPc;
+                _instructionFrequency.Record(opcode);
 
-            if ((opcode & 0xF000) == 0xA000)
-            {
-                RaiseException(10, instructionPc, 34);
-                return (int)(State.Cycles - startCycles);
-            }
-
-            if ((opcode & 0xF000) == 0xF000)
-            {
-                if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
+                var decoded = DecodeByOpcodeLine(opcode, instructionPc);
+                if (decoded)
                 {
-                    var trapId = FetchWord();
-                    var returnProgramCounter = State.ProgramCounter;
-                    if (_bus.TryInvokeHostTrap(instructionPc, trapId, State))
-                    {
-                        AddCycles(16);
-                        if (!State.Halted && State.ProgramCounter == returnProgramCounter)
-                        {
-                            State.ProgramCounter = PullLong();
-                        }
-
-                        return (int)(State.Cycles - startCycles);
-                    }
-
-                    State.ProgramCounter = returnProgramCounter;
+                    return (int)(State.Cycles - startCycles);
                 }
 
-                RaiseException(11, instructionPc, 34);
+                if ((opcode & 0xF000) == 0xA000)
+                {
+                    RaiseException(10, instructionPc, 34);
+                    return (int)(State.Cycles - startCycles);
+                }
+
+                if ((opcode & 0xF000) == 0xF000)
+                {
+                    if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
+                    {
+                        var trapId = FetchWord();
+                        var returnProgramCounter = State.ProgramCounter;
+                        if (_bus.TryInvokeHostTrap(instructionPc, trapId, State))
+                        {
+                            AddCycles(16);
+                            if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                            {
+                                State.ProgramCounter = PullLong();
+                            }
+
+                            return (int)(State.Cycles - startCycles);
+                        }
+
+                        State.ProgramCounter = returnProgramCounter;
+                    }
+
+                    RaiseException(11, instructionPc, 34);
+                    return (int)(State.Cycles - startCycles);
+                }
+
+                throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+            }
+            catch (M68kAddressErrorException)
+            {
                 return (int)(State.Cycles - startCycles);
             }
-
-            throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+            catch (M68kIllegalInstructionException)
+            {
+                return (int)(State.Cycles - startCycles);
+            }
         }
 
         private bool DecodeByOpcodeLine(ushort opcode, uint instructionPc)
@@ -581,8 +612,9 @@ namespace CopperMod.Amiga
 
             if (condition == 1)
             {
+                var target = (uint)(branchBase + offset);
                 PushLong(State.ProgramCounter);
-                State.ProgramCounter = (uint)(branchBase + offset);
+                State.ProgramCounter = target;
                 AddCycles(displacement == 0 ? 18 : 18);
                 return true;
             }
@@ -763,6 +795,12 @@ namespace CopperMod.Amiga
             }
 
             var size = DecodeImmediateSize(opcode);
+            if (size == 0)
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
             var immediate = FetchImmediate(size);
             var mode = (opcode >> 3) & 7;
             var reg = opcode & 7;
@@ -878,9 +916,12 @@ namespace CopperMod.Amiga
                     return true;
                 }
                 case 0x4E75:
-                    State.ProgramCounter = PullLong();
+                {
+                    var programCounter = PullLong();
+                    State.ProgramCounter = programCounter;
                     AddCycles(16);
                     return true;
+                }
                 case 0x4E76:
                     State.Halted = true;
                     AddCycles(4);
@@ -1073,6 +1114,12 @@ namespace CopperMod.Amiga
             if (unary is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
                 var size = DecodeImmediateSize(opcode);
+                if (size == 0)
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, size, write: unary != 0x4A00);
                 var value = ea.Read();
                 switch (unary)
@@ -1315,6 +1362,11 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if ((line == 0x8 || line == 0xC) && DecodeBcdArithmetic(opcode))
+            {
+                return true;
+            }
+
             var reg = (opcode >> 9) & 7;
             var opmode = (opcode >> 6) & 7;
             var mode = (opcode >> 3) & 7;
@@ -1529,6 +1581,105 @@ namespace CopperMod.Amiga
 
             AddCycles(operandSize == M68kOperandSize.Long ? 12 : 8);
             return true;
+        }
+
+        private bool DecodeBcdArithmetic(ushort opcode)
+        {
+            if ((opcode & 0xF1F0) is not (0x8100 or 0xC100))
+            {
+                return false;
+            }
+
+            var subtract = (opcode & 0xF000) == 0x8000;
+            var sourceRegister = opcode & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var memoryMode = (opcode & 0x0008) != 0;
+            byte source;
+            byte destination;
+            uint destinationAddress = 0;
+
+            if (memoryMode)
+            {
+                SetAddressRegister(sourceRegister, State.A[sourceRegister] - AddressIncrement(sourceRegister, M68kOperandSize.Byte));
+                SetAddressRegister(destinationRegister, State.A[destinationRegister] - AddressIncrement(destinationRegister, M68kOperandSize.Byte));
+                source = ReadByte(State.A[sourceRegister]);
+                destinationAddress = State.A[destinationRegister];
+                destination = ReadByte(destinationAddress);
+            }
+            else
+            {
+                source = (byte)State.D[sourceRegister];
+                destination = (byte)State.D[destinationRegister];
+            }
+
+            var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
+            var result = subtract
+                ? SubtractBcdByte(destination, source, extend, out var carry)
+                : AddBcdByte(destination, source, extend, out carry);
+
+            if (memoryMode)
+            {
+                WriteByte(destinationAddress, result);
+            }
+            else
+            {
+                WriteDataRegister(destinationRegister, result, M68kOperandSize.Byte);
+            }
+
+            SetBcdFlags(result, carry);
+            AddCycles(memoryMode ? 18 : 6);
+            return true;
+        }
+
+        private static byte AddBcdByte(byte destination, byte source, int extend, out bool carry)
+        {
+            var low = (destination & 0x0F) + (source & 0x0F) + extend;
+            var high = (destination >> 4) + (source >> 4);
+            if (low > 9)
+            {
+                low -= 10;
+                high++;
+            }
+
+            carry = high > 9;
+            if (carry)
+            {
+                high -= 10;
+            }
+
+            return (byte)((high << 4) | low);
+        }
+
+        private static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry)
+        {
+            var low = (destination & 0x0F) - (source & 0x0F) - extend;
+            var high = (destination >> 4) - (source >> 4);
+            if (low < 0)
+            {
+                low += 10;
+                high--;
+            }
+
+            carry = high < 0;
+            if (carry)
+            {
+                high += 10;
+            }
+
+            return (byte)((high << 4) | low);
+        }
+
+        private void SetBcdFlags(byte result, bool carry)
+        {
+            if (result != 0)
+            {
+                State.SetFlag(M68kCpuState.Zero, false);
+            }
+
+            State.SetFlag(M68kCpuState.Negative, (result & 0x80) != 0);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, carry);
+            State.SetFlag(M68kCpuState.Extend, carry);
         }
 
         private bool DecodeCmpm(ushort opcode)
@@ -1859,8 +2010,14 @@ namespace CopperMod.Amiga
                 2 => ResolvePcRelative(size),
                 3 => ResolvePcIndexed(size),
                 4 => EaOperand.Immediate(this, FetchImmediate(size), size),
-                _ => throw new UnsupportedM68kOpcodeException(State.LastOpcode, State.ProgramCounter - 2)
+                _ => RaiseIllegalInstruction()
             };
+        }
+
+        private EaOperand RaiseIllegalInstruction()
+        {
+            RaiseException(4, State.LastInstructionProgramCounter, 34);
+            throw M68kIllegalInstructionException.Instance;
         }
 
         private EaOperand ResolvePcRelative(M68kOperandSize size)
@@ -2110,7 +2267,7 @@ namespace CopperMod.Amiga
                 0 => M68kOperandSize.Byte,
                 1 => M68kOperandSize.Word,
                 2 => M68kOperandSize.Long,
-                _ => throw new UnsupportedM68kOpcodeException(opcode, 0)
+                _ => (M68kOperandSize)0
             };
         }
 
@@ -2150,7 +2307,8 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
+                RaiseAddressError(address, isWrite: false, accessKind);
+                throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
@@ -2163,7 +2321,8 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
+                RaiseAddressError(address, isWrite: false, AmigaBusAccessKind.CpuDataRead);
+                throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
@@ -2183,7 +2342,8 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
+                RaiseAddressError(address, isWrite: true, AmigaBusAccessKind.CpuDataWrite);
+                throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
@@ -2195,7 +2355,8 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
+                RaiseAddressError(address, isWrite: true, AmigaBusAccessKind.CpuDataWrite);
+                throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
@@ -2244,6 +2405,45 @@ namespace CopperMod.Amiga
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong((uint)(vector * 4));
             AddCycles(cycles);
+        }
+
+        private void RaiseAddressError(uint faultAddress, bool isWrite, AmigaBusAccessKind accessKind)
+        {
+            var savedStatusRegister = State.StatusRegister;
+            State.StatusRegister |= M68kCpuState.Supervisor;
+            PushLong(State.ProgramCounter);
+            PushWord(savedStatusRegister);
+            PushWord(State.LastOpcode);
+            PushLong(faultAddress);
+            PushWord(CreateBusErrorStatusWord(faultAddress, savedStatusRegister, isWrite, accessKind));
+            State.ProgramCounter = ReadLong(0x0000_000C);
+            AddCycles(AddressErrorExceptionCycles);
+        }
+
+        private static ushort CreateBusErrorStatusWord(
+            uint faultAddress,
+            ushort savedStatusRegister,
+            bool isWrite,
+            AmigaBusAccessKind accessKind)
+        {
+            _ = faultAddress;
+            var instruction = accessKind == AmigaBusAccessKind.CpuInstructionFetch;
+            var supervisor = (savedStatusRegister & M68kCpuState.Supervisor) != 0;
+            var functionCode = instruction
+                ? (supervisor ? 0x06 : 0x02)
+                : (supervisor ? 0x05 : 0x01);
+            var status = functionCode & 0x07;
+            if (!instruction)
+            {
+                status |= 0x08;
+            }
+
+            if (!isWrite)
+            {
+                status |= 0x10;
+            }
+
+            return (ushort)status;
         }
 
         private static uint AddressIncrement(int reg, M68kOperandSize size)

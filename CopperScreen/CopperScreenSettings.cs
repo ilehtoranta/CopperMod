@@ -81,6 +81,7 @@ internal sealed class CopperScreenSettingsDraft
 			FloppyDriveCount = profile.FloppyDriveCount,
 			CpuBackend = profile.CpuBackend,
 			KickstartSource = profile.KickstartSource,
+			KickstartRomPath = profile.KickstartRomPath,
 			FloppyDriveAudio = profile.FloppyDriveAudio,
 			Input = profile.Input,
 			PresentationOptions = profile.PresentationOptions
@@ -140,7 +141,8 @@ internal sealed class CopperScreenSettingsDraft
 			CreateMediaDrives(),
 			Input,
 			configPath,
-			PresentationOptions);
+			PresentationOptions,
+			KickstartRomPath);
 	}
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> CreateMediaDrives()
@@ -355,7 +357,8 @@ internal static class CopperScreenProfileStore
 				Kickstart = new KickstartFile
 				{
 					Source = draft.KickstartSource.ToString(),
-					Version = "1.3"
+					Version = draft.KickstartSource == CopperScreenKickstartSource.DiagRom ? "2.0" : "1.3",
+					Path = string.IsNullOrWhiteSpace(draft.KickstartRomPath) ? null : draft.KickstartRomPath.Trim()
 				},
 				Media = draft.CreateMediaDrives().Count == 0
 					? null
@@ -472,6 +475,8 @@ internal static class CopperScreenProfileStore
 		public string Source { get; set; } = "CopperStart";
 
 		public string Version { get; set; } = "1.3";
+
+		public string? Path { get; set; }
 	}
 
 	private sealed class MediaFile

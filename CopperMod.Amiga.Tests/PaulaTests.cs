@@ -69,6 +69,14 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void SerialDataReadReportsIdleTransmitEmptyBits()
+	{
+		var bus = CreatePaulaComponentBus();
+
+		Assert.Equal(0x3000, bus.ReadWord(0x00DFF018));
+	}
+
+	[Fact]
 	public void CustomRegisterReadDmaFetchIsReusedWhenAudioTimelineCatchesUp()
 	{
 		var bus = CreatePaulaComponentBus();

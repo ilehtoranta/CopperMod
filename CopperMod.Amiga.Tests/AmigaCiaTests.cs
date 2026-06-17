@@ -258,7 +258,7 @@ public sealed class AmigaCiaTests
 	}
 
 	[Fact]
-	public void KeyboardSerialInterruptImmediatelyDispatchesPortsIntreq()
+	public void KeyboardSerialInterruptDispatchesPortsIntreqAfterRecognitionDelay()
 	{
 		var machine = new AmigaMachine(AmigaMachineOptions
 			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
@@ -271,6 +271,10 @@ public sealed class AmigaCiaTests
 
 		machine.Bus.Keyboard.KeyDown(AmigaRawKey.Digit1, 100);
 
+		Assert.False(machine.DispatchPendingHardwareInterrupt());
+		var releaseCycle = 100 + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		machine.Cpu.State.Cycles = releaseCycle;
+		machine.Bus.Paula.AdvanceTo(releaseCycle);
 		Assert.True(machine.DispatchPendingHardwareInterrupt());
 		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqPorts);
 		Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);

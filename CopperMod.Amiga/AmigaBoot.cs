@@ -642,7 +642,7 @@ namespace CopperMod.Amiga
                 _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
                 _owner._machine.Bus.AdvanceRasterTo(currentCycle);
                 _owner._machine.Bus.AdvanceCiaTimersTo(currentCycle);
-                _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: false, advancePassiveDiskInput: false);
+                _owner._machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: true, advancePassiveDiskInput: false);
                 _owner._machine.DispatchPendingHardwareInterrupt();
 
                 _instructions += instructionCount;
@@ -1221,6 +1221,12 @@ namespace CopperMod.Amiga
                 case -384: // RemakeDisplay
                 case -390: // RethinkDisplay
                     state.D[0] = HostRethinkDisplay(state.Cycles);
+                    return;
+                case -396: // AllocRemember
+                    HostAllocMemAndStore(state);
+                    return;
+                case -408: // FreeRemember
+                    state.D[0] = 0;
                     return;
                 case -294: // ViewAddress
                     state.D[0] = _currentViewAddress != 0 ? _currentViewAddress : EnsureSyntheticView();

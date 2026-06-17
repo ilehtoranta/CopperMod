@@ -1040,7 +1040,7 @@ internal sealed class MainWindow : Window
 		_profileIdBox = AddTextSetting(layout, "Profile id");
 		_profileNameBox = AddTextSetting(layout, "Display name");
 		_profileDescriptionBox = AddTextSetting(layout, "Description");
-		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom"]);
+		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom", "DiagRom"]);
 		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
 		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "JitM68000"]);
 		layout.Children.Add(CreateSettingsSection("Memory"));
@@ -1869,9 +1869,14 @@ internal sealed class MainWindow : Window
 	}
 
 	private static CopperScreenKickstartSource ParseKickstartSourceSelection(object? value)
-		=> string.Equals(value?.ToString(), "Kickstart13Rom", StringComparison.OrdinalIgnoreCase)
-			? CopperScreenKickstartSource.Kickstart13Rom
-			: CopperScreenKickstartSource.CopperStart;
+	{
+		return value?.ToString() switch
+		{
+			string source when string.Equals(source, "Kickstart13Rom", StringComparison.OrdinalIgnoreCase) => CopperScreenKickstartSource.Kickstart13Rom,
+			string source when string.Equals(source, "DiagRom", StringComparison.OrdinalIgnoreCase) => CopperScreenKickstartSource.DiagRom,
+			_ => CopperScreenKickstartSource.CopperStart
+		};
+	}
 
 	private static M68kBackendKind ParseCpuSelection(object? value)
 		=> string.Equals(value?.ToString(), "JitM68000", StringComparison.OrdinalIgnoreCase)

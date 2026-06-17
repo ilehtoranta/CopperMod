@@ -15,6 +15,8 @@ namespace CopperMod.Cust
         private const int MaxPaulaInterruptsPerDispatch = 512;
         private const uint DmaconAddress = 0x00DFF096;
         private const ushort DmaconSetMasterDma = 0x8200;
+        private const uint SubroutineReturnAddress = 0xFFFF_FFFC;
+        private const uint InterruptReturnAddress = 0xFFFF_FFF8;
         private readonly HunkFile _hunk;
         private readonly DeliTagTable _rawTags;
         private readonly ModuleLoadContext? _loadContext;
@@ -470,6 +472,18 @@ namespace CopperMod.Cust
             {
                 state.D[0] = AmigaKickstartHost.DosLibraryBase;
             }
+            else if (name.IndexOf("graphics", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                state.D[0] = AmigaKickstartHost.GraphicsLibraryBase;
+            }
+            else if (name.IndexOf("intuition", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                state.D[0] = AmigaKickstartHost.IntuitionLibraryBase;
+            }
+            else if (name.IndexOf("expansion", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                state.D[0] = AmigaKickstartHost.ExpansionLibraryBase;
+            }
             else if (name.IndexOf("ciaa", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 state.D[0] = AmigaKickstartHost.CiaAResourceBase;
@@ -655,7 +669,10 @@ namespace CopperMod.Cust
             var value = ReadNullTerminatedString(state.A[0], 128);
             if (LooksLikePathFragment(value))
             {
-                _hostPath += value.Replace('\\', '/');
+                var currentPath = ReadNullTerminatedString(
+                    AmigaKickstartHost.HostPathBufferAddress,
+                    AmigaKickstartHost.HostPathBufferLength);
+                _hostPath = currentPath + value.Replace('\\', '/');
                 WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, _hostPath, AmigaKickstartHost.HostPathBufferLength);
             }
 
@@ -803,15 +820,24 @@ namespace CopperMod.Cust
                 advanceTimedHardwareDuringRun);
         }
 
-        private void CallInstalledInterrupt(long budget)
+        private void CallGenericInstalledInterrupts(long budget)
         {
-            if (_installedInterrupts.Count == 0)
+            var servers = new List<InterruptServer>();
+            foreach (var server in _installedInterrupts)
+            {
+                if (!server.Cia.HasValue && server.PaulaMask == 0)
+                {
+                    servers.Add(server);
+                }
+            }
+
+            if (servers.Count == 0)
             {
                 return;
             }
 
-            var perServerBudget = Math.Max(1, budget / _installedInterrupts.Count);
-            foreach (var server in _installedInterrupts.ToArray())
+            var perServerBudget = Math.Max(1, budget / servers.Count);
+            foreach (var server in servers)
             {
                 RunIsolatedSubroutine(
                     server.Code,
@@ -839,7 +865,7 @@ namespace CopperMod.Cust
             if (!HasInstalledCiaInterruptServer())
             {
                 Bus.AdvanceCiasTo(targetCycle);
-                Bus.DrainCiaInterrupts();
+                DispatchGenericCiaInterrupts(targetCycle);
                 return;
             }
 
@@ -883,9 +909,37 @@ namespace CopperMod.Cust
 
                 Cpu.State.Cycles = Math.Max(Cpu.State.Cycles, interruptEvent.Cycle);
                 CallInstalledInterrupt(interruptEvent);
+                Bus.SetCiaInterrupts(interruptEvent.Cia, interruptEvent.IcrBits, Cpu.State.Cycles);
+                CallGenericInstalledInterrupts(HostInterruptCycleBudget);
                 dispatched++;
                 if (dispatched >= MaxCiaInterruptsPerDispatch)
                 {
+                    return;
+                }
+            }
+        }
+
+        private void DispatchGenericCiaInterrupts(long targetCycle)
+        {
+            var dispatched = 0;
+            var events = Bus.DrainCiaInterrupts();
+            foreach (var interruptEvent in events)
+            {
+                if (interruptEvent.Cycle > targetCycle)
+                {
+                    continue;
+                }
+
+                Cpu.State.Cycles = Math.Max(Cpu.State.Cycles, interruptEvent.Cycle);
+                CallGenericInstalledInterrupts(HostInterruptCycleBudget);
+                Bus.SetCiaInterrupts(interruptEvent.Cia, interruptEvent.IcrBits, Cpu.State.Cycles);
+                dispatched++;
+                if (dispatched >= MaxCiaInterruptsPerDispatch)
+                {
+                    AddDiagnostic(
+                        ModuleDiagnosticSeverity.Warning,
+                        "CUST generic CIA interrupt dispatch exceeded its per-quantum guard.",
+                        "CUST_CPU_OVERRUN");
                     return;
                 }
             }
@@ -1035,18 +1089,20 @@ namespace CopperMod.Cust
             bool advancePaulaAtEnd = true,
             Action<M68kCpuState>? prepare = null,
             bool dispatchHostInterrupts = true,
-            bool advanceTimedHardwareDuringRun = true)
+            bool advanceTimedHardwareDuringRun = true,
+            GuestReturnFrame returnFrame = GuestReturnFrame.Subroutine)
         {
             var startCycles = Cpu.State.Cycles;
             var instructions = 0;
             var stopwatch = Stopwatch.StartNew();
-            Cpu.BeginSubroutine(address, CustConstants.StackTopAddress, 0xFFFF_FFFC);
+            var returnAddress = returnFrame == GuestReturnFrame.Interrupt ? InterruptReturnAddress : SubroutineReturnAddress;
+            var alternateReturnAddress = BeginRoutine(address, returnAddress, returnFrame);
             Cpu.State.A[5] = CustConstants.HostBlockAddress;
             prepare?.Invoke(Cpu.State);
             try
             {
                 while (!Cpu.State.Halted &&
-                    Cpu.State.ProgramCounter != 0xFFFF_FFFC &&
+                    !HasRoutineReturned(Cpu.State.ProgramCounter, returnAddress, alternateReturnAddress) &&
                     Cpu.State.Cycles - startCycles < maxCycles &&
                     instructions < CustConstants.SubroutineInstructionBudget &&
                     stopwatch.ElapsedMilliseconds < CustConstants.SubroutineWallClockBudgetMilliseconds)
@@ -1065,12 +1121,12 @@ namespace CopperMod.Cust
                     instructions++;
                 }
 
-                if (Cpu.State.ProgramCounter != 0xFFFF_FFFC &&
+                if (!HasRoutineReturned(Cpu.State.ProgramCounter, returnAddress, alternateReturnAddress) &&
                     (Cpu.State.Cycles - startCycles >= maxCycles ||
                     instructions >= CustConstants.SubroutineInstructionBudget ||
                     stopwatch.ElapsedMilliseconds >= CustConstants.SubroutineWallClockBudgetMilliseconds))
                 {
-                    if (!dispatchHostInterrupts || !TryRecoverHostInterruptWait())
+                    if (!dispatchHostInterrupts || !TryRecoverHostInterruptWait(returnAddress, alternateReturnAddress))
                     {
                         AddDiagnostic(
                             ModuleDiagnosticSeverity.Warning,
@@ -1108,13 +1164,40 @@ namespace CopperMod.Cust
             }
         }
 
+        private uint? BeginRoutine(uint address, uint returnAddress, GuestReturnFrame returnFrame)
+        {
+            if (returnFrame == GuestReturnFrame.Subroutine)
+            {
+                Cpu.BeginSubroutine(address, CustConstants.StackTopAddress, returnAddress);
+                return null;
+            }
+
+            var savedStatusRegister = Cpu.State.StatusRegister;
+            Cpu.State.StatusRegister = (ushort)(savedStatusRegister | M68kCpuState.Supervisor);
+            var stackTop = Cpu.State.A[7] >= 6 ? Cpu.State.A[7] : CustConstants.StackTopAddress;
+            var stackPointer = stackTop - 6;
+            Cpu.State.SetActiveStackPointer(stackPointer);
+            Bus.WriteHostWord(stackPointer, savedStatusRegister);
+            Bus.WriteHostLong(stackPointer + 2, returnAddress);
+            Cpu.State.ProgramCounter = address;
+            Cpu.State.Halted = false;
+            Cpu.State.Stopped = false;
+            return ((uint)savedStatusRegister << 16) | (returnAddress >> 16);
+        }
+
+        private static bool HasRoutineReturned(uint programCounter, uint returnAddress, uint? alternateReturnAddress)
+        {
+            return programCounter == returnAddress ||
+                (alternateReturnAddress.HasValue && programCounter == alternateReturnAddress.Value);
+        }
+
         private void AdvanceTimedHardwareTo(long targetCycle)
         {
             Bus.AdvanceRasterTo(targetCycle);
             Bus.Paula.AdvanceTo(targetCycle);
         }
 
-        private bool TryRecoverHostInterruptWait()
+        private bool TryRecoverHostInterruptWait(uint returnAddress, uint? alternateReturnAddress)
         {
             if (_insideHostInterrupt || ShouldUseDeliTimerInterrupt() || _installedInterrupts.Count == 0)
             {
@@ -1127,7 +1210,7 @@ namespace CopperMod.Cust
                 var startCycles = Cpu.State.Cycles;
                 var instructions = 0;
                 while (!Cpu.State.Halted &&
-                    Cpu.State.ProgramCounter != 0xFFFF_FFFC &&
+                    !HasRoutineReturned(Cpu.State.ProgramCounter, returnAddress, alternateReturnAddress) &&
                     Cpu.State.Cycles - startCycles < GetRecoveryIntervalCycles() * 4 &&
                     instructions < 4_000)
                 {
@@ -1138,7 +1221,7 @@ namespace CopperMod.Cust
                     instructions++;
                 }
 
-                if (Cpu.State.ProgramCounter == 0xFFFF_FFFC)
+                if (HasRoutineReturned(Cpu.State.ProgramCounter, returnAddress, alternateReturnAddress))
                 {
                     return true;
                 }
@@ -1188,7 +1271,12 @@ namespace CopperMod.Cust
             try
             {
                 _insideHostInterrupt = true;
-                RunSubroutine(address, maxCycles, advancePaulaAtEnd: false, prepare);
+                RunSubroutine(
+                    address,
+                    maxCycles,
+                    advancePaulaAtEnd: false,
+                    prepare: prepare,
+                    returnFrame: GuestReturnFrame.Interrupt);
                 elapsedCycles = Math.Max(0, Cpu.State.Cycles - savedCycles);
             }
             finally
@@ -1203,6 +1291,12 @@ namespace CopperMod.Cust
                 Cpu.State.LastInstructionProgramCounter = savedLastPc;
                 Cpu.State.Cycles = savedCycles + elapsedCycles;
             }
+        }
+
+        private enum GuestReturnFrame
+        {
+            Subroutine,
+            Interrupt
         }
 
         private void AddDiagnostic(ModuleDiagnosticSeverity severity, string message, string code)

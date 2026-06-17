@@ -760,6 +760,31 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     }
 
     [Fact]
+    public void LiveDmaLatePendingWriteDoesNotRecaptureCompletedBitplaneRow()
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: true);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var lateWriteCycle = OutputCycle(StandardY, 0xDA);
+
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        SetBitplanePointer(bus, 0, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        bus.WriteWord(0x00DFF096, 0x8380);
+        bus.WriteWord(0x00DFF100, 0x1000);
+
+        bus.AdvanceDmaTo(lateWriteCycle);
+        bus.Display.ScheduleWrite(lateWriteCycle, 0x096, 0x0100);
+        bus.AdvanceDmaTo(FrameCycles());
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, AmigaConstants.PalLowResWidth - 1, StandardY));
+    }
+
+    [Fact]
     public void LiveDmaArchivedTimelineRendersDmaconChanges()
     {
         var presentationBus = CreateDmaconDisableBus(enableLiveDma: false);

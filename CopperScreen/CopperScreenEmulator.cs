@@ -83,7 +83,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			SetDriveDiskMetadata(driveIndex, path);
 		}
 		_initialDiskImageOverride = initialDiskImageOverride;
-		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
+		StatusText = _startupError ?? GetInitialStatusText();
 	}
 
 	public int Width { get; }
@@ -265,10 +265,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return machineOptions;
 		}
 
-		var romPath = startupOptions.KickstartRomPath ?? FindDefaultKickstart13Rom(startupOptions.BaseDirectory);
+		var romPath = startupOptions.KickstartRomPath ?? FindDefaultRomImage(startupOptions.Profile.KickstartSource, startupOptions.BaseDirectory);
 		if (romPath == null || !File.Exists(romPath))
 		{
-			startupError ??= "Kickstart 1.3 ROM not found. Expected ROM\\Kickstart_13.rom or pass --kickstart-rom <path>.";
+			startupError ??= $"{GetRomDisplayName(startupOptions.Profile.KickstartSource)} not found. Expected {GetDefaultRomHint(startupOptions.Profile.KickstartSource)} or pass --kickstart-rom <path>.";
 			return machineOptions;
 		}
 
@@ -280,7 +280,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
 		{
-			startupError ??= $"Could not load Kickstart 1.3 ROM: {ex.Message}";
+			startupError ??= $"Could not load {GetRomDisplayName(startupOptions.Profile.KickstartSource)}: {ex.Message}";
 		}
 
 		return machineOptions;
@@ -314,18 +314,31 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return Math.Clamp(driveCount, 1, 4);
 	}
 
-	private static string? FindDefaultKickstart13Rom(string baseDirectory)
+	private static string? FindDefaultRomImage(CopperScreenKickstartSource source, string baseDirectory)
+	{
+		return source == CopperScreenKickstartSource.DiagRom
+			? FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "DiagROM", "diagrom.rom"))
+			: FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "Kickstart_13.rom"));
+	}
+
+	private static string GetRomDisplayName(CopperScreenKickstartSource source)
+		=> source == CopperScreenKickstartSource.DiagRom ? "DiagROM" : "Kickstart 1.3 ROM";
+
+	private static string GetDefaultRomHint(CopperScreenKickstartSource source)
+		=> source == CopperScreenKickstartSource.DiagRom ? "ROM\\DiagROM\\diagrom.rom" : "ROM\\Kickstart_13.rom";
+
+	private static string? FindDefaultRomImage(string baseDirectory, string relativePath)
 	{
 		var directory = new DirectoryInfo(baseDirectory);
 		while (directory != null)
 		{
-			var localRom = Path.Combine(directory.FullName, "ROM", "Kickstart_13.rom");
+			var localRom = Path.Combine(directory.FullName, relativePath);
 			if (File.Exists(localRom))
 			{
 				return localRom;
 			}
 
-			var projectRom = Path.Combine(directory.FullName, "CopperScreen", "ROM", "Kickstart_13.rom");
+			var projectRom = Path.Combine(directory.FullName, "CopperScreen", relativePath);
 			if (File.Exists(projectRom))
 			{
 				return projectRom;
@@ -585,6 +598,21 @@ internal sealed class CopperScreenEmulator : IDisposable
 		InsertAdjacentExternalDisks(diskPath, markChanged);
 	}
 
+	private AmigaDiskImage LoadInitialBootDisk()
+	{
+		if (DiskPath != null)
+		{
+			return AmigaDiskImage.Load(DiskPath);
+		}
+
+		if (_profile.BootsWithoutDisk)
+		{
+			return AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "diagrom-blank.adf");
+		}
+
+		throw new InvalidOperationException("A disk image is required to boot this profile.");
+	}
+
 	private void ApplyConfiguredBootDriveWriteProtection()
 	{
 		if (_initialDriveWriteProtected.Length > 0 && _initialDriveWriteProtected[0] is bool writeProtected)
@@ -701,7 +729,17 @@ internal sealed class CopperScreenEmulator : IDisposable
 			IsPaused = false;
 		}
 
-		StatusText = _startupError ?? (DiskPath == null ? "insert disk image" : _diskName);
+		StatusText = _startupError ?? GetInitialStatusText();
+	}
+
+	private string GetInitialStatusText()
+	{
+		if (DiskPath != null)
+		{
+			return _diskName;
+		}
+
+		return _profile.BootsWithoutDisk ? _profile.DisplayName : "insert disk image";
 	}
 
 	public bool TogglePaused()
@@ -937,7 +975,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return;
 		}
 
-		if (DiskPath == null)
+		if (DiskPath == null && !_profile.BootsWithoutDisk)
 		{
 			_frameAudio.AsSpan().Clear();
 			InvalidateInterlacePresentationHistory();
@@ -960,7 +998,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			try
 			{
 				_bootAttempted = true;
-				var disk = _initialDiskImageOverride ?? AmigaDiskImage.Load(DiskPath);
+				var disk = _initialDiskImageOverride ?? LoadInitialBootDisk();
 				_initialDiskImageOverride = null;
 				if (_profile.UsesKickstartRom)
 				{

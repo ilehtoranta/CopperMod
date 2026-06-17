@@ -73,6 +73,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		{
 			yield return new object[] { new AreaTimingRow("D-only clear", 0x0100, DestinationD, 4, 1) };
 			yield return new object[] { new AreaTimingRow("A+D copy", 0x09F0, SourceA, 4, 2) };
+			yield return new object[] { new AreaTimingRow("A+D exclusive fill", 0x09F0, SourceA, 6, 2, 0x0012) };
 			yield return new object[] { new AreaTimingRow("B+D copy", 0x05CC, SourceB, 6, 2) };
 			yield return new object[] { new AreaTimingRow("B+C+D copy", 0x07CA, SourceB, 8, 3) };
 		}
@@ -102,7 +103,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.Equal(32, ShiftRows.Count());
 		Assert.Equal(16, LineOctantRows.Count());
 		Assert.Equal(16, LineTextureRows.Count());
-		Assert.Equal(4, AreaTimingRows.Count());
+		Assert.Equal(5, AreaTimingRows.Count());
 	}
 
 	[Theory]
@@ -409,7 +410,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		var bus = new AmigaBus();
 		WriteWord(bus, row.SourceAddress, 0x1234);
 		WriteWord(bus, SourceC, 0x00FF);
-		ConfigureAreaBlit(bus, row.Bltcon0);
+		ConfigureAreaBlit(bus, row.Bltcon0, row.Bltcon1);
 		EnableBlitterDma(bus);
 
 		bus.WriteWord(0x00DFF058, 0x0041);
@@ -468,6 +469,45 @@ public sealed class AmigaBlitterConformanceMatrixTests
 				access.Request.IsWrite &&
 				access.Request.Address == destination);
 		Assert.True(finalWrite.CompletedCycle > nominalCompletion);
+	}
+
+	[Fact]
+	public void BlitterFillWithBlitPriWaitsForNextFrameBitplaneDma()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var fetchCycle = frameCycles +
+			OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			(0x38 * slotCycles);
+		var destination = 0x1800u;
+		WriteWord(bus, SourceA, 0xCAFE);
+		WriteWord(bus, destination, 0x1234);
+		ConfigureAreaBlit(bus, 0x09F0, bltcon1: 0x0012, destinationD: destination);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		WritePointer(bus, 0x00DFF0E0, 0x2000);
+		WritePointer(bus, 0x00DFF0E4, 0x3000);
+		WritePointer(bus, 0x00DFF0E8, 0x4000);
+		bus.WriteWord(0x00DFF100, 0x3000);
+		bus.WriteWord(0x00DFF096, 0x8740);
+
+		bus.AdvanceDmaTo(frameCycles);
+		bus.Blitter.WriteRegister(0x058, 0x0041, fetchCycle - (3 * slotCycles));
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		Assert.Equal(fetchCycle - (2 * slotCycles), startCycle);
+
+		bus.AdvanceDmaTo(fetchCycle + (8 * slotCycles));
+
+		var finalWrite = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite &&
+				access.Request.Address == destination);
+		Assert.True(finalWrite.GrantedCycle > fetchCycle);
 	}
 
 	[Fact]
@@ -785,7 +825,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		public override string ToString() => $"texture shift={ShiftB}";
 	}
 
-	private sealed record AreaTimingRow(string Name, ushort Bltcon0, uint SourceAddress, int ExpectedCycles, int ExpectedMicroOps)
+	private sealed record AreaTimingRow(string Name, ushort Bltcon0, uint SourceAddress, int ExpectedCycles, int ExpectedMicroOps, ushort Bltcon1 = 0)
 	{
 		public override string ToString() => Name;
 	}

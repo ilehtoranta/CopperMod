@@ -6,10 +6,10 @@ public sealed class AmigaCustomChipPointerTests
 {
     [Theory]
     [InlineData(512 * 1024, 0x0007_FFFEu)]
-    [InlineData(1024 * 1024, 0x000F_FFFEu)]
-    [InlineData(2 * 1024 * 1024, 0x001F_FFFEu)]
-    [InlineData(8 * 1024 * 1024, 0x007F_FFFEu)]
-    public void CustomChipDmaPointerMaskFollowsInstalledChipRamSize(int chipRamSize, uint expectedMask)
+    [InlineData(1024 * 1024, 0x0007_FFFEu)]
+    [InlineData(2 * 1024 * 1024, 0x0007_FFFEu)]
+    [InlineData(8 * 1024 * 1024, 0x0007_FFFEu)]
+    public void CustomChipDmaPointerMaskUsesOcsChipDmaBusWidth(int chipRamSize, uint expectedMask)
     {
         var bus = new AmigaBus(chipRamSize);
 
@@ -20,10 +20,10 @@ public sealed class AmigaCustomChipPointerTests
 
     [Theory]
     [InlineData(512 * 1024, 0x0007_FFFEu)]
-    [InlineData(1024 * 1024, 0x000F_FFFEu)]
-    [InlineData(2 * 1024 * 1024, 0x001F_FFFEu)]
-    [InlineData(8 * 1024 * 1024, 0x007F_FFFEu)]
-    public void CustomChipPointerRegistersMaskUnusedBitsToInstalledChipRamSize(int chipRamSize, uint expectedPointer)
+    [InlineData(1024 * 1024, 0x0007_FFFEu)]
+    [InlineData(2 * 1024 * 1024, 0x0007_FFFEu)]
+    [InlineData(8 * 1024 * 1024, 0x0007_FFFEu)]
+    public void CustomChipPointerRegistersMaskUnusedBitsToOcsChipDmaBusWidth(int chipRamSize, uint expectedPointer)
     {
         var bus = new AmigaBus(chipRamSize);
 

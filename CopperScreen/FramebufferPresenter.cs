@@ -240,7 +240,7 @@ internal sealed class FramebufferPresenter : Control
 			return false;
 		}
 
-		var snappedScale = SnapUniformScaleToDevicePixels(scale, source, renderScaling);
+		var snappedScale = SnapUniformScaleToDevicePixels(scale, renderScaling);
 		var imageWidth = Math.Min(bounds.Width, source.Width * snappedScale);
 		var imageHeight = Math.Min(bounds.Height, source.Height * snappedScale);
 		if (imageWidth <= 0 || imageHeight <= 0)
@@ -266,13 +266,10 @@ internal sealed class FramebufferPresenter : Control
 			PixelFormat.Bgra8888,
 			AlphaFormat.Opaque);
 
-	private static double SnapUniformScaleToDevicePixels(double scale, Size source, double renderScaling)
+	private static double SnapUniformScaleToDevicePixels(double scale, double renderScaling)
 	{
-		var width = GetIntegralSourceDimension(source.Width);
-		var height = GetIntegralSourceDimension(source.Height);
-		var divisor = GreatestCommonDivisor(width, height);
-		var snappedDeviceScale = Math.Floor(scale * renderScaling * divisor) / divisor;
-		if (snappedDeviceScale > 0)
+		var snappedDeviceScale = Math.Floor(scale * renderScaling);
+		if (snappedDeviceScale >= 1)
 		{
 			return snappedDeviceScale / renderScaling;
 		}
@@ -282,23 +279,6 @@ internal sealed class FramebufferPresenter : Control
 
 	private static double SnapOffsetToDevicePixel(double value, double renderScaling)
 		=> Math.Round(Math.Max(0, value) * renderScaling) / renderScaling;
-
-	private static int GetIntegralSourceDimension(double value)
-		=> Math.Max(1, (int)Math.Round(value));
-
-	private static int GreatestCommonDivisor(int left, int right)
-	{
-		left = Math.Abs(left);
-		right = Math.Abs(right);
-		while (right != 0)
-		{
-			var remainder = left % right;
-			left = right;
-			right = remainder;
-		}
-
-		return Math.Max(1, left);
-	}
 
 	internal static void CopyBgraRows(int[] bgra, int width, int height, IntPtr destination, int destinationRowBytes)
 	{

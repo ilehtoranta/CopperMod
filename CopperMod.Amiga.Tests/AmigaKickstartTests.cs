@@ -70,6 +70,30 @@ public sealed class AmigaKickstartTests
 	}
 
 	[Fact]
+	public void HostShim13RoutesIntuitionAllocRememberToAllocator()
+	{
+		var bus = new AmigaBus();
+		var requestedSize = 0u;
+		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		host.Install(bus, CreateTrapTable(allocMemAndStore: state =>
+		{
+			requestedSize = state.D[0];
+			state.D[0] = 0x0010_2000;
+			bus.WriteLong(state.A[0], state.D[0]);
+		}));
+		var state = new M68kCpuState();
+		state.A[0] = 0x2000;
+		state.D[0] = 0x1234;
+		state.D[1] = 2;
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -396), state));
+
+		Assert.Equal(0x1234u, requestedSize);
+		Assert.Equal(0x0010_2000u, state.D[0]);
+		Assert.Equal(0x0010_2000u, bus.ReadLong(0x2000));
+	}
+
+	[Fact]
 	public void RomImageConfigurationMapsKickstartBytesWithoutInstallingHostTraps()
 	{
 		var bus = new AmigaBus();

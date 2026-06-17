@@ -10,6 +10,7 @@ namespace CopperMod.Amiga
         private const ushort AudioInterruptMask = 0x0780;
         private const ushort WritableDmaconMask = 0x07FF;
         private const ushort WritableIntreqMask = 0x3FFF;
+        private const ushort IdleSerdatr = 0x3000;
         private const float VoiceScale = 0.25f;
         private const int MaxCapturedWrites = 65536;
         private const int MaxPendingInterruptEvents = 65536;
@@ -23,8 +24,11 @@ namespace CopperMod.Amiga
         private readonly ReusableReadOnlyList<PaulaInterruptEvent> _drainedInterrupts = new ReusableReadOnlyList<PaulaInterruptEvent>();
         private readonly BoundedWriteLog _writes = new BoundedWriteLog(MaxCapturedWrites);
         private readonly byte[] _registerBytes = new byte[0x200];
+        private readonly long[] _cpuInterruptReleaseCycles = new long[14];
         private ushort _vposr;
         private ushort _vhposr;
+        private ushort _lastCpuActiveInterruptBits;
+        private long _copperInterruptRecognitionCycle = long.MinValue;
         private float[][]? _captureSamples;
         private int _captureFrameIndex;
         private int _captureSampleRate;
@@ -64,10 +68,13 @@ namespace CopperMod.Amiga
             _dmaFetches.Clear();
             _pendingInterrupts.Clear();
             _writes.Clear();
+            Array.Clear(_cpuInterruptReleaseCycles);
             _audioTimeline.Reset();
             _registerTimeline.Reset();
             _vposr = 0;
             _vhposr = 0;
+            _lastCpuActiveInterruptBits = 0;
+            _copperInterruptRecognitionCycle = long.MinValue;
             _captureSamples = null;
             _captureFrameIndex = 0;
             _captureSampleRate = 0;
@@ -88,6 +95,16 @@ namespace CopperMod.Amiga
             if (offset == 0x010)
             {
                 return (byte)(_registerTimeline.Adkcon >> 8);
+            }
+
+            if (offset == 0x018)
+            {
+                return (byte)(IdleSerdatr >> 8);
+            }
+
+            if (offset == 0x019)
+            {
+                return (byte)((int)IdleSerdatr & 0x00FF);
             }
 
             if (offset == 0x011)
@@ -214,34 +231,50 @@ namespace CopperMod.Amiga
         }
 
         public int GetHighestPendingInterruptLevel()
+            => GetHighestInterruptLevel(ActiveInterruptBits);
+
+        public int GetHighestCpuVisibleInterruptLevel(long cycle)
+            => GetHighestInterruptLevel(GetCpuVisibleInterruptBits(cycle));
+
+        public long? GetNextCpuVisibleInterruptCycle(long currentCycle, long targetCycle, int cpuInterruptMask)
         {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            RefreshCpuInterruptVisibility(currentCycle);
             var active = ActiveInterruptBits;
-            if ((active & 0x2000) != 0)
+            if (active == 0)
             {
-                return 6;
+                return null;
             }
 
-            if ((active & 0x1800) != 0)
+            long? candidate = null;
+            for (var bitIndex = 0; bitIndex < _cpuInterruptReleaseCycles.Length; bitIndex++)
             {
-                return 5;
+                var bit = (ushort)(1 << bitIndex);
+                if ((active & bit) == 0)
+                {
+                    continue;
+                }
+
+                var level = GetInterruptLevelForBit(bit);
+                if (level <= 0 || (cpuInterruptMask >= 0 && level <= (cpuInterruptMask & 0x07)))
+                {
+                    continue;
+                }
+
+                var releaseCycle = Math.Max(currentCycle + 1, _cpuInterruptReleaseCycles[bitIndex]);
+                if (releaseCycle <= targetCycle && (!candidate.HasValue || releaseCycle < candidate.Value))
+                {
+                    candidate = releaseCycle;
+                }
             }
 
-            if ((active & 0x0780) != 0)
-            {
-                return 4;
-            }
-
-            if ((active & 0x0070) != 0)
-            {
-                return 3;
-            }
-
-            if ((active & 0x0008) != 0)
-            {
-                return 2;
-            }
-
-            return (active & 0x0007) != 0 ? 1 : 0;
+            return candidate;
         }
 
         public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)
@@ -406,6 +439,11 @@ namespace CopperMod.Amiga
             }
 
             AdvanceChannels(timeline, kind, targetCycle);
+            if (kind == PaulaTimelineKind.Register)
+            {
+                RefreshCpuInterruptVisibility(targetCycle);
+            }
+
             CompactPendingWrites();
             CompactDmaFetches();
         }
@@ -427,6 +465,7 @@ namespace CopperMod.Amiga
                 ApplyWrite(_registerTimeline, PaulaTimelineKind.Register, write.Offset, write.Value);
             }
 
+            RefreshCpuInterruptVisibility(targetCycle);
             CompactPendingWrites();
             CompactDmaFetches();
         }
@@ -497,6 +536,7 @@ namespace CopperMod.Amiga
                 {
                     WriteRegisterWord(0x01C, timeline.Intena);
                     QueuePendingEnabledAudioInterrupts(timeline.LastCycle);
+                    RefreshCpuInterruptVisibility(timeline.LastCycle);
                 }
 
                 return;
@@ -521,6 +561,7 @@ namespace CopperMod.Amiga
                 if (kind == PaulaTimelineKind.Register)
                 {
                     WriteRegisterWord(0x01E, timeline.Intreq);
+                    RefreshCpuInterruptVisibility(timeline.LastCycle);
                 }
 
                 return;
@@ -616,6 +657,102 @@ namespace CopperMod.Amiga
             _registerTimeline.Intreq |= bit;
             WriteRegisterWord(0x01E, _registerTimeline.Intreq);
             QueuePendingEnabledAudioInterrupts(cycle, bit);
+            RefreshCpuInterruptVisibility(cycle);
+        }
+
+        internal void DelayCopperInterruptRecognition(long cycle)
+            => _copperInterruptRecognitionCycle = Math.Max(
+                _copperInterruptRecognitionCycle,
+                Math.Max(0, cycle) + AmigaConstants.A500CopperIntreqDelayCpuCycles);
+
+        private ushort GetCpuVisibleInterruptBits(long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            RefreshCpuInterruptVisibility(cycle);
+            var active = ActiveInterruptBits;
+            if (active == 0)
+            {
+                return 0;
+            }
+
+            ushort visible = 0;
+            for (var bitIndex = 0; bitIndex < _cpuInterruptReleaseCycles.Length; bitIndex++)
+            {
+                var bit = (ushort)(1 << bitIndex);
+                if ((active & bit) != 0 && cycle >= _cpuInterruptReleaseCycles[bitIndex])
+                {
+                    visible |= bit;
+                }
+            }
+
+            return visible;
+        }
+
+        private void RefreshCpuInterruptVisibility(long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            var active = ActiveInterruptBits;
+            var newlyActive = (ushort)(active & ~_lastCpuActiveInterruptBits);
+            for (var bitIndex = 0; bitIndex < _cpuInterruptReleaseCycles.Length; bitIndex++)
+            {
+                var bit = (ushort)(1 << bitIndex);
+                if ((active & bit) == 0)
+                {
+                    _cpuInterruptReleaseCycles[bitIndex] = 0;
+                    continue;
+                }
+
+                if ((newlyActive & bit) != 0 || _cpuInterruptReleaseCycles[bitIndex] == 0)
+                {
+                    _cpuInterruptReleaseCycles[bitIndex] = GetCpuInterruptReleaseCycle(bit, cycle);
+                }
+            }
+
+            _lastCpuActiveInterruptBits = active;
+        }
+
+        private static int GetHighestInterruptLevel(ushort active)
+        {
+            if ((active & 0x2000) != 0)
+            {
+                return 6;
+            }
+
+            if ((active & 0x1800) != 0)
+            {
+                return 5;
+            }
+
+            if ((active & 0x0780) != 0)
+            {
+                return 4;
+            }
+
+            if ((active & 0x0070) != 0)
+            {
+                return 3;
+            }
+
+            if ((active & 0x0008) != 0)
+            {
+                return 2;
+            }
+
+            return (active & 0x0007) != 0 ? 1 : 0;
+        }
+
+        private static int GetInterruptLevelForBit(ushort bit)
+            => GetHighestInterruptLevel(bit);
+
+        private long GetCpuInterruptReleaseCycle(ushort bit, long cycle)
+        {
+            var recognitionCycle = cycle;
+            if ((bit & AmigaConstants.IntreqCopper) != 0 && _copperInterruptRecognitionCycle > recognitionCycle)
+            {
+                recognitionCycle = _copperInterruptRecognitionCycle;
+            }
+
+            return recognitionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
         }
 
         private void ApplyModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)

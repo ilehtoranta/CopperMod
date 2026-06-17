@@ -35,6 +35,29 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void A500PalFrameUsesLong313LineCadenceByDefault()
+	{
+		Assert.Equal(313, AmigaConstants.A500PalRasterLines);
+		Assert.Equal(
+			AmigaConstants.A500PalCpuCyclesPerRasterLine * 313,
+			AmigaConstants.A500PalCpuCyclesPerFrame);
+	}
+
+	[Fact]
+	public void CopperSlotsStayEvenRelativeToEachRasterLine()
+	{
+		var engine = new AgnusHrmSlotEngine();
+		var oddLineDiskSlot = AmigaConstants.A500PalCpuCyclesPerRasterLine +
+			(0x08 * AgnusChipSlotScheduler.SlotCycles);
+
+		var access = engine.ReserveCopperDmaSlot(0x1000, oddLineDiskSlot);
+
+		Assert.Equal(oddLineDiskSlot, access.GrantedCycle);
+		Assert.True(AgnusHrmOcsSlotTable.IsCopperAccessSlot(access.GrantedCycle));
+		Assert.False(AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(access.GrantedCycle));
+	}
+
+	[Fact]
 	public void PseudoFastUsesChipSlotSchedulerButRealFastIsZeroWait()
 	{
 		var bus = new AmigaBus(
@@ -429,6 +452,37 @@ public sealed class AmigaBusTimingTests
 		Assert.True(
 			intreqWrite.Cycle >= expectedReadyCycle,
 			$"Copper resumed before blitter completion: intreq={intreqWrite.Cycle}, blitter={expectedReadyCycle}");
+	}
+
+	[Fact]
+	public void LiveCopperIntreqMoveIsVisibleBeforePaulaConsumesTargetCycle()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		const uint copperList = 0x2400;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x0001, 0x00FE),
+			(0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqCopper));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		bus.AdvanceDmaTo(AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			(write.Value & AmigaConstants.IntreqCopper) != 0);
+		var cpuVisibleCycle = intreqWrite.Cycle +
+			AmigaConstants.A500CopperIntreqDelayCpuCycles +
+			AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
+		Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
+		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
+		Assert.Equal(3, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
 	}
 
 	[Fact]
@@ -1153,15 +1207,19 @@ public sealed class AmigaBusTimingTests
 			(ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank));
 		bus.Paula.AdvanceTo(0);
 
-		var pendingCandidate = bus.GetNextCpuBatchWakeCandidateCycle(10, 100, out var pendingWakeSource);
-		var maskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(10, 100, 3, out var maskedWakeSource);
-		var unmaskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(10, 100, 2, out var unmaskedWakeSource);
+		var releaseCycle = AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		var delayedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(10, 200, out var delayedWakeSource);
+		var pendingCandidate = bus.GetNextCpuBatchWakeCandidateCycle(releaseCycle, releaseCycle + 100, out var pendingWakeSource);
+		var maskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(releaseCycle, releaseCycle + 100, 3, out var maskedWakeSource);
+		var unmaskedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(releaseCycle, releaseCycle + 100, 2, out var unmaskedWakeSource);
 
-		Assert.Equal(11, pendingCandidate);
+		Assert.Equal(releaseCycle, delayedCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, delayedWakeSource);
+		Assert.Equal(releaseCycle + 1, pendingCandidate);
 		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, pendingWakeSource);
-		Assert.Equal(100, maskedCandidate);
+		Assert.Equal(releaseCycle + 100, maskedCandidate);
 		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, maskedWakeSource);
-		Assert.Equal(11, unmaskedCandidate);
+		Assert.Equal(releaseCycle + 1, unmaskedCandidate);
 		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, unmaskedWakeSource);
 	}
 
@@ -1235,6 +1293,31 @@ public sealed class AmigaBusTimingTests
 
 		Assert.Equal(20, candidate);
 		Assert.Equal(M68kTraceBatchWakeSource.Paula, wakeSource);
+	}
+
+	[Fact]
+	public void StoppedCpuWakeCandidateIncludesLiveCopperWork()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		const uint copperList = 0x2400;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x0180, 0x0F00),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8280);
+		bus.AdvanceDmaTo(0);
+
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(
+			0,
+			AmigaConstants.A500PalCpuCyclesPerRasterLine,
+			out var wakeSource);
+
+		Assert.InRange(candidate, 1, AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		Assert.Equal(M68kTraceBatchWakeSource.Copper, wakeSource);
 	}
 
 	[Fact]

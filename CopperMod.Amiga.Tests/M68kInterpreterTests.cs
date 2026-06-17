@@ -80,6 +80,53 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void MovemDiagRomSaveRestoreMaskPreservesReturnAddress()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x48, 0xE7, 0x7C, 0x40); // MOVEM.L D1-D5/A1,-(A7)
+		Write(bus.Memory, 0x1004, 0x4C, 0xDF, 0x02, 0x3E); // MOVEM.L (A7)+,D1-D5/A1
+		Write(bus.Memory, 0x1008, 0x4E, 0x75); // RTS
+		bus.WriteLong(0x2FFC, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[7] = 0x2FFC;
+		cpu.State.D[1] = 0x1111_1111;
+		cpu.State.D[2] = 0x2222_2222;
+		cpu.State.D[3] = 0x3333_3333;
+		cpu.State.D[4] = 0x4444_4444;
+		cpu.State.D[5] = 0x5555_5555;
+		cpu.State.A[1] = 0xAAAA_AAAA;
+
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x2FE4u, cpu.State.A[7]);
+		Assert.Equal(0x1111_1111u, ReadLong(bus.Memory, 0x2FE4));
+		Assert.Equal(0x2222_2222u, ReadLong(bus.Memory, 0x2FE8));
+		Assert.Equal(0x3333_3333u, ReadLong(bus.Memory, 0x2FEC));
+		Assert.Equal(0x4444_4444u, ReadLong(bus.Memory, 0x2FF0));
+		Assert.Equal(0x5555_5555u, ReadLong(bus.Memory, 0x2FF4));
+		Assert.Equal(0xAAAA_AAAAu, ReadLong(bus.Memory, 0x2FF8));
+		Assert.Equal(0x0000_4000u, ReadLong(bus.Memory, 0x2FFC));
+
+		cpu.State.D[1] = 0;
+		cpu.State.D[2] = 0;
+		cpu.State.D[3] = 0;
+		cpu.State.D[4] = 0;
+		cpu.State.D[5] = 0;
+		cpu.State.A[1] = 0;
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+		Assert.Equal(0x1111_1111u, cpu.State.D[1]);
+		Assert.Equal(0x2222_2222u, cpu.State.D[2]);
+		Assert.Equal(0x3333_3333u, cpu.State.D[3]);
+		Assert.Equal(0x4444_4444u, cpu.State.D[4]);
+		Assert.Equal(0x5555_5555u, cpu.State.D[5]);
+		Assert.Equal(0xAAAA_AAAAu, cpu.State.A[1]);
+	}
+
+	[Fact]
 	public void MoveUspUsesCorrectSupervisorDirection()
 	{
 		var bus = new TestBus();
@@ -111,6 +158,66 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x00C0_0276u, cpu.State.A[2]);
 		Assert.Equal(0x0000_0040u, cpu.State.A[6]);
+	}
+
+	[Fact]
+	public void AbcdConsumesExtendFromBinaryShiftForBcdAccumulation()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xD1, 0x80); // ADD.L D0,D0
+		Write(bus.Memory, 0x1002, 0xC3, 0x01); // ABCD D1,D1
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x8000_0000;
+		cpu.State.D[1] = 0x0000_0000;
+
+		cpu.ExecuteInstruction();
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_0001u, cpu.State.D[1]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void AbcdDataRegisterUsesStickyZeroAndDecimalCarry()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xC5, 0x01); // ABCD D1,D2
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[1] = 0x49;
+		cpu.State.D[2] = 0x50;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x00u, cpu.State.D[2] & 0xFF);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void SbcdDataRegisterSubtractsPackedDecimalWithExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x85, 0x01); // SBCD D1,D2
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[1] = 0x01;
+		cpu.State.D[2] = 0x20;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x18u, cpu.State.D[2] & 0xFF);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 	}
 
 	[Fact]
@@ -845,10 +952,116 @@ public sealed class M68kInterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 	}
 
+	[Fact]
+	public void OddWordDataReadRaisesAddressErrorWith68000Frame()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x30, 0x10); // MOVE.W (A0),D0
+		bus.WriteLong(0x000C, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF2u, cpu.State.A[7]);
+		Assert.Equal(0x001D, ReadWord(bus.Memory, 0x2FF2));
+		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
+		Assert.Equal(0x3010, ReadWord(bus.Memory, 0x2FF8));
+		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
+	}
+
+	[Fact]
+	public void OddWordDataWriteRaisesAddressErrorWith68000Frame()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x30, 0x80); // MOVE.W D0,(A0)
+		bus.WriteLong(0x000C, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234;
+		cpu.State.A[0] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF2u, cpu.State.A[7]);
+		Assert.Equal(0x000D, ReadWord(bus.Memory, 0x2FF2));
+		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
+		Assert.Equal(0x3080, ReadWord(bus.Memory, 0x2FF8));
+		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
+		Assert.Equal(0x00, bus.Memory[0x2001]);
+	}
+
+	[Fact]
+	public void OddInstructionFetchRaisesAddressErrorWithProgramFunctionCode()
+	{
+		var bus = new TestBus();
+		bus.WriteLong(0x000C, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1001, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF2u, cpu.State.A[7]);
+		Assert.Equal(0x0016, ReadWord(bus.Memory, 0x2FF2));
+		Assert.Equal(0x0000_1001u, ReadLong(bus.Memory, 0x2FF4));
+		Assert.Equal(0x0000, ReadWord(bus.Memory, 0x2FF8));
+		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x0000_1001u, ReadLong(bus.Memory, 0x2FFC));
+	}
+
+	[Fact]
+	public void InvalidImmediateSizeRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x00, 0xF8);
+		bus.WriteLong(0x0010, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+
+	[Fact]
+	public void InvalidMode7EffectiveAddressRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x30, 0xBF);
+		bus.WriteLong(0x0010, 0x0000_4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
 	}
+
+	private static ushort ReadWord(byte[] memory, int address)
+		=> (ushort)((memory[address] << 8) | memory[address + 1]);
+
+	private static uint ReadLong(byte[] memory, int address)
+		=> ((uint)memory[address] << 24) |
+			((uint)memory[address + 1] << 16) |
+			((uint)memory[address + 2] << 8) |
+			memory[address + 3];
 
 	private static AmigaBus CreateRomProgramBus(ReadOnlySpan<byte> program)
 	{

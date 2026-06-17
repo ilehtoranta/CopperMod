@@ -135,7 +135,7 @@ namespace CopperMod.Amiga
             _liveAgnusDmaDefault = enableLiveAgnusDma;
             _realTimeClock = realTimeClockEnabled ? new AmigaRealTimeClock(realTimeClockNowProvider) : null;
             _chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
-            ChipDmaAddressMask = ((uint)chipRamSize - 1u) & 0x00FF_FFFEu;
+            ChipDmaAddressMask = (((uint)chipRamSize - 1u) & AmigaConstants.A500OcsChipDmaAddressMask) & 0x00FF_FFFEu;
             ExpansionRamBase = NormalizeAddress(expansionRamBase);
             RealFastRamBase = NormalizeAddress(realFastRamBase);
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
@@ -1092,12 +1092,30 @@ namespace CopperMod.Amiga
             var target = ClassifyTarget(address);
             if (target == AmigaBusAccessTarget.CustomRegisters && requester != AmigaBusRequester.Cpu)
             {
-                WriteRawWord(address, value, Math.Max(0, requestedCycle));
+                var grantedCycle = Math.Max(0, requestedCycle);
+                MarkCopperIntreqWriteIfNeeded(requester, address, value, grantedCycle);
+                WriteRawWord(address, value, grantedCycle);
                 return;
             }
 
             var access = Arbitrate(requester, kind, target, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
+            MarkCopperIntreqWriteIfNeeded(requester, address, value, access.GrantedCycle);
             WriteRawWord(address, value, access.GrantedCycle);
+        }
+
+        private void MarkCopperIntreqWriteIfNeeded(AmigaBusRequester requester, uint address, ushort value, long cycle)
+        {
+            if (requester != AmigaBusRequester.Copper ||
+                (value & 0x8000) == 0 ||
+                (value & AmigaConstants.IntreqCopper) == 0 ||
+                address < 0x00DFF000 ||
+                address >= 0x00DFF200 ||
+                ((address - 0x00DFF000) & 0x01FE) != 0x09C)
+            {
+                return;
+            }
+
+            Paula.DelayCopperInterruptRecognition(cycle);
         }
 
         internal void RequestHardwareInterrupt(ushort intreqBit, long cycle)
@@ -1181,6 +1199,11 @@ namespace CopperMod.Amiga
 
         public void AdvanceDmaTo(long targetCycle, bool advanceLiveAgnus, bool advancePassiveDiskInput)
         {
+            if (advanceLiveAgnus && LiveAgnusDmaEnabled)
+            {
+                Agnus.AdvanceTo(targetCycle);
+            }
+
             Paula.AdvanceTo(targetCycle);
             if (advancePassiveDiskInput)
             {
@@ -1189,11 +1212,6 @@ namespace CopperMod.Amiga
             else
             {
                 Disk.AdvanceEventsTo(targetCycle);
-            }
-
-            if (advanceLiveAgnus && LiveAgnusDmaEnabled)
-            {
-                Agnus.AdvanceTo(targetCycle);
             }
 
             Blitter.AdvanceTo(targetCycle);
@@ -1375,7 +1393,7 @@ namespace CopperMod.Amiga
             }
 
             var candidate = targetCycle;
-            var pendingPaulaInterruptLevel = Paula.GetHighestPendingInterruptLevel();
+            var pendingPaulaInterruptLevel = Paula.GetHighestCpuVisibleInterruptLevel(currentCycle);
             var pendingPaulaInterruptCanEnter = pendingPaulaInterruptLevel > 0 &&
                 (cpuInterruptMask < 0 || pendingPaulaInterruptLevel > (cpuInterruptMask & 0x07));
             if (_pendingCiaInterrupts.Count != 0 || pendingPaulaInterruptCanEnter)
@@ -1384,6 +1402,13 @@ namespace CopperMod.Amiga
                 wakeSource = M68kTraceBatchWakeSource.PendingInterrupt;
             }
 
+            candidate = MinStoppedWakeCandidate(
+                candidate,
+                currentCycle,
+                targetCycle,
+                Paula.GetNextCpuVisibleInterruptCycle(currentCycle, targetCycle, cpuInterruptMask),
+                M68kTraceBatchWakeSource.PendingInterrupt,
+                ref wakeSource);
             candidate = MinStoppedWakeCandidate(
                 candidate,
                 currentCycle,
@@ -1418,6 +1443,13 @@ namespace CopperMod.Amiga
                 targetCycle,
                 Paula.GetNextWakeCandidateCycle(currentCycle, targetCycle),
                 M68kTraceBatchWakeSource.Paula,
+                ref wakeSource);
+            candidate = MinStoppedWakeCandidate(
+                candidate,
+                currentCycle,
+                targetCycle,
+                Display.GetNextLiveCopperWakeCandidateCycle(currentCycle, targetCycle),
+                M68kTraceBatchWakeSource.Copper,
                 ref wakeSource);
             candidate = MinStoppedWakeCandidate(
                 candidate,

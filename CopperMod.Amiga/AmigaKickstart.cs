@@ -191,6 +191,7 @@ namespace CopperMod.Amiga
             RegisterDosLibrary(bus, traps);
             RegisterCiaResource(bus, traps);
             RegisterReqLibrary(bus, traps);
+            RegisterIntuitionLibrary(bus, traps);
             RegisterDummyLibrary(bus, traps);
         }
 
@@ -258,6 +259,12 @@ namespace CopperMod.Amiga
             RegisterLibraryCallback(bus, ReqLibraryBase, -180, traps.Ok);
             RegisterLibraryCallback(bus, ReqLibraryBase, -396, traps.Ok);
             RegisterLibraryCallback(bus, ReqLibraryBase, -408, traps.OpenLibrary);
+        }
+
+        private static void RegisterIntuitionLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        {
+            RegisterLibraryCallback(bus, IntuitionLibraryBase, -396, traps.AllocMemAndStore);
+            RegisterLibraryCallback(bus, IntuitionLibraryBase, -408, traps.Ok);
         }
 
         private static void RegisterDummyLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)

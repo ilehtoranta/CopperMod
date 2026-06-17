@@ -269,7 +269,7 @@ namespace CopperMod.Amiga
                 Bus.RequestHardwareInterrupt(intreqBit, ciaEvent.Cycle);
             }
 
-            var level = Bus.Paula.GetHighestPendingInterruptLevel();
+            var level = Bus.Paula.GetHighestCpuVisibleInterruptLevel(Cpu.State.Cycles);
             if (level <= 0)
             {
                 return false;

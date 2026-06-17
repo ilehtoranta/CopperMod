@@ -55,16 +55,16 @@ public sealed class FramebufferPresenterTests
 	}
 
 	[Fact]
-	public void UniformDestinationUsesDevicePixelSnappedLetterboxRect()
+	public void UniformDestinationUsesIntegerDevicePixelScale()
 	{
 		var bounds = new Size(1200, 960);
 		var source = new Size(352, 288);
 
 		Assert.True(FramebufferPresenter.TryCalculateUniformDestination(bounds, source, out var destination));
-		Assert.Equal(17, destination.X, precision: 6);
-		Assert.Equal(3, destination.Y, precision: 6);
-		Assert.Equal(1166, destination.Width, precision: 6);
-		Assert.Equal(954, destination.Height, precision: 6);
+		Assert.Equal(72, destination.X, precision: 6);
+		Assert.Equal(48, destination.Y, precision: 6);
+		Assert.Equal(1056, destination.Width, precision: 6);
+		Assert.Equal(864, destination.Height, precision: 6);
 	}
 
 	[Fact]
@@ -79,6 +79,8 @@ public sealed class FramebufferPresenterTests
 		Assert.Equal(Math.Round(destination.Y * 1.25), destination.Y * 1.25, precision: 6);
 		Assert.Equal(Math.Round(destination.Width * 1.25), destination.Width * 1.25, precision: 6);
 		Assert.Equal(Math.Round(destination.Height * 1.25), destination.Height * 1.25, precision: 6);
+		Assert.Equal(2, (destination.Width * 1.25) / source.Width, precision: 6);
+		Assert.Equal(2, (destination.Height * 1.25) / source.Height, precision: 6);
 		Assert.True(destination.Right <= bounds.Width);
 		Assert.True(destination.Bottom <= bounds.Height);
 	}

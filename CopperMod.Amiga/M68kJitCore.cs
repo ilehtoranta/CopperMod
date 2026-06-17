@@ -6366,6 +6366,7 @@ namespace CopperMod.Amiga
                 M68kTraceBatchWakeSource.CiaTimer => "cia-timer",
                 M68kTraceBatchWakeSource.Disk => "disk",
                 M68kTraceBatchWakeSource.Paula => "paula",
+                M68kTraceBatchWakeSource.Copper => "copper",
                 M68kTraceBatchWakeSource.Blitter => "blitter",
                 _ => "unknown"
             };

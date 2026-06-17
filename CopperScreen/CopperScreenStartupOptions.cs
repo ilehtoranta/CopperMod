@@ -71,7 +71,7 @@ internal sealed class CopperScreenStartupOptions
 			normalizedDriveDiskPaths[0],
 			normalizedDriveDiskPaths,
 			normalizedWriteProtected,
-			ResolveOptionalPath(kickstartRomPath, baseDirectory),
+			ResolveRomPath(kickstartRomPath ?? profile.KickstartRomPath, baseDirectory),
 			cpuBackendOverride,
 			floppyDriveAudio,
 			input,
@@ -89,7 +89,7 @@ internal sealed class CopperScreenStartupOptions
 			null,
 			driveDiskPaths,
 			CreateDriveWriteProtectedArray(profile),
-			null,
+			ResolveRomPath(profile.KickstartRomPath, baseDirectory),
 			null,
 			profile.FloppyDriveAudio,
 			profile.Input,
@@ -290,12 +290,13 @@ internal sealed class CopperScreenStartupOptions
 			floppySoundVolumeOverride);
 		var driveDiskPaths = CreateDriveDiskPathArray(profile, diskPath, baseDirectory);
 		var driveWriteProtected = CreateDriveWriteProtectedArray(profile);
+		var resolvedKickstartRomPath = ResolveRomPath(kickstartRomPath ?? profile.KickstartRomPath, baseDirectory);
 		return new CopperScreenStartupOptions(
 			profile,
 			driveDiskPaths[0],
 			driveDiskPaths,
 			driveWriteProtected,
-			kickstartRomPath,
+			resolvedKickstartRomPath,
 			cpuBackendOverride,
 			floppyDriveAudio,
 			profile.Input,
@@ -452,5 +453,42 @@ internal sealed class CopperScreenStartupOptions
 		}
 
 		return Path.GetFullPath(Path.Combine(baseDirectory, path));
+	}
+
+	private static string? ResolveRomPath(string? path, string baseDirectory)
+	{
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return null;
+		}
+
+		if (Path.IsPathFullyQualified(path))
+		{
+			return Path.GetFullPath(path);
+		}
+
+		foreach (var candidate in EnumerateRelativePathCandidates(path, baseDirectory))
+		{
+			if (File.Exists(candidate))
+			{
+				return Path.GetFullPath(candidate);
+			}
+		}
+
+		return Path.GetFullPath(Path.Combine(baseDirectory, path));
+	}
+
+	private static IEnumerable<string> EnumerateRelativePathCandidates(string path, string baseDirectory)
+	{
+		yield return Path.GetFullPath(path);
+		yield return Path.GetFullPath(Path.Combine(baseDirectory, path));
+
+		var directory = new DirectoryInfo(baseDirectory);
+		while (directory != null)
+		{
+			yield return Path.Combine(directory.FullName, path);
+			yield return Path.Combine(directory.FullName, "CopperScreen", path);
+			directory = directory.Parent;
+		}
 	}
 }

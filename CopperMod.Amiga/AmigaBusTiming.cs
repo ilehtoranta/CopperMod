@@ -354,6 +354,9 @@ namespace CopperMod.Amiga
             return (absoluteSlot & 1) == 0;
         }
 
+        public static bool IsCopperAccessSlot(long slotCycle)
+            => (GetHorizontal(slotCycle) & 1) == 0;
+
         public static AgnusChipSlotOwner GetFixedOwner(int horizontal)
         {
             if (horizontal is 0x00 or 0x02 or 0x04 or 0x06)
@@ -625,7 +628,7 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
+                if (!AgnusHrmOcsSlotTable.IsCopperAccessSlot(candidate))
                 {
                     candidate += SlotCycles;
                     continue;

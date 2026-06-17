@@ -67,12 +67,21 @@ public sealed class AmigaHardwareRegressionTests
 		bus.WriteWord(0x6CDFF096, 0x8201, 0);
 		var buffer = new float[2];
 
-		bus.Paula.RenderSample(34, buffer, 0, 2);
+		bus.Paula.AdvanceTo(0);
+		var channel = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(0x1000u, channel.Location);
+		Assert.Equal(1, channel.LengthWords);
+		Assert.Equal(1, channel.Period);
+		Assert.Equal(32, channel.Volume);
+		Assert.True(channel.DmaEnabled);
+		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x0A0);
+		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x096);
+
+		bus.Paula.RenderSample(38, buffer, 0, 2);
 
 		Assert.True(buffer[0] > 0.01f);
 		Assert.Equal(0.0f, buffer[1]);
-		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x0A0);
-		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x096);
 	}
 
 	[Fact]

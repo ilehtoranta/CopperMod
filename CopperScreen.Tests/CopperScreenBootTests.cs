@@ -1006,9 +1006,9 @@ public sealed class CopperScreenBootTests
 		var expectedCapacity = (int)((((long)44_100 * AmigaConstants.A500PalCpuCyclesPerFrame) - 1) /
 			AmigaConstants.A500PalCpuCyclesPerSecond) + 1;
 
-		Assert.Equal(881, expectedCapacity);
+		Assert.Equal(884, expectedCapacity);
 		Assert.Equal(expectedCapacity, emulator.AudioFramesPerAppFrame(44_100));
-		Assert.NotEqual(882, emulator.AudioFramesPerAppFrame(44_100));
+		Assert.NotEqual(885, emulator.AudioFramesPerAppFrame(44_100));
 	}
 
 	[Fact]
@@ -1031,8 +1031,8 @@ public sealed class CopperScreenBootTests
 		var expectedTotal = ((long)44_100 * AmigaConstants.A500PalCpuCyclesPerFrame * renderedFrames) /
 			AmigaConstants.A500PalCpuCyclesPerSecond;
 		Assert.Equal(expectedTotal, totalFrames);
-		Assert.Contains(880, counts);
-		Assert.Contains(881, counts);
+		Assert.Contains(883, counts);
+		Assert.Contains(884, counts);
 	}
 
 	[Fact]
