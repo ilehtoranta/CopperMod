@@ -215,6 +215,20 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void SidAndRsidFilesDoNotExposeC64VideoFrames()
+	{
+		var psid = Assert.IsAssignableFrom<IC64VideoFrameProvider>(
+			new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram())));
+		var rsid = Assert.IsAssignableFrom<IC64VideoFrameProvider>(
+			new SidFormat().Load(SidFixtureBuilder.CreateRsid(SidFixtureBuilder.SimpleToneProgram())));
+
+		Assert.False(psid.HasVideoFrameSource);
+		Assert.False(psid.TryGetLatestVideoFrame(out _));
+		Assert.False(rsid.HasVideoFrameSource);
+		Assert.False(rsid.TryGetLatestVideoFrame(out _));
+	}
+
+	[Fact]
 	public void RealArkanoidFixtureIsRecognizedWhenPresent()
 	{
 		var path = FindWorkspaceFile("TestTunes", "SID", "Arkanoid.sid");

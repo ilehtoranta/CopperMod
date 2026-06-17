@@ -222,7 +222,7 @@ namespace CopperMod.Sid
             _machine.ScheduleAutostartKey(key, delay, hold);
         }
 
-        public bool HasVideoFrameSource => _module.IsCartridge || _module.IsRsid;
+        public bool HasVideoFrameSource => _module.IsCartridge;
 
         public bool TryGetLatestVideoFrame(out C64VideoFrame frame)
         {

@@ -40,6 +40,8 @@ public sealed class C64CartridgeTests
 
 		Assert.Equal("C64 CRT", song.Metadata.FormatName);
 		Assert.Equal("EasyFlash", song.Metadata.Tags["Cartridge"]);
+		Assert.Equal("Mos6581", song.Metadata.Tags["ChipModel"]);
+		Assert.True(Assert.IsAssignableFrom<IC64VideoFrameProvider>(song).HasVideoFrameSource);
 	}
 
 	[Fact]
@@ -49,6 +51,8 @@ public sealed class C64CartridgeTests
 		var machine = new C64Machine(module);
 		machine.Reset(0);
 
+		Assert.Equal(SidChipModel.Mos6581, module.EffectiveChipModel);
+		Assert.Equal(SidChipModel.Mos6581, machine.Sid.Chips[0].Model);
 		Assert.Equal(0x8000, machine.Cpu.ProgramCounter);
 		Assert.Equal(0x30, machine.Read(0xE000));
 		machine.Write(0xDE02, 0x05, 0);
@@ -185,6 +189,7 @@ public sealed class C64CartridgeTests
 		machine.ScheduleAutostartKey("f3", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(0.25));
 		machine.Reset(0);
 
+		Assert.Equal(SidChipModel.Mos6581, machine.Sid.Chips[0].Model);
 		for (var i = 0; i < 130; i++)
 		{
 			machine.RunFrame();

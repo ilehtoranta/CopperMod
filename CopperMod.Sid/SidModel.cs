@@ -185,7 +185,7 @@ namespace CopperMod.Sid
                 author: "C64 Cartridge",
                 released: "",
                 clock: SidClock.Pal,
-                chipModel: SidChipModel.Mos8580,
+                chipModel: SidChipModel.Mos6581,
                 chips: new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) },
                 payload: Array.Empty<byte>(),
                 diagnostics: Array.Empty<ModuleDiagnostic>(),

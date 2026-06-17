@@ -190,6 +190,20 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void Mos8580VolumeRegisterUsesFullByteMeasuredAmplitude()
+	{
+		var volume00 = MeasureSettledD418Output(0x00, SidChipModel.Mos8580);
+		var volume0f = MeasureSettledD418Output(0x0F, SidChipModel.Mos8580);
+		var volume9f = MeasureSettledD418Output(0x9F, SidChipModel.Mos8580);
+		var volumeff = MeasureSettledD418Output(0xFF, SidChipModel.Mos8580);
+
+		Assert.True(volume0f > volume00 + 0.010, $"Expected $0F to exceed $00, got {volume0f:0.000} and {volume00:0.000}.");
+		Assert.True(volume0f > volume9f + 0.035, $"Expected $0F to exceed $9F, got {volume0f:0.000} and {volume9f:0.000}.");
+		Assert.True(volume00 > volumeff + 0.020, $"Expected $00 to exceed $FF, got {volume00:0.000} and {volumeff:0.000}.");
+		Assert.All(new[] { volume00, volume0f, volume9f, volumeff }, sample => Assert.True(double.IsFinite(sample)));
+	}
+
+	[Fact]
 	public void Mos6581VolumeRegisterStepsAddSlewedTransientDigiEnergy()
 	{
 		var mos6581 = MeasureVolumeStepTransient(SidChipModel.Mos6581);

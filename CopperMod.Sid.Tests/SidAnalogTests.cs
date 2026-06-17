@@ -14,7 +14,18 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
-	public void Mos6581D418VolumeOffsetUsesFullRegisterByte()
+	public void Mos8580D418MeasuredAmplitudeTableHasExpectedReferenceValues()
+	{
+		Assert.Equal(256, SidAnalog.Mos8580D418AmplitudeTableLength);
+		Assert.Equal(0.296841, SidAnalog.Mos8580D418MeasuredAmplitude(0x00), precision: 6);
+		Assert.Equal(1.0, SidAnalog.Mos8580D418MeasuredAmplitude(0x0F), precision: 12);
+		Assert.Equal(1.009703, SidAnalog.Mos8580D418MeasuredAmplitude(0x4F), precision: 6);
+		Assert.Equal(-1.0, SidAnalog.Mos8580D418MeasuredAmplitude(0x9F), precision: 12);
+		Assert.Equal(-0.964929, SidAnalog.Mos8580D418MeasuredAmplitude(0xFF), precision: 6);
+	}
+
+	[Fact]
+	public void D418VolumeOffsetUsesMeasuredFullRegisterByte()
 	{
 		var volume0f = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos6581);
 		var volume1f = SidAnalog.VolumeOffset(0x1F, SidChipModel.Mos6581);
@@ -24,10 +35,15 @@ public sealed class SidAnalogTests
 		Assert.True(volume0f > volume1f + 0.30);
 		Assert.True(volume1f > volume9f + 0.15);
 		Assert.True(volumeff > volume9f + 0.05);
-		Assert.Equal(
-			SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos8580),
-			SidAnalog.VolumeOffset(0xFF, SidChipModel.Mos8580),
-			precision: 12);
+
+		var mos8580Volume00 = SidAnalog.VolumeOffset(0x00, SidChipModel.Mos8580);
+		var mos8580Volume0f = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos8580);
+		var mos8580Volume9f = SidAnalog.VolumeOffset(0x9F, SidChipModel.Mos8580);
+		var mos8580Volumeff = SidAnalog.VolumeOffset(0xFF, SidChipModel.Mos8580);
+
+		Assert.Equal(0.017, mos8580Volume0f - mos8580Volume00, precision: 12);
+		Assert.True(mos8580Volume0f > mos8580Volume9f + 0.04);
+		Assert.True(mos8580Volume00 > mos8580Volumeff + 0.02);
 	}
 
 	[Fact]

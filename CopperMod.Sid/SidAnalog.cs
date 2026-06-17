@@ -5,6 +5,7 @@ namespace CopperMod.Sid
     internal static class SidAnalog
     {
         private static readonly double[] Mos6581D418Amplitude = BuildMos6581D418AmplitudeTable();
+        private static readonly double[] Mos8580D418Amplitude = BuildMos8580D418AmplitudeTable();
         private static readonly SidAnalogProfile Mos6581Profile = BuildProfile(SidChipModel.Mos6581);
         private static readonly SidAnalogProfile Mos8580Profile = BuildProfile(SidChipModel.Mos8580);
         private static readonly double[] Mos6581WaveformDac = BuildWaveformDac(SidChipModel.Mos6581);
@@ -41,6 +42,13 @@ namespace CopperMod.Sid
         public static double Mos6581D418MeasuredAmplitude(int registerValue)
         {
             return Mos6581D418Amplitude[registerValue & 0xFF];
+        }
+
+        public static int Mos8580D418AmplitudeTableLength => Mos8580D418Amplitude.Length;
+
+        public static double Mos8580D418MeasuredAmplitude(int registerValue)
+        {
+            return Mos8580D418Amplitude[registerValue & 0xFF];
         }
 
         public static double VoiceMixGain(SidChipModel model)
@@ -326,7 +334,7 @@ namespace CopperMod.Sid
             var volumeGain = BuildVolumeGain(model);
             var volumeDc = is6581
                 ? BuildMos6581MeasuredD418Offset()
-                : BuildVolumeDc(volumeGain, 0.0, 0.017);
+                : BuildMos8580MeasuredD418Offset();
 
             return new SidAnalogProfile(
                 volumeGain,
@@ -347,17 +355,6 @@ namespace CopperMod.Sid
                 table[i] = model == SidChipModel.Mos8580
                     ? normalized
                     : Math.Pow(normalized, 1.10);
-            }
-
-            return table;
-        }
-
-        private static double[] BuildVolumeDc(double[] volumeGain, double dcBias, double dcRange)
-        {
-            var table = new double[16];
-            for (var i = 0; i < table.Length; i++)
-            {
-                table[i] = dcBias + ((volumeGain[i] - 0.5) * dcRange);
             }
 
             return table;
@@ -470,6 +467,45 @@ namespace CopperMod.Sid
             };
         }
 
+        private static double[] BuildMos8580D418AmplitudeTable()
+        {
+            return new[]
+            {
+                0.296841, 0.342174, 0.388113, 0.433498, 0.482807, 0.528693, 0.574186, 0.619396,
+                0.676467, 0.722504, 0.767631, 0.812965, 0.863225, 0.908043, 0.953330, 1.000000,
+                0.296585, 0.253814, 0.211532, 0.169380, 0.124805, 0.083160, 0.041534, 0.000451,
+                -0.049665, -0.090874, -0.131023, -0.171055, -0.214557, -0.254048, -0.293259, -0.332582,
+                0.296836, 0.341514, 0.386523, 0.431586, 0.480032, 0.524722, 0.570275, 0.614677,
+                0.670630, 0.715622, 0.760787, 0.805202, 0.853724, 0.899193, 0.943526, 0.988241,
+                0.296460, 0.253930, 0.211830, 0.169796, 0.125264, 0.083848, 0.042654, 0.001443,
+                -0.048578, -0.089090, -0.129681, -0.169480, -0.212023, -0.252196, -0.291202, -0.330199,
+                0.296649, 0.342981, 0.389236, 0.435599, 0.485816, 0.531765, 0.578136, 0.624629,
+                0.682344, 0.728451, 0.775523, 0.821118, 0.871032, 0.917586, 0.963997, 1.009703,
+                0.296347, 0.255303, 0.214417, 0.173850, 0.130589, 0.090463, 0.050517, 0.010497,
+                -0.037865, -0.077090, -0.116374, -0.155345, -0.196354, -0.234968, -0.273508, -0.311138,
+                0.296581, 0.342281, 0.387932, 0.433519, 0.482923, 0.528480, 0.574099, 0.619880,
+                0.677029, 0.722269, 0.768037, 0.814036, 0.862826, 0.908465, 0.954833, 0.999726,
+                0.296236, 0.255376, 0.214698, 0.174211, 0.131121, 0.091095, 0.051414, 0.011812,
+                -0.036847, -0.075769, -0.114846, -0.153714, -0.194759, -0.232907, -0.271384, -0.309193,
+                0.296631, 0.296051, 0.295420, 0.294675, 0.294027, 0.293355, 0.292672, 0.291986,
+                0.291301, 0.290530, 0.289790, 0.289257, 0.288395, 0.287714, 0.287066, 0.286200,
+                0.296024, 0.207189, 0.118702, 0.031332, -0.062120, -0.148408, -0.233674, -0.318311,
+                -0.423175, -0.506204, -0.588661, -0.670987, -0.758686, -0.838896, -0.919460, -1.000000,
+                0.296446, 0.295562, 0.294723, 0.293702, 0.292709, 0.291929, 0.290942, 0.289956,
+                0.288819, 0.288125, 0.287000, 0.286121, 0.285209, 0.284152, 0.283296, 0.282474,
+                0.296023, 0.207571, 0.119787, 0.032803, -0.059999, -0.145602, -0.230978, -0.314539,
+                -0.418685, -0.501903, -0.583358, -0.664869, -0.752822, -0.832273, -0.911804, -0.991570,
+                0.296631, 0.296919, 0.297435, 0.297892, 0.298243, 0.298690, 0.299148, 0.299392,
+                0.299985, 0.300553, 0.300809, 0.301129, 0.301655, 0.302262, 0.302299, 0.302810,
+                0.296092, 0.208841, 0.122328, 0.036532, -0.054881, -0.139210, -0.223246, -0.305961,
+                -0.408225, -0.490167, -0.571972, -0.651102, -0.737570, -0.817478, -0.894767, -0.973014,
+                0.296381, 0.296539, 0.296760, 0.297017, 0.297232, 0.297228, 0.297447, 0.297756,
+                0.297718, 0.297945, 0.298221, 0.298231, 0.298337, 0.298736, 0.298706, 0.298886,
+                0.295939, 0.209426, 0.123411, 0.038287, -0.053101, -0.136446, -0.219814, -0.302593,
+                -0.403816, -0.485082, -0.566300, -0.646700, -0.730704, -0.810044, -0.889231, -0.964929
+            };
+        }
+
         private static double[] BuildMos6581MeasuredD418Offset()
         {
             const double dcBias = -0.165;
@@ -478,6 +514,20 @@ namespace CopperMod.Sid
             for (var i = 0; i < table.Length; i++)
             {
                 table[i] = dcBias + (Mos6581D418Amplitude[i] * dcRange);
+            }
+
+            return table;
+        }
+
+        private static double[] BuildMos8580MeasuredD418Offset()
+        {
+            const double lowNibbleDcRange = 0.017;
+            var table = new double[Mos8580D418Amplitude.Length];
+            var scale = lowNibbleDcRange / (Mos8580D418Amplitude[0x0F] - Mos8580D418Amplitude[0x00]);
+            var bias = -(lowNibbleDcRange * 0.5) - (Mos8580D418Amplitude[0x00] * scale);
+            for (var i = 0; i < table.Length; i++)
+            {
+                table[i] = bias + (Mos8580D418Amplitude[i] * scale);
             }
 
             return table;
