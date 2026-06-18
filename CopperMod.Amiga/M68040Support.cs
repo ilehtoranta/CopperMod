@@ -94,6 +94,140 @@ namespace CopperMod.Amiga
         }
     }
 
+    internal enum M68040FpuJitKind
+    {
+        Operation = 0,
+        MoveToEa = 1,
+        MoveToControl = 2,
+        MoveFromControl = 3,
+        LineFTrap = 4
+    }
+
+    internal static class M68040FpuHelpers
+    {
+        public static bool IsSupportedOperation(int opmode)
+            => opmode is 0x00 or 0x04 or 0x18 or 0x1A or 0x20 or 0x22 or 0x23 or 0x28 or 0x38 or 0x3A;
+
+        public static bool IsSupportedDataRegisterFormat(int format)
+            => format is 0 or 1 or 4 or 6;
+
+        public static bool IsSupportedMemoryFormat(int format)
+            => format is 0 or 1 or 4 or 5 or 6;
+
+        public static bool UsesBus(M68kDecodedInstruction instruction)
+            => (M68040FpuJitKind)instruction.Variant == M68040FpuJitKind.LineFTrap ||
+                instruction.Source.IsMemory ||
+                instruction.Destination.IsMemory;
+
+        public static uint FormatByteSize(int format)
+        {
+            return format switch
+            {
+                0 or 1 => 4,
+                4 => 2,
+                5 => 8,
+                6 => 1,
+                _ => 4
+            };
+        }
+
+        public static double ReadDataRegister(uint value, int format)
+        {
+            return format switch
+            {
+                0 => unchecked((int)value),
+                1 => BitConverter.Int32BitsToSingle(unchecked((int)value)),
+                4 => unchecked((short)(value & 0xFFFF)),
+                6 => unchecked((sbyte)(value & 0xFF)),
+                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
+            };
+        }
+
+        public static uint WriteDataRegister(uint currentValue, int format, double value)
+        {
+            return format switch
+            {
+                0 => unchecked((uint)(int)value),
+                1 => unchecked((uint)BitConverter.SingleToInt32Bits((float)value)),
+                4 => (currentValue & 0xFFFF_0000u) | unchecked((ushort)(short)value),
+                6 => (currentValue & 0xFFFF_FF00u) | unchecked((byte)(sbyte)value),
+                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
+            };
+        }
+
+        public static double ReadImmediate(
+            int format,
+            ushort extension0,
+            ushort extension1,
+            uint immediate)
+        {
+            return format switch
+            {
+                0 => unchecked((int)immediate),
+                1 => BitConverter.Int32BitsToSingle(unchecked((int)immediate)),
+                4 => unchecked((short)immediate),
+                5 => BitConverter.Int64BitsToDouble(
+                    unchecked((long)(((ulong)extension0 << 48) |
+                        ((ulong)extension1 << 32) |
+                        immediate))),
+                6 => unchecked((sbyte)(byte)immediate),
+                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU immediate format {format}.")
+            };
+        }
+
+        public static bool ApplyOperation(M68040FpuState fpu, int destination, int opmode, double source)
+        {
+            switch (opmode)
+            {
+                case 0x00:
+                    fpu.FP[destination] = source;
+                    fpu.SetCondition(source);
+                    return true;
+                case 0x04:
+                    StoreUnary(fpu, destination, Math.Sqrt(source));
+                    return true;
+                case 0x18:
+                    StoreUnary(fpu, destination, Math.Abs(source));
+                    return true;
+                case 0x1A:
+                    StoreUnary(fpu, destination, -source);
+                    return true;
+                case 0x20:
+                    StoreBinary(fpu, destination, fpu.FP[destination] / source);
+                    return true;
+                case 0x22:
+                    StoreBinary(fpu, destination, fpu.FP[destination] + source);
+                    return true;
+                case 0x23:
+                    StoreBinary(fpu, destination, fpu.FP[destination] * source);
+                    return true;
+                case 0x28:
+                    StoreBinary(fpu, destination, fpu.FP[destination] - source);
+                    return true;
+                case 0x38:
+                    fpu.SetCompareCondition(fpu.FP[destination], source);
+                    return true;
+                case 0x3A:
+                    fpu.SetCondition(source);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static void StoreUnary(M68040FpuState fpu, int destination, double result)
+        {
+            fpu.FP[destination] = result;
+            fpu.SetCondition(result);
+        }
+
+        private static void StoreBinary(M68040FpuState fpu, int destination, double result)
+        {
+            fpu.FP[destination] = result;
+            fpu.SetCondition(result);
+        }
+    }
+
     internal sealed class M68040MmuState
     {
         private const uint TranslationEnable = 0x8000_0000;
@@ -623,42 +757,10 @@ namespace CopperMod.Amiga
                 : ReadFpuEa(opcode, (extension >> 10) & 7);
             var destination = (extension >> 7) & 7;
             var opmode = extension & 0x007F;
-            switch (opmode)
+            if (!M68040FpuHelpers.ApplyOperation(State.M68040Fpu, destination, opmode, source))
             {
-                case 0x00:
-                    State.M68040Fpu.FP[destination] = source;
-                    State.M68040Fpu.SetCondition(source);
-                    break;
-                case 0x04:
-                    ExecuteUnaryFpu(destination, source, Math.Sqrt);
-                    break;
-                case 0x18:
-                    ExecuteUnaryFpu(destination, source, Math.Abs);
-                    break;
-                case 0x1A:
-                    ExecuteUnaryFpu(destination, source, value => -value);
-                    break;
-                case 0x20:
-                    ExecuteBinaryFpu(destination, source, (left, right) => left / right);
-                    break;
-                case 0x22:
-                    ExecuteBinaryFpu(destination, source, (left, right) => left + right);
-                    break;
-                case 0x23:
-                    ExecuteBinaryFpu(destination, source, (left, right) => left * right);
-                    break;
-                case 0x28:
-                    ExecuteBinaryFpu(destination, source, (left, right) => left - right);
-                    break;
-                case 0x38:
-                    State.M68040Fpu.SetCompareCondition(State.M68040Fpu.FP[destination], source);
-                    break;
-                case 0x3A:
-                    State.M68040Fpu.SetCondition(source);
-                    break;
-                default:
-                    RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
-                    return true;
+                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                return true;
             }
 
             CompleteTiming(M68kInstructionTimingKey.Movec);
@@ -718,20 +820,6 @@ namespace CopperMod.Amiga
             WriteFpuEa(opcode, format, State.M68040Fpu.FP[source]);
         }
 
-        private void ExecuteUnaryFpu(int destination, double source, Func<double, double> operation)
-        {
-            var result = operation(source);
-            State.M68040Fpu.FP[destination] = result;
-            State.M68040Fpu.SetCondition(result);
-        }
-
-        private void ExecuteBinaryFpu(int destination, double source, Func<double, double, double> operation)
-        {
-            var result = operation(State.M68040Fpu.FP[destination], source);
-            State.M68040Fpu.FP[destination] = result;
-            State.M68040Fpu.SetCondition(result);
-        }
-
         private double ReadFpuEa(ushort opcode, int format)
         {
             var mode = (opcode >> 3) & 7;
@@ -766,10 +854,7 @@ namespace CopperMod.Amiga
             {
                 State.D[register] = format switch
                 {
-                    0 => unchecked((uint)(int)value),
-                    1 => unchecked((uint)BitConverter.SingleToInt32Bits((float)value)),
-                    4 => (State.D[register] & 0xFFFF_0000u) | unchecked((ushort)(short)value),
-                    6 => (State.D[register] & 0xFFFF_FF00u) | unchecked((byte)(sbyte)value),
+                    0 or 1 or 4 or 6 => M68040FpuHelpers.WriteDataRegister(State.D[register], format, value),
                     _ => throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile)
                 };
                 return;
@@ -804,10 +889,7 @@ namespace CopperMod.Amiga
         {
             return format switch
             {
-                0 => unchecked((int)value),
-                1 => BitConverter.Int32BitsToSingle(unchecked((int)value)),
-                4 => unchecked((short)(value & 0xFFFF)),
-                6 => unchecked((sbyte)(value & 0xFF)),
+                0 or 1 or 4 or 6 => M68040FpuHelpers.ReadDataRegister(value, format),
                 _ => throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile)
             };
         }
@@ -827,14 +909,7 @@ namespace CopperMod.Amiga
 
         private static uint FpuFormatByteSize(int format)
         {
-            return format switch
-            {
-                0 or 1 => 4,
-                4 => 2,
-                5 => 8,
-                6 => 1,
-                _ => 4
-            };
+            return M68040FpuHelpers.FormatByteSize(format);
         }
 
         private uint GetFpuMemoryAddress(int mode, int register, uint byteSize)

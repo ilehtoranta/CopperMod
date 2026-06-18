@@ -57,6 +57,27 @@ namespace CopperMod.Amiga
             typeof(int),
             typeof(ushort),
             typeof(uint));
+        private static readonly MethodInfo ExecuteM68040Fpu = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledM68040Fpu",
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(uint),
+            typeof(ushort),
+            typeof(ushort),
+            typeof(uint),
+            typeof(int),
+            typeof(int),
+            typeof(uint),
+            typeof(ushort),
+            typeof(ushort),
+            typeof(uint),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(ushort));
         private static readonly MethodInfo ExecuteMovem = RequiredMethod(
             typeof(M68kJitCore),
             "ExecuteCompiledMovem",
@@ -200,6 +221,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Cmpi => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmp => instruction.Source.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Not or M68kJitOperation.Neg => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction),
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
                 _ => false
             };
@@ -230,6 +252,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori => IsSupportedReadWriteEa(instruction.Destination),
                 M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor => IsSupportedBinaryArithmeticEa(instruction),
                 M68kJitOperation.Not or M68kJitOperation.Neg => IsSupportedReadWriteEa(instruction.Destination),
+                M68kJitOperation.M68040Fpu => M68040FpuHelpers.UsesBus(instruction),
                 _ => false
             };
         }
@@ -483,10 +506,27 @@ namespace CopperMod.Amiga
                     EmitRts(il, context);
                     EmitTrue(il);
                     return;
+                case M68kJitOperation.M68040Fpu:
+                    EmitM68040Fpu(il, instruction);
+                    return;
                 default:
                     EmitHelper(il, instruction);
                     return;
             }
+        }
+
+        private static void EmitM68040Fpu(ILGenerator il, M68kDecodedInstruction instruction)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, instruction.Variant);
+            M68kEaEmitter.EmitEaArguments(il, instruction.Source);
+            M68kEaEmitter.EmitEaArguments(il, instruction.Destination);
+            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+            il.Emit(OpCodes.Ldc_I4, instruction.Condition);
+            il.Emit(OpCodes.Ldc_I4, instruction.Displacement);
+            il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
+            il.Emit(OpCodes.Call, ExecuteM68040Fpu);
         }
 
         private static void EmitMoveq(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)

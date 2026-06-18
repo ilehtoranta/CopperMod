@@ -255,6 +255,34 @@ namespace CopperMod.Amiga
                 new[] { typeof(int), typeof(uint) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledStatusImmediate));
+        private static readonly MethodInfo ExecuteM68040FpuForV2BatchMethod =
+            typeof(M68kJitCore).GetMethod(
+                nameof(ExecuteCompiledM68040Fpu),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[]
+                {
+                    typeof(int),
+                    typeof(int),
+                    typeof(int),
+                    typeof(uint),
+                    typeof(ushort),
+                    typeof(ushort),
+                    typeof(uint),
+                    typeof(int),
+                    typeof(int),
+                    typeof(uint),
+                    typeof(ushort),
+                    typeof(ushort),
+                    typeof(uint),
+                    typeof(int),
+                    typeof(int),
+                    typeof(int),
+                    typeof(int),
+                    typeof(ushort)
+                },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledM68040Fpu));
         private static readonly MethodInfo ExecutePeaForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ExecuteCompiledPea),
@@ -1267,7 +1295,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _))
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _, _cpuModel))
             {
                 blockReason = "no-trace-decode";
                 return false;
@@ -1675,6 +1703,11 @@ namespace CopperMod.Amiga
             _fallback.ExecuteInstruction();
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
+            if (opcodeAvailable && _cpuModel == M68kJitCpuModel.M68040 && IsM68040FpuOpcode(opcode))
+            {
+                _counters.M68040FpuFallbackInstructions++;
+            }
+
             if (opcodeAvailable && ShouldFlushM68040JitAfterFallback(root, opcode))
             {
                 _counters.Invalidations++;
@@ -1684,6 +1717,9 @@ namespace CopperMod.Amiga
             ObserveHotRoot(root);
             return true;
         }
+
+        private static bool IsM68040FpuOpcode(ushort opcode)
+            => (opcode & 0xFFC0) == 0xF200;
 
         private bool HandleM68040CompiledMmuFault(M68040MmuFault fault, IM68kInstructionBoundary boundary)
         {
@@ -2294,7 +2330,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _) ||
+                if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _, _cpuModel) ||
                     !IsV2Instruction(instruction, out _))
                 {
                     continue;
@@ -2342,7 +2378,7 @@ namespace CopperMod.Amiga
             while (count < MaxTraceInstructions && byteCount < MaxTraceBytes)
             {
                 if (!reader.ContainsRange(pc, 2) ||
-                    !M68kDecoder.TryDecode(reader, pc, out var instruction, out _))
+                    !M68kDecoder.TryDecode(reader, pc, out var instruction, out _, input.Options.CpuModel))
                 {
                     break;
                 }
@@ -2553,7 +2589,7 @@ namespace CopperMod.Amiga
 
                     if (!reader.ContainsRange(pc, 2) ||
                         reader.HasHostTrapStub(pc) ||
-                        !M68kDecoder.TryDecode(reader, pc, out var instruction, out _))
+                        !M68kDecoder.TryDecode(reader, pc, out var instruction, out _, options.CpuModel))
                     {
                         if (collected.Count == 0)
                         {
@@ -3101,7 +3137,7 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out _))
+                    if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out _, _cpuModel))
                     {
                         if (collected.Count == 0)
                         {
@@ -3620,6 +3656,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Jmp or M68kJitOperation.Jsr => IsV2AddressOnlyEa(instruction.Source),
                 M68kJitOperation.Bsr or M68kJitOperation.Rts => true,
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
+                M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction) || _v2BusAccessEnabled,
                 _ => false
             };
             if (supported)
@@ -3714,6 +3751,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Jmp or M68kJitOperation.Jsr => IsV2AddressOnlyEa(instruction.Source),
                 M68kJitOperation.Bsr or M68kJitOperation.Rts => true,
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
+                M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction) || options.V2BusAccessEnabled,
                 _ => false
             };
             if (supported)
@@ -3924,6 +3962,7 @@ namespace CopperMod.Amiga
                 M68kJitOperation.Divu or
                 M68kJitOperation.Divs => !IsV2MemoryReadEa(instruction.Source),
                 M68kJitOperation.Movem => false,
+                M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction),
                 M68kJitOperation.Jsr or M68kJitOperation.Bsr or M68kJitOperation.Rts => false,
                 _ => true
             };
@@ -4825,6 +4864,9 @@ namespace CopperMod.Amiga
                 case M68kJitOperation.Pea:
                     EmitV2Pea(il, context, instruction);
                     return;
+                case M68kJitOperation.M68040Fpu:
+                    EmitV2M68040Fpu(il, context, instruction, exit);
+                    return;
                 case M68kJitOperation.Jmp:
                     EmitV2Jmp(il, context, instruction, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
                     return;
@@ -5514,6 +5556,38 @@ namespace CopperMod.Amiga
             il.Emit(OpCodes.Ldc_I4, instruction.Source.Extension1);
             il.Emit(OpCodes.Call, ExecutePeaForV2BatchMethod);
             context.EmitReloadState();
+        }
+
+        private static void EmitV2M68040Fpu(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, instruction.Variant);
+            EmitV2EaArguments(il, instruction.Source);
+            EmitV2EaArguments(il, instruction.Destination);
+            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+            il.Emit(OpCodes.Ldc_I4, instruction.Condition);
+            il.Emit(OpCodes.Ldc_I4, instruction.Displacement);
+            il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
+            il.Emit(OpCodes.Call, ExecuteM68040FpuForV2BatchMethod);
+            il.Emit(OpCodes.Brfalse, exit);
+            context.EmitReloadState();
+        }
+
+        private static void EmitV2EaArguments(ILGenerator il, M68kDecodedEa ea)
+        {
+            il.Emit(OpCodes.Ldc_I4, (int)ea.Kind);
+            il.Emit(OpCodes.Ldc_I4, ea.Register);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)ea.ExtensionAddress));
+            il.Emit(OpCodes.Ldc_I4, ea.Extension0);
+            il.Emit(OpCodes.Ldc_I4, ea.Extension1);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)ea.Immediate));
         }
 
         private static void EmitV2Movem(
@@ -6607,7 +6681,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var reason))
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var reason, _cpuModel))
             {
                 var opcode = _amigaBus.ReadHostWord(target);
                 IncrementV2Diagnostic(
@@ -6650,7 +6724,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason, _cpuModel))
             {
                 var opcode = _amigaBus.ReadHostWord(target);
                 RecordV2TraceHandoffDiagnostic(
@@ -6696,7 +6770,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason, _cpuModel))
             {
                 var opcode = _amigaBus.ReadHostWord(target);
                 IncrementV2Diagnostic(
@@ -6733,7 +6807,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason))
+            if (!M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out var decodeReason, _cpuModel))
             {
                 var opcode = _amigaBus.ReadHostWord(target);
                 IncrementV2Diagnostic(
@@ -7353,7 +7427,7 @@ namespace CopperMod.Amiga
             if (_amigaBus == null ||
                 _amigaBus.IsChipRamAddress(target) ||
                 _amigaBus.HasHostTrapStub(target) ||
-                !M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _))
+                !M68kDecoder.TryDecode(_amigaBus, target, out var instruction, out _, _cpuModel))
             {
                 return false;
             }
@@ -8018,6 +8092,26 @@ namespace CopperMod.Amiga
                         source.Extension0,
                         source.Extension1);
                     return true;
+                case M68kJitOperation.M68040Fpu:
+                    return ExecuteCompiledM68040Fpu(
+                        variant,
+                        (int)source.Kind,
+                        source.Register,
+                        source.ExtensionAddress,
+                        source.Extension0,
+                        source.Extension1,
+                        source.Immediate,
+                        (int)destination.Kind,
+                        destination.Register,
+                        destination.ExtensionAddress,
+                        destination.Extension0,
+                        destination.Extension1,
+                        destination.Immediate,
+                        register,
+                        quickValue,
+                        condition,
+                        displacement,
+                        registerMask);
                 case M68kJitOperation.M68040Fallback:
                     return ExecuteCompiledM68040Fallback(source.Immediate);
                 default:
@@ -8027,6 +8121,223 @@ namespace CopperMod.Amiga
                     _counters.UnsupportedOpcode++;
                     return false;
             }
+        }
+
+        private bool ExecuteCompiledM68040Fpu(
+            int kindValue,
+            int sourceKindValue,
+            int sourceRegister,
+            uint sourceExtensionAddress,
+            ushort sourceExtension0,
+            ushort sourceExtension1,
+            uint sourceImmediate,
+            int destinationKindValue,
+            int destinationRegister,
+            uint destinationExtensionAddress,
+            ushort destinationExtension0,
+            ushort destinationExtension1,
+            uint destinationImmediate,
+            int register,
+            int quickValue,
+            int condition,
+            int displacement,
+            ushort registerMask)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return false;
+            }
+
+            var kind = (M68040FpuJitKind)kindValue;
+            var source = new M68kDecodedEa(
+                (M68kJitEaKind)sourceKindValue,
+                sourceRegister,
+                sourceExtensionAddress,
+                sourceExtension0,
+                sourceExtension1,
+                sourceImmediate);
+            var destination = new M68kDecodedEa(
+                (M68kJitEaKind)destinationKindValue,
+                destinationRegister,
+                destinationExtensionAddress,
+                destinationExtension0,
+                destinationExtension1,
+                destinationImmediate);
+
+            State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
+            _counters.NativeM68040FpuIlInstructions++;
+            switch (kind)
+            {
+                case M68040FpuJitKind.MoveToControl:
+                    ExecuteCompiledM68040FmoveControl(register, registerMask, toControl: true);
+                    AddCycles(4);
+                    return true;
+                case M68040FpuJitKind.MoveFromControl:
+                    ExecuteCompiledM68040FmoveControl(register, registerMask, toControl: false);
+                    AddCycles(4);
+                    return true;
+                case M68040FpuJitKind.MoveToEa:
+                    WriteM68040FpuEa(destination, quickValue, State.M68040Fpu.FP[register]);
+                    AddCycles(4);
+                    return true;
+                case M68040FpuJitKind.Operation:
+                {
+                    var sourceValue = displacement != 0
+                        ? ReadM68040FpuEa(source, quickValue)
+                        : State.M68040Fpu.FP[quickValue];
+                    if (!M68040FpuHelpers.ApplyOperation(State.M68040Fpu, register, condition, sourceValue))
+                    {
+                        RaiseM68040Format0Exception(11, State.LastInstructionProgramCounter, 34);
+                    }
+
+                    AddCycles(4);
+                    return true;
+                }
+                case M68040FpuJitKind.LineFTrap:
+                    if (displacement != 0)
+                    {
+                        _ = ReadM68040FpuEa(source, quickValue);
+                    }
+
+                    RaiseM68040Format0Exception(11, State.LastInstructionProgramCounter, 34);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void ExecuteCompiledM68040FmoveControl(int register, ushort mask, bool toControl)
+        {
+            if ((mask & 0x1000) != 0)
+            {
+                if (toControl)
+                {
+                    State.M68040Fpu.Fpcr = State.D[register];
+                }
+                else
+                {
+                    State.D[register] = State.M68040Fpu.Fpcr;
+                }
+            }
+
+            if ((mask & 0x0800) != 0)
+            {
+                if (toControl)
+                {
+                    State.M68040Fpu.Fpsr = State.D[register];
+                }
+                else
+                {
+                    State.D[register] = State.M68040Fpu.Fpsr;
+                }
+            }
+
+            if ((mask & 0x0400) != 0)
+            {
+                if (toControl)
+                {
+                    State.M68040Fpu.Fpiar = State.D[register];
+                }
+                else
+                {
+                    State.D[register] = State.M68040Fpu.Fpiar;
+                }
+            }
+        }
+
+        private double ReadM68040FpuEa(M68kDecodedEa ea, int format)
+        {
+            if (ea.Kind == M68kJitEaKind.DataRegister)
+            {
+                return M68040FpuHelpers.ReadDataRegister(State.D[ea.Register], format);
+            }
+
+            if (ea.Kind == M68kJitEaKind.Immediate)
+            {
+                return M68040FpuHelpers.ReadImmediate(format, ea.Extension0, ea.Extension1, ea.Immediate);
+            }
+
+            var address = ResolveM68040FpuMemoryAddress(ea, format, applySideEffects: true);
+            return format switch
+            {
+                0 => unchecked((int)ReadMemoryValue(address, M68kOperandSize.Long)),
+                1 => BitConverter.Int32BitsToSingle(unchecked((int)ReadMemoryValue(address, M68kOperandSize.Long))),
+                4 => unchecked((short)ReadMemoryValue(address, M68kOperandSize.Word)),
+                5 => BitConverter.Int64BitsToDouble(unchecked((long)(((ulong)ReadMemoryValue(address, M68kOperandSize.Long) << 32) |
+                    ReadMemoryValue(address + 4, M68kOperandSize.Long)))),
+                6 => unchecked((sbyte)ReadMemoryValue(address, M68kOperandSize.Byte)),
+                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU read format {format}.")
+            };
+        }
+
+        private void WriteM68040FpuEa(M68kDecodedEa ea, int format, double value)
+        {
+            if (ea.Kind == M68kJitEaKind.DataRegister)
+            {
+                State.D[ea.Register] = M68040FpuHelpers.WriteDataRegister(State.D[ea.Register], format, value);
+                return;
+            }
+
+            var address = ResolveM68040FpuMemoryAddress(ea, format, applySideEffects: true);
+            switch (format)
+            {
+                case 0:
+                    WriteMemoryValue(address, unchecked((uint)(int)value), M68kOperandSize.Long);
+                    break;
+                case 1:
+                    WriteMemoryValue(address, unchecked((uint)BitConverter.SingleToInt32Bits((float)value)), M68kOperandSize.Long);
+                    break;
+                case 4:
+                    WriteMemoryValue(address, unchecked((ushort)(short)value), M68kOperandSize.Word);
+                    break;
+                case 5:
+                    var bits = unchecked((ulong)BitConverter.DoubleToInt64Bits(value));
+                    WriteMemoryValue(address, (uint)(bits >> 32), M68kOperandSize.Long);
+                    WriteMemoryValue(address + 4, (uint)bits, M68kOperandSize.Long);
+                    break;
+                case 6:
+                    WriteMemoryValue(address, unchecked((byte)(sbyte)value), M68kOperandSize.Byte);
+                    break;
+                default:
+                    throw new AmigaEmulationException($"Unsupported MC68040 FPU write format {format}.");
+            }
+        }
+
+        private uint ResolveM68040FpuMemoryAddress(M68kDecodedEa ea, int format, bool applySideEffects)
+        {
+            var byteSize = M68040FpuHelpers.FormatByteSize(format);
+            return ea.Kind switch
+            {
+                M68kJitEaKind.AddressIndirect => State.A[ea.Register],
+                M68kJitEaKind.AddressPostincrement => ResolveM68040FpuPostincrement(ea.Register, byteSize, applySideEffects),
+                M68kJitEaKind.AddressPredecrement => ResolveM68040FpuPredecrement(ea.Register, byteSize, applySideEffects),
+                M68kJitEaKind.AddressDisplacement => unchecked((uint)(State.A[ea.Register] + (int)(short)ea.Extension0)),
+                M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
+                _ => throw new AmigaEmulationException("MC68040 FPU effective address is not memory-addressable.")
+            };
+        }
+
+        private uint ResolveM68040FpuPostincrement(int register, uint byteSize, bool applySideEffects)
+        {
+            var address = State.A[register];
+            if (applySideEffects)
+            {
+                State.A[register] += register == 7 && byteSize == 1 ? 2u : byteSize;
+            }
+
+            return address;
+        }
+
+        private uint ResolveM68040FpuPredecrement(int register, uint byteSize, bool applySideEffects)
+        {
+            var decrement = register == 7 && byteSize == 1 ? 2u : byteSize;
+            var address = State.A[register] - decrement;
+            if (applySideEffects)
+            {
+                State.A[register] = address;
+            }
+
+            return address;
         }
 
         private bool ExecuteCompiledM68040Fallback(uint instructionPc)
@@ -8040,6 +8351,11 @@ namespace CopperMod.Amiga
             _compiledInstructionCycleFloorActive = false;
             var opcode = State.LastOpcode;
             _fallback.ExecuteInstruction();
+            if (IsM68040FpuOpcode(opcode))
+            {
+                _counters.M68040FpuFallbackInstructions++;
+            }
+
             if (ShouldFlushM68040JitAfterFallback(instructionPc, opcode))
             {
                 _counters.Invalidations++;
@@ -9827,7 +10143,8 @@ namespace CopperMod.Amiga
                 _v2FastReadEnabled,
                 _v2BusGraphEnabled || _v2BusAccessEnabled,
                 workerGraphExpansionEnabled,
-                _cpuModel == M68kJitCpuModel.M68040);
+                _cpuModel == M68kJitCpuModel.M68040,
+                _cpuModel);
 
         private int CalculateAsyncCompilePriority(
             uint root,
@@ -11191,7 +11508,8 @@ namespace CopperMod.Amiga
                 bool v2FastReadEnabled,
                 bool v2BusGraphEnabled,
                 bool workerGraphExpansionEnabled,
-                bool forceTranslatedMemoryAccesses)
+                bool forceTranslatedMemoryAccesses,
+                M68kJitCpuModel cpuModel)
             {
                 V2Enabled = v2Enabled;
                 V2Tier3Enabled = v2Tier3Enabled;
@@ -11201,6 +11519,7 @@ namespace CopperMod.Amiga
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
                 ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                CpuModel = cpuModel;
             }
 
             public bool V2Enabled { get; }
@@ -11218,6 +11537,8 @@ namespace CopperMod.Amiga
             public bool WorkerGraphExpansionEnabled { get; }
 
             public bool ForceTranslatedMemoryAccesses { get; }
+
+            public M68kJitCpuModel CpuModel { get; }
         }
 
         private readonly struct M68kTraceCompilationInput
@@ -12101,6 +12422,10 @@ namespace CopperMod.Amiga
         public long Invalidations { get; set; }
 
         public long FallbackInstructions { get; set; }
+
+        public long NativeM68040FpuIlInstructions { get; set; }
+
+        public long M68040FpuFallbackInstructions { get; set; }
 
         public long BlacklistCount { get; set; }
 

@@ -60,6 +60,7 @@ namespace CopperMod.Amiga
         MoveToCcr,
         MoveToSr,
         Pea,
+        M68040Fpu,
         M68040Fallback
     }
 
@@ -169,6 +170,7 @@ namespace CopperMod.Amiga
             ushort extension1,
             ushort extension2,
             ushort extension3,
+            ushort extension4,
             bool stopsTrace)
         {
             ProgramCounter = programCounter;
@@ -189,6 +191,7 @@ namespace CopperMod.Amiga
             Extension1 = extension1;
             Extension2 = extension2;
             Extension3 = extension3;
+            Extension4 = extension4;
             StopsTrace = stopsTrace;
         }
 
@@ -227,6 +230,8 @@ namespace CopperMod.Amiga
         public ushort Extension2 { get; }
 
         public ushort Extension3 { get; }
+
+        public ushort Extension4 { get; }
 
         public int Length => 2 + (ExtensionCount * 2);
 
@@ -285,23 +290,7 @@ namespace CopperMod.Amiga
                 var opcode = codeReader.ReadHostWord(programCounter);
                 if ((opcode & 0xF000) == 0xF000 && cpuModel == M68kJitCpuModel.M68040)
                 {
-                    instruction = Create(
-                        programCounter,
-                        opcode,
-                        M68kJitOperation.M68040Fallback,
-                        M68kOperandSize.Word,
-                        new M68kDecodedEa(M68kJitEaKind.Immediate, 0, 0, 0, 0, programCounter),
-                        M68kDecodedEa.None,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        programCounter + 2,
-                        new DecodeCursor(codeReader, programCounter + 2),
-                        stopsTrace: true);
-                    return true;
+                    return TryDecodeM68040LineF(programCounter, opcode, new DecodeCursor(codeReader, programCounter + 2), out instruction);
                 }
 
                 if ((opcode & 0xF000) is 0xA000 or 0xF000 || opcode is 0x4AFC)
@@ -348,6 +337,281 @@ namespace CopperMod.Amiga
                 reason = M68kJitBailoutReason.UnsupportedOpcode;
                 instruction = default;
                 return false;
+            }
+        }
+
+        private static bool TryDecodeM68040LineF(
+            uint pc,
+            ushort opcode,
+            DecodeCursor cursor,
+            out M68kDecodedInstruction instruction)
+        {
+            if ((opcode & 0xFFC0) != 0xF200)
+            {
+                instruction = CreateM68040Fallback(pc, opcode, cursor);
+                return true;
+            }
+
+            var local = cursor;
+            var extension = local.FetchWord();
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            if ((extension & 0xE000) == 0xA000)
+            {
+                if (mode != 0)
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Fpu,
+                    M68kOperandSize.Long,
+                    new M68kDecodedEa(M68kJitEaKind.DataRegister, register, 0, 0, 0, 0),
+                    M68kDecodedEa.None,
+                    register,
+                    0,
+                    0,
+                    0,
+                    (int)M68040FpuJitKind.MoveToControl,
+                    (ushort)(extension & 0x1C00),
+                    pc + 2,
+                    local,
+                    stopsTrace: false);
+                return true;
+            }
+
+            if ((extension & 0xE000) == 0x8000)
+            {
+                if (mode != 0)
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Fpu,
+                    M68kOperandSize.Long,
+                    M68kDecodedEa.None,
+                    new M68kDecodedEa(M68kJitEaKind.DataRegister, register, 0, 0, 0, 0),
+                    register,
+                    0,
+                    0,
+                    0,
+                    (int)M68040FpuJitKind.MoveFromControl,
+                    (ushort)(extension & 0x1C00),
+                    pc + 2,
+                    local,
+                    stopsTrace: false);
+                return true;
+            }
+
+            if ((extension & 0x6000) == 0x6000)
+            {
+                var format = (extension >> 10) & 7;
+                if (!TryDecodeFpuEa(ref local, mode, register, format, write: true, out var destination))
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Fpu,
+                    M68kOperandSize.Long,
+                    M68kDecodedEa.None,
+                    destination,
+                    (extension >> 7) & 7,
+                    format,
+                    0,
+                    0,
+                    (int)M68040FpuJitKind.MoveToEa,
+                    0,
+                    pc + 2,
+                    local,
+                    stopsTrace: false);
+                return true;
+            }
+
+            var sourceIsEa = (extension & 0x4000) != 0;
+            var formatOrSource = (extension >> 10) & 7;
+            var source = M68kDecodedEa.None;
+            if (sourceIsEa &&
+                !TryDecodeFpuEa(ref local, mode, register, formatOrSource, write: false, out source))
+            {
+                instruction = CreateM68040Fallback(pc, opcode, cursor);
+                return true;
+            }
+
+            var opmode = extension & 0x007F;
+            instruction = Create(
+                pc,
+                opcode,
+                M68kJitOperation.M68040Fpu,
+                M68kOperandSize.Long,
+                source,
+                M68kDecodedEa.None,
+                (extension >> 7) & 7,
+                formatOrSource,
+                opmode,
+                sourceIsEa ? 1 : 0,
+                M68040FpuHelpers.IsSupportedOperation(opmode)
+                    ? (int)M68040FpuJitKind.Operation
+                    : (int)M68040FpuJitKind.LineFTrap,
+                0,
+                pc + 2,
+                local,
+                stopsTrace: false);
+            return true;
+        }
+
+        private static M68kDecodedInstruction CreateM68040Fallback(uint pc, ushort opcode, DecodeCursor cursor)
+        {
+            return Create(
+                pc,
+                opcode,
+                M68kJitOperation.M68040Fallback,
+                M68kOperandSize.Word,
+                new M68kDecodedEa(M68kJitEaKind.Immediate, 0, 0, 0, 0, pc),
+                M68kDecodedEa.None,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                pc + 2,
+                cursor,
+                stopsTrace: true);
+        }
+
+        private static bool TryDecodeFpuEa(
+            ref DecodeCursor cursor,
+            int mode,
+            int register,
+            int format,
+            bool write,
+            out M68kDecodedEa ea)
+        {
+            ea = default;
+            if (mode == 0)
+            {
+                if (!M68040FpuHelpers.IsSupportedDataRegisterFormat(format))
+                {
+                    return false;
+                }
+
+                ea = new M68kDecodedEa(M68kJitEaKind.DataRegister, register, 0, 0, 0, 0);
+                return true;
+            }
+
+            if (!M68040FpuHelpers.IsSupportedMemoryFormat(format))
+            {
+                return false;
+            }
+
+            if (mode == 7 && register == 4)
+            {
+                if (write)
+                {
+                    return false;
+                }
+
+                return TryDecodeFpuImmediate(ref cursor, format, out ea);
+            }
+
+            return mode switch
+            {
+                2 => DecodeSimpleFpuEa(M68kJitEaKind.AddressIndirect, register, out ea),
+                3 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPostincrement, register, out ea),
+                4 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPredecrement, register, out ea),
+                5 => DecodeExtensionFpuEa(ref cursor, M68kJitEaKind.AddressDisplacement, register, out ea),
+                7 when register == 1 => DecodeAbsoluteLongFpuEa(ref cursor, out ea),
+                _ => false
+            };
+        }
+
+        private static bool DecodeSimpleFpuEa(M68kJitEaKind kind, int register, out M68kDecodedEa ea)
+        {
+            ea = new M68kDecodedEa(kind, register, 0, 0, 0, 0);
+            return true;
+        }
+
+        private static bool DecodeExtensionFpuEa(
+            ref DecodeCursor cursor,
+            M68kJitEaKind kind,
+            int register,
+            out M68kDecodedEa ea)
+        {
+            var extensionAddress = cursor.Address;
+            var extension = cursor.FetchWord();
+            ea = new M68kDecodedEa(kind, register, extensionAddress, extension, 0, 0);
+            return true;
+        }
+
+        private static bool DecodeAbsoluteLongFpuEa(ref DecodeCursor cursor, out M68kDecodedEa ea)
+        {
+            var extensionAddress = cursor.Address;
+            var high = cursor.FetchWord();
+            var low = cursor.FetchWord();
+            ea = new M68kDecodedEa(M68kJitEaKind.AbsoluteLong, 0, extensionAddress, high, low, 0);
+            return true;
+        }
+
+        private static bool TryDecodeFpuImmediate(ref DecodeCursor cursor, int format, out M68kDecodedEa ea)
+        {
+            var extensionAddress = cursor.Address;
+            switch (format)
+            {
+                case 0:
+                case 1:
+                {
+                    var high = cursor.FetchWord();
+                    var low = cursor.FetchWord();
+                    ea = new M68kDecodedEa(
+                        M68kJitEaKind.Immediate,
+                        0,
+                        extensionAddress,
+                        high,
+                        low,
+                        ((uint)high << 16) | low);
+                    return true;
+                }
+                case 4:
+                {
+                    var value = cursor.FetchWord();
+                    ea = new M68kDecodedEa(M68kJitEaKind.Immediate, 0, extensionAddress, value, 0, value);
+                    return true;
+                }
+                case 5:
+                {
+                    var word0 = cursor.FetchWord();
+                    var word1 = cursor.FetchWord();
+                    var word2 = cursor.FetchWord();
+                    var word3 = cursor.FetchWord();
+                    ea = new M68kDecodedEa(
+                        M68kJitEaKind.Immediate,
+                        0,
+                        extensionAddress,
+                        word0,
+                        word1,
+                        ((uint)word2 << 16) | word3);
+                    return true;
+                }
+                case 6:
+                {
+                    var value = cursor.FetchWord();
+                    ea = new M68kDecodedEa(M68kJitEaKind.Immediate, 0, extensionAddress, value, 0, value & 0xFFu);
+                    return true;
+                }
+                default:
+                    ea = default;
+                    return false;
             }
         }
 
@@ -1534,6 +1798,7 @@ namespace CopperMod.Amiga
                 cursor.Extension1,
                 cursor.Extension2,
                 cursor.Extension3,
+                cursor.Extension4,
                 stopsTrace);
         }
 
@@ -1555,6 +1820,7 @@ namespace CopperMod.Amiga
                 Extension1 = 0;
                 Extension2 = 0;
                 Extension3 = 0;
+                Extension4 = 0;
             }
 
             public uint Address { get; private set; }
@@ -1568,6 +1834,8 @@ namespace CopperMod.Amiga
             public ushort Extension2 { get; private set; }
 
             public ushort Extension3 { get; private set; }
+
+            public ushort Extension4 { get; private set; }
 
             public ushort FetchWord()
             {
@@ -1585,6 +1853,9 @@ namespace CopperMod.Amiga
                         break;
                     case 3:
                         Extension3 = word;
+                        break;
+                    case 4:
+                        Extension4 = word;
                         break;
                     default:
                         throw new InvalidOperationException("The MC68000 JIT decoder exceeded the supported extension word budget.");
