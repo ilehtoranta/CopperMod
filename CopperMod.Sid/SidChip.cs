@@ -102,6 +102,8 @@ namespace CopperMod.Sid
 
         public SidCycleTrace? Trace { get; set; }
 
+        internal SidOutputStageTrace? OutputStageTrace { get; set; }
+
         public void Reset()
         {
             Array.Clear(_registers);
@@ -529,17 +531,26 @@ namespace CopperMod.Sid
                     {
                         var volume = value & 0x0F;
                         var nextVolumeOffset = SidAnalog.VolumeOffset(value, Model, SidEmulationProfile);
-                        AddRegisterTransient((nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain);
-                        AddRegisterTransient(SidAnalog.D418TransitionTransient(
+                        var genericStepImpulse = (nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain;
+                        var matrixImpulse = SidAnalog.D418TransitionTransient(
                             previousValue,
                             value,
                             Model,
-                            SidEmulationProfile));
-                        AddRegisterTransient(SidAnalog.FilterModeTransient(
+                            SidEmulationProfile);
+                        var filterModeImpulse = SidAnalog.FilterModeTransient(
                             previousValue,
                             value,
                             Model,
-                            SidEmulationProfile));
+                            SidEmulationProfile);
+                        AddRegisterTransient(genericStepImpulse);
+                        AddRegisterTransient(matrixImpulse);
+                        AddRegisterTransient(filterModeImpulse);
+                        var outputStageTrace = OutputStageTrace;
+                        if (outputStageTrace is { IsCapturing: true })
+                        {
+                            outputStageTrace.AddD418Write(genericStepImpulse, matrixImpulse, filterModeImpulse);
+                        }
+
                         _masterVolume = SidAnalog.ConvertVolume(volume, Model, SidEmulationProfile);
                         _volumeOffset = nextVolumeOffset;
                         _voice3Muted = (value & 0x80) != 0;
@@ -682,29 +693,67 @@ namespace CopperMod.Sid
         [HotPath]
         private double ApplyOutputStage(double voiceSignal)
         {
+            var volumeTransientTarget = _volumeRegisterTransientTarget;
             var volumeTransient = _volumeRegisterTransient +
-                ((_volumeRegisterTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
-            var output = SidAnalog.SoftClip(voiceSignal + _volumeOffset + volumeTransient);
+                ((volumeTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
+            var preSoftClip = voiceSignal + _volumeOffset + volumeTransient;
+            var output = SidAnalog.SoftClip(preSoftClip);
             _volumeRegisterTransient = volumeTransient;
             _volumeRegisterTransientTarget *= _volumeRegisterTransientDecay;
             _outputLowPassState += (output - _outputLowPassState) * _outputLowPassAlpha;
+            var outputStageTrace = OutputStageTrace;
+            if (outputStageTrace is { IsCapturing: true })
+            {
+                outputStageTrace.AddOutputCycle(new SidOutputStageCycle(
+                    voiceSignal,
+                    _volumeOffset,
+                    volumeTransientTarget,
+                    volumeTransient,
+                    preSoftClip,
+                    output,
+                    0.0,
+                    0.0,
+                    0.0,
+                    _outputLowPassState));
+            }
+
             return _outputLowPassState;
         }
 
         [HotPath]
         private double ApplyMos6581AnalogOutputStage(SidMos6581AnalogFilter filter, double mixedVoltage)
         {
+            var volumeTransientTarget = _volumeRegisterTransientTarget;
             var volumeTransient = _volumeRegisterTransient +
-                ((_volumeRegisterTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
+                ((volumeTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
+            var preSoftClip = _volumeOffset + volumeTransient;
             var outputVoltage = filter.ApplyOutputStageVoltage(
                 mixedVoltage,
                 _masterVolume,
                 _volumeOffset,
                 volumeTransient);
+            var outputSample = filter.OutputVoltageToSample(outputVoltage);
             _volumeRegisterTransient = volumeTransient;
             _volumeRegisterTransientTarget *= _volumeRegisterTransientDecay;
             _analogOutputLowPassVoltage += (outputVoltage - _analogOutputLowPassVoltage) * _analogOutputLowPassAlpha;
-            return filter.OutputVoltageToSample(_analogOutputLowPassVoltage);
+            var finalSample = filter.OutputVoltageToSample(_analogOutputLowPassVoltage);
+            var outputStageTrace = OutputStageTrace;
+            if (outputStageTrace is { IsCapturing: true })
+            {
+                outputStageTrace.AddOutputCycle(new SidOutputStageCycle(
+                    0.0,
+                    _volumeOffset,
+                    volumeTransientTarget,
+                    volumeTransient,
+                    preSoftClip,
+                    outputSample,
+                    mixedVoltage,
+                    outputVoltage,
+                    _analogOutputLowPassVoltage,
+                    finalSample));
+            }
+
+            return finalSample;
         }
 
         [HotPath]

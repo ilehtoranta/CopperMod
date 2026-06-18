@@ -1,5 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace CopperMod.Sid.Tests;
 
@@ -13,7 +18,51 @@ public sealed class PexD418ReplayCalibrationTests
 	private const int PexTransitionCycles = PexZeroToFromCycles + PexFromToCycles + PexToZeroCycles;
 	private const int PexSampleOffset = 13;
 	private const int PexZeroRightSampleOffset = 26;
+	private const int MinPhaseOffset = -8;
+	private const int MaxPhaseOffset = 8;
+	private const int StageCount = (int)CalibrationStage.Count;
 	private const ushort SidBase = SidConstants.DefaultSidBaseAddress;
+	private static readonly object ReportFileLock = new();
+
+	private static readonly CalibrationStage[] ContextFitStages =
+	{
+		CalibrationStage.D418MatrixImpulse,
+		CalibrationStage.D418GenericStepImpulse,
+		CalibrationStage.FilterModeImpulse,
+		CalibrationStage.VolumeTransientTarget,
+		CalibrationStage.VolumeTransientCurrent,
+		CalibrationStage.VolumeOffset,
+		CalibrationStage.PreSoftClipSample,
+		CalibrationStage.PostSoftClipSample,
+		CalibrationStage.AnalogOutputVoltage,
+		CalibrationStage.AnalogLowPassVoltage,
+		CalibrationStage.FinalSample
+	};
+
+	private static readonly (int Previous, int Next)[] RepresentativeTransitions =
+	{
+		(0x00, 0x00),
+		(0x00, 0x0F),
+		(0x0F, 0x00),
+		(0x00, 0x9F),
+		(0x9F, 0x0F),
+		(0xFF, 0x00),
+		(0x00, 0x80),
+		(0x80, 0x0F),
+		(0x1F, 0x0F),
+		(0x20, 0x2F),
+		(0x60, 0x2F),
+		(0x40, 0x4F),
+		(0xC0, 0x4F),
+		(0x70, 0x7F),
+		(0xF0, 0x7F),
+		(0x90, 0x9F),
+		(0x10, 0x9F),
+		(0x7F, 0xFF),
+		(0xFF, 0x7F),
+		(0x55, 0xAA),
+		(0xAA, 0x55)
+	};
 
 	private static readonly ContextDelta[] ContextDeltas =
 	{
@@ -27,10 +76,17 @@ public sealed class PexD418ReplayCalibrationTests
 		new(0x90, 0x10, 0x9F)
 	};
 
+	private readonly ITestOutputHelper _output;
+
+	public PexD418ReplayCalibrationTests(ITestOutputHelper output)
+	{
+		_output = output;
+	}
+
 	[Theory]
 	[InlineData((int)SidChipModel.Mos6581)]
 	[InlineData((int)SidChipModel.Mos8580)]
-	public void OptionalContinuousPexReplayCalibrationProducesFiniteFitReport(int modelValue)
+	public void OptionalContinuousPexReplayCalibrationProducesPhasePolarityFitReport(int modelValue)
 	{
 		if (!ContinuousCalibrationEnabled())
 		{
@@ -38,88 +94,120 @@ public sealed class PexD418ReplayCalibrationTests
 		}
 
 		var model = (SidChipModel)modelValue;
-		var reference = MeasureContextFit(model, SidEmulationProfile.ReferenceMeasured);
-		var balanced = MeasureContextFit(model, SidEmulationProfile.Balanced);
+		var transitionIndices = BuildTransitionSet();
+		var reference = BuildCalibrationReport(model, SidEmulationProfile.ReferenceMeasured, transitionIndices);
+		var balanced = BuildCalibrationReport(model, SidEmulationProfile.Balanced, transitionIndices);
 
-		AssertFinite(model, SidEmulationProfile.ReferenceMeasured, reference);
-		AssertFinite(model, SidEmulationProfile.Balanced, balanced);
+		WriteReport(reference);
+		WriteReport(balanced);
+		AssertFinite(reference);
+		AssertFinite(balanced);
+		Assert.True(
+			Math.Abs(reference.ContextFit.Correlation) > 0.50,
+			$"Expected {model} reference final context fit to retain useful correlation: {reference.ContextFit}.");
+		Assert.True(
+			reference.ContextFit.NormalizedRootMeanSquareError < 0.90,
+			$"Expected {model} reference final context fit to stay within calibrated error bounds: {reference.ContextFit}.");
+		Assert.True(
+			reference.ContextFit.NormalizedRootMeanSquareError < balanced.ContextFit.NormalizedRootMeanSquareError * 0.95,
+			$"Expected {model} reference final context fit to beat balanced. Reference {reference.ContextFit}; balanced {balanced.ContextFit}.");
 	}
 
-	private static void AssertFinite(SidChipModel model, SidEmulationProfile sidEmulationProfile, ContextFit fit)
-	{
-		Assert.True(double.IsFinite(fit.Scale), $"{model} {sidEmulationProfile} invalid scale: {fit}.");
-		Assert.True(double.IsFinite(fit.Correlation), $"{model} {sidEmulationProfile} invalid correlation: {fit}.");
-		Assert.True(double.IsFinite(fit.RootMeanSquareError), $"{model} {sidEmulationProfile} invalid RMSE: {fit}.");
-		Assert.True(double.IsFinite(fit.NormalizedRootMeanSquareError), $"{model} {sidEmulationProfile} invalid normalized RMSE: {fit}.");
-		Assert.True(double.IsFinite(fit.MaxAbsoluteError), $"{model} {sidEmulationProfile} invalid max error: {fit}.");
-	}
-
-	private static ContextFit MeasureContextFit(SidChipModel model, SidEmulationProfile sidEmulationProfile)
-	{
-		var transitions = new (int Previous, int Next)[ContextDeltas.Length * 2];
-		for (var i = 0; i < ContextDeltas.Length; i++)
-		{
-			var sample = ContextDeltas[i];
-			transitions[i * 2] = (sample.PreviousA, sample.Next);
-			transitions[(i * 2) + 1] = (sample.PreviousB, sample.Next);
-		}
-
-		var replay = ReplayContinuousPexTransitions(model, sidEmulationProfile, transitions);
-		var observed = new double[ContextDeltas.Length];
-		var expected = new double[ContextDeltas.Length];
-		for (var i = 0; i < ContextDeltas.Length; i++)
-		{
-			var sample = ContextDeltas[i];
-			var lowPrevious = replay[(sample.PreviousA << 8) | sample.Next];
-			var highPrevious = replay[(sample.PreviousB << 8) | sample.Next];
-
-			observed[i] = lowPrevious.PostWrite - highPrevious.PostWrite;
-			expected[i] =
-				PexD418ReplayTests.TransitionPostWriteAmplitude(sample.PreviousA, sample.Next, model) -
-				PexD418ReplayTests.TransitionPostWriteAmplitude(sample.PreviousB, sample.Next, model);
-		}
-
-		var scale = FitScaleThroughOrigin(observed, expected);
-		var sumSquaredError = 0.0;
-		var maxAbsoluteError = 0.0;
-		for (var i = 0; i < observed.Length; i++)
-		{
-			var error = (observed[i] * scale) - expected[i];
-			sumSquaredError += error * error;
-			maxAbsoluteError = Math.Max(maxAbsoluteError, Math.Abs(error));
-		}
-
-		var rootMeanSquareError = Math.Sqrt(sumSquaredError / observed.Length);
-		var expectedSpread = StandardDeviation(expected);
-		var normalizedRootMeanSquareError = expectedSpread <= 0.0
-			? rootMeanSquareError
-			: rootMeanSquareError / expectedSpread;
-		return new ContextFit(
-			scale,
-			Correlation(observed, expected),
-			rootMeanSquareError,
-			normalizedRootMeanSquareError,
-			maxAbsoluteError,
-			DescribeSamples(observed, expected, scale));
-	}
-
-	private static PexD418ReplayTests.PexReplayMeasurement[] ReplayContinuousPexTransitions(
+	private CalibrationReport BuildCalibrationReport(
 		SidChipModel model,
 		SidEmulationProfile sidEmulationProfile,
-		(int Previous, int Next)[] transitions)
+		int[] transitionIndices)
 	{
-		var maxTransitionIndex = 0;
-		for (var i = 0; i < transitions.Length; i++)
+		var replay = ReplayContinuousPexTransitions(
+			model,
+			sidEmulationProfile,
+			transitionIndices,
+			MinPhaseOffset,
+			MaxPhaseOffset);
+		var bestPostFit = FindBestPostWriteFit(model, replay, transitionIndices);
+		var bestContextFit = FindBestContextFit(model, replay, CalibrationStage.FinalSample);
+		var stageFits = FindBestStageContextFits(model, replay);
+		return new CalibrationReport(model, sidEmulationProfile, bestPostFit, bestContextFit, stageFits);
+	}
+
+	private static void AssertFinite(CalibrationReport report)
+	{
+		AssertFinite(report, "post-write", report.PostWriteFit);
+		AssertFinite(report, "context", report.ContextFit);
+		for (var i = 0; i < report.StageContextFits.Length; i++)
 		{
-			maxTransitionIndex = Math.Max(maxTransitionIndex, (transitions[i].Previous << 8) | transitions[i].Next);
+			AssertFinite(report, "stage context", report.StageContextFits[i]);
+		}
+	}
+
+	private static void AssertFinite(CalibrationReport report, string name, CalibrationFit fit)
+	{
+		Assert.True(double.IsFinite(fit.Scale), $"{report.Model} {report.SidEmulationProfile} {name} invalid scale: {fit}.");
+		Assert.True(double.IsFinite(fit.Bias), $"{report.Model} {report.SidEmulationProfile} {name} invalid bias: {fit}.");
+		Assert.True(double.IsFinite(fit.Correlation), $"{report.Model} {report.SidEmulationProfile} {name} invalid correlation: {fit}.");
+		Assert.True(double.IsFinite(fit.RootMeanSquareError), $"{report.Model} {report.SidEmulationProfile} {name} invalid RMSE: {fit}.");
+		Assert.True(double.IsFinite(fit.NormalizedRootMeanSquareError), $"{report.Model} {report.SidEmulationProfile} {name} invalid normalized RMSE: {fit}.");
+		Assert.True(double.IsFinite(fit.MaxAbsoluteError), $"{report.Model} {report.SidEmulationProfile} {name} invalid max error: {fit}.");
+	}
+
+	private void WriteReport(CalibrationReport report)
+	{
+		var text = report.ToString();
+		_output.WriteLine(text);
+		var path = Environment.GetEnvironmentVariable("SID_D418_REPLAY_CALIBRATION_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return;
 		}
 
+		var fullPath = Path.GetFullPath(path);
+		var directory = Path.GetDirectoryName(fullPath);
+		if (!string.IsNullOrEmpty(directory))
+		{
+			Directory.CreateDirectory(directory);
+		}
+
+		lock (ReportFileLock)
+		{
+			File.AppendAllText(fullPath, text + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
+		}
+	}
+
+	private static int[] BuildTransitionSet()
+	{
+		var set = new SortedSet<int>();
+		for (var i = 0; i < RepresentativeTransitions.Length; i++)
+		{
+			set.Add((RepresentativeTransitions[i].Previous << 8) | RepresentativeTransitions[i].Next);
+		}
+
+		for (var i = 0; i < ContextDeltas.Length; i++)
+		{
+			set.Add((ContextDeltas[i].PreviousA << 8) | ContextDeltas[i].Next);
+			set.Add((ContextDeltas[i].PreviousB << 8) | ContextDeltas[i].Next);
+		}
+
+		var values = new int[set.Count];
+		set.CopyTo(values);
+		return values;
+	}
+
+	private static Dictionary<int, StageReplayMeasurement[]> ReplayContinuousPexTransitions(
+		SidChipModel model,
+		SidEmulationProfile sidEmulationProfile,
+		int[] transitionIndices,
+		int minPhaseOffset,
+		int maxPhaseOffset)
+	{
+		var maxTransitionIndex = transitionIndices[^1];
 		var sid = new SidSystem(
 			new[] { new SidChipPlacement(0, SidBase) },
 			model,
 			SidConstants.PalCpuCyclesPerSecond,
 			SidFilterProfileId.Auto,
 			sidEmulationProfile);
+		var outputStageTrace = new SidOutputStageTrace();
+		sid.Chips[0].OutputStageTrace = outputStageTrace;
 		ApplyPexSidSetup(sid);
 
 		var firstFromCycle = CycleForSample(FirstFromSampleIndex);
@@ -137,22 +225,229 @@ public sealed class PexD418ReplayCalibrationTests
 		var finalFromCycle = firstFromCycle + ((long)maxTransitionIndex * PexTransitionCycles);
 		WriteD418(sid, 0x00, finalFromCycle + PexFromToCycles + PexToZeroCycles);
 
-		var result = new PexD418ReplayTests.PexReplayMeasurement[256 * 256];
-		var sortedTransitions = new int[transitions.Length];
-		for (var i = 0; i < transitions.Length; i++)
+		var result = new Dictionary<int, StageReplayMeasurement[]>(transitionIndices.Length);
+		for (var i = 0; i < transitionIndices.Length; i++)
 		{
-			sortedTransitions[i] = (transitions[i].Previous << 8) | transitions[i].Next;
-		}
-
-		Array.Sort(sortedTransitions);
-		for (var i = 0; i < sortedTransitions.Length; i++)
-		{
-			var transitionIndex = sortedTransitions[i];
-			var measurement = MeasureContinuousTransition(sid, transitionIndex);
-			result[transitionIndex] = measurement;
+			var transitionIndex = transitionIndices[i];
+			result[transitionIndex] = MeasureContinuousTransitionPhases(
+				sid,
+				outputStageTrace,
+				transitionIndex,
+				minPhaseOffset,
+				maxPhaseOffset);
 		}
 
 		return result;
+	}
+
+	private static StageReplayMeasurement[] MeasureContinuousTransitionPhases(
+		SidSystem sid,
+		SidOutputStageTrace outputStageTrace,
+		int transitionIndex,
+		int minPhaseOffset,
+		int maxPhaseOffset)
+	{
+		var phaseCount = maxPhaseOffset - minPhaseOffset + 1;
+		var centerIndex = FirstFromSampleIndex +
+			(transitionIndex * PexTransitionCycles * (double)SampleRate / SidConstants.PalCpuCyclesPerSecond);
+		var firstSampleIndex = RoundMatlab(centerIndex + minPhaseOffset - PexSampleOffset) - 1;
+		var lastSampleIndex = RoundMatlab(centerIndex + maxPhaseOffset + PexZeroRightSampleOffset) + 1;
+		var samples = new CapturedSample[lastSampleIndex - firstSampleIndex + 1];
+		for (var sampleIndex = firstSampleIndex; sampleIndex <= lastSampleIndex; sampleIndex++)
+		{
+			samples[sampleIndex - firstSampleIndex] = RenderSingleSampleAt(sid, outputStageTrace, sampleIndex);
+		}
+
+		var result = new StageReplayMeasurement[phaseCount];
+		for (var phaseOffset = minPhaseOffset; phaseOffset <= maxPhaseOffset; phaseOffset++)
+		{
+			var shiftedCenterIndex = centerIndex + phaseOffset;
+			var zeroLeftIndex = RoundMatlab(shiftedCenterIndex - PexSampleOffset);
+			var fromIndex = RoundMatlab(shiftedCenterIndex);
+			var toIndex = RoundMatlab(shiftedCenterIndex + PexSampleOffset);
+			var zeroRightIndex = RoundMatlab(shiftedCenterIndex + PexZeroRightSampleOffset);
+			var measurement = new StageReplayMeasurement();
+			for (var stageIndex = 0; stageIndex < StageCount; stageIndex++)
+			{
+				var stage = (CalibrationStage)stageIndex;
+				var zeroLeft = AverageAt(samples, zeroLeftIndex, firstSampleIndex, stage);
+				var preWrite = AverageAt(samples, fromIndex, firstSampleIndex, stage);
+				var postWrite = AverageAt(samples, toIndex, firstSampleIndex, stage);
+				var zeroRight = AverageAt(samples, zeroRightIndex, firstSampleIndex, stage);
+				var preWriteZero = Interpolate(zeroLeft, zeroRight, zeroLeftIndex, zeroRightIndex, fromIndex);
+				var postWriteZero = Interpolate(zeroLeft, zeroRight, zeroLeftIndex, zeroRightIndex, toIndex);
+				measurement.PreWrite[stageIndex] = preWrite - preWriteZero;
+				measurement.PostWrite[stageIndex] = postWrite - postWriteZero;
+			}
+
+			result[phaseOffset - minPhaseOffset] = measurement;
+		}
+
+		return result;
+	}
+
+	private static CalibrationFit FindBestPostWriteFit(
+		SidChipModel model,
+		Dictionary<int, StageReplayMeasurement[]> replay,
+		int[] transitionIndices)
+	{
+		CalibrationFit? best = null;
+		for (var phaseOffset = MinPhaseOffset; phaseOffset <= MaxPhaseOffset; phaseOffset++)
+		{
+			var phaseIndex = phaseOffset - MinPhaseOffset;
+			var points = new FitPoint[transitionIndices.Length];
+			for (var i = 0; i < transitionIndices.Length; i++)
+			{
+				var transitionIndex = transitionIndices[i];
+				var previous = transitionIndex >> 8;
+				var next = transitionIndex & 0xFF;
+				points[i] = new FitPoint(
+					$"{previous:X2}->{next:X2}",
+					replay[transitionIndex][phaseIndex].PostWrite[(int)CalibrationStage.FinalSample],
+					PexD418ReplayTests.TransitionPostWriteAmplitude(previous, next, model));
+			}
+
+			var fit = FitAffine("post-write", phaseOffset, points);
+			best = IsBetterFit(fit, best) ? fit : best;
+		}
+
+		return best ?? throw new InvalidOperationException("No post-write calibration fit was produced.");
+	}
+
+	private static CalibrationFit FindBestContextFit(
+		SidChipModel model,
+		Dictionary<int, StageReplayMeasurement[]> replay,
+		CalibrationStage stage)
+	{
+		CalibrationFit? best = null;
+		var stageIndex = (int)stage;
+		for (var phaseOffset = MinPhaseOffset; phaseOffset <= MaxPhaseOffset; phaseOffset++)
+		{
+			var phaseIndex = phaseOffset - MinPhaseOffset;
+			var points = new FitPoint[ContextDeltas.Length];
+			for (var i = 0; i < ContextDeltas.Length; i++)
+			{
+				var sample = ContextDeltas[i];
+				var leftIndex = (sample.PreviousA << 8) | sample.Next;
+				var rightIndex = (sample.PreviousB << 8) | sample.Next;
+				points[i] = new FitPoint(
+					$"{sample.PreviousA:X2}/{sample.PreviousB:X2}->{sample.Next:X2}",
+					replay[leftIndex][phaseIndex].PostWrite[stageIndex] - replay[rightIndex][phaseIndex].PostWrite[stageIndex],
+					PexD418ReplayTests.TransitionPostWriteAmplitude(sample.PreviousA, sample.Next, model) -
+						PexD418ReplayTests.TransitionPostWriteAmplitude(sample.PreviousB, sample.Next, model));
+			}
+
+			var fit = FitAffine(StageLabel(stage), phaseOffset, points);
+			best = IsBetterFit(fit, best) ? fit : best;
+		}
+
+		return best ?? throw new InvalidOperationException("No context calibration fit was produced.");
+	}
+
+	private static CalibrationFit[] FindBestStageContextFits(
+		SidChipModel model,
+		Dictionary<int, StageReplayMeasurement[]> replay)
+	{
+		var fits = new CalibrationFit[ContextFitStages.Length];
+		for (var i = 0; i < ContextFitStages.Length; i++)
+		{
+			fits[i] = FindBestContextFit(model, replay, ContextFitStages[i]);
+		}
+
+		return fits;
+	}
+
+	private static bool IsBetterFit(CalibrationFit fit, CalibrationFit? currentBest)
+	{
+		if (currentBest == null)
+		{
+			return true;
+		}
+
+		var errorDelta = fit.NormalizedRootMeanSquareError - currentBest.Value.NormalizedRootMeanSquareError;
+		if (Math.Abs(errorDelta) > 0.000001)
+		{
+			return errorDelta < 0.0;
+		}
+
+		return Math.Abs(fit.Correlation) > Math.Abs(currentBest.Value.Correlation);
+	}
+
+	private static CalibrationFit FitAffine(string name, int phaseOffset, FitPoint[] points)
+	{
+		var observedMean = 0.0;
+		var expectedMean = 0.0;
+		for (var i = 0; i < points.Length; i++)
+		{
+			observedMean += points[i].Observed;
+			expectedMean += points[i].Expected;
+		}
+
+		observedMean /= points.Length;
+		expectedMean /= points.Length;
+
+		var covariance = 0.0;
+		var observedVariance = 0.0;
+		var expectedVariance = 0.0;
+		for (var i = 0; i < points.Length; i++)
+		{
+			var observedDelta = points[i].Observed - observedMean;
+			var expectedDelta = points[i].Expected - expectedMean;
+			covariance += observedDelta * expectedDelta;
+			observedVariance += observedDelta * observedDelta;
+			expectedVariance += expectedDelta * expectedDelta;
+		}
+
+		var scale = observedVariance <= 0.0 ? 0.0 : covariance / observedVariance;
+		var bias = expectedMean - (scale * observedMean);
+		var correlation = observedVariance <= 0.0 || expectedVariance <= 0.0
+			? 0.0
+			: covariance / Math.Sqrt(observedVariance * expectedVariance);
+		var sumSquaredError = 0.0;
+		var errors = new FitError[points.Length];
+		for (var i = 0; i < points.Length; i++)
+		{
+			var fitted = (points[i].Observed * scale) + bias;
+			var error = fitted - points[i].Expected;
+			sumSquaredError += error * error;
+			errors[i] = new FitError(points[i].Label, error, points[i].Observed, fitted, points[i].Expected);
+		}
+
+		Array.Sort(errors, (left, right) => Math.Abs(right.Error).CompareTo(Math.Abs(left.Error)));
+		var rootMeanSquareError = Math.Sqrt(sumSquaredError / points.Length);
+		var expectedSpread = Math.Sqrt(expectedVariance / points.Length);
+		var normalizedRootMeanSquareError = expectedSpread <= 0.0
+			? rootMeanSquareError
+			: rootMeanSquareError / expectedSpread;
+		return new CalibrationFit(
+			name,
+			phaseOffset,
+			scale,
+			bias,
+			correlation,
+			rootMeanSquareError,
+			normalizedRootMeanSquareError,
+			Math.Abs(errors[0].Error),
+			DescribeWorst(errors));
+	}
+
+	private static string DescribeWorst(FitError[] errors)
+	{
+		var count = Math.Min(3, errors.Length);
+		var parts = new string[count];
+		for (var i = 0; i < count; i++)
+		{
+			parts[i] = string.Format(
+				CultureInfo.InvariantCulture,
+				"{0}: err {1:0.000000}, obs {2:0.000000}, fit {3:0.000000}, exp {4:0.000000}",
+				errors[i].Label,
+				errors[i].Error,
+				errors[i].Observed,
+				errors[i].Fitted,
+				errors[i].Expected);
+		}
+
+		return string.Join("; ", parts);
 	}
 
 	private static bool ContinuousCalibrationEnabled()
@@ -161,41 +456,16 @@ public sealed class PexD418ReplayCalibrationTests
 			"1",
 			StringComparison.Ordinal);
 
-	private static PexD418ReplayTests.PexReplayMeasurement MeasureContinuousTransition(
+	private static CapturedSample RenderSingleSampleAt(
 		SidSystem sid,
-		int transitionIndex)
-	{
-		var centerIndex = FirstFromSampleIndex +
-			(transitionIndex * PexTransitionCycles * (double)SampleRate / SidConstants.PalCpuCyclesPerSecond);
-		var zeroLeftIndex = RoundMatlab(centerIndex - PexSampleOffset);
-		var fromIndex = RoundMatlab(centerIndex);
-		var toIndex = RoundMatlab(centerIndex + PexSampleOffset);
-		var zeroRightIndex = RoundMatlab(centerIndex + PexZeroRightSampleOffset);
-		var firstSampleIndex = zeroLeftIndex - 1;
-		var lastSampleIndex = zeroRightIndex + 1;
-		var samples = new double[lastSampleIndex - firstSampleIndex + 1];
-		for (var sampleIndex = firstSampleIndex; sampleIndex <= lastSampleIndex; sampleIndex++)
-		{
-			samples[sampleIndex - firstSampleIndex] = RenderSingleSampleAt(sid, sampleIndex);
-		}
-
-		var zeroLeft = AverageAt(samples, zeroLeftIndex, firstSampleIndex);
-		var preWrite = AverageAt(samples, fromIndex, firstSampleIndex);
-		var postWrite = AverageAt(samples, toIndex, firstSampleIndex);
-		var zeroRight = AverageAt(samples, zeroRightIndex, firstSampleIndex);
-		var preWriteZero = Interpolate(zeroLeft, zeroRight, zeroLeftIndex, zeroRightIndex, fromIndex);
-		var postWriteZero = Interpolate(zeroLeft, zeroRight, zeroLeftIndex, zeroRightIndex, toIndex);
-
-		return new PexD418ReplayTests.PexReplayMeasurement(
-			preWrite - preWriteZero,
-			postWrite - postWriteZero);
-	}
-
-	private static float RenderSingleSampleAt(SidSystem sid, int sampleIndex)
+		SidOutputStageTrace outputStageTrace,
+		int sampleIndex)
 	{
 		sid.AdvanceTo(CycleForSample(sampleIndex - 1));
 		sid.DiscardAccumulatedOutput();
-		return sid.RenderSample(CycleForSample(sampleIndex));
+		outputStageTrace.BeginFrame();
+		var sample = sid.RenderSample(CycleForSample(sampleIndex));
+		return new CapturedSample(sample, outputStageTrace.EndFrame());
 	}
 
 	private static void ApplyPexSidSetup(SidSystem sid)
@@ -240,11 +510,58 @@ public sealed class PexD418ReplayCalibrationTests
 	private static int RoundMatlab(double value)
 		=> (int)Math.Floor(value + 0.5);
 
-	private static double AverageAt(double[] samples, int sampleIndex, int firstSampleIndex)
+	private static double AverageAt(
+		CapturedSample[] samples,
+		int sampleIndex,
+		int firstSampleIndex,
+		CalibrationStage stage)
 	{
 		var offset = sampleIndex - firstSampleIndex;
-		return (samples[offset - 1] + samples[offset] + samples[offset + 1]) / 3.0;
+		return (GetStageValue(samples[offset - 1], stage) +
+			GetStageValue(samples[offset], stage) +
+			GetStageValue(samples[offset + 1], stage)) / 3.0;
 	}
+
+	private static double GetStageValue(CapturedSample sample, CalibrationStage stage)
+	{
+		var frame = sample.Frame;
+		return stage switch
+		{
+			CalibrationStage.FinalSample => frame.FinalSample,
+			CalibrationStage.D418MatrixImpulse => frame.D418MatrixImpulse,
+			CalibrationStage.D418GenericStepImpulse => frame.D418GenericStepImpulse,
+			CalibrationStage.FilterModeImpulse => frame.FilterModeImpulse,
+			CalibrationStage.VoiceSignal => frame.VoiceSignal,
+			CalibrationStage.VolumeOffset => frame.VolumeOffset,
+			CalibrationStage.VolumeTransientTarget => frame.VolumeTransientTarget,
+			CalibrationStage.VolumeTransientCurrent => frame.VolumeTransientCurrent,
+			CalibrationStage.PreSoftClipSample => frame.PreSoftClipSample,
+			CalibrationStage.PostSoftClipSample => frame.PostSoftClipSample,
+			CalibrationStage.AnalogMixedVoltage => frame.AnalogMixedVoltage,
+			CalibrationStage.AnalogOutputVoltage => frame.AnalogOutputVoltage,
+			CalibrationStage.AnalogLowPassVoltage => frame.AnalogLowPassVoltage,
+			_ => sample.Output
+		};
+	}
+
+	private static string StageLabel(CalibrationStage stage)
+		=> stage switch
+		{
+			CalibrationStage.FinalSample => "final",
+			CalibrationStage.D418MatrixImpulse => "matrix-impulse",
+			CalibrationStage.D418GenericStepImpulse => "generic-step",
+			CalibrationStage.FilterModeImpulse => "filter-mode",
+			CalibrationStage.VoiceSignal => "voice-signal",
+			CalibrationStage.VolumeOffset => "volume-offset",
+			CalibrationStage.VolumeTransientTarget => "transient-target",
+			CalibrationStage.VolumeTransientCurrent => "transient-current",
+			CalibrationStage.PreSoftClipSample => "pre-softclip",
+			CalibrationStage.PostSoftClipSample => "post-softclip",
+			CalibrationStage.AnalogMixedVoltage => "analog-mixed-v",
+			CalibrationStage.AnalogOutputVoltage => "analog-output-v",
+			CalibrationStage.AnalogLowPassVoltage => "analog-lowpass-v",
+			_ => stage.ToString()
+		};
 
 	private static double Interpolate(
 		double left,
@@ -257,86 +574,102 @@ public sealed class PexD418ReplayCalibrationTests
 		return left + ((right - left) * fraction);
 	}
 
-	private static double FitScaleThroughOrigin(double[] observed, double[] expected)
+	private enum CalibrationStage
 	{
-		var numerator = 0.0;
-		var denominator = 0.0;
-		for (var i = 0; i < observed.Length; i++)
-		{
-			numerator += observed[i] * expected[i];
-			denominator += observed[i] * observed[i];
-		}
-
-		return denominator == 0.0 ? 0.0 : numerator / denominator;
+		FinalSample = 0,
+		D418MatrixImpulse,
+		D418GenericStepImpulse,
+		FilterModeImpulse,
+		VoiceSignal,
+		VolumeOffset,
+		VolumeTransientTarget,
+		VolumeTransientCurrent,
+		PreSoftClipSample,
+		PostSoftClipSample,
+		AnalogMixedVoltage,
+		AnalogOutputVoltage,
+		AnalogLowPassVoltage,
+		Count
 	}
 
-	private static double Correlation(double[] left, double[] right)
+	private sealed class StageReplayMeasurement
 	{
-		var leftMean = Mean(left);
-		var rightMean = Mean(right);
-		var numerator = 0.0;
-		var leftSquared = 0.0;
-		var rightSquared = 0.0;
-		for (var i = 0; i < left.Length; i++)
-		{
-			var leftDelta = left[i] - leftMean;
-			var rightDelta = right[i] - rightMean;
-			numerator += leftDelta * rightDelta;
-			leftSquared += leftDelta * leftDelta;
-			rightSquared += rightDelta * rightDelta;
-		}
+		public double[] PreWrite { get; } = new double[StageCount];
 
-		var denominator = Math.Sqrt(leftSquared * rightSquared);
-		return denominator == 0.0 ? 0.0 : numerator / denominator;
+		public double[] PostWrite { get; } = new double[StageCount];
 	}
 
-	private static double StandardDeviation(double[] values)
-	{
-		var mean = Mean(values);
-		var sumSquared = 0.0;
-		for (var i = 0; i < values.Length; i++)
-		{
-			var delta = values[i] - mean;
-			sumSquared += delta * delta;
-		}
-
-		return Math.Sqrt(sumSquared / values.Length);
-	}
-
-	private static double Mean(double[] values)
-	{
-		var sum = 0.0;
-		for (var i = 0; i < values.Length; i++)
-		{
-			sum += values[i];
-		}
-
-		return sum / values.Length;
-	}
-
-	private static string DescribeSamples(double[] observed, double[] expected, double scale)
-	{
-		var parts = new string[observed.Length];
-		for (var i = 0; i < observed.Length; i++)
-		{
-			var sample = ContextDeltas[i];
-			parts[i] = $"{sample.PreviousA:X2}/{sample.PreviousB:X2}->{sample.Next:X2}: observed {observed[i]:0.000000}, scaled {observed[i] * scale:0.000000}, expected {expected[i]:0.000000}";
-		}
-
-		return string.Join("; ", parts);
-	}
+	private readonly record struct CapturedSample(double Output, SidOutputStageFrame Frame);
 
 	private readonly record struct ContextDelta(int PreviousA, int PreviousB, int Next);
 
-	private readonly record struct ContextFit(
+	private readonly record struct FitPoint(string Label, double Observed, double Expected);
+
+	private readonly record struct FitError(
+		string Label,
+		double Error,
+		double Observed,
+		double Fitted,
+		double Expected);
+
+	private readonly record struct CalibrationReport(
+		SidChipModel Model,
+		SidEmulationProfile SidEmulationProfile,
+		CalibrationFit PostWriteFit,
+		CalibrationFit ContextFit,
+		CalibrationFit[] StageContextFits)
+	{
+		public override string ToString()
+		{
+			var builder = new StringBuilder();
+			builder.AppendFormat(
+				CultureInfo.InvariantCulture,
+				"{0} {1}{2}  {3}{2}  context: {4}",
+				Model,
+				SidEmulationProfile,
+				Environment.NewLine,
+				PostWriteFit,
+				ContextFit);
+			builder.AppendLine();
+			builder.AppendLine("  stage context:");
+			for (var i = 0; i < StageContextFits.Length; i++)
+			{
+				builder.Append("    ");
+				builder.Append(StageContextFits[i]);
+				if (i < StageContextFits.Length - 1)
+				{
+					builder.AppendLine();
+				}
+			}
+
+			return builder.ToString();
+		}
+	}
+
+	private readonly record struct CalibrationFit(
+		string Name,
+		int PhaseOffsetSamples,
 		double Scale,
+		double Bias,
 		double Correlation,
 		double RootMeanSquareError,
 		double NormalizedRootMeanSquareError,
 		double MaxAbsoluteError,
-		string Details)
+		string WorstTransitions)
 	{
 		public override string ToString()
-			=> $"scale {Scale:0.000000}, corr {Correlation:0.000}, nrmse {NormalizedRootMeanSquareError:0.000}, rmse {RootMeanSquareError:0.000000}, max {MaxAbsoluteError:0.000000}; {Details}";
+			=> string.Format(
+				CultureInfo.InvariantCulture,
+				"{0}: phase {1:+0;-0;0}, polarity {2}, scale {3:0.000000}, bias {4:0.000000}, corr {5:0.000}, nrmse {6:0.000}, rmse {7:0.000000}, max {8:0.000000}; worst {9}",
+				Name,
+				PhaseOffsetSamples,
+				Scale < 0.0 ? "inverted" : "normal",
+				Scale,
+				Bias,
+				Correlation,
+				NormalizedRootMeanSquareError,
+				RootMeanSquareError,
+				MaxAbsoluteError,
+				WorstTransitions);
 	}
 }

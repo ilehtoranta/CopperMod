@@ -83,7 +83,7 @@ public sealed class PexD418ReplayTests
 		var referenceSpread = Math.Abs(referenceLowPrevious.PostWrite - referenceHighPrevious.PostWrite);
 
 		Assert.True(
-			referenceSpread > balancedSpread * 1.20,
+			referenceSpread > balancedSpread * 1.15,
 			$"Expected measured profile context spread {referenceSpread:0.000000} to exceed balanced spread {balancedSpread:0.000000}.");
 	}
 

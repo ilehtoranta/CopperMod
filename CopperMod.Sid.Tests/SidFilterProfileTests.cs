@@ -214,6 +214,18 @@ public sealed class SidFilterProfileTests
 	}
 
 	[Fact]
+	public void ReferenceMeasured6581OutputLowPassKeepsMeasuredD418TransitionsFast()
+	{
+		var balanced = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var reference = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581ReferenceMeasured);
+		var balancedModel = Assert.IsType<SidMos6581AnalogModel>(balanced.Analog6581Model);
+		var referenceModel = Assert.IsType<SidMos6581AnalogModel>(reference.Analog6581Model);
+
+		Assert.InRange(balancedModel.OutputCircuit.OutputLowPassCutoffHz, 11_999.0, 12_001.0);
+		Assert.InRange(referenceModel.OutputCircuit.OutputLowPassCutoffHz, 23_999.0, 24_001.0);
+	}
+
+	[Fact]
 	public void Mos6581VoltageDomainNodesStayWithinOpAmpRails()
 	{
 		var profile = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
