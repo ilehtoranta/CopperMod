@@ -215,14 +215,17 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
-	public void ReferenceMeasuredProfileAddsD418TransitionContext()
+	public void ReferenceMeasuredProfileUsesMatrixD418TransitionWithoutGenericStepDoubleCount()
 	{
 		var balanced = MeasureVolumeStepTransient(SidChipModel.Mos6581, SidEmulationProfile.Balanced);
 		var reference = MeasureVolumeStepTransient(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
 
 		Assert.True(
-			reference.EarlyExcursion > balanced.EarlyExcursion * 1.05,
-			$"Expected reference profile to add measured transition energy, balanced {balanced.EarlyExcursion:0.000}, reference {reference.EarlyExcursion:0.000}.");
+			reference.EarlyExcursion > 0.05,
+			$"Expected reference profile to retain measured D418 transition energy, got {reference.EarlyExcursion:0.000}.");
+		Assert.True(
+			reference.EarlyExcursion < balanced.EarlyExcursion * 0.75,
+			$"Expected reference profile to avoid double-counting the generic D418 step transient, balanced {balanced.EarlyExcursion:0.000}, reference {reference.EarlyExcursion:0.000}.");
 		Assert.InRange(Math.Abs(reference.Settled - balanced.Settled), 0.0, 0.02);
 	}
 

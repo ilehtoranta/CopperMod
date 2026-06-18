@@ -499,7 +499,7 @@ namespace CopperMod.Sid
             return new SidAnalogProfile(
                 volumeGain,
                 volumeDc,
-                volumeStepTransientGain: is6581 ? (referenceMeasured ? 3.65 : 3.40) : (referenceMeasured ? 0.18 : 0.0),
+                volumeStepTransientGain: is6581 ? (referenceMeasured ? 0.0 : 3.40) : 0.0,
                 volumeStepTransientLimit: is6581 ? (referenceMeasured ? 0.70 : 0.62) : (referenceMeasured ? 0.055 : 0.0),
                 volumeStepAttackSeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientAttackSeconds : 0.00024) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientAttackSeconds : 0.0),
                 volumeStepDecaySeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientDecaySeconds : 0.0030) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientDecaySeconds : 0.0),

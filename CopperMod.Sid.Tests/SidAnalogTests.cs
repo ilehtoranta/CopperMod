@@ -49,6 +49,9 @@ public sealed class SidAnalogTests
 	{
 		Assert.Equal(0.00024, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
 		Assert.Equal(0.0030, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(3.40, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(0.0, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
+		Assert.Equal(0.0, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 12);
 
 		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientAttackSeconds, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
 		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientDecaySeconds, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
