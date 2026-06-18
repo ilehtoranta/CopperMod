@@ -9,7 +9,7 @@ namespace CopperMod.Amiga
         protected const ushort Format0ExceptionFrame = 0x0000;
         protected readonly IM68kBus _bus;
         protected readonly M68020CpuProfile _profile;
-        private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
+        protected readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         protected readonly M68kTimingEngine _timing;
         protected readonly M68kAcceleratorBusBridge _busBridge;
 
@@ -106,6 +106,11 @@ namespace CopperMod.Amiga
             }
 
             if (TryExecuteM68020Instruction(opcode))
+            {
+                return (int)(State.Cycles - startCycles);
+            }
+
+            if (TryExecuteApproximateInstruction(opcode))
             {
                 return (int)(State.Cycles - startCycles);
             }
@@ -1220,6 +1225,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            return false;
+        }
+
+        protected virtual bool TryExecuteApproximateInstruction(ushort opcode)
+        {
+            _ = opcode;
             return false;
         }
 

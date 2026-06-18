@@ -64,6 +64,49 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
+	public void ApproximateIntegerFallbackExecutesCommonM68000Arithmetic()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, CodeBase, 0x5280); // ADDQ.L #1,D0
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.D[0] = 41;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(42u, cpu.State.D[0]);
+		Assert.Equal(CodeBase + 2, cpu.State.ProgramCounter);
+		Assert.True(cpu.State.Cycles > 0);
+		Assert.True(cpu.State.NativeCycles >= cpu.Profile.MachineToNativeCycles(cpu.State.Cycles));
+	}
+
+	[Fact]
+	public void ApproximateIntegerFallbackStillUsesTranslatedChipBusAccesses()
+	{
+		const uint chipAddress = 0x3000;
+		var bus = new AmigaBus();
+		WriteWords(bus, CodeBase, 0x5290); // ADDQ.L #1,(A0)
+		bus.WriteLong(chipAddress, 0x0000_0004);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = chipAddress;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_0005u, bus.ReadLong(chipAddress));
+		Assert.Contains(bus.BusAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.Request.Kind == AmigaBusAccessKind.CpuDataRead &&
+			access.Request.Address == chipAddress &&
+			access.Request.Size == AmigaBusAccessSize.Long);
+		Assert.Contains(bus.BusAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.Request.Kind == AmigaBusAccessKind.CpuDataWrite &&
+			access.Request.Address == chipAddress &&
+			access.Request.Size == AmigaBusAccessSize.Long);
+	}
+
+	[Fact]
 	public void FmoveControlTransfersFpcrThroughDataRegister()
 	{
 		var bus = new AmigaBus();

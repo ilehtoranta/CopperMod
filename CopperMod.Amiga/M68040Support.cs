@@ -231,7 +231,7 @@ namespace CopperMod.Amiga
     internal sealed class M68040MmuState
     {
         private const uint TranslationEnable = 0x8000_0000;
-        private readonly Dictionary<ulong, uint> _atc = new Dictionary<ulong, uint>();
+        private readonly Dictionary<ulong, uint> _atc = [];
 
         public uint TranslationControl { get; set; }
 
@@ -530,11 +530,127 @@ namespace CopperMod.Amiga
         }
     }
 
+    internal readonly struct M68040ApproximateFallbackCheckpoint
+    {
+        private readonly uint _d0;
+        private readonly uint _d1;
+        private readonly uint _d2;
+        private readonly uint _d3;
+        private readonly uint _d4;
+        private readonly uint _d5;
+        private readonly uint _d6;
+        private readonly uint _d7;
+        private readonly uint _a0;
+        private readonly uint _a1;
+        private readonly uint _a2;
+        private readonly uint _a3;
+        private readonly uint _a4;
+        private readonly uint _a5;
+        private readonly uint _a6;
+        private readonly uint _a7;
+        private readonly uint _programCounter;
+        private readonly ushort _statusRegister;
+        private readonly uint _userStackPointer;
+        private readonly uint _supervisorStackPointer;
+        private readonly uint _masterStackPointer;
+        private readonly uint _vectorBaseRegister;
+        private readonly uint _sourceFunctionCode;
+        private readonly uint _destinationFunctionCode;
+        private readonly uint _cacheControlRegister;
+        private readonly uint _cacheAddressRegister;
+        private readonly long _cycles;
+        private readonly long _nativeCycles;
+        private readonly bool _halted;
+        private readonly bool _stopped;
+        private readonly ushort _lastOpcode;
+        private readonly uint _lastInstructionProgramCounter;
+
+        private M68040ApproximateFallbackCheckpoint(M68kCpuState state)
+        {
+            _d0 = state.D[0];
+            _d1 = state.D[1];
+            _d2 = state.D[2];
+            _d3 = state.D[3];
+            _d4 = state.D[4];
+            _d5 = state.D[5];
+            _d6 = state.D[6];
+            _d7 = state.D[7];
+            _a0 = state.A[0];
+            _a1 = state.A[1];
+            _a2 = state.A[2];
+            _a3 = state.A[3];
+            _a4 = state.A[4];
+            _a5 = state.A[5];
+            _a6 = state.A[6];
+            _a7 = state.A[7];
+            _programCounter = state.ProgramCounter;
+            _statusRegister = state.StatusRegister;
+            _userStackPointer = state.UserStackPointer;
+            _supervisorStackPointer = state.SupervisorStackPointer;
+            _masterStackPointer = state.MasterStackPointer;
+            _vectorBaseRegister = state.VectorBaseRegister;
+            _sourceFunctionCode = state.SourceFunctionCode;
+            _destinationFunctionCode = state.DestinationFunctionCode;
+            _cacheControlRegister = state.CacheControlRegister;
+            _cacheAddressRegister = state.CacheAddressRegister;
+            _cycles = state.Cycles;
+            _nativeCycles = state.NativeCycles;
+            _halted = state.Halted;
+            _stopped = state.Stopped;
+            _lastOpcode = state.LastOpcode;
+            _lastInstructionProgramCounter = state.LastInstructionProgramCounter;
+        }
+
+        public static M68040ApproximateFallbackCheckpoint Capture(M68kCpuState state)
+            => new(state);
+
+        public void Restore(M68kCpuState state)
+        {
+            state.D[0] = _d0;
+            state.D[1] = _d1;
+            state.D[2] = _d2;
+            state.D[3] = _d3;
+            state.D[4] = _d4;
+            state.D[5] = _d5;
+            state.D[6] = _d6;
+            state.D[7] = _d7;
+            state.A[0] = _a0;
+            state.A[1] = _a1;
+            state.A[2] = _a2;
+            state.A[3] = _a3;
+            state.A[4] = _a4;
+            state.A[5] = _a5;
+            state.A[6] = _a6;
+            state.ResetStackPointers(
+                _supervisorStackPointer,
+                _userStackPointer,
+                (_statusRegister & M68kCpuState.Supervisor) != 0);
+            state.EnableM68020StackMode();
+            state.SetMasterStackPointer(_masterStackPointer);
+            state.SetInterruptStackPointer(_supervisorStackPointer);
+            state.StatusRegister = _statusRegister;
+            state.SetActiveStackPointer(_a7);
+            state.ProgramCounter = _programCounter;
+            state.VectorBaseRegister = _vectorBaseRegister;
+            state.SourceFunctionCode = _sourceFunctionCode;
+            state.DestinationFunctionCode = _destinationFunctionCode;
+            state.CacheControlRegister = _cacheControlRegister;
+            state.CacheAddressRegister = _cacheAddressRegister;
+            state.Cycles = _cycles;
+            state.NativeCycles = _nativeCycles;
+            state.Halted = _halted;
+            state.Stopped = _stopped;
+            state.LastOpcode = _lastOpcode;
+            state.LastInstructionProgramCounter = _lastInstructionProgramCounter;
+        }
+    }
+
     internal sealed class M68040Interpreter : M68020Interpreter
     {
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;
         private readonly IM68kBus _physicalBus;
+        private readonly M68kInterpreter _approximateIntegerFallback;
 
         public M68040Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : this(bus, profile, new M68kCpuState())
@@ -553,6 +669,8 @@ namespace CopperMod.Amiga
             {
                 throw new ArgumentException("The MC68040 interpreter requires an MC68040 CPU profile.", nameof(profile));
             }
+
+            _approximateIntegerFallback = new M68kInterpreter(_bus, State, _instructionFrequency);
         }
 
         public override int ExecuteInstruction()
@@ -594,6 +712,28 @@ namespace CopperMod.Amiga
             }
 
             return TryExecuteFpuInstruction(opcode);
+        }
+
+        protected override bool TryExecuteApproximateInstruction(ushort opcode)
+        {
+            if ((opcode & 0xF000) is 0xA000 or 0xF000 || opcode == 0x4AFC)
+            {
+                return false;
+            }
+
+            var checkpoint = M68040ApproximateFallbackCheckpoint.Capture(State);
+            try
+            {
+                _approximateIntegerFallback.ExecuteInstruction();
+                _timing.SynchronizeNativeToMachine();
+                State.EnableM68020StackMode();
+                return true;
+            }
+            catch (UnsupportedM68kOpcodeException)
+            {
+                checkpoint.Restore(State);
+                return false;
+            }
         }
 
         protected override uint ReadControlRegister(int register, uint instructionPc)
