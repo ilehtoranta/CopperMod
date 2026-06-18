@@ -357,7 +357,9 @@ internal static class CopperScreenProfileStore
 				Kickstart = new KickstartFile
 				{
 					Source = draft.KickstartSource.ToString(),
-					Version = draft.KickstartSource == CopperScreenKickstartSource.DiagRom ? "2.0" : "1.3",
+					Version = draft.KickstartSource == CopperScreenKickstartSource.Kickstart13Rom
+						? "1.3"
+						: draft.KickstartSource == CopperScreenKickstartSource.DiagRom ? "2.0" : null,
 					Path = string.IsNullOrWhiteSpace(draft.KickstartRomPath) ? null : draft.KickstartRomPath.Trim()
 				},
 				Media = draft.CreateMediaDrives().Count == 0
@@ -474,7 +476,7 @@ internal static class CopperScreenProfileStore
 	{
 		public string Source { get; set; } = "CopperStart";
 
-		public string Version { get; set; } = "1.3";
+		public string? Version { get; set; } = "1.3";
 
 		public string? Path { get; set; }
 	}

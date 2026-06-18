@@ -420,6 +420,41 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void ProfileStoreRoundTripsGenericKickstartRomSource()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		try
+		{
+			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
+			draft.Id = "roundtrip-kickstart-rom";
+			draft.DisplayName = "Roundtrip Kickstart ROM";
+			draft.KickstartSource = CopperScreenKickstartSource.KickstartRom;
+			draft.KickstartRomPath = "ROM/Kickstart.rom";
+			draft.CpuBackend = M68kBackendKind.AccurateM68040;
+
+			var savedPath = CopperScreenProfileStore.Save(draft, baseDirectory);
+
+			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
+			Assert.Equal(CopperScreenKickstartSource.KickstartRom, loaded.KickstartSource);
+			Assert.Equal("ROM/Kickstart.rom", loaded.KickstartRomPath);
+			Assert.Equal(M68kBackendKind.AccurateM68040, loaded.CpuBackend);
+			Assert.True(loaded.UsesKickstartRom);
+			Assert.False(loaded.BootsWithoutDisk);
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
 	public void ProfileStoreSaveAsCreatesNonOverwritingCopy()
 	{
 		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

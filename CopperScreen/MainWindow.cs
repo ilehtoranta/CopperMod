@@ -1040,9 +1040,9 @@ internal sealed class MainWindow : Window
 		_profileIdBox = AddTextSetting(layout, "Profile id");
 		_profileNameBox = AddTextSetting(layout, "Display name");
 		_profileDescriptionBox = AddTextSetting(layout, "Description");
-		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "Kickstart13Rom", "DiagRom"]);
+		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "KickstartRom", "Kickstart13Rom", "DiagRom"]);
 		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
-		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "AccurateM68020", "AccurateM68030", "JitM68000"]);
+		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68000"]);
 		layout.Children.Add(CreateSettingsSection("Memory"));
 		_chipRamBox = AddTextSetting(layout, "Chip RAM KB");
 		_pseudoFastRamBox = AddTextSetting(layout, "Pseudo-fast RAM KB");
@@ -1872,6 +1872,7 @@ internal sealed class MainWindow : Window
 	{
 		return value?.ToString() switch
 		{
+			string source when string.Equals(source, "KickstartRom", StringComparison.OrdinalIgnoreCase) => CopperScreenKickstartSource.KickstartRom,
 			string source when string.Equals(source, "Kickstart13Rom", StringComparison.OrdinalIgnoreCase) => CopperScreenKickstartSource.Kickstart13Rom,
 			string source when string.Equals(source, "DiagRom", StringComparison.OrdinalIgnoreCase) => CopperScreenKickstartSource.DiagRom,
 			_ => CopperScreenKickstartSource.CopperStart
@@ -1884,6 +1885,7 @@ internal sealed class MainWindow : Window
 			string backend when string.Equals(backend, "JitM68000", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.JitM68000,
 			string backend when string.Equals(backend, "AccurateM68020", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68020,
 			string backend when string.Equals(backend, "AccurateM68030", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68030,
+			string backend when string.Equals(backend, "AccurateM68040", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68040,
 			_ => M68kBackendKind.AccurateM68000
 		};
 

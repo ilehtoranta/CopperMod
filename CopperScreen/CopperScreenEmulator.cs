@@ -325,7 +325,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 	}
 
 	private static string GetRomDisplayName(CopperScreenKickstartSource source)
-		=> source == CopperScreenKickstartSource.DiagRom ? "DiagROM" : "Kickstart 1.3 ROM";
+		=> source switch
+		{
+			CopperScreenKickstartSource.DiagRom => "DiagROM",
+			CopperScreenKickstartSource.KickstartRom => "Kickstart ROM",
+			_ => "Kickstart 1.3 ROM"
+		};
 
 	private static string GetDefaultRomHint(CopperScreenKickstartSource source)
 		=> source == CopperScreenKickstartSource.DiagRom
@@ -1601,7 +1606,19 @@ internal sealed class CopperScreenEmulator : IDisposable
 			cpu.DestinationFunctionCode,
 			cpu.CacheControlRegister,
 			cpu.CacheAddressRegister,
-			cpu.MasterStackPointer);
+			cpu.MasterStackPointer,
+			_machine.Options.CpuBackend == M68kBackendKind.AccurateM68040,
+			cpu.M68040Fpu.Fpcr,
+			cpu.M68040Fpu.Fpsr,
+			cpu.M68040Fpu.Fpiar,
+			cpu.M68040Mmu.TranslationControl,
+			cpu.M68040Mmu.SupervisorRootPointer,
+			cpu.M68040Mmu.UserRootPointer,
+			cpu.M68040Mmu.InstructionTransparentTranslation0,
+			cpu.M68040Mmu.InstructionTransparentTranslation1,
+			cpu.M68040Mmu.DataTransparentTranslation0,
+			cpu.M68040Mmu.DataTransparentTranslation1,
+			cpu.M68040Mmu.Status);
 		return new CopperScreenDebugSnapshot(
 			DateTimeOffset.Now,
 			reasonCode,

@@ -101,7 +101,8 @@ namespace CopperMod.Amiga
         FastM68000 = 2,
         JitM68000 = 3,
         Cpu32 = 4,
-        AccurateM68030 = 5
+        AccurateM68030 = 5,
+        AccurateM68040 = 6
     }
 
     internal interface IM68kCoreFactory
@@ -128,6 +129,11 @@ namespace CopperMod.Amiga
             if (backend == M68kBackendKind.AccurateM68030)
             {
                 return new M68030Interpreter(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz);
+            }
+
+            if (backend == M68kBackendKind.AccurateM68040)
+            {
+                return new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
             }
 
             if (backend == M68kBackendKind.JitM68000)
@@ -181,6 +187,10 @@ namespace CopperMod.Amiga
         public uint CacheControlRegister { get; set; }
 
         public uint CacheAddressRegister { get; set; }
+
+        public M68040FpuState M68040Fpu { get; } = new M68040FpuState();
+
+        public M68040MmuState M68040Mmu { get; } = new M68040MmuState();
 
         public long Cycles { get; set; }
 

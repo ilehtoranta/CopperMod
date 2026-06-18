@@ -7,6 +7,7 @@ namespace CopperScreen;
 internal enum CopperScreenKickstartSource
 {
 	CopperStart,
+	KickstartRom,
 	Kickstart13Rom,
 	DiagRom
 }
@@ -163,9 +164,12 @@ internal sealed class CopperScreenProfile
 		out CopperScreenProfile profile,
 		out string? error)
 	{
-		var id = current.ExpansionRamSize == 0
-			? source == CopperScreenKickstartSource.CopperStart ? "vanilla-copperstart" : "vanilla-kickstart13"
-			: source == CopperScreenKickstartSource.CopperStart ? "expanded-copperstart" : "expanded-kickstart13";
+		var id = source switch
+		{
+			CopperScreenKickstartSource.CopperStart => current.ExpansionRamSize == 0 ? "vanilla-copperstart" : "expanded-copperstart",
+			CopperScreenKickstartSource.DiagRom => "expanded-diagrom",
+			_ => current.ExpansionRamSize == 0 ? "vanilla-kickstart13" : "expanded-kickstart13"
+		};
 		return TryLoad(id, baseDirectory, out profile, out error);
 	}
 
@@ -189,6 +193,7 @@ internal sealed class CopperScreenProfile
 			"vanilla" => "vanilla-copperstart",
 			"expanded-rom" or "expanded-kickstart" or "expanded-kickstart-13" => "expanded-kickstart13",
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
+			"expanded-m68040-rom" or "expanded-m68040-kickstart" or "expanded-68040-kickstart-rom" => "expanded-m68040-kickstart-rom",
 			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized
 		};
@@ -392,7 +397,8 @@ internal sealed class CopperScreenProfile
 		return source.Trim().ToLowerInvariant().Replace("-", string.Empty) switch
 		{
 			"copperstart" => CopperScreenKickstartSource.CopperStart,
-			"kickstart13rom" or "kickstart13" or "rom" => CopperScreenKickstartSource.Kickstart13Rom,
+			"kickstartrom" or "kickstart" or "rom" => CopperScreenKickstartSource.KickstartRom,
+			"kickstart13rom" or "kickstart13" => CopperScreenKickstartSource.Kickstart13Rom,
 			"diagrom" or "diagromv2" => CopperScreenKickstartSource.DiagRom,
 			_ => throw new InvalidOperationException($"Unsupported kickstart source '{source}'.")
 		};
@@ -411,6 +417,7 @@ internal sealed class CopperScreenProfile
 			"interpreter" or "accurate" or "accuratem68000" or "m68000" => M68kBackendKind.AccurateM68000,
 			"accuratem68020" or "m68020" or "68020" or "020" or "ocs6802014mhz" => M68kBackendKind.AccurateM68020,
 			"accuratem68030" or "m68030" or "68030" or "030" or "ocs6803014mhz" => M68kBackendKind.AccurateM68030,
+			"accuratem68040" or "m68040" or "68040" or "040" or "ocs6804025mhz" => M68kBackendKind.AccurateM68040,
 			"jit" or "jitm68000" => M68kBackendKind.JitM68000,
 			_ => throw new InvalidOperationException($"Unsupported CPU backend '{value}'.")
 		};

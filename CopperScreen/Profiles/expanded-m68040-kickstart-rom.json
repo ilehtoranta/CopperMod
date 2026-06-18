@@ -1,0 +1,27 @@
+{
+  "id": "expanded-m68040-kickstart-rom",
+  "displayName": "Expanded A500 + MC68040 + Kickstart ROM",
+  "description": "A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, 8 MB real fast RAM at $200000, RTC, two drives, generic Kickstart ROM, and an MC68040 accelerator backend.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000",
+    "realFastRamKb": 8192,
+    "realFastBase": "$200000",
+    "rtcEnabled": true,
+    "floppyDriveCount": 2
+  },
+  "cpu": {
+    "backend": "AccurateM68040"
+  },
+  "kickstart": {
+    "source": "KickstartRom"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "synthetic"
+    }
+  }
+}

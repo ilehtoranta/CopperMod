@@ -5,7 +5,8 @@ namespace CopperMod.Amiga
     internal enum M68kAcceleratorModel
     {
         M68020,
-        M68030
+        M68030,
+        M68040
     }
 
     [Flags]
@@ -372,7 +373,9 @@ namespace CopperMod.Amiga
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             _state = state ?? throw new ArgumentNullException(nameof(state));
             InstructionCache = new M68kInstructionCache();
-            DataCache = profile.Model == M68kAcceleratorModel.M68030 ? new M68kInstructionCache() : null;
+            DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
+                ? new M68kInstructionCache()
+                : null;
         }
 
         public M68kPipelineState Pipeline { get; } = new M68kPipelineState();
@@ -394,7 +397,7 @@ namespace CopperMod.Amiga
         }
 
         public M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
-            => _profile.Model == M68kAcceleratorModel.M68030
+            => _profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
                 ? M68030TimingModel.GetPlan(key)
                 : M68020TimingModel.GetPlan(key);
 
@@ -406,7 +409,7 @@ namespace CopperMod.Amiga
 
         public void ApplyCacheControl(uint cacheControlRegister, uint cacheAddressRegister)
         {
-            if (_profile.Model == M68kAcceleratorModel.M68030)
+            if (_profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040)
             {
                 InstructionCache.ApplyControl(
                     enabled: (cacheControlRegister & 0x0000_0001) != 0,

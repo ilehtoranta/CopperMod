@@ -81,11 +81,32 @@ namespace CopperMod.Amiga
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
             });
 
+        public static M68020CpuProfile Ocs68040Accelerator25Mhz { get; } = new(
+            "Ocs68040_25MHz",
+            M68kAcceleratorModel.M68040,
+            nativeCyclesPerMachineCycle: 4,
+            new[]
+            {
+                new M68020BusTimingRule(M68020MemoryTarget.ChipRam, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.ExpansionRam, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.RealFastRam, M68020BusWidth.Long, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.CustomRegisters, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Cia, M68020BusWidth.Byte, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
+            });
+
         public string Name { get; }
 
         public M68kAcceleratorModel Model { get; }
 
-        public string ModelName => Model == M68kAcceleratorModel.M68030 ? "MC68030" : "MC68020";
+        public string ModelName => Model switch
+        {
+            M68kAcceleratorModel.M68030 => "MC68030",
+            M68kAcceleratorModel.M68040 => "MC68040",
+            _ => "MC68020"
+        };
 
         public int NativeCyclesPerMachineCycle { get; }
 

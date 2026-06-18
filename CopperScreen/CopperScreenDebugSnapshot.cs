@@ -149,7 +149,19 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 	uint DestinationFunctionCode = 0,
 	uint CacheControlRegister = 0,
 	uint CacheAddressRegister = 0,
-	uint MasterStackPointer = 0)
+	uint MasterStackPointer = 0,
+	bool M68040StateEnabled = false,
+	uint FpuControlRegister = 0,
+	uint FpuStatusRegister = 0,
+	uint FpuInstructionAddressRegister = 0,
+	uint MmuTranslationControl = 0,
+	uint MmuSupervisorRootPointer = 0,
+	uint MmuUserRootPointer = 0,
+	uint InstructionTransparentTranslation0 = 0,
+	uint InstructionTransparentTranslation1 = 0,
+	uint DataTransparentTranslation0 = 0,
+	uint DataTransparentTranslation1 = 0,
+	uint MmuStatus = 0)
 {
 	public string Flags
 	{
@@ -173,7 +185,14 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 		builder.AppendLine($"Cycles={Cycles}  Halted={Halted}  Stopped={Stopped}");
 		if (M68020StateEnabled)
 		{
-			builder.AppendLine($"68020/030 NativeCycles={NativeCycles}  VBR={FormatAddress(VectorBaseRegister)}  SFC={SourceFunctionCode}  DFC={DestinationFunctionCode}  CACR=${CacheControlRegister:X8}  CAAR=${CacheAddressRegister:X8}  MSP={FormatAddress(MasterStackPointer)}");
+			builder.AppendLine($"68020+ NativeCycles={NativeCycles}  VBR={FormatAddress(VectorBaseRegister)}  SFC={SourceFunctionCode}  DFC={DestinationFunctionCode}  CACR=${CacheControlRegister:X8}  CAAR=${CacheAddressRegister:X8}  MSP={FormatAddress(MasterStackPointer)}");
+		}
+
+		if (M68040StateEnabled)
+		{
+			builder.AppendLine($"68040 FPU FPCR=${FpuControlRegister:X8}  FPSR=${FpuStatusRegister:X8}  FPIAR={FormatLogicalAddress(FpuInstructionAddressRegister)}");
+			builder.AppendLine($"68040 MMU TC=${MmuTranslationControl:X8}  SRP=${MmuSupervisorRootPointer:X8}  URP=${MmuUserRootPointer:X8}  MMUSR=${MmuStatus:X8}");
+			builder.AppendLine($"68040 TT ITT0=${InstructionTransparentTranslation0:X8}  ITT1=${InstructionTransparentTranslation1:X8}  DTT0=${DataTransparentTranslation0:X8}  DTT1=${DataTransparentTranslation1:X8}");
 		}
 
 		for (var i = 0; i < 8; i += 4)
@@ -211,6 +230,9 @@ internal readonly record struct CopperScreenDebugCpuSnapshot(
 
 	private static string FormatAddress(uint address)
 		=> $"${address & 0x00FF_FFFF:X6}";
+
+	private static string FormatLogicalAddress(uint address)
+		=> $"${address:X8}";
 }
 
 internal delegate bool TryReadM68kWord(uint address, out ushort value);

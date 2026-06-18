@@ -6,12 +6,12 @@ namespace CopperMod.Amiga
     internal class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
-        private const ushort Format0ExceptionFrame = 0x0000;
-        private readonly IM68kBus _bus;
-        private readonly M68020CpuProfile _profile;
+        protected const ushort Format0ExceptionFrame = 0x0000;
+        protected readonly IM68kBus _bus;
+        protected readonly M68020CpuProfile _profile;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
-        private readonly M68kTimingEngine _timing;
-        private readonly M68kAcceleratorBusBridge _busBridge;
+        protected readonly M68kTimingEngine _timing;
+        protected readonly M68kAcceleratorBusBridge _busBridge;
 
         public M68020Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : this(bus, profile, new M68kCpuState())
@@ -91,7 +91,7 @@ namespace CopperMod.Amiga
             return instructions;
         }
 
-        public int ExecuteInstruction()
+        public virtual int ExecuteInstruction()
         {
             var startCycles = State.Cycles;
             if (State.Halted || State.Stopped)
@@ -113,7 +113,7 @@ namespace CopperMod.Amiga
             throw new UnsupportedM68kTimingException(opcode, State.ProgramCounter, _profile);
         }
 
-        public void Reset(uint programCounter, uint stackPointer)
+        public virtual void Reset(uint programCounter, uint stackPointer)
         {
             Array.Clear(State.D);
             Array.Clear(State.A);
@@ -125,6 +125,8 @@ namespace CopperMod.Amiga
             State.DestinationFunctionCode = 0;
             State.CacheControlRegister = 0;
             State.CacheAddressRegister = 0;
+            State.M68040Fpu.Reset();
+            State.M68040Mmu.Reset();
             State.Cycles = 0;
             State.NativeCycles = 0;
             State.Halted = false;
@@ -167,8 +169,13 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
         }
 
-        private bool TryExecuteM68020Instruction(ushort opcode)
+        protected virtual bool TryExecuteM68020Instruction(ushort opcode)
         {
+            if (TryExecuteModelSpecificInstruction(opcode))
+            {
+                return true;
+            }
+
             if ((opcode & 0xF000) == 0xA000)
             {
                 BeginInstruction(opcode);
@@ -1216,6 +1223,12 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        protected virtual bool TryExecuteModelSpecificInstruction(ushort opcode)
+        {
+            _ = opcode;
+            return false;
+        }
+
         private void ExecuteNop()
         {
             BeginInstruction(0x4E71);
@@ -1223,7 +1236,7 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
-        private void ExecuteMovec(ushort opcode)
+        protected virtual void ExecuteMovec(ushort opcode)
         {
             BeginInstruction(opcode);
             var instructionPc = State.ProgramCounter;
@@ -3648,14 +3661,14 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.DbccExpired);
         }
 
-        private void BeginInstruction(ushort opcode)
+        protected void BeginInstruction(ushort opcode)
         {
             State.LastInstructionProgramCounter = State.ProgramCounter;
             State.LastOpcode = opcode;
             _instructionFrequency.Record(opcode);
         }
 
-        private void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
+        protected virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
         {
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
@@ -3666,7 +3679,7 @@ namespace CopperMod.Amiga
             CompleteTiming(timingKey);
         }
 
-        private uint ReadControlRegister(int register, uint instructionPc)
+        protected virtual uint ReadControlRegister(int register, uint instructionPc)
         {
             return register switch
             {
@@ -3681,7 +3694,7 @@ namespace CopperMod.Amiga
             };
         }
 
-        private void WriteControlRegister(int register, uint value, uint instructionPc)
+        protected virtual void WriteControlRegister(int register, uint value, uint instructionPc)
         {
             switch (register)
             {
@@ -3714,16 +3727,16 @@ namespace CopperMod.Amiga
             }
         }
 
-        private uint RaiseIllegalControlRegister(uint instructionPc)
+        protected uint RaiseIllegalControlRegister(uint instructionPc)
         {
             RaiseFormat0Exception(4, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
             return 0;
         }
 
-        private uint ReadGeneralRegister(bool addressRegister, int register)
+        protected uint ReadGeneralRegister(bool addressRegister, int register)
             => addressRegister ? State.A[register] : State.D[register];
 
-        private void WriteGeneralRegister(bool addressRegister, int register, uint value)
+        protected void WriteGeneralRegister(bool addressRegister, int register, uint value)
         {
             if (addressRegister)
             {
@@ -3742,7 +3755,7 @@ namespace CopperMod.Amiga
             }
         }
 
-        private ushort FetchWord()
+        protected ushort FetchWord()
         {
             var address = State.ProgramCounter;
             var value = _bus is IM68kCodeReader codeReader && _timing.ProbeInstructionCache(address)
@@ -3752,63 +3765,63 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        private uint FetchLong()
+        protected uint FetchLong()
         {
             var high = FetchWord();
             var low = FetchWord();
             return ((uint)high << 16) | low;
         }
 
-        private byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        protected byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
         {
             return _busBridge.ReadByte(address, accessKind);
         }
 
-        private ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        protected ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
         {
             return _busBridge.ReadWord(address, accessKind);
         }
 
-        private uint ReadLong(uint address)
+        protected uint ReadLong(uint address)
         {
             return _busBridge.ReadLong(address, AmigaBusAccessKind.CpuDataRead);
         }
 
-        private void WriteByte(uint address, byte value)
+        protected void WriteByte(uint address, byte value)
         {
             _busBridge.WriteByte(address, value, AmigaBusAccessKind.CpuDataWrite);
         }
 
-        private void WriteWord(uint address, ushort value)
+        protected void WriteWord(uint address, ushort value)
         {
             _busBridge.WriteWord(address, value, AmigaBusAccessKind.CpuDataWrite);
         }
 
-        private void WriteLong(uint address, uint value)
+        protected void WriteLong(uint address, uint value)
         {
             _busBridge.WriteLong(address, value, AmigaBusAccessKind.CpuDataWrite);
         }
 
-        private void PushWord(ushort value)
+        protected void PushWord(ushort value)
         {
             State.SetActiveStackPointer(State.A[7] - 2);
             WriteWord(State.A[7], value);
         }
 
-        private void PushLong(uint value)
+        protected void PushLong(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
             WriteLong(State.A[7], value);
         }
 
-        private uint PullLong()
+        protected uint PullLong()
         {
             var value = ReadLong(State.A[7]);
             State.SetActiveStackPointer(State.A[7] + 4);
             return value;
         }
 
-        private void CompleteTiming(M68kInstructionTimingKey key)
+        protected void CompleteTiming(M68kInstructionTimingKey key)
         {
             _timing.CompleteInstruction(_timing.GetPlan(key));
         }
