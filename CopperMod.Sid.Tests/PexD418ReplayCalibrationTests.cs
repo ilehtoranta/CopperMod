@@ -102,6 +102,7 @@ public sealed class PexD418ReplayCalibrationTests
 		WriteReport(balanced);
 		AssertFinite(reference);
 		AssertFinite(balanced);
+		AssertReferenceMeasuredStageFits(reference);
 		Assert.True(
 			Math.Abs(reference.ContextFit.Correlation) > 0.50,
 			$"Expected {model} reference final context fit to retain useful correlation: {reference.ContextFit}.");
@@ -148,6 +149,47 @@ public sealed class PexD418ReplayCalibrationTests
 		Assert.True(double.IsFinite(fit.RootMeanSquareError), $"{report.Model} {report.SidEmulationProfile} {name} invalid RMSE: {fit}.");
 		Assert.True(double.IsFinite(fit.NormalizedRootMeanSquareError), $"{report.Model} {report.SidEmulationProfile} {name} invalid normalized RMSE: {fit}.");
 		Assert.True(double.IsFinite(fit.MaxAbsoluteError), $"{report.Model} {report.SidEmulationProfile} {name} invalid max error: {fit}.");
+	}
+
+	private static void AssertReferenceMeasuredStageFits(CalibrationReport report)
+	{
+		Assert.Equal(SidEmulationProfile.ReferenceMeasured, report.SidEmulationProfile);
+		var matrix = FindStageContextFit(report, "matrix-impulse");
+		Assert.True(
+			Math.Abs(matrix.Correlation) > 0.999999,
+			$"Expected {report.Model} measured matrix stage to match the Pex oracle correlation: {matrix}.");
+		Assert.True(
+			matrix.NormalizedRootMeanSquareError < 0.000001,
+			$"Expected {report.Model} measured matrix stage to fit the Pex oracle exactly: {matrix}.");
+		Assert.True(
+			matrix.MaxAbsoluteError < 0.000001,
+			$"Expected {report.Model} measured matrix stage to have no representative transition error: {matrix}.");
+
+		if (report.Model != SidChipModel.Mos6581)
+		{
+			return;
+		}
+
+		var transient = FindStageContextFit(report, "transient-current");
+		Assert.True(
+			Math.Abs(transient.Correlation) > 0.60,
+			$"Expected 6581 measured transient stage to keep useful Pex context correlation: {transient}.");
+		Assert.True(
+			transient.NormalizedRootMeanSquareError < 0.80,
+			$"Expected 6581 measured transient stage to stay within calibrated Pex context error bounds: {transient}.");
+	}
+
+	private static CalibrationFit FindStageContextFit(CalibrationReport report, string name)
+	{
+		for (var i = 0; i < report.StageContextFits.Length; i++)
+		{
+			if (string.Equals(report.StageContextFits[i].Name, name, StringComparison.Ordinal))
+			{
+				return report.StageContextFits[i];
+			}
+		}
+
+		throw new InvalidOperationException($"Calibration stage '{name}' was not reported for {report.Model} {report.SidEmulationProfile}.");
 	}
 
 	private void WriteReport(CalibrationReport report)
@@ -624,17 +666,28 @@ public sealed class PexD418ReplayCalibrationTests
 			var builder = new StringBuilder();
 			builder.AppendFormat(
 				CultureInfo.InvariantCulture,
-				"{0} {1}{2}  {3}{2}  context: {4}",
+				"{0} {1}",
 				Model,
-				SidEmulationProfile,
-				Environment.NewLine,
-				PostWriteFit,
-				ContextFit);
+				SidEmulationProfile);
 			builder.AppendLine();
-			builder.AppendLine("  stage context:");
+			builder.AppendLine("  summary:");
+			builder.AppendLine("    stage                 phase polarity    corr   nrmse        max");
+			AppendSummaryRow(builder, "post-write", PostWriteFit);
+			AppendSummaryRow(builder, "context-final", ContextFit);
 			for (var i = 0; i < StageContextFits.Length; i++)
 			{
-				builder.Append("    ");
+				AppendSummaryRow(builder, StageContextFits[i].Name, StageContextFits[i]);
+			}
+
+			builder.AppendLine("  details:");
+			builder.Append("    ");
+			builder.AppendLine(PostWriteFit.ToString());
+			builder.Append("    context: ");
+			builder.AppendLine(ContextFit.ToString());
+			builder.AppendLine("    stage context:");
+			for (var i = 0; i < StageContextFits.Length; i++)
+			{
+				builder.Append("      ");
 				builder.Append(StageContextFits[i]);
 				if (i < StageContextFits.Length - 1)
 				{
@@ -643,6 +696,20 @@ public sealed class PexD418ReplayCalibrationTests
 			}
 
 			return builder.ToString();
+		}
+
+		private static void AppendSummaryRow(StringBuilder builder, string name, CalibrationFit fit)
+		{
+			builder.AppendFormat(
+				CultureInfo.InvariantCulture,
+				"    {0,-20} {1,5:+0;-0;0} {2,-8} {3,7:0.000} {4,7:0.000} {5,10:0.000000}",
+				name,
+				fit.PhaseOffsetSamples,
+				fit.Scale < 0.0 ? "inv" : "norm",
+				fit.Correlation,
+				fit.NormalizedRootMeanSquareError,
+				fit.MaxAbsoluteError);
+			builder.AppendLine();
 		}
 	}
 
