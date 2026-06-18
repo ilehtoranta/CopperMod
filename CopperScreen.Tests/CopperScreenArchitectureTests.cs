@@ -52,6 +52,14 @@ public sealed class CopperScreenArchitectureTests
 			2,
 			M68kBackendKind.JitM68000,
 			2 * 1024 * 1024);
+		AssertProfile(
+			"expanded-m68040-jit-kickstart-rom",
+			AmigaMachineProfile.A500Pal512KBoot,
+			CopperScreenKickstartSource.KickstartRom,
+			512 * 1024,
+			2,
+			M68kBackendKind.JitM68040,
+			8 * 1024 * 1024);
 		AssertProfile("diagnostic-hrm-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);

@@ -10,6 +10,63 @@ using System.Threading;
 
 namespace CopperMod.Amiga
 {
+    internal enum M68kJitCpuModel
+    {
+        M68000,
+        M68040
+    }
+
+    internal sealed class M68kJitOptions
+    {
+        public M68kJitOptions(
+            M68kJitCpuModel cpuModel,
+            bool enableV2,
+            bool enableV2Tier3,
+            bool enableV2MemoryRead,
+            bool enableV2BusAccess,
+            bool enableV2FastRead,
+            bool enableV2BusGraph,
+            bool enableAsyncJit,
+            bool enableAsyncJitSyncFallback,
+            bool cacheFlushOnlyInvalidation,
+            bool minimalCycleTiming)
+        {
+            CpuModel = cpuModel;
+            EnableV2 = enableV2;
+            EnableV2Tier3 = enableV2Tier3;
+            EnableV2MemoryRead = enableV2MemoryRead;
+            EnableV2BusAccess = enableV2BusAccess;
+            EnableV2FastRead = enableV2FastRead;
+            EnableV2BusGraph = enableV2BusGraph;
+            EnableAsyncJit = enableAsyncJit;
+            EnableAsyncJitSyncFallback = enableAsyncJitSyncFallback;
+            CacheFlushOnlyInvalidation = cacheFlushOnlyInvalidation;
+            MinimalCycleTiming = minimalCycleTiming;
+        }
+
+        public M68kJitCpuModel CpuModel { get; }
+
+        public bool EnableV2 { get; }
+
+        public bool EnableV2Tier3 { get; }
+
+        public bool EnableV2MemoryRead { get; }
+
+        public bool EnableV2BusAccess { get; }
+
+        public bool EnableV2FastRead { get; }
+
+        public bool EnableV2BusGraph { get; }
+
+        public bool EnableAsyncJit { get; }
+
+        public bool EnableAsyncJitSyncFallback { get; }
+
+        public bool CacheFlushOnlyInvalidation { get; }
+
+        public bool MinimalCycleTiming { get; }
+    }
+
     internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const int CompileThreshold = 64;
@@ -46,7 +103,10 @@ namespace CopperMod.Amiga
 
         private readonly IM68kBus _bus;
         private readonly AmigaBus? _amigaBus;
-        private readonly M68kInterpreter _fallback;
+        private readonly IM68kCore _fallback;
+        private readonly M68kJitCpuModel _cpuModel;
+        private readonly bool _cacheFlushOnlyInvalidation;
+        private readonly bool _minimalCycleTiming;
         private readonly bool _v2Enabled;
         private readonly bool _v2Tier3Enabled;
         private readonly bool _v2MemoryReadEnabled;
@@ -91,6 +151,7 @@ namespace CopperMod.Amiga
         private int _v2PendingOutOfBlockBranchByteLength;
         private bool _v2PendingOutOfBlockBranchIsFallthrough;
         private bool _disposed;
+        private bool _subscribedToWriteInvalidation;
         private int _asyncCompileEpoch;
         private int _asyncCompileSequence;
         private static readonly MethodInfo CheckV2ConditionMethod =
@@ -287,19 +348,57 @@ namespace CopperMod.Amiga
             bool enableV2BusAccess = true,
             bool enableV2FastRead = false,
             bool enableV2BusGraph = false)
+            : this(
+                bus,
+                new M68kJitOptions(
+                    M68kJitCpuModel.M68000,
+                    enableV2,
+                    enableV2Tier3,
+                    enableV2MemoryRead,
+                    enableV2BusAccess,
+                    enableV2FastRead,
+                    enableV2BusGraph,
+                    IsAsyncJitEnabledByDefault(),
+                    IsAsyncJitSyncFallbackEnabledByDefault(),
+                    cacheFlushOnlyInvalidation: false,
+                    minimalCycleTiming: false))
+        {
+        }
+
+        internal static M68kJitCore CreateM68040(IM68kBus bus)
+            => new M68kJitCore(
+                bus,
+                new M68kJitOptions(
+                    M68kJitCpuModel.M68040,
+                    enableV2: true,
+                    enableV2Tier3: true,
+                    enableV2MemoryRead: true,
+                    enableV2BusAccess: true,
+                    enableV2FastRead: true,
+                    enableV2BusGraph: true,
+                    enableAsyncJit: true,
+                    enableAsyncJitSyncFallback: true,
+                    cacheFlushOnlyInvalidation: true,
+                    minimalCycleTiming: true));
+
+        private M68kJitCore(IM68kBus bus, M68kJitOptions options)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            ArgumentNullException.ThrowIfNull(options);
             _amigaBus = bus as AmigaBus;
-            _v2Enabled = enableV2;
-            _v2Tier3Enabled = enableV2Tier3;
-            _v2MemoryReadEnabled = enableV2MemoryRead;
-            _v2BusAccessEnabled = enableV2BusAccess;
-            _v2FastReadEnabled = enableV2FastRead;
-            _v2BusGraphEnabled = enableV2BusGraph;
-            _asyncJitEnabled = IsAsyncJitEnabledByDefault();
-            _asyncJitSyncFallbackEnabled = IsAsyncJitSyncFallbackEnabledByDefault();
+            _cpuModel = options.CpuModel;
+            _cacheFlushOnlyInvalidation = options.CacheFlushOnlyInvalidation;
+            _minimalCycleTiming = options.MinimalCycleTiming;
+            _v2Enabled = options.EnableV2;
+            _v2Tier3Enabled = options.EnableV2Tier3;
+            _v2MemoryReadEnabled = options.EnableV2MemoryRead;
+            _v2BusAccessEnabled = options.EnableV2BusAccess;
+            _v2FastReadEnabled = options.EnableV2FastRead;
+            _v2BusGraphEnabled = options.EnableV2BusGraph;
+            _asyncJitEnabled = options.EnableAsyncJit;
+            _asyncJitSyncFallbackEnabled = options.EnableAsyncJitSyncFallback;
             State = new M68kCpuState();
-            _fallback = new M68kInterpreter(bus, State, _instructionFrequency);
+            _fallback = CreateFallback(bus, State, _instructionFrequency, _cpuModel);
             if (_asyncJitEnabled)
             {
                 _asyncCompiler = new M68kAsyncJitCompiler(
@@ -307,11 +406,21 @@ namespace CopperMod.Amiga
                     AsyncCompileQueueCapacity);
             }
 
-            if (_amigaBus != null)
+            if (_amigaBus != null && !_cacheFlushOnlyInvalidation)
             {
                 _amigaBus.JitEligibleMemoryWritten += InvalidateWrittenCodeRange;
+                _subscribedToWriteInvalidation = true;
             }
         }
+
+        private static IM68kCore CreateFallback(
+            IM68kBus bus,
+            M68kCpuState state,
+            M68kInstructionFrequencyMatrix instructionFrequency,
+            M68kJitCpuModel cpuModel)
+            => cpuModel == M68kJitCpuModel.M68040
+                ? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed, state, instructionFrequency)
+                : new M68kInterpreter(bus, state, instructionFrequency);
 
         public M68kCpuState State { get; }
 
@@ -361,9 +470,10 @@ namespace CopperMod.Amiga
 
             _disposed = true;
             _asyncCompiler?.Dispose();
-            if (_amigaBus != null)
+            if (_amigaBus != null && _subscribedToWriteInvalidation)
             {
                 _amigaBus.JitEligibleMemoryWritten -= InvalidateWrittenCodeRange;
+                _subscribedToWriteInvalidation = false;
             }
         }
 
@@ -501,7 +611,22 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var traced = TryExecuteTrace(maxInstructions - instructions, targetCycle, boundary);
+                int traced;
+                try
+                {
+                    traced = TryExecuteTrace(maxInstructions - instructions, targetCycle, boundary);
+                }
+                catch (M68040MmuFaultException ex) when (_cpuModel == M68kJitCpuModel.M68040)
+                {
+                    if (!HandleM68040CompiledMmuFault(ex.Fault, boundary))
+                    {
+                        break;
+                    }
+
+                    instructions++;
+                    continue;
+                }
+
                 if (traced > 0)
                 {
                     instructions += traced;
@@ -544,7 +669,7 @@ namespace CopperMod.Amiga
             bool allowV2TraceHandoff = true)
         {
             var pc = Normalize(State.ProgramCounter);
-            if (_amigaBus != null && _amigaBus.IsChipRamAddress(pc))
+            if (_amigaBus != null && !IsJitEligibleInstructionAddress(pc))
             {
                 RemoveTrace(pc);
                 return 0;
@@ -594,6 +719,11 @@ namespace CopperMod.Amiga
 
         private bool TryValidateTraceGeneration(uint pc, ref TraceEntry trace)
         {
+            if (_cacheFlushOnlyInvalidation)
+            {
+                return true;
+            }
+
             if (_amigaBus == null ||
                 _amigaBus.CodeRangeGenerationMatches(
                     trace.CodeStart,
@@ -1541,11 +1671,282 @@ namespace CopperMod.Amiga
 
             var previousCycle = State.Cycles;
             var root = Normalize(State.ProgramCounter);
+            var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
             _fallback.ExecuteInstruction();
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
+            if (opcodeAvailable && ShouldFlushM68040JitAfterFallback(root, opcode))
+            {
+                _counters.Invalidations++;
+                ClearRuntimeState();
+            }
+
             ObserveHotRoot(root);
             return true;
+        }
+
+        private bool HandleM68040CompiledMmuFault(M68040MmuFault fault, IM68kInstructionBoundary boundary)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return false;
+            }
+
+            var instructionPc = Normalize(State.LastInstructionProgramCounter);
+            var previousCycle = _compiledInstructionCycleFloorActive
+                ? _compiledInstructionPreviousCycle
+                : State.Cycles;
+            State.Cycles = previousCycle;
+            _compiledInstructionCycleFloorActive = false;
+            var bypass = State.M68040Mmu.BypassTranslation;
+            State.M68040Mmu.BypassTranslation = true;
+            try
+            {
+                State.M68040Mmu.Status = fault.Status;
+                RaiseM68040Format0Exception(2, instructionPc, 34);
+            }
+            finally
+            {
+                State.M68040Mmu.BypassTranslation = bypass;
+            }
+
+            boundary.AfterInstruction(previousCycle, State.Cycles);
+            _counters.SideExits++;
+            RemoveTrace(instructionPc);
+            return true;
+        }
+
+        private void RaiseM68040Format0Exception(int vector, uint stackedProgramCounter, int cycles)
+        {
+            var savedStatusRegister = State.StatusRegister;
+            State.StatusRegister |= M68kCpuState.Supervisor;
+            PushWord((ushort)((vector * 4) & 0x0FFF));
+            PushLong(stackedProgramCounter);
+            PushWord(savedStatusRegister);
+            State.ProgramCounter = ReadLong((uint)(vector * 4));
+            AddCycles(cycles);
+        }
+
+        private bool ShouldFlushM68040JitAfterFallback(uint instructionPc, ushort opcode)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return false;
+            }
+
+            if (opcode == 0x4E70)
+            {
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0xF500 || (opcode & 0xFF00) == 0xF400)
+            {
+                return true;
+            }
+
+            if (opcode != 0x4E7B ||
+                !TryReadInstructionWord(instructionPc + 2, out var extension))
+            {
+                return false;
+            }
+
+            return IsM68040JitInvalidatingControlRegister(extension & 0x0FFF);
+        }
+
+        private static bool IsM68040JitInvalidatingControlRegister(int register)
+            => register is 0x002 or 0x003 or 0x004 or 0x005 or 0x006 or 0x007 or 0x802 or 0x806 or 0x807;
+
+        private bool TryReadInstructionWord(uint logicalAddress, out ushort value)
+        {
+            value = 0;
+            if (!TryTranslateM68040Address(
+                logicalAddress,
+                AmigaBusAccessKind.CpuInstructionFetch,
+                write: false,
+                out var physicalAddress,
+                out _))
+            {
+                return false;
+            }
+
+            physicalAddress = Normalize(physicalAddress);
+            try
+            {
+                if (_bus is IM68kCodeReader codeReader)
+                {
+                    value = codeReader.ReadHostWord(physicalAddress);
+                    return true;
+                }
+
+                var cycle = State.Cycles;
+                value = _bus.ReadWord(physicalAddress, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+                return true;
+            }
+            catch (Exception ex) when (ex is AmigaEmulationException or IndexOutOfRangeException or M68kCodeReadException)
+            {
+                value = 0;
+                return false;
+            }
+        }
+
+        private IM68kCodeReader CreateTraceCodeReader()
+            => _cpuModel == M68kJitCpuModel.M68040 ? new M68040JitCodeReader(this) : _amigaBus!;
+
+        private bool IsJitEligibleInstructionAddress(uint logicalAddress)
+        {
+            if (_amigaBus == null)
+            {
+                return false;
+            }
+
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return !_amigaBus.IsChipRamAddress(logicalAddress);
+            }
+
+            return TryTranslateM68040Address(
+                    logicalAddress,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    write: false,
+                    out var physicalAddress,
+                    out _) &&
+                IsPhysicalJitCodeAddress(physicalAddress);
+        }
+
+        private static bool IsPhysicalJitCodeAddress(uint physicalAddress)
+        {
+            if (physicalAddress > 0x00FF_FFFFu)
+            {
+                return false;
+            }
+
+            return M68020CpuProfile.ClassifyTarget(physicalAddress) is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or
+                M68020MemoryTarget.Rom;
+        }
+
+        private bool CanUsePhysicalV2TraceCompilation(uint logicalRoot, int byteCount)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return true;
+            }
+
+            if (byteCount <= 0)
+            {
+                return false;
+            }
+
+            for (var offset = 0; offset < byteCount; offset += 2)
+            {
+                var logical = Normalize(logicalRoot + (uint)offset);
+                if (!TryTranslateM68040Address(
+                        logical,
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        write: false,
+                        out var physical,
+                        out _) ||
+                    Normalize(physical) != logical)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool CanQueueAsyncTraceCompilation(uint logicalRoot)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return true;
+            }
+
+            if (TryReadInstructionWord(logicalRoot, out var opcode) &&
+                (opcode & 0xF000) == 0xF000)
+            {
+                return false;
+            }
+
+            return TryTranslateM68040Address(
+                    logicalRoot,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    write: false,
+                    out var physical,
+                    out _) &&
+                Normalize(physical) == Normalize(logicalRoot);
+        }
+
+        private bool TryTranslateM68040Address(
+            uint logicalAddress,
+            AmigaBusAccessKind accessKind,
+            bool write,
+            out uint physicalAddress,
+            out M68040MmuFault fault)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                physicalAddress = Normalize(logicalAddress);
+                fault = default;
+                return true;
+            }
+
+            var supervisor = (State.StatusRegister & M68kCpuState.Supervisor) != 0;
+            return State.M68040Mmu.TryTranslate(
+                logicalAddress,
+                accessKind,
+                write,
+                supervisor,
+                ReadPhysicalLongForM68040Mmu,
+                out physicalAddress,
+                out fault);
+        }
+
+        private uint ReadPhysicalLongForM68040Mmu(uint physicalAddress)
+        {
+            var bypass = State.M68040Mmu.BypassTranslation;
+            State.M68040Mmu.BypassTranslation = true;
+            try
+            {
+                var cycle = State.Cycles;
+                return _bus.ReadLong(Normalize(physicalAddress), ref cycle, AmigaBusAccessKind.CpuDataRead);
+            }
+            finally
+            {
+                State.M68040Mmu.BypassTranslation = bypass;
+            }
+        }
+
+        private sealed class M68040JitCodeReader : IM68kCodeReader
+        {
+            private readonly M68kJitCore _owner;
+
+            public M68040JitCodeReader(M68kJitCore owner)
+            {
+                _owner = owner;
+            }
+
+            public bool HasHostTrapStub(uint address)
+            {
+                return _owner.TryTranslateM68040Address(
+                        address,
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        write: false,
+                        out var physical,
+                        out _) &&
+                    _owner._bus.HasHostTrapStub(Normalize(physical));
+            }
+
+            public ushort ReadHostWord(uint address)
+            {
+                if (_owner.TryReadInstructionWord(address, out var value))
+                {
+                    return value;
+                }
+
+                throw M68kCodeReadException.Instance;
+            }
         }
 
         private bool ExecuteStoppedInstruction(
@@ -1579,7 +1980,7 @@ namespace CopperMod.Amiga
         {
             if (_amigaBus == null ||
                 _traces.ContainsKey(pc) ||
-                _amigaBus.IsChipRamAddress(pc))
+                !IsJitEligibleInstructionAddress(pc))
             {
                 return;
             }
@@ -1608,7 +2009,7 @@ namespace CopperMod.Amiga
             }
 
             _hotCounters.Remove(pc);
-            if (_asyncJitEnabled)
+            if (_asyncJitEnabled && CanQueueAsyncTraceCompilation(pc))
             {
                 if (TryQueueAsyncTraceCompilation(
                     pc,
@@ -1666,23 +2067,24 @@ namespace CopperMod.Amiga
             out M68kTraceCompilationPlan plan)
         {
             plan = default;
-            if (_amigaBus == null || _amigaBus.IsChipRamAddress(root))
+            if (_amigaBus == null || !IsJitEligibleInstructionAddress(root))
             {
                 return false;
             }
 
+            var codeReader = CreateTraceCodeReader();
             Span<M68kDecodedInstruction> instructions = stackalloc M68kDecodedInstruction[MaxTraceInstructions];
             var count = 0;
             var pc = root;
             var byteCount = 0;
             while (count < MaxTraceInstructions && byteCount < MaxTraceBytes)
             {
-                if (_amigaBus.IsChipRamAddress(pc))
+                if (!IsJitEligibleInstructionAddress(pc))
                 {
                     break;
                 }
 
-                if (!M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out var decodeReason))
+                if (!M68kDecoder.TryDecode(codeReader, pc, out var instruction, out var decodeReason, _cpuModel))
                 {
                     CountBailout(decodeReason);
                     break;
@@ -1710,7 +2112,9 @@ namespace CopperMod.Amiga
 
             var traceInstructions = instructions[..count].ToArray();
             var pureCpuBatchEligible = IsPureCpuBatchEligible(traceInstructions);
-            var v2Trace = _v2Enabled && TryCreateV2TracePlan(root, tier, out var compiledV2Trace)
+            var v2Trace = _v2Enabled &&
+                    CanUsePhysicalV2TraceCompilation(root, byteCount) &&
+                    TryCreateV2TracePlan(root, tier, out var compiledV2Trace)
                 ? compiledV2Trace
                 : default;
             var guardStart = root;
@@ -1748,7 +2152,8 @@ namespace CopperMod.Amiga
                 directMemoryInstructionPrefixes,
                 specializedHelperInstructionPrefixes,
                 v2Trace,
-                _v2BusGraphEnabled);
+                _v2BusGraphEnabled,
+                _cpuModel == M68kJitCpuModel.M68040);
             return true;
         }
 
@@ -1771,7 +2176,8 @@ namespace CopperMod.Amiga
                     plan.V2Trace.ByteLength,
                     plan.V2Trace.PureCpuBatchEligible,
                     plan.V2Trace.FastReadOnlyBatchEligible,
-                    plan.V2BusGraphEnabled);
+                    plan.V2BusGraphEnabled,
+                    plan.ForceTranslatedMemoryAccesses);
             return new TraceEntry(
                 plan.Root,
                 plan.CodeStart,
@@ -2008,7 +2414,8 @@ namespace CopperMod.Amiga
                 directMemoryInstructionPrefixes,
                 specializedHelperInstructionPrefixes,
                 v2Trace,
-                input.Options.V2BusGraphEnabled);
+                input.Options.V2BusGraphEnabled,
+                input.Options.ForceTranslatedMemoryAccesses);
             return true;
         }
 
@@ -2050,7 +2457,8 @@ namespace CopperMod.Amiga
                 endGeneration,
                 codeWords,
                 v2Trace,
-                input.Options.V2BusGraphEnabled);
+                input.Options.V2BusGraphEnabled,
+                input.Options.ForceTranslatedMemoryAccesses);
             return true;
         }
 
@@ -2338,7 +2746,18 @@ namespace CopperMod.Amiga
             var address = root;
             for (var i = 0; i < words.Length; i++)
             {
-                words[i] = _amigaBus.ReadHostWord(address);
+                if (_cpuModel == M68kJitCpuModel.M68040)
+                {
+                    if (!TryReadInstructionWord(address, out words[i]))
+                    {
+                        return Array.Empty<ushort>();
+                    }
+                }
+                else
+                {
+                    words[i] = _amigaBus.ReadHostWord(address);
+                }
+
                 address = Normalize(address + 2);
             }
 
@@ -2519,7 +2938,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            trace = CompileV2FromPlan(root, plan, _v2BusGraphEnabled);
+            trace = CompileV2FromPlan(root, plan, _v2BusGraphEnabled, _cpuModel == M68kJitCpuModel.M68040);
             RecordV2CompiledTrace(tier);
             return true;
         }
@@ -2580,7 +2999,11 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private static V2TraceCompilation CompileV2FromPlan(uint root, V2TracePlan plan, bool useGraph)
+        private static V2TraceCompilation CompileV2FromPlan(
+            uint root,
+            V2TracePlan plan,
+            bool useGraph,
+            bool forceTranslatedMemoryAccesses)
         {
             var compiled = CompileV2(
                 root,
@@ -2590,7 +3013,8 @@ namespace CopperMod.Amiga
                 plan.ByteLength,
                 plan.PureCpuBatchEligible,
                 plan.FastReadOnlyBatchEligible,
-                useGraph);
+                useGraph,
+                forceTranslatedMemoryAccesses);
             return new V2TraceCompilation(
                 compiled,
                 plan.Tier,
@@ -3964,8 +4388,14 @@ namespace CopperMod.Amiga
             int byteLength,
             bool pureCpuBatchEligible,
             bool fastReadOnlyBatchEligible,
-            bool busGraphEnabled)
+            bool busGraphEnabled,
+            bool forceTranslatedMemoryAccesses)
         {
+            if (forceTranslatedMemoryAccesses)
+            {
+                fastReadOnlyBatchEligible = false;
+            }
+
             GetV2RegisterMasks(
                 instructions,
                 out var loadDataRegisters,
@@ -3989,7 +4419,8 @@ namespace CopperMod.Amiga
                     loadDataRegisters,
                     loadAddressRegisters,
                     dirtyDataRegisters,
-                    dirtyAddressRegisters)
+                    dirtyAddressRegisters,
+                    forceTranslatedMemoryAccesses)
                 : CompileV2BusAccessBatch(
                     root,
                     tier,
@@ -4000,7 +4431,8 @@ namespace CopperMod.Amiga
                     loadDataRegisters,
                     loadAddressRegisters,
                     dirtyDataRegisters,
-                    dirtyAddressRegisters);
+                    dirtyAddressRegisters,
+                    forceTranslatedMemoryAccesses);
         }
 
         private static bool V2TraceNeedsFullEntryRegisterLoad(M68kDecodedInstruction[] instructions)
@@ -4041,7 +4473,8 @@ namespace CopperMod.Amiga
             int loadDataRegisters,
             int loadAddressRegisters,
             int dirtyDataRegisters,
-            int dirtyAddressRegisters)
+            int dirtyAddressRegisters,
+            bool forceTranslatedMemoryAccesses)
         {
             var method = new DynamicMethod(
                 "M68kV2Trace_" + tier + "_" + root.ToString("X6"),
@@ -4061,6 +4494,7 @@ namespace CopperMod.Amiga
             var exit = il.DefineLabel();
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il);
+            context.SetZeroWaitProbe(enabled: !forceTranslatedMemoryAccesses);
             var fastReadFailureLabels = new List<(Label Label, uint ProgramCounter)>();
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
@@ -4154,7 +4588,8 @@ namespace CopperMod.Amiga
             int loadDataRegisters,
             int loadAddressRegisters,
             int dirtyDataRegisters,
-            int dirtyAddressRegisters)
+            int dirtyAddressRegisters,
+            bool forceTranslatedMemoryAccesses)
         {
             var method = new DynamicMethod(
                 "M68kV2BusAccessTrace_" + tier + "_" + root.ToString("X6"),
@@ -4166,7 +4601,7 @@ namespace CopperMod.Amiga
             var exit = il.DefineLabel();
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il);
-            context.SetZeroWaitProbe(enabled: true);
+            context.SetZeroWaitProbe(enabled: !forceTranslatedMemoryAccesses);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
             if (useGraph)
@@ -7273,7 +7708,7 @@ namespace CopperMod.Amiga
             programCounter = Normalize(programCounter);
             _compiledInstructionPreviousCycle = State.Cycles;
             if (State.ProgramCounter != programCounter ||
-                (_amigaBus != null && _amigaBus.HasHostTrapStub(programCounter)))
+                HasHostTrapStubForInstruction(programCounter))
             {
                 _counters.HostTrapBailouts++;
                 return false;
@@ -7285,6 +7720,27 @@ namespace CopperMod.Amiga
             _instructionFrequency.Record(expectedOpcode);
             _compiledInstructionCycleFloorActive = true;
             return true;
+        }
+
+        private bool HasHostTrapStubForInstruction(uint programCounter)
+        {
+            if (_amigaBus == null)
+            {
+                return false;
+            }
+
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return _amigaBus.HasHostTrapStub(programCounter);
+            }
+
+            return TryTranslateM68040Address(
+                    programCounter,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    write: false,
+                    out var physical,
+                    out _) &&
+                _amigaBus.HasHostTrapStub(Normalize(physical));
         }
 
         private void BeginCompiledInstructionCycleFloor(long startCycle)
@@ -7562,6 +8018,8 @@ namespace CopperMod.Amiga
                         source.Extension0,
                         source.Extension1);
                     return true;
+                case M68kJitOperation.M68040Fallback:
+                    return ExecuteCompiledM68040Fallback(source.Immediate);
                 default:
                     State.ProgramCounter = State.LastInstructionProgramCounter;
                     State.Cycles = _compiledInstructionPreviousCycle;
@@ -7569,6 +8027,26 @@ namespace CopperMod.Amiga
                     _counters.UnsupportedOpcode++;
                     return false;
             }
+        }
+
+        private bool ExecuteCompiledM68040Fallback(uint instructionPc)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return false;
+            }
+
+            State.ProgramCounter = Normalize(instructionPc);
+            _compiledInstructionCycleFloorActive = false;
+            var opcode = State.LastOpcode;
+            _fallback.ExecuteInstruction();
+            if (ShouldFlushM68040JitAfterFallback(instructionPc, opcode))
+            {
+                _counters.Invalidations++;
+                ClearRuntimeState();
+            }
+
+            return true;
         }
 
         private void ExecuteCompiledStatusImmediate(int operationValue, uint immediate)
@@ -8490,21 +8968,24 @@ namespace CopperMod.Amiga
 
         private uint ReadMemoryValueForV2Batch(uint address, M68kOperandSize size)
         {
+            address = TranslateM68040DataAddress(address, write: false);
             if (_amigaBus != null && _amigaBus.TryReadJitZeroWaitMemory(address, size, out var value))
             {
                 return value;
             }
 
-            return ReadMemoryValueForV2BatchSlow(address, size);
+            return ReadPhysicalMemoryValue(address, size);
         }
 
         private uint ReadMemoryValueForV2BatchSlow(uint address, M68kOperandSize size)
         {
-            return ReadMemoryValue(address, size);
+            address = TranslateM68040DataAddress(address, write: false);
+            return ReadPhysicalMemoryValue(address, size);
         }
 
         private uint ReadMemoryValueForV2BatchSlowRef(ref long cycles, uint address, M68kOperandSize size)
         {
+            address = TranslateM68040DataAddress(address, write: false);
             if (_amigaBus != null)
             {
                 return _amigaBus.ReadJitSlotAwareMemory(ref cycles, address, size);
@@ -8530,11 +9011,13 @@ namespace CopperMod.Amiga
 
         private void WriteMemoryValueForV2Batch(uint address, uint value, M68kOperandSize size)
         {
-            WriteMemoryValue(address, value, size);
+            address = TranslateM68040DataAddress(address, write: true);
+            WritePhysicalMemoryValue(address, value, size);
         }
 
         private void WriteMemoryValueForV2BatchSlowRef(ref long cycles, uint address, uint value, M68kOperandSize size)
         {
+            address = TranslateM68040DataAddress(address, write: true);
             if (_amigaBus != null)
             {
                 _amigaBus.WriteJitSlotAwareMemory(ref cycles, address, value, size);
@@ -8581,7 +9064,60 @@ namespace CopperMod.Amiga
             }
         }
 
+        private uint ReadPhysicalMemoryValue(uint address, M68kOperandSize size)
+        {
+            return size switch
+            {
+                M68kOperandSize.Byte => ReadPhysicalByte(address, AmigaBusAccessKind.CpuDataRead),
+                M68kOperandSize.Word => ReadPhysicalWord(address, AmigaBusAccessKind.CpuDataRead),
+                _ => ReadPhysicalLong(address, AmigaBusAccessKind.CpuDataRead)
+            };
+        }
+
+        private void WritePhysicalMemoryValue(uint address, uint value, M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                WritePhysicalByte(address, (byte)value, AmigaBusAccessKind.CpuDataWrite);
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                WritePhysicalWord(address, (ushort)value, AmigaBusAccessKind.CpuDataWrite);
+            }
+            else
+            {
+                WritePhysicalLong(address, value, AmigaBusAccessKind.CpuDataWrite);
+            }
+        }
+
+        private uint TranslateM68040DataAddress(uint address, bool write)
+            => TranslateM68040MemoryAddress(
+                address,
+                write ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                write);
+
+        private uint TranslateM68040MemoryAddress(uint address, AmigaBusAccessKind accessKind, bool write)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040)
+            {
+                return Normalize(address);
+            }
+
+            if (TryTranslateM68040Address(address, accessKind, write, out var physical, out var fault))
+            {
+                return Normalize(physical);
+            }
+
+            throw new M68040MmuFaultException(fault);
+        }
+
         private byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        {
+            address = TranslateM68040MemoryAddress(address, accessKind, write: false);
+            return ReadPhysicalByte(address, accessKind);
+        }
+
+        private byte ReadPhysicalByte(uint address, AmigaBusAccessKind accessKind)
         {
             var cycle = State.Cycles;
             var value = _bus.ReadByte(address, ref cycle, accessKind);
@@ -8596,6 +9132,12 @@ namespace CopperMod.Amiga
                 throw new AmigaEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
             }
 
+            address = TranslateM68040MemoryAddress(address, accessKind, write: false);
+            return ReadPhysicalWord(address, accessKind);
+        }
+
+        private ushort ReadPhysicalWord(uint address, AmigaBusAccessKind accessKind)
+        {
             var cycle = State.Cycles;
             var value = _bus.ReadWord(address, ref cycle, accessKind);
             State.Cycles = cycle;
@@ -8609,16 +9151,28 @@ namespace CopperMod.Amiga
                 throw new AmigaEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
             }
 
+            address = TranslateM68040MemoryAddress(address, AmigaBusAccessKind.CpuDataRead, write: false);
+            return ReadPhysicalLong(address, AmigaBusAccessKind.CpuDataRead);
+        }
+
+        private uint ReadPhysicalLong(uint address, AmigaBusAccessKind accessKind)
+        {
             var cycle = State.Cycles;
-            var value = _bus.ReadLong(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            var value = _bus.ReadLong(address, ref cycle, accessKind);
             State.Cycles = cycle;
             return value;
         }
 
         private void WriteByte(uint address, byte value)
         {
+            address = TranslateM68040MemoryAddress(address, AmigaBusAccessKind.CpuDataWrite, write: true);
+            WritePhysicalByte(address, value, AmigaBusAccessKind.CpuDataWrite);
+        }
+
+        private void WritePhysicalByte(uint address, byte value, AmigaBusAccessKind accessKind)
+        {
             var cycle = State.Cycles;
-            _bus.WriteByte(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteByte(address, value, ref cycle, accessKind);
             State.Cycles = cycle;
         }
 
@@ -8629,8 +9183,14 @@ namespace CopperMod.Amiga
                 throw new AmigaEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
             }
 
+            address = TranslateM68040MemoryAddress(address, AmigaBusAccessKind.CpuDataWrite, write: true);
+            WritePhysicalWord(address, value, AmigaBusAccessKind.CpuDataWrite);
+        }
+
+        private void WritePhysicalWord(uint address, ushort value, AmigaBusAccessKind accessKind)
+        {
             var cycle = State.Cycles;
-            _bus.WriteWord(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteWord(address, value, ref cycle, accessKind);
             State.Cycles = cycle;
         }
 
@@ -8641,8 +9201,14 @@ namespace CopperMod.Amiga
                 throw new AmigaEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
             }
 
+            address = TranslateM68040MemoryAddress(address, AmigaBusAccessKind.CpuDataWrite, write: true);
+            WritePhysicalLong(address, value, AmigaBusAccessKind.CpuDataWrite);
+        }
+
+        private void WritePhysicalLong(uint address, uint value, AmigaBusAccessKind accessKind)
+        {
             var cycle = State.Cycles;
-            _bus.WriteLong(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteLong(address, value, ref cycle, accessKind);
             State.Cycles = cycle;
         }
 
@@ -8893,6 +9459,7 @@ namespace CopperMod.Amiga
         private void AddCycles(int cycles)
         {
             Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            cycles = GetEffectiveCompiledCycles(cycles);
             if (_compiledInstructionCycleFloorActive)
             {
                 CompleteCompiledInstructionCycles(cycles);
@@ -8906,6 +9473,7 @@ namespace CopperMod.Amiga
         private void CompleteCompiledInstructionCycles(int cycles)
         {
             Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            cycles = GetEffectiveCompiledCycles(cycles);
             var floor = _compiledInstructionPreviousCycle + cycles;
             if (State.Cycles < floor)
             {
@@ -8914,6 +9482,9 @@ namespace CopperMod.Amiga
 
             _compiledInstructionCycleFloorActive = false;
         }
+
+        private int GetEffectiveCompiledCycles(int cycles)
+            => _minimalCycleTiming ? 1 : cycles;
 
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
         {
@@ -9255,7 +9826,8 @@ namespace CopperMod.Amiga
                 _v2BusAccessEnabled,
                 _v2FastReadEnabled,
                 _v2BusGraphEnabled || _v2BusAccessEnabled,
-                workerGraphExpansionEnabled);
+                workerGraphExpansionEnabled,
+                _cpuModel == M68kJitCpuModel.M68040);
 
         private int CalculateAsyncCompilePriority(
             uint root,
@@ -10549,7 +11121,8 @@ namespace CopperMod.Amiga
                 int[] directMemoryInstructionPrefixes,
                 int[] specializedHelperInstructionPrefixes,
                 V2TracePlan v2Trace,
-                bool v2BusGraphEnabled)
+                bool v2BusGraphEnabled,
+                bool forceTranslatedMemoryAccesses)
             {
                 Root = root;
                 RequestedTier = requestedTier;
@@ -10568,6 +11141,7 @@ namespace CopperMod.Amiga
                 SpecializedHelperInstructionPrefixes = specializedHelperInstructionPrefixes;
                 V2Trace = v2Trace;
                 V2BusGraphEnabled = v2BusGraphEnabled;
+                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
             }
 
             public uint Root { get; }
@@ -10603,6 +11177,8 @@ namespace CopperMod.Amiga
             public V2TracePlan V2Trace { get; }
 
             public bool V2BusGraphEnabled { get; }
+
+            public bool ForceTranslatedMemoryAccesses { get; }
         }
 
         private readonly struct M68kTraceCompilationOptions
@@ -10614,7 +11190,8 @@ namespace CopperMod.Amiga
                 bool v2BusAccessEnabled,
                 bool v2FastReadEnabled,
                 bool v2BusGraphEnabled,
-                bool workerGraphExpansionEnabled)
+                bool workerGraphExpansionEnabled,
+                bool forceTranslatedMemoryAccesses)
             {
                 V2Enabled = v2Enabled;
                 V2Tier3Enabled = v2Tier3Enabled;
@@ -10623,6 +11200,7 @@ namespace CopperMod.Amiga
                 V2FastReadEnabled = v2FastReadEnabled;
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
+                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
             }
 
             public bool V2Enabled { get; }
@@ -10638,6 +11216,8 @@ namespace CopperMod.Amiga
             public bool V2BusGraphEnabled { get; }
 
             public bool WorkerGraphExpansionEnabled { get; }
+
+            public bool ForceTranslatedMemoryAccesses { get; }
         }
 
         private readonly struct M68kTraceCompilationInput
@@ -10709,7 +11289,8 @@ namespace CopperMod.Amiga
                 uint endGeneration,
                 ushort[] codeWords,
                 V2TracePlan v2Trace,
-                bool v2BusGraphEnabled)
+                bool v2BusGraphEnabled,
+                bool forceTranslatedMemoryAccesses)
             {
                 Root = root;
                 Tier = tier;
@@ -10720,6 +11301,7 @@ namespace CopperMod.Amiga
                 CodeWords = codeWords;
                 V2Trace = v2Trace;
                 V2BusGraphEnabled = v2BusGraphEnabled;
+                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
             }
 
             public uint Root { get; }
@@ -10739,6 +11321,8 @@ namespace CopperMod.Amiga
             public V2TracePlan V2Trace { get; }
 
             public bool V2BusGraphEnabled { get; }
+
+            public bool ForceTranslatedMemoryAccesses { get; }
         }
 
         private readonly struct M68kTraceCompileSuccess
@@ -10874,7 +11458,11 @@ namespace CopperMod.Amiga
                         return M68kJitCompileResult.Failed(Epoch, BranchPressurePromotion, stopwatch, Key, M68kJitCompileReason.Promotion);
                     }
 
-                    var compiled = CompileV2FromPlan(promotionPlan.Root, promotionPlan.V2Trace, promotionPlan.V2BusGraphEnabled);
+                    var compiled = CompileV2FromPlan(
+                        promotionPlan.Root,
+                        promotionPlan.V2Trace,
+                        promotionPlan.V2BusGraphEnabled,
+                        promotionPlan.ForceTranslatedMemoryAccesses);
                     PrepareCompiledTrace(compiled.Compiled!);
                     return M68kJitCompileResult.ForPromotion(
                         Epoch,

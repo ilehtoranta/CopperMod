@@ -59,7 +59,8 @@ namespace CopperMod.Amiga
         EoriToSr,
         MoveToCcr,
         MoveToSr,
-        Pea
+        Pea,
+        M68040Fallback
     }
 
     internal enum M68kJitEaKind
@@ -267,7 +268,8 @@ namespace CopperMod.Amiga
             IM68kCodeReader codeReader,
             uint programCounter,
             out M68kDecodedInstruction instruction,
-            out M68kJitBailoutReason reason)
+            out M68kJitBailoutReason reason,
+            M68kJitCpuModel cpuModel = M68kJitCpuModel.M68000)
         {
             instruction = default;
             reason = M68kJitBailoutReason.None;
@@ -281,6 +283,27 @@ namespace CopperMod.Amiga
                 }
 
                 var opcode = codeReader.ReadHostWord(programCounter);
+                if ((opcode & 0xF000) == 0xF000 && cpuModel == M68kJitCpuModel.M68040)
+                {
+                    instruction = Create(
+                        programCounter,
+                        opcode,
+                        M68kJitOperation.M68040Fallback,
+                        M68kOperandSize.Word,
+                        new M68kDecodedEa(M68kJitEaKind.Immediate, 0, 0, 0, 0, programCounter),
+                        M68kDecodedEa.None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        programCounter + 2,
+                        new DecodeCursor(codeReader, programCounter + 2),
+                        stopsTrace: true);
+                    return true;
+                }
+
                 if ((opcode & 0xF000) is 0xA000 or 0xF000 || opcode is 0x4AFC)
                 {
                     reason = M68kJitBailoutReason.ExceptionInstruction;

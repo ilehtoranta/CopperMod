@@ -1607,7 +1607,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			cpu.CacheControlRegister,
 			cpu.CacheAddressRegister,
 			cpu.MasterStackPointer,
-			_machine.Options.CpuBackend == M68kBackendKind.AccurateM68040,
+			_machine.Options.CpuBackend is M68kBackendKind.AccurateM68040 or M68kBackendKind.JitM68040,
 			cpu.M68040Fpu.Fpcr,
 			cpu.M68040Fpu.Fpsr,
 			cpu.M68040Fpu.Fpiar,

@@ -97,6 +97,22 @@ namespace CopperMod.Amiga
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
             });
 
+        public static M68020CpuProfile Ocs68040JitMaxSpeed { get; } = new(
+            "Ocs68040_JitMaxSpeed",
+            M68kAcceleratorModel.M68040,
+            nativeCyclesPerMachineCycle: 1,
+            new[]
+            {
+                new M68020BusTimingRule(M68020MemoryTarget.ChipRam, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.ExpansionRam, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.RealFastRam, M68020BusWidth.Long, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.CustomRegisters, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Cia, M68020BusWidth.Byte, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
+            });
+
         public string Name { get; }
 
         public M68kAcceleratorModel Model { get; }

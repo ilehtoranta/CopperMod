@@ -102,7 +102,8 @@ namespace CopperMod.Amiga
         JitM68000 = 3,
         Cpu32 = 4,
         AccurateM68030 = 5,
-        AccurateM68040 = 6
+        AccurateM68040 = 6,
+        JitM68040 = 7
     }
 
     internal interface IM68kCoreFactory
@@ -139,6 +140,11 @@ namespace CopperMod.Amiga
             if (backend == M68kBackendKind.JitM68000)
             {
                 return new M68kJitCore(bus);
+            }
+
+            if (backend == M68kBackendKind.JitM68040)
+            {
+                return M68kJitCore.CreateM68040(bus);
             }
 
             throw new AmigaEmulationException($"The requested M68k backend is not implemented: {backend}.");

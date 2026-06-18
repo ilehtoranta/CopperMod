@@ -38,6 +38,16 @@ public sealed class CopperScreenM68020BackendTests
 		Assert.Equal(M68kBackendKind.AccurateM68040, CopperScreenProfile.ParseCpuBackend(backend));
 	}
 
+	[Theory]
+	[InlineData("JitM68040")]
+	[InlineData("jit68040")]
+	[InlineData("m68040jit")]
+	[InlineData("040jit")]
+	public void CpuBackendParserAcceptsM68040JitAliases(string backend)
+	{
+		Assert.Equal(M68kBackendKind.JitM68040, CopperScreenProfile.ParseCpuBackend(backend));
+	}
+
 	[Fact]
 	public void StartupArgumentParserCanSelectM68020Backend()
 	{
@@ -71,6 +81,20 @@ public sealed class CopperScreenM68020BackendTests
 
 		Assert.Null(options.Error);
 		Assert.Equal(M68kBackendKind.AccurateM68040, options.CpuBackendOverride);
+	}
+
+	[Theory]
+	[InlineData("--jit-m68040")]
+	[InlineData("--jit-68040")]
+	[InlineData("--m68040-jit")]
+	public void StartupArgumentParserCanSelectM68040JitBackend(string alias)
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", alias },
+			AppContext.BaseDirectory);
+
+		Assert.Null(options.Error);
+		Assert.Equal(M68kBackendKind.JitM68040, options.CpuBackendOverride);
 	}
 
 	[Fact]
@@ -117,6 +141,24 @@ public sealed class CopperScreenM68020BackendTests
 		Assert.Equal(CopperScreenKickstartSource.KickstartRom, profile.KickstartSource);
 		Assert.Equal(M68kBackendKind.AccurateM68040, profile.CpuBackend);
 		Assert.Equal(M68kBackendKind.AccurateM68040, profile.CreateMachineOptions().CpuBackend);
+		Assert.Equal(8 * 1024 * 1024, profile.RealFastRamSize);
+		Assert.Equal(0x0020_0000u, profile.RealFastRamBase);
+	}
+
+	[Fact]
+	public void BundledM68040JitKickstartProfileCreatesM68040JitMachineOptions()
+	{
+		Assert.True(
+			CopperScreenProfile.TryLoad(
+				"expanded-m68040-jit-kickstart-rom",
+				AppContext.BaseDirectory,
+				out var profile,
+				out var error),
+			error);
+
+		Assert.Equal(CopperScreenKickstartSource.KickstartRom, profile.KickstartSource);
+		Assert.Equal(M68kBackendKind.JitM68040, profile.CpuBackend);
+		Assert.Equal(M68kBackendKind.JitM68040, profile.CreateMachineOptions().CpuBackend);
 		Assert.Equal(8 * 1024 * 1024, profile.RealFastRamSize);
 		Assert.Equal(0x0020_0000u, profile.RealFastRamBase);
 	}

@@ -194,6 +194,7 @@ internal sealed class CopperScreenProfile
 			"expanded-rom" or "expanded-kickstart" or "expanded-kickstart-13" => "expanded-kickstart13",
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
 			"expanded-m68040-rom" or "expanded-m68040-kickstart" or "expanded-68040-kickstart-rom" => "expanded-m68040-kickstart-rom",
+			"expanded-m68040-jit-rom" or "expanded-m68040-jit-kickstart" or "expanded-68040-jit-kickstart-rom" => "expanded-m68040-jit-kickstart-rom",
 			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized
 		};
@@ -419,6 +420,7 @@ internal sealed class CopperScreenProfile
 			"accuratem68030" or "m68030" or "68030" or "030" or "ocs6803014mhz" => M68kBackendKind.AccurateM68030,
 			"accuratem68040" or "m68040" or "68040" or "040" or "ocs6804025mhz" => M68kBackendKind.AccurateM68040,
 			"jit" or "jitm68000" => M68kBackendKind.JitM68000,
+			"jitm68040" or "jit68040" or "m68040jit" or "040jit" => M68kBackendKind.JitM68040,
 			_ => throw new InvalidOperationException($"Unsupported CPU backend '{value}'.")
 		};
 	}

@@ -162,6 +162,14 @@ internal sealed class CopperScreenStartupOptions
 				continue;
 			}
 
+			if (IsOption(arg, "--jit-m68040") ||
+				IsOption(arg, "--jit-68040") ||
+				IsOption(arg, "--m68040-jit"))
+			{
+				cpuBackendOverride = M68kBackendKind.JitM68040;
+				continue;
+			}
+
 			if (IsOption(arg, "--m68020") || IsOption(arg, "--68020"))
 			{
 				cpuBackendOverride = M68kBackendKind.AccurateM68020;

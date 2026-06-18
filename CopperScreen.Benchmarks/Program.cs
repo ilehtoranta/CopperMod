@@ -1025,6 +1025,12 @@ internal readonly record struct BenchmarkOptions(
             {
                 cpuBackend = "jit";
             }
+            else if (string.Equals(args[i], "--jit-m68040", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[i], "--jit-68040", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[i], "--m68040-jit", StringComparison.OrdinalIgnoreCase))
+            {
+                cpuBackend = "jitm68040";
+            }
             else if (string.Equals(args[i], "--real-kickstart", StringComparison.OrdinalIgnoreCase))
             {
                 realKickstart = true;
