@@ -14,6 +14,7 @@ public sealed class CopperScreenDiagRomTests
 	private const string ExpectedDiagRomV20Sha256 = "8DA1CF37B74B2BF1BDE3DC725D00A27EB6BD402E859BAFAF9CA2E74BBF0273F6";
 	private const int MainMenuMinimumFrames = 1_000;
 	private const int MainMenuMaxFrames = 1_500;
+	private const int M68020MainMenuMaxFrames = 10_000;
 	private const int MenuTransitionMaxFrames = 300;
 	private const int StableSamples = 6;
 	private const int CrashScreenRedPixelThreshold = 2_000;
@@ -148,6 +149,69 @@ public sealed class CopperScreenDiagRomTests
 					throw new Xunit.Sdk.XunitException(BuildFailure("DiagROM simple waveform entered the crash screen.", harness, frame, []));
 				}
 			}
+		}
+	}
+
+	[Fact]
+	public void DiagRomAudioSimpleWaveformRunsInM68020ModeWhenEnabledAndAvailable()
+	{
+		if (!IsDiagRomMenuTestsEnabled())
+		{
+			return;
+		}
+
+		var harness = TryCreateHarness(requireAudioSimpleWaveform: true, ["--m68020"]);
+		if (harness == null)
+		{
+			return;
+		}
+
+		using (harness)
+		{
+			harness.Emulator.SetInstructionFrequencyEnabled(true);
+			var main = WaitForStableScreen(harness, M68020MainMenuMaxFrames, MainMenuMinimumFrames, "DiagROM main menu");
+
+			TapKey(harness, AmigaRawKey.Digit1);
+			WaitForStableScreenDifferentFrom(harness, main.Hash, MenuTransitionMaxFrames, "DiagROM audio menu");
+
+			TapKey(harness, AmigaRawKey.Digit1);
+			for (var frame = 1; frame <= 240; frame++)
+			{
+				RenderChecked(harness, frame, null);
+				if (HasDiagRomCrashScreen(harness.Emulator))
+				{
+					throw new Xunit.Sdk.XunitException(BuildFailure("DiagROM 68020 simple waveform entered the crash screen.", harness, frame, []));
+				}
+			}
+		}
+	}
+
+	[Fact]
+	public void DiagRomM68020BootCheckpointTraceWhenEnabledAndAvailable()
+	{
+		if (!string.Equals(Environment.GetEnvironmentVariable("COPPERSCREEN_DIAGROM_68020_TRACE"), "1", StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		var harness = TryCreateHarness(requireAudioSimpleWaveform: true, ["--m68020"]);
+		if (harness == null)
+		{
+			return;
+		}
+
+		using (harness)
+		{
+			GetBoot(harness.Emulator).StartKickstartRomBoot(
+				AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "diagrom-blank.adf"));
+			var trace = new System.Text.StringBuilder();
+			var boundary = new DiagRomM68020CheckpointBoundary(harness.Machine, trace);
+			var core = Assert.IsAssignableFrom<IM68kBatchCore>(harness.Machine.Cpu);
+			var executed = core.ExecuteInstructions(5_000_000, null, boundary);
+			trace.AppendLine($"executed={executed}, completed={boundary.Completed}, halted={harness.Machine.Cpu.State.Halted}");
+			trace.AppendLine(BuildFailure("DiagROM 68020 checkpoint trace final state.", harness, 0, []));
+
+			throw new Xunit.Sdk.XunitException(trace.ToString());
 		}
 	}
 
@@ -323,7 +387,9 @@ public sealed class CopperScreenDiagRomTests
 		return hash;
 	}
 
-	private static DiagRomHarness? TryCreateHarness(bool requireAudioSimpleWaveform = false)
+	private static DiagRomHarness? TryCreateHarness(
+		bool requireAudioSimpleWaveform = false,
+		params string[] extraArgs)
 	{
 		var rom = TryFindSupportedDiagRom(requireAudioSimpleWaveform: requireAudioSimpleWaveform);
 		if (rom == null)
@@ -337,8 +403,18 @@ public sealed class CopperScreenDiagRomTests
 		var diskBytes = new byte[AmigaDiskImage.StandardAdfSize];
 		File.WriteAllBytes(diskPath, diskBytes);
 
+		var args = new List<string>
+		{
+			"--profile",
+			"expanded-kickstart13",
+			"--kickstart-rom",
+			rom.Path,
+			diskPath
+		};
+		args.AddRange(extraArgs);
+
 		var emulator = CopperScreenEmulator.CreateWithLoadedDisk(
-			["--profile", "expanded-kickstart13", "--kickstart-rom", rom.Path, diskPath],
+			args.ToArray(),
 			AppContext.BaseDirectory,
 			AmigaDiskImage.FromAdfBytes(diskBytes, Path.GetFileName(diskPath)));
 		return new DiagRomHarness(emulator, GetMachine(emulator), tempDirectory);
@@ -423,12 +499,16 @@ public sealed class CopperScreenDiagRomTests
 			.GetValue(emulator)!;
 	}
 
-	private static IReadOnlyList<AmigaBootDiagnostic> GetDiagnostics(CopperScreenEmulator emulator)
+	private static AmigaBootController GetBoot(CopperScreenEmulator emulator)
 	{
-		var boot = (AmigaBootController)typeof(CopperScreenEmulator)
+		return (AmigaBootController)typeof(CopperScreenEmulator)
 			.GetField("_boot", BindingFlags.NonPublic | BindingFlags.Instance)!
 			.GetValue(emulator)!;
-		return boot.Diagnostics;
+	}
+
+	private static IReadOnlyList<AmigaBootDiagnostic> GetDiagnostics(CopperScreenEmulator emulator)
+	{
+		return GetBoot(emulator).Diagnostics;
 	}
 
 	private static string? BuildFatalDiagnosticStatus(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
@@ -482,11 +562,20 @@ public sealed class CopperScreenDiagRomTests
 		var vector2 = machine.Bus.ReadLong(0x0000_0008);
 		var vector3 = machine.Bus.ReadLong(0x0000_000C);
 		var vector4 = machine.Bus.ReadLong(0x0000_0010);
+		var state = machine.Cpu.State;
+		var a6 = state.A[6];
+		var diagRomRaster = machine.Bus.ReadByte(unchecked(a6 + 0x00FCu));
+		var diagRomNoDraw = machine.Bus.ReadByte(unchecked(a6 + 0x023Au));
+		var waitShortReturn = state.A[7] <= 0x00FF_FFC0 ? machine.Bus.ReadLong(state.A[7] + 60u) : 0;
 		var stack = CaptureStackWords(machine, machine.Cpu.State.A[7], 8);
 		var hashTail = string.Join(", ", recentHashes.TakeLast(12).Select(hash => $"0x{hash:X8}"));
 		var stats = SampleFrameStats(harness.Emulator);
+		var frequency = harness.Emulator.InstructionFrequency;
+		var hotOpcodes = string.Join(", ", frequency.Opcodes.Take(10).Select(opcode => $"0x{opcode.Opcode:X4}:{opcode.Count}"));
 		return $"{message} frame={frame}, status={harness.Emulator.StatusText}, pc=0x{pc:X6}, opcode=0x{opcode:X4}, " +
-			$"sr=0x{machine.Cpu.State.StatusRegister:X4}, cycles={machine.Cpu.State.Cycles}, halted={machine.Cpu.State.Halted}, stopped={machine.Cpu.State.Stopped}, " +
+			$"sr=0x{state.StatusRegister:X4}, cycles={state.Cycles}, nativeCycles={state.NativeCycles}, halted={state.Halted}, stopped={state.Stopped}, " +
+			$"d0=0x{state.D[0]:X8}, d1=0x{state.D[1]:X8}, d7=0x{state.D[7]:X8}, a4=0x{state.A[4]:X8}, a6=0x{a6:X8}, diagRaster=0x{diagRomRaster:X2}, diagNoDraw=0x{diagRomNoDraw:X2}, waitReturn=0x{waitShortReturn:X8}, " +
+			$"instructions={frequency.TotalInstructions}, hotOpcodes=[{hotOpcodes}], " +
 			$"frameStats={stats}, crashRedPixels={CountCrashScreenRedPixels(harness.Emulator)}, " +
 			$"vectors=[2:0x{vector2:X8},3:0x{vector3:X8},4:0x{vector4:X8}], stack=[{stack}], " +
 			$"dmacon=0x{machine.Bus.Paula.Dmacon:X4}, dmaconr=0x{dmaconr:X4}, intena=0x{intena:X4}, intreq=0x{intreq:X4}, " +
@@ -565,4 +654,119 @@ public sealed class CopperScreenDiagRomTests
 		bool IsProfileDefault);
 
 	private sealed record DiagRomImage(string Path, bool SupportsAudioSimpleWaveform);
+
+	private sealed class DiagRomM68020CheckpointBoundary : IM68kInstructionBoundary
+	{
+		private readonly AmigaMachine _machine;
+		private readonly System.Text.StringBuilder _trace;
+		private byte? _lastRaster;
+		private byte? _lastNoDraw;
+		private uint _lastA6 = uint.MaxValue;
+		private uint? _watchedA6;
+		private int _instruction;
+		private int _lines;
+		private bool _logAfter;
+		private uint _loggedPc;
+		private uint _currentPc;
+		private ushort _currentOpcode;
+
+		public DiagRomM68020CheckpointBoundary(AmigaMachine machine, System.Text.StringBuilder trace)
+		{
+			_machine = machine;
+			_trace = trace;
+		}
+
+		public bool Completed { get; private set; }
+
+		public bool BeforeInstruction()
+		{
+			if (Completed)
+			{
+				return false;
+			}
+
+			var state = _machine.Cpu.State;
+			var pc = state.ProgramCounter & 0x00FF_FFFF;
+			_currentPc = pc;
+			_currentOpcode = _machine.Bus.ReadWord(pc);
+			var sample = SampleVariables();
+			var checkpoint = pc is 0x00F820DC or 0x00F82264 or 0x00F82278 or 0x00F823DE;
+			var variableChanged = sample.CanSample &&
+				_watchedA6.HasValue &&
+				sample.A6 == _watchedA6.Value &&
+				(sample.Raster != _lastRaster || sample.NoDraw != _lastNoDraw);
+			_logAfter = checkpoint || (variableChanged && _lines < 80);
+			_loggedPc = pc;
+
+			if (_logAfter)
+			{
+				_trace.AppendLine(
+					$"before i={_instruction}, pc=0x{pc:X6}, op=0x{_currentOpcode:X4}, " +
+					$"sr=0x{state.StatusRegister:X4}, d7=0x{state.D[7]:X8}, a4=0x{state.A[4]:X8}, a6=0x{sample.A6:X8}, " +
+					$"raster=0x{sample.Raster:X2}, nodraw=0x{sample.NoDraw:X2}");
+				_lines++;
+			}
+
+			_lastA6 = sample.A6;
+			_lastRaster = sample.CanSample ? sample.Raster : null;
+			_lastNoDraw = sample.CanSample ? sample.NoDraw : null;
+			return true;
+		}
+
+		public void AfterInstruction(long previousCycle, long currentCycle)
+		{
+			_machine.Bus.AdvanceRasterTo(currentCycle);
+			_machine.Bus.AdvanceCiaTimersTo(currentCycle);
+			_machine.Bus.AdvanceDmaTo(currentCycle, advanceLiveAgnus: true, advancePassiveDiskInput: false);
+			_machine.DispatchPendingHardwareInterrupt();
+
+			var sample = SampleVariables();
+			var watchedBytesChanged =
+				!_logAfter &&
+				_watchedA6.HasValue &&
+				sample.CanSample &&
+				sample.A6 == _watchedA6.Value &&
+				(sample.Raster != _lastRaster || sample.NoDraw != _lastNoDraw) &&
+				_lines < 120;
+			if (_logAfter || watchedBytesChanged)
+			{
+				var state = _machine.Cpu.State;
+				var prefix = watchedBytesChanged ? $"changed after i={_instruction}, instrPc=0x{_currentPc:X6}, op=0x{_currentOpcode:X4}" : $" after i={_instruction}";
+				_trace.AppendLine(
+					$"{prefix}, pc=0x{(state.ProgramCounter & 0x00FF_FFFF):X6}, sr=0x{state.StatusRegister:X4}, " +
+					$"d7=0x{state.D[7]:X8}, a4=0x{state.A[4]:X8}, a6=0x{sample.A6:X8}, " +
+					$"raster=0x{sample.Raster:X2}, nodraw=0x{sample.NoDraw:X2}");
+				_lines++;
+				_lastA6 = sample.A6;
+				_lastRaster = sample.CanSample ? sample.Raster : null;
+				_lastNoDraw = sample.CanSample ? sample.NoDraw : null;
+				if (_loggedPc == 0x00F82264)
+				{
+					_watchedA6 = sample.A6;
+				}
+			}
+
+			_instruction++;
+			if (_loggedPc == 0x00F823DE)
+			{
+				Completed = true;
+			}
+		}
+
+		private (bool CanSample, uint A6, byte Raster, byte NoDraw) SampleVariables()
+		{
+			var a6 = _machine.Cpu.State.A[6];
+			var canSample = a6 is >= 0x0000_0400 and < 0x0020_0000;
+			if (!canSample)
+			{
+				return (false, a6, 0, 0);
+			}
+
+			return (
+				true,
+				a6,
+				_machine.Bus.ReadByte(unchecked(a6 + 0x00FCu)),
+				_machine.Bus.ReadByte(unchecked(a6 + 0x023Au)));
+		}
+	}
 }
