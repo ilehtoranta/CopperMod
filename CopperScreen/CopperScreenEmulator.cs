@@ -67,7 +67,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
-		_boot.AutoStartWorkbenchDefaultTool = false;
+		_boot.AutoStartWorkbenchDefaultTool = _profile.AutoStartWorkbenchStartupSequence;
+		_boot.AutoRunStartupSequence = _profile.AutoStartWorkbenchStartupSequence;
 		Width = _machine.Bus.Display.Width;
 		Height = _machine.Bus.Display.Height;
 		Framebuffer = new int[Width * Height];
@@ -1461,7 +1462,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		var fatalStatus = BuildFatalStatus(result.Diagnostics);
-		StatusText = fatalStatus ?? RunningStatusText;
+		StatusText = fatalStatus ?? (GetHostWorkbenchDesktopStatus(result.Diagnostics) ?? RunningStatusText);
 		if (fatalStatus == null)
 		{
 			return false;
@@ -1476,11 +1477,59 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return true;
 	}
 
+	private static string? GetHostWorkbenchDesktopStatus(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_HOST")
+			{
+				return "Workbench 3.1 desktop (native LoadWB bridge)";
+			}
+
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST")
+			{
+				return "Workbench 3.1 desktop (System/Workbench bridge)";
+			}
+
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST")
+			{
+				return "Workbench 3.1 install media (native LoadWB bridge)";
+			}
+		}
+
+		return HasHostWorkbenchDesktopDiagnostic(diagnostics)
+			? "Workbench 3.1 desktop (host bridge)"
+			: null;
+	}
+
 	private static bool HasWorkbenchHandoffDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
 	{
 		for (var i = 0; i < diagnostics.Count; i++)
 		{
 			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_WORKBENCH_HANDOFF")
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static bool HasHostWorkbenchDesktopDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
+	{
+		for (var i = 0; i < diagnostics.Count; i++)
+		{
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_HOST")
+			{
+				return true;
+			}
+
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST")
+			{
+				return true;
+			}
+
+			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST")
 			{
 				return true;
 			}
@@ -1516,7 +1565,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	private static bool IsFatalDiagnostic(string code)
 	{
-		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED" or "AMIGA_BOOT_NULL_PC";
+		return code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_PROTECTED_DISK_UNSUPPORTED" or "AMIGA_BOOT_NULL_PC" or "AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE";
 	}
 
 	private static AmigaBootDiagnostic GetFirstFatalDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)

@@ -100,11 +100,16 @@ namespace CopperMod.Amiga
         MoveToEa = 1,
         MoveToControl = 2,
         MoveFromControl = 3,
-        LineFTrap = 4
+        LineFTrap = 4,
+        SaveState = 5,
+        RestoreState = 6
     }
 
     internal static class M68040FpuHelpers
     {
+        public const uint IdleStateFrame = 0x4118_0000;
+        public const uint IdleStateFrameSize = 0x18;
+
         public static bool IsSupportedOperation(int opmode)
             => opmode is 0x00 or 0x04 or 0x18 or 0x1A or 0x20 or 0x22 or 0x23 or 0x28 or 0x38 or 0x3A;
 
@@ -115,9 +120,15 @@ namespace CopperMod.Amiga
             => format is 0 or 1 or 4 or 5 or 6;
 
         public static bool UsesBus(M68kDecodedInstruction instruction)
-            => (M68040FpuJitKind)instruction.Variant == M68040FpuJitKind.LineFTrap ||
+            => (M68040FpuJitKind)instruction.Variant is M68040FpuJitKind.LineFTrap or M68040FpuJitKind.SaveState or M68040FpuJitKind.RestoreState ||
                 instruction.Source.IsMemory ||
                 instruction.Destination.IsMemory;
+
+        public static uint StateFrameSize(ushort header)
+        {
+            var size = header & 0x00FFu;
+            return size == 0 ? IdleStateFrameSize : size;
+        }
 
         public static uint FormatByteSize(int format)
         {
@@ -862,6 +873,26 @@ namespace CopperMod.Amiga
 
         private bool TryExecuteFpuInstruction(ushort opcode)
         {
+            if ((opcode & 0xFFC0) == 0xF300)
+            {
+                BeginInstruction(opcode);
+                State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
+                _ = FetchWord();
+                ExecuteFsave(opcode);
+                CompleteTiming(M68kInstructionTimingKey.Movec);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0xF340)
+            {
+                BeginInstruction(opcode);
+                State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
+                _ = FetchWord();
+                ExecuteFrestore(opcode);
+                CompleteTiming(M68kInstructionTimingKey.Movec);
+                return true;
+            }
+
             if ((opcode & 0xFFC0) != 0xF200)
             {
                 return false;
@@ -871,6 +902,20 @@ namespace CopperMod.Amiga
             State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
             _ = FetchWord();
             var extension = FetchWord();
+            if ((extension & 0xE000) == 0xE000)
+            {
+                ExecuteFmovem(opcode, extension, registersToMemory: true);
+                CompleteTiming(M68kInstructionTimingKey.Movec);
+                return true;
+            }
+
+            if ((extension & 0xE000) == 0xC000)
+            {
+                ExecuteFmovem(opcode, extension, registersToMemory: false);
+                CompleteTiming(M68kInstructionTimingKey.Movec);
+                return true;
+            }
+
             if ((extension & 0xE000) == 0xA000)
             {
                 ExecuteFmoveControl(opcode, extension, toControl: true);
@@ -907,15 +952,54 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        private void ExecuteFsave(ushort opcode)
+        {
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var address = GetFpuStateFrameAddress(mode, register, M68040FpuHelpers.IdleStateFrameSize);
+            WriteLong(address, M68040FpuHelpers.IdleStateFrame);
+            for (var offset = 4u; offset < M68040FpuHelpers.IdleStateFrameSize; offset += 4)
+            {
+                WriteLong(address + offset, 0);
+            }
+
+            if (mode == 3)
+            {
+                State.A[register] = address + M68040FpuHelpers.IdleStateFrameSize;
+            }
+        }
+
+        private void ExecuteFrestore(ushort opcode)
+        {
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var address = GetFpuStateFrameAddress(mode, register, M68040FpuHelpers.IdleStateFrameSize);
+            var size = M68040FpuHelpers.StateFrameSize(ReadWord(address));
+            if (mode == 3)
+            {
+                State.A[register] = address + size;
+            }
+        }
+
         private void ExecuteFmoveControl(ushort opcode, ushort extension, bool toControl)
         {
             var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
             if (mode != 0)
             {
-                throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
+                var address = GetFpuMemoryAddress(mode, register, 4);
+                if (toControl)
+                {
+                    WriteLong(address, State.M68040Fpu.Fpcr);
+                }
+                else
+                {
+                    State.M68040Fpu.Fpcr = ReadLong(address);
+                }
+
+                return;
             }
 
-            var register = opcode & 7;
             if ((extension & 0x1000) != 0)
             {
                 if (toControl)
@@ -951,6 +1035,59 @@ namespace CopperMod.Amiga
                     State.D[register] = State.M68040Fpu.Fpiar;
                 }
             }
+        }
+
+        private void ExecuteFmovem(ushort opcode, ushort extension, bool registersToMemory)
+        {
+            var mask = (byte)(extension & 0x00FF);
+            var byteSize = (uint)(CountFpuRegisterMaskBits(mask) * 12);
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var address = GetFpuMemoryAddress(mode, register, byteSize);
+            for (var fpRegister = 0; fpRegister < 8; fpRegister++)
+            {
+                if ((mask & (0x80 >> fpRegister)) == 0)
+                {
+                    continue;
+                }
+
+                if (registersToMemory)
+                {
+                    WriteFpuExtendedSlot(address, State.M68040Fpu.FP[fpRegister]);
+                }
+                else
+                {
+                    State.M68040Fpu.FP[fpRegister] = ReadFpuExtendedSlot(address);
+                }
+
+                address += 12;
+            }
+        }
+
+        private void WriteFpuExtendedSlot(uint address, double value)
+        {
+            var bits = unchecked((ulong)BitConverter.DoubleToInt64Bits(value));
+            WriteLong(address, 0);
+            WriteLong(address + 4, (uint)(bits >> 32));
+            WriteLong(address + 8, (uint)bits);
+        }
+
+        private double ReadFpuExtendedSlot(uint address)
+        {
+            var bits = unchecked(((ulong)ReadLong(address + 4) << 32) | ReadLong(address + 8));
+            return BitConverter.Int64BitsToDouble(unchecked((long)bits));
+        }
+
+        private static int CountFpuRegisterMaskBits(byte mask)
+        {
+            var count = 0;
+            while (mask != 0)
+            {
+                mask &= (byte)(mask - 1);
+                count++;
+            }
+
+            return count;
         }
 
         private void ExecuteFmoveToEa(ushort opcode, ushort extension)
@@ -1058,6 +1195,19 @@ namespace CopperMod.Amiga
             {
                 2 => State.A[register],
                 3 => PostIncrementAddress(register, byteSize),
+                4 => PredecrementAddress(register, byteSize),
+                5 => unchecked((uint)(State.A[register] + (int)(short)FetchWord())),
+                7 when register == 1 => FetchLong(),
+                _ => throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile)
+            };
+        }
+
+        private uint GetFpuStateFrameAddress(int mode, int register, uint byteSize)
+        {
+            return mode switch
+            {
+                2 => State.A[register],
+                3 => State.A[register],
                 4 => PredecrementAddress(register, byteSize),
                 5 => unchecked((uint)(State.A[register] + (int)(short)FetchWord())),
                 7 when register == 1 => FetchLong(),

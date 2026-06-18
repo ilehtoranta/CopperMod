@@ -61,6 +61,276 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
+	public void Kickstart31M68040JitSysInfoProfileLaunchesSysInfoWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Tools", "SysInfo.adf");
+		if (romPath == null || diskPath == null)
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "sysinfo-040jit", "--kickstart-rom", romPath },
+			AppContext.BaseDirectory);
+		Assert.Equal(Path.GetFullPath(diskPath), emulator.DiskPath);
+		Assert.Equal("JitM68040", emulator.CpuBackendName);
+
+		for (var frame = 0; frame < 360; frame++)
+		{
+			emulator.RenderNextFrame();
+			var diagnostics = GetDiagnostics(emulator);
+			if (diagnostics.Any(diagnostic =>
+				diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+				diagnostic.Message.Contains("SysInfo/SysInfo", StringComparison.OrdinalIgnoreCase)) ||
+				emulator.StatusText.Contains("AMIGA_BOOT_", StringComparison.Ordinal))
+			{
+				break;
+			}
+		}
+
+		var finalDiagnostics = GetDiagnostics(emulator);
+		var diagnosticText = string.Join(Environment.NewLine, finalDiagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.DoesNotContain(finalDiagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
+		Assert.Contains(finalDiagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_HOST" &&
+			diagnostic.Message.Contains("SetPatch_1.38", StringComparison.OrdinalIgnoreCase));
+		Assert.Contains(finalDiagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("C/Initialize", StringComparison.OrdinalIgnoreCase));
+		Assert.Contains(finalDiagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("SysInfo/SysInfo", StringComparison.OrdinalIgnoreCase));
+		Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
+	}
+
+	[Fact]
+	public void Kickstart31M68040JitWorkbenchProfileBootsStartupSequenceToSystemWorkbenchWhenRomAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		if (romPath == null)
+		{
+			return;
+		}
+
+		var diskPath = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-040jit-" + Guid.NewGuid().ToString("N") + ".adf");
+		File.WriteAllBytes(diskPath, CreateBootableWorkbench31StartupDiskBytes());
+		try
+		{
+			using var emulator = CopperScreenEmulator.Create(
+				new[] { "--profile", "kickstart31-workbench31", "--kickstart-rom", romPath, diskPath },
+				AppContext.BaseDirectory);
+			Assert.Equal("JitM68040", emulator.CpuBackendName);
+
+			for (var frame = 0; frame < 180; frame++)
+			{
+				emulator.RenderNextFrame();
+				if (GetDiagnostics(emulator).Any(diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST") ||
+					emulator.StatusText.Contains("AMIGA_BOOT_", StringComparison.Ordinal))
+				{
+					break;
+				}
+			}
+
+			var diagnostics = GetDiagnostics(emulator);
+			var diagnosticText = string.Join(Environment.NewLine, diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+			Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE");
+			Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
+			Assert.Contains(diagnostics, diagnostic =>
+				diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+				diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
+			Assert.Contains(diagnostics, diagnostic =>
+				diagnostic.Code == "AMIGA_BOOT_DOS_AUTOSTART" &&
+				diagnostic.Message.Contains("C:LoadWB via System/Workbench", StringComparison.OrdinalIgnoreCase));
+			Assert.Contains(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST");
+			Assert.Equal("Workbench 3.1 desktop (System/Workbench bridge)", emulator.StatusText);
+			Assert.True(emulator.Framebuffer.Distinct().Count() >= 3, diagnosticText);
+			Assert.True(emulator.Framebuffer.Count(pixel => (pixel & 0x00FF_FFFF) != 0) > 10_000, diagnosticText);
+
+			var machine = GetMachine(emulator);
+			Assert.True((machine.Cpu.State.CacheControlRegister & 1) != 0, diagnosticText);
+			Assert.True(emulator.JitCounters.FallbackInstructions > 0, diagnosticText);
+			Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
+		}
+		finally
+		{
+			File.Delete(diskPath);
+		}
+	}
+
+	[Fact]
+	public void Kickstart31M68040JitWorkbenchProfileBootsInstallDiskToHostWorkbenchWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var diskPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].zip");
+		if (romPath == null || diskPath == null)
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "kickstart31-workbench31", "--kickstart-rom", romPath, diskPath },
+			AppContext.BaseDirectory);
+		Assert.Equal(Path.GetFullPath(diskPath), emulator.DiskPath);
+		Assert.Equal("JitM68040", emulator.CpuBackendName);
+
+		for (var frame = 0; frame < 160; frame++)
+		{
+			emulator.RenderNextFrame();
+			if (GetDiagnostics(emulator).Any(diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST") &&
+				emulator.Framebuffer.Distinct().Count() >= 3)
+			{
+				break;
+			}
+		}
+
+		var diagnostics = GetDiagnostics(emulator);
+		var diagnosticText = string.Join(Environment.NewLine, diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE" or "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
+		Assert.Contains(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST");
+		Assert.Contains(diagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("C/LoadWB", StringComparison.OrdinalIgnoreCase));
+		Assert.Equal("Workbench 3.1 install media (native LoadWB bridge)", emulator.StatusText);
+		Assert.True(emulator.Framebuffer.Distinct().Count() >= 3, diagnosticText);
+		Assert.True(emulator.Framebuffer.Count(pixel => (pixel & 0x00FF_FFFF) != 0) > 10_000, diagnosticText);
+
+		var machine = GetMachine(emulator);
+		Assert.True((machine.Cpu.State.CacheControlRegister & 1) != 0, diagnosticText);
+		Assert.True(emulator.JitCounters.FallbackInstructions > 0, diagnosticText);
+		Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
+	}
+
+	[Fact]
+	public void Kickstart31M68040JitWorkbenchProfileBootsRealSiblingDesktopDiskWhenAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var installPath = TryFindWorkspaceFile(
+			"CopperScreen",
+			"TestImages",
+			"Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].zip");
+		if (romPath == null || installPath == null)
+		{
+			return;
+		}
+
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "kickstart31-workbench31", "--kickstart-rom", romPath, installPath },
+			AppContext.BaseDirectory);
+		Assert.Null(options.Error);
+		var bootDiskPath = options.DriveDiskPaths.Length > 0
+			? options.DriveDiskPaths[0]
+			: options.DiskPath;
+		if (string.IsNullOrWhiteSpace(bootDiskPath) ||
+			string.Equals(Path.GetFullPath(bootDiskPath), Path.GetFullPath(installPath), StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "kickstart31-workbench31", "--kickstart-rom", romPath, installPath },
+			AppContext.BaseDirectory);
+		Assert.Equal(Path.GetFullPath(bootDiskPath), Path.GetFullPath(emulator.DiskPath!));
+		Assert.Equal("JitM68040", emulator.CpuBackendName);
+
+		for (var frame = 0; frame < 220; frame++)
+		{
+			emulator.RenderNextFrame();
+			if (GetDiagnostics(emulator).Any(diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST") ||
+				emulator.StatusText.Contains("AMIGA_BOOT_", StringComparison.Ordinal))
+			{
+				break;
+			}
+		}
+
+		var diagnostics = GetDiagnostics(emulator);
+		var diagnosticText = string.Join(Environment.NewLine, diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+		Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE" or "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
+		Assert.Contains(diagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
+		Assert.Contains(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST");
+		Assert.Equal("Workbench 3.1 desktop (System/Workbench bridge)", emulator.StatusText);
+		Assert.True(emulator.Framebuffer.Distinct().Count() >= 3, diagnosticText);
+		Assert.True(emulator.Framebuffer.Count(pixel => (pixel & 0x00FF_FFFF) != 0) > 10_000, diagnosticText);
+
+		var machine = GetMachine(emulator);
+		Assert.True((machine.Cpu.State.CacheControlRegister & 1) != 0, diagnosticText);
+		Assert.True(emulator.JitCounters.FallbackInstructions > 0, diagnosticText);
+		Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
+	}
+
+	[Fact]
+	public void Kickstart31M68040JitWorkbenchProfileBootsSiblingDesktopDiskAndUsesInstallDiskSupport()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		if (romPath == null)
+		{
+			return;
+		}
+
+		var directory = CreateTempDirectory();
+		try
+		{
+			var installPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf");
+			var workbenchPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf");
+			File.WriteAllBytes(installPath, CreateWorkbench31InstallSupportDiskBytes());
+			File.WriteAllBytes(
+				workbenchPath,
+				CreateBootableWorkbench31StartupDiskBytes(
+					"C:SetPatch >NIL:\r\nC:LoadWB\r\nEndCLI >NIL:\r\n",
+					includeM68040Library: false));
+
+			using var emulator = CopperScreenEmulator.Create(
+				new[] { "--profile", "kickstart31-workbench31", "--kickstart-rom", romPath, installPath },
+				AppContext.BaseDirectory);
+			Assert.Equal(Path.GetFullPath(workbenchPath), emulator.DiskPath);
+			Assert.Equal("JitM68040", emulator.CpuBackendName);
+
+			for (var frame = 0; frame < 180; frame++)
+			{
+				emulator.RenderNextFrame();
+				if (GetDiagnostics(emulator).Any(diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST") ||
+					emulator.StatusText.Contains("AMIGA_BOOT_", StringComparison.Ordinal))
+				{
+					break;
+				}
+			}
+
+			var diagnostics = GetDiagnostics(emulator);
+			var diagnosticText = string.Join(Environment.NewLine, diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+			Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE" or "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
+			Assert.Contains(diagnostics, diagnostic =>
+				diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_HOST" &&
+				diagnostic.Message.Contains("SetPatch", StringComparison.OrdinalIgnoreCase) &&
+				diagnostic.Message.Contains("68040.library", StringComparison.OrdinalIgnoreCase));
+			Assert.Contains(diagnostics, diagnostic =>
+				diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+				diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
+			Assert.Contains(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST");
+			Assert.Equal("Workbench 3.1 desktop (System/Workbench bridge)", emulator.StatusText);
+
+			var drives = emulator.CaptureDriveStates();
+			Assert.True(drives[0].HasDisk, diagnosticText);
+			Assert.Equal(Path.GetFullPath(workbenchPath), drives[0].DiskPath);
+			Assert.True(drives[1].HasDisk, diagnosticText);
+			Assert.Equal(Path.GetFullPath(installPath), drives[1].DiskPath);
+
+			var machine = GetMachine(emulator);
+			Assert.True((machine.Cpu.State.CacheControlRegister & 1) != 0, diagnosticText);
+			Assert.True(emulator.JitCounters.FallbackInstructions > 0, diagnosticText);
+			Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
+	[Fact]
 	public void ShadowOfTheBeastIpfDoesNotExitDuringInitialFramesWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile(
@@ -3358,6 +3628,110 @@ public sealed class CopperScreenBootTests
 		data[13] = 0xFE;
 		BigEndian.WriteUInt32(data, 4, CalculateBootChecksum(data.AsSpan(0, 1024)));
 		return data;
+	}
+
+	private static byte[] CreateBootableWorkbench31StartupDiskBytes(
+		string startupSequence = "C:LoadWB\r\n",
+		bool includeM68040Library = true)
+	{
+		var data = new byte[AmigaDiskImage.StandardAdfSize];
+		data[0] = (byte)'D';
+		data[1] = (byte)'O';
+		data[2] = (byte)'S';
+		data[12] = 0x4E;
+		data[13] = 0xF9;
+		data[14] = 0x00;
+		data[15] = 0x00;
+		data[16] = 0x00;
+		data[17] = 0x00;
+		WriteAmigaDosDirectoryHeader(data, 880, 0, "Workbench", 1);
+		WriteAmigaDosDirectoryHeader(data, 10, 880, "C", 2);
+		WriteAmigaDosDirectoryHeader(data, 20, 880, "S", 2);
+		WriteAmigaDosDirectoryHeader(data, 30, 880, "System", 2);
+		WriteAmigaDosDirectoryHeader(data, 40, 880, "Libs", 2);
+		WriteAmigaDosFile(data, 11, 10, "LoadWB", CreateRtsHunk(), 100);
+		WriteAmigaDosFile(data, 21, 20, "Startup-Sequence", System.Text.Encoding.ASCII.GetBytes(startupSequence), 101);
+		WriteAmigaDosFile(data, 31, 30, "Workbench", CreateRtsHunk(), 102);
+		if (includeM68040Library)
+		{
+			WriteAmigaDosFile(data, 41, 40, "68040.library", CreateRtsHunk(), 103);
+		}
+
+		BigEndian.WriteUInt32(data, 4, CalculateBootChecksum(data.AsSpan(0, 1024)));
+		return data;
+	}
+
+	private static byte[] CreateWorkbench31InstallSupportDiskBytes()
+	{
+		var data = new byte[AmigaDiskImage.StandardAdfSize];
+		data[0] = (byte)'D';
+		data[1] = (byte)'O';
+		data[2] = (byte)'S';
+		WriteAmigaDosDirectoryHeader(data, 880, 0, "Install3.1", 1);
+		WriteAmigaDosDirectoryHeader(data, 40, 880, "Libs", 2);
+		WriteAmigaDosFile(data, 41, 40, "68040.library", CreateRtsHunk(), 103);
+		return data;
+	}
+
+	private static void WriteAmigaDosDirectoryHeader(byte[] data, int block, int parentBlock, string name, int secondaryType)
+	{
+		var offset = block * AmigaDiskImage.SectorSize;
+		BigEndian.WriteUInt32(data, offset, 2);
+		WriteAmigaDosName(data, offset + 432, name);
+		BigEndian.WriteUInt32(data, offset + 0x1F4, (uint)parentBlock);
+		BigEndian.WriteUInt32(data, offset + 0x1FC, unchecked((uint)secondaryType));
+	}
+
+	private static void WriteAmigaDosFile(byte[] data, int block, int parentBlock, string name, byte[] content, int dataBlock)
+	{
+		WriteAmigaDosDirectoryHeader(data, block, parentBlock, name, -3);
+		var headerOffset = block * AmigaDiskImage.SectorSize;
+		BigEndian.WriteUInt32(data, headerOffset + 0x10, (uint)dataBlock);
+		BigEndian.WriteUInt32(data, headerOffset + 0x144, (uint)content.Length);
+
+		var dataOffset = dataBlock * AmigaDiskImage.SectorSize;
+		BigEndian.WriteUInt32(data, dataOffset, 8);
+		BigEndian.WriteUInt32(data, dataOffset + 12, (uint)content.Length);
+		BigEndian.WriteUInt32(data, dataOffset + 16, 0);
+		Array.Copy(content, 0, data, dataOffset + 24, content.Length);
+	}
+
+	private static void WriteAmigaDosName(byte[] data, int offset, string name)
+	{
+		var bytes = System.Text.Encoding.ASCII.GetBytes(name);
+		data[offset] = (byte)bytes.Length;
+		Array.Copy(bytes, 0, data, offset + 1, bytes.Length);
+	}
+
+	private static byte[] CreateRtsHunk()
+	{
+		var data = new List<byte>();
+		WriteLong(data, 0x0000_03F3);
+		WriteLong(data, 0);
+		WriteLong(data, 1);
+		WriteLong(data, 0);
+		WriteLong(data, 0);
+		WriteLong(data, 1);
+		WriteLong(data, 0x0000_03E9);
+		WriteLong(data, 1);
+		WriteWord(data, 0x4E75);
+		WriteWord(data, 0);
+		WriteLong(data, 0x0000_03F2);
+		return data.ToArray();
+	}
+
+	private static void WriteLong(List<byte> data, uint value)
+	{
+		data.Add((byte)(value >> 24));
+		data.Add((byte)(value >> 16));
+		data.Add((byte)(value >> 8));
+		data.Add((byte)value);
+	}
+
+	private static void WriteWord(List<byte> data, ushort value)
+	{
+		data.Add((byte)(value >> 8));
+		data.Add((byte)value);
 	}
 
 	private static uint CalculateBootChecksum(ReadOnlySpan<byte> bootBlock)

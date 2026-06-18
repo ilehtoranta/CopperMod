@@ -41,6 +41,7 @@ internal sealed class CopperScreenProfile
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		CopperScreenInputOptions input,
 		CopperScreenPresentationOptions presentationOptions,
+		bool autoStartWorkbenchStartupSequence,
 		string? configPath)
 	{
 		Id = id;
@@ -60,6 +61,7 @@ internal sealed class CopperScreenProfile
 		MediaDrives = mediaDrives;
 		Input = input;
 		PresentationOptions = presentationOptions;
+		AutoStartWorkbenchStartupSequence = autoStartWorkbenchStartupSequence;
 		ConfigPath = configPath;
 	}
 
@@ -96,6 +98,8 @@ internal sealed class CopperScreenProfile
 	public CopperScreenInputOptions Input { get; }
 
 	public CopperScreenPresentationOptions PresentationOptions { get; }
+
+	public bool AutoStartWorkbenchStartupSequence { get; }
 
 	public string? ConfigPath { get; }
 
@@ -195,6 +199,8 @@ internal sealed class CopperScreenProfile
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
 			"expanded-m68040-rom" or "expanded-m68040-kickstart" or "expanded-68040-kickstart-rom" => "expanded-m68040-kickstart-rom",
 			"expanded-m68040-jit-rom" or "expanded-m68040-jit-kickstart" or "expanded-68040-jit-kickstart-rom" => "expanded-m68040-jit-kickstart-rom",
+			"expanded-m68040-jit-kickstart31" or "expanded-m68040-jit-workbench31" or "kickstart31-workbench31" or "workbench31-040jit" => "expanded-m68040-jit-kickstart31-workbench31",
+			"expanded-m68040-jit-sysinfo" or "expanded-m68040-jit-kickstart31-sysinfo" or "kickstart31-sysinfo" or "sysinfo-040jit" => "expanded-m68040-jit-kickstart31-sysinfo",
 			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized
 		};
@@ -231,6 +237,7 @@ internal sealed class CopperScreenProfile
 		var mediaDrives = ParseMediaDrives(config.Media);
 		var input = ParseInputOptions(config.Input);
 		var presentationOptions = ParsePresentationOptions(config.Presentation);
+		var autoStartWorkbenchStartupSequence = config.Workbench?.AutoStartStartupSequence ?? false;
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -259,6 +266,7 @@ internal sealed class CopperScreenProfile
 			mediaDrives,
 			input,
 			presentationOptions,
+			autoStartWorkbenchStartupSequence,
 			Path.GetFullPath(path));
 	}
 
@@ -280,7 +288,8 @@ internal sealed class CopperScreenProfile
 		CopperScreenInputOptions input,
 		string? configPath = null,
 		CopperScreenPresentationOptions? presentationOptions = null,
-		string? kickstartRomPath = null)
+		string? kickstartRomPath = null,
+		bool autoStartWorkbenchStartupSequence = false)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -305,6 +314,7 @@ internal sealed class CopperScreenProfile
 			mediaDrives,
 			input,
 			presentationOptions ?? CopperScreenPresentationOptions.Default,
+			autoStartWorkbenchStartupSequence,
 			configPath);
 	}
 
@@ -342,9 +352,21 @@ internal sealed class CopperScreenProfile
 			yield return Path.GetFullPath(specifier + ".json");
 		}
 
+		yield return Path.GetFullPath(Path.Combine(baseDirectory, specifier));
+		if (!hasExtension)
+		{
+			yield return Path.GetFullPath(Path.Combine(baseDirectory, specifier + ".json"));
+		}
+
 		var directory = new DirectoryInfo(baseDirectory);
 		while (directory != null)
 		{
+			yield return Path.Combine(directory.FullName, specifier);
+			if (!hasExtension)
+			{
+				yield return Path.Combine(directory.FullName, specifier + ".json");
+			}
+
 			yield return Path.Combine(directory.FullName, "Profiles", fileName);
 			yield return Path.Combine(directory.FullName, "CopperScreen", "Profiles", fileName);
 			directory = directory.Parent;
@@ -568,6 +590,7 @@ internal sealed class CopperScreenProfile
 			Array.Empty<CopperScreenMediaDriveSettings>(),
 			CopperScreenInputOptions.Default,
 			CopperScreenPresentationOptions.Default,
+			false,
 			null);
 	}
 
@@ -592,6 +615,13 @@ internal sealed class CopperScreenProfile
 		public InputFile? Input { get; set; }
 
 		public PresentationFile? Presentation { get; set; }
+
+		public WorkbenchFile? Workbench { get; set; }
+	}
+
+	private sealed class WorkbenchFile
+	{
+		public bool AutoStartStartupSequence { get; set; }
 	}
 
 	private sealed class MachineFile

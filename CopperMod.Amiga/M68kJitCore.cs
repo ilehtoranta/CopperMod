@@ -95,6 +95,7 @@ namespace CopperMod.Amiga
         private const int BlacklistHits = 256;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
+        private const uint M68040InstructionCacheEnable = 0x0000_0001;
         private const ushort LogicFlags = M68kCpuState.Negative |
             M68kCpuState.Zero |
             M68kCpuState.Overflow |
@@ -696,6 +697,11 @@ namespace CopperMod.Amiga
             IM68kInstructionBoundary boundary,
             bool allowV2TraceHandoff = true)
         {
+            if (!CanUseJitForCurrentCacheState())
+            {
+                return 0;
+            }
+
             var pc = Normalize(State.ProgramCounter);
             if (_amigaBus != null && !IsJitEligibleInstructionAddress(pc))
             {
@@ -1719,7 +1725,7 @@ namespace CopperMod.Amiga
         }
 
         private static bool IsM68040FpuOpcode(ushort opcode)
-            => (opcode & 0xFFC0) == 0xF200;
+            => (opcode & 0xFFC0) is 0xF200 or 0xF300 or 0xF340;
 
         private bool HandleM68040CompiledMmuFault(M68040MmuFault fault, IM68kInstructionBoundary boundary)
         {
@@ -2015,6 +2021,7 @@ namespace CopperMod.Amiga
         private void ObserveHotRoot(uint pc)
         {
             if (_amigaBus == null ||
+                !CanUseJitForCurrentCacheState() ||
                 _traces.ContainsKey(pc) ||
                 !IsJitEligibleInstructionAddress(pc))
             {
@@ -2082,6 +2089,11 @@ namespace CopperMod.Amiga
         private bool TryCompileTrace(uint root, M68kJitCompileReason reason, out TraceEntry trace)
         {
             trace = default;
+            if (!CanUseJitForCurrentCacheState())
+            {
+                return false;
+            }
+
             if (!TryCreateTraceCompilationPlan(
                 root,
                 V2TraceTier.Tier0,
@@ -8201,6 +8213,14 @@ namespace CopperMod.Amiga
 
                     RaiseM68040Format0Exception(11, State.LastInstructionProgramCounter, 34);
                     return true;
+                case M68040FpuJitKind.SaveState:
+                    WriteM68040FpuStateFrame(destination);
+                    AddCycles(4);
+                    return true;
+                case M68040FpuJitKind.RestoreState:
+                    RestoreM68040FpuStateFrame(source);
+                    AddCycles(4);
+                    return true;
                 default:
                     return false;
             }
@@ -8314,6 +8334,39 @@ namespace CopperMod.Amiga
                 M68kJitEaKind.AddressDisplacement => unchecked((uint)(State.A[ea.Register] + (int)(short)ea.Extension0)),
                 M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
                 _ => throw new AmigaEmulationException("MC68040 FPU effective address is not memory-addressable.")
+            };
+        }
+
+        private void WriteM68040FpuStateFrame(M68kDecodedEa ea)
+        {
+            var address = ResolveM68040FpuStateFrameAddress(ea, M68040FpuHelpers.IdleStateFrameSize, applySideEffects: true);
+            WriteMemoryValue(address, M68040FpuHelpers.IdleStateFrame, M68kOperandSize.Long);
+            for (var offset = 4u; offset < M68040FpuHelpers.IdleStateFrameSize; offset += 4)
+            {
+                WriteMemoryValue(address + offset, 0, M68kOperandSize.Long);
+            }
+        }
+
+        private void RestoreM68040FpuStateFrame(M68kDecodedEa ea)
+        {
+            var address = ResolveM68040FpuStateFrameAddress(ea, M68040FpuHelpers.IdleStateFrameSize, applySideEffects: false);
+            var size = M68040FpuHelpers.StateFrameSize((ushort)ReadMemoryValue(address, M68kOperandSize.Word));
+            if (ea.Kind == M68kJitEaKind.AddressPostincrement)
+            {
+                State.A[ea.Register] = address + size;
+            }
+        }
+
+        private uint ResolveM68040FpuStateFrameAddress(M68kDecodedEa ea, uint byteSize, bool applySideEffects)
+        {
+            return ea.Kind switch
+            {
+                M68kJitEaKind.AddressIndirect => State.A[ea.Register],
+                M68kJitEaKind.AddressPostincrement => ResolveM68040FpuPostincrement(ea.Register, byteSize, applySideEffects),
+                M68kJitEaKind.AddressPredecrement => ResolveM68040FpuPredecrement(ea.Register, byteSize, applySideEffects),
+                M68kJitEaKind.AddressDisplacement => unchecked((uint)(State.A[ea.Register] + (int)(short)ea.Extension0)),
+                M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
+                _ => throw new AmigaEmulationException("MC68040 FPU state-frame address is not memory-addressable.")
             };
         }
 
@@ -10034,7 +10087,7 @@ namespace CopperMod.Amiga
             out M68kAsyncJitQueueResult queueResult)
         {
             queueResult = M68kAsyncJitQueueResult.Dropped;
-            if (_asyncCompiler == null)
+            if (_asyncCompiler == null || !CanUseJitForCurrentCacheState())
             {
                 return false;
             }
@@ -10265,6 +10318,22 @@ namespace CopperMod.Amiga
         private void InstallAsyncTraceResult(M68kJitCompileResult result)
         {
             var plan = result.Trace!.Value.Plan;
+            if (!CanUseJitForCurrentCacheState())
+            {
+                _counters.AsyncCompletedDiscardedSuperseded++;
+                if (plan.Reason == M68kJitCompileReason.Handoff)
+                {
+                    _v2HandoffQueuePressures.Remove(plan.Root);
+                    RecordV2TraceHandoffBlock("no-trace-cache-disabled", plan.Root, countFailure: false);
+                }
+                else if (plan.Reason == M68kJitCompileReason.BranchPressure)
+                {
+                    _v2BranchPressureQueuedTargets.Remove(plan.Root);
+                }
+
+                return;
+            }
+
             if (plan.Reason == M68kJitCompileReason.Handoff)
             {
                 _v2HandoffQueuePressures.Remove(plan.Root);
@@ -10338,6 +10407,12 @@ namespace CopperMod.Amiga
         {
             var promotion = result.Promotion!.Value;
             var plan = promotion.Plan;
+            if (!CanUseJitForCurrentCacheState())
+            {
+                _counters.AsyncCompletedDiscardedSuperseded++;
+                return;
+            }
+
             if (!_traces.TryGetValue(plan.Root, out var current) ||
                 current.V2Compiled == null ||
                 current.V2Tier >= plan.Tier)
@@ -10446,6 +10521,10 @@ namespace CopperMod.Amiga
             _v2PendingOutOfBlockBranchByteLength = 0;
             _v2PendingOutOfBlockBranchIsFallthrough = false;
         }
+
+        private bool CanUseJitForCurrentCacheState()
+            => _cpuModel != M68kJitCpuModel.M68040 ||
+                (State.CacheControlRegister & M68040InstructionCacheEnable) != 0;
 
         private static uint Normalize(uint address)
         {

@@ -193,6 +193,24 @@ namespace CopperMod.Amiga
             {
                 BeginInstruction(opcode);
                 _ = FetchWord();
+                if (opcode == 0xFF00 && _bus.HasHostTrapStub(State.LastInstructionProgramCounter))
+                {
+                    var trapId = FetchWord();
+                    var returnProgramCounter = State.ProgramCounter;
+                    if (_bus.TryInvokeHostTrap(State.LastInstructionProgramCounter, trapId, State))
+                    {
+                        if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                        {
+                            State.ProgramCounter = PullLong();
+                        }
+
+                        CompleteTiming(M68kInstructionTimingKey.Nop);
+                        return true;
+                    }
+
+                    State.ProgramCounter = returnProgramCounter;
+                }
+
                 RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
                 return true;
             }
@@ -202,6 +220,11 @@ namespace CopperMod.Amiga
                 BeginInstruction(opcode);
                 _ = FetchWord();
                 RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return true;
+            }
+
+            if (TryExecuteImmediateLogicalToStatusRegister(opcode))
+            {
                 return true;
             }
 
@@ -499,13 +522,25 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if ((opcode & 0xF1F8) == 0x21C0)
+            if ((opcode & 0xFFF8) == 0x21C0)
+            {
+                ExecuteMoveLongDataToAbsoluteWord(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xFFF8) == 0x23C0)
             {
                 ExecuteMoveLongDataToAbsoluteLong(opcode);
                 return true;
             }
 
-            if ((opcode & 0xF1F8) == 0x21C8)
+            if ((opcode & 0xFFF8) == 0x21C8)
+            {
+                ExecuteMoveLongAddressToAbsoluteWord(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xFFF8) == 0x23C8)
             {
                 ExecuteMoveLongAddressToAbsoluteLong(opcode);
                 return true;
@@ -781,6 +816,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((opcode & 0xFFC0) is 0x4C00 or 0x4C40)
+            {
+                ExecuteLongMultiplyDivide(opcode);
+                return true;
+            }
+
             if ((opcode & 0xF1FF) == 0x80FC)
             {
                 ExecuteDivuWordImmediateToData(opcode);
@@ -819,7 +860,7 @@ namespace CopperMod.Amiga
 
             if ((opcode & 0xF1FF) == 0xC0FC)
             {
-                ExecuteAndWordImmediateToData(opcode);
+                ExecuteMuluWordImmediateToData(opcode);
                 return true;
             }
 
@@ -1238,6 +1279,45 @@ namespace CopperMod.Amiga
         {
             _ = opcode;
             return false;
+        }
+
+        private bool TryExecuteImmediateLogicalToStatusRegister(ushort opcode)
+        {
+            if (opcode is not (0x003C or 0x007C or 0x023C or 0x027C or 0x0A3C or 0x0A7C))
+            {
+                return false;
+            }
+
+            BeginInstruction(opcode);
+            var instructionPc = State.ProgramCounter;
+            _ = FetchWord();
+            var immediate = FetchWord();
+            var operation = opcode & 0x0F00;
+            var status = State.StatusRegister;
+            var result = operation switch
+            {
+                0x0000 => status | immediate,
+                0x0200 => status & immediate,
+                0x0A00 => status ^ immediate,
+                _ => status
+            };
+
+            if ((opcode & 0x0040) == 0)
+            {
+                State.StatusRegister = (ushort)((State.StatusRegister & 0xFFE0) | (result & 0x001F));
+                CompleteTiming(M68kInstructionTimingKey.ImmediateWordToConditionCodeRegister);
+                return true;
+            }
+
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            {
+                RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
+                return true;
+            }
+
+            State.StatusRegister = (ushort)result;
+            CompleteTiming(M68kInstructionTimingKey.ImmediateWordToStatusRegister);
+            return true;
         }
 
         private void ExecuteNop()
@@ -2047,6 +2127,18 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.MoveLongAbsoluteLongToData);
         }
 
+        private void ExecuteMoveLongDataToAbsoluteWord(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var source = opcode & 7;
+            var address = unchecked((uint)(short)FetchWord());
+            var value = State.D[source];
+            WriteLong(address, value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongDataToAbsoluteLong);
+        }
+
         private void ExecuteMoveLongDataToAbsoluteLong(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -2057,6 +2149,18 @@ namespace CopperMod.Amiga
             WriteLong(address, value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongDataToAbsoluteLong);
+        }
+
+        private void ExecuteMoveLongAddressToAbsoluteWord(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var source = opcode & 7;
+            var address = unchecked((uint)(short)FetchWord());
+            var value = State.A[source];
+            WriteLong(address, value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressToAbsoluteLong);
         }
 
         private void ExecuteMoveLongAddressToAbsoluteLong(ushort opcode)
@@ -2667,6 +2771,154 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.SubaLongImmediateToAddress);
         }
 
+        private void ExecuteLongMultiplyDivide(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extension = FetchWord();
+            if ((extension & 0x83F8) != 0)
+            {
+                throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
+            }
+
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var source = ReadLongDataSource(mode, register, opcode);
+            var primaryDestination = (extension >> 12) & 7;
+            var secondaryDestination = extension & 7;
+            var signed = (extension & 0x0800) != 0;
+            var extendedResult = (extension & 0x0400) != 0;
+
+            if ((opcode & 0xFFC0) == 0x4C00)
+            {
+                ExecuteMultiplyLong(source, primaryDestination, secondaryDestination, signed, extendedResult);
+                CompleteTiming(signed ? M68kInstructionTimingKey.MulsLong : M68kInstructionTimingKey.MuluLong);
+                return;
+            }
+
+            ExecuteDivideLong(source, primaryDestination, secondaryDestination, signed, extendedResult);
+            CompleteTiming(signed ? M68kInstructionTimingKey.DivsLong : M68kInstructionTimingKey.DivuLong);
+        }
+
+        private void ExecuteMultiplyLong(
+            uint source,
+            int lowRegister,
+            int highRegister,
+            bool signed,
+            bool extendedResult)
+        {
+            if (signed)
+            {
+                var product = (long)unchecked((int)State.D[lowRegister]) * unchecked((int)source);
+                var rawProduct = unchecked((ulong)product);
+                if (extendedResult)
+                {
+                    State.D[highRegister] = (uint)(rawProduct >> 32);
+                    State.D[lowRegister] = (uint)rawProduct;
+                    State.SetFlag(M68kCpuState.Negative, product < 0);
+                    State.SetFlag(M68kCpuState.Zero, product == 0);
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                }
+                else
+                {
+                    State.D[lowRegister] = (uint)rawProduct;
+                    State.SetNegativeZero((uint)rawProduct, M68kOperandSize.Long);
+                    State.SetFlag(M68kCpuState.Overflow, product < int.MinValue || product > int.MaxValue);
+                }
+            }
+            else
+            {
+                var product = (ulong)State.D[lowRegister] * source;
+                if (extendedResult)
+                {
+                    State.D[highRegister] = (uint)(product >> 32);
+                    State.D[lowRegister] = (uint)product;
+                    State.SetFlag(M68kCpuState.Negative, (product & 0x8000_0000_0000_0000ul) != 0);
+                    State.SetFlag(M68kCpuState.Zero, product == 0);
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                }
+                else
+                {
+                    State.D[lowRegister] = (uint)product;
+                    State.SetNegativeZero((uint)product, M68kOperandSize.Long);
+                    State.SetFlag(M68kCpuState.Overflow, (product >> 32) != 0);
+                }
+            }
+
+            State.SetFlag(M68kCpuState.Carry, false);
+        }
+
+        private void ExecuteDivideLong(
+            uint source,
+            int quotientRegister,
+            int remainderRegister,
+            bool signed,
+            bool extendedDividend)
+        {
+            if (source == 0)
+            {
+                RaiseFormat0Exception(5, State.ProgramCounter, signed ? M68kInstructionTimingKey.DivsLong : M68kInstructionTimingKey.DivuLong);
+                return;
+            }
+
+            if (signed)
+            {
+                var divisor = unchecked((int)source);
+                var dividend = extendedDividend
+                    ? unchecked((long)(((ulong)State.D[remainderRegister] << 32) | State.D[quotientRegister]))
+                    : unchecked((int)State.D[quotientRegister]);
+                if (dividend == long.MinValue && divisor == -1)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, true);
+                    State.SetFlag(M68kCpuState.Carry, false);
+                    return;
+                }
+
+                var quotient = dividend / divisor;
+                if (quotient < int.MinValue || quotient > int.MaxValue)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, true);
+                    State.SetFlag(M68kCpuState.Carry, false);
+                    return;
+                }
+
+                var remainder = dividend % divisor;
+                if (remainderRegister != quotientRegister)
+                {
+                    State.D[remainderRegister] = unchecked((uint)(int)remainder);
+                }
+
+                State.D[quotientRegister] = unchecked((uint)(int)quotient);
+                State.SetNegativeZero((uint)quotient, M68kOperandSize.Long);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+                return;
+            }
+
+            var unsignedDivisor = source;
+            var unsignedDividend = extendedDividend
+                ? ((ulong)State.D[remainderRegister] << 32) | State.D[quotientRegister]
+                : State.D[quotientRegister];
+            var unsignedQuotient = unsignedDividend / unsignedDivisor;
+            if (unsignedQuotient > uint.MaxValue)
+            {
+                State.SetFlag(M68kCpuState.Overflow, true);
+                State.SetFlag(M68kCpuState.Carry, false);
+                return;
+            }
+
+            var unsignedRemainder = unsignedDividend % unsignedDivisor;
+            if (remainderRegister != quotientRegister)
+            {
+                State.D[remainderRegister] = (uint)unsignedRemainder;
+            }
+
+            State.D[quotientRegister] = (uint)unsignedQuotient;
+            State.SetNegativeZero((uint)unsignedQuotient, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+        }
+
         private void ExecuteDivuWordImmediateToData(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -2786,18 +3038,18 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.EoriWordImmediateToData);
         }
 
-        private void ExecuteAndWordImmediateToData(ushort opcode)
+        private void ExecuteMuluWordImmediateToData(ushort opcode)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var register = (opcode >> 9) & 7;
             var source = FetchWord();
-            var result = (ushort)(State.D[register] & source);
-            WriteDataRegisterWord(register, result);
-            State.SetNegativeZero(result, M68kOperandSize.Word);
+            var result = (uint)((ushort)State.D[register] * source);
+            State.D[register] = result;
+            State.SetNegativeZero(result, M68kOperandSize.Long);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
-            CompleteTiming(M68kInstructionTimingKey.AndWordImmediateToData);
+            CompleteTiming(M68kInstructionTimingKey.MuluWordImmediateToData);
         }
 
         private void ExecuteAndByteDataToData(ushort opcode)
@@ -4021,7 +4273,66 @@ namespace CopperMod.Amiga
             State.D[register] = (State.D[register] & 0xFFFF_0000u) | value;
         }
 
+        private uint ReadLongDataSource(int mode, int register, ushort opcode)
+        {
+            return mode switch
+            {
+                0 => State.D[register],
+                2 => ReadLong(State.A[register]),
+                3 => ReadLongPostIncrement(register),
+                4 => ReadLongPredecrement(register),
+                5 => ReadLong(unchecked((uint)(State.A[register] + unchecked((int)(short)FetchWord())))),
+                6 => ReadLong(CalculateBriefIndexedAddress(register, FetchWord(), opcode)),
+                7 => ReadLongExtendedSource(register, opcode),
+                _ => throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile)
+            };
+        }
+
+        private uint ReadLongPostIncrement(int register)
+        {
+            var address = State.A[register];
+            var value = ReadLong(address);
+            WriteGeneralRegister(true, register, address + 4);
+            return value;
+        }
+
+        private uint ReadLongPredecrement(int register)
+        {
+            WriteGeneralRegister(true, register, State.A[register] - 4);
+            return ReadLong(State.A[register]);
+        }
+
+        private uint ReadLongExtendedSource(int register, ushort opcode)
+        {
+            switch (register)
+            {
+                case 0:
+                    return ReadLong(unchecked((uint)(short)FetchWord()));
+                case 1:
+                    return ReadLong(FetchLong());
+                case 2:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var displacement = unchecked((int)(short)FetchWord());
+                    return ReadLong(unchecked((uint)(extensionAddress + displacement)));
+                }
+                case 3:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var extension = FetchWord();
+                    return ReadLong(CalculateBriefIndexedAddress(extensionAddress, extension, opcode));
+                }
+                case 4:
+                    return FetchLong();
+                default:
+                    throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
+            }
+        }
+
         private uint CalculateBriefIndexedAddress(int baseRegister, ushort extension, ushort opcode)
+            => CalculateBriefIndexedAddress(State.A[baseRegister], extension, opcode);
+
+        private uint CalculateBriefIndexedAddress(uint baseAddress, ushort extension, ushort opcode)
         {
             if ((extension & 0x0100) != 0)
             {
@@ -4037,7 +4348,7 @@ namespace CopperMod.Amiga
             var index = usesLongIndex
                 ? unchecked((int)rawIndex)
                 : unchecked((int)(short)(rawIndex & 0xFFFF));
-            return unchecked((uint)(State.A[baseRegister] + displacement + (index * scale)));
+            return unchecked((uint)(baseAddress + displacement + (index * scale)));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

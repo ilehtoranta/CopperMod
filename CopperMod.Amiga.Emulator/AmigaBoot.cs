@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace CopperMod.Amiga
@@ -12,6 +14,13 @@ namespace CopperMod.Amiga
 
     internal sealed class AmigaBootController
     {
+        private enum WorkbenchDesktopLaunchKind
+        {
+            None,
+            NativeLoadWb,
+            SystemWorkbench
+        }
+
         public const uint BootBlockAddress = 0x0007_C000;
         public const uint BootEntryAddress = BootBlockAddress + 0x0C;
         public const uint BootIoRequestAddress = 0x0000_0800;
@@ -103,6 +112,9 @@ namespace CopperMod.Amiga
         private const int SyntheticScreenBytesPerRow = AmigaConstants.PalLowResWidth / 8;
         private const int SyntheticScreenPlaneSize = SyntheticScreenBytesPerRow * SyntheticScreenHeight;
         private const int SyntheticScreenTitleHeight = 24;
+        private const int NativeLoadWorkbenchFallbackFrames = 10;
+        private const long NativeLoadWorkbenchLibraryCallFallbackCycles = 512;
+        private const int HostReadArgsAllocationSize = 0x400;
         private const uint NoTitleChange = 0xFFFF_FFFF;
 
         private readonly AmigaMachine _machine;
@@ -111,6 +123,8 @@ namespace CopperMod.Amiga
         private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>(16);
         private readonly Dictionary<uint, BootDosHandle> _dosHandles = new Dictionary<uint, BootDosHandle>();
         private readonly Dictionary<uint, AmigaDosDirectoryEntry> _dosLocks = new Dictionary<uint, AmigaDosDirectoryEntry>();
+        private readonly Dictionary<string, string> _dosAssigns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _ramDirectorySources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private bool _bootDiskReadCompleted;
         private bool _dosBootContinuationStarted;
         private bool _dosBootBlockHeaderProbeEnabled;
@@ -123,6 +137,8 @@ namespace CopperMod.Amiga
         private int _execDiagnosticCount;
         private int _hostFreeDiagnosticCount;
         private int _dosWriteDiagnosticCount;
+        private int _dosGenericDiagnosticCount;
+        private int _dosReadArgsDiagnosticCount;
         private int _intuitionTitleDiagnosticCount;
         private int _nextAllocatedSignalBit;
         private uint _allocatedSignalMask;
@@ -157,7 +173,18 @@ namespace CopperMod.Amiga
         private uint _fastMemLower;
         private uint _fastMemUpper;
         private bool _memoryListInstalled;
-        private AmigaDosFileSystem? _dosFileSystem;
+        private readonly AmigaDosFileSystem?[] _dosFileSystems = new AmigaDosFileSystem?[4];
+        private readonly List<StartupSequenceCommand> _startupSequenceCommands = new List<StartupSequenceCommand>();
+        private int _startupSequenceCommandIndex;
+        private bool _startupSequenceActive;
+        private int _startupSequenceFailAt = 10;
+        private bool _nativeLoadWorkbenchDesktopPending;
+        private bool _nativeLoadWorkbenchDesktopAttached;
+        private bool _nativeLoadWorkbenchOpenedWorkbenchLibrary;
+        private long _nativeLoadWorkbenchOpenedWorkbenchLibraryCycle;
+        private long _nativeLoadWorkbenchLaunchCycle;
+        private ushort _nativeLoadWorkbenchSavedInterruptMask;
+        private WorkbenchDesktopLaunchKind _workbenchDesktopLaunchKind;
 
         public AmigaBootController(AmigaMachine machine, IAmigaDiskDmaEngine? diskDma = null)
         {
@@ -177,6 +204,8 @@ namespace CopperMod.Amiga
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 
         public bool AutoStartWorkbenchDefaultTool { get; set; } = true;
+
+        public bool AutoRunStartupSequence { get; set; }
 
         public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
 
@@ -251,6 +280,10 @@ namespace CopperMod.Amiga
             _diagnostics.Clear();
             _dosHandles.Clear();
             _dosLocks.Clear();
+            _dosAssigns.Clear();
+            _ramDirectorySources.Clear();
+            _dosAssigns["ENVARC"] = "Prefs/Env-Archive";
+            _dosAssigns["SYS"] = string.Empty;
             _bootDiskReadCompleted = false;
             _dosBootContinuationStarted = false;
             _dosBootBlockHeaderProbeEnabled = true;
@@ -263,6 +296,8 @@ namespace CopperMod.Amiga
             _execDiagnosticCount = 0;
             _hostFreeDiagnosticCount = 0;
             _dosWriteDiagnosticCount = 0;
+            _dosGenericDiagnosticCount = 0;
+            _dosReadArgsDiagnosticCount = 0;
             _intuitionTitleDiagnosticCount = 0;
             _nextAllocatedSignalBit = 0;
             _allocatedSignalMask = 0;
@@ -297,7 +332,18 @@ namespace CopperMod.Amiga
             _fastMemLower = 0;
             _fastMemUpper = 0;
             _memoryListInstalled = false;
-            _dosFileSystem = null;
+            Array.Clear(_dosFileSystems);
+            _startupSequenceCommands.Clear();
+            _startupSequenceCommandIndex = 0;
+            _startupSequenceActive = false;
+            _startupSequenceFailAt = 10;
+            _nativeLoadWorkbenchDesktopPending = false;
+            _nativeLoadWorkbenchDesktopAttached = false;
+            _nativeLoadWorkbenchOpenedWorkbenchLibrary = false;
+            _nativeLoadWorkbenchOpenedWorkbenchLibraryCycle = 0;
+            _nativeLoadWorkbenchLaunchCycle = 0;
+            _nativeLoadWorkbenchSavedInterruptMask = 0;
+            _workbenchDesktopLaunchKind = WorkbenchDesktopLaunchKind.None;
             PendingWorkbenchLaunchRequest = null;
             Drive0.Insert(disk);
             Drive1.Eject();
@@ -380,7 +426,7 @@ namespace CopperMod.Amiga
             var bus = _machine.Bus;
             _machine.Kickstart.InstallHostShim(bus, CreateHostTrapTable());
             InstallSafeAutovectors(bus);
-            for (var displacement = -6; displacement >= -600; displacement -= 6)
+            for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
                 bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, captured), state => HostExecGeneric(state, captured));
@@ -400,6 +446,12 @@ namespace CopperMod.Amiga
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -414), HostOk);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -498), HostOpenLibrary);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -552), HostOpenLibrary);
+            for (var displacement = -6; displacement >= -1200; displacement -= 6)
+            {
+                var captured = displacement;
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, captured), state => HostDosGeneric(state, captured));
+            }
+
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -48), HostDosWrite);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -54), HostDosInput);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -60), HostDosOutput);
@@ -408,13 +460,19 @@ namespace CopperMod.Amiga
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -102), HostDosExamine);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -126), HostDosCurrentDir);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -132), HostDosIoErr);
-            for (var displacement = -6; displacement >= -180; displacement -= 6)
+            for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
                 bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, captured), state => HostIconGeneric(state, captured));
             }
 
-            for (var displacement = -6; displacement >= -600; displacement -= 6)
+            for (var displacement = -6; displacement >= -1200; displacement -= 6)
+            {
+                var captured = displacement;
+                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.WorkbenchLibraryBase, captured), state => HostWorkbenchGeneric(state, captured));
+            }
+
+            for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
                 bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.GraphicsLibraryBase, captured), state => HostGraphicsGeneric(state, captured));
@@ -582,15 +640,31 @@ namespace CopperMod.Amiga
                     return false;
                 }
 
-                if (_owner._machine.Cpu.State.ProgramCounter == DosProgramReturnAddress && _instructions > 0)
+                if (_owner._machine.Cpu.State.ProgramCounter == DosProgramReturnAddress)
                 {
-                    Completed = true;
-                    return false;
+                    return TryHandleDosProgramReturn();
                 }
 
                 _owner.SkipDosBootBlockHeaderIfNeeded();
                 _owner.ApplyWorkbenchLanguageSelectionIfNeeded();
+                _owner.AttachPendingNativeLoadWorkbenchDesktopAfterGracePeriod();
+                if (_owner._machine.Cpu.State.ProgramCounter == DosProgramReturnAddress)
+                {
+                    return TryHandleDosProgramReturn();
+                }
+
                 return true;
+            }
+
+            private bool TryHandleDosProgramReturn()
+            {
+                if (_owner.TryContinueStartupSequence())
+                {
+                    return true;
+                }
+
+                Completed = true;
+                return false;
             }
 
             public void AfterInstruction(long previousCycle, long currentCycle)
@@ -938,6 +1012,12 @@ namespace CopperMod.Amiga
             {
                 state.D[0] = AmigaKickstartHost.IconLibraryBase;
             }
+            else if (ContainsNullTerminatedString(name, state.A[1], 96, "workbench"))
+            {
+                _nativeLoadWorkbenchOpenedWorkbenchLibrary = true;
+                _nativeLoadWorkbenchOpenedWorkbenchLibraryCycle = state.Cycles;
+                state.D[0] = AmigaKickstartHost.WorkbenchLibraryBase;
+            }
             else
             {
                 state.D[0] = AmigaKickstartHost.DummyLibraryBase;
@@ -1023,6 +1103,96 @@ namespace CopperMod.Amiga
             state.D[0] = consoleHandle;
         }
 
+        private void HostDosGeneric(M68kCpuState state, int displacement)
+        {
+            switch (displacement)
+            {
+                case -798: // ReadArgs()
+                    HostDosReadArgs(state);
+                    return;
+                case -858: // FreeArgs()
+                    state.D[0] = 0;
+                    return;
+                case -474: // PrintFault()
+                    state.D[0] = 0;
+                    return;
+            }
+
+            if (_dosGenericDiagnosticCount < 24)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_GENERIC",
+                    $"DOS library call {displacement} returned a host-bridge default value."));
+                _dosGenericDiagnosticCount++;
+            }
+
+            state.D[0] = displacement switch
+            {
+                -78 => 0xFFFF_FFFF, // DeleteFile() style failure for write-side calls.
+                -198 => 0,          // Delay() is a void-style call.
+                -300 => 1,          // IsInteractive() defaults to true for the synthetic console.
+                _ => 0
+            };
+        }
+
+        private void HostDosReadArgs(M68kCpuState state)
+        {
+            var template = state.D[1] != 0 && _machine.Bus.IsMappedMemoryRange(state.D[1], 1)
+                ? ReadNullTerminatedString(state.D[1], 160)
+                : string.Empty;
+            var entryCount = CountReadArgsTemplateEntries(template);
+            if (state.D[2] != 0 &&
+                entryCount > 0 &&
+                _machine.Bus.IsMappedMemoryRange(state.D[2], checked(entryCount * 4)))
+            {
+                for (var i = 0; i < entryCount; i++)
+                {
+                    _machine.Bus.WriteLong(state.D[2] + (uint)(i * 4), 0, state.Cycles);
+                }
+            }
+
+            var rdArgs = state.D[3] != 0
+                ? state.D[3]
+                : AllocateMemoryFromMemList(HostReadArgsAllocationSize, MemfPublic | MemfClear);
+            state.D[0] = rdArgs;
+            _lastDosError = rdArgs != 0 ? 0u : 103u;
+            if (_dosReadArgsDiagnosticCount < 8)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_READ_ARGS",
+                    $"ReadArgs parsed an empty host command line for template '{template}'."));
+                _dosReadArgsDiagnosticCount++;
+            }
+        }
+
+        private static int CountReadArgsTemplateEntries(string template)
+        {
+            if (string.IsNullOrWhiteSpace(template))
+            {
+                return 0;
+            }
+
+            var count = 0;
+            var segmentHasText = false;
+            foreach (var character in template)
+            {
+                if (character == ',')
+                {
+                    if (segmentHasText)
+                    {
+                        count++;
+                        segmentHasText = false;
+                    }
+
+                    continue;
+                }
+
+                segmentHasText |= !char.IsWhiteSpace(character);
+            }
+
+            return segmentHasText ? count + 1 : count;
+        }
+
         private static void HostDosCurrentDir(M68kCpuState state)
         {
             state.D[0] = WorkbenchRootLock;
@@ -1105,6 +1275,14 @@ namespace CopperMod.Amiga
             state.D[0] = EnsureWorkbenchDiskObject();
         }
 
+        private void HostWorkbenchGeneric(M68kCpuState state, int displacement)
+        {
+            LogUiCall("workbench.library", displacement);
+            AttachPendingNativeLoadWorkbenchDesktop($"{DescribePendingWorkbenchProgram()} called workbench.library LVO {displacement}");
+            _ = EnsureSyntheticScreen();
+            state.D[0] = EnsureSyntheticHostObject();
+        }
+
         private void HostExecGeneric(M68kCpuState state, int displacement)
         {
             LogExecCall(displacement);
@@ -1164,12 +1342,55 @@ namespace CopperMod.Amiga
 
         private void HostDefaultTaskTrapCode(M68kCpuState state)
         {
-            var frameAddress = state.A[7] + 4;
-            var statusRegister = _machine.Bus.ReadWord(frameAddress);
-            var programCounter = _machine.Bus.ReadLong(frameAddress + 2);
-            state.SetActiveStackPointer(frameAddress + 6);
+            if (!TryReadTaskTrapFrame(state.A[7] + 4, out var statusRegister, out var programCounter, out var stackPointer) &&
+                !TryReadTaskTrapFrame(state.A[7], out statusRegister, out programCounter, out stackPointer))
+            {
+                statusRegister = _machine.Bus.ReadWord(state.A[7] + 4);
+                programCounter = _machine.Bus.ReadLong(state.A[7] + 6);
+                stackPointer = state.A[7] + 10;
+            }
+
+            state.SetActiveStackPointer(stackPointer);
             state.StatusRegister = statusRegister;
             state.ProgramCounter = programCounter;
+        }
+
+        private bool TryReadTaskTrapFrame(uint frameAddress, out ushort statusRegister, out uint programCounter, out uint stackPointer)
+        {
+            statusRegister = _machine.Bus.ReadWord(frameAddress);
+            programCounter = _machine.Bus.ReadLong(frameAddress + 2);
+            stackPointer = frameAddress + 6;
+            if (!IsPlausibleTaskTrapReturn(programCounter))
+            {
+                return false;
+            }
+
+            var formatWord = _machine.Bus.ReadWord(frameAddress + 6);
+            if (IsFormat0TaskTrapFrameWord(formatWord))
+            {
+                stackPointer = frameAddress + 8;
+            }
+
+            return true;
+        }
+
+        private bool IsPlausibleTaskTrapReturn(uint programCounter)
+        {
+            if ((programCounter & 1) != 0)
+            {
+                return false;
+            }
+
+            return _machine.Bus.IsMappedMemoryRange(programCounter, 2) ||
+                _machine.Bus.HasHostTrapStub(programCounter);
+        }
+
+        private static bool IsFormat0TaskTrapFrameWord(ushort formatWord)
+        {
+            var vectorOffset = formatWord & 0x0FFF;
+            return (formatWord & 0xF000) == 0 &&
+                (vectorOffset & 0x0003) == 0 &&
+                vectorOffset is >= 0x0080 and <= 0x00BC;
         }
 
         private void HostGraphicsGeneric(M68kCpuState state, int displacement)
@@ -2441,6 +2662,21 @@ namespace CopperMod.Amiga
 
             AmigaProgramLaunchRequest request;
             string autostartDescription;
+            if (AutoRunStartupSequence &&
+                TryReadStartupSequence(fileSystem, out var startupSequence))
+            {
+                if (TryStartStartupSequence(fileSystem, startupSequence, out autostartDescription))
+                {
+                    _dosBootBlockHeaderProbeEnabled = true;
+                    _diagnostics.Add(new AmigaBootDiagnostic(
+                        "AMIGA_BOOT_DOS_AUTOSTART",
+                        $"Started {autostartDescription}."));
+                    return true;
+                }
+
+                return false;
+            }
+
             if (fileSystem.TryResolveWorkbenchDefaultTool(out var projectPath, out var toolPath, out var toolTypes) &&
                 fileSystem.TryReadFile(toolPath, out _))
             {
@@ -2480,6 +2716,362 @@ namespace CopperMod.Amiga
                 "AMIGA_BOOT_DOS_AUTOSTART",
                 $"Started {autostartDescription}."));
             return true;
+        }
+
+        private bool TryStartStartupSequence(
+            AmigaDosFileSystem fileSystem,
+            string startupSequence,
+            out string description)
+        {
+            description = string.Empty;
+            _startupSequenceCommands.Clear();
+            _startupSequenceCommandIndex = 0;
+            foreach (var rawLine in startupSequence.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = NormalizeStartupSequenceLine(rawLine);
+                if (line.Length == 0 || line[0] == ';')
+                {
+                    continue;
+                }
+
+                var executablePath = ExtractStartupCommandPath(line);
+                if (executablePath.Length == 0)
+                {
+                    continue;
+                }
+
+                _startupSequenceCommands.Add(new StartupSequenceCommand(
+                    executablePath,
+                    ExtractStartupCommandArguments(line),
+                    rawLine.Trim()));
+            }
+
+            if (_startupSequenceCommands.Count == 0)
+            {
+                return false;
+            }
+
+            _startupSequenceActive = true;
+            return TryLaunchNextStartupSequenceCommand(fileSystem, out description);
+        }
+
+        private bool TryContinueStartupSequence()
+        {
+            if (!_startupSequenceActive)
+            {
+                return false;
+            }
+
+            var fileSystem = EnsureDosFileSystem();
+            AttachPendingNativeLoadWorkbenchDesktop(
+                _nativeLoadWorkbenchOpenedWorkbenchLibrary
+                    ? $"{DescribePendingWorkbenchProgram()} returned after opening workbench.library without calling it"
+                    : $"{DescribePendingWorkbenchProgram()} returned before opening workbench.library");
+            if (TryLaunchNextStartupSequenceCommand(fileSystem, out var description))
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_STARTUP_CONTINUE",
+                    $"Started {description}."));
+                return true;
+            }
+
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_DOS_STARTUP_COMPLETE",
+                "Startup-Sequence reached the end of the host bridge runner."));
+            return false;
+        }
+
+        private bool TryLaunchNextStartupSequenceCommand(AmigaDosFileSystem fileSystem, out string description)
+        {
+            description = string.Empty;
+            while (_startupSequenceCommandIndex < _startupSequenceCommands.Count)
+            {
+                var command = _startupSequenceCommands[_startupSequenceCommandIndex++];
+                if (IsStartupSequenceTerminator(command.ExecutablePath))
+                {
+                    _startupSequenceActive = false;
+                    description = $"startup-sequence command {command.ExecutablePath}";
+                    return false;
+                }
+
+                if (TryHandleHostBridgeSetupCommand(fileSystem, command))
+                {
+                    continue;
+                }
+
+                var launchPath = IsLoadWorkbenchCommand(command.ExecutablePath) &&
+                    TryFindSystemWorkbenchProgram(fileSystem)
+                    ? "System/Workbench"
+                    : command.ExecutablePath;
+                if (!fileSystem.TryCreateLaunchRequest(launchPath, out var request, out var message))
+                {
+                    if (IsLoadWorkbenchCommand(command.ExecutablePath))
+                    {
+                        StartHostLoadWorkbenchCommand(fileSystem, command, $"Could not launch native LoadWB: {message}");
+                        description = $"startup-sequence command {command.ExecutablePath}";
+                        return false;
+                    }
+
+                    _diagnostics.Add(new AmigaBootDiagnostic(
+                        "AMIGA_BOOT_DOS_STARTUP_SKIP",
+                        $"Skipped startup-sequence command '{command.RawLine}': {message}"));
+                    continue;
+                }
+
+                EnsureWorkbenchHostShimInstalled();
+                if (command.Arguments.Length != 0)
+                {
+                    request = new AmigaProgramLaunchRequest(
+                        request.ExecutablePath,
+                        request.ProjectPath,
+                        request.CurrentDirectory,
+                        request.ToolTypes,
+                        request.StackSize,
+                        command.Arguments);
+                }
+
+                var launchedLoadWorkbenchCommand = IsLoadWorkbenchCommand(command.ExecutablePath);
+                var launchedNativeLoadWorkbench = launchedLoadWorkbenchCommand &&
+                    string.Equals(launchPath, command.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+                var launchedSystemWorkbench = launchedLoadWorkbenchCommand &&
+                    string.Equals(launchPath, "System/Workbench", StringComparison.OrdinalIgnoreCase);
+                PendingWorkbenchLaunchRequest = request;
+                if (!TryLaunchProgram(
+                    request,
+                    out _,
+                    out message,
+                    enableProgramInterrupts: !launchedNativeLoadWorkbench && !launchedSystemWorkbench))
+                {
+                    if (IsLoadWorkbenchCommand(command.ExecutablePath))
+                    {
+                        StartHostLoadWorkbenchCommand(fileSystem, command, $"Native LoadWB returned a launch error: {message}");
+                        description = $"startup-sequence command {command.ExecutablePath}";
+                        return false;
+                    }
+
+                    _diagnostics.Add(new AmigaBootDiagnostic(
+                        "AMIGA_BOOT_DOS_STARTUP_SKIP",
+                        $"Could not launch startup-sequence command '{command.RawLine}': {message}"));
+                    continue;
+                }
+
+                if (launchedNativeLoadWorkbench || launchedSystemWorkbench)
+                {
+                    StartPendingHostWorkbenchDesktop(launchedSystemWorkbench
+                        ? WorkbenchDesktopLaunchKind.SystemWorkbench
+                        : WorkbenchDesktopLaunchKind.NativeLoadWb);
+                    _diagnostics.Add(new AmigaBootDiagnostic(
+                        launchedSystemWorkbench
+                            ? "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_NATIVE"
+                            : "AMIGA_BOOT_DOS_LOADWB_NATIVE",
+                        launchedSystemWorkbench
+                            ? "Started native System/Workbench with interrupts masked until Workbench services are used."
+                            : "Started native C:LoadWB with interrupts masked until Workbench services are used."));
+                }
+
+                description = string.Equals(launchPath, command.ExecutablePath, StringComparison.OrdinalIgnoreCase)
+                    ? $"startup-sequence command {command.ExecutablePath}"
+                    : $"startup-sequence command {command.ExecutablePath} via {launchPath}";
+                return true;
+            }
+
+            _startupSequenceActive = false;
+            return false;
+        }
+
+        private void StartHostLoadWorkbenchCommand(
+            AmigaDosFileSystem fileSystem,
+            StartupSequenceCommand command,
+            string reason)
+        {
+            _startupSequenceActive = false;
+            EnsureWorkbenchHostShimInstalled();
+            _workbenchToolTypes = Array.Empty<string>();
+            _workbenchDefaultToolPath = "C/LoadWB";
+            _workbenchCurrentDirectory = "C";
+            _workbenchStackSize = 4096;
+            _workbenchLanguageSelectionIndex = null;
+            _workbenchLanguageSelectionApplied = false;
+            _workbenchDiskObjectAddress = 0;
+
+            _ = EnsureSyntheticScreen();
+            RenderSyntheticWorkbenchDesktop(fileSystem);
+            _ = HostRethinkDisplay(_machine.Cpu.State.Cycles);
+            EnableWorkbenchProgramInterrupts();
+            _dosBootBlockHeaderProbeEnabled = true;
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_COPPERBENCH_LAUNCH",
+                "Started C/LoadWB."));
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_DOS_AUTOSTART",
+                $"Started startup-sequence command {command.ExecutablePath}."));
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_DOS_LOADWB_HOST",
+                $"Started the host-bridge Workbench desktop from LoadWB. {reason}"));
+        }
+
+        private void StartPendingHostWorkbenchDesktop(WorkbenchDesktopLaunchKind launchKind)
+        {
+            _workbenchDesktopLaunchKind = launchKind;
+            _nativeLoadWorkbenchDesktopPending = true;
+            _nativeLoadWorkbenchDesktopAttached = false;
+            _nativeLoadWorkbenchOpenedWorkbenchLibrary = false;
+            _nativeLoadWorkbenchOpenedWorkbenchLibraryCycle = 0;
+            _nativeLoadWorkbenchLaunchCycle = _machine.Cpu.State.Cycles;
+            _nativeLoadWorkbenchSavedInterruptMask = (ushort)(_machine.Cpu.State.StatusRegister & 0x0700);
+            _machine.Cpu.State.StatusRegister = (ushort)((_machine.Cpu.State.StatusRegister & 0xF8FF) | 0x0700);
+        }
+
+        private void AttachHostWorkbenchDesktopToNativeLoadWorkbench(AmigaDosFileSystem fileSystem)
+            => AttachHostWorkbenchDesktopToNativeLoadWorkbench(
+                fileSystem,
+                $"{DescribePendingWorkbenchProgram()} reached Workbench services");
+
+        private void AttachPendingNativeLoadWorkbenchDesktop(string reason)
+        {
+            if (!_nativeLoadWorkbenchDesktopPending)
+            {
+                return;
+            }
+
+            AttachHostWorkbenchDesktopToNativeLoadWorkbench(EnsureDosFileSystem(), reason);
+        }
+
+        private void AttachPendingNativeLoadWorkbenchDesktopAfterGracePeriod()
+        {
+            if (!_nativeLoadWorkbenchDesktopPending)
+            {
+                return;
+            }
+
+            if (_nativeLoadWorkbenchOpenedWorkbenchLibrary)
+            {
+                if (_machine.Cpu.State.Cycles - _nativeLoadWorkbenchOpenedWorkbenchLibraryCycle <
+                    NativeLoadWorkbenchLibraryCallFallbackCycles)
+                {
+                    return;
+                }
+
+                AttachHostWorkbenchDesktopToNativeLoadWorkbench(
+                    EnsureDosFileSystem(),
+                    $"{DescribePendingWorkbenchProgram()} opened workbench.library without calling it before the host-bridge safety window");
+                return;
+            }
+
+            if (_machine.Cpu.State.Cycles - _nativeLoadWorkbenchLaunchCycle <
+                (long)AmigaConstants.A500PalCpuCyclesPerFrame * NativeLoadWorkbenchFallbackFrames)
+            {
+                return;
+            }
+
+            AttachHostWorkbenchDesktopToNativeLoadWorkbench(
+                EnsureDosFileSystem(),
+                $"{DescribePendingWorkbenchProgram()} ran for {NativeLoadWorkbenchFallbackFrames} frames without reaching workbench.library");
+        }
+
+        private void AttachHostWorkbenchDesktopToNativeLoadWorkbench(AmigaDosFileSystem fileSystem, string reason)
+        {
+            if (_nativeLoadWorkbenchDesktopAttached)
+            {
+                _nativeLoadWorkbenchDesktopPending = false;
+                return;
+            }
+
+            _nativeLoadWorkbenchDesktopPending = false;
+            _nativeLoadWorkbenchDesktopAttached = true;
+            _machine.Cpu.State.StatusRegister = (ushort)(
+                (_machine.Cpu.State.StatusRegister & 0xF8FF) |
+                _nativeLoadWorkbenchSavedInterruptMask);
+            EnsureWorkbenchHostShimInstalled();
+            _ = EnsureSyntheticScreen();
+            RenderSyntheticWorkbenchDesktop(fileSystem);
+            _ = HostRethinkDisplay(_machine.Cpu.State.Cycles);
+            EnableWorkbenchProgramInterrupts();
+            _dosBootBlockHeaderProbeEnabled = true;
+            _machine.Cpu.State.ProgramCounter = DosProgramReturnAddress;
+            var hasFullWorkbenchProgram = TryFindSystemWorkbenchProgram(fileSystem);
+            if (_workbenchDesktopLaunchKind == WorkbenchDesktopLaunchKind.SystemWorkbench)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic(
+                    "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST",
+                    $"Started native System/Workbench and attached the host-bridge Workbench desktop after {reason}."));
+                _workbenchDesktopLaunchKind = WorkbenchDesktopLaunchKind.None;
+                return;
+            }
+
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                hasFullWorkbenchProgram
+                    ? "AMIGA_BOOT_DOS_LOADWB_NATIVE_HOST"
+                    : "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST",
+                hasFullWorkbenchProgram
+                    ? $"Started native C:LoadWB and attached the host-bridge Workbench desktop after {reason}."
+                    : $"Started native C:LoadWB from install/minimal media and attached the host-bridge Workbench desktop after {reason}; System/Workbench is not present on DF0:."));
+            _workbenchDesktopLaunchKind = WorkbenchDesktopLaunchKind.None;
+        }
+
+        private string DescribePendingWorkbenchProgram()
+        {
+            return _workbenchDesktopLaunchKind == WorkbenchDesktopLaunchKind.SystemWorkbench
+                ? "native System/Workbench"
+                : "native C:LoadWB";
+        }
+
+        private void RenderSyntheticWorkbenchDesktop(AmigaDosFileSystem fileSystem)
+        {
+            if (!EnsureSyntheticScreenBitmap())
+            {
+                return;
+            }
+
+            ClearSyntheticScreenBitmap();
+            FillSyntheticRect(0, 0, AmigaConstants.PalLowResWidth, SyntheticScreenTitleHeight, 1);
+            DrawSyntheticText("Workbench 3.1", 8, 6, 2);
+
+            var diskName = fileSystem.Entries.FirstOrDefault(entry => entry.ParentBlock == 0).Name;
+            if (string.IsNullOrWhiteSpace(diskName))
+            {
+                diskName = "Workbench";
+            }
+
+            DrawSyntheticWorkbenchIcon(24, 44, diskName, isDrawer: false);
+            var entries = fileSystem.ListDirectory(string.Empty)
+                .Where(entry => !entry.Name.EndsWith(".info", StringComparison.OrdinalIgnoreCase))
+                .Take(10)
+                .ToArray();
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var column = i % 2;
+                var row = i / 2;
+                DrawSyntheticWorkbenchIcon(24 + (column * 146), 94 + (row * 38), entries[i].Name, entries[i].IsDirectory);
+            }
+        }
+
+        private void DrawSyntheticWorkbenchIcon(int x, int y, string label, bool isDrawer)
+        {
+            FillSyntheticRect(x + 8, y, isDrawer ? 28 : 22, 14, 2);
+            FillSyntheticRect(x + 10, y + 2, isDrawer ? 24 : 18, 10, 0);
+            if (isDrawer)
+            {
+                FillSyntheticRect(x + 12, y - 3, 14, 4, 2);
+            }
+
+            DrawSyntheticText(TrimSyntheticLabel(label), x, y + 20, 2);
+        }
+
+        private static string TrimSyntheticLabel(string label)
+        {
+            label = string.IsNullOrWhiteSpace(label) ? "Item" : label.Trim();
+            return label.Length <= 8 ? label : label.Substring(0, 8);
+        }
+
+        private void EnsureWorkbenchHostShimInstalled()
+        {
+            if (_memoryListInstalled)
+            {
+                return;
+            }
+
+            InstallBootHostTraps();
         }
 
         private bool TryCreateStartupSequenceLaunchRequest(
@@ -2541,10 +3133,199 @@ namespace CopperMod.Amiga
             return end < 0 ? line : line[..end];
         }
 
+        private static string ExtractStartupCommandArguments(string line)
+        {
+            var space = line.IndexOf(' ');
+            var tab = line.IndexOf('\t');
+            var start = space < 0
+                ? tab
+                : tab < 0
+                    ? space
+                    : Math.Min(space, tab);
+            return start < 0 ? string.Empty : line[start..].Trim();
+        }
+
+        private static string NormalizeStartupSequenceLine(string line)
+        {
+            line = RemoveStartupRedirections(line.Trim());
+            var comment = line.IndexOf(';');
+            if (comment >= 0)
+            {
+                line = line[..comment].TrimEnd();
+            }
+
+            return line;
+        }
+
+        private static string RemoveStartupRedirections(string line)
+        {
+            if (line.IndexOf('>') < 0 && line.IndexOf('<') < 0)
+            {
+                return line;
+            }
+
+            var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            var kept = new List<string>(parts.Length);
+            var skipNext = false;
+            foreach (var part in parts)
+            {
+                if (skipNext)
+                {
+                    skipNext = false;
+                    continue;
+                }
+
+                if (part is ">" or "<")
+                {
+                    skipNext = true;
+                    continue;
+                }
+
+                if (part.StartsWith(">", StringComparison.Ordinal) ||
+                    part.StartsWith("<", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                kept.Add(part);
+            }
+
+            return string.Join(" ", kept);
+        }
+
+        private static bool IsStartupSequenceTerminator(string executablePath)
+        {
+            var normalized = AmigaDosFileSystem.GetFileName(executablePath);
+            return normalized.Equals("EndCLI", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("EndShell", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryHandleHostBridgeSetupCommand(AmigaDosFileSystem fileSystem, StartupSequenceCommand command)
+        {
+            var normalized = AmigaDosFileSystem.GetFileName(command.ExecutablePath);
+            var arguments = SplitStartupArguments(command.Arguments);
+            if (IsSetPatchCommand(normalized))
+            {
+                var hasM68040Library = TryFindDosEntry("Libs/68040.library", out var library) && library.IsFile;
+                AddStartupHostDiagnostic(
+                    command,
+                    hasM68040Library
+                        ? "Modeled SetPatch and detected Libs/68040.library."
+                        : "Modeled SetPatch without a disk 68040.library.");
+                return true;
+            }
+
+            if (normalized.Equals("Version", StringComparison.OrdinalIgnoreCase))
+            {
+                AddStartupHostDiagnostic(command, "Modeled Version query.");
+                return true;
+            }
+
+            if (normalized.Equals("AddBuffers", StringComparison.OrdinalIgnoreCase))
+            {
+                AddStartupHostDiagnostic(command, "Modeled disk buffer allocation.");
+                return true;
+            }
+
+            if (normalized.Equals("FailAt", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Length > 0 && int.TryParse(arguments[0], out var failAt))
+                {
+                    _startupSequenceFailAt = failAt;
+                }
+
+                AddStartupHostDiagnostic(command, $"Set host startup FailAt threshold to {_startupSequenceFailAt}.");
+                return true;
+            }
+
+            if (normalized.Equals("MakeDir", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Length > 0)
+                {
+                    var directory = NormalizeHostDosPath(arguments[0]);
+                    if (directory.StartsWith("RAM/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _ramDirectorySources[directory] = string.Empty;
+                    }
+                }
+
+                AddStartupHostDiagnostic(command, "Modeled RAM: directory creation.");
+                return true;
+            }
+
+            if (normalized.Equals("Copy", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Length >= 2)
+                {
+                    var source = ResolveAssignedDosPath(arguments[0]);
+                    var target = NormalizeHostDosPath(arguments[1]);
+                    if (target.StartsWith("RAM/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _ramDirectorySources[target] = source;
+                    }
+                }
+
+                AddStartupHostDiagnostic(command, "Modeled startup copy into RAM:.");
+                return true;
+            }
+
+            if (normalized.Equals("Assign", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Length >= 2)
+                {
+                    var assignName = NormalizeAssignName(arguments[0]);
+                    if (assignName.Length != 0)
+                    {
+                        _dosAssigns[assignName] = NormalizeHostDosAssignTarget(arguments[1]);
+                    }
+                }
+
+                AddStartupHostDiagnostic(command, "Modeled DOS assign.");
+                return true;
+            }
+
+            if (normalized.Equals("BindDrivers", StringComparison.OrdinalIgnoreCase))
+            {
+                AddStartupHostDiagnostic(command, "Modeled BindDrivers expansion scan.");
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsSetPatchCommand(string fileName)
+            => fileName.Equals("SetPatch", StringComparison.OrdinalIgnoreCase) ||
+                fileName.StartsWith("SetPatch_", StringComparison.OrdinalIgnoreCase);
+
+        private void AddStartupHostDiagnostic(StartupSequenceCommand command, string message)
+        {
+            _diagnostics.Add(new AmigaBootDiagnostic(
+                "AMIGA_BOOT_DOS_STARTUP_HOST",
+                $"{message} Command '{command.RawLine}'."));
+        }
+
+        private static string[] SplitStartupArguments(string arguments)
+        {
+            return (arguments ?? string.Empty)
+                .Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        private static bool IsLoadWorkbenchCommand(string executablePath)
+        {
+            return AmigaDosFileSystem.GetFileName(executablePath)
+                .Equals("LoadWB", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryFindSystemWorkbenchProgram(AmigaDosFileSystem fileSystem)
+        {
+            return fileSystem.TryFindEntry("System/Workbench", out var entry) && entry.IsFile;
+        }
+
         public bool TryLaunchProgram(
             AmigaProgramLaunchRequest request,
             out AmigaProgramLaunchResult result,
-            out string message)
+            out string message,
+            bool enableProgramInterrupts = true)
         {
             result = default;
             message = string.Empty;
@@ -2588,7 +3369,11 @@ namespace CopperMod.Amiga
             _machine.Cpu.State.D[0] = (uint)startupArguments.Length;
             _machine.Cpu.State.A[0] = startupAddress;
             _machine.Cpu.State.A[6] = AmigaKickstartHost.ExecLibraryBase;
-            EnableWorkbenchProgramInterrupts();
+            if (enableProgramInterrupts)
+            {
+                EnableWorkbenchProgramInterrupts();
+            }
+
             result = new AmigaProgramLaunchResult(
                 program.EntryAddress,
                 request.ExecutablePath,
@@ -2846,8 +3631,8 @@ namespace CopperMod.Amiga
 
         private bool TryReadDosFile(string path, out byte[] data)
         {
-            var fileSystem = EnsureDosFileSystem();
-            if (fileSystem.TryReadFile(path, out data))
+            path = ResolveAssignedDosPath(path);
+            if (TryReadDosFileFromResolvedPath(path, out data))
             {
                 return true;
             }
@@ -2857,7 +3642,7 @@ namespace CopperMod.Amiga
                 path.IndexOf('/') < 0 &&
                 path.IndexOf('\\') < 0)
             {
-                return fileSystem.TryReadFile(
+                return TryReadDosFileFromResolvedPath(
                     AmigaDosFileSystem.CombinePath(_workbenchCurrentDirectory, path),
                     out data);
             }
@@ -2868,8 +3653,8 @@ namespace CopperMod.Amiga
 
         private bool TryFindDosEntry(string path, out AmigaDosDirectoryEntry entry)
         {
-            var fileSystem = EnsureDosFileSystem();
-            if (fileSystem.TryFindEntry(path, out entry))
+            path = ResolveAssignedDosPath(path);
+            if (TryFindDosEntryFromResolvedPath(path, out entry))
             {
                 return true;
             }
@@ -2879,7 +3664,7 @@ namespace CopperMod.Amiga
                 path.IndexOf('/') < 0 &&
                 path.IndexOf('\\') < 0)
             {
-                return fileSystem.TryFindEntry(
+                return TryFindDosEntryFromResolvedPath(
                     AmigaDosFileSystem.CombinePath(_workbenchCurrentDirectory, path),
                     out entry);
             }
@@ -2888,20 +3673,249 @@ namespace CopperMod.Amiga
             return false;
         }
 
-        private AmigaDosFileSystem EnsureDosFileSystem()
+        private bool TryReadDosFileFromResolvedPath(string path, out byte[] data)
         {
-            if (_dosFileSystem != null)
+            if (TryParseDrivePath(path, out var driveIndex, out var drivePath))
             {
-                return _dosFileSystem;
+                return TryReadDosFileFromDrive(driveIndex, drivePath, out data);
             }
 
-            if (Drive0.Disk == null)
+            if (TryReadDosFileFromDrive(0, path, out data))
             {
-                throw new AmigaEmulationException("No disk is inserted in DF0:.");
+                return true;
             }
 
-            _dosFileSystem = new AmigaDosFileSystem(Drive0.Disk);
-            return _dosFileSystem;
+            for (var index = 1; index < _machine.Bus.Disk.ConnectedDriveCount; index++)
+            {
+                if (TryReadDosFileFromDrive(index, path, out data))
+                {
+                    return true;
+                }
+            }
+
+            data = Array.Empty<byte>();
+            return false;
+        }
+
+        private bool TryFindDosEntryFromResolvedPath(string path, out AmigaDosDirectoryEntry entry)
+        {
+            if (TryParseDrivePath(path, out var driveIndex, out var drivePath))
+            {
+                return TryFindDosEntryFromDrive(driveIndex, drivePath, out entry);
+            }
+
+            if (TryFindDosEntryFromDrive(0, path, out entry))
+            {
+                return true;
+            }
+
+            for (var index = 1; index < _machine.Bus.Disk.ConnectedDriveCount; index++)
+            {
+                if (TryFindDosEntryFromDrive(index, path, out entry))
+                {
+                    return true;
+                }
+            }
+
+            entry = default;
+            return false;
+        }
+
+        private bool TryReadDosFileFromDrive(int driveIndex, string path, out byte[] data)
+        {
+            if (TryGetDosFileSystem(driveIndex, out var fileSystem) &&
+                fileSystem.TryReadFile(path, out data))
+            {
+                return true;
+            }
+
+            data = Array.Empty<byte>();
+            return false;
+        }
+
+        private bool TryFindDosEntryFromDrive(int driveIndex, string path, out AmigaDosDirectoryEntry entry)
+        {
+            if (TryGetDosFileSystem(driveIndex, out var fileSystem) &&
+                fileSystem.TryFindEntry(path, out entry))
+            {
+                return true;
+            }
+
+            entry = default;
+            return false;
+        }
+
+        private string ResolveAssignedDosPath(string path)
+        {
+            path = (path ?? string.Empty).Trim().Trim('"').Replace('\\', '/');
+            var colon = path.IndexOf(':');
+            if (colon >= 0)
+            {
+                var assignName = NormalizeAssignName(path.Substring(0, colon));
+                var suffix = path.Substring(colon + 1).TrimStart('/');
+                if (TryParseDrivePrefix(assignName, out var driveIndex))
+                {
+                    return $"DF{driveIndex}:{NormalizeHostDosPath(suffix)}";
+                }
+
+                if (assignName.Length != 0 &&
+                    _dosAssigns.TryGetValue(assignName, out var target))
+                {
+                    return CombineHostDosPath(ResolveRamDirectorySource(target), suffix);
+                }
+            }
+
+            return ResolveRamDirectorySource(path);
+        }
+
+        private string ResolveRamDirectorySource(string path)
+        {
+            path = NormalizeHostDosAssignTarget(path);
+            if (TryParseDrivePath(path, out _, out _))
+            {
+                return path;
+            }
+
+            foreach (var pair in _ramDirectorySources)
+            {
+                if (path.Equals(pair.Key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return string.IsNullOrWhiteSpace(pair.Value) ? path : pair.Value;
+                }
+
+                if (path.StartsWith(pair.Key + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return string.IsNullOrWhiteSpace(pair.Value)
+                        ? path
+                        : CombineHostDosPath(pair.Value, path.Substring(pair.Key.Length + 1));
+                }
+            }
+
+            return path;
+        }
+
+        private static string CombineHostDosPath(string parentPath, string suffix)
+        {
+            if (TryParseDrivePath(parentPath, out var driveIndex, out var drivePath))
+            {
+                var combinedDrivePath = CombineHostDosPath(drivePath, suffix);
+                return $"DF{driveIndex}:{combinedDrivePath}";
+            }
+
+            parentPath = NormalizeHostDosPath(parentPath);
+            suffix = NormalizeHostDosPath(suffix);
+            if (parentPath.Length == 0)
+            {
+                return suffix;
+            }
+
+            return suffix.Length == 0 ? parentPath : parentPath + "/" + suffix;
+        }
+
+        private static string NormalizeHostDosPath(string path)
+        {
+            return AmigaDosFileSystem.NormalizeDisplayPath(path ?? string.Empty);
+        }
+
+        private static string NormalizeHostDosAssignTarget(string path)
+        {
+            path = (path ?? string.Empty).Trim().Trim('"').Replace('\\', '/');
+            return TryParseDrivePath(path, out var driveIndex, out var drivePath)
+                ? $"DF{driveIndex}:{NormalizeHostDosPath(drivePath)}"
+                : NormalizeHostDosPath(path);
+        }
+
+        private static string NormalizeAssignName(string assignName)
+        {
+            return (assignName ?? string.Empty).Trim().TrimEnd(':');
+        }
+
+        private static bool TryParseDrivePath(string path, out int driveIndex, out string drivePath)
+        {
+            driveIndex = -1;
+            drivePath = string.Empty;
+            path = (path ?? string.Empty).Trim().Trim('"').Replace('\\', '/');
+            var colon = path.IndexOf(':');
+            if (colon < 0 || !TryParseDrivePrefix(path.Substring(0, colon), out driveIndex))
+            {
+                return false;
+            }
+
+            drivePath = NormalizeHostDosPath(path.Substring(colon + 1));
+            return true;
+        }
+
+        private static bool TryParseDrivePrefix(string prefix, out int driveIndex)
+        {
+            driveIndex = -1;
+            prefix = NormalizeAssignName(prefix);
+            if (prefix.Length != 3 ||
+                (prefix[0] != 'D' && prefix[0] != 'd') ||
+                (prefix[1] != 'F' && prefix[1] != 'f') ||
+                prefix[2] is < '0' or > '3')
+            {
+                return false;
+            }
+
+            driveIndex = prefix[2] - '0';
+            return true;
+        }
+
+        private AmigaDosFileSystem EnsureDosFileSystem()
+            => EnsureDosFileSystem(0);
+
+        private AmigaDosFileSystem EnsureDosFileSystem(int driveIndex)
+        {
+            if ((uint)driveIndex >= (uint)_dosFileSystems.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(driveIndex));
+            }
+
+            if (_dosFileSystems[driveIndex] != null)
+            {
+                return _dosFileSystems[driveIndex]!;
+            }
+
+            var drive = GetDrive(driveIndex);
+            if (drive.Disk == null)
+            {
+                throw new AmigaEmulationException($"No disk is inserted in DF{driveIndex}:.");
+            }
+
+            _dosFileSystems[driveIndex] = new AmigaDosFileSystem(drive.Disk);
+            return _dosFileSystems[driveIndex]!;
+        }
+
+        private bool TryGetDosFileSystem(int driveIndex, out AmigaDosFileSystem fileSystem)
+        {
+            fileSystem = null!;
+            if ((uint)driveIndex >= (uint)_dosFileSystems.Length ||
+                driveIndex >= _machine.Bus.Disk.ConnectedDriveCount)
+            {
+                return false;
+            }
+
+            try
+            {
+                fileSystem = EnsureDosFileSystem(driveIndex);
+                return true;
+            }
+            catch (Exception ex) when (ex is AmigaEmulationException or IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private AmigaFloppyDrive GetDrive(int driveIndex)
+        {
+            return driveIndex switch
+            {
+                0 => Drive0,
+                1 => Drive1,
+                2 => Drive2,
+                3 => Drive3,
+                _ => throw new ArgumentOutOfRangeException(nameof(driveIndex))
+            };
         }
 
         private void InstallKickstartMemoryList()
@@ -3533,6 +4547,22 @@ namespace CopperMod.Amiga
             }
 
             return unchecked((ushort)-sum);
+        }
+
+        private readonly struct StartupSequenceCommand
+        {
+            public StartupSequenceCommand(string executablePath, string arguments, string rawLine)
+            {
+                ExecutablePath = executablePath ?? string.Empty;
+                Arguments = arguments ?? string.Empty;
+                RawLine = rawLine ?? string.Empty;
+            }
+
+            public string ExecutablePath { get; }
+
+            public string Arguments { get; }
+
+            public string RawLine { get; }
         }
 
         private sealed class BootDosHandle

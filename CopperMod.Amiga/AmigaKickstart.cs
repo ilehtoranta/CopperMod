@@ -143,6 +143,7 @@ namespace CopperMod.Amiga
         public const uint DummyLibraryBase = 0x00F5_0000;
         public const uint CiaAResourceBase = 0x00F6_0000;
         public const uint IconLibraryBase = 0x00F7_0000;
+        public const uint WorkbenchLibraryBase = 0x00F8_8000;
         public const uint GraphicsLibraryBase = 0x00F9_0000;
         public const uint IntuitionLibraryBase = 0x00FA_0000;
         public const uint ExpansionLibraryBase = 0x00FB_0000;

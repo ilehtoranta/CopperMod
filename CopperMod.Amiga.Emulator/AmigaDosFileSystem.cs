@@ -19,12 +19,14 @@ namespace CopperMod.Amiga
         private const int HashTableEntryCount = 72;
         private const uint PrimaryTypeDirectory = 2;
         private const uint PrimaryTypeData = 8;
+        private const uint PrimaryTypeFileList = 16;
         private const int SecondaryTypeRoot = 1;
         private const int SecondaryTypeDirectory = 2;
         private const int SecondaryTypeFile = -3;
         private readonly IAmigaDiskImage _disk;
         private readonly List<AmigaDosDirectoryEntry> _entries = new List<AmigaDosDirectoryEntry>();
         private readonly Dictionary<int, int> _headerPhysicalBlocks = new Dictionary<int, int>();
+        private readonly bool _isFastFileSystem;
         private int _rootDirectoryKey = StandardRootBlock;
 
         public AmigaDosFileSystem(IAmigaDiskImage disk)
@@ -32,9 +34,10 @@ namespace CopperMod.Amiga
             _disk = disk ?? throw new ArgumentNullException(nameof(disk));
             if (!IsSupported(disk))
             {
-                throw new AmigaEmulationException("Only standard OFS DOS\\0 Amiga disk images are supported by the slim boot filesystem.");
+                throw new AmigaEmulationException("Only standard OFS DOS\\0 and FFS DOS\\1 Amiga disk images are supported by the slim boot filesystem.");
             }
 
+            _isFastFileSystem = disk.Data[3] == 1;
             ScanDirectoryEntries();
         }
 
@@ -47,7 +50,7 @@ namespace CopperMod.Amiga
                 disk.Data[0] == (byte)'D' &&
                 disk.Data[1] == (byte)'O' &&
                 disk.Data[2] == (byte)'S' &&
-                disk.Data[3] == 0;
+                disk.Data[3] is 0 or 1;
         }
 
         public bool TryReadFile(string path, out byte[] data)
@@ -312,6 +315,11 @@ namespace CopperMod.Amiga
 
         private byte[] ReadFile(AmigaDosDirectoryEntry entry)
         {
+            if (_isFastFileSystem)
+            {
+                return ReadFastFile(entry);
+            }
+
             var output = new byte[entry.Size];
             var outputOffset = 0;
             var headerBlock = ResolvePhysicalHeaderBlock(entry.Block);
@@ -340,6 +348,53 @@ namespace CopperMod.Amiga
                 Array.Copy(_disk.Data, offset + DataBlockPayloadOffset, output, outputOffset, copyLength);
                 outputOffset += copyLength;
                 block = checked((int)ReadUInt32(offset + 16));
+            }
+
+            return output;
+        }
+
+        private byte[] ReadFastFile(AmigaDosDirectoryEntry entry)
+        {
+            var output = new byte[entry.Size];
+            var outputOffset = 0;
+            var listBlock = ResolvePhysicalHeaderBlock(entry.Block);
+            var guard = 0;
+            while (listBlock != 0 && outputOffset < output.Length)
+            {
+                if (++guard > _disk.Data.Length / BlockSize)
+                {
+                    throw new AmigaEmulationException($"The FFS data block table for {entry.Name} is cyclic.");
+                }
+
+                var offset = CheckedBlockOffset(listBlock, $"FFS file list block for {entry.Name}");
+                var primaryType = ReadUInt32(offset);
+                if (primaryType != PrimaryTypeDirectory && primaryType != PrimaryTypeFileList)
+                {
+                    throw new AmigaEmulationException($"The FFS file list for {entry.Name} is invalid at block {listBlock}.");
+                }
+
+                var entryCount = checked((int)ReadUInt32(offset + 8));
+                if (entryCount < 0 || entryCount > HashTableEntryCount)
+                {
+                    throw new AmigaEmulationException($"The FFS file list block {listBlock} has an invalid table size.");
+                }
+
+                for (var i = 0; i < entryCount && outputOffset < output.Length; i++)
+                {
+                    var tableOffset = offset + RootHashTableOffset + ((HashTableEntryCount - 1 - i) * 4);
+                    var dataBlock = checked((int)ReadUInt32(tableOffset));
+                    if (dataBlock == 0)
+                    {
+                        throw new AmigaEmulationException($"The FFS file list block {listBlock} contains an empty data pointer.");
+                    }
+
+                    var dataOffset = CheckedBlockOffset(dataBlock, $"FFS data block for {entry.Name}");
+                    var copyLength = Math.Min(BlockSize, output.Length - outputOffset);
+                    Array.Copy(_disk.Data, dataOffset, output, outputOffset, copyLength);
+                    outputOffset += copyLength;
+                }
+
+                listBlock = checked((int)ReadUInt32(offset + 0x1F8));
             }
 
             return output;
@@ -441,6 +496,22 @@ namespace CopperMod.Amiga
             return Encoding.ASCII.GetString(_disk.Data, offset + 1, length);
         }
 
+        private int CheckedBlockOffset(int block, string description)
+        {
+            if (block < 0)
+            {
+                throw new AmigaEmulationException($"{description} has an invalid negative block number.");
+            }
+
+            var offset = block * BlockSize;
+            if (offset < 0 || offset + BlockSize > _disk.Data.Length)
+            {
+                throw new AmigaEmulationException($"{description} points outside the disk image at block {block}.");
+            }
+
+            return offset;
+        }
+
         private uint ReadUInt32(int offset)
         {
             return BigEndian.ReadUInt32(_disk.Data, offset, "AmigaDOS block field");
@@ -448,13 +519,7 @@ namespace CopperMod.Amiga
 
         private static string[] NormalizePath(string path)
         {
-            path = path.Trim().Trim('"').Replace('\\', '/');
-            var colon = path.IndexOf(':');
-            if (colon >= 0)
-            {
-                path = path.Substring(colon + 1);
-            }
-
+            path = NormalizeDisplayPath(path);
             return path.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
@@ -516,7 +581,15 @@ namespace CopperMod.Amiga
             var colon = path.IndexOf(':');
             if (colon >= 0)
             {
-                path = path.Substring(colon + 1);
+                var prefix = path.Substring(0, colon).Trim('/');
+                var suffix = path.Substring(colon + 1).TrimStart('/');
+                path = IsRootVolumePrefix(prefix)
+                    ? suffix
+                    : suffix.Length == 0
+                        ? prefix
+                        : prefix.Length == 0
+                            ? suffix
+                            : prefix + "/" + suffix;
             }
 
             while (path.StartsWith("/", StringComparison.Ordinal))
@@ -530,6 +603,19 @@ namespace CopperMod.Amiga
             }
 
             return path;
+        }
+
+        private static bool IsRootVolumePrefix(string prefix)
+        {
+            if (prefix.Equals("SYS", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return prefix.Length == 3 &&
+                (prefix[0] == 'D' || prefix[0] == 'd') &&
+                (prefix[1] == 'F' || prefix[1] == 'f') &&
+                prefix[2] is >= '0' and <= '3';
         }
 
         internal static string TrimInfoSuffix(string path)

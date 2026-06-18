@@ -107,6 +107,31 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
+	public void MoveLongRegisterToAbsoluteWordUsesSingleExtensionWord()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x21C8, 0x0010, // MOVE.L A0,($0010).W
+			0x21C0, 0x0014); // MOVE.L D0,($0014).W
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = 0x00F8_0404;
+		cpu.State.D[0] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x00F8_0404u, bus.ReadLong(0x0010));
+		Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, bus.ReadLong(0x0014));
+		Assert.Equal(CodeBase + 8, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void FmoveControlTransfersFpcrThroughDataRegister()
 	{
 		var bus = new AmigaBus();
@@ -124,6 +149,66 @@ public sealed class M68040InterpreterTests
 
 		Assert.Equal(0x0000_0040u, cpu.State.M68040Fpu.Fpcr);
 		Assert.Equal(0x0000_0040u, cpu.State.D[1]);
+	}
+
+	[Fact]
+	public void FmoveControlTransfersFpcrThroughMemoryPredecrementAndPostIncrement()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0xF225, 0xBC00, // FMOVE.L FPCR,-(A5)
+			0xF21D, 0x9C00); // FMOVE.L (A5)+,FPCR
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[5] = 0x2000;
+		cpu.State.M68040Fpu.Fpcr = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1FFCu, cpu.State.A[5]);
+		Assert.Equal(0x1234_5678u, bus.ReadLong(0x1FFC));
+
+		cpu.State.M68040Fpu.Fpcr = 0;
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.A[5]);
+		Assert.Equal(0x1234_5678u, cpu.State.M68040Fpu.Fpcr);
+	}
+
+	[Fact]
+	public void FmovemPredecrementAndPostIncrementRoundTripsFpRegisters()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0xF225, 0xE0FF, // FMOVEM FP0-FP7,-(A5)
+			0xF21D, 0xD0FF); // FMOVEM (A5)+,FP0-FP7
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[5] = 0x3000;
+		for (var i = 0; i < 8; i++)
+		{
+			cpu.State.M68040Fpu.FP[i] = i + 0.5;
+		}
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2FA0u, cpu.State.A[5]);
+		for (var i = 0; i < 8; i++)
+		{
+			cpu.State.M68040Fpu.FP[i] = 0;
+		}
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x3000u, cpu.State.A[5]);
+		for (var i = 0; i < 8; i++)
+		{
+			Assert.Equal(i + 0.5, cpu.State.M68040Fpu.FP[i]);
+		}
 	}
 
 	[Fact]
@@ -176,6 +261,29 @@ public sealed class M68040InterpreterTests
 		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
 		Assert.Equal(CodeBase, bus.ReadLong(StackBase - 6u));
 		Assert.Equal(11 * 4, bus.ReadWord(StackBase - 2u));
+	}
+
+	[Fact]
+	public void FsaveAndFrestoreUseM68040IdleStateFrame()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0xF327, // FSAVE -(A7)
+			0xF35F); // FRESTORE (A7)+
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(StackBase - M68040FpuHelpers.IdleStateFrameSize, cpu.State.A[7]);
+		Assert.Equal(M68040FpuHelpers.IdleStateFrame, bus.ReadLong(cpu.State.A[7]));
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(StackBase, cpu.State.A[7]);
+		Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
 	}
 
 	[Fact]

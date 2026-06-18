@@ -346,6 +346,37 @@ namespace CopperMod.Amiga
             DecodeCursor cursor,
             out M68kDecodedInstruction instruction)
         {
+            if ((opcode & 0xFFC0) == 0xF300 || (opcode & 0xFFC0) == 0xF340)
+            {
+                var stateCursor = cursor;
+                var stateMode = (opcode >> 3) & 7;
+                var stateRegister = opcode & 7;
+                if (!TryDecodeFpuStateEa(ref stateCursor, stateMode, stateRegister, out var ea))
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                var save = (opcode & 0xFFC0) == 0xF300;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Fpu,
+                    M68kOperandSize.Long,
+                    save ? M68kDecodedEa.None : ea,
+                    save ? ea : M68kDecodedEa.None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    save ? (int)M68040FpuJitKind.SaveState : (int)M68040FpuJitKind.RestoreState,
+                    0,
+                    pc + 2,
+                    stateCursor,
+                    stopsTrace: false);
+                return true;
+            }
+
             if ((opcode & 0xFFC0) != 0xF200)
             {
                 instruction = CreateM68040Fallback(pc, opcode, cursor);
@@ -525,6 +556,24 @@ namespace CopperMod.Amiga
                 return TryDecodeFpuImmediate(ref cursor, format, out ea);
             }
 
+            return mode switch
+            {
+                2 => DecodeSimpleFpuEa(M68kJitEaKind.AddressIndirect, register, out ea),
+                3 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPostincrement, register, out ea),
+                4 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPredecrement, register, out ea),
+                5 => DecodeExtensionFpuEa(ref cursor, M68kJitEaKind.AddressDisplacement, register, out ea),
+                7 when register == 1 => DecodeAbsoluteLongFpuEa(ref cursor, out ea),
+                _ => false
+            };
+        }
+
+        private static bool TryDecodeFpuStateEa(
+            ref DecodeCursor cursor,
+            int mode,
+            int register,
+            out M68kDecodedEa ea)
+        {
+            ea = default;
             return mode switch
             {
                 2 => DecodeSimpleFpuEa(M68kJitEaKind.AddressIndirect, register, out ea),

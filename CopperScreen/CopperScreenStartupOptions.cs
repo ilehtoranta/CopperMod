@@ -1,3 +1,8 @@
+using System.Globalization;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using CopperMod.Amiga;
 
 namespace CopperScreen;
@@ -346,9 +351,22 @@ internal sealed class CopperScreenStartupOptions
 			}
 		}
 
+		var workbenchExternalDiskSourcePath = diskPath;
 		if (diskPath != null)
 		{
-			paths[0] = diskPath;
+			paths[0] = profile.AutoStartWorkbenchStartupSequence
+				? ResolveWorkbenchStartupDiskPath(diskPath, baseDirectory)
+				: diskPath;
+		}
+		else if (profile.AutoStartWorkbenchStartupSequence)
+		{
+			workbenchExternalDiskSourcePath = paths[0];
+			paths[0] = ResolveWorkbenchStartupDiskPath(paths[0], baseDirectory);
+		}
+
+		if (profile.AutoStartWorkbenchStartupSequence)
+		{
+			PopulateWorkbenchStartupExternalDisks(paths, workbenchExternalDiskSourcePath, baseDirectory, profile.FloppyDriveCount);
 		}
 
 		return paths;
@@ -389,6 +407,404 @@ internal sealed class CopperScreenStartupOptions
 
 		return values;
 	}
+
+	internal static string? ResolveWorkbenchStartupDiskPath(string? path, string baseDirectory)
+	{
+		var resolved = ResolveOptionalPath(path, baseDirectory);
+		if (string.IsNullOrWhiteSpace(resolved) ||
+			ContainsWorkbenchDesktop(resolved))
+		{
+			return resolved;
+		}
+
+		if (TryExtractWorkbenchDesktopDiskFromArchive(resolved, out var archivedDesktopDisk))
+		{
+			return archivedDesktopDisk;
+		}
+
+		foreach (var candidate in EnumerateWorkbenchDesktopDiskCandidates(resolved))
+		{
+			if (ContainsWorkbenchDesktop(candidate))
+			{
+				return candidate;
+			}
+
+			if (TryExtractWorkbenchDesktopDiskFromArchive(candidate, out archivedDesktopDisk))
+			{
+				return archivedDesktopDisk;
+			}
+		}
+
+		return resolved;
+	}
+
+	private static IEnumerable<string> EnumerateWorkbenchDesktopDiskCandidates(string configuredPath)
+	{
+		var directory = Path.GetDirectoryName(configuredPath);
+		if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+		{
+			yield break;
+		}
+
+		var configuredName = Path.GetFileName(configuredPath);
+		var exactCandidateName = configuredName
+			.Replace("(Disk 1 of 6)", "(Disk 2 of 6)", StringComparison.OrdinalIgnoreCase)
+			.Replace("(Install)", "(Workbench)", StringComparison.OrdinalIgnoreCase);
+		if (!string.Equals(exactCandidateName, configuredName, StringComparison.OrdinalIgnoreCase))
+		{
+			var exactCandidate = Path.Combine(directory, exactCandidateName);
+			if (File.Exists(exactCandidate))
+			{
+				yield return Path.GetFullPath(exactCandidate);
+			}
+		}
+
+		var candidates = Directory.EnumerateFiles(directory)
+			.Where(path =>
+				IsLikelyWorkbenchDesktopDiskName(path) &&
+				IsSameWorkbenchDiskSetCandidate(configuredName, Path.GetFileName(path)))
+			.OrderByDescending(path => Path.GetFileName(path).Contains("Disk 2 of 6", StringComparison.OrdinalIgnoreCase))
+			.ThenBy(path => path, StringComparer.OrdinalIgnoreCase);
+		foreach (var candidate in candidates)
+		{
+			yield return Path.GetFullPath(candidate);
+		}
+	}
+
+	private static void PopulateWorkbenchStartupExternalDisks(
+		string?[] paths,
+		string? configuredDiskPath,
+		string baseDirectory,
+		int profileFloppyDriveCount)
+	{
+		var bootDiskPath = paths[0];
+		if (profileFloppyDriveCount <= 1 || string.IsNullOrWhiteSpace(bootDiskPath))
+		{
+			return;
+		}
+
+		var sourcePath = ResolveOptionalPath(configuredDiskPath, baseDirectory) ?? bootDiskPath;
+		if (string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(bootDiskPath), StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		var driveIndex = 1;
+		foreach (var candidate in EnumerateWorkbenchStartupExternalDiskCandidates(sourcePath, bootDiskPath))
+		{
+			if (driveIndex >= paths.Length || driveIndex >= profileFloppyDriveCount)
+			{
+				return;
+			}
+
+			paths[driveIndex++] = candidate;
+		}
+	}
+
+	private static IEnumerable<string> EnumerateWorkbenchStartupExternalDiskCandidates(string sourcePath, string bootDiskPath)
+	{
+		var returned = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFullPath(bootDiskPath) };
+		var sourceFullPath = Path.GetFullPath(sourcePath);
+		if (Path.GetExtension(sourceFullPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+		{
+			foreach (var archiveDiskPath in EnumerateWorkbenchStartupArchiveExternalDiskCandidates(sourceFullPath, bootDiskPath))
+			{
+				if (returned.Add(archiveDiskPath))
+				{
+					yield return archiveDiskPath;
+				}
+			}
+		}
+		else if (!returned.Contains(sourceFullPath) &&
+			File.Exists(sourceFullPath) &&
+			IsLikelyWorkbenchDiskSetName(sourceFullPath))
+		{
+			returned.Add(sourceFullPath);
+			yield return sourceFullPath;
+		}
+
+		var directory = Path.GetDirectoryName(sourceFullPath);
+		if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+		{
+			yield break;
+		}
+
+		var sourceNumber = TryReadWorkbenchDiskNumber(Path.GetFileName(sourceFullPath), out var parsedNumber)
+			? parsedNumber
+			: int.MaxValue;
+		var candidates = Directory.EnumerateFiles(directory)
+			.Where(path =>
+				IsLikelyWorkbenchDiskSetName(path) &&
+				IsSameWorkbenchDiskSetCandidate(Path.GetFileName(sourceFullPath), Path.GetFileName(path)) &&
+				!returned.Contains(Path.GetFullPath(path)))
+			.Select(path => new
+			{
+				Path = Path.GetFullPath(path),
+				DiskNumber = TryReadWorkbenchDiskNumber(Path.GetFileName(path), out var diskNumber)
+					? diskNumber
+					: int.MaxValue
+			})
+			.OrderBy(candidate => candidate.DiskNumber == sourceNumber ? 0 : 1)
+			.ThenBy(candidate => candidate.DiskNumber)
+			.ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase);
+		foreach (var candidate in candidates)
+		{
+			returned.Add(candidate.Path);
+			yield return candidate.Path;
+		}
+	}
+
+	private static IEnumerable<string> EnumerateWorkbenchStartupArchiveExternalDiskCandidates(string archivePath, string bootDiskPath)
+	{
+		if (!File.Exists(archivePath))
+		{
+			yield break;
+		}
+
+		List<WorkbenchArchiveDiskCandidate> candidates;
+		try
+		{
+			using var archive = ZipFile.OpenRead(archivePath);
+			candidates = archive.Entries
+				.Where(entry =>
+					!string.IsNullOrWhiteSpace(entry.Name) &&
+					(entry.Name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
+						entry.Name.EndsWith(".adz", StringComparison.OrdinalIgnoreCase)) &&
+					IsLikelyWorkbenchDiskSetName(entry.Name) &&
+					IsSameWorkbenchDiskSetCandidate(Path.GetFileName(archivePath), entry.Name))
+				.Select(entry => new WorkbenchArchiveDiskCandidate(
+					entry.FullName,
+					TryReadWorkbenchDiskNumber(entry.Name, out var diskNumber) ? diskNumber : int.MaxValue))
+				.OrderBy(candidate => candidate.DiskNumber)
+				.ThenBy(candidate => candidate.FullName, StringComparer.OrdinalIgnoreCase)
+				.ToList();
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+		{
+			yield break;
+		}
+
+		foreach (var candidate in candidates)
+		{
+			string? cachedPath;
+			try
+			{
+				using var archive = ZipFile.OpenRead(archivePath);
+				var entry = archive.GetEntry(candidate.FullName);
+				var adfBytes = entry == null ? null : ReadArchiveAdfBytes(entry);
+				cachedPath = adfBytes == null
+					? null
+					: WriteArchiveDiskCacheFile(archivePath, entry!, adfBytes);
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+			{
+				continue;
+			}
+
+			if (cachedPath != null &&
+				!string.Equals(Path.GetFullPath(cachedPath), Path.GetFullPath(bootDiskPath), StringComparison.OrdinalIgnoreCase))
+			{
+				yield return cachedPath;
+			}
+		}
+	}
+
+	private static bool IsLikelyWorkbenchDesktopDiskName(string path)
+	{
+		var name = Path.GetFileName(path);
+		var extension = Path.GetExtension(name);
+		return (extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
+				extension.Equals(".adf", StringComparison.OrdinalIgnoreCase) ||
+				extension.Equals(".adz", StringComparison.OrdinalIgnoreCase)) &&
+			name.Contains("Workbench", StringComparison.OrdinalIgnoreCase) &&
+			!name.Contains("Install", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool IsLikelyWorkbenchDiskSetName(string path)
+	{
+		var name = Path.GetFileName(path);
+		var extension = Path.GetExtension(name);
+		return (extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
+				extension.Equals(".adf", StringComparison.OrdinalIgnoreCase) ||
+				extension.Equals(".adz", StringComparison.OrdinalIgnoreCase)) &&
+			name.Contains("Workbench", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool TryReadWorkbenchDiskNumber(string fileName, out int diskNumber)
+	{
+		diskNumber = 0;
+		var match = Regex.Match(fileName, @"Disk\s*(?<number>\d+)\s*of\s*\d+", RegexOptions.IgnoreCase);
+		return match.Success && int.TryParse(match.Groups["number"].Value, out diskNumber);
+	}
+
+	private static bool IsSameWorkbenchDiskSetCandidate(string configuredName, string candidateName)
+	{
+		if (!TryReadWorkbenchDiskSetIdentity(configuredName, out var configuredPrefix, out var configuredTotal))
+		{
+			return true;
+		}
+
+		return TryReadWorkbenchDiskSetIdentity(candidateName, out var candidatePrefix, out var candidateTotal) &&
+			configuredTotal == candidateTotal &&
+			string.Equals(configuredPrefix, candidatePrefix, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool TryReadWorkbenchDiskSetIdentity(string fileName, out string prefix, out int total)
+	{
+		prefix = string.Empty;
+		total = 0;
+		var match = Regex.Match(fileName, @"Disk\s*\d+\s*of\s*(?<total>\d+)", RegexOptions.IgnoreCase);
+		if (!match.Success || !int.TryParse(match.Groups["total"].Value, out total))
+		{
+			return false;
+		}
+
+		prefix = fileName[..match.Index].Trim();
+		return true;
+	}
+
+	private static bool ContainsWorkbenchDesktop(string path)
+	{
+		if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+		{
+			return false;
+		}
+
+		try
+		{
+			var disk = AmigaDiskImage.Load(path);
+			if (!AmigaDosFileSystem.IsSupported(disk))
+			{
+				return false;
+			}
+
+			var fileSystem = new AmigaDosFileSystem(disk);
+			return fileSystem.TryFindEntry("System/Workbench", out var entry) && entry.IsFile;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+		{
+			return false;
+		}
+	}
+
+	private static bool TryExtractWorkbenchDesktopDiskFromArchive(string path, out string diskPath)
+	{
+		diskPath = string.Empty;
+		if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
+			!File.Exists(path))
+		{
+			return false;
+		}
+
+		try
+		{
+			using var archive = ZipFile.OpenRead(path);
+			var entries = archive.Entries
+				.Where(entry =>
+					!string.IsNullOrWhiteSpace(entry.Name) &&
+					(entry.Name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
+						entry.Name.EndsWith(".adz", StringComparison.OrdinalIgnoreCase)))
+				.OrderByDescending(entry => entry.Name.Contains("Disk 2 of 6", StringComparison.OrdinalIgnoreCase))
+				.ThenByDescending(entry => entry.Name.Contains("Workbench", StringComparison.OrdinalIgnoreCase))
+				.ThenBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase);
+			foreach (var entry in entries)
+			{
+				var adfBytes = ReadArchiveAdfBytes(entry);
+				if (adfBytes == null || !ContainsWorkbenchDesktop(adfBytes))
+				{
+					continue;
+				}
+
+				diskPath = WriteArchiveDiskCacheFile(path, entry, adfBytes);
+				return true;
+			}
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+		{
+			return false;
+		}
+
+		return false;
+	}
+
+	private static byte[]? ReadArchiveAdfBytes(ZipArchiveEntry entry)
+	{
+		using var entryStream = entry.Open();
+		using var memory = new MemoryStream();
+		if (entry.Name.EndsWith(".adz", StringComparison.OrdinalIgnoreCase))
+		{
+			using var gzip = new GZipStream(entryStream, CompressionMode.Decompress);
+			gzip.CopyTo(memory);
+		}
+		else
+		{
+			entryStream.CopyTo(memory);
+		}
+
+		var data = memory.ToArray();
+		return data.Length == AmigaDiskImage.StandardAdfSize ? data : null;
+	}
+
+	private static bool ContainsWorkbenchDesktop(byte[] adfBytes)
+	{
+		try
+		{
+			var disk = AmigaDiskImage.FromAdfBytes(adfBytes.ToArray(), "workbench.adf");
+			if (!AmigaDosFileSystem.IsSupported(disk))
+			{
+				return false;
+			}
+
+			var fileSystem = new AmigaDosFileSystem(disk);
+			return fileSystem.TryFindEntry("System/Workbench", out var entry) && entry.IsFile;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
+		{
+			return false;
+		}
+	}
+
+	private static string WriteArchiveDiskCacheFile(string archivePath, ZipArchiveEntry entry, byte[] adfBytes)
+	{
+		var cacheDirectory = Path.Combine(Path.GetTempPath(), "CopperScreen", "Workbench31ArchiveCache");
+		Directory.CreateDirectory(cacheDirectory);
+		var archiveInfo = new FileInfo(archivePath);
+		var identity = string.Join(
+			"|",
+			Path.GetFullPath(archivePath),
+			archiveInfo.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+			entry.FullName,
+			entry.Length.ToString(CultureInfo.InvariantCulture),
+			entry.CompressedLength.ToString(CultureInfo.InvariantCulture));
+		var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).Substring(0, 16);
+		var fileName = SanitizeFileName(Path.GetFileNameWithoutExtension(entry.Name));
+		if (string.IsNullOrWhiteSpace(fileName))
+		{
+			fileName = "workbench31";
+		}
+
+		var outputPath = Path.Combine(cacheDirectory, $"{fileName}-{hash}.adf");
+		if (!File.Exists(outputPath) || new FileInfo(outputPath).Length != adfBytes.Length)
+		{
+			File.WriteAllBytes(outputPath, adfBytes);
+		}
+
+		return outputPath;
+	}
+
+	private static string SanitizeFileName(string name)
+	{
+		var invalid = Path.GetInvalidFileNameChars();
+		var builder = new StringBuilder(name.Length);
+		foreach (var character in name)
+		{
+			builder.Append(invalid.Contains(character) ? '_' : character);
+		}
+
+		return builder.ToString().Trim();
+	}
+
+	private readonly record struct WorkbenchArchiveDiskCandidate(string FullName, int DiskNumber);
 
 	private static bool TryParseOnOff(string value, out bool enabled)
 	{
@@ -472,10 +888,12 @@ internal sealed class CopperScreenStartupOptions
 			return Path.GetFullPath(path);
 		}
 
-		var currentDirectoryCandidate = Path.GetFullPath(path);
-		if (File.Exists(currentDirectoryCandidate))
+		foreach (var candidate in EnumerateRelativePathCandidates(path, baseDirectory))
 		{
-			return currentDirectoryCandidate;
+			if (File.Exists(candidate))
+			{
+				return Path.GetFullPath(candidate);
+			}
 		}
 
 		return Path.GetFullPath(Path.Combine(baseDirectory, path));

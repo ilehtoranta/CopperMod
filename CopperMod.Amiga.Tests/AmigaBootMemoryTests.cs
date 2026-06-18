@@ -122,6 +122,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Cpu.State.A[6]);
 		Assert.True(machine.Bus.HasHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -408)));
 		Assert.True(machine.Bus.HasHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -30)));
+		Assert.True(machine.Bus.HasHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -798)));
 	}
 
 	[Fact]
