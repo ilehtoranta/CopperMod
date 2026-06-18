@@ -23,6 +23,9 @@ namespace CopperMod.Amiga
         Sub,
         Subi,
         Subq,
+        Abcd,
+        Sbcd,
+        Nbcd,
         And,
         Andi,
         Or,
@@ -843,6 +846,41 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((opcode & 0xFFC0) == 0x4800)
+            {
+                var local = cursor;
+                if (!TryDecodeEa(
+                        ref local,
+                        (opcode >> 3) & 7,
+                        opcode & 7,
+                        M68kOperandSize.Byte,
+                        EaAllowed.DataRegister | EaAllowed.Memory | EaAllowed.PrePost,
+                        out var ea))
+                {
+                    reason = M68kJitBailoutReason.UnsupportedEa;
+                    return false;
+                }
+
+                cursor = local;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.Nbcd,
+                    M68kOperandSize.Byte,
+                    ea,
+                    ea,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: false);
+                return true;
+            }
+
             var unary = opcode & 0xFF00;
             if (unary is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
@@ -1021,6 +1059,28 @@ namespace CopperMod.Amiga
             var opmode = (opcode >> 6) & 7;
             var mode = (opcode >> 3) & 7;
             var eaReg = opcode & 7;
+            if ((opcode & 0xF1F0) is 0x8100 or 0xC100)
+            {
+                var memoryMode = (opcode & 0x0008) != 0;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    (opcode & 0xF000) == 0x8000 ? M68kJitOperation.Sbcd : M68kJitOperation.Abcd,
+                    M68kOperandSize.Byte,
+                    new M68kDecodedEa(memoryMode ? M68kJitEaKind.AddressPredecrement : M68kJitEaKind.DataRegister, eaReg, 0, 0, 0, 0),
+                    new M68kDecodedEa(memoryMode ? M68kJitEaKind.AddressPredecrement : M68kJitEaKind.DataRegister, reg, 0, 0, 0, 0),
+                    reg,
+                    0,
+                    0,
+                    0,
+                    memoryMode ? 1 : 0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: false);
+                return true;
+            }
+
             if ((line == 0x9 || line == 0xD) && opmode is 4 or 5 or 6 && mode is 0 or 1)
             {
                 reason = M68kJitBailoutReason.UnsupportedOpcode;

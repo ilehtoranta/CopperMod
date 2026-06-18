@@ -1246,6 +1246,25 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((opcode & 0xFFC0) == 0x4800)
+            {
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                if (mode == 1 || (mode == 7 && reg >= 2))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Byte, write: true);
+                var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
+                var result = SubtractBcdByte(0, (byte)ea.Read(), extend, out var carry);
+                ea.Write(result);
+                SetBcdFlags(result, carry);
+                AddCycles(ea.IsRegister ? 6 : 8);
+                return true;
+            }
+
             var unary = opcode & 0xFF00;
             if (unary is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {

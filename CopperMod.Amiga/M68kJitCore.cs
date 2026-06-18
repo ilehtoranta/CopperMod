@@ -7456,6 +7456,15 @@ namespace CopperMod.Amiga
                     return ExecuteImmediateArithmetic(add: false, logicalOperation: 0, source.Immediate, destination, size);
                 case M68kJitOperation.Subq:
                     return ExecuteQuickArithmetic(add: false, quickValue, destination, size);
+                case M68kJitOperation.Abcd:
+                    ExecuteBcdArithmetic(source, destination, subtract: false);
+                    return true;
+                case M68kJitOperation.Sbcd:
+                    ExecuteBcdArithmetic(source, destination, subtract: true);
+                    return true;
+                case M68kJitOperation.Nbcd:
+                    ExecuteNbcd(destination);
+                    return true;
                 case M68kJitOperation.And:
                     return ExecuteBinaryLogical(0, source, destination, register, size, registerToEa: variant != 0);
                 case M68kJitOperation.Andi:
@@ -7857,6 +7866,56 @@ namespace CopperMod.Amiga
             WriteResolvedEa(destination, size, result, resolvedAddress, memory);
             SetLogicFlags(result, size);
             AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private void ExecuteBcdArithmetic(M68kDecodedEa source, M68kDecodedEa destination, bool subtract)
+        {
+            var memoryMode = source.Kind == M68kJitEaKind.AddressPredecrement &&
+                destination.Kind == M68kJitEaKind.AddressPredecrement;
+            byte sourceValue;
+            byte destinationValue;
+            uint destinationAddress = 0;
+
+            if (memoryMode)
+            {
+                SetAddressRegister(source.Register, State.A[source.Register] - AddressIncrement(source.Register, M68kOperandSize.Byte));
+                SetAddressRegister(destination.Register, State.A[destination.Register] - AddressIncrement(destination.Register, M68kOperandSize.Byte));
+                sourceValue = (byte)ReadMemoryValue(State.A[source.Register], M68kOperandSize.Byte);
+                destinationAddress = State.A[destination.Register];
+                destinationValue = (byte)ReadMemoryValue(destinationAddress, M68kOperandSize.Byte);
+            }
+            else
+            {
+                sourceValue = (byte)State.D[source.Register];
+                destinationValue = (byte)State.D[destination.Register];
+            }
+
+            var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
+            var result = subtract
+                ? SubtractBcdByte(destinationValue, sourceValue, extend, out var carry)
+                : AddBcdByte(destinationValue, sourceValue, extend, out carry);
+
+            if (memoryMode)
+            {
+                WriteMemoryValue(destinationAddress, result, M68kOperandSize.Byte);
+            }
+            else
+            {
+                WriteDataRegister(destination.Register, result, M68kOperandSize.Byte);
+            }
+
+            SetBcdFlags(result, carry);
+            AddCycles(memoryMode ? 18 : 6);
+        }
+
+        private void ExecuteNbcd(M68kDecodedEa destination)
+        {
+            var value = ReadEaForModify(destination, M68kOperandSize.Byte, out var resolvedAddress, out var memory);
+            var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
+            var result = SubtractBcdByte(0, (byte)value, extend, out var carry);
+            WriteResolvedEa(destination, M68kOperandSize.Byte, result, resolvedAddress, memory);
+            SetBcdFlags(result, carry);
+            AddCycles(memory ? 8 : 6);
         }
 
         private bool ExecuteBinaryArithmetic(
@@ -8676,6 +8735,57 @@ namespace CopperMod.Amiga
             }
 
             return result;
+        }
+
+        private static byte AddBcdByte(byte destination, byte source, int extend, out bool carry)
+        {
+            var low = (destination & 0x0F) + (source & 0x0F) + extend;
+            var high = (destination >> 4) + (source >> 4);
+            if (low > 9)
+            {
+                low -= 10;
+                high++;
+            }
+
+            carry = high > 9;
+            if (carry)
+            {
+                high -= 10;
+            }
+
+            return (byte)((high << 4) | low);
+        }
+
+        private static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry)
+        {
+            var low = (destination & 0x0F) - (source & 0x0F) - extend;
+            var high = (destination >> 4) - (source >> 4);
+            if (low < 0)
+            {
+                low += 10;
+                high--;
+            }
+
+            carry = high < 0;
+            if (carry)
+            {
+                high += 10;
+            }
+
+            return (byte)((high << 4) | low);
+        }
+
+        private void SetBcdFlags(byte result, bool carry)
+        {
+            if (result != 0)
+            {
+                State.SetFlag(M68kCpuState.Zero, false);
+            }
+
+            State.SetFlag(M68kCpuState.Negative, (result & 0x80) != 0);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, carry);
+            State.SetFlag(M68kCpuState.Extend, carry);
         }
 
         private uint Shift(uint value, int count, M68kOperandSize size, int type, bool left)

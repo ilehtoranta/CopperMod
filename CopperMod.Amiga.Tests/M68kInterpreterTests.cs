@@ -375,6 +375,97 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AbcdPredecrementMemoryAddsPackedDecimalAndUpdatesAddresses()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0xC5, 0x09); // ABCD -(A1),-(A2)
+		Write(bus.Memory, 0x2000, 0x49);
+		Write(bus.Memory, 0x2100, 0x50);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[1] = 0x2001;
+		cpu.State.A[2] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.A[1]);
+		Assert.Equal(0x2100u, cpu.State.A[2]);
+		Assert.Equal(0x00, bus.Memory[0x2100]);
+		Assert.Equal(18, cycles);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void SbcdPredecrementMemorySubtractsPackedDecimalWithExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x85, 0x09); // SBCD -(A1),-(A2)
+		Write(bus.Memory, 0x2000, 0x01);
+		Write(bus.Memory, 0x2100, 0x20);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[1] = 0x2001;
+		cpu.State.A[2] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.A[1]);
+		Assert.Equal(0x2100u, cpu.State.A[2]);
+		Assert.Equal(0x18, bus.Memory[0x2100]);
+		Assert.Equal(18, cycles);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
+	public void NbcdDataRegisterNegatesPackedDecimalWithExtend()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x48, 0x02); // NBCD D2
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[2] = 0x1234_5601;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5698u, cpu.State.D[2]);
+		Assert.Equal(6, cycles);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+
+	[Fact]
+	public void NbcdPostIncrementMemoryNegatesPackedDecimalAndAdvancesAddress()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x48, 0x18); // NBCD (A0)+
+		Write(bus.Memory, 0x2000, 0x20);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Zero;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2001u, cpu.State.A[0]);
+		Assert.Equal(0x80, bus.Memory[0x2000]);
+		Assert.Equal(8, cycles);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+
+	[Fact]
 	public void MovecRaisesIllegalInstructionExceptionOnM68000()
 	{
 		var bus = new TestBus();

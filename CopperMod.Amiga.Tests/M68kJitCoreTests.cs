@@ -3926,6 +3926,109 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Theory]
+	[InlineData(0xC501, (int)M68kJitOperation.Abcd)]
+	[InlineData(0xC509, (int)M68kJitOperation.Abcd)]
+	[InlineData(0x8501, (int)M68kJitOperation.Sbcd)]
+	[InlineData(0x8509, (int)M68kJitOperation.Sbcd)]
+	[InlineData(0x4802, (int)M68kJitOperation.Nbcd)]
+	public void JitDecoderClassifiesBcdOpcodesBeforeGenericArithmetic(ushort opcode, int operation)
+	{
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase, opcode);
+
+		Assert.True(M68kDecoder.TryDecode(bus, RealFastCodeBase, out var instruction, out var reason));
+		Assert.Equal(M68kJitBailoutReason.None, reason);
+		Assert.Equal((M68kJitOperation)operation, instruction.Operation);
+	}
+
+	[Fact]
+	public void JitCompiledHelperMatchesInterpreterForRegisterBcdLoop()
+	{
+		var words = new ushort[]
+		{
+			0xC501, // ABCD D1,D2
+			0x8903, // SBCD D3,D4
+			0x4805, // NBCD D5
+			0x60F8  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.D[1] = jit.State.D[1] = 0x01;
+		interpreter.State.D[2] = jit.State.D[2] = 0x10;
+		interpreter.State.D[3] = jit.State.D[3] = 0x01;
+		interpreter.State.D[4] = jit.State.D[4] = 0x50;
+		interpreter.State.D[5] = jit.State.D[5] = 0x01;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(800, null, new CountingBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+	}
+
+	[Fact]
+	public void JitCompiledHelperMatchesInterpreterForMemoryBcdLoop()
+	{
+		var words = new ushort[]
+		{
+			0x207C, 0x0000, 0x2001, // MOVEA.L #$2001,A0
+			0x227C, 0x0000, 0x2101, // MOVEA.L #$2101,A1
+			0xC308,                 // ABCD -(A0),-(A1)
+			0x207C, 0x0000, 0x2001, // MOVEA.L #$2001,A0
+			0x227C, 0x0000, 0x2101, // MOVEA.L #$2101,A1
+			0x8308,                 // SBCD -(A0),-(A1)
+			0x247C, 0x0000, 0x2200, // MOVEA.L #$2200,A2
+			0x4812,                 // NBCD (A2)
+			0x60DA                  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		interpreterBus.WriteWord(0x2000, 0x4900);
+		interpreterBus.WriteWord(0x2100, 0x5000);
+		interpreterBus.WriteWord(0x2200, 0x2000);
+		jitBus.WriteWord(0x2000, 0x4900);
+		jitBus.WriteWord(0x2100, 0x5000);
+		jitBus.WriteWord(0x2200, 0x2000);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(800, null, new CountingBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(interpreterBus.ReadWord(0x2000), jitBus.ReadWord(0x2000));
+		Assert.Equal(interpreterBus.ReadWord(0x2100), jitBus.ReadWord(0x2100));
+		Assert.Equal(interpreterBus.ReadWord(0x2200), jitBus.ReadWord(0x2200));
+	}
+
+	[Theory]
 	[MemberData(nameof(RepresentativeGenericTracePrograms))]
 	public void JitAndInterpreterAgreeForRepresentativeGenericTraces(ushort[] words)
 	{

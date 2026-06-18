@@ -313,6 +313,11 @@ namespace CopperMod.Amiga
                 return M68kInstructionFamily.StatusControl;
             }
 
+            if ((opcode & 0xFFC0) == 0x4800)
+            {
+                return M68kInstructionFamily.Bcd;
+            }
+
             if ((opcode & 0xFB80) == 0x4880 && ((opcode >> 3) & 7) != 0)
             {
                 return M68kInstructionFamily.Movem;
@@ -489,6 +494,7 @@ namespace CopperMod.Amiga
                 _ when (opcode & 0xFFF8) == 0x4E90 => "JSR",
                 _ when (opcode & 0xFFC0) == 0x4E80 => "JSR",
                 _ when (opcode & 0xFFC0) == 0x4EC0 => "JMP",
+                _ when (opcode & 0xFFC0) == 0x4800 => "NBCD",
                 _ when (opcode & 0xFF00) == 0x4200 => "CLR",
                 _ when (opcode & 0xFF00) == 0x4400 => "NEG",
                 _ when (opcode & 0xFF00) == 0x4600 => "NOT",
