@@ -5,6 +5,7 @@ internal static class Usage
 	public const string Text = """
 		Usage:
 		  coppermod-tools render <input> --out <output> [options]
+		  coppermod-tools generate-sid-d418-matrices --input <Pex root> --out <generated C# file>
 
 		Options:
 		  --format wav|pcm|mp3|bmp   Optional when output extension is .wav, .pcm, .mp3, or .bmp.

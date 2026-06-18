@@ -4,6 +4,9 @@ namespace CopperMod.Sid
 {
     internal static class SidAnalog
     {
+        private const double Mos6581D418DcRange = 0.300;
+        private const double Mos8580D418LowNibbleDcRange = 0.017;
+
         private static readonly double[] Mos6581D418Amplitude = BuildMos6581D418AmplitudeTable();
         private static readonly double[] Mos8580D418Amplitude = BuildMos8580D418AmplitudeTable();
         private static readonly SidAnalogProfile Mos6581BalancedProfile = BuildProfile(SidChipModel.Mos6581, SidEmulationProfile.Balanced);
@@ -51,6 +54,28 @@ namespace CopperMod.Sid
         public static double Mos8580D418MeasuredAmplitude(int registerValue)
         {
             return Mos8580D418Amplitude[registerValue & 0xFF];
+        }
+
+        public static int D418TransitionMatrixLength => SidD418TransitionMatrices.MatrixLength;
+
+        public static double Mos6581D418TransitionPreWriteAmplitude(int previousRegisterValue, int nextRegisterValue)
+        {
+            return SidD418TransitionMatrices.GetMos6581PreWrite(previousRegisterValue, nextRegisterValue);
+        }
+
+        public static double Mos6581D418TransitionPostWriteAmplitude(int previousRegisterValue, int nextRegisterValue)
+        {
+            return SidD418TransitionMatrices.GetMos6581PostWrite(previousRegisterValue, nextRegisterValue);
+        }
+
+        public static double Mos8580D418TransitionPreWriteAmplitude(int previousRegisterValue, int nextRegisterValue)
+        {
+            return SidD418TransitionMatrices.GetMos8580PreWrite(previousRegisterValue, nextRegisterValue);
+        }
+
+        public static double Mos8580D418TransitionPostWriteAmplitude(int previousRegisterValue, int nextRegisterValue)
+        {
+            return SidD418TransitionMatrices.GetMos8580PostWrite(previousRegisterValue, nextRegisterValue);
         }
 
         public static double VoiceMixGain(SidChipModel model)
@@ -122,6 +147,11 @@ namespace CopperMod.Sid
             return GetProfile(model, sidEmulationProfile).VolumeStepTransientLimit;
         }
 
+        public static double VolumeRegisterTransientAttackSeconds(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
+        {
+            return GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
+        }
+
         public static double VolumeRegisterTransientSlew(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             var attackSeconds = GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
@@ -132,6 +162,11 @@ namespace CopperMod.Sid
 
             var clock = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
             return 1.0 - Math.Exp(-1.0 / (clock * attackSeconds));
+        }
+
+        public static double VolumeRegisterTransientDecaySeconds(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
+        {
+            return GetProfile(model, sidEmulationProfile).VolumeStepDecaySeconds;
         }
 
         public static double VolumeRegisterTransientDecay(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
@@ -159,19 +194,9 @@ namespace CopperMod.Sid
             }
 
             var profile = GetProfile(model, sidEmulationProfile);
-            var previousAmplitude = D418MeasuredAmplitude(previousRegisterValue, model);
-            var nextAmplitude = D418MeasuredAmplitude(nextRegisterValue, model);
-            var amplitudeDelta = nextAmplitude - previousAmplitude;
-            var offsetDelta =
-                VolumeOffset(nextRegisterValue, model, sidEmulationProfile) -
-                VolumeOffset(previousRegisterValue, model, sidEmulationProfile);
-            var highNibbleChange = ((previousRegisterValue ^ nextRegisterValue) & 0xF0) != 0 ? 1.0 : 0.0;
-            var lowNibbleChange = Math.Abs((nextRegisterValue & 0x0F) - (previousRegisterValue & 0x0F)) / 15.0;
-            var contextWeight = 0.70 + (0.22 * Math.Min(1.0, Math.Abs(amplitudeDelta))) + (0.08 * lowNibbleChange);
-            var impulse =
-                (offsetDelta * profile.D418TransitionOffsetGain * contextWeight) +
-                (amplitudeDelta * profile.D418TransitionAmplitudeGain) +
-                (Math.Sign(amplitudeDelta) * highNibbleChange * profile.D418HighNibbleTransitionGain);
+            var measuredPostWriteAmplitude = D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue, model);
+            var settledTargetAmplitude = D418MeasuredAmplitude(nextRegisterValue, model);
+            var impulse = D418AmplitudeDeltaToVolumeOffset(measuredPostWriteAmplitude - settledTargetAmplitude, model);
             return Math.Clamp(impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
         }
 
@@ -259,6 +284,25 @@ namespace CopperMod.Sid
             return model == SidChipModel.Mos8580
                 ? Mos8580D418MeasuredAmplitude(registerValue)
                 : Mos6581D418MeasuredAmplitude(registerValue);
+        }
+
+        private static double D418TransitionPostWriteAmplitude(int previousRegisterValue, int nextRegisterValue, SidChipModel model)
+        {
+            return model == SidChipModel.Mos8580
+                ? Mos8580D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue)
+                : Mos6581D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue);
+        }
+
+        private static double D418AmplitudeDeltaToVolumeOffset(double amplitudeDelta, SidChipModel model)
+        {
+            return model == SidChipModel.Mos8580
+                ? amplitudeDelta * Mos8580D418DcScale()
+                : amplitudeDelta * Mos6581D418DcRange;
+        }
+
+        private static double Mos8580D418DcScale()
+        {
+            return Mos8580D418LowNibbleDcRange / (Mos8580D418Amplitude[0x0F] - Mos8580D418Amplitude[0x00]);
         }
 
         private static double[] BuildWaveformDac(SidChipModel model)
@@ -457,8 +501,8 @@ namespace CopperMod.Sid
                 volumeDc,
                 volumeStepTransientGain: is6581 ? (referenceMeasured ? 3.65 : 3.40) : (referenceMeasured ? 0.18 : 0.0),
                 volumeStepTransientLimit: is6581 ? (referenceMeasured ? 0.70 : 0.62) : (referenceMeasured ? 0.055 : 0.0),
-                volumeStepAttackSeconds: is6581 ? (referenceMeasured ? 0.00018 : 0.00024) : (referenceMeasured ? 0.00016 : 0.0),
-                volumeStepDecaySeconds: is6581 ? (referenceMeasured ? 0.0026 : 0.0030) : (referenceMeasured ? 0.0018 : 0.0),
+                volumeStepAttackSeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientAttackSeconds : 0.00024) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientAttackSeconds : 0.0),
+                volumeStepDecaySeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientDecaySeconds : 0.0030) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientDecaySeconds : 0.0),
                 chipOutputLowPassCutoffHz: is6581 ? (referenceMeasured ? 24_000.0 : 22_000.0) : 14_000.0,
                 d418TransitionOffsetGain: is6581 ? (referenceMeasured ? 0.36 : 0.0) : (referenceMeasured ? 0.11 : 0.0),
                 d418TransitionAmplitudeGain: is6581 ? (referenceMeasured ? 0.030 : 0.0) : (referenceMeasured ? 0.0045 : 0.0),
@@ -631,11 +675,10 @@ namespace CopperMod.Sid
         private static double[] BuildMos6581MeasuredD418Offset()
         {
             const double dcBias = -0.165;
-            const double dcRange = 0.300;
             var table = new double[Mos6581D418Amplitude.Length];
             for (var i = 0; i < table.Length; i++)
             {
-                table[i] = dcBias + (Mos6581D418Amplitude[i] * dcRange);
+                table[i] = dcBias + (Mos6581D418Amplitude[i] * Mos6581D418DcRange);
             }
 
             return table;
@@ -643,10 +686,9 @@ namespace CopperMod.Sid
 
         private static double[] BuildMos8580MeasuredD418Offset()
         {
-            const double lowNibbleDcRange = 0.017;
             var table = new double[Mos8580D418Amplitude.Length];
-            var scale = lowNibbleDcRange / (Mos8580D418Amplitude[0x0F] - Mos8580D418Amplitude[0x00]);
-            var bias = -(lowNibbleDcRange * 0.5) - (Mos8580D418Amplitude[0x00] * scale);
+            var scale = Mos8580D418DcScale();
+            var bias = -(Mos8580D418LowNibbleDcRange * 0.5) - (Mos8580D418Amplitude[0x00] * scale);
             for (var i = 0; i < table.Length; i++)
             {
                 table[i] = bias + (Mos8580D418Amplitude[i] * scale);

@@ -6,6 +6,10 @@ namespace CopperMod.Sid.Tests;
 public sealed class PexD418MeasurementTests
 {
 	private const string MeasurementRootName = "Musik_RunStop_8-bit_sample_measurements_by_Pex_Mahoney_Tufvesson";
+	private const int EnvelopeWindowSampleCount = 6;
+	private const int EnvelopeFitSampleCount = 4;
+	private const double Mos6581EnvelopeFitThreshold = 0.010;
+	private const double Mos8580EnvelopeFitThreshold = 0.002;
 
 	[Fact]
 	public void MeasuredAmplitudeTableFilesMatchRuntimeConstantsWhenPresent()
@@ -51,6 +55,43 @@ public sealed class PexD418MeasurementTests
 			SidChipModel.Mos8580,
 			147995,
 			3404870));
+	}
+
+	[Fact]
+	public void OptionalPexRawWavCapturesRegenerateMeasuredD418TransitionMatrices()
+	{
+		if (Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var root = FindMeasurementRoot();
+		if (root == null)
+		{
+			AssertNotStrict("Pex measurement folder was not found.");
+			return;
+		}
+
+		var captures = GetFullMatrixCaptures(root);
+		foreach (var capture in captures)
+		{
+			if (!File.Exists(capture.Path))
+			{
+				AssertNotStrict("Pex capture WAV was not found: " + capture.Path);
+				return;
+			}
+		}
+
+		var regenerated = BuildNormalizedTransitionMatrices(captures);
+
+		AssertMatrixMatches("6581 pre-write", regenerated.Mos6581PreWrite, SidD418TransitionMatrices.Mos6581PreWrite);
+		AssertMatrixMatches("6581 post-write", regenerated.Mos6581PostWrite, SidD418TransitionMatrices.Mos6581PostWrite);
+		AssertMatrixMatches("8580 pre-write", regenerated.Mos8580PreWrite, SidD418TransitionMatrices.Mos8580PreWrite);
+		AssertMatrixMatches("8580 post-write", regenerated.Mos8580PostWrite, SidD418TransitionMatrices.Mos8580PostWrite);
+		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientAttackSeconds, regenerated.Mos6581TransientAttackSeconds, precision: 15);
+		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientDecaySeconds, regenerated.Mos6581TransientDecaySeconds, precision: 12);
+		Assert.Equal(SidD418TransitionMatrices.Mos8580TransientAttackSeconds, regenerated.Mos8580TransientAttackSeconds, precision: 15);
+		Assert.Equal(SidD418TransitionMatrices.Mos8580TransientDecaySeconds, regenerated.Mos8580TransientDecaySeconds, precision: 12);
 	}
 
 	[Fact]
@@ -182,7 +223,166 @@ public sealed class PexD418MeasurementTests
 		Assert.True(negative.To < lowToHigh.To, $"Expected ${0x9F:X2} to be below positive full-scale in raw capture.");
 	}
 
+	private static PexCapture[] GetFullMatrixCaptures(string root)
+	{
+		return new[]
+		{
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Hedning_6581R4_Gubbdata_Compo_96kHz_24bit.wav"),
+				SidChipModel.Mos6581,
+				219470,
+				3476292),
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Hedning_6581R4_SX64_96kHz_24bit.wav"),
+				SidChipModel.Mos6581,
+				193964,
+				3450805),
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Bepp_8580R5_Pepp_96kHz_24bit.wav"),
+				SidChipModel.Mos8580,
+				147995,
+				3404880),
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Bepp_6581_1185_sn1532716_96kHz_24bit.wav"),
+				SidChipModel.Mos6581,
+				143217,
+				3399978),
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Bepp_6581_3684_brokenesc_96kHz_24bit.wav"),
+				SidChipModel.Mos6581,
+				233037,
+				3489947),
+			new PexCapture(
+				Path.Combine(root, "Pex_testfiles", "Bepp_8580R5_bread_96kHz_32bit_fixed.wav"),
+				SidChipModel.Mos8580,
+				147995,
+				3404870)
+		};
+	}
+
+	private static MeasuredTransitionMatrices BuildNormalizedTransitionMatrices(PexCapture[] captures)
+	{
+		var mos6581 = new MatrixAccumulator(Mos6581EnvelopeFitThreshold);
+		var mos8580 = new MatrixAccumulator(Mos8580EnvelopeFitThreshold);
+
+		foreach (var capture in captures)
+		{
+			var wav = MeasurementWavReader.ReadMono(capture.Path);
+			Assert.Equal(96000, wav.SampleRate);
+			var normalized = NormalizeFullRange(wav.Samples);
+			var matrices = MeasureTransitionMatrix(normalized, capture);
+			NormalizeTransitionMatrices(matrices, capture.Model);
+
+			if (capture.Model == SidChipModel.Mos8580)
+			{
+				mos8580.Add(matrices);
+			}
+			else
+			{
+				mos6581.Add(matrices);
+			}
+		}
+
+		return new MeasuredTransitionMatrices(
+			mos6581.BuildPreWriteAverage(),
+			mos6581.BuildPostWriteAverage(),
+			mos8580.BuildPreWriteAverage(),
+			mos8580.BuildPostWriteAverage(),
+			(float)(1.0 / 96000.0),
+			mos6581.BuildDecaySeconds(96000),
+			(float)(1.0 / 96000.0),
+			mos8580.BuildDecaySeconds(96000));
+	}
+
+	private static TransitionMatrices MeasureTransitionMatrix(float[] samples, PexCapture capture)
+	{
+		var matrices = new TransitionMatrices();
+		for (var from = 0; from < 256; from++)
+		{
+			for (var to = 0; to < 256; to++)
+			{
+				MeasureTransitionValue(samples, capture, from, to, matrices);
+			}
+		}
+
+		return matrices;
+	}
+
+	private static void NormalizeTransitionMatrices(TransitionMatrices matrices, SidChipModel model)
+	{
+		var means = new double[256];
+		for (var value = 0; value < means.Length; value++)
+		{
+			var fromSum = 0.0;
+			var toSum = 0.0;
+			for (var other = 0; other < 256; other++)
+			{
+				fromSum += matrices.PreWrite[(value << 8) | other];
+				toSum += matrices.PostWrite[(other << 8) | value];
+			}
+
+			means[value] = ((fromSum / 256.0) + (toSum / 256.0)) * 0.5;
+		}
+
+		var maxValue = means[0x0F];
+		var minValue = means[0x9F];
+		if (model == SidChipModel.Mos8580)
+		{
+			var scale = 2.0 / (maxValue - minValue);
+			var bias = -1.0 - (minValue * scale);
+			NormalizeAffine(matrices.PreWrite, scale, bias);
+			NormalizeAffine(matrices.PostWrite, scale, bias);
+			NormalizeWindows(matrices.PostWriteWindow, scale, bias);
+			NormalizeAffine(means, scale, bias);
+			matrices.MeanOutput = means;
+		}
+		else
+		{
+			var maxAmplitude = Math.Max(maxValue, -minValue);
+			NormalizeAffine(matrices.PreWrite, 1.0 / maxAmplitude, 0.0);
+			NormalizeAffine(matrices.PostWrite, 1.0 / maxAmplitude, 0.0);
+			NormalizeWindows(matrices.PostWriteWindow, 1.0 / maxAmplitude, 0.0);
+			NormalizeAffine(means, 1.0 / maxAmplitude, 0.0);
+			matrices.MeanOutput = means;
+		}
+	}
+
+	private static void NormalizeAffine(double[] values, double scale, double bias)
+	{
+		for (var i = 0; i < values.Length; i++)
+		{
+			values[i] = (values[i] * scale) + bias;
+		}
+	}
+
+	private static void NormalizeWindows(double[][] windows, double scale, double bias)
+	{
+		for (var i = 0; i < windows.Length; i++)
+		{
+			NormalizeAffine(windows[i], scale, bias);
+		}
+	}
+
+	private static void AssertMatrixMatches(string name, double[] regenerated, ReadOnlySpan<float> runtime)
+	{
+		Assert.Equal(SidAnalog.D418TransitionMatrixLength, regenerated.Length);
+		Assert.Equal(SidAnalog.D418TransitionMatrixLength, runtime.Length);
+		for (var i = 0; i < regenerated.Length; i++)
+		{
+			var delta = Math.Abs(regenerated[i] - runtime[i]);
+			Assert.True(delta <= 0.000001, $"{name} matrix mismatch at transition ${i >> 8:X2}->${i & 0xFF:X2}: regenerated {regenerated[i]:0.000000000}, runtime {runtime[i]:0.000000000}, delta {delta:0.000000000}.");
+		}
+	}
+
 	private static (double From, double To) MeasureTransitionValue(float[] samples, PexCapture capture, int from, int to)
+	{
+		var matrices = new TransitionMatrices();
+		MeasureTransitionValue(samples, capture, from, to, matrices);
+		var index = (from << 8) | to;
+		return (matrices.PreWrite[index], matrices.PostWrite[index]);
+	}
+
+	private static void MeasureTransitionValue(float[] samples, PexCapture capture, int from, int to, TransitionMatrices matrices)
 	{
 		var startIndex = capture.FirstValueIndex + 33.0;
 		var endIndex = capture.LastValueIndex - 20.0;
@@ -202,7 +402,15 @@ public sealed class PexD418MeasurementTests
 		var toFraction = (toIndex - zeroLeftIndex) / (double)(zeroRightIndex - zeroLeftIndex);
 		var zeroFrom = (zeroLeft * (1.0 - fromFraction)) + (zeroRight * fromFraction);
 		var zeroTo = (zeroLeft * (1.0 - toFraction)) + (zeroRight * toFraction);
-		return (fromValue - zeroFrom, toValue - zeroTo);
+		matrices.PreWrite[transitionIndex] = fromValue - zeroFrom;
+		matrices.PostWrite[transitionIndex] = toValue - zeroTo;
+		for (var sample = 0; sample < EnvelopeWindowSampleCount; sample++)
+		{
+			var windowIndex = RoundMatlab(index + 13.0 + sample);
+			var windowFraction = (windowIndex - zeroLeftIndex) / (double)(zeroRightIndex - zeroLeftIndex);
+			var zeroWindow = (zeroLeft * (1.0 - windowFraction)) + (zeroRight * windowFraction);
+			matrices.PostWriteWindow[sample][transitionIndex] = AverageAtMatlabIndex(samples, windowIndex) - zeroWindow;
+		}
 	}
 
 	private static float[] NormalizeFullRange(float[] samples)
@@ -265,6 +473,147 @@ public sealed class PexD418MeasurementTests
 	private sealed record PexCapture(string Path, SidChipModel Model, int FirstValueIndex, int LastValueIndex);
 
 	private sealed record MeasurementWav(int SampleRate, float[] Samples);
+
+	private sealed class TransitionMatrices
+	{
+		public double[] PreWrite { get; } = new double[SidAnalog.D418TransitionMatrixLength];
+
+		public double[] PostWrite { get; } = new double[SidAnalog.D418TransitionMatrixLength];
+
+		public double[][] PostWriteWindow { get; } = CreatePostWriteWindow();
+
+		public double[] MeanOutput { get; set; } = Array.Empty<double>();
+
+		private static double[][] CreatePostWriteWindow()
+		{
+			var window = new double[EnvelopeWindowSampleCount][];
+			for (var i = 0; i < window.Length; i++)
+			{
+				window[i] = new double[SidAnalog.D418TransitionMatrixLength];
+			}
+
+			return window;
+		}
+	}
+
+	private sealed record MeasuredTransitionMatrices(
+		double[] Mos6581PreWrite,
+		double[] Mos6581PostWrite,
+		double[] Mos8580PreWrite,
+		double[] Mos8580PostWrite,
+		double Mos6581TransientAttackSeconds,
+		double Mos6581TransientDecaySeconds,
+		double Mos8580TransientAttackSeconds,
+		double Mos8580TransientDecaySeconds);
+
+	private sealed class MatrixAccumulator
+	{
+		private readonly double[] _preWrite = new double[SidAnalog.D418TransitionMatrixLength];
+		private readonly double[] _postWrite = new double[SidAnalog.D418TransitionMatrixLength];
+		private readonly double _envelopeFitThreshold;
+		private readonly List<double>[] _envelopeRatios;
+		private int _count;
+
+		public MatrixAccumulator(double envelopeFitThreshold)
+		{
+			_envelopeFitThreshold = envelopeFitThreshold;
+			_envelopeRatios = new List<double>[EnvelopeFitSampleCount];
+			for (var i = 0; i < _envelopeRatios.Length; i++)
+			{
+				_envelopeRatios[i] = new List<double>();
+			}
+		}
+
+		public void Add(TransitionMatrices matrices)
+		{
+			for (var i = 0; i < SidAnalog.D418TransitionMatrixLength; i++)
+			{
+				_preWrite[i] += matrices.PreWrite[i];
+				_postWrite[i] += matrices.PostWrite[i];
+			}
+
+			AddEnvelopeRatios(matrices);
+			_count++;
+		}
+
+		public double[] BuildPreWriteAverage()
+		{
+			return BuildAverage(_preWrite);
+		}
+
+		public double[] BuildPostWriteAverage()
+		{
+			return BuildAverage(_postWrite);
+		}
+
+		public double BuildDecaySeconds(int sampleRate)
+		{
+			Assert.True(_count > 0);
+			var sumXy = 0.0;
+			var sumXx = 0.0;
+			for (var i = 0; i < _envelopeRatios.Length; i++)
+			{
+				var median = Median(_envelopeRatios[i]);
+				var sampleOffset = i + 1.0;
+				sumXy += sampleOffset * Math.Log(median);
+				sumXx += sampleOffset * sampleOffset;
+			}
+
+			var slope = sumXy / sumXx;
+			Assert.True(slope < 0.0, "Expected regenerated D418 envelope to decay.");
+			return (float)((-1.0 / slope) / sampleRate);
+		}
+
+		private void AddEnvelopeRatios(TransitionMatrices matrices)
+		{
+			for (var i = 0; i < SidAnalog.D418TransitionMatrixLength; i++)
+			{
+				var target = matrices.MeanOutput[i & 0xFF];
+				var initialResidual = matrices.PostWriteWindow[0][i] - target;
+				if (Math.Abs(initialResidual) < _envelopeFitThreshold)
+				{
+					continue;
+				}
+
+				for (var sample = 1; sample <= EnvelopeFitSampleCount; sample++)
+				{
+					var residual = matrices.PostWriteWindow[sample][i] - target;
+					if (Math.Sign(residual) != Math.Sign(initialResidual))
+					{
+						continue;
+					}
+
+					var ratio = residual / initialResidual;
+					if (ratio > 0.0 && ratio < 2.0)
+					{
+						_envelopeRatios[sample - 1].Add(ratio);
+					}
+				}
+			}
+		}
+
+		private static double Median(List<double> values)
+		{
+			Assert.NotEmpty(values);
+			values.Sort();
+			var middle = values.Count / 2;
+			return (values.Count & 1) == 0
+				? (values[middle - 1] + values[middle]) * 0.5
+				: values[middle];
+		}
+
+		private double[] BuildAverage(double[] source)
+		{
+			Assert.True(_count > 0);
+			var average = new double[SidAnalog.D418TransitionMatrixLength];
+			for (var i = 0; i < average.Length; i++)
+			{
+				average[i] = source[i] / _count;
+			}
+
+			return average;
+		}
+	}
 
 	private static class MeasurementWavReader
 	{

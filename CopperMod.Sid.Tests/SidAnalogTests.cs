@@ -25,6 +25,46 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void MeasuredD418TransitionMatricesHaveExpectedShape()
+	{
+		Assert.Equal(256 * 256, SidAnalog.D418TransitionMatrixLength);
+		AssertFiniteMatrix(SidD418TransitionMatrices.Mos6581PreWrite, "6581 pre-write");
+		AssertFiniteMatrix(SidD418TransitionMatrices.Mos6581PostWrite, "6581 post-write");
+		AssertFiniteMatrix(SidD418TransitionMatrices.Mos8580PreWrite, "8580 pre-write");
+		AssertFiniteMatrix(SidD418TransitionMatrices.Mos8580PostWrite, "8580 post-write");
+	}
+
+	[Fact]
+	public void MeasuredD418TransitionMatricesHaveExpectedReferenceValues()
+	{
+		AssertTransitionValues(0x00, 0x0F, 0.004160145, 1.03355706, 0.30113918, 0.99477065);
+		AssertTransitionValues(0x0F, 0x00, 1.01067090, -0.003847202, 1.00021756, 0.29528311);
+		AssertTransitionValues(0x00, 0x9F, -0.002876993, -0.85220689, 0.29199123, -1.00677383);
+		AssertTransitionValues(0x9F, 0x0F, -0.86797822, 0.96767813, -0.99111611, 1.00570190);
+		AssertTransitionValues(0xFF, 0x00, -0.63494444, 0.003721667, -0.96524543, 0.30268008);
+	}
+
+	[Fact]
+	public void ReferenceMeasuredD418TransientEnvelopeUsesMeasuredConstants()
+	{
+		Assert.Equal(0.00024, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(0.0030, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+
+		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientAttackSeconds, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
+		Assert.Equal(SidD418TransitionMatrices.Mos6581TransientDecaySeconds, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
+		Assert.Equal(SidD418TransitionMatrices.Mos8580TransientAttackSeconds, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 15);
+		Assert.Equal(SidD418TransitionMatrices.Mos8580TransientDecaySeconds, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 15);
+
+		Assert.InRange(SidD418TransitionMatrices.Mos6581TransientAttackSeconds, 0.000010, 0.000011);
+		Assert.InRange(SidD418TransitionMatrices.Mos6581TransientDecaySeconds, 0.0010, 0.0012);
+		Assert.InRange(SidD418TransitionMatrices.Mos8580TransientDecaySeconds, 0.0004, 0.0005);
+		Assert.True(
+			SidAnalog.VolumeRegisterTransientSlew(SidChipModel.Mos6581, SidConstants.PalCpuCyclesPerSecond, SidEmulationProfile.ReferenceMeasured) >
+				SidAnalog.VolumeRegisterTransientSlew(SidChipModel.Mos6581, SidConstants.PalCpuCyclesPerSecond, SidEmulationProfile.Balanced),
+			"Expected measured reference profile to use faster D418 transient attack.");
+	}
+
+	[Fact]
 	public void D418VolumeOffsetUsesMeasuredFullRegisterByte()
 	{
 		var volume0f = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos6581);
@@ -49,13 +89,20 @@ public sealed class SidAnalogTests
 	[Fact]
 	public void ReferenceMeasuredD418TransitionsAreProfileGated()
 	{
-		var balanced6581 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
-		var reference6581 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
-		var reference8580 = SidAnalog.D418TransitionTransient(0x0F, 0x9F, SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
+		var balanced6581 = SidAnalog.D418TransitionTransient(0xD8, 0x0E, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference6581 = SidAnalog.D418TransitionTransient(0xD8, 0x0E, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var reference8580 = SidAnalog.D418TransitionTransient(0x00, 0x02, SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
 
 		Assert.Equal(0.0, balanced6581, precision: 12);
-		Assert.True(Math.Abs(reference6581) > 0.05, $"Expected measured 6581 transition impulse, got {reference6581:0.000000}.");
-		Assert.InRange(Math.Abs(reference8580), 0.001, Math.Abs(reference6581) * 0.25);
+		Assert.True(Math.Abs(reference6581) > 0.005, $"Expected measured 6581 transition correction, got {reference6581:0.000000}.");
+		Assert.InRange(Math.Abs(reference8580), 0.0002, Math.Abs(reference6581) * 0.25);
+	}
+
+	[Fact]
+	public void ReferenceMeasuredD418TransitionUsesMeasuredPostWriteMatrix()
+	{
+		AssertMeasuredTransitionFormula(0xD8, 0x0E, SidChipModel.Mos6581);
+		AssertMeasuredTransitionFormula(0x00, 0x02, SidChipModel.Mos8580);
 	}
 
 	[Fact]
@@ -144,5 +191,47 @@ public sealed class SidAnalogTests
 				SidAnalog.VolumeOffset(volume, SidChipModel.Mos6581) > SidAnalog.VolumeOffset(volume - 1, SidChipModel.Mos6581),
 				$"Expected 6581 volume DC {volume} to exceed {volume - 1}.");
 		}
+	}
+
+	private static void AssertFiniteMatrix(ReadOnlySpan<float> values, string name)
+	{
+		Assert.Equal(SidAnalog.D418TransitionMatrixLength, values.Length);
+		for (var i = 0; i < values.Length; i++)
+		{
+			Assert.True(float.IsFinite(values[i]), $"{name} matrix contains a non-finite value at {i}.");
+		}
+	}
+
+	private static void AssertTransitionValues(
+		int previousRegisterValue,
+		int nextRegisterValue,
+		double mos6581PreWrite,
+		double mos6581PostWrite,
+		double mos8580PreWrite,
+		double mos8580PostWrite)
+	{
+		Assert.Equal(mos6581PreWrite, SidAnalog.Mos6581D418TransitionPreWriteAmplitude(previousRegisterValue, nextRegisterValue), precision: 6);
+		Assert.Equal(mos6581PostWrite, SidAnalog.Mos6581D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue), precision: 6);
+		Assert.Equal(mos8580PreWrite, SidAnalog.Mos8580D418TransitionPreWriteAmplitude(previousRegisterValue, nextRegisterValue), precision: 6);
+		Assert.Equal(mos8580PostWrite, SidAnalog.Mos8580D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue), precision: 6);
+	}
+
+	private static void AssertMeasuredTransitionFormula(int previousRegisterValue, int nextRegisterValue, SidChipModel model)
+	{
+		var postWriteAmplitude = model == SidChipModel.Mos8580
+			? SidAnalog.Mos8580D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue)
+			: SidAnalog.Mos6581D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue);
+		var settledAmplitude = model == SidChipModel.Mos8580
+			? SidAnalog.Mos8580D418MeasuredAmplitude(nextRegisterValue)
+			: SidAnalog.Mos6581D418MeasuredAmplitude(nextRegisterValue);
+		var scale =
+			(SidAnalog.VolumeOffset(0x0F, model, SidEmulationProfile.ReferenceMeasured) -
+				SidAnalog.VolumeOffset(0x00, model, SidEmulationProfile.ReferenceMeasured)) /
+			((model == SidChipModel.Mos8580 ? SidAnalog.Mos8580D418MeasuredAmplitude(0x0F) : SidAnalog.Mos6581D418MeasuredAmplitude(0x0F)) -
+				(model == SidChipModel.Mos8580 ? SidAnalog.Mos8580D418MeasuredAmplitude(0x00) : SidAnalog.Mos6581D418MeasuredAmplitude(0x00)));
+		var limit = SidAnalog.VolumeRegisterTransientLimit(model, SidEmulationProfile.ReferenceMeasured);
+		var expected = Math.Clamp((postWriteAmplitude - settledAmplitude) * scale, -limit, limit);
+
+		Assert.Equal(expected, SidAnalog.D418TransitionTransient(previousRegisterValue, nextRegisterValue, model, SidEmulationProfile.ReferenceMeasured), precision: 12);
 	}
 }

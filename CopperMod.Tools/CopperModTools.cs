@@ -14,6 +14,14 @@ internal static class CopperModTools
 	{
 		try
 		{
+			if (SidD418MatrixGeneratorOptions.IsCommand(args))
+			{
+				var generatorOptions = SidD418MatrixGeneratorOptions.Parse(args);
+				SidD418MatrixGenerator.GenerateFile(generatorOptions);
+				output.WriteLine("Generated SID $D418 transition matrices: " + generatorOptions.OutputPath);
+				return 0;
+			}
+
 			var options = RenderCommandOptions.Parse(args);
 			Render(options, output);
 			return 0;
@@ -23,7 +31,7 @@ internal static class CopperModTools
 			error.WriteLine(ex.Message);
 			return 1;
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ModuleLoadException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ModuleLoadException)
 		{
 			error.WriteLine(ex.Message);
 			return 1;
