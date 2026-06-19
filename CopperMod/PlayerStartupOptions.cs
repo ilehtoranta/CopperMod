@@ -10,13 +10,15 @@ internal sealed class PlayerStartupOptions
 		IReadOnlyList<string> c64AutostartKeys,
 		TimeSpan c64AutostartDelay,
 		TimeSpan c64AutostartHold,
-		TimeSpan c64AutostartGap)
+		TimeSpan c64AutostartGap,
+		string? c64RomPath)
 	{
 		InitialPath = initialPath;
 		C64AutostartKeys = c64AutostartKeys;
 		C64AutostartDelay = c64AutostartDelay;
 		C64AutostartHold = c64AutostartHold;
 		C64AutostartGap = c64AutostartGap;
+		C64RomPath = c64RomPath;
 	}
 
 	public string? InitialPath { get; }
@@ -29,6 +31,8 @@ internal sealed class PlayerStartupOptions
 
 	public TimeSpan C64AutostartGap { get; }
 
+	public string? C64RomPath { get; }
+
 	public static PlayerStartupOptions Parse(string[] args, string? defaultPath)
 	{
 		string? initialPath = null;
@@ -36,6 +40,7 @@ internal sealed class PlayerStartupOptions
 		var c64AutostartDelay = TimeSpan.FromSeconds(1.0);
 		var c64AutostartHold = TimeSpan.FromSeconds(0.25);
 		var c64AutostartGap = TimeSpan.FromSeconds(0.75);
+		string? c64RomPath = null;
 
 		for (var i = 0; i < args.Length; i++)
 		{
@@ -65,6 +70,9 @@ internal sealed class PlayerStartupOptions
 				case "--c64-autostart-gap-seconds":
 					c64AutostartGap = TimeSpan.FromSeconds(ParseNonNegativeDouble(RequireValue(args, ref i, arg), arg));
 					break;
+				case "--c64-rom":
+					c64RomPath = RequireValue(args, ref i, arg);
+					break;
 				case "--help":
 					throw new ArgumentException(GetUsage());
 				default:
@@ -77,11 +85,22 @@ internal sealed class PlayerStartupOptions
 			c64AutostartKeys,
 			c64AutostartDelay,
 			c64AutostartHold,
-			c64AutostartGap);
+			c64AutostartGap,
+			c64RomPath);
 	}
 
 	public void Apply(IModuleSong song)
 	{
+		if (!string.IsNullOrWhiteSpace(C64RomPath))
+		{
+			if (song is not IC64RomController c64Rom)
+			{
+				throw new InvalidOperationException("The loaded module does not support C64 ROM selection.");
+			}
+
+			c64Rom.C64RomPath = C64RomPath;
+		}
+
 		if (C64AutostartKeys.Count == 0)
 		{
 			return;
@@ -144,13 +163,42 @@ internal sealed class PlayerStartupOptions
 
 		foreach (var key in keys)
 		{
-			if (key != "f3" && key != "space")
+			if (!IsSupportedC64AutostartKey(key))
 			{
-				throw new ArgumentException("--c64-autostart-key currently supports f3 and space.");
+				throw new ArgumentException("--c64-autostart-key contains an unsupported C64 key: " + key + ".");
 			}
 		}
 
 		return keys;
+	}
+
+	private static bool IsSupportedC64AutostartKey(string key)
+	{
+		if (key.Length == 1)
+		{
+			var ch = key[0];
+			return char.IsLetterOrDigit(ch) ||
+				ch is ' ' or '+' or '-' or '.' or ':' or '@' or ',' or '*' or ';' or '=' or '/';
+		}
+
+		return key is
+			"return" or
+			"enter" or
+			"space" or
+			"f1" or
+			"f3" or
+			"f5" or
+			"f7" or
+			"runstop" or
+			"run-stop" or
+			"stop" or
+			"delete" or
+			"del" or
+			"home" or
+			"cursorright" or
+			"right" or
+			"cursordown" or
+			"down";
 	}
 
 	private static string GetUsage()
@@ -160,10 +208,11 @@ internal sealed class PlayerStartupOptions
 			  CopperMod.exe [module-path] [options]
 
 			Options:
-			  --c64-autostart-key f3[,space] Schedule C64 cartridge startup keys.
+			  --c64-autostart-key a,return Schedule C64/PRG startup keys.
 			  --c64-autostart-delay-seconds <n> Default: 1.
 			  --c64-autostart-hold-seconds <n> Default: 0.25.
 			  --c64-autostart-gap-seconds <n> Default: 0.75.
+			  --c64-rom <path> Optional 16 KiB BASIC+KERNAL or 20 KiB combo ROM.
 			""";
 	}
 }

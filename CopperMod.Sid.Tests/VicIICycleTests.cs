@@ -3,6 +3,20 @@ namespace CopperMod.Sid.Tests;
 public sealed class VicIICycleTests
 {
 	[Fact]
+	public void ResetDoesNotStartWithRasterCompareIrqPending()
+	{
+		var vic = CreateVic();
+
+		vic.Write(0x1A, 0x01);
+
+		Assert.Equal(0x00, vic.Read(0x19));
+
+		Tick(vic, SidConstants.PalCyclesPerFrame);
+
+		Assert.Equal(0x81, vic.Read(0x19));
+	}
+
+	[Fact]
 	public void PalAndNtscRasterCountersWrapAtExplicitGeometry()
 	{
 		var pal = new VicII(C64ClockProfile.FromSidClock(SidClock.Pal));

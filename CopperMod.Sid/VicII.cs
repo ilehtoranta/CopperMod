@@ -148,7 +148,7 @@ namespace CopperMod.Sid
             _badlineGraphicsAddress = 0;
             _badlineMatrixValue = 0;
             _badlineGraphicsValue = 0;
-            _rasterCompareMatched = false;
+            _rasterCompareMatched = true;
             for (var i = 0; i < _sprites.Length; i++)
             {
                 _sprites[i] = new SpriteState
@@ -157,7 +157,9 @@ namespace CopperMod.Sid
                 };
             }
 
-            EvaluateRasterCompare();
+            // Reset starts on raster line 0 with compare 0, but the compare event has
+            // not crossed yet. Keep it matched so enabling $D01A does not inherit a
+            // stale raster IRQ before the first full frame wraps.
         }
 
         public byte Read(byte register)
