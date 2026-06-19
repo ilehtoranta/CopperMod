@@ -66,7 +66,7 @@ public sealed class SidCycleTraceTests
 	}
 
 	[Fact]
-	public void TraceMarksNoiseShiftOnOscillatorBitNineteenRisingCycle()
+	public void TraceMarksNoiseShiftOnSecondNoiseShiftPhase()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		var trace = new SidCycleTrace();
@@ -74,11 +74,14 @@ public sealed class SidCycleTraceTests
 		chip.Write(0x00, 0x00);
 		chip.Write(0x01, 0x80);
 
-		chip.Render(16);
+		chip.Render(18);
 
-		var before = Frame(trace, cycle: 15, voice: 0);
-		var shift = Frame(trace, cycle: 16, voice: 0);
-		Assert.False(before.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
+		var clockRise = Frame(trace, cycle: 16, voice: 0);
+		var phase1 = Frame(trace, cycle: 17, voice: 0);
+		var shift = Frame(trace, cycle: 18, voice: 0);
+		Assert.False(clockRise.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
+		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
+		Assert.Equal(0x7FFFF8u, phase1.NoiseShiftRegister);
 		Assert.True(shift.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.Equal(0x7FFFF8u, shift.NoiseShiftRegisterBefore);
 		Assert.Equal(NextNoise(0x7FFFF8u), shift.NoiseShiftRegister);

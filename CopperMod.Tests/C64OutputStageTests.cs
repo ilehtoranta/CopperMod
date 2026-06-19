@@ -68,6 +68,26 @@ public sealed class C64OutputStageTests
 	}
 
 	[Fact]
+	public void C64ProfileKeepsDcCouplingDroopVisibleAcrossFirstNote()
+	{
+		var stage = new C64OutputStage(C64OutputProfile.C64);
+		const int sampleRate = 44100;
+		var samples = Enumerable.Repeat(0.5f, sampleRate).ToArray();
+
+		stage.Process(samples, channels: 1, sampleRate);
+
+		var initial = Math.Abs(samples[0]);
+		var after50Milliseconds = Math.Abs(samples[sampleRate / 20]);
+		var after250Milliseconds = Math.Abs(samples[sampleRate / 4]);
+		Assert.True(
+			after50Milliseconds > initial * 0.40f,
+			$"Expected C64 output coupling to retain visible first-note droop, initial {initial:0.000}, 50 ms {after50Milliseconds:0.000}.");
+		Assert.True(
+			after250Milliseconds < initial * 0.20f,
+			$"Expected C64 output coupling to settle after the note attack window, initial {initial:0.000}, 250 ms {after250Milliseconds:0.000}.");
+	}
+
+	[Fact]
 	public void CleanProfileBypassesC64PostOutputShaping()
 	{
 		var stage = new C64OutputStage(C64OutputProfile.Clean);

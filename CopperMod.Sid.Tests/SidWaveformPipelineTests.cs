@@ -202,14 +202,17 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void NoiseWaveformUsesPostShiftRegisterOnBitNineteenRisingCycle()
+	public void NoiseWaveformUsesPostShiftRegisterOnSecondNoiseShiftPhase()
 	{
 		var chip = CreateTracedChip(out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x80);
 
-		chip.Render(16);
+		chip.Render(18);
 
-		var frame = Frame(trace, cycle: 16, voice: 0);
+		var phase1 = Frame(trace, cycle: 17, voice: 0);
+		var frame = Frame(trace, cycle: 18, voice: 0);
+		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
+		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), phase1.WaveformDac);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.True(frame.NoiseUsesPostShiftRegister);
 		Assert.Equal(0x7FFFF8u, frame.NoiseShiftRegisterBefore);

@@ -5,6 +5,8 @@ namespace CopperMod.Sid
 {
     internal sealed class SidChip
     {
+        internal const long OpenBusDecayCycles = 0x2000;
+
         private readonly SidVoice[] _voices = { new SidVoice(), new SidVoice(), new SidVoice() };
         private readonly byte[] _registers = new byte[32];
         private readonly byte[] _forwardedRegisters = new byte[32];
@@ -49,6 +51,7 @@ namespace CopperMod.Sid
         private double _analogOutputLowPassVoltage;
         private double _lastOutput;
         private byte _busValue;
+        private long _busLastDrivenCycle;
         private long _cycle;
 
         public SidChip(
@@ -145,6 +148,7 @@ namespace CopperMod.Sid
             _analogOutputLowPassVoltage = _analog6581Filter?.OutputRestVoltage ?? 0.0;
             _lastOutput = 0;
             _busValue = 0;
+            _busLastDrivenCycle = 0;
             _cycle = 0;
         }
 
@@ -185,6 +189,7 @@ namespace CopperMod.Sid
             _analogOutputLowPassVoltage = source._analogOutputLowPassVoltage;
             _lastOutput = source._lastOutput;
             _busValue = source._busValue;
+            _busLastDrivenCycle = source._busLastDrivenCycle;
             _cycle = source._cycle;
             if (_analog6581Filter != null && source._analog6581Filter != null)
             {
@@ -194,21 +199,37 @@ namespace CopperMod.Sid
 
         public void Write(byte register, byte value)
         {
+            Write(register, value, _cycle);
+        }
+
+        public void Write(byte register, byte value, long cycle)
+        {
             register = (byte)(register & 0x1F);
             _registers[register] = value;
             _pendingRegisters[register] = value;
             _pendingRegisterBits |= 1u << register;
-            _busValue = value;
+            DriveOpenBus(value, cycle);
         }
 
         public void WriteBusValueOnly(byte value)
         {
-            _busValue = value;
+            WriteBusValueOnly(value, _cycle);
+        }
+
+        public void WriteBusValueOnly(byte value, long cycle)
+        {
+            DriveOpenBus(value, cycle);
         }
 
         public byte Read(byte register)
         {
+            return Read(register, _cycle);
+        }
+
+        public byte Read(byte register, long cycle)
+        {
             register = (byte)(register & 0x1F);
+            ApplyOpenBusDecay(cycle);
             var value = register switch
             {
                 0x19 => (byte)0xFF,
@@ -217,8 +238,27 @@ namespace CopperMod.Sid
                 0x1C => (byte)_voices[2].EnvelopeCounter,
                 _ => _busValue
             };
-            _busValue = value;
+            DriveOpenBus(value, cycle);
             return value;
+        }
+
+        private void DriveOpenBus(byte value, long cycle)
+        {
+            _busValue = value;
+            _busLastDrivenCycle = cycle;
+        }
+
+        private void ApplyOpenBusDecay(long cycle)
+        {
+            if (_busValue == 0 ||
+                cycle < _busLastDrivenCycle ||
+                cycle - _busLastDrivenCycle < OpenBusDecayCycles)
+            {
+                return;
+            }
+
+            _busValue = 0;
+            _busLastDrivenCycle = cycle;
         }
 
         [HotPath]

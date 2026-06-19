@@ -100,7 +100,7 @@ namespace CopperMod.Sid
             double minimumCutoffHz,
             double fullScaleCutoffHz,
             double capacitorFarads = 470e-12,
-            double dacTwoRDivR = 2.20,
+            double dacTwoRDivR = 1.879,
             bool dacTerminated = false,
             double thresholdVoltage = 1.31,
             double mobilityCox = 20e-6,
@@ -558,7 +558,7 @@ namespace CopperMod.Sid
         private static double[] BuildCutoffControlVoltageTable(SidMos6581AnalogParameters parameters)
         {
             var circuit = parameters.CutoffCircuit;
-            var dac = BuildKinkedDacTable(bits: 11, twoRDivR: circuit.DacTwoRDivR, terminated: circuit.DacTerminated);
+            var dac = BuildForcedMsbCutoffDacTable(circuit);
             var zeroControlVoltage = SolveControlVoltageForCutoff(circuit.MinimumCutoffHz, circuit);
             var fullScaleControlVoltage = SolveControlVoltageForCutoff(circuit.FullScaleCutoffHz, circuit);
             var table = new double[CutoffTableSize];
@@ -567,6 +567,23 @@ namespace CopperMod.Sid
                 table[i] = zeroControlVoltage + (dac[i] * (fullScaleControlVoltage - zeroControlVoltage));
             }
 
+            return table;
+        }
+
+        private static double[] BuildForcedMsbCutoffDacTable(SidMos6581CutoffCircuit circuit)
+        {
+            var physicalDac = BuildKinkedDacTable(bits: 12, twoRDivR: circuit.DacTwoRDivR, terminated: circuit.DacTerminated);
+            var low = physicalDac[0x800];
+            var high = physicalDac[0xFFF];
+            var span = Math.Max(1.0e-12, high - low);
+            var table = new double[CutoffTableSize];
+            for (var register = 0; register < table.Length; register++)
+            {
+                table[register] = Math.Clamp((physicalDac[0x800 | register] - low) / span, 0.0, 1.0);
+            }
+
+            table[0] = 0.0;
+            table[^1] = 1.0;
             return table;
         }
 

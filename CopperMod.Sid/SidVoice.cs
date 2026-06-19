@@ -16,8 +16,10 @@ namespace CopperMod.Sid
         private const uint NoiseClockBit = 0x00080000;
         private const uint NoiseRegisterMask = 0x007FFFFF;
         private const uint NoiseResetValue = 0x7FFFF8;
+        internal const int NoiseTestAllOnesDelayCycles = 0x4000;
         private static readonly int[] NoiseDacRegisterBits = { 22, 20, 16, 13, 11, 7, 4, 2 };
         private static readonly int[] NoiseDacWaveformBits = { 11, 10, 9, 8, 7, 6, 5, 4 };
+        private const uint NoiseDacWaveformMask = 0x0FF0;
         private static readonly int[] RatePeriods =
         {
             9, 32, 63, 95, 149, 220, 267, 313,
@@ -36,6 +38,11 @@ namespace CopperMod.Sid
         private bool _envelopeMaxHold;
         private bool _noiseResetHeld;
         private bool _noiseResetReleasePending;
+        private int _noiseShiftNextPhase;
+        private int _noiseShiftActivePhase;
+        private int _noiseTestHeldCycles;
+        private int _noiseWritebackPhase1NonNoiseMask;
+        private uint _noiseWritebackPhase1PulledLowBits;
         private byte _oscillatorReadLatch;
         private byte _oscillatorReadPipeline;
         private byte _control;
@@ -83,6 +90,11 @@ namespace CopperMod.Sid
             _envelopeMaxHold = false;
             _noiseResetHeld = false;
             _noiseResetReleasePending = false;
+            _noiseShiftNextPhase = 0;
+            _noiseShiftActivePhase = 0;
+            _noiseTestHeldCycles = 0;
+            _noiseWritebackPhase1NonNoiseMask = 0;
+            _noiseWritebackPhase1PulledLowBits = 0;
             _oscillatorReadLatch = 0;
             _oscillatorReadPipeline = 0;
             _control = 0;
@@ -108,6 +120,11 @@ namespace CopperMod.Sid
             _envelopeMaxHold = source._envelopeMaxHold;
             _noiseResetHeld = source._noiseResetHeld;
             _noiseResetReleasePending = source._noiseResetReleasePending;
+            _noiseShiftNextPhase = source._noiseShiftNextPhase;
+            _noiseShiftActivePhase = source._noiseShiftActivePhase;
+            _noiseTestHeldCycles = source._noiseTestHeldCycles;
+            _noiseWritebackPhase1NonNoiseMask = source._noiseWritebackPhase1NonNoiseMask;
+            _noiseWritebackPhase1PulledLowBits = source._noiseWritebackPhase1PulledLowBits;
             _oscillatorReadLatch = source._oscillatorReadLatch;
             _oscillatorReadPipeline = source._oscillatorReadPipeline;
             _control = source._control;
@@ -280,15 +297,34 @@ namespace CopperMod.Sid
         public void ClockNoise(bool oscillatorBit19Rising)
         {
             ApplyPendingNoiseResetRelease();
-            if (!oscillatorBit19Rising)
+            _noiseShiftActivePhase = 0;
+            if (_noiseResetHeld)
             {
+                ClearNoiseShiftState();
                 return;
             }
 
-            var feedback = ((_noise >> 22) ^ (_noise >> 17)) & 1;
-            _noiseShiftLatch = ((_noise << 1) | feedback) & NoiseRegisterMask;
-            _noise = _noiseShiftLatch;
-            _cycleEvents |= SidCycleTraceEvents.NoiseShift;
+            if (_noiseShiftNextPhase == 1)
+            {
+                _noiseShiftActivePhase = 1;
+                var feedback = ((_noise >> 22) ^ (_noise >> 17)) & 1;
+                _noiseShiftLatch = ((_noise << 1) | feedback) & NoiseRegisterMask;
+                _noiseWritebackPhase1NonNoiseMask = 0;
+                _noiseWritebackPhase1PulledLowBits = 0;
+                _noiseShiftNextPhase = 2;
+            }
+            else if (_noiseShiftNextPhase == 2)
+            {
+                _noiseShiftActivePhase = 2;
+                _noise = _noiseShiftLatch & NoiseRegisterMask;
+                _noiseShiftNextPhase = 0;
+                _cycleEvents |= SidCycleTraceEvents.NoiseShift;
+            }
+
+            if (oscillatorBit19Rising && _noiseShiftNextPhase == 0)
+            {
+                _noiseShiftNextPhase = 1;
+            }
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model)
@@ -472,6 +508,7 @@ namespace CopperMod.Sid
                 waveformMask,
                 model,
                 out var outputs);
+            RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
@@ -497,7 +534,6 @@ namespace CopperMod.Sid
                     triangleInverted,
                     noiseSelected)
                 : default;
-            ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback);
             return SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
                 ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model)
                 : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
@@ -607,6 +643,7 @@ namespace CopperMod.Sid
                 waveformMask,
                 model,
                 out var outputs);
+            RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback: true);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
@@ -614,7 +651,6 @@ namespace CopperMod.Sid
             }
 
             UpdateOscillatorReadLatch(selectorDac);
-            ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback: true);
             return SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
                 ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model)
                 : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
@@ -679,6 +715,7 @@ namespace CopperMod.Sid
                 waveformMask,
                 model,
                 out var outputs);
+            RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback: true);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
@@ -686,7 +723,6 @@ namespace CopperMod.Sid
             }
 
             UpdateOscillatorReadLatch(selectorDac);
-            ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback: true);
         }
 
         private double RenderMos6581TrianglePulseFast(SidVoice? syncSource)
@@ -737,10 +773,25 @@ namespace CopperMod.Sid
         {
             _cycleEvents |= _phase == 0 ? SidCycleTraceEvents.TestBitHeld : SidCycleTraceEvents.TestBitReset;
             _phase = 0;
-            _noise = NoiseResetValue;
             if (!_noiseResetHeld)
             {
                 BeginNoiseReset();
+            }
+
+            if (_noiseTestHeldCycles < NoiseTestAllOnesDelayCycles)
+            {
+                _noiseTestHeldCycles++;
+            }
+
+            if (_noiseTestHeldCycles >= NoiseTestAllOnesDelayCycles)
+            {
+                _noise = NoiseRegisterMask;
+                _noiseShiftLatch = NoiseRegisterMask;
+            }
+            else
+            {
+                _noise = NoiseResetValue;
+                _noiseShiftLatch = NoiseResetValue;
             }
         }
 
@@ -748,14 +799,17 @@ namespace CopperMod.Sid
         {
             _noiseResetHeld = true;
             _noiseResetReleasePending = false;
+            _noiseTestHeldCycles = 0;
             _noise = NoiseResetValue;
             _noiseShiftLatch = NoiseResetValue;
+            ClearNoiseShiftState();
         }
 
         private void ReleaseNoiseReset()
         {
             _noiseResetHeld = false;
             _noiseResetReleasePending = true;
+            _noiseTestHeldCycles = 0;
         }
 
         private void ApplyPendingNoiseResetRelease()
@@ -769,7 +823,7 @@ namespace CopperMod.Sid
             _noiseResetReleasePending = false;
         }
 
-        private void ApplyMos6581NoiseWriteback(
+        private void RecordMos6581NoiseWritebackPhase(
             SidChipModel model,
             int waveformMask,
             uint waveformDac,
@@ -777,39 +831,50 @@ namespace CopperMod.Sid
         {
             if (!applyNoiseWriteback ||
                 model != SidChipModel.Mos6581 ||
+                _noiseShiftActivePhase == 0 ||
                 !NoiseCombinedWithOtherWaveforms(waveformMask))
             {
                 return;
             }
 
-            if ((waveformMask & 0xF0) == 0xA0)
+            var nonNoiseMask = waveformMask & 0x70;
+            var pulledLowBits = (~waveformDac) & NoiseDacWaveformMask;
+            if (_noiseShiftActivePhase == 1)
+            {
+                _noiseWritebackPhase1NonNoiseMask = nonNoiseMask;
+                _noiseWritebackPhase1PulledLowBits = pulledLowBits;
+                return;
+            }
+
+            if ((_noiseWritebackPhase1NonNoiseMask & nonNoiseMask) == 0)
             {
                 return;
             }
 
-            if (waveformDac == 0)
+            var writebackPulledLowBits = _noiseWritebackPhase1PulledLowBits & pulledLowBits;
+            if (writebackPulledLowBits == 0)
             {
                 return;
             }
 
-            if (_noiseResetHeld)
-            {
-                _noiseShiftLatch = ClearNoiseDacBitsFromWaveform(_noiseShiftLatch, waveformDac);
-            }
-            else
-            {
-                _noise = ClearNoiseDacBitsFromWaveform(_noise, waveformDac);
-                _noiseShiftLatch = _noise;
-            }
-
+            _noise = ClearNoiseDacBitsFromWaveform(_noise, writebackPulledLowBits);
+            _noiseShiftLatch = _noise;
             _cycleEvents |= SidCycleTraceEvents.NoiseWriteback;
         }
 
-        private static uint ClearNoiseDacBitsFromWaveform(uint noiseRegister, uint waveformDac)
+        private void ClearNoiseShiftState()
+        {
+            _noiseShiftNextPhase = 0;
+            _noiseShiftActivePhase = 0;
+            _noiseWritebackPhase1NonNoiseMask = 0;
+            _noiseWritebackPhase1PulledLowBits = 0;
+        }
+
+        private static uint ClearNoiseDacBitsFromWaveform(uint noiseRegister, uint pulledLowBits)
         {
             for (var i = 0; i < NoiseDacRegisterBits.Length; i++)
             {
-                if (((waveformDac >> NoiseDacWaveformBits[i]) & 1u) == 0)
+                if ((pulledLowBits & (1u << NoiseDacWaveformBits[i])) != 0)
                 {
                     noiseRegister &= ~(1u << NoiseDacRegisterBits[i]);
                 }

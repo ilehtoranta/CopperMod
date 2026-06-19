@@ -164,7 +164,7 @@ public sealed class SidFilterProfileTests
 		Assert.InRange(cutoffCircuit.MinimumCutoffHz, 209.9, 210.1);
 		Assert.InRange(cutoffCircuit.FullScaleCutoffHz, 10999.0, 11001.0);
 		Assert.InRange(cutoffCircuit.CapacitorFarads, 469e-12, 471e-12);
-		Assert.InRange(cutoffCircuit.DacTwoRDivR, 2.19, 2.21);
+		Assert.InRange(cutoffCircuit.DacTwoRDivR, 1.878, 1.880);
 		Assert.False(cutoffCircuit.DacTerminated);
 		Assert.InRange(cutoffCircuit.ThresholdVoltage, 1.30, 1.32);
 		Assert.InRange(cutoffCircuit.MobilityCox, 19e-6, 21e-6);
@@ -208,6 +208,11 @@ public sealed class SidFilterProfileTests
 
 		var linearMidpoint = lowControl + ((highControl - lowControl) * 1024.0 / 2047.0);
 		Assert.True(Math.Abs(midControl - linearMidpoint) > 0.005, $"Expected 6581 DAC control voltage to show a non-linear kink, midpoint delta {midControl - linearMidpoint:0.000}.");
+		var normalizedMid = (midControl - lowControl) / (highControl - lowControl);
+		var forcedMsbMid = NormalizedForcedMsbDacCode(1024, cutoffCircuit.DacTwoRDivR, cutoffCircuit.DacTerminated);
+		Assert.True(
+			Math.Abs(normalizedMid - forcedMsbMid) < 0.000001,
+			$"Expected cutoff DAC midpoint {normalizedMid:0.000000} to follow forced-MSB physical shape {forcedMsbMid:0.000000}.");
 
 		var linearCutoffMidpoint = model.CutoffHz[0] + ((model.CutoffHz[^1] - model.CutoffHz[0]) * 1024.0 / 2047.0);
 		Assert.True(Math.Abs(model.CutoffHz[1024] - linearCutoffMidpoint) > 1000.0, $"Expected VCR-derived cutoff to be strongly non-linear, midpoint delta {model.CutoffHz[1024] - linearCutoffMidpoint:0.0} Hz.");
@@ -738,6 +743,76 @@ public sealed class SidFilterProfileTests
 		}
 
 		return Math.Sqrt(sum / Math.Max(1, samples.Count));
+	}
+
+	private static double NormalizedForcedMsbDacCode(int register, double twoRDivR, bool terminated)
+	{
+		var physicalDac = BuildNormalizedDacTable(bits: 12, twoRDivR, terminated);
+		var low = physicalDac[0x800];
+		var high = physicalDac[0xFFF];
+		return (physicalDac[0x800 | (register & 0x7FF)] - low) / (high - low);
+	}
+
+	private static double[] BuildNormalizedDacTable(int bits, double twoRDivR, bool terminated)
+	{
+		var bitWeights = new double[bits];
+		for (var setBit = 0; setBit < bits; setBit++)
+		{
+			var voltage = 1.0;
+			var resistance = 1.0;
+			var twoR = twoRDivR * resistance;
+			var tail = terminated ? twoR : double.PositiveInfinity;
+			for (var bit = 0; bit < setBit; bit++)
+			{
+				tail = double.IsInfinity(tail)
+					? resistance + twoR
+					: resistance + ((twoR * tail) / (twoR + tail));
+			}
+
+			if (double.IsInfinity(tail))
+			{
+				tail = twoR;
+			}
+			else
+			{
+				tail = (twoR * tail) / (twoR + tail);
+				voltage *= tail / twoR;
+			}
+
+			for (var bit = setBit + 1; bit < bits; bit++)
+			{
+				tail += resistance;
+				var current = voltage / tail;
+				tail = (twoR * tail) / (twoR + tail);
+				voltage = tail * current;
+			}
+
+			bitWeights[setBit] = voltage;
+		}
+
+		var table = new double[1 << bits];
+		var maximum = 0.0;
+		for (var code = 0; code < table.Length; code++)
+		{
+			var output = 0.0;
+			for (var bit = 0; bit < bits; bit++)
+			{
+				if ((code & (1 << bit)) != 0)
+				{
+					output += bitWeights[bit];
+				}
+			}
+
+			table[code] = output;
+			maximum = Math.Max(maximum, output);
+		}
+
+		for (var code = 0; code < table.Length; code++)
+		{
+			table[code] /= maximum;
+		}
+
+		return table;
 	}
 
 	private static void RenderCycles(SidChip chip, int cycles)

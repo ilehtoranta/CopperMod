@@ -166,8 +166,8 @@ namespace CopperMod.Sid
             CaptureWrite(new SidRegisterWrite(cycle, chipIndex, register, value));
             if (cycle <= _lastCycle)
             {
-                Chips[chipIndex].Write(register, value);
-                _registerChips[chipIndex].Write(register, value);
+                Chips[chipIndex].Write(register, value, cycle);
+                _registerChips[chipIndex].Write(register, value, cycle);
             }
             else
             {
@@ -200,12 +200,12 @@ namespace CopperMod.Sid
                     AdvanceTo(cycle);
                 }
 
-                value = Chips[chipIndex].Read(register);
+                value = Chips[chipIndex].Read(register, cycle);
                 return true;
             }
 
             AdvanceRegisterObservableTo(cycle, GetRegisterReadAdvanceKind(register));
-            value = _registerChips[chipIndex].Read(register);
+            value = _registerChips[chipIndex].Read(register, cycle);
             return true;
         }
 
@@ -357,7 +357,7 @@ namespace CopperMod.Sid
                 _pendingWrites[_registerBusPendingWriteIndex].Cycle <= targetCycle)
             {
                 var write = _pendingWrites[_registerBusPendingWriteIndex++];
-                _registerChips[write.ChipIndex].WriteBusValueOnly(write.Value);
+                _registerChips[write.ChipIndex].WriteBusValueOnly(write.Value, write.Cycle);
             }
 
             _registerBusLastCycle = targetCycle;
@@ -376,7 +376,7 @@ namespace CopperMod.Sid
             {
                 var write = _pendingWrites[_registerPendingWriteIndex++];
                 AdvanceRegisterChips(write.Cycle - _registerLastCycle);
-                _registerChips[write.ChipIndex].Write(write.Register, write.Value);
+                _registerChips[write.ChipIndex].Write(write.Register, write.Value, write.Cycle);
             }
 
             AdvanceRegisterChips(targetCycle - _registerLastCycle);
@@ -413,7 +413,7 @@ namespace CopperMod.Sid
             {
                 var write = _pendingWrites[_pendingWriteIndex++];
                 AccumulateCycles(write.Cycle - _lastCycle);
-                Chips[write.ChipIndex].Write(write.Register, write.Value);
+                Chips[write.ChipIndex].Write(write.Register, write.Value, write.Cycle);
             }
 
             AccumulateCycles(targetCycle - _lastCycle);

@@ -66,6 +66,29 @@ public sealed class SidReadbackTests
 	}
 
 	[Fact]
+	public void OscillatorThreeReadbackFollowsTwoPhaseNoiseShiftWithoutAdvancingAudio()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD40E, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD40F, 0x80, 0));
+		Assert.True(sid.TryWrite(0xD412, 0x80, 0));
+		var timingBefore = sid.CaptureTimingSnapshot();
+		var chipBefore = sid.Chips[0].DebugState;
+
+		Assert.True(sid.TryRead(0xD41B, cycle: 17, out _));
+		Assert.Equal(0x7FFFF8u, sid.GetRegisterChipDebugState(0).Voices[2].NoiseShiftRegister);
+
+		Assert.True(sid.TryRead(0xD41B, cycle: 18, out _));
+
+		Assert.Equal(NextNoise(0x7FFFF8), sid.GetRegisterChipDebugState(0).Voices[2].NoiseShiftRegister);
+		var timingAfter = sid.CaptureTimingSnapshot();
+		Assert.Equal(timingBefore.AudioCycle, timingAfter.AudioCycle);
+		Assert.Equal(timingBefore.SampleCycles, timingAfter.SampleCycles);
+		Assert.Equal(timingBefore.SampleAccumulator, timingAfter.SampleAccumulator);
+		AssertSidChipDebugStateEqual(chipBefore, sid.Chips[0].DebugState);
+	}
+
+	[Fact]
 	public void OscillatorThreeLatchMatchesFastAndTracedSidSystems()
 	{
 		var fast = CreateSid();
@@ -137,6 +160,92 @@ public sealed class SidReadbackTests
 		Assert.Equal(timingBefore.SampleAccumulator, timingAfter.SampleAccumulator);
 		Assert.Equal(timingBefore.ChannelCaptureFrameIndex, timingAfter.ChannelCaptureFrameIndex);
 		Assert.Equal(0, timingAfter.RegisterCycle);
+		AssertSidChipDebugStateEqual(chipBefore, sid.Chips[0].DebugState);
+	}
+
+	[Fact]
+	public void OpenBusKeepsLastWriteForShortDelayAndDecaysAfterTtl()
+	{
+		var shortDelay = CreateSid();
+		Assert.True(shortDelay.TryWrite(0xD418, 0x5A, 0));
+
+		Assert.True(shortDelay.TryRead(0xD400, cycle: SidChip.OpenBusDecayCycles - 1, out var retained));
+
+		Assert.Equal(0x5A, retained);
+
+		var expired = CreateSid();
+		Assert.True(expired.TryWrite(0xD418, 0x5A, 0));
+
+		Assert.True(expired.TryRead(0xD400, cycle: SidChip.OpenBusDecayCycles, out var decayed));
+
+		Assert.Equal(0x00, decayed);
+	}
+
+	[Fact]
+	public void OpenBusReadRefreshesDecayTimerWithReturnedValue()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD418, 0x3C, 0));
+
+		Assert.True(sid.TryRead(0xD400, cycle: SidChip.OpenBusDecayCycles - 1, out var first));
+		Assert.True(sid.TryRead(0xD401, cycle: (SidChip.OpenBusDecayCycles * 2) - 2, out var second));
+
+		Assert.Equal(0x3C, first);
+		Assert.Equal(0x3C, second);
+	}
+
+	[Fact]
+	public void PotReadRefreshesOpenBusUntilDecayExpires()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD418, 0x44, 0));
+
+		Assert.True(sid.TryRead(0xD419, cycle: 10, out var pot));
+		Assert.True(sid.TryRead(0xD400, cycle: 11, out var refreshed));
+		Assert.True(sid.TryRead(0xD401, cycle: 11 + SidChip.OpenBusDecayCycles, out var decayed));
+
+		Assert.Equal(0xFF, pot);
+		Assert.Equal(0xFF, refreshed);
+		Assert.Equal(0x00, decayed);
+	}
+
+	[Fact]
+	public void OscillatorAndEnvelopeReadsRefreshOpenBus()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD40E, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD40F, 0x80, 0));
+		Assert.True(sid.TryWrite(0xD412, 0x20, 0));
+		Assert.True(sid.TryWrite(0xD413, 0x00, 0));
+		Assert.True(sid.TryWrite(0xD414, 0xF0, 0));
+
+		Assert.True(sid.TryRead(0xD41B, cycle: 3, out var oscillator));
+		Assert.True(sid.TryRead(0xD400, cycle: 3, out var busAfterOscillator));
+		Assert.True(sid.TryWrite(0xD412, 0x21, 4));
+		Assert.True(sid.TryRead(0xD41C, cycle: 13, out var envelope));
+		Assert.True(sid.TryRead(0xD401, cycle: 13, out var busAfterEnvelope));
+
+		Assert.Equal(0x01, oscillator);
+		Assert.Equal(oscillator, busAfterOscillator);
+		Assert.Equal(0x01, envelope);
+		Assert.Equal(envelope, busAfterEnvelope);
+	}
+
+	[Fact]
+	public void FutureOpenBusDecayReadDoesNotAdvanceMainAudioTimeline()
+	{
+		var sid = CreateSid();
+		Assert.True(sid.TryWrite(0xD418, 0x7E, 0));
+		var timingBefore = sid.CaptureTimingSnapshot();
+		var chipBefore = sid.Chips[0].DebugState;
+
+		Assert.True(sid.TryRead(0xD400, cycle: SidChip.OpenBusDecayCycles, out var openBus));
+
+		Assert.Equal(0x00, openBus);
+		var timingAfter = sid.CaptureTimingSnapshot();
+		Assert.Equal(timingBefore.AudioCycle, timingAfter.AudioCycle);
+		Assert.Equal(timingBefore.SampleCycles, timingAfter.SampleCycles);
+		Assert.Equal(timingBefore.SampleAccumulator, timingAfter.SampleAccumulator);
 		AssertSidChipDebugStateEqual(chipBefore, sid.Chips[0].DebugState);
 	}
 
@@ -314,6 +423,12 @@ public sealed class SidReadbackTests
 		Assert.True(sid.TryWrite(0xD406, 0xF0, cycle));
 		Assert.True(sid.TryWrite(0xD404, 0x41, cycle));
 		Assert.True(sid.TryWrite(0xD418, 0x0F, cycle));
+	}
+
+	private static uint NextNoise(uint value)
+	{
+		var feedback = ((value >> 22) ^ (value >> 17)) & 1;
+		return ((value << 1) | feedback) & 0x7FFFFF;
 	}
 
 	private static void AssertSidChipDebugStateEqual(SidChipDebugState expected, SidChipDebugState actual)

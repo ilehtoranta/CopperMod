@@ -3,7 +3,7 @@ namespace CopperMod.Rendering;
 public sealed class C64OutputStage
 {
 	private static readonly C64OutputStageProfile C64Profile = new C64OutputStageProfile(
-		DcBlockCutoffHz: 15.9,
+		DcBlockCutoffHz: 1.59,
 		OutputLowPassCutoffHz: 24000.0,
 		OutputHeadroom: 0.555f,
 		Drive: 0.0f);
