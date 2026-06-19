@@ -11,6 +11,7 @@ namespace CopperMod.Sid
         private const int Release = 3;
         private const int RateCounterMask = 0x7FFF;
         private const uint PhaseMask = 0x00FFFFFF;
+        private const uint PhaseResetValue = 0x00555555;
         private const uint PhaseMsb = 0x00800000;
         private const uint NoiseClockBit = 0x00080000;
         private const uint NoiseRegisterMask = 0x007FFFFF;
@@ -70,7 +71,7 @@ namespace CopperMod.Sid
 
         public void Reset()
         {
-            _phase = 0;
+            _phase = PhaseResetValue;
             _noise = NoiseResetValue;
             _noiseShiftLatch = NoiseResetValue;
             _envelopeCounter = 0;

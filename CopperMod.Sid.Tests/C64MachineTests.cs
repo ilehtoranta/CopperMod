@@ -294,8 +294,8 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(4);
 
-		Assert.Equal(0x01, machine.Cpu.A);
-		Assert.Equal(0x00020000u, machine.Sid.Chips[0].DebugState.Voices[2].Accumulator);
+		Assert.Equal(0x56, machine.Cpu.A);
+		Assert.Equal(0x575555u, machine.Sid.Chips[0].DebugState.Voices[2].Accumulator);
 	}
 
 	[Fact]
@@ -324,8 +324,8 @@ public sealed class C64MachineTests
 		Assert.True(machine.Sid.TryWrite(0xD412, 0x20, 0));
 		var before = machine.Sid.CaptureTimingSnapshot();
 
-		Assert.Equal(0x01, machine.Read(0xD41B, cycleOffset: 4));
-		Assert.Equal(0x01, machine.Read(0xD41B, cycleOffset: 4));
+		Assert.Equal(0x56, machine.Read(0xD41B, cycleOffset: 4));
+		Assert.Equal(0x56, machine.Read(0xD41B, cycleOffset: 4));
 
 		var after = machine.Sid.CaptureTimingSnapshot();
 		Assert.Equal(before.AudioCycle, after.AudioCycle);

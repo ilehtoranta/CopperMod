@@ -429,6 +429,15 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void OscillatorPowerUpUsesResidFpAccumulatorPattern()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Reset();
+
+		Assert.All(chip.DebugState.Voices, voice => Assert.Equal(0x555555u, voice.Accumulator));
+	}
+
+	[Fact]
 	public void OscillatorUsesTwentyFourBitAccumulator()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
