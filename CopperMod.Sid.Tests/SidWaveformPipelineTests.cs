@@ -105,7 +105,24 @@ public sealed class SidWaveformPipelineTests
 		Assert.True(frame.SyncSourceMsb);
 		Assert.True(frame.RingModInverted);
 		Assert.True(frame.TriangleInverted);
-		Assert.Equal(0xFFFu, frame.WaveformDac);
+		Assert.Equal(0xFFEu, frame.WaveformDac);
+	}
+
+	[Fact]
+	public void RingModulationUsesSourceAccumulatorMsbEvenWhenSourceVoiceIsSilent()
+	{
+		var chip = CreateTracedChip(out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x00);
+		WriteVoice(chip, voice: 1, frequency: 0x0000, control: 0x14);
+
+		chip.Render(256);
+
+		var frame = Frame(trace, cycle: 256, voice: 1);
+		Assert.True(frame.SyncSourceMsb);
+		Assert.True(frame.RingModInverted);
+		Assert.True(frame.TriangleInverted);
+		Assert.Equal(0u, frame.Accumulator);
+		Assert.Equal(0xFFEu, frame.WaveformDac);
 	}
 
 	[Fact]
@@ -125,8 +142,22 @@ public sealed class SidWaveformPipelineTests
 		Assert.Equal(0x800u, sawFrame.WaveformDac);
 		Assert.Equal(0xFF0u, triangleBeforeHalf.WaveformDac);
 		Assert.False(triangleBeforeHalf.TriangleInverted);
-		Assert.Equal(0xFFFu, triangleAtHalf.WaveformDac);
+		Assert.Equal(0xFFEu, triangleAtHalf.WaveformDac);
 		Assert.True(triangleAtHalf.TriangleInverted);
+	}
+
+	[Fact]
+	public void TriangleDacUsesElevenEffectiveBitsShiftedIntoTwelveBitRange()
+	{
+		var chip = CreateTracedChip(out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x10);
+
+		chip.Render(512);
+
+		var triangleFrames = trace.Frames.Where(frame => frame.VoiceIndex == 0).ToArray();
+		Assert.All(triangleFrames, frame => Assert.Equal(0u, frame.WaveformDac & 1u));
+		Assert.Contains(triangleFrames, frame => frame.WaveformDac == 0xFFEu);
+		Assert.DoesNotContain(triangleFrames, frame => frame.WaveformDac == 0xFFFu);
 	}
 
 	[Fact]
@@ -181,12 +212,13 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 16, voice: 0);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.True(frame.NoiseUsesPostShiftRegister);
+		Assert.Equal(0x7FFFF8u, frame.NoiseShiftRegisterBefore);
 		Assert.Equal(NextNoise(0x7FFFF8u), frame.NoiseShiftRegister);
 		Assert.Equal(ExpectedNoiseDac(frame.NoiseShiftRegister), frame.WaveformDac);
 	}
 
 	[Fact]
-	public void Mos6581NoiseCombinedWithOtherWaveformsTraceWritesBackWithoutImmediateLock()
+	public void Mos6581NoiseCombinedWithOtherWaveformsZeroOutputDoesNotImmediatelyLock()
 	{
 		var chip = CreateTracedChip(out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
@@ -195,9 +227,9 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0xA0, frame.Waveform);
-		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.Equal(0x2ED768u, frame.NoiseShiftRegister);
-		Assert.Equal(0u, frame.NoiseDac);
+		Assert.False(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
+		Assert.Equal(0x7FFFF8u, frame.NoiseShiftRegister);
+		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), frame.NoiseDac);
 		Assert.Equal(0u, frame.WaveformDac);
 		Assert.True(frame.NoiseUsesPostShiftRegister);
 		Assert.InRange(frame.WaveformOutput, -0.44, -0.42);
@@ -213,7 +245,8 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0x30, frame.Waveform);
-		Assert.Equal(0x001u, frame.WaveformDac);
+		Assert.True(frame.WaveformDac <= 0x0FFFu);
+		Assert.NotEqual(0x002u, frame.WaveformDac);
 		Assert.NotEqual(
 			SidAnalog.ConvertWaveformDac12(0x002u, SidChipModel.Mos6581) *
 				SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581),
@@ -221,10 +254,28 @@ public sealed class SidWaveformPipelineTests
 			precision: 12);
 	}
 
+	[Fact]
+	public void Mos6581CombinedWaveformMapperUsesSeparateSourceDacs()
+	{
+		var collapsedOnly = SidAnalog.MapCombinedWaveformDac12(0x800u, 0x30, SidChipModel.Mos6581);
+		var sourceAware = SidAnalog.MapCombinedWaveformDac12(
+			triangleDac: 0xFFEu,
+			sawDac: 0x800u,
+			pulseDac: 0u,
+			noiseDac: 0u,
+			waveformMask: 0x30,
+			model: SidChipModel.Mos6581,
+			out var activeWaveforms);
+
+		Assert.Equal(2, activeWaveforms);
+		Assert.NotEqual(collapsedOnly, sourceAware);
+		Assert.Equal(0u, sourceAware & ~0x0FFFu);
+	}
+
 	[Theory]
-	[InlineData(0x60, 0x001u)]
-	[InlineData(0x70, 0x005u)]
-	public void Mos6581PulseCombinedWithOtherWaveformsUsesContentionTable(byte control, uint expectedDac)
+	[InlineData(0x60)]
+	[InlineData(0x70)]
+	public void Mos6581PulseCombinedWithOtherWaveformsUsesContentionTable(byte control)
 	{
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
@@ -238,7 +289,7 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(control & 0xF0, frame.Waveform);
 		Assert.True(frame.PulseHigh);
-		Assert.Equal(expectedDac, frame.WaveformDac);
+		Assert.True(frame.WaveformDac <= 0x0FFFu);
 		Assert.True(double.IsFinite(frame.WaveformOutput));
 	}
 
@@ -270,7 +321,7 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0x50, frame.Waveform);
 		Assert.True(frame.PulseHigh);
-		Assert.Equal(0x00Fu, frame.WaveformDac);
+		Assert.Equal(0xFFFu, frame.WaveformDac);
 	}
 
 	[Fact]

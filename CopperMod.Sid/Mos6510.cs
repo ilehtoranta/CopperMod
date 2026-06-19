@@ -77,6 +77,12 @@ namespace CopperMod.Sid
             Cycles += cycles;
         }
 
+        internal void SetAccumulatorAndFlags(byte value)
+        {
+            A = value;
+            SetZn(A);
+        }
+
         public void BeginSubroutine(ushort address, byte accumulator, byte x = 0, byte y = 0)
         {
             A = accumulator;

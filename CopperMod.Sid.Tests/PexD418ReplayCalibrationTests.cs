@@ -100,6 +100,11 @@ public sealed class PexD418ReplayCalibrationTests
 
 		WriteReport(reference);
 		WriteReport(balanced);
+		if (CalibrationSweepEnabled())
+		{
+			WriteSweepReport(model, transitionIndices, reference);
+		}
+
 		AssertFinite(reference);
 		AssertFinite(balanced);
 		AssertReferenceMeasuredStageFits(reference);
@@ -117,18 +122,32 @@ public sealed class PexD418ReplayCalibrationTests
 	private CalibrationReport BuildCalibrationReport(
 		SidChipModel model,
 		SidEmulationProfile sidEmulationProfile,
-		int[] transitionIndices)
+		int[] transitionIndices,
+		SidAnalogReferenceCalibration? calibration = null)
 	{
-		var replay = ReplayContinuousPexTransitions(
-			model,
-			sidEmulationProfile,
-			transitionIndices,
-			MinPhaseOffset,
-			MaxPhaseOffset);
-		var bestPostFit = FindBestPostWriteFit(model, replay, transitionIndices);
-		var bestContextFit = FindBestContextFit(model, replay, CalibrationStage.FinalSample);
-		var stageFits = FindBestStageContextFits(model, replay);
-		return new CalibrationReport(model, sidEmulationProfile, bestPostFit, bestContextFit, stageFits);
+		IDisposable? calibrationScope = null;
+		try
+		{
+			if (calibration != null)
+			{
+				calibrationScope = SidAnalog.PushReferenceCalibration(calibration);
+			}
+
+			var replay = ReplayContinuousPexTransitions(
+				model,
+				sidEmulationProfile,
+				transitionIndices,
+				MinPhaseOffset,
+				MaxPhaseOffset);
+			var bestPostFit = FindBestPostWriteFit(model, replay, transitionIndices);
+			var bestContextFit = FindBestContextFit(model, replay, CalibrationStage.FinalSample);
+			var stageFits = FindBestStageContextFits(model, replay);
+			return new CalibrationReport(model, sidEmulationProfile, bestPostFit, bestContextFit, stageFits);
+		}
+		finally
+		{
+			calibrationScope?.Dispose();
+		}
 	}
 
 	private static void AssertFinite(CalibrationReport report)
@@ -193,8 +212,126 @@ public sealed class PexD418ReplayCalibrationTests
 	}
 
 	private void WriteReport(CalibrationReport report)
+		=> WriteText(report.ToString());
+
+	private void WriteSweepReport(
+		SidChipModel model,
+		int[] transitionIndices,
+		CalibrationReport currentReport)
 	{
-		var text = report.ToString();
+		var candidates = BuildSweepCandidates(model);
+		var results = new List<CalibrationSweepResult>(candidates.Length + 1)
+		{
+			CalibrationSweepResult.FromReport("current", currentReport)
+		};
+
+		for (var i = 0; i < candidates.Length; i++)
+		{
+			var candidate = candidates[i];
+			var report = BuildCalibrationReport(
+				model,
+				SidEmulationProfile.ReferenceMeasured,
+				transitionIndices,
+				candidate.Calibration);
+			results.Add(CalibrationSweepResult.FromReport(candidate.Name, report));
+		}
+
+		results.Sort((left, right) => CompareSweepResults(left, right));
+		WriteText(FormatSweepReport(model, results));
+	}
+
+	private static CalibrationCandidate[] BuildSweepCandidates(SidChipModel model)
+	{
+		if (model == SidChipModel.Mos8580)
+		{
+			return new[]
+			{
+				new CalibrationCandidate(
+					"lp18k",
+					new SidAnalogReferenceCalibration { Mos8580OutputLowPassCutoffHz = 18_000.0 }),
+				new CalibrationCandidate(
+					"lp22k",
+					new SidAnalogReferenceCalibration { Mos8580OutputLowPassCutoffHz = 22_000.0 }),
+				new CalibrationCandidate(
+					"atk1.5",
+					new SidAnalogReferenceCalibration { Mos8580TransientAttackScale = 1.50 }),
+				new CalibrationCandidate(
+					"dec1.25",
+					new SidAnalogReferenceCalibration { Mos8580TransientDecayScale = 1.25 }),
+				new CalibrationCandidate(
+					"xition0.85",
+					new SidAnalogReferenceCalibration { Mos8580TransitionScale = 0.85 })
+			};
+		}
+
+		return new[]
+		{
+			new CalibrationCandidate(
+				"lp20k",
+				new SidAnalogReferenceCalibration { Mos6581OutputLowPassCutoffHz = 20_000.0 }),
+			new CalibrationCandidate(
+				"lp28k",
+				new SidAnalogReferenceCalibration { Mos6581OutputLowPassCutoffHz = 28_000.0 }),
+			new CalibrationCandidate(
+				"atk1.5",
+				new SidAnalogReferenceCalibration { Mos6581TransientAttackScale = 1.50 }),
+			new CalibrationCandidate(
+				"dec1.25",
+				new SidAnalogReferenceCalibration { Mos6581TransientDecayScale = 1.25 }),
+			new CalibrationCandidate(
+				"atk1.5-dec1.25",
+				new SidAnalogReferenceCalibration { Mos6581TransientAttackScale = 1.50, Mos6581TransientDecayScale = 1.25 }),
+			new CalibrationCandidate(
+				"xition0.85",
+				new SidAnalogReferenceCalibration { Mos6581TransitionScale = 0.85 })
+		};
+	}
+
+	private static int CompareSweepResults(CalibrationSweepResult left, CalibrationSweepResult right)
+	{
+		var errorDelta = left.ContextFit.NormalizedRootMeanSquareError - right.ContextFit.NormalizedRootMeanSquareError;
+		if (Math.Abs(errorDelta) > 0.000001)
+		{
+			return errorDelta < 0.0 ? -1 : 1;
+		}
+
+		var correlationDelta = Math.Abs(right.ContextFit.Correlation) - Math.Abs(left.ContextFit.Correlation);
+		if (Math.Abs(correlationDelta) > 0.000001)
+		{
+			return correlationDelta < 0.0 ? -1 : 1;
+		}
+
+		return string.CompareOrdinal(left.Name, right.Name);
+	}
+
+	private static string FormatSweepReport(SidChipModel model, List<CalibrationSweepResult> results)
+	{
+		var builder = new StringBuilder();
+		builder.AppendFormat(CultureInfo.InvariantCulture, "{0} ReferenceMeasured sweep", model);
+		builder.AppendLine();
+		builder.AppendLine("  candidate          phase polarity    corr   nrmse        max  transient  postclip");
+		for (var i = 0; i < results.Count; i++)
+		{
+			var result = results[i];
+			builder.AppendFormat(
+				CultureInfo.InvariantCulture,
+				"  {0,-16} {1,5:+0;-0;0} {2,-8} {3,7:0.000} {4,7:0.000} {5,10:0.000000} {6,10:0.000} {7,9:0.000}",
+				result.Name,
+				result.ContextFit.PhaseOffsetSamples,
+				result.ContextFit.Scale < 0.0 ? "inv" : "norm",
+				result.ContextFit.Correlation,
+				result.ContextFit.NormalizedRootMeanSquareError,
+				result.ContextFit.MaxAbsoluteError,
+				result.TransientCurrentFit.NormalizedRootMeanSquareError,
+				result.PostSoftClipFit.NormalizedRootMeanSquareError);
+			builder.AppendLine();
+		}
+
+		return builder.ToString();
+	}
+
+	private void WriteText(string text)
+	{
 		_output.WriteLine(text);
 		var path = Environment.GetEnvironmentVariable("SID_D418_REPLAY_CALIBRATION_REPORT");
 		if (string.IsNullOrWhiteSpace(path))
@@ -498,6 +635,12 @@ public sealed class PexD418ReplayCalibrationTests
 			"1",
 			StringComparison.Ordinal);
 
+	private static bool CalibrationSweepEnabled()
+		=> string.Equals(
+			Environment.GetEnvironmentVariable("SID_D418_REPLAY_SWEEP"),
+			"1",
+			StringComparison.Ordinal);
+
 	private static CapturedSample RenderSingleSampleAt(
 		SidSystem sid,
 		SidOutputStageTrace outputStageTrace,
@@ -653,6 +796,24 @@ public sealed class PexD418ReplayCalibrationTests
 		double Observed,
 		double Fitted,
 		double Expected);
+
+	private readonly record struct CalibrationCandidate(
+		string Name,
+		SidAnalogReferenceCalibration Calibration);
+
+	private readonly record struct CalibrationSweepResult(
+		string Name,
+		CalibrationFit ContextFit,
+		CalibrationFit TransientCurrentFit,
+		CalibrationFit PostSoftClipFit)
+	{
+		public static CalibrationSweepResult FromReport(string name, CalibrationReport report)
+			=> new CalibrationSweepResult(
+				name,
+				report.ContextFit,
+				FindStageContextFit(report, "transient-current"),
+				FindStageContextFit(report, "post-softclip"));
+	}
 
 	private readonly record struct CalibrationReport(
 		SidChipModel Model,

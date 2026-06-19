@@ -82,7 +82,11 @@ namespace CopperMod.Sid
                 : null;
             _analogOutputLowPassAlpha = _analog6581Filter == null
                 ? _outputLowPassAlpha
-                : 1.0 - Math.Exp(-2.0 * Math.PI * _analog6581Filter.OutputLowPassCutoffHz / _cpuCyclesPerSecond);
+                : 1.0 - Math.Exp(
+                    -2.0 *
+                    Math.PI *
+                    SidAnalog.ApplyOutputLowPassCalibration(Model, SidEmulationProfile, _analog6581Filter.OutputLowPassCutoffHz) /
+                    _cpuCyclesPerSecond);
             _analogOutputLowPassVoltage = _analog6581Filter?.OutputRestVoltage ?? 0.0;
         }
 

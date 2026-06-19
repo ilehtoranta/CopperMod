@@ -84,7 +84,8 @@ namespace CopperMod.Sid
             IReadOnlyList<SidChipPlacement> chips,
             byte[] payload,
             IReadOnlyList<ModuleDiagnostic> diagnostics,
-            C64CartridgeImage? cartridge = null)
+            C64CartridgeImage? cartridge = null,
+            bool preferRomBasic = false)
         {
             Kind = kind;
             Version = version;
@@ -108,6 +109,7 @@ namespace CopperMod.Sid
             Payload = payload;
             Diagnostics = diagnostics;
             Cartridge = cartridge;
+            PreferRomBasic = preferRomBasic;
         }
 
         public SidFileKind Kind { get; }
@@ -154,6 +156,8 @@ namespace CopperMod.Sid
 
         public C64CartridgeImage? Cartridge { get; }
 
+        public bool PreferRomBasic { get; }
+
         public bool IsRsid => Kind == SidFileKind.Rsid;
 
         public bool IsCartridge => Kind == SidFileKind.Crt;
@@ -190,6 +194,51 @@ namespace CopperMod.Sid
                 payload: Array.Empty<byte>(),
                 diagnostics: Array.Empty<ModuleDiagnostic>(),
                 cartridge: cartridge);
+        }
+
+        public static SidModule CreateBasicProgram(ReadOnlySpan<byte> data, string title)
+        {
+            if (data.Length < 3)
+            {
+                throw new ModuleLoadException("C64 PRG data is shorter than the load address and payload.");
+            }
+
+            var loadAddress = (ushort)(data[0] | (data[1] << 8));
+            var payload = data.Slice(2).ToArray();
+            if (loadAddress + payload.Length > 0x10000)
+            {
+                throw new ModuleLoadException("C64 PRG payload does not fit in memory.");
+            }
+
+            return new SidModule(
+                SidFileKind.Rsid,
+                version: 2,
+                dataOffset: 2,
+                loadAddress: 0,
+                effectiveLoadAddress: loadAddress,
+                initAddress: 0,
+                playAddress: 0,
+                subSongCount: 1,
+                defaultSubSongIndex: 0,
+                speed: 0,
+                flags: 0x0002,
+                relocationStartPage: 0,
+                relocationPageLength: 0,
+                title: string.IsNullOrWhiteSpace(title) ? "C64 PRG" : title,
+                author: "C64 PRG",
+                released: "",
+                clock: SidClock.Pal,
+                chipModel: SidChipModel.Mos6581,
+                chips: new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) },
+                payload: payload,
+                diagnostics: new[]
+                {
+                    new ModuleDiagnostic(
+                        ModuleDiagnosticSeverity.Info,
+                        "C64 PRG BASIC program can be executed by the ROM BASIC path when a C64 ROM is selected.",
+                        "SID_PRG_BASIC_NATIVE_RUNNER")
+                },
+                preferRomBasic: true);
         }
     }
 }

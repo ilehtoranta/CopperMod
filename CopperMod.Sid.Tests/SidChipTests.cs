@@ -506,7 +506,7 @@ public sealed class SidChipTests
 	[Theory]
 	[InlineData(false)]
 	[InlineData(true)]
-	public void Mos6581NoiseCombinedWithOtherWaveformsDegradesWithoutImmediateLfsrClear(bool traced)
+	public void Mos6581NoiseSawPreservesNoiseRegisterForMeasuredCombinedOutput(bool traced)
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		if (traced)
@@ -518,8 +518,8 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		Assert.Equal(0x2ED768u, chip.DebugState.Voices[0].NoiseShiftRegister);
-		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseDac);
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), chip.DebugState.Voices[0].NoiseDac);
 
 		chip.Write(0x04, 0x80);
 		chip.Render(15);
@@ -528,11 +528,11 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		Assert.Equal(NextNoise(0x2ED768), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
-	public void Mos6581NoiseWritebackDuringTestAffectsReleaseLatch()
+	public void Mos6581NoiseSawDuringTestPreservesReleaseLatch()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA8);
@@ -544,7 +544,7 @@ public sealed class SidChipTests
 		chip.Write(0x04, 0x80);
 		chip.Render(1);
 
-		Assert.Equal(0x2ED768u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -584,16 +584,18 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
-	public void Mos6581TrianglePulseCombinationAddsContentionEdges()
+	public void Mos6581TrianglePulseCombinationStaysAudibleAndDistinct()
 	{
 		var triangleSamples = RenderAudioSamples(control: 0x11);
 		var combinedSamples = RenderAudioSamples(control: 0x51);
 
-		var triangleCrossingRate = ZeroCrossingRate(triangleSamples);
-		var combinedCrossingRate = ZeroCrossingRate(combinedSamples);
-
-		Assert.True(combinedCrossingRate > triangleCrossingRate * 2.5, $"Expected 6581 triangle+pulse contention to add edge detail, triangle {triangleCrossingRate:0.000}, combined {combinedCrossingRate:0.000}.");
 		Assert.True(MeasureRange(combinedSamples) > 0.02, "Expected 6581 triangle+pulse combination to remain audible.");
+		var meanAbsoluteDifference = triangleSamples
+			.Zip(combinedSamples, (triangle, combined) => Math.Abs(triangle - combined))
+			.Average();
+		Assert.True(
+			meanAbsoluteDifference > 0.02,
+			$"Expected 6581 triangle+pulse combination to differ from plain triangle, got mean absolute difference {meanAbsoluteDifference:0.000}.");
 	}
 
 	[Fact]

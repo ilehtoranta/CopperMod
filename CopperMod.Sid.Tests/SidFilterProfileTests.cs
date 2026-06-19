@@ -222,7 +222,7 @@ public sealed class SidFilterProfileTests
 		var referenceModel = Assert.IsType<SidMos6581AnalogModel>(reference.Analog6581Model);
 
 		Assert.InRange(balancedModel.OutputCircuit.OutputLowPassCutoffHz, 11_999.0, 12_001.0);
-		Assert.InRange(referenceModel.OutputCircuit.OutputLowPassCutoffHz, 23_999.0, 24_001.0);
+		Assert.InRange(referenceModel.OutputCircuit.OutputLowPassCutoffHz, 27_999.0, 28_001.0);
 	}
 
 	[Fact]

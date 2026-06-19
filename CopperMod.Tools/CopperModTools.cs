@@ -104,6 +104,16 @@ internal static class CopperModTools
 			sidEmulationProfileController.SidEmulationProfile = options.SidProfile;
 		}
 
+		if (!string.IsNullOrWhiteSpace(options.C64RomPath))
+		{
+			if (song is not IC64RomController c64RomController)
+			{
+				throw new CommandLineException("--c64-rom requires a C64/SID input file.");
+			}
+
+			c64RomController.C64RomPath = options.C64RomPath;
+		}
+
 		if (options.SidSoloVoice.HasValue)
 		{
 			if (song is not ISidVoiceMuteController sidVoiceMuteController)

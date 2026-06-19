@@ -24,7 +24,7 @@ namespace CopperMod.Sid
         public bool CanLoad(ModuleLoadContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
-            return CanLoad(context.DataSpan);
+            return CanLoad(context.DataSpan) || IsPrg(context);
         }
 
         /// <inheritdoc />
@@ -57,7 +57,20 @@ namespace CopperMod.Sid
         public IModuleSong Load(ModuleLoadContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
+            if (IsPrg(context))
+            {
+                var title = Path.GetFileNameWithoutExtension(context.SourcePath) ?? "C64 PRG";
+                return new SidSong(SidModule.CreateBasicProgram(context.DataSpan, title));
+            }
+
             return Load(context.DataSpan);
+        }
+
+        private static bool IsPrg(ModuleLoadContext context)
+        {
+            return context.DataSpan.Length >= 3 &&
+                !string.IsNullOrWhiteSpace(context.SourcePath) &&
+                string.Equals(Path.GetExtension(context.SourcePath), ".prg", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsZip(ReadOnlySpan<byte> data)

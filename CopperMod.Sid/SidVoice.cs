@@ -436,28 +436,9 @@ namespace CopperMod.Sid
                     out trace);
             }
 
-            var outputs = 0;
-            uint combinedDac = 0x0FFF;
-            if ((waveformMask & 0x10) != 0)
-            {
-                combinedDac &= triangleDac;
-                outputs++;
-            }
-
-            if ((waveformMask & 0x20) != 0)
-            {
-                combinedDac &= GetSawDac();
-                outputs++;
-            }
-
-            if ((waveformMask & 0x40) != 0)
-            {
-                combinedDac &= pulseDac;
-                outputs++;
-            }
-
             var noiseSelected = (waveformMask & 0x80) != 0;
-            if ((waveformMask & 0x80) != 0)
+            var noiseDac = 0u;
+            if (noiseSelected)
             {
                 if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
                 {
@@ -475,14 +456,21 @@ namespace CopperMod.Sid
                             ringModInverted,
                             triangleInverted,
                             noiseUsesPostShiftRegister: false)
-                        : default;
-                    return 0;
-                }
-
-                combinedDac &= GetNoiseDac();
-                outputs++;
+                    : default;
+                return 0;
             }
 
+                noiseDac = GetNoiseDac();
+            }
+
+            var selectorDac = SidAnalog.MapCombinedWaveformDac12(
+                triangleDac,
+                GetSawDac(),
+                pulseDac,
+                noiseDac,
+                waveformMask,
+                model,
+                out var outputs);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
@@ -498,7 +486,6 @@ namespace CopperMod.Sid
                 return 0;
             }
 
-            var selectorDac = SidAnalog.MapCombinedWaveformDac12(combinedDac, waveformMask, model);
             UpdateOscillatorReadLatch(selectorDac);
             trace = captureTrace
                 ? new SidWaveformTrace(
@@ -537,18 +524,11 @@ namespace CopperMod.Sid
                         triangleInverted,
                         noiseUsesPostShiftRegister: false)
                     : default;
-                return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
-                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
+                return (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
+                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
             }
 
-            var saw = GetSawDac();
-            var contentionMask = (_phase >> 10) & 0x0FFF;
-            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
-            if ((PulseWidth & 0x0FFF) != 0)
-            {
-                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
-            }
-
+            var contentionDac = GetMos6581TrianglePulseContentionDac();
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             UpdateOscillatorReadLatch(contentionDac);
             trace = captureTrace
@@ -598,26 +578,10 @@ namespace CopperMod.Sid
                     return SidAnalog.ConvertWaveformDac12(noiseDac, model);
             }
 
-            var outputs = 0;
-            uint combinedDac = 0x0FFF;
-            if ((waveformMask & 0x10) != 0)
-            {
-                combinedDac &= GetTriangleDac(syncSource, out _, out _, out _);
-                outputs++;
-            }
-
-            if ((waveformMask & 0x20) != 0)
-            {
-                combinedDac &= GetSawDac();
-                outputs++;
-            }
-
-            if ((waveformMask & 0x40) != 0)
-            {
-                combinedDac &= GetPulseDac();
-                outputs++;
-            }
-
+            var triangleDacForCombined = GetTriangleDac(syncSource, out _, out _, out _);
+            var sawDacForCombined = GetSawDac();
+            var pulseDacForCombined = GetPulseDac();
+            var noiseDacForCombined = 0u;
             if ((waveformMask & 0x80) != 0)
             {
                 if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
@@ -631,17 +595,23 @@ namespace CopperMod.Sid
                     return 0;
                 }
 
-                combinedDac &= GetNoiseDac();
-                outputs++;
+                noiseDacForCombined = GetNoiseDac();
             }
 
+            var selectorDac = SidAnalog.MapCombinedWaveformDac12(
+                triangleDacForCombined,
+                sawDacForCombined,
+                pulseDacForCombined,
+                noiseDacForCombined,
+                waveformMask,
+                model,
+                out var outputs);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
                 return 0;
             }
 
-            var selectorDac = SidAnalog.MapCombinedWaveformDac12(combinedDac, waveformMask, model);
             UpdateOscillatorReadLatch(selectorDac);
             ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback: true);
             return SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
@@ -680,26 +650,10 @@ namespace CopperMod.Sid
                     return;
             }
 
-            var outputs = 0;
-            uint combinedDac = 0x0FFF;
-            if ((waveformMask & 0x10) != 0)
-            {
-                combinedDac &= GetTriangleDac(syncSource, out _, out _, out _);
-                outputs++;
-            }
-
-            if ((waveformMask & 0x20) != 0)
-            {
-                combinedDac &= GetSawDac();
-                outputs++;
-            }
-
-            if ((waveformMask & 0x40) != 0)
-            {
-                combinedDac &= GetPulseDac();
-                outputs++;
-            }
-
+            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
+            var sawDac = GetSawDac();
+            var pulseDac = GetPulseDac();
+            var noiseDac = 0u;
             if ((waveformMask & 0x80) != 0)
             {
                 if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
@@ -713,17 +667,23 @@ namespace CopperMod.Sid
                     return;
                 }
 
-                combinedDac &= GetNoiseDac();
-                outputs++;
+                noiseDac = GetNoiseDac();
             }
 
+            var selectorDac = SidAnalog.MapCombinedWaveformDac12(
+                triangleDac,
+                sawDac,
+                pulseDac,
+                noiseDac,
+                waveformMask,
+                model,
+                out var outputs);
             if (outputs == 0)
             {
                 UpdateOscillatorReadLatch(0);
                 return;
             }
 
-            var selectorDac = SidAnalog.MapCombinedWaveformDac12(combinedDac, waveformMask, model);
             UpdateOscillatorReadLatch(selectorDac);
             ApplyMos6581NoiseWriteback(model, waveformMask, selectorDac, applyNoiseWriteback: true);
         }
@@ -734,19 +694,12 @@ namespace CopperMod.Sid
             if (pulseDac == 0)
             {
                 UpdateOscillatorReadLatch(0);
-                return SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
-                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581);
+                return (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
+                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
             }
 
-            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
-            var saw = GetSawDac();
-            var contentionMask = (_phase >> 10) & 0x0FFF;
-            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
-            if ((PulseWidth & 0x0FFF) != 0)
-            {
-                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
-            }
-
+            _ = GetTriangleDac(syncSource, out _, out _, out _);
+            var contentionDac = GetMos6581TrianglePulseContentionDac();
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             UpdateOscillatorReadLatch(contentionDac);
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
@@ -762,16 +715,16 @@ namespace CopperMod.Sid
                 return;
             }
 
-            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
-            var saw = GetSawDac();
-            var contentionMask = (_phase >> 10) & 0x0FFF;
-            var contentionDac = (triangleDac & contentionMask) | ((triangleDac & saw) >> 1);
-            if ((PulseWidth & 0x0FFF) != 0)
-            {
-                contentionDac ^= (saw & 0x20) == 0 ? 0u : 0x0FFFu;
-            }
-
+            _ = GetTriangleDac(syncSource, out _, out _, out _);
+            var contentionDac = GetMos6581TrianglePulseContentionDac();
             UpdateOscillatorReadLatch(contentionDac);
+        }
+
+        private uint GetMos6581TrianglePulseContentionDac()
+        {
+            var pulseWidth = (uint)(PulseWidth & 0x0FFF);
+            var pulsePhase = (GetSawDac() - pulseWidth) & 0x0FFFu;
+            return pulsePhase < 0x0140u ? 0x0FFFu : 0u;
         }
 
         private double GetMos6581TrianglePulseBias()
@@ -828,6 +781,16 @@ namespace CopperMod.Sid
                 return;
             }
 
+            if ((waveformMask & 0xF0) == 0xA0)
+            {
+                return;
+            }
+
+            if (waveformDac == 0)
+            {
+                return;
+            }
+
             if (_noiseResetHeld)
             {
                 _noiseShiftLatch = ClearNoiseDacBitsFromWaveform(_noiseShiftLatch, waveformDac);
@@ -865,17 +828,14 @@ namespace CopperMod.Sid
             out bool ringModInverted,
             out bool triangleInverted)
         {
-            var phase = (_phase >> 11) & 0x0FFF;
-            var invert = (_phase & PhaseMsb) != 0;
             syncSourceMsb = syncSource != null && (syncSource._phase & PhaseMsb) != 0;
-            ringModInverted = (_control & 0x04) != 0 && syncSourceMsb;
-            if (ringModInverted)
-            {
-                invert = !invert;
-            }
-
+            var ringModEnabled = (_control & 0x04) != 0;
+            var accumulatorMsb = (_phase & PhaseMsb) != 0;
+            var invert = ringModEnabled ? accumulatorMsb ^ syncSourceMsb : accumulatorMsb;
+            ringModInverted = ringModEnabled && syncSourceMsb;
             triangleInverted = invert;
-            return invert ? phase ^ 0x0FFFu : phase;
+            var phase = ((_phase >> 12) & 0x07FF) << 1;
+            return invert ? phase ^ 0x0FFEu : phase;
         }
 
         private uint GetSawDac()

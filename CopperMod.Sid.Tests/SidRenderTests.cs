@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using System.Text;
 
 namespace CopperMod.Sid.Tests;
 
@@ -182,6 +183,69 @@ public sealed class SidRenderTests
 		}
 
 		Assert.True(peakRange > 0.001f, $"{name} should stay audible after mixer/filter hot-path changes, peak range was {peakRange:0.000000}.");
+	}
+
+	[Fact]
+	public void RawPrgBasicProgramConsumesAutostartInputAndRunsPastFalseIfAndRemColon()
+	{
+		var prg = SidFixtureBuilder.CreateBasicPrg(
+			(10, Basic(0x85, " A$")),
+			(20, Basic(0x8B, " A$", 0xB2, "\"Q\" ", 0xA7, " ", 0x97, " 54296,0: ", 0x80)),
+			(30, Basic(0x8B, " A$", 0xB2, "\"A\" ", 0xA7, " 50")),
+			(40, Basic(0x80)),
+			(50, Basic(0x8F, " TEST 1: BASIC WAVEFORMS")),
+			(60, Basic(0x97, " 54296,15: ", 0x97, " 54272,49: ", 0x97, " 54273,28")),
+			(70, Basic(0x97, " 54277,0: ", 0x97, " 54278,240: ", 0x97, " 54276,17")),
+			(80, Basic(0x80)));
+		using var song = (SidSong)new SidFormat().Load(new ModuleLoadContext(prg, Path.Combine(Path.GetTempPath(), "sidtest.prg")));
+		var autostart = (IC64AutostartController)song;
+		autostart.ScheduleAutostartKey("a", TimeSpan.Zero, TimeSpan.FromMilliseconds(1));
+		autostart.ScheduleAutostartKey("return", TimeSpan.FromMilliseconds(2), TimeSpan.FromMilliseconds(1));
+		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
+
+		for (var tick = 0; tick < 8; tick++)
+		{
+			_ = RenderNextTick(song, options);
+		}
+
+		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x0F);
+		Assert.Contains(song.SidWrites, write => write.Register == 0x04 && write.Value == 0x11);
+		Assert.DoesNotContain(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x00);
+	}
+
+	[Fact]
+	public void C64RomPathInstallsSixteenKilobyteBasicAndKernalRom()
+	{
+		var path = Path.Combine(Path.GetTempPath(), "CopperMod-C64Rom-" + Guid.NewGuid().ToString("N") + ".bin");
+		var rom = new byte[0x4000];
+		rom[0] = 0x42;
+		rom[0x1FFF] = 0x43;
+		rom[0x2000] = 0x99;
+		rom[0x3FFF] = 0x9A;
+		File.WriteAllBytes(path, rom);
+		try
+		{
+			var prg = SidFixtureBuilder.CreateBasicPrg((10, Basic(0x80)));
+			using var song = (SidSong)new SidFormat().Load(new ModuleLoadContext(prg, Path.Combine(Path.GetTempPath(), "romtest.prg")));
+
+			((IC64RomController)song).C64RomPath = path;
+
+			var machine = GetMachine(song);
+			var basicRom = (byte[])machine.GetType()
+				.GetField("_basicRom", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+				.GetValue(machine)!;
+			var kernalRom = (byte[])machine.GetType()
+				.GetField("_kernalRom", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+				.GetValue(machine)!;
+			Assert.Equal(0x42, basicRom[0]);
+			Assert.Equal(0x43, basicRom[^1]);
+			Assert.Equal(0x99, kernalRom[0]);
+			Assert.Equal(0x9A, kernalRom[^1]);
+		}
+		finally
+		{
+			File.Delete(path);
+		}
 	}
 
 	[Fact]
@@ -560,18 +624,14 @@ public sealed class SidRenderTests
 
 	private static int GetCpuProgramCounter(SidSong song)
 	{
-		var machine = typeof(SidSong)
-			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-			.GetValue(song)!;
+		var machine = GetMachine(song);
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (ushort)cpu.GetType().GetProperty("ProgramCounter")!.GetValue(cpu)!;
 	}
 
 	private static long GetCpuCycle(SidSong song)
 	{
-		var machine = typeof(SidSong)
-			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-			.GetValue(song)!;
+		var machine = GetMachine(song);
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (long)cpu.GetType().GetProperty("Cycles")!.GetValue(cpu)!;
 	}
@@ -586,11 +646,16 @@ public sealed class SidRenderTests
 
 	private static bool GetCpuHalted(SidSong song)
 	{
-		var machine = typeof(SidSong)
-			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-			.GetValue(song)!;
+		var machine = GetMachine(song);
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (bool)cpu.GetType().GetProperty("Halted")!.GetValue(cpu)!;
+	}
+
+	private static object GetMachine(SidSong song)
+	{
+		return typeof(SidSong)
+			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+			.GetValue(song)!;
 	}
 
 	private static string FindWorkspaceFile(params string[] parts)
@@ -638,6 +703,27 @@ public sealed class SidRenderTests
 	{
 		var offset = register % 7;
 		return register < 21 && offset <= 6;
+	}
+
+	private static byte[] Basic(params object[] parts)
+	{
+		var bytes = new List<byte>();
+		foreach (var part in parts)
+		{
+			switch (part)
+			{
+				case int value:
+					bytes.Add((byte)value);
+					break;
+				case string text:
+					bytes.AddRange(Encoding.ASCII.GetBytes(text));
+					break;
+				default:
+					throw new ArgumentException("Unsupported BASIC token part: " + part, nameof(parts));
+			}
+		}
+
+		return bytes.ToArray();
 	}
 
 	private static bool IsControlRegister(byte register)

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 
 namespace CopperMod.Sid
 {
@@ -36,10 +38,15 @@ namespace CopperMod.Sid
         private const ushort KernalRamTasAddress = 0xFF87;
         private const ushort KernalRestorAddress = 0xFF8A;
         private const ushort KernalChrOutAddress = 0xFFD2;
+        private const ushort KernalChrInAddress = 0xFFCF;
+        private const ushort KernalStopAddress = 0xFFE1;
+        private const ushort KernalGetInAddress = 0xFFE4;
+        private const ushort BasicExecuteProgramAddress = 0xA7AE;
         private const ushort TextScreenStart = 0x0400;
         private const int TextScreenColumns = 40;
         private const int TextScreenRows = 25;
         private const byte DefaultTextColor = 0x0E;
+        private const long RomBasicBootCycles = 2_500_000;
         private byte _processorPortDirection;
         private byte _processorPortValue;
         private long _hardwareCycle;
@@ -55,6 +62,10 @@ namespace CopperMod.Sid
         private int _vicBankBase;
         private readonly List<ScheduledAutostartKey> _autostartKeys = new List<ScheduledAutostartKey>();
         private readonly HashSet<C64Key> _pressedKeys = new HashSet<C64Key>();
+        private readonly Queue<byte> _hostInputQueue = new Queue<byte>();
+        private int _basicInputScheduleIndex;
+        private int _romBasicInputScheduleIndex;
+        private bool _realRomInstalled;
         private readonly byte[] _videoVicRegisters = new byte[0x40];
         private readonly List<C64SpriteRegisterSnapshot> _spriteRegisterSnapshots = new List<C64SpriteRegisterSnapshot>(32);
         private long _videoFrameNumber;
@@ -65,7 +76,8 @@ namespace CopperMod.Sid
         public C64Machine(
             SidModule module,
             SidFilterProfileId filterProfile = SidFilterProfileId.Auto,
-            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced,
+            string? c64RomPath = null)
         {
             _module = module ?? throw new ArgumentNullException(nameof(module));
             _clock = C64ClockProfile.FromSidClock(module.Clock);
@@ -78,7 +90,7 @@ namespace CopperMod.Sid
             Sid = new SidSystem(module.Chips, module.EffectiveChipModel, _clock.CpuCyclesPerSecond, filterProfile, sidEmulationProfile);
             Cpu = new Mos6510(this);
             UpdateVicBankBase();
-            InstallMinimalRoms();
+            InstallRoms(c64RomPath);
         }
 
         public Mos6510 Cpu { get; }
@@ -152,6 +164,9 @@ namespace CopperMod.Sid
             _digimax.Reset();
             _easyFlash?.Reset();
             _pressedKeys.Clear();
+            _hostInputQueue.Clear();
+            _basicInputScheduleIndex = 0;
+            _romBasicInputScheduleIndex = 0;
             _spriteRegisterSnapshots.Clear();
             _videoFrameNumber = 0;
             _kernalCursorColumn = 0;
@@ -165,6 +180,12 @@ namespace CopperMod.Sid
                 _hardwareCycle = 0;
                 Sid.ResetClock();
                 RefreshInterruptLines();
+                return;
+            }
+
+            if (_module.IsBasicRsid && _module.PreferRomBasic && _realRomInstalled)
+            {
+                StartRomBasicProgram();
                 return;
             }
 
@@ -619,10 +640,13 @@ namespace CopperMod.Sid
                     HostKernalChrOut(Cpu.A);
                     AdvanceNativeCycles(128);
                     return true;
-                case 0xFFCF: // CHRIN
-                case 0xFFE1: // STOP
-                case 0xFFE4: // GETIN
-                    Cpu.A = 0;
+                case KernalChrInAddress:
+                case KernalGetInAddress:
+                    HostKernalInput(address == KernalChrInAddress);
+                    AdvanceNativeCycles(64);
+                    return true;
+                case KernalStopAddress:
+                    Cpu.SetAccumulatorAndFlags(0xFF);
                     AdvanceNativeCycles(64);
                     return true;
                 default:
@@ -642,6 +666,61 @@ namespace CopperMod.Sid
             {
                 _ram[address + i] = _module.Payload[i];
             }
+        }
+
+        private void StartRomBasicProgram()
+        {
+            Cpu.Reset(ReadResetVector());
+            Cpu.ResetCycles();
+            _hardwareCycle = 0;
+            Sid.ResetClock();
+            RefreshInterruptLines();
+
+            RunRomBasicBootUntilInput(RomBasicBootCycles);
+
+            LoadPayload();
+            InitializeBasicProgramPointers();
+
+            Cpu.Reset(BasicExecuteProgramAddress);
+            _hardwareCycle = 0;
+            Sid.Reset();
+            Sid.ResetClock();
+            RefreshInterruptLines();
+        }
+
+        private void RunRomBasicBootUntilInput(long maxCycles)
+        {
+            var target = Cpu.Cycles + maxCycles;
+            while (Cpu.Cycles < target &&
+                   !Cpu.Halted &&
+                   Cpu.ProgramCounter != KernalChrInAddress &&
+                   Cpu.ProgramCounter != KernalGetInAddress)
+            {
+                var before = Cpu.Cycles;
+                BeginCpuInstruction();
+                _ = Cpu.ExecuteInstruction();
+                CompleteCpuInstruction();
+                AdvanceHardwareTo(Cpu.Cycles);
+                ServicePendingInterrupts();
+                if (Cpu.Cycles == before)
+                {
+                    break;
+                }
+            }
+        }
+
+        private void InitializeBasicProgramPointers()
+        {
+            var start = _module.EffectiveLoadAddress;
+            var end = (ushort)(start + _module.Payload.Length);
+            WriteWord(0x002B, start); // TXTTAB
+            WriteWord(0x002D, end);   // VARTAB
+            WriteWord(0x002F, end);   // ARYTAB
+            WriteWord(0x0031, end);   // STREND
+            WriteWord(0x007A, (ushort)(start - 1)); // TXTPTR, CHRGET pre-increments.
+            WriteWord(0x0039, 0x0000); // CURLIN: program mode before the first line header is read.
+            WriteWord(0x003B, 0xFFFF); // OLDLIN
+            WriteWord(0x003D, 0x0000); // OLDTXT
         }
 
         private void InstallRsidEnvironment()
@@ -709,12 +788,60 @@ namespace CopperMod.Sid
                 (byte)(KernalIrqEntryAddress >> 8));
         }
 
+        private void InstallRoms(string? c64RomPath)
+        {
+            _realRomInstalled = false;
+            if (string.IsNullOrWhiteSpace(c64RomPath))
+            {
+                InstallMinimalRoms();
+                return;
+            }
+
+            var rom = File.ReadAllBytes(c64RomPath);
+            switch (rom.Length)
+            {
+                case 0x4000:
+                    Array.Copy(rom, 0, _basicRom, 0, _basicRom.Length);
+                    Array.Copy(rom, _basicRom.Length, _kernalRom, 0, _kernalRom.Length);
+                    C64CharacterRom.Install(_characterRom);
+                    _realRomInstalled = true;
+                    break;
+                case 0x5000:
+                    Array.Copy(rom, 0, _basicRom, 0, _basicRom.Length);
+                    Array.Copy(rom, _basicRom.Length, _kernalRom, 0, _kernalRom.Length);
+                    Array.Copy(rom, _basicRom.Length + _kernalRom.Length, _characterRom, 0, _characterRom.Length);
+                    _realRomInstalled = true;
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        "C64 ROM image must be 16 KiB BASIC+KERNAL or 20 KiB BASIC+KERNAL+CHAR.");
+            }
+        }
+
         private bool TryHandleKernalOpcodeFetch(ushort address, CpuBusAccessKind kind, out byte value)
         {
             value = 0;
             if (kind != CpuBusAccessKind.OpcodeFetch)
             {
                 return false;
+            }
+
+            if (_module.PreferRomBasic && _realRomInstalled)
+            {
+                switch (address)
+                {
+                    case KernalChrInAddress:
+                    case KernalGetInAddress:
+                        HostKernalInput(address == KernalChrInAddress);
+                        value = 0x60;
+                        return true;
+                    case KernalStopAddress:
+                        Cpu.SetAccumulatorAndFlags(0xFF);
+                        value = 0x60;
+                        return true;
+                    default:
+                        return false;
+                }
             }
 
             switch (address)
@@ -735,15 +862,81 @@ namespace CopperMod.Sid
                     HostKernalChrOut(Cpu.A);
                     value = 0x60;
                     return true;
-                case 0xFFCF: // CHRIN
-                case 0xFFE1: // STOP
-                case 0xFFE4: // GETIN
-                    Cpu.A = 0;
+                case KernalChrInAddress:
+                case KernalGetInAddress:
+                    HostKernalInput(address == KernalChrInAddress);
+                    value = 0x60;
+                    return true;
+                case KernalStopAddress:
+                    Cpu.SetAccumulatorAndFlags(0xFF);
                     value = 0x60;
                     return true;
                 default:
                     return false;
             }
+        }
+
+        private void HostKernalInput(bool blocking)
+        {
+            if (!TryDequeueRomBasicInput(out var value) && blocking)
+            {
+                if (_romBasicInputScheduleIndex < _autostartKeys.Count)
+                {
+                    var nextCycle = _autostartKeys[_romBasicInputScheduleIndex].StartCycle;
+                    if (nextCycle > Cpu.Cycles)
+                    {
+                        AdvanceNativeCycles(nextCycle - Cpu.Cycles);
+                    }
+
+                    _ = TryDequeueRomBasicInput(out value);
+                }
+                else
+                {
+                    AdvanceNativeCycles(512);
+                }
+            }
+
+            Cpu.SetAccumulatorAndFlags(value);
+        }
+
+        private bool TryDequeueRomBasicInput(out byte value)
+        {
+            if (_hostInputQueue.Count > 0)
+            {
+                value = _hostInputQueue.Dequeue();
+                return true;
+            }
+
+            while (_romBasicInputScheduleIndex < _autostartKeys.Count)
+            {
+                var key = _autostartKeys[_romBasicInputScheduleIndex];
+                if (Cpu.Cycles < key.StartCycle)
+                {
+                    break;
+                }
+
+                _romBasicInputScheduleIndex++;
+                if (key.Key == C64Key.Return)
+                {
+                    _hostInputQueue.Enqueue(0x0D);
+                }
+                else if (key.BasicInputText != null)
+                {
+                    foreach (var ch in key.BasicInputText)
+                    {
+                        _hostInputQueue.Enqueue((byte)ch);
+                    }
+                }
+
+                if (_hostInputQueue.Count > 0)
+                {
+                    value = _hostInputQueue.Dequeue();
+                    return true;
+                }
+            }
+
+            value = 0;
+            return false;
         }
 
         private void HostKernalIoInit()
@@ -1248,8 +1441,50 @@ namespace CopperMod.Sid
             var clampedHold = hold <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : hold;
             var start = SidIntegerMath.TimeSpanToCycles(clampedDelay, _clock.CpuCyclesPerSecond);
             var length = Math.Max(1, SidIntegerMath.TimeSpanToCycles(clampedHold, _clock.CpuCyclesPerSecond));
-            var keyPosition = C64KeyboardMatrix.GetPosition(ParseAutostartKey(key));
-            _autostartKeys.Add(new ScheduledAutostartKey(start, start + length, keyPosition.ColumnMask, keyPosition.RowMask));
+            var c64Key = ParseAutostartKey(key);
+            var keyPosition = C64KeyboardMatrix.GetPosition(c64Key);
+            _autostartKeys.Add(new ScheduledAutostartKey(
+                start,
+                start + length,
+                keyPosition.ColumnMask,
+                keyPosition.RowMask,
+                c64Key,
+                GetBasicInputText(c64Key)));
+        }
+
+        internal bool TryReadScheduledBasicInputLine(out string line)
+        {
+            line = string.Empty;
+            if (_basicInputScheduleIndex >= _autostartKeys.Count)
+            {
+                return false;
+            }
+
+            var builder = new StringBuilder();
+            var waitUntilCycle = Cpu.Cycles;
+            for (var i = _basicInputScheduleIndex; i < _autostartKeys.Count; i++)
+            {
+                var key = _autostartKeys[i];
+                waitUntilCycle = Math.Max(waitUntilCycle, key.EndCycle);
+                if (key.Key == C64Key.Return)
+                {
+                    _basicInputScheduleIndex = i + 1;
+                    if (waitUntilCycle > Cpu.Cycles)
+                    {
+                        AdvanceNativeCycles(waitUntilCycle - Cpu.Cycles);
+                    }
+
+                    line = builder.ToString();
+                    return true;
+                }
+
+                if (key.BasicInputText != null)
+                {
+                    builder.Append(key.BasicInputText);
+                }
+            }
+
+            return false;
         }
 
         internal void SetKeyPressed(C64Key key, bool pressed)
@@ -1338,17 +1573,141 @@ namespace CopperMod.Sid
 
         private static C64Key ParseAutostartKey(string key)
         {
-            if (string.Equals(key, "f3", StringComparison.OrdinalIgnoreCase))
+            key = key.Trim();
+            if (key.Length == 1 && TryParseCharacterKey(key[0], out var characterKey))
             {
-                return C64Key.F3;
+                return characterKey;
             }
 
-            if (string.Equals(key, "space", StringComparison.OrdinalIgnoreCase))
+            return key.ToLowerInvariant() switch
             {
-                return C64Key.Space;
-            }
+                "return" or "enter" => C64Key.Return,
+                "space" => C64Key.Space,
+                "f1" => C64Key.F1,
+                "f3" => C64Key.F3,
+                "f5" => C64Key.F5,
+                "f7" => C64Key.F7,
+                "runstop" or "run-stop" or "stop" => C64Key.RunStop,
+                "delete" or "del" => C64Key.Delete,
+                "home" => C64Key.Home,
+                "cursorright" or "right" => C64Key.CursorRight,
+                "cursordown" or "down" => C64Key.CursorDown,
+                _ => throw new ArgumentException("Unsupported C64 autostart key: " + key, nameof(key))
+            };
+        }
 
-            throw new ArgumentException("Unsupported C64 autostart key: " + key, nameof(key));
+        private static bool TryParseCharacterKey(char value, out C64Key key)
+        {
+            key = value switch
+            {
+                '0' => C64Key.Zero,
+                '1' => C64Key.One,
+                '2' => C64Key.Two,
+                '3' => C64Key.Three,
+                '4' => C64Key.Four,
+                '5' => C64Key.Five,
+                '6' => C64Key.Six,
+                '7' => C64Key.Seven,
+                '8' => C64Key.Eight,
+                '9' => C64Key.Nine,
+                ' ' => C64Key.Space,
+                '+' => C64Key.Plus,
+                '-' => C64Key.Minus,
+                '.' => C64Key.Period,
+                ':' => C64Key.Colon,
+                '@' => C64Key.At,
+                ',' => C64Key.Comma,
+                '*' => C64Key.Asterisk,
+                ';' => C64Key.Semicolon,
+                '=' => C64Key.Equals,
+                '/' => C64Key.Slash,
+                _ => char.ToUpperInvariant(value) switch
+                {
+                    'A' => C64Key.A,
+                    'B' => C64Key.B,
+                    'C' => C64Key.C,
+                    'D' => C64Key.D,
+                    'E' => C64Key.E,
+                    'F' => C64Key.F,
+                    'G' => C64Key.G,
+                    'H' => C64Key.H,
+                    'I' => C64Key.I,
+                    'J' => C64Key.J,
+                    'K' => C64Key.K,
+                    'L' => C64Key.L,
+                    'M' => C64Key.M,
+                    'N' => C64Key.N,
+                    'O' => C64Key.O,
+                    'P' => C64Key.P,
+                    'Q' => C64Key.Q,
+                    'R' => C64Key.R,
+                    'S' => C64Key.S,
+                    'T' => C64Key.T,
+                    'U' => C64Key.U,
+                    'V' => C64Key.V,
+                    'W' => C64Key.W,
+                    'X' => C64Key.X,
+                    'Y' => C64Key.Y,
+                    'Z' => C64Key.Z,
+                    _ => default
+                }
+            };
+            return key != default || value == '0';
+        }
+
+        private static string? GetBasicInputText(C64Key key)
+        {
+            return key switch
+            {
+                C64Key.A => "A",
+                C64Key.B => "B",
+                C64Key.C => "C",
+                C64Key.D => "D",
+                C64Key.E => "E",
+                C64Key.F => "F",
+                C64Key.G => "G",
+                C64Key.H => "H",
+                C64Key.I => "I",
+                C64Key.J => "J",
+                C64Key.K => "K",
+                C64Key.L => "L",
+                C64Key.M => "M",
+                C64Key.N => "N",
+                C64Key.O => "O",
+                C64Key.P => "P",
+                C64Key.Q => "Q",
+                C64Key.R => "R",
+                C64Key.S => "S",
+                C64Key.T => "T",
+                C64Key.U => "U",
+                C64Key.V => "V",
+                C64Key.W => "W",
+                C64Key.X => "X",
+                C64Key.Y => "Y",
+                C64Key.Z => "Z",
+                C64Key.Zero => "0",
+                C64Key.One => "1",
+                C64Key.Two => "2",
+                C64Key.Three => "3",
+                C64Key.Four => "4",
+                C64Key.Five => "5",
+                C64Key.Six => "6",
+                C64Key.Seven => "7",
+                C64Key.Eight => "8",
+                C64Key.Nine => "9",
+                C64Key.Space => " ",
+                C64Key.Plus => "+",
+                C64Key.Minus => "-",
+                C64Key.Period => ".",
+                C64Key.Colon => ":",
+                C64Key.At => "@",
+                C64Key.Comma => ",",
+                C64Key.Asterisk => "*",
+                C64Key.Semicolon => ";",
+                C64Key.Equals => "=",
+                C64Key.Slash => "/",
+                _ => null
+            };
         }
 
         private void CaptureSpriteRegisterSnapshot(byte register)
@@ -1418,12 +1777,20 @@ namespace CopperMod.Sid
 
         private readonly struct ScheduledAutostartKey
         {
-            public ScheduledAutostartKey(long startCycle, long endCycle, byte portAColumnMask, byte portBRowMask)
+            public ScheduledAutostartKey(
+                long startCycle,
+                long endCycle,
+                byte portAColumnMask,
+                byte portBRowMask,
+                C64Key key,
+                string? basicInputText)
             {
                 StartCycle = startCycle;
                 EndCycle = endCycle;
                 PortAColumnMask = portAColumnMask;
                 PortBRowMask = portBRowMask;
+                Key = key;
+                BasicInputText = basicInputText;
             }
 
             public long StartCycle { get; }
@@ -1433,6 +1800,10 @@ namespace CopperMod.Sid
             public byte PortAColumnMask { get; }
 
             public byte PortBRowMask { get; }
+
+            public C64Key Key { get; }
+
+            public string? BasicInputText { get; }
         }
 
         [HotPath]

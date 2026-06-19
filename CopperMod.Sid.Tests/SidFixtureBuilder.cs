@@ -64,6 +64,17 @@ internal static class SidFixtureBuilder
 		return CreateBasicRsid(lines, Array.Empty<byte>(), 0);
 	}
 
+	public static byte[] CreateBasicPrg(params (ushort LineNumber, byte[] Tokens)[] lines)
+	{
+		const ushort loadAddress = 0x0801;
+		var program = BuildBasicProgram(lines);
+		var payload = new byte[program.Length + 2];
+		payload[0] = (byte)(loadAddress & 0xFF);
+		payload[1] = (byte)(loadAddress >> 8);
+		program.CopyTo(payload, 2);
+		return payload;
+	}
+
 	public static byte[] CreateBasicRsid((ushort LineNumber, byte[] Tokens)[] lines, byte[] trailingBytes, ushort trailingAddress)
 	{
 		const ushort loadAddress = 0x0801;

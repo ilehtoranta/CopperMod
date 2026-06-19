@@ -3,7 +3,7 @@ using System;
 namespace CopperMod.Sid
 {
     /// <summary>
-    /// Allows tools to schedule automated C64 keyboard input for cartridge playback.
+    /// Allows tools to schedule automated C64 keyboard input for C64 playback.
     /// </summary>
     public interface IC64AutostartController
     {

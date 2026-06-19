@@ -68,6 +68,39 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void ReferenceCalibrationOverrideIsScopedToMeasuredProfile()
+	{
+		var defaultLimit = SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var defaultAttack = SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var defaultSlew = SidAnalog.VolumeRegisterTransientSlew(SidChipModel.Mos6581, SidConstants.PalCpuCyclesPerSecond, SidEmulationProfile.ReferenceMeasured);
+		var defaultCutoff = SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
+		var defaultTransition = SidAnalog.D418TransitionTransient(0x00, 0x0F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+
+		using (SidAnalog.PushReferenceCalibration(new SidAnalogReferenceCalibration
+		{
+			Mos6581TransientLimitScale = 0.50,
+			Mos6581TransientAttackScale = 2.00,
+			Mos6581TransitionScale = 0.25,
+			Mos8580OutputLowPassCutoffHz = 18_000.0
+		}))
+		{
+			Assert.Equal(defaultLimit * 0.50, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
+			Assert.Equal(defaultAttack * 2.00, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
+			Assert.True(
+				SidAnalog.VolumeRegisterTransientSlew(SidChipModel.Mos6581, SidConstants.PalCpuCyclesPerSecond, SidEmulationProfile.ReferenceMeasured) < defaultSlew,
+				"Expected a slower calibrated attack to reduce the per-cycle slew.");
+			Assert.Equal(18_000.0, SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 12);
+			Assert.Equal(defaultTransition * 0.25, SidAnalog.D418TransitionTransient(0x00, 0x0F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
+			Assert.Equal(0.62, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		}
+
+		Assert.Equal(defaultLimit, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
+		Assert.Equal(defaultAttack, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 15);
+		Assert.Equal(defaultCutoff, SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 12);
+		Assert.Equal(defaultTransition, SidAnalog.D418TransitionTransient(0x00, 0x0F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
+	}
+
+	[Fact]
 	public void D418VolumeOffsetUsesMeasuredFullRegisterByte()
 	{
 		var volume0f = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos6581);

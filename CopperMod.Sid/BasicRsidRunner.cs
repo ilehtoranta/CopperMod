@@ -11,6 +11,7 @@ namespace CopperMod.Sid
         private const byte TokenFor = 0x81;
         private const byte TokenNext = 0x82;
         private const byte TokenData = 0x83;
+        private const byte TokenInput = 0x85;
         private const byte TokenDim = 0x86;
         private const byte TokenRead = 0x87;
         private const byte TokenLet = 0x88;
@@ -245,8 +246,12 @@ namespace CopperMod.Sid
                     Consume(StatementCycles);
                     return;
                 case TokenData:
-                case TokenRem:
                     cursor.SkipStatement();
+                    SavePosition(cursor);
+                    Consume(StatementCycles);
+                    return;
+                case TokenRem:
+                    cursor.SkipLine();
                     SavePosition(cursor);
                     Consume(StatementCycles);
                     return;
@@ -320,6 +325,14 @@ namespace CopperMod.Sid
                     SavePosition(cursor);
                     Consume(StatementCycles);
                     return;
+                case TokenInput:
+                    cursor.Read();
+                    if (!ExecuteInput(ref cursor))
+                    {
+                        return;
+                    }
+
+                    break;
                 case TokenGet:
                     cursor.Read();
                     ExecuteGet(ref cursor);
@@ -593,7 +606,7 @@ namespace CopperMod.Sid
             cursor.SkipSpaces();
             if (!condition)
             {
-                cursor.SkipStatement();
+                cursor.SkipLine();
                 SavePosition(cursor);
                 Consume(StatementCycles);
                 return;
@@ -701,6 +714,49 @@ namespace CopperMod.Sid
             }
 
             Halt("BASIC WAIT did not complete before the native runner poll limit.");
+        }
+
+        private bool ExecuteInput(ref Cursor cursor)
+        {
+            cursor.SkipSpaces();
+            if (!cursor.End && cursor.Peek() == (byte)'"')
+            {
+                _ = cursor.ReadStringLiteral();
+                cursor.SkipSpaces();
+                if (!cursor.Match((byte)';'))
+                {
+                    cursor.Match((byte)',');
+                }
+            }
+
+            if (!_machine.TryReadScheduledBasicInputLine(out var line))
+            {
+                Consume(StatementCycles);
+                return false;
+            }
+
+            var fields = line.Split(',');
+            var fieldIndex = 0;
+            do
+            {
+                var target = ParseVariableReference(ref cursor);
+                var text = fieldIndex < fields.Length ? fields[fieldIndex++] : string.Empty;
+                if (target.IsString)
+                {
+                    Assign(target, BasicValue.FromString(text));
+                }
+                else
+                {
+                    Assign(
+                        target,
+                        BasicValue.FromNumber(double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : 0));
+                }
+
+                cursor.SkipSpaces();
+            }
+            while (cursor.Match((byte)','));
+
+            return true;
         }
 
         private void ExecuteGet(ref Cursor cursor)
@@ -1378,10 +1434,28 @@ namespace CopperMod.Sid
 
             public void SkipStatement()
             {
-                while (!End && _tokens[Position] != (byte)':')
+                var inString = false;
+                while (!End)
                 {
+                    if (_tokens[Position] == (byte)'"')
+                    {
+                        inString = !inString;
+                        Position++;
+                        continue;
+                    }
+
+                    if (!inString && _tokens[Position] == (byte)':')
+                    {
+                        break;
+                    }
+
                     Position++;
                 }
+            }
+
+            public void SkipLine()
+            {
+                Position = _tokens.Length;
             }
 
             public string ReadStringLiteral()

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace CopperMod.Sid
 {
@@ -20,6 +21,7 @@ namespace CopperMod.Sid
         private static readonly ushort[][] Mos6581CombinedWaveformDac = BuildMos6581CombinedWaveformDacTables();
         private static readonly double[] Mos6581CombinedWaveformGain = BuildMos6581CombinedWaveformGain();
         private static readonly double[] Mos6581CombinedWaveformBias = BuildMos6581CombinedWaveformBias();
+        private static readonly AsyncLocal<SidAnalogReferenceCalibration?> ReferenceCalibrationOverride = new AsyncLocal<SidAnalogReferenceCalibration?>();
 
         public static double ConvertWaveformDac12(uint value, SidChipModel model)
         {
@@ -102,6 +104,96 @@ namespace CopperMod.Sid
                 Mos6581CombinedWaveformDac[waveformMask & 0xF0] != null;
         }
 
+        public static uint MapCombinedWaveformDac12(
+            uint triangleDac,
+            uint sawDac,
+            uint pulseDac,
+            uint noiseDac,
+            int waveformMask,
+            SidChipModel model,
+            out int activeWaveforms)
+        {
+            waveformMask &= 0xF0;
+            activeWaveforms = 0;
+            uint combinedDac = 0x0FFF;
+            uint sourceBleedUnion = 0;
+            if ((waveformMask & 0x10) != 0)
+            {
+                triangleDac &= 0x0FFFu;
+                combinedDac &= triangleDac;
+                sourceBleedUnion |= triangleDac;
+                activeWaveforms++;
+            }
+
+            if ((waveformMask & 0x20) != 0)
+            {
+                sawDac &= 0x0FFFu;
+                combinedDac &= sawDac;
+                sourceBleedUnion |= sawDac;
+                activeWaveforms++;
+            }
+
+            if ((waveformMask & 0x40) != 0)
+            {
+                pulseDac &= 0x0FFFu;
+                combinedDac &= pulseDac;
+                activeWaveforms++;
+            }
+
+            if ((waveformMask & 0x80) != 0)
+            {
+                noiseDac &= 0x0FFFu;
+                combinedDac &= noiseDac;
+                sourceBleedUnion |= noiseDac;
+                activeWaveforms++;
+            }
+
+            if (activeWaveforms <= 1 || model != SidChipModel.Mos6581 || !UsesCombinedWaveformTable(waveformMask, model))
+            {
+                return combinedDac & 0x0FFFu;
+            }
+
+            if (waveformMask == 0x30)
+            {
+                var halfCyclePhase = sawDac & 0x07FFu;
+                var contentionPulse = halfCyclePhase < 0x00C0u ? 0x0FFFu : 0u;
+                return MapCombinedWaveformDac12(contentionPulse, waveformMask, model);
+            }
+
+            if (waveformMask == 0x60)
+            {
+                var fifthHarmonicPhase = (sawDac * 5u) & 0x0FFFu;
+                var fifthContentionDac = fifthHarmonicPhase < 0x0180u ? 0x0FFFu : 0u;
+                var fifthMapped = MapCombinedWaveformDac12(fifthContentionDac, waveformMask, model);
+                var halfCyclePhase = sawDac & 0x07FFu;
+                var octaveSquareDac = halfCyclePhase < 0x0400u ? 0x0FFFu : 0u;
+                var octaveShoulderDac = halfCyclePhase < 0x0180u ? 0x0FFFu : 0u;
+                var octaveSquareMapped = MapCombinedWaveformDac12(octaveSquareDac, waveformMask, model);
+                var octaveShoulderMapped = MapCombinedWaveformDac12(octaveShoulderDac, waveformMask, model);
+                var directResidueMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+                return Math.Min(
+                    0x0FFFu,
+                    fifthMapped + (octaveSquareMapped >> 6) + (octaveShoulderMapped >> 5) + (directResidueMapped >> 6));
+            }
+
+            if (waveformMask == 0x70)
+            {
+                var fifthHarmonicPhase = (sawDac * 5u) & 0x0FFFu;
+                var fifthContentionDac = fifthHarmonicPhase < 0x00C0u ? 0x0FFFu : 0u;
+                var fifthMapped = MapCombinedWaveformDac12(fifthContentionDac, waveformMask, model);
+                var halfCyclePhase = sawDac & 0x07FFu;
+                var octaveShoulderDac = halfCyclePhase < 0x0180u ? 0x0FFFu : 0u;
+                var octaveShoulderMapped = MapCombinedWaveformDac12(octaveShoulderDac, waveformMask, model);
+                var directResidueMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+                return Math.Min(0x0FFFu, fifthMapped + (octaveShoulderMapped >> 8) + (directResidueMapped >> 7));
+            }
+
+            var mapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+            var disagreement = (sourceBleedUnion & ~combinedDac) & 0x0FFFu;
+            var bleed = (disagreement >> Math.Min(activeWaveforms + 2, 5)) & (uint)GetMos6581CombinedWeakMask(waveformMask);
+            return (mapped | bleed) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
+        }
+
         public static uint MapCombinedWaveformDac12(uint value, int waveformMask, SidChipModel model)
         {
             var table = model == SidChipModel.Mos6581
@@ -134,7 +226,7 @@ namespace CopperMod.Sid
 
         public static double OutputLowPassCutoffHz(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model, sidEmulationProfile).ChipOutputLowPassCutoffHz;
+            return ApplyOutputLowPassCalibration(model, sidEmulationProfile, GetProfile(model, sidEmulationProfile).ChipOutputLowPassCutoffHz);
         }
 
         public static double VolumeRegisterTransientGain(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
@@ -144,17 +236,25 @@ namespace CopperMod.Sid
 
         public static double VolumeRegisterTransientLimit(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model, sidEmulationProfile).VolumeStepTransientLimit;
+            var value = GetProfile(model, sidEmulationProfile).VolumeStepTransientLimit;
+            var calibration = GetReferenceCalibration(sidEmulationProfile);
+            return model == SidChipModel.Mos8580
+                ? ApplyPositiveScale(value, calibration?.Mos8580TransientLimitScale, nameof(SidAnalogReferenceCalibration.Mos8580TransientLimitScale))
+                : ApplyPositiveScale(value, calibration?.Mos6581TransientLimitScale, nameof(SidAnalogReferenceCalibration.Mos6581TransientLimitScale));
         }
 
         public static double VolumeRegisterTransientAttackSeconds(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
+            var value = GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
+            var calibration = GetReferenceCalibration(sidEmulationProfile);
+            return model == SidChipModel.Mos8580
+                ? ApplyPositiveScale(value, calibration?.Mos8580TransientAttackScale, nameof(SidAnalogReferenceCalibration.Mos8580TransientAttackScale))
+                : ApplyPositiveScale(value, calibration?.Mos6581TransientAttackScale, nameof(SidAnalogReferenceCalibration.Mos6581TransientAttackScale));
         }
 
         public static double VolumeRegisterTransientSlew(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            var attackSeconds = GetProfile(model, sidEmulationProfile).VolumeStepAttackSeconds;
+            var attackSeconds = VolumeRegisterTransientAttackSeconds(model, sidEmulationProfile);
             if (attackSeconds <= 0.0)
             {
                 return 1.0;
@@ -166,12 +266,16 @@ namespace CopperMod.Sid
 
         public static double VolumeRegisterTransientDecaySeconds(SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetProfile(model, sidEmulationProfile).VolumeStepDecaySeconds;
+            var value = GetProfile(model, sidEmulationProfile).VolumeStepDecaySeconds;
+            var calibration = GetReferenceCalibration(sidEmulationProfile);
+            return model == SidChipModel.Mos8580
+                ? ApplyPositiveScale(value, calibration?.Mos8580TransientDecayScale, nameof(SidAnalogReferenceCalibration.Mos8580TransientDecayScale))
+                : ApplyPositiveScale(value, calibration?.Mos6581TransientDecayScale, nameof(SidAnalogReferenceCalibration.Mos6581TransientDecayScale));
         }
 
         public static double VolumeRegisterTransientDecay(SidChipModel model, int cpuCyclesPerSecond, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            var decaySeconds = GetProfile(model, sidEmulationProfile).VolumeStepDecaySeconds;
+            var decaySeconds = VolumeRegisterTransientDecaySeconds(model, sidEmulationProfile);
             if (decaySeconds <= 0.0)
             {
                 return 0.0;
@@ -193,11 +297,34 @@ namespace CopperMod.Sid
                 return 0.0;
             }
 
-            var profile = GetProfile(model, sidEmulationProfile);
             var measuredPostWriteAmplitude = D418TransitionPostWriteAmplitude(previousRegisterValue, nextRegisterValue, model);
             var settledTargetAmplitude = D418MeasuredAmplitude(nextRegisterValue, model);
             var impulse = D418AmplitudeDeltaToVolumeOffset(measuredPostWriteAmplitude - settledTargetAmplitude, model);
-            return Math.Clamp(impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
+            var calibration = GetReferenceCalibration(sidEmulationProfile);
+            impulse = model == SidChipModel.Mos8580
+                ? ApplyPositiveScale(impulse, calibration?.Mos8580TransitionScale, nameof(SidAnalogReferenceCalibration.Mos8580TransitionScale))
+                : ApplyPositiveScale(impulse, calibration?.Mos6581TransitionScale, nameof(SidAnalogReferenceCalibration.Mos6581TransitionScale));
+            var limit = VolumeRegisterTransientLimit(model, sidEmulationProfile);
+            return Math.Clamp(impulse, -limit, limit);
+        }
+
+        internal static double ApplyOutputLowPassCalibration(
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile,
+            double cutoffHz)
+        {
+            var calibration = GetReferenceCalibration(sidEmulationProfile);
+            return model == SidChipModel.Mos8580
+                ? ApplyPositiveOverride(cutoffHz, calibration?.Mos8580OutputLowPassCutoffHz, nameof(SidAnalogReferenceCalibration.Mos8580OutputLowPassCutoffHz))
+                : ApplyPositiveOverride(cutoffHz, calibration?.Mos6581OutputLowPassCutoffHz, nameof(SidAnalogReferenceCalibration.Mos6581OutputLowPassCutoffHz));
+        }
+
+        internal static IDisposable PushReferenceCalibration(SidAnalogReferenceCalibration calibration)
+        {
+            ArgumentNullException.ThrowIfNull(calibration);
+            var previous = ReferenceCalibrationOverride.Value;
+            ReferenceCalibrationOverride.Value = calibration;
+            return new ReferenceCalibrationScope(previous);
         }
 
         public static double FilterRoutingTransient(
@@ -277,6 +404,43 @@ namespace CopperMod.Sid
             }
 
             return model == SidChipModel.Mos8580 ? Mos8580BalancedProfile : Mos6581BalancedProfile;
+        }
+
+        private static SidAnalogReferenceCalibration? GetReferenceCalibration(SidEmulationProfile sidEmulationProfile)
+        {
+            return sidEmulationProfile == SidEmulationProfile.ReferenceMeasured
+                ? ReferenceCalibrationOverride.Value
+                : null;
+        }
+
+        private static double ApplyPositiveScale(double value, double? scale, string name)
+        {
+            if (!scale.HasValue)
+            {
+                return value;
+            }
+
+            if (!double.IsFinite(scale.Value) || scale.Value <= 0.0)
+            {
+                throw new ArgumentOutOfRangeException(name, scale.Value, "SID reference calibration scales must be finite and positive.");
+            }
+
+            return value * scale.Value;
+        }
+
+        private static double ApplyPositiveOverride(double value, double? overrideValue, string name)
+        {
+            if (!overrideValue.HasValue)
+            {
+                return value;
+            }
+
+            if (!double.IsFinite(overrideValue.Value) || overrideValue.Value <= 0.0)
+            {
+                throw new ArgumentOutOfRangeException(name, overrideValue.Value, "SID reference calibration values must be finite and positive.");
+            }
+
+            return overrideValue.Value;
         }
 
         private static double D418MeasuredAmplitude(int registerValue, SidChipModel model)
@@ -754,6 +918,28 @@ namespace CopperMod.Sid
             public double FilterModeTransientGain { get; }
 
             public double Voice3MuteTransientGain { get; }
+        }
+
+        private sealed class ReferenceCalibrationScope : IDisposable
+        {
+            private readonly SidAnalogReferenceCalibration? _previous;
+            private bool _disposed;
+
+            public ReferenceCalibrationScope(SidAnalogReferenceCalibration? previous)
+            {
+                _previous = previous;
+            }
+
+            public void Dispose()
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                ReferenceCalibrationOverride.Value = _previous;
+                _disposed = true;
+            }
         }
     }
 }

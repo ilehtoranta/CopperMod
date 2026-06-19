@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using CopperMod.Abstractions;
 
@@ -9,7 +10,7 @@ namespace CopperMod.Sid
     /// <summary>
     /// Loaded PSID/RSID song.
     /// </summary>
-    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidEmulationProfileController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController, IC64VideoFrameProvider, IC64KeyboardController
+    internal sealed class SidSong : IModuleSong, IModuleSubSongSelector, IModuleOutputFamilyProvider, IModuleChannelWaveformProvider, ISidVoiceMuteController, ISidEmulationProfileController, IC64RomController, ISidLoopDetector, ISidDurationDetector, IC64AutostartController, IC64VideoFrameProvider, IC64KeyboardController
     {
         private readonly SidModule _module;
         private readonly ModuleMetadata _metadata;
@@ -22,6 +23,7 @@ namespace CopperMod.Sid
         private int _currentSubSongIndex;
         private bool _channelWaveformCaptureEnabled;
         private SidEmulationProfile _sidEmulationProfile = SidEmulationProfile.Balanced;
+        private string? _c64RomPath;
 
         internal SidSong(SidModule module)
         {
@@ -97,6 +99,25 @@ namespace CopperMod.Sid
         {
             get => _machine.Sid.MutedVoicesMask;
             set => _machine.Sid.MutedVoicesMask = value;
+        }
+
+        public string? C64RomPath
+        {
+            get => _c64RomPath;
+            set
+            {
+                var normalized = string.IsNullOrWhiteSpace(value) ? null : Path.GetFullPath(value);
+                if (string.Equals(_c64RomPath, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                _c64RomPath = normalized;
+                var mutedVoicesMask = _machine.Sid.MutedVoicesMask;
+                _machine = CreateMachine();
+                Reset();
+                _machine.Sid.MutedVoicesMask = mutedVoicesMask;
+            }
         }
 
         public bool ChannelWaveformCaptureEnabled
@@ -237,12 +258,6 @@ namespace CopperMod.Sid
 
         public void ScheduleAutostartKey(string key, TimeSpan delay, TimeSpan hold)
         {
-            if (!string.Equals(key, "f3", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(key, "space", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ArgumentException("Only F3 and Space autostart are supported for C64 cartridge playback.", nameof(key));
-            }
-
             _machine.ScheduleAutostartKey(key, delay, hold);
         }
 
@@ -307,7 +322,7 @@ namespace CopperMod.Sid
 
         private C64Machine CreateMachine()
         {
-            return new C64Machine(_module, sidEmulationProfile: _sidEmulationProfile);
+            return new C64Machine(_module, sidEmulationProfile: _sidEmulationProfile, c64RomPath: _c64RomPath);
         }
 
         private static string FormatSubSongTitle(int index)

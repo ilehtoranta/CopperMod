@@ -30,6 +30,7 @@ internal sealed class RenderCommandOptions
 		double c64AutostartDelaySeconds,
 		double c64AutostartHoldSeconds,
 		double c64AutostartGapSeconds,
+		string? c64RomPath,
 		bool overwrite)
 	{
 		InputPath = inputPath;
@@ -55,6 +56,7 @@ internal sealed class RenderCommandOptions
 		C64AutostartDelaySeconds = c64AutostartDelaySeconds;
 		C64AutostartHoldSeconds = c64AutostartHoldSeconds;
 		C64AutostartGapSeconds = c64AutostartGapSeconds;
+		C64RomPath = c64RomPath;
 		Overwrite = overwrite;
 	}
 
@@ -103,6 +105,8 @@ internal sealed class RenderCommandOptions
 	public double C64AutostartHoldSeconds { get; }
 
 	public double C64AutostartGapSeconds { get; }
+
+	public string? C64RomPath { get; }
 
 	public bool Overwrite { get; }
 
@@ -157,6 +161,7 @@ internal sealed class RenderCommandOptions
 		var c64AutostartDelaySeconds = 1.0;
 		var c64AutostartHoldSeconds = 0.25;
 		var c64AutostartGapSeconds = 0.75;
+		string? c64RomPath = null;
 		var overwrite = false;
 		var amigaProfileSpecified = false;
 		var c64ProfileSpecified = false;
@@ -254,6 +259,9 @@ internal sealed class RenderCommandOptions
 				case "--c64-autostart-gap-seconds":
 					c64AutostartGapSeconds = ParseNonNegativeDouble(RequireValue(args, ref i, arg), arg);
 					break;
+				case "--c64-rom":
+					c64RomPath = RequireValue(args, ref i, arg);
+					break;
 				case "--overwrite":
 					overwrite = true;
 					break;
@@ -325,6 +333,7 @@ internal sealed class RenderCommandOptions
 			c64AutostartDelaySeconds,
 			c64AutostartHoldSeconds,
 			c64AutostartGapSeconds,
+			c64RomPath,
 			overwrite);
 	}
 
@@ -456,13 +465,42 @@ internal sealed class RenderCommandOptions
 
 		foreach (var key in keys)
 		{
-			if (key != "f3" && key != "space")
+			if (!IsSupportedC64AutostartKey(key))
 			{
-				throw new CommandLineException("--c64-autostart-key currently supports f3 and space.");
+				throw new CommandLineException("--c64-autostart-key contains an unsupported C64 key: " + key + ".");
 			}
 		}
 
 		return keys;
+	}
+
+	private static bool IsSupportedC64AutostartKey(string key)
+	{
+		if (key.Length == 1)
+		{
+			var ch = key[0];
+			return char.IsLetterOrDigit(ch) ||
+				ch is ' ' or '+' or '-' or '.' or ':' or '@' or ',' or '*' or ';' or '=' or '/';
+		}
+
+		return key is
+			"return" or
+			"enter" or
+			"space" or
+			"f1" or
+			"f3" or
+			"f5" or
+			"f7" or
+			"runstop" or
+			"run-stop" or
+			"stop" or
+			"delete" or
+			"del" or
+			"home" or
+			"cursorright" or
+			"right" or
+			"cursordown" or
+			"down";
 	}
 
 	private static int ParseBitmapDimension(string value, string option, int minimum, int maximum)

@@ -207,6 +207,26 @@ public sealed class RenderCommandOptionsTests
 	}
 
 	[Fact]
+	public void ParsesAndConfiguresC64RomPath()
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.prg",
+			"--out",
+			"output.wav",
+			"--c64-rom",
+			"c64.rom"
+		});
+		using var song = new FakeC64RomSong();
+
+		CopperModTools.ConfigureSong(song, options);
+
+		Assert.Equal("c64.rom", options.C64RomPath);
+		Assert.Equal(Path.GetFullPath("c64.rom"), song.C64RomPath);
+	}
+
+	[Fact]
 	public void ConfiguresSidEmulationProfile()
 	{
 		var options = RenderCommandOptions.Parse(new[]
@@ -254,7 +274,7 @@ public sealed class RenderCommandOptionsTests
 			"--seconds",
 			"1",
 			"--c64-autostart-key",
-			"f3,space",
+			"a,return",
 			"--c64-autostart-delay-seconds",
 			"0.5",
 			"--c64-autostart-hold-seconds",
@@ -266,15 +286,15 @@ public sealed class RenderCommandOptionsTests
 
 		CopperModTools.ConfigureSong(song, options);
 
-		Assert.Equal("f3,space", options.C64AutostartKey);
-		Assert.Equal(new[] { "f3", "space" }, options.C64AutostartKeys);
+		Assert.Equal("a,return", options.C64AutostartKey);
+		Assert.Equal(new[] { "a", "return" }, options.C64AutostartKeys);
 		Assert.Equal(0.5, options.C64AutostartDelaySeconds);
 		Assert.Equal(0.125, options.C64AutostartHoldSeconds);
 		Assert.Equal(0.25, options.C64AutostartGapSeconds);
 		Assert.Equal(new[]
 		{
-			new ScheduledAutostartKey("f3", TimeSpan.FromSeconds(0.5), TimeSpan.FromSeconds(0.125)),
-			new ScheduledAutostartKey("space", TimeSpan.FromSeconds(0.875), TimeSpan.FromSeconds(0.125))
+			new ScheduledAutostartKey("a", TimeSpan.FromSeconds(0.5), TimeSpan.FromSeconds(0.125)),
+			new ScheduledAutostartKey("return", TimeSpan.FromSeconds(0.875), TimeSpan.FromSeconds(0.125))
 		}, song.Keys);
 	}
 
@@ -282,7 +302,7 @@ public sealed class RenderCommandOptionsTests
 	public void C64AutostartRejectsUnsupportedKeys()
 	{
 		Assert.Throws<CommandLineException>(() =>
-			RenderCommandOptions.Parse(new[] { "render", "input.crt", "--out", "output.wav", "--c64-autostart-key", "return" }));
+			RenderCommandOptions.Parse(new[] { "render", "input.crt", "--out", "output.wav", "--c64-autostart-key", "escape" }));
 	}
 
 	[Fact]
@@ -412,6 +432,22 @@ public sealed class RenderCommandOptionsTests
 		}
 
 		public SidEmulationProfile SidEmulationProfile { get; set; }
+	}
+
+	private sealed class FakeC64RomSong : FakeSong, IC64RomController
+	{
+		private string? _c64RomPath;
+
+		public FakeC64RomSong()
+			: base(SongDuration.Unknown)
+		{
+		}
+
+		public string? C64RomPath
+		{
+			get => _c64RomPath;
+			set => _c64RomPath = string.IsNullOrWhiteSpace(value) ? null : Path.GetFullPath(value);
+		}
 	}
 
 	private readonly record struct ScheduledAutostartKey(string Key, TimeSpan Delay, TimeSpan Hold);

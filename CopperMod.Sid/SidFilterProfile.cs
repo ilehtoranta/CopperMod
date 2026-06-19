@@ -401,7 +401,7 @@ namespace CopperMod.Sid
                     resonanceOutputTrim: 1.00,
                     outputGainTrim: 1.01),
                 outputCircuit: new SidMos6581OutputCircuit(
-                    outputLowPassCutoffHz: 24_000.0)));
+                    outputLowPassCutoffHz: 28_000.0)));
 
         private static readonly SidFilterProfileDefinition Mos6581DarkR3 = new SidFilterProfileDefinition(
             SidFilterProfileId.Mos6581DarkR3,
