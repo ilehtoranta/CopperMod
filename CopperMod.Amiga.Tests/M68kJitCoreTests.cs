@@ -79,6 +79,26 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void M68040JitFallbackMovecPcrProbeRaisesLineFWithoutClobberingDestination()
+	{
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
+		bus.WriteLong(4u * 4, 0x0000_3000);
+		bus.WriteLong(11u * 4, 0x0000_2000);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(RealFastCodeBase, 0x4000);
+		cpu.State.D[1] = 4;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(4u, cpu.State.D[1]);
+		Assert.Equal(0x4000u - 8u, cpu.State.A[7]);
+		Assert.Equal(RealFastCodeBase, bus.ReadLong(0x4000u - 6u));
+		Assert.Equal(11 * 4, bus.ReadWord(0x4000u - 2u));
+	}
+
+	[Fact]
 	public void M68040JitMaxSpeedRomDataReadLoopUsesZeroWaitReads()
 	{
 		const uint romBase = 0x00F8_0000;

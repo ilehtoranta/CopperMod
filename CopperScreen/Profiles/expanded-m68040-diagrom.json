@@ -7,6 +7,8 @@
     "chipRamKb": 512,
     "pseudoFastRamKb": 512,
     "pseudoFastBase": "$C00000",
+    "realFastRamKb": 8192,
+    "realFastBase": "$200000",
     "rtcEnabled": true,
     "floppyDriveCount": 2
   },

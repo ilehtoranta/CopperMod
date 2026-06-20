@@ -1444,13 +1444,20 @@ namespace Copper68k
 
             if (opcode == 0x4E7A)
             {
-                var value = ReadControlRegister(controlRegister, instructionPc);
+                if (!TryReadControlRegister(controlRegister, instructionPc, out var value))
+                {
+                    return;
+                }
+
                 WriteGeneralRegister(useAddressRegister, generalRegister, value);
             }
             else
             {
                 var value = ReadGeneralRegister(useAddressRegister, generalRegister);
-                WriteControlRegister(controlRegister, value, instructionPc);
+                if (!TryWriteControlRegister(controlRegister, value, instructionPc))
+                {
+                    return;
+                }
             }
 
             CompleteTiming(M68kInstructionTimingKey.Movec);
@@ -4078,51 +4085,67 @@ namespace Copper68k
             CompleteTiming(timingKey);
         }
 
-        protected virtual uint ReadControlRegister(int register, uint instructionPc)
+        protected virtual bool TryReadControlRegister(int register, uint instructionPc, out uint value)
         {
-            return register switch
+            switch (register)
             {
-                0x000 => State.SourceFunctionCode,
-                0x001 => State.DestinationFunctionCode,
-                0x002 => State.CacheControlRegister,
-                0x801 => State.VectorBaseRegister,
-                0x802 => State.CacheAddressRegister,
-                0x803 => State.MasterStackPointer,
-                0x804 => State.InterruptStackPointer,
-                _ => RaiseIllegalControlRegister(instructionPc)
-            };
+                case 0x000:
+                    value = State.SourceFunctionCode;
+                    return true;
+                case 0x001:
+                    value = State.DestinationFunctionCode;
+                    return true;
+                case 0x002:
+                    value = State.CacheControlRegister;
+                    return true;
+                case 0x801:
+                    value = State.VectorBaseRegister;
+                    return true;
+                case 0x802:
+                    value = State.CacheAddressRegister;
+                    return true;
+                case 0x803:
+                    value = State.MasterStackPointer;
+                    return true;
+                case 0x804:
+                    value = State.InterruptStackPointer;
+                    return true;
+                default:
+                    value = RaiseIllegalControlRegister(instructionPc);
+                    return false;
+            }
         }
 
-        protected virtual void WriteControlRegister(int register, uint value, uint instructionPc)
+        protected virtual bool TryWriteControlRegister(int register, uint value, uint instructionPc)
         {
             switch (register)
             {
                 case 0x000:
                     State.SourceFunctionCode = value & 0x7;
-                    break;
+                    return true;
                 case 0x001:
                     State.DestinationFunctionCode = value & 0x7;
-                    break;
+                    return true;
                 case 0x002:
                     State.CacheControlRegister = value;
                     _timing.ApplyCacheControl(State.CacheControlRegister, State.CacheAddressRegister);
-                    break;
+                    return true;
                 case 0x801:
                     State.VectorBaseRegister = value;
-                    break;
+                    return true;
                 case 0x802:
                     State.CacheAddressRegister = value;
                     _timing.ApplyCacheControl(State.CacheControlRegister, State.CacheAddressRegister);
-                    break;
+                    return true;
                 case 0x803:
                     State.SetMasterStackPointer(value);
-                    break;
+                    return true;
                 case 0x804:
                     State.SetInterruptStackPointer(value);
-                    break;
+                    return true;
                 default:
                     _ = RaiseIllegalControlRegister(instructionPc);
-                    break;
+                    return false;
             }
         }
 

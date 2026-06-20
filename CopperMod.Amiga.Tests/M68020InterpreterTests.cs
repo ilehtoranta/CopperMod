@@ -49,6 +49,25 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
+	public void MovecUnsupportedControlRegisterRaisesIllegalWithoutClobberingDestination()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
+		bus.WriteLong(4u * 4, 0x0000_2000);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[1] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x1234_5678u, cpu.State.D[1]);
+		Assert.Equal(0x3000u - 8u, cpu.State.A[7]);
+		Assert.Equal(CodeBase, bus.ReadLong(0x3000u - 6u));
+		Assert.Equal(4 * 4, bus.ReadWord(0x3000u - 2u));
+	}
+
+	[Fact]
 	public void MovepLongReadsSpacedMemoryBytesIntoDataRegister()
 	{
 		var bus = new ZeroWaitCodeBus();

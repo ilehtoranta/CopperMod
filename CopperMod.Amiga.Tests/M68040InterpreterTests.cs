@@ -38,6 +38,26 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
+	public void MovecM68060ProcessorConfigurationRegisterProbeRaisesLineF()
+	{
+		var bus = new AmigaBus();
+		WriteWords(bus, CodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
+		bus.WriteLong(4u * 4, 0x0000_3000);
+		bus.WriteLong(11u * 4, 0x0000_2000);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.D[1] = 4;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(4u, cpu.State.D[1]);
+		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
+		Assert.Equal(CodeBase, bus.ReadLong(StackBase - 6u));
+		Assert.Equal(11 * 4, bus.ReadWord(StackBase - 2u));
+	}
+
+	[Fact]
 	public void Move16CopiesAlignedBlockAndAdvancesAddressRegisters()
 	{
 		var bus = new AmigaBus();

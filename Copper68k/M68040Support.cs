@@ -1014,61 +1014,89 @@ namespace Copper68k
             }
         }
 
-        protected override uint ReadControlRegister(int register, uint instructionPc)
+        protected override bool TryReadControlRegister(int register, uint instructionPc, out uint value)
         {
-            return register switch
+            switch (register)
             {
-                0x003 => State.M68040Mmu.TranslationControl,
-                0x004 => State.M68040Mmu.InstructionTransparentTranslation0,
-                0x005 => State.M68040Mmu.InstructionTransparentTranslation1,
-                0x006 => State.M68040Mmu.DataTransparentTranslation0,
-                0x007 => State.M68040Mmu.DataTransparentTranslation1,
-                0x805 => State.M68040Mmu.Status,
-                0x806 => State.M68040Mmu.UserRootPointer,
-                0x807 => State.M68040Mmu.SupervisorRootPointer,
-                _ => base.ReadControlRegister(register, instructionPc)
-            };
+                case 0x003:
+                    value = State.M68040Mmu.TranslationControl;
+                    return true;
+                case 0x004:
+                    value = State.M68040Mmu.InstructionTransparentTranslation0;
+                    return true;
+                case 0x005:
+                    value = State.M68040Mmu.InstructionTransparentTranslation1;
+                    return true;
+                case 0x006:
+                    value = State.M68040Mmu.DataTransparentTranslation0;
+                    return true;
+                case 0x007:
+                    value = State.M68040Mmu.DataTransparentTranslation1;
+                    return true;
+                case 0x805:
+                    value = State.M68040Mmu.Status;
+                    return true;
+                case 0x806:
+                    value = State.M68040Mmu.UserRootPointer;
+                    return true;
+                case 0x807:
+                    value = State.M68040Mmu.SupervisorRootPointer;
+                    return true;
+                case 0x808:
+                    value = RaiseLineFControlRegister(instructionPc);
+                    return false;
+                default:
+                    return base.TryReadControlRegister(register, instructionPc, out value);
+            }
         }
 
-        protected override void WriteControlRegister(int register, uint value, uint instructionPc)
+        protected override bool TryWriteControlRegister(int register, uint value, uint instructionPc)
         {
             switch (register)
             {
                 case 0x003:
                     State.M68040Mmu.TranslationControl = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x004:
                     State.M68040Mmu.InstructionTransparentTranslation0 = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x005:
                     State.M68040Mmu.InstructionTransparentTranslation1 = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x006:
                     State.M68040Mmu.DataTransparentTranslation0 = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x007:
                     State.M68040Mmu.DataTransparentTranslation1 = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x805:
                     State.M68040Mmu.Status = value;
-                    break;
+                    return true;
                 case 0x806:
                     State.M68040Mmu.UserRootPointer = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
                 case 0x807:
                     State.M68040Mmu.SupervisorRootPointer = value;
                     State.M68040Mmu.Flush();
-                    break;
+                    return true;
+                case 0x808:
+                    _ = RaiseLineFControlRegister(instructionPc);
+                    return false;
                 default:
-                    base.WriteControlRegister(register, value, instructionPc);
-                    break;
+                    return base.TryWriteControlRegister(register, value, instructionPc);
             }
+        }
+
+        private uint RaiseLineFControlRegister(uint instructionPc)
+        {
+            RaiseFormat0Exception(VectorLineF, instructionPc, M68kInstructionTimingKey.LineFException);
+            return 0;
         }
 
         private bool TryExecuteMove16(ushort opcode)
