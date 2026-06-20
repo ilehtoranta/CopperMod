@@ -110,7 +110,7 @@ public sealed class AmigaKickstartTests
 	}
 
 	[Fact]
-	public void RomOverlayMapsKickstartAtLowMemoryUntilCiaAOverlayBitClearsIt()
+	public void RomOverlayMapsKickstartAtLowMemoryUntilCiaAOverlayBitDisablesIt()
 	{
 		var bus = new AmigaBus();
 		var rom = Enumerable.Range(0, 256).Select(value => (byte)(0x80 | value)).ToArray();
@@ -121,13 +121,13 @@ public sealed class AmigaKickstartTests
 
 		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
 
-		bus.WriteByte(0x00BFE001, 0x00, 0);
+		bus.WriteByte(0x00BFE001, 0x01, 0);
 		Assert.Equal(0x42, bus.ReadByte(0x0000_0000));
 
-		bus.WriteByte(0x00BFE001, 0x01, 0);
+		bus.WriteByte(0x00BFE001, 0x00, 0);
 		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
 
-		bus.WriteByte(0x00BFE001, 0x00, 0);
+		bus.WriteByte(0x00BFE001, 0x01, 0);
 		bus.ResetExternalDevices(0);
 		Assert.Equal(rom[0], bus.ReadByte(0x0000_0000));
 	}

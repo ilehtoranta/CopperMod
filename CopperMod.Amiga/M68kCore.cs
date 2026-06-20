@@ -31,6 +31,26 @@ namespace CopperMod.Amiga
         void ResetExternalDevices(long cycle);
     }
 
+    internal interface IAmigaCpuPhysicalAddressMap
+    {
+        bool IsCpuPhysicalAddressMapped(uint address, int byteCount, AmigaBusAccessKind accessKind);
+    }
+
+    internal interface IM68kFastMemoryBus
+    {
+        bool TryReadFastByte(uint address, AmigaBusAccessKind accessKind, out byte value);
+
+        bool TryReadFastWord(uint address, AmigaBusAccessKind accessKind, out ushort value);
+
+        bool TryReadFastLong(uint address, AmigaBusAccessKind accessKind, out uint value);
+
+        bool TryWriteFastByte(uint address, byte value, AmigaBusAccessKind accessKind);
+
+        bool TryWriteFastWord(uint address, ushort value, AmigaBusAccessKind accessKind);
+
+        bool TryWriteFastLong(uint address, uint value, AmigaBusAccessKind accessKind);
+    }
+
     internal enum M68kTraceBatchWakeSource
     {
         Unknown = 0,
@@ -160,6 +180,7 @@ namespace CopperMod.Amiga
         public const ushort Extend = 0x0010;
         public const ushort Master = 0x1000;
         public const ushort Supervisor = 0x2000;
+        public const ushort ResetStatusRegister = 0x2700;
         private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
         public uint[] D { get; } = new uint[8];
@@ -209,6 +230,87 @@ namespace CopperMod.Amiga
         public ushort LastOpcode { get; set; }
 
         public uint LastInstructionProgramCounter { get; set; }
+
+        public int LastExceptionVector { get; set; } = -1;
+
+        public int FirstExceptionVector { get; set; } = -1;
+
+        public uint FirstExceptionStackedProgramCounter { get; set; }
+
+        public ushort FirstExceptionStatusRegister { get; set; }
+
+        public ushort FirstExceptionOpcode { get; set; }
+
+        public uint FirstExceptionInstructionProgramCounter { get; set; }
+
+        public uint FirstExceptionD0 { get; set; }
+
+        public uint FirstExceptionD1 { get; set; }
+
+        public uint FirstExceptionA0 { get; set; }
+
+        public uint FirstExceptionA6 { get; set; }
+
+        public uint FirstExceptionA7 { get; set; }
+
+        public uint LastExceptionStackedProgramCounter { get; set; }
+
+        public ushort LastExceptionStatusRegister { get; set; }
+
+        public ushort LastExceptionOpcode { get; set; }
+
+        public uint LastExceptionInstructionProgramCounter { get; set; }
+
+        public uint LastExceptionD0 { get; set; }
+
+        public uint LastExceptionD1 { get; set; }
+
+        public uint LastExceptionA0 { get; set; }
+
+        public uint LastExceptionA6 { get; set; }
+
+        public uint LastExceptionA7 { get; set; }
+
+        public void RecordException(int vector, uint stackedProgramCounter, ushort savedStatusRegister)
+        {
+            if (vector < 0)
+            {
+                FirstExceptionVector = -1;
+                FirstExceptionStackedProgramCounter = 0;
+                FirstExceptionStatusRegister = 0;
+                FirstExceptionOpcode = 0;
+                FirstExceptionInstructionProgramCounter = 0;
+                FirstExceptionD0 = 0;
+                FirstExceptionD1 = 0;
+                FirstExceptionA0 = 0;
+                FirstExceptionA6 = 0;
+                FirstExceptionA7 = 0;
+            }
+            else if (FirstExceptionVector < 0)
+            {
+                FirstExceptionVector = vector;
+                FirstExceptionStackedProgramCounter = stackedProgramCounter;
+                FirstExceptionStatusRegister = savedStatusRegister;
+                FirstExceptionOpcode = LastOpcode;
+                FirstExceptionInstructionProgramCounter = LastInstructionProgramCounter;
+                FirstExceptionD0 = D[0];
+                FirstExceptionD1 = D[1];
+                FirstExceptionA0 = A[0];
+                FirstExceptionA6 = A[6];
+                FirstExceptionA7 = A[7];
+            }
+
+            LastExceptionVector = vector;
+            LastExceptionStackedProgramCounter = stackedProgramCounter;
+            LastExceptionStatusRegister = savedStatusRegister;
+            LastExceptionOpcode = LastOpcode;
+            LastExceptionInstructionProgramCounter = LastInstructionProgramCounter;
+            LastExceptionD0 = D[0];
+            LastExceptionD1 = D[1];
+            LastExceptionA0 = A[0];
+            LastExceptionA6 = A[6];
+            LastExceptionA7 = A[7];
+        }
 
         public bool M68020StackModeEnabled { get; private set; }
 
@@ -657,10 +759,13 @@ namespace CopperMod.Amiga
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
+            State.StatusRegister = M68kCpuState.ResetStatusRegister;
             State.Cycles = 0;
             State.Halted = false;
             State.Stopped = false;
             State.LastOpcode = 0;
+            State.LastInstructionProgramCounter = 0;
+            State.RecordException(-1, 0, 0);
         }
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
@@ -2596,6 +2701,7 @@ namespace CopperMod.Amiga
         private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
         {
             var savedStatusRegister = State.StatusRegister;
+            State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister |= M68kCpuState.Supervisor;
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);

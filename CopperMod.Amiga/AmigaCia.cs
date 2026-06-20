@@ -39,6 +39,8 @@ namespace CopperMod.Amiga
         private readonly CiaTimer _timerB = new CiaTimer(isTimerB: true);
         private int _todCounter;
         private int _todAlarm;
+        private int _todReadLatch;
+        private bool _todReadLatched;
         private byte _icrMask;
         private byte _icrPending;
 
@@ -65,6 +67,8 @@ namespace CopperMod.Amiga
             _registers[0] = initialPortA;
             _todCounter = 0;
             _todAlarm = 0;
+            _todReadLatch = 0;
+            _todReadLatched = false;
             _timerA.Reset();
             _timerB.Reset();
             _icrMask = 0;
@@ -88,11 +92,11 @@ namespace CopperMod.Amiga
                 case 0x07:
                     return (byte)(_timerB.Counter >> 8);
                 case 0x08:
-                    return (byte)_todCounter;
+                    return ReadTodRegister(register);
                 case 0x09:
-                    return (byte)(_todCounter >> 8);
+                    return ReadTodRegister(register);
                 case 0x0A:
-                    return (byte)(_todCounter >> 16);
+                    return ReadTodRegister(register);
                 case 0x0D:
                     return ReadInterruptControl();
                 case 0x0E:
@@ -277,6 +281,25 @@ namespace CopperMod.Amiga
         {
             var value = ReadInterruptControlValue();
             _icrPending = 0;
+            return value;
+        }
+
+        private byte ReadTodRegister(int register)
+        {
+            register &= 0x0F;
+            if (register == 0x0A && !_todReadLatched)
+            {
+                _todReadLatch = _todCounter;
+                _todReadLatched = true;
+            }
+
+            var source = _todReadLatched ? _todReadLatch : _todCounter;
+            var value = (byte)(source >> ((register - 0x08) * 8));
+            if (register == 0x08)
+            {
+                _todReadLatched = false;
+            }
+
             return value;
         }
 

@@ -16,7 +16,12 @@
     "backend": "JitM68040"
   },
   "kickstart": {
-    "source": "KickstartRom"
+    "source": "KickstartRom",
+    "version": "3.1",
+    "path": "ROM/kickstart-3.1-a500.rom"
+  },
+  "workbench": {
+    "autoStartStartupSequence": true
   },
   "audio": {
     "floppyDriveSounds": {

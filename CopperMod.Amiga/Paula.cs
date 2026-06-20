@@ -10,7 +10,7 @@ namespace CopperMod.Amiga
         private const ushort AudioInterruptMask = 0x0780;
         private const ushort WritableDmaconMask = 0x07FF;
         private const ushort WritableIntreqMask = 0x3FFF;
-        private const ushort IdleSerdatr = 0x3000;
+        private const ushort IdleSerdatr = 0x30FF;
         private const float VoiceScale = 0.25f;
         private const int MaxCapturedWrites = 65536;
         private const int MaxPendingInterruptEvents = 65536;
@@ -176,16 +176,26 @@ namespace CopperMod.Amiga
             }
 
             _pendingWrites.Insert(insertIndex, pending);
-            PreserveTimelinePendingWriteIndex(_audioTimeline, insertIndex, cycle);
-            PreserveTimelinePendingWriteIndex(_registerTimeline, insertIndex, cycle);
+            PreserveTimelinePendingWriteIndex(_audioTimeline, insertIndex, cycle, PaulaTimelineKind.Audio, offset, value);
+            PreserveTimelinePendingWriteIndex(_registerTimeline, insertIndex, cycle, PaulaTimelineKind.Register, offset, value);
         }
 
-        private static void PreserveTimelinePendingWriteIndex(PaulaTimelineState timeline, int insertIndex, long cycle)
+        private void PreserveTimelinePendingWriteIndex(
+            PaulaTimelineState timeline,
+            int insertIndex,
+            long cycle,
+            PaulaTimelineKind kind,
+            ushort offset,
+            ushort value)
         {
             if (insertIndex < timeline.PendingWriteIndex ||
                 (insertIndex == timeline.PendingWriteIndex && cycle < timeline.LastCycle))
             {
                 timeline.PendingWriteIndex++;
+                if (cycle <= timeline.LastCycle)
+                {
+                    ApplyWrite(timeline, kind, offset, value);
+                }
             }
         }
 

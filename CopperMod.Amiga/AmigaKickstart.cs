@@ -196,8 +196,14 @@ namespace CopperMod.Amiga
             RegisterDummyLibrary(bus, traps);
         }
 
-        private void InstallRomImage(AmigaBus bus)
+        public void InstallRomImage(AmigaBus bus)
         {
+            ArgumentNullException.ThrowIfNull(bus);
+            if (_configuration.Backend != AmigaKickstartBackendKind.RomImage)
+            {
+                throw new InvalidOperationException("InstallRomImage requires a ROM-backed Kickstart configuration.");
+            }
+
             var image = _configuration.RomImage;
             if (image.IsEmpty)
             {

@@ -18,6 +18,9 @@
   "kickstart": {
     "source": "KickstartRom"
   },
+  "workbench": {
+    "autoStartStartupSequence": true
+  },
   "audio": {
     "floppyDriveSounds": {
       "enabled": true,

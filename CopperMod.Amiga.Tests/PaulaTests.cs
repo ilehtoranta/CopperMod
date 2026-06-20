@@ -69,11 +69,24 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void SerialDataReadReportsIdleTransmitEmptyBits()
+	public void SerialDataReadReportsIdleTransmitEmptyAndReceiveBits()
 	{
 		var bus = CreatePaulaComponentBus();
 
-		Assert.Equal(0x3000, bus.ReadWord(0x00DFF018));
+		Assert.Equal(0x30FF, bus.ReadWord(0x00DFF018));
+	}
+
+	[Fact]
+	public void LateDmaconWriteStillUpdatesRegisterTimelineState()
+	{
+		var bus = CreatePaulaComponentBus();
+
+		SchedulePaulaWrite(bus, 0x096, 0x8200, 10);
+		bus.Paula.AdvanceTo(100);
+		SchedulePaulaWrite(bus, 0x096, 0x8040, 20);
+		bus.Paula.AdvanceTo(100);
+
+		Assert.Equal(0x0240, bus.Paula.Dmacon & 0x0240);
 	}
 
 	[Fact]

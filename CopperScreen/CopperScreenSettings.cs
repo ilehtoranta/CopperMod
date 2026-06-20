@@ -46,6 +46,8 @@ internal sealed class CopperScreenSettingsDraft
 
 	public bool?[] DriveWriteProtected { get; } = new bool?[4];
 
+	public List<CopperScreenHardfileSettings> HardDrives { get; } = new List<CopperScreenHardfileSettings>();
+
 	public bool RequiresRestart { get; private set; }
 
 	public static CopperScreenSettingsDraft FromStartupOptions(CopperScreenStartupOptions options)
@@ -60,6 +62,8 @@ internal sealed class CopperScreenSettingsDraft
 			draft.DriveDiskPaths[i] = i < options.DriveDiskPaths.Length ? options.DriveDiskPaths[i] : null;
 			draft.DriveWriteProtected[i] = i < options.DriveWriteProtected.Length ? options.DriveWriteProtected[i] : null;
 		}
+
+		draft.HardDrives.AddRange(options.HardDrives);
 
 		draft.RequiresRestart = false;
 		return draft;
@@ -94,6 +98,8 @@ internal sealed class CopperScreenSettingsDraft
 				draft.DriveWriteProtected[drive.Index] = drive.WriteProtected;
 			}
 		}
+
+		draft.HardDrives.AddRange(profile.HardDrives);
 
 		return draft;
 	}
@@ -139,6 +145,7 @@ internal sealed class CopperScreenSettingsDraft
 			FloppyDriveAudio,
 			KickstartSource,
 			CreateMediaDrives(),
+			HardDrives.ToArray(),
 			Input,
 			configPath,
 			PresentationOptions,
@@ -319,6 +326,8 @@ internal static class CopperScreenProfileStore
 
 		public MediaFile? Media { get; set; }
 
+		public HardDriveFile[]? HardDrives { get; set; }
+
 		public InputFile? Input { get; set; }
 
 		public PresentationFile? Presentation { get; set; }
@@ -375,6 +384,17 @@ internal static class CopperScreenProfileStore
 							})
 							.ToArray()
 					},
+				HardDrives = draft.HardDrives.Count == 0
+					? null
+					: draft.HardDrives
+						.Select(drive => new HardDriveFile
+						{
+							Unit = drive.Unit,
+							Path = drive.Path,
+							ReadOnly = drive.ReadOnly,
+							SizeMb = drive.CreateSizeBytes == 0 ? null : checked((int)(drive.CreateSizeBytes / (1024 * 1024)))
+						})
+						.ToArray(),
 				Input = IsDefaultInput(draft.Input)
 					? null
 					: new InputFile
@@ -493,6 +513,17 @@ internal static class CopperScreenProfileStore
 		public string? DiskPath { get; set; }
 
 		public bool? WriteProtected { get; set; }
+	}
+
+	private sealed class HardDriveFile
+	{
+		public int Unit { get; set; }
+
+		public string Path { get; set; } = string.Empty;
+
+		public bool ReadOnly { get; set; }
+
+		public int? SizeMb { get; set; }
 	}
 
 	private sealed class InputFile

@@ -19,12 +19,27 @@ namespace CopperMod.Amiga
 
         public uint Fpiar { get; set; }
 
+        public uint LastStateFrameAddress { get; set; }
+
+        public ushort LastStateFrameHeader { get; set; }
+
+        public uint LastStateFrameSize { get; set; }
+
+        public bool LastStateFrameRestore { get; set; }
+
+        public bool HasExecutedNonConditionalInstruction { get; set; }
+
         public void Reset()
         {
             Array.Clear(FP);
             Fpcr = 0;
             Fpsr = 0;
             Fpiar = 0;
+            LastStateFrameAddress = 0;
+            LastStateFrameHeader = 0;
+            LastStateFrameSize = 0;
+            LastStateFrameRestore = false;
+            HasExecutedNonConditionalInstruction = false;
         }
 
         public void SetCondition(double value)
@@ -107,8 +122,10 @@ namespace CopperMod.Amiga
 
     internal static class M68040FpuHelpers
     {
-        public const uint IdleStateFrame = 0x4118_0000;
-        public const uint IdleStateFrameSize = 0x18;
+        public const uint NullStateFrame = 0x0000_0000;
+        public const uint NullStateFrameSize = 4;
+        public const uint IdleStateFrame = 0x4100_0000;
+        public const uint IdleStateFrameSize = 4;
 
         public static bool IsSupportedOperation(int opmode)
             => opmode is 0x00 or 0x04 or 0x18 or 0x1A or 0x20 or 0x22 or 0x23 or 0x28 or 0x38 or 0x3A;
@@ -127,8 +144,14 @@ namespace CopperMod.Amiga
         public static uint StateFrameSize(ushort header)
         {
             var size = header & 0x00FFu;
-            return size == 0 ? IdleStateFrameSize : size;
+            return size == 0 ? NullStateFrameSize : size;
         }
+
+        public static bool IsNullStateFrameHeader(ushort header)
+            => header == 0;
+
+        public static uint CurrentStateFrame(M68040FpuState fpu)
+            => fpu.HasExecutedNonConditionalInstruction ? IdleStateFrame : NullStateFrame;
 
         public static uint FormatByteSize(int format)
         {
@@ -191,34 +214,44 @@ namespace CopperMod.Amiga
             switch (opmode)
             {
                 case 0x00:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     fpu.FP[destination] = source;
                     fpu.SetCondition(source);
                     return true;
                 case 0x04:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreUnary(fpu, destination, Math.Sqrt(source));
                     return true;
                 case 0x18:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreUnary(fpu, destination, Math.Abs(source));
                     return true;
                 case 0x1A:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreUnary(fpu, destination, -source);
                     return true;
                 case 0x20:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreBinary(fpu, destination, fpu.FP[destination] / source);
                     return true;
                 case 0x22:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreBinary(fpu, destination, fpu.FP[destination] + source);
                     return true;
                 case 0x23:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreBinary(fpu, destination, fpu.FP[destination] * source);
                     return true;
                 case 0x28:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     StoreBinary(fpu, destination, fpu.FP[destination] - source);
                     return true;
                 case 0x38:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     fpu.SetCompareCondition(fpu.FP[destination], source);
                     return true;
                 case 0x3A:
+                    fpu.HasExecutedNonConditionalInstruction = true;
                     fpu.SetCondition(source);
                     return true;
                 default:
@@ -243,20 +276,55 @@ namespace CopperMod.Amiga
     {
         private const uint TranslationEnable = 0x8000_0000;
         private readonly Dictionary<ulong, uint> _atc = [];
+        private uint _translationControl;
+        private uint _supervisorRootPointer;
+        private uint _userRootPointer;
+        private uint _instructionTransparentTranslation0;
+        private uint _instructionTransparentTranslation1;
+        private uint _dataTransparentTranslation0;
+        private uint _dataTransparentTranslation1;
 
-        public uint TranslationControl { get; set; }
+        public uint TranslationControl
+        {
+            get => _translationControl;
+            set => SetTranslationRegister(ref _translationControl, value);
+        }
 
-        public uint SupervisorRootPointer { get; set; }
+        public uint SupervisorRootPointer
+        {
+            get => _supervisorRootPointer;
+            set => SetTranslationRegister(ref _supervisorRootPointer, value);
+        }
 
-        public uint UserRootPointer { get; set; }
+        public uint UserRootPointer
+        {
+            get => _userRootPointer;
+            set => SetTranslationRegister(ref _userRootPointer, value);
+        }
 
-        public uint InstructionTransparentTranslation0 { get; set; }
+        public uint InstructionTransparentTranslation0
+        {
+            get => _instructionTransparentTranslation0;
+            set => SetTranslationRegister(ref _instructionTransparentTranslation0, value);
+        }
 
-        public uint InstructionTransparentTranslation1 { get; set; }
+        public uint InstructionTransparentTranslation1
+        {
+            get => _instructionTransparentTranslation1;
+            set => SetTranslationRegister(ref _instructionTransparentTranslation1, value);
+        }
 
-        public uint DataTransparentTranslation0 { get; set; }
+        public uint DataTransparentTranslation0
+        {
+            get => _dataTransparentTranslation0;
+            set => SetTranslationRegister(ref _dataTransparentTranslation0, value);
+        }
 
-        public uint DataTransparentTranslation1 { get; set; }
+        public uint DataTransparentTranslation1
+        {
+            get => _dataTransparentTranslation1;
+            set => SetTranslationRegister(ref _dataTransparentTranslation1, value);
+        }
 
         public uint Status { get; set; }
 
@@ -280,6 +348,17 @@ namespace CopperMod.Amiga
 
         public void Flush()
             => _atc.Clear();
+
+        private void SetTranslationRegister(ref uint register, uint value)
+        {
+            if (register == value)
+            {
+                return;
+            }
+
+            register = value;
+            Flush();
+        }
 
         public bool TryTranslate(
             uint logicalAddress,
@@ -430,7 +509,32 @@ namespace CopperMod.Amiga
         uint LogicalAddress,
         AmigaBusAccessKind AccessKind,
         bool Write,
-        uint Status);
+        uint Status,
+        uint? StackedProgramCounter = null);
+
+    internal sealed class UnsupportedM68040InstructionException : AmigaEmulationException
+    {
+        public UnsupportedM68040InstructionException(
+            ushort opcode,
+            uint programCounter,
+            string profileName,
+            Exception? innerException = null)
+            : base($"Unsupported MC68040 instruction form for opcode 0x{opcode:X4} at 0x{programCounter:X8} in profile {profileName}.")
+        {
+            Opcode = opcode;
+            ProgramCounter = programCounter;
+            ProfileName = profileName;
+            OriginalException = innerException;
+        }
+
+        public ushort Opcode { get; }
+
+        public uint ProgramCounter { get; }
+
+        public string ProfileName { get; }
+
+        public Exception? OriginalException { get; }
+    }
 
     internal sealed class M68040MmuFaultException : AmigaEmulationException
     {
@@ -443,42 +547,45 @@ namespace CopperMod.Amiga
         public M68040MmuFault Fault { get; }
     }
 
-    internal sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader
+    internal sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
     {
         private readonly IM68kBus _physicalBus;
         private readonly IM68kCodeReader? _codeReader;
+        private readonly IAmigaCpuPhysicalAddressMap? _physicalAddressMap;
         private readonly M68kCpuState _state;
 
         public M68040LogicalBus(IM68kBus physicalBus, M68kCpuState state)
         {
             _physicalBus = physicalBus ?? throw new ArgumentNullException(nameof(physicalBus));
             _codeReader = physicalBus as IM68kCodeReader;
+            _physicalAddressMap = physicalBus as IAmigaCpuPhysicalAddressMap;
             _state = state ?? throw new ArgumentNullException(nameof(state));
         }
 
         public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.ReadByte(Translate(address, accessKind, write: false), ref cycle, accessKind);
+            => _physicalBus.ReadByte(Translate(address, accessKind, write: false, byteCount: 1), ref cycle, accessKind);
 
         public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.ReadWord(Translate(address, accessKind, write: false), ref cycle, accessKind);
+            => _physicalBus.ReadWord(Translate(address, accessKind, write: false, byteCount: 2), ref cycle, accessKind);
 
         public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.ReadLong(Translate(address, accessKind, write: false), ref cycle, accessKind);
+            => _physicalBus.ReadLong(Translate(address, accessKind, write: false, byteCount: 4), ref cycle, accessKind);
 
         public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.WriteByte(Translate(address, accessKind, write: true), value, ref cycle, accessKind);
+            => _physicalBus.WriteByte(Translate(address, accessKind, write: true, byteCount: 1), value, ref cycle, accessKind);
 
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.WriteWord(Translate(address, accessKind, write: true), value, ref cycle, accessKind);
+            => _physicalBus.WriteWord(Translate(address, accessKind, write: true, byteCount: 2), value, ref cycle, accessKind);
 
         public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
-            => _physicalBus.WriteLong(Translate(address, accessKind, write: true), value, ref cycle, accessKind);
+            => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4), value, ref cycle, accessKind);
 
         public bool HasHostTrapStub(uint address)
         {
             try
             {
-                return _physicalBus.HasHostTrapStub(Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false));
+                return _physicalBus.HasHostTrapStub(
+                    Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2));
             }
             catch (M68040MmuFaultException)
             {
@@ -488,7 +595,11 @@ namespace CopperMod.Amiga
 
         public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
         {
-            var physicalPc = Translate(instructionProgramCounter, AmigaBusAccessKind.CpuInstructionFetch, write: false);
+            var physicalPc = Translate(
+                instructionProgramCounter,
+                AmigaBusAccessKind.CpuInstructionFetch,
+                write: false,
+                byteCount: 2);
             return _physicalBus.TryInvokeHostTrap(physicalPc, trapId, state);
         }
 
@@ -497,7 +608,7 @@ namespace CopperMod.Amiga
 
         public ushort ReadHostWord(uint address)
         {
-            var physical = Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false);
+            var physical = Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2);
             if (_codeReader != null)
             {
                 return _codeReader.ReadHostWord(physical);
@@ -507,7 +618,95 @@ namespace CopperMod.Amiga
             return _physicalBus.ReadWord(physical, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
         }
 
-        private uint Translate(uint address, AmigaBusAccessKind accessKind, bool write)
+        public bool TryReadFastByte(uint address, AmigaBusAccessKind accessKind, out byte value)
+        {
+            var physical = Translate(address, accessKind, write: false, byteCount: 1);
+            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            {
+                value = amigaBus.ReadHostByte(physical);
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        public bool TryReadFastWord(uint address, AmigaBusAccessKind accessKind, out ushort value)
+        {
+            var physical = Translate(address, accessKind, write: false, byteCount: 2);
+            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            {
+                value = amigaBus.ReadHostWord(physical);
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        public bool TryReadFastLong(uint address, AmigaBusAccessKind accessKind, out uint value)
+        {
+            var physical = Translate(address, accessKind, write: false, byteCount: 4);
+            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            {
+                value = amigaBus.ReadHostLong(physical);
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        public bool TryWriteFastByte(uint address, byte value, AmigaBusAccessKind accessKind)
+        {
+            var physical = Translate(address, accessKind, write: true, byteCount: 1);
+            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            {
+                return false;
+            }
+
+            amigaBus.WriteHostByte(physical, value);
+            return true;
+        }
+
+        public bool TryWriteFastWord(uint address, ushort value, AmigaBusAccessKind accessKind)
+        {
+            var physical = Translate(address, accessKind, write: true, byteCount: 2);
+            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            {
+                return false;
+            }
+
+            amigaBus.WriteHostWord(physical, value);
+            return true;
+        }
+
+        public bool TryWriteFastLong(uint address, uint value, AmigaBusAccessKind accessKind)
+        {
+            var physical = Translate(address, accessKind, write: true, byteCount: 4);
+            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            {
+                return false;
+            }
+
+            amigaBus.WriteHostLong(physical, value);
+            return true;
+        }
+
+        private static bool CanFastReadPhysical(uint physical)
+            => (physical & 0x00FF_FFFFu) == 0x00BF_E001u ||
+                M68020CpuProfile.ClassifyTarget(physical) is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or
+                M68020MemoryTarget.Rom;
+
+        private static bool CanFastWritePhysical(uint physical)
+            => (physical & 0x00FF_FFFFu) == 0x00BF_E001u ||
+                M68020CpuProfile.ClassifyTarget(physical) is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam;
+
+        private uint Translate(uint address, AmigaBusAccessKind accessKind, bool write, int byteCount)
         {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
             if (_state.M68040Mmu.TryTranslate(
@@ -519,10 +718,47 @@ namespace CopperMod.Amiga
                 out var physical,
                 out var fault))
             {
+                if (!IsPhysicalAddressMapped(physical, byteCount, accessKind))
+                {
+                    throw new M68040MmuFaultException(
+                        WithStackedProgramCounter(
+                            CreatePhysicalAddressFault(address, accessKind, write, supervisor),
+                            address,
+                            accessKind));
+                }
+
                 return physical;
             }
 
-            throw new M68040MmuFaultException(fault);
+            throw new M68040MmuFaultException(
+                WithStackedProgramCounter(fault, address, accessKind));
+        }
+
+        private bool IsPhysicalAddressMapped(uint physicalAddress, int byteCount, AmigaBusAccessKind accessKind)
+            => _physicalAddressMap == null ||
+                _physicalAddressMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
+
+        private static M68040MmuFault CreatePhysicalAddressFault(
+            uint logicalAddress,
+            AmigaBusAccessKind accessKind,
+            bool write,
+            bool supervisor)
+        {
+            var status = 0x0000_0010u |
+                (write ? 0x0000_0100u : 0) |
+                (supervisor ? 0x0000_0200u : 0);
+            return new M68040MmuFault(logicalAddress, accessKind, write, status);
+        }
+
+        private M68040MmuFault WithStackedProgramCounter(
+            M68040MmuFault fault,
+            uint logicalAddress,
+            AmigaBusAccessKind accessKind)
+        {
+            var stackedProgramCounter = accessKind == AmigaBusAccessKind.CpuInstructionFetch
+                ? logicalAddress
+                : _state.LastInstructionProgramCounter;
+            return fault with { StackedProgramCounter = stackedProgramCounter };
         }
 
         private uint ReadPhysicalLong(uint physicalAddress)
@@ -531,6 +767,12 @@ namespace CopperMod.Amiga
             _state.M68040Mmu.BypassTranslation = true;
             try
             {
+                if (!IsPhysicalAddressMapped(physicalAddress, 4, AmigaBusAccessKind.CpuDataRead))
+                {
+                    throw new AmigaEmulationException(
+                        $"MC68040 MMU table read from unmapped physical address 0x{physicalAddress:X8}.");
+                }
+
                 var cycle = _state.Cycles;
                 return _physicalBus.ReadLong(physicalAddress, ref cycle, AmigaBusAccessKind.CpuDataRead);
             }
@@ -696,6 +938,10 @@ namespace CopperMod.Amiga
                 RaiseMmuFault(ex.Fault);
                 return (int)(State.Cycles - startCycles);
             }
+            catch (UnsupportedM68kTimingException ex)
+            {
+                throw new UnsupportedM68040InstructionException(ex.Opcode, ex.ProgramCounter, _profile.Name, ex);
+            }
         }
 
         public override void Reset(uint programCounter, uint stackPointer)
@@ -733,10 +979,25 @@ namespace CopperMod.Amiga
             }
 
             var checkpoint = M68040ApproximateFallbackCheckpoint.Capture(State);
+            var startCycles = State.Cycles;
+            var startNativeCycles = State.NativeCycles;
             try
             {
                 _approximateIntegerFallback.ExecuteInstruction();
-                _timing.SynchronizeNativeToMachine();
+                if (_profile.FixedInstructionNativeCycles is int fixedCycles)
+                {
+                    State.Cycles = startCycles;
+                    State.NativeCycles = startNativeCycles;
+                    _timing.CompleteInstruction(M68kInstructionPlan.CreateFlat(
+                        M68kInstructionTimingKey.Nop,
+                        "fixed JIT fallback",
+                        fixedCycles));
+                }
+                else
+                {
+                    _timing.SynchronizeNativeToMachine();
+                }
+
                 State.EnableM68020StackMode();
                 return true;
             }
@@ -957,15 +1218,22 @@ namespace CopperMod.Amiga
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var address = GetFpuStateFrameAddress(mode, register, M68040FpuHelpers.IdleStateFrameSize);
-            WriteLong(address, M68040FpuHelpers.IdleStateFrame);
-            for (var offset = 4u; offset < M68040FpuHelpers.IdleStateFrameSize; offset += 4)
+            var stateFrame = M68040FpuHelpers.CurrentStateFrame(State.M68040Fpu);
+            var header = (ushort)(stateFrame >> 16);
+            var size = M68040FpuHelpers.StateFrameSize(header);
+            State.M68040Fpu.LastStateFrameAddress = address;
+            State.M68040Fpu.LastStateFrameHeader = header;
+            State.M68040Fpu.LastStateFrameSize = size;
+            State.M68040Fpu.LastStateFrameRestore = false;
+            WriteLong(address, stateFrame);
+            for (var offset = 4u; offset < size; offset += 4)
             {
                 WriteLong(address + offset, 0);
             }
 
             if (mode == 3)
             {
-                State.A[register] = address + M68040FpuHelpers.IdleStateFrameSize;
+                State.A[register] = address + size;
             }
         }
 
@@ -974,7 +1242,13 @@ namespace CopperMod.Amiga
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var address = GetFpuStateFrameAddress(mode, register, M68040FpuHelpers.IdleStateFrameSize);
-            var size = M68040FpuHelpers.StateFrameSize(ReadWord(address));
+            var header = ReadWord(address);
+            var size = M68040FpuHelpers.StateFrameSize(header);
+            State.M68040Fpu.LastStateFrameAddress = address;
+            State.M68040Fpu.LastStateFrameHeader = header;
+            State.M68040Fpu.LastStateFrameSize = size;
+            State.M68040Fpu.LastStateFrameRestore = true;
+            State.M68040Fpu.HasExecutedNonConditionalInstruction = !M68040FpuHelpers.IsNullStateFrameHeader(header);
             if (mode == 3)
             {
                 State.A[register] = address + size;
@@ -983,6 +1257,7 @@ namespace CopperMod.Amiga
 
         private void ExecuteFmoveControl(ushort opcode, ushort extension, bool toControl)
         {
+            State.M68040Fpu.HasExecutedNonConditionalInstruction = true;
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             if (mode != 0)
@@ -1039,6 +1314,7 @@ namespace CopperMod.Amiga
 
         private void ExecuteFmovem(ushort opcode, ushort extension, bool registersToMemory)
         {
+            State.M68040Fpu.HasExecutedNonConditionalInstruction = true;
             var mask = (byte)(extension & 0x00FF);
             var byteSize = (uint)(CountFpuRegisterMaskBits(mask) * 12);
             var mode = (opcode >> 3) & 7;
@@ -1092,6 +1368,7 @@ namespace CopperMod.Amiga
 
         private void ExecuteFmoveToEa(ushort opcode, ushort extension)
         {
+            State.M68040Fpu.HasExecutedNonConditionalInstruction = true;
             var source = (extension >> 7) & 7;
             var format = (extension >> 10) & 7;
             WriteFpuEa(opcode, format, State.M68040Fpu.FP[source]);
@@ -1235,7 +1512,11 @@ namespace CopperMod.Amiga
             try
             {
                 State.M68040Mmu.Status = fault.Status;
-                RaiseFormat0Exception(VectorBusError, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                var stackedProgramCounter = fault.StackedProgramCounter ??
+                    (fault.AccessKind == AmigaBusAccessKind.CpuInstructionFetch
+                        ? fault.LogicalAddress
+                        : State.LastInstructionProgramCounter);
+                RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
             }
             finally
             {

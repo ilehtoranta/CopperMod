@@ -100,6 +100,14 @@ namespace CopperMod.Amiga
                 return (int)(State.Cycles - startCycles);
             }
 
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                var instructionPc = State.ProgramCounter;
+                BeginInstruction(0);
+                RaiseFormat0Exception(3, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
+                return (int)(State.Cycles - startCycles);
+            }
+
             if (!TryPeekOpcode(State.ProgramCounter, out var opcode))
             {
                 throw new UnsupportedM68kTimingException(0, State.ProgramCounter, _profile);
@@ -124,6 +132,7 @@ namespace CopperMod.Amiga
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
+            State.StatusRegister = M68kCpuState.ResetStatusRegister;
             State.EnableM68020StackMode();
             State.VectorBaseRegister = 0;
             State.SourceFunctionCode = 0;
@@ -138,6 +147,7 @@ namespace CopperMod.Amiga
             State.Stopped = false;
             State.LastOpcode = 0;
             State.LastInstructionProgramCounter = 0;
+            State.RecordException(-1, 0, 0);
             _timing.Reset();
         }
 
@@ -166,6 +176,7 @@ namespace CopperMod.Amiga
             State.Stopped = false;
             var savedStatusRegister = State.StatusRegister;
             var vectorTarget = ReadLong(State.VectorBaseRegister + vectorAddress);
+            State.RecordException((int)(vectorAddress / 4), State.ProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((State.StatusRegister & 0xE8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
             PushWord((ushort)(Format0ExceptionFrame | ((int)vectorAddress & 0x0FFF)));
             PushLong(State.ProgramCounter);
@@ -225,6 +236,12 @@ namespace CopperMod.Amiga
 
             if (TryExecuteImmediateLogicalToStatusRegister(opcode))
             {
+                return true;
+            }
+
+            if ((opcode & 0xF138) == 0x0108)
+            {
+                ExecuteMovep(opcode);
                 return true;
             }
 
@@ -366,7 +383,19 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if ((opcode & 0xF1F8) == 0x2178)
+            if ((opcode & 0xF1FF) == 0x2178)
+            {
+                ExecuteMoveLongAbsoluteWordToAddressDisplacement(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xF1FF) == 0x2179)
+            {
+                ExecuteMoveLongAbsoluteLongToAddressDisplacement(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xF1FF) == 0x217C)
             {
                 ExecuteMoveLongImmediateToAddressDisplacement(opcode);
                 return true;
@@ -1327,6 +1356,49 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
+        private void ExecuteMovep(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var dataRegister = (opcode >> 9) & 7;
+            var addressRegister = opcode & 7;
+            var address = unchecked((uint)(State.A[addressRegister] + unchecked((int)(short)FetchWord())));
+            var isLong = (opcode & 0x0040) != 0;
+            var registerToMemory = (opcode & 0x0080) != 0;
+
+            if (registerToMemory)
+            {
+                var value = State.D[dataRegister];
+                if (isLong)
+                {
+                    WriteByte(address, (byte)(value >> 24));
+                    WriteByte(unchecked(address + 2), (byte)(value >> 16));
+                    WriteByte(unchecked(address + 4), (byte)(value >> 8));
+                    WriteByte(unchecked(address + 6), (byte)value);
+                }
+                else
+                {
+                    WriteByte(address, (byte)(value >> 8));
+                    WriteByte(unchecked(address + 2), (byte)value);
+                }
+            }
+            else if (isLong)
+            {
+                State.D[dataRegister] =
+                    ((uint)ReadByte(address) << 24) |
+                    ((uint)ReadByte(unchecked(address + 2)) << 16) |
+                    ((uint)ReadByte(unchecked(address + 4)) << 8) |
+                    ReadByte(unchecked(address + 6));
+            }
+            else
+            {
+                var value = (ushort)((ReadByte(address) << 8) | ReadByte(unchecked(address + 2)));
+                WriteDataRegisterWord(dataRegister, value);
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
         protected virtual void ExecuteMovec(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -1534,11 +1606,6 @@ namespace CopperMod.Amiga
             _ = FetchWord();
             var mask = FetchWord();
             var addressRegister = opcode & 7;
-            if ((mask & (1 << (8 + addressRegister))) != 0)
-            {
-                throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
-            }
-
             var address = State.A[addressRegister];
             for (var register = 0; register < 8; register++)
             {
@@ -1784,6 +1851,32 @@ namespace CopperMod.Amiga
             WriteLong(unchecked((uint)(State.A[destination] + displacement)), value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAddressDisplacement);
+        }
+
+        private void ExecuteMoveLongAbsoluteWordToAddressDisplacement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = unchecked((uint)(short)FetchWord());
+            var displacement = unchecked((int)(short)FetchWord());
+            var value = ReadLong(sourceAddress);
+            WriteLong(unchecked((uint)(State.A[destination] + displacement)), value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAbsoluteWordToAddressDisplacement);
+        }
+
+        private void ExecuteMoveLongAbsoluteLongToAddressDisplacement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = FetchLong();
+            var displacement = unchecked((int)(short)FetchWord());
+            var value = ReadLong(sourceAddress);
+            WriteLong(unchecked((uint)(State.A[destination] + displacement)), value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAbsoluteLongToAddressDisplacement);
         }
 
         private void ExecuteMoveLongImmediateToPostIncrement(ushort opcode)
@@ -3934,6 +4027,7 @@ namespace CopperMod.Amiga
         protected virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
         {
             var savedStatusRegister = State.StatusRegister;
+            State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
             PushWord((ushort)(Format0ExceptionFrame | ((vector * 4) & 0x0FFF)));
             PushLong(stackedProgramCounter);
@@ -4096,13 +4190,13 @@ namespace CopperMod.Amiga
             bool registerToMemory)
         {
             const int registerListImmediateAddressCycles = 4;
-            var nativeCycles = _profile.Model == M68kAcceleratorModel.M68030
+            var nativeCycles = _profile.FixedInstructionNativeCycles ?? (_profile.Model == M68kAcceleratorModel.M68030
                 ? registerToMemory
                     ? 4 + (2 * registerCount) + registerListImmediateAddressCycles
                     : 8 + (4 * registerCount) + registerListImmediateAddressCycles
                 : registerToMemory
                     ? 4 + (3 * registerCount) + registerListImmediateAddressCycles
-                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles;
+                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles);
             var plan = _profile.Model == M68kAcceleratorModel.M68030
                 ? M68kInstructionPlan.CreateHeadTail(key, name, nativeCycles, 2, 0)
                 : M68kInstructionPlan.CreateFlat(key, name, nativeCycles);

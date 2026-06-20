@@ -1,4 +1,4 @@
-using System.IO.Compression;
+using System.Reflection;
 using CopperMod.Amiga;
 using CopperScreen;
 
@@ -62,14 +62,6 @@ public sealed class CopperScreenArchitectureTests
 			M68kBackendKind.JitM68040,
 			8 * 1024 * 1024);
 		AssertProfile(
-			"expanded-m68040-jit-kickstart31-workbench31",
-			AmigaMachineProfile.A500Pal512KBoot,
-			CopperScreenKickstartSource.KickstartRom,
-			512 * 1024,
-			2,
-			M68kBackendKind.JitM68040,
-			8 * 1024 * 1024);
-		AssertProfile(
 			"expanded-m68040-jit-kickstart31-sysinfo",
 			AmigaMachineProfile.A500Pal512KBoot,
 			CopperScreenKickstartSource.KickstartRom,
@@ -83,6 +75,49 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal("expanded-diagrom", diagRom.Id);
 		Assert.Equal("ROM/DiagROM/diagrom-a500.rom", diagRom.KickstartRomPath);
 		Assert.True(diagRom.BootsWithoutDisk);
+	}
+
+	[Fact]
+	public void ProfileAutoStartStartupSequenceDefaultsToTrueUnlessExplicitlyDisabled()
+	{
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-autostart-default-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		try
+		{
+			Assert.True(LoadProfile("absent-workbench", null).AutoStartWorkbenchStartupSequence);
+			Assert.True(LoadProfile("empty-workbench", "\"workbench\": {}").AutoStartWorkbenchStartupSequence);
+			Assert.False(LoadProfile("disabled-workbench", "\"workbench\": { \"autoStartStartupSequence\": false }").AutoStartWorkbenchStartupSequence);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+
+		CopperScreenProfile LoadProfile(string id, string? workbenchJson)
+		{
+			var workbenchBlock = workbenchJson == null ? string.Empty : "," + Environment.NewLine + "  " + workbenchJson;
+			var profilePath = Path.Combine(directory, id + ".json");
+			File.WriteAllText(
+				profilePath,
+				$$"""
+				{
+				  "id": "{{id}}",
+				  "displayName": "{{id}}",
+				  "machine": {
+				    "model": "A500PAL",
+				    "chipRamKb": 512,
+				    "pseudoFastRamKb": 512
+				  },
+				  "kickstart": {
+				    "source": "CopperStart",
+				    "version": "1.3"
+				  }{{workbenchBlock}}
+				}
+				""");
+
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+			return profile;
+		}
 	}
 
 	[Fact]
@@ -136,212 +171,144 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
-	public void BundledKickstart31Workbench31M68040JitProfileResolvesRomAndDisk()
+	public void BundledKickstart31CopperHdfProfileResolvesHardDrive()
 	{
 		Assert.True(
 			CopperScreenProfile.TryLoad(
-				"workbench31-040jit",
+				"copperhdf",
 				AppContext.BaseDirectory,
 				out var profile,
 				out var error),
 			error);
 
-		Assert.Equal("expanded-m68040-jit-kickstart31-workbench31", profile.Id);
+		Assert.Equal("expanded-m68040-jit-kickstart31-copperhdf", profile.Id);
 		Assert.Equal(CopperScreenKickstartSource.KickstartRom, profile.KickstartSource);
 		Assert.Equal("ROM/kickstart-3.1-a500.rom", profile.KickstartRomPath);
 		Assert.Equal(M68kBackendKind.JitM68040, profile.CpuBackend);
-		Assert.True(profile.AutoStartWorkbenchStartupSequence);
-
-		var drive = Assert.Single(profile.MediaDrives);
-		Assert.Equal(0, drive.Index);
-		Assert.Equal("TestImages/Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].zip", drive.DiskPath);
-		Assert.True(drive.WriteProtected);
+		var hardDrive = Assert.Single(profile.HardDrives);
+		Assert.Equal(0, hardDrive.Unit);
+		Assert.Equal("TestImages/Hardfiles/copperhdf.hdf", hardDrive.Path);
+		Assert.False(hardDrive.ReadOnly);
+		Assert.Equal(32L * 1024L * 1024L, hardDrive.CreateSizeBytes);
 
 		var options = CopperScreenStartupOptions.Parse(
-			new[] { "--profile", "kickstart31-workbench31" },
+			new[] { "--profile", "copperhdf" },
 			AppContext.BaseDirectory);
 		Assert.Null(options.Error);
-		Assert.EndsWith(Path.Combine("ROM", "kickstart-3.1-a500.rom"), options.KickstartRomPath);
-		Assert.EndsWith(
-			Path.Combine("TestImages", "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].zip"),
-			options.DiskPath);
+		Assert.Null(options.DiskPath);
+		var startupHardDrive = Assert.Single(options.HardDrives);
+		Assert.EndsWith(Path.Combine("TestImages", "Hardfiles", "copperhdf.hdf"), startupHardDrive.Path);
+		Assert.Equal(32L * 1024L * 1024L, startupHardDrive.CreateSizeBytes);
 	}
 
 	[Fact]
-	public void Workbench31StartupDiskResolutionPrefersSiblingDesktopDisk()
+	public void M68040KickstartRomProfilesAutoStartStartupSequence()
 	{
-		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-" + Guid.NewGuid().ToString("N"));
-		Directory.CreateDirectory(directory);
-		try
-		{
-			var installPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf");
-			var workbenchPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf");
-			File.WriteAllBytes(installPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: false));
-			File.WriteAllBytes(workbenchPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
+		Assert.True(CopperScreenProfile.TryLoad("expanded-m68040-kickstart-rom", AppContext.BaseDirectory, out var accurate, out var accurateError), accurateError);
+		Assert.True(CopperScreenProfile.TryLoad("expanded-m68040-jit-kickstart-rom", AppContext.BaseDirectory, out var jit, out var jitError), jitError);
 
-			var resolved = CopperScreenStartupOptions.ResolveWorkbenchStartupDiskPath(installPath, directory);
-
-			Assert.Equal(Path.GetFullPath(workbenchPath), resolved);
-		}
-		finally
-		{
-			Directory.Delete(directory, recursive: true);
-		}
+		Assert.True(accurate.AutoStartWorkbenchStartupSequence);
+		Assert.True(jit.AutoStartWorkbenchStartupSequence);
 	}
 
 	[Fact]
-	public void Workbench31ProfilePrefersSiblingDesktopDiskForExplicitInstallDisk()
+	public void KickstartRomProfilesDoNotEnableSyntheticWorkbenchStartupRunner()
 	{
-		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-explicit-" + Guid.NewGuid().ToString("N"));
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-rom-autostart-" + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(directory);
 		try
 		{
-			var installPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf");
-			var workbenchPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf");
-			File.WriteAllBytes(installPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: false));
-			File.WriteAllBytes(workbenchPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
+			var romPath = Path.Combine(directory, "kick.rom");
+			File.WriteAllBytes(romPath, new byte[8]);
+			var copperStartProfile = WriteProfile("host-startup", "CopperStart");
+			var kickstartRomProfile = WriteProfile("rom-startup", "KickstartRom");
 
-			var options = CopperScreenStartupOptions.Parse(
-				new[] { "--profile", "kickstart31-workbench31", installPath },
+			using var copperStart = CopperScreenEmulator.Create(["--profile", copperStartProfile], AppContext.BaseDirectory);
+			var copperStartBoot = GetBoot(copperStart);
+			Assert.True(copperStartBoot.AutoRunStartupSequence);
+			Assert.True(copperStartBoot.AutoStartWorkbenchDefaultTool);
+
+			using var kickstartRom = CopperScreenEmulator.Create(
+				["--profile", kickstartRomProfile, "--kickstart-rom", romPath],
 				AppContext.BaseDirectory);
-
-			Assert.Null(options.Error);
-			Assert.Equal(Path.GetFullPath(workbenchPath), options.DiskPath);
-			Assert.Equal(Path.GetFullPath(workbenchPath), options.DriveDiskPaths[0]);
-			Assert.Equal(Path.GetFullPath(installPath), options.DriveDiskPaths[1]);
+			var kickstartRomBoot = GetBoot(kickstartRom);
+			Assert.False(kickstartRomBoot.AutoRunStartupSequence);
+			Assert.False(kickstartRomBoot.AutoStartWorkbenchDefaultTool);
 		}
 		finally
 		{
 			Directory.Delete(directory, recursive: true);
 		}
-	}
 
-	[Fact]
-	public void Workbench31ProfilePreservesProfileInstallDiskForSiblingDesktopDisk()
-	{
-		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-profile-" + Guid.NewGuid().ToString("N"));
-		Directory.CreateDirectory(directory);
-		try
+		string WriteProfile(string id, string kickstartSource)
 		{
-			var installPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf");
-			var workbenchPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf");
-			var profilePath = Path.Combine(directory, "profile.json");
-			File.WriteAllBytes(installPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: false));
-			File.WriteAllBytes(workbenchPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
-			var installJsonPath = installPath.Replace('\\', '/');
+			var profilePath = Path.Combine(directory, id + ".json");
 			File.WriteAllText(
 				profilePath,
 				$$"""
 				{
-				  "id": "custom-wb31-profile-media",
-				  "displayName": "Custom Workbench 3.1 Profile Media",
+				  "id": "{{id}}",
+				  "displayName": "{{id}}",
 				  "machine": {
 				    "model": "A500PAL",
 				    "chipRamKb": 512,
-				    "pseudoFastRamKb": 512,
-				    "floppyDriveCount": 2
-				  },
-				  "cpu": {
-				    "backend": "JitM68040"
+				    "pseudoFastRamKb": 512
 				  },
 				  "kickstart": {
-				    "source": "KickstartRom",
-				    "version": "3.1",
-				    "path": "ROM/kickstart-3.1-a500.rom"
-				  },
-				  "media": {
-				    "drives": [
-				      {
-				        "index": 0,
-				        "diskPath": "{{installJsonPath}}",
-				        "writeProtected": true
-				      }
-				    ]
+				    "source": "{{kickstartSource}}"
 				  },
 				  "workbench": {
 				    "autoStartStartupSequence": true
 				  }
 				}
 				""");
-
-			var options = CopperScreenStartupOptions.Parse(
-				new[] { "--profile", profilePath },
-				AppContext.BaseDirectory);
-
-			Assert.Null(options.Error);
-			Assert.Equal(Path.GetFullPath(workbenchPath), options.DiskPath);
-			Assert.Equal(Path.GetFullPath(workbenchPath), options.DriveDiskPaths[0]);
-			Assert.Equal(Path.GetFullPath(installPath), options.DriveDiskPaths[1]);
-		}
-		finally
-		{
-			Directory.Delete(directory, recursive: true);
+			return profilePath;
 		}
 	}
 
 	[Fact]
-	public void Workbench31ProfileDoesNotAttachUnrelatedWorkbenchDiskWhenDesktopDiskIsAbsent()
+	public void StartupArgumentParserCanAttachHardfile()
 	{
-		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-unrelated-" + Guid.NewGuid().ToString("N"));
+		var hdfPath = Path.Combine(Path.GetTempPath(), "startup-hardfile-" + Guid.NewGuid().ToString("N") + ".hdf");
+		try
+		{
+			File.WriteAllBytes(hdfPath, new byte[1024]);
+			var options = CopperScreenStartupOptions.Parse(
+				new[] { "--profile", "expanded-m68040-jit-kickstart-rom", "--hdf-readonly", hdfPath },
+				AppContext.BaseDirectory);
+
+			Assert.Null(options.Error);
+			var hardDrive = Assert.Single(options.HardDrives);
+			Assert.Equal(0, hardDrive.Unit);
+			Assert.Equal(Path.GetFullPath(hdfPath), hardDrive.Path);
+			Assert.True(hardDrive.ReadOnly);
+		}
+		finally
+		{
+			File.Delete(hdfPath);
+		}
+	}
+
+	[Fact]
+	public void WorkbenchNamedExplicitDiskPathIsPreservedLikeAnyOtherDisk()
+	{
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-literal-" + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(directory);
 		try
 		{
 			var installPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf");
-			var oldWorkbenchPath = Path.Combine(directory, "Workbench v1.3 rev 34.20 (1988)(Commodore)(A500-A2000)(Disk 1 of 2)(Workbench)[m].adf");
+			var workbenchPath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf");
 			File.WriteAllBytes(installPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: false));
-			File.WriteAllBytes(oldWorkbenchPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
+			File.WriteAllBytes(workbenchPath, CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
 
 			var options = CopperScreenStartupOptions.Parse(
-				new[] { "--profile", "kickstart31-workbench31", installPath },
+				new[] { "--profile", "expanded-m68040-jit-kickstart-rom", installPath },
 				AppContext.BaseDirectory);
 
 			Assert.Null(options.Error);
 			Assert.Equal(Path.GetFullPath(installPath), options.DiskPath);
 			Assert.Equal(Path.GetFullPath(installPath), options.DriveDiskPaths[0]);
 			Assert.Null(options.DriveDiskPaths[1]);
-		}
-		finally
-		{
-			Directory.Delete(directory, recursive: true);
-		}
-	}
-
-	[Fact]
-	public void Workbench31ProfileExtractsDesktopDiskFromMultiImageZip()
-	{
-		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-wb31-zip-" + Guid.NewGuid().ToString("N"));
-		Directory.CreateDirectory(directory);
-		try
-		{
-			var archivePath = Path.Combine(directory, "Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].zip");
-			using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
-			{
-				WriteZipEntry(
-					archive,
-					"Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 1 of 6)(Install)[m].adf",
-					CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: false));
-				WriteZipEntry(
-					archive,
-					"Workbench v3.1 rev 40.29 (1993)(Commodore)(beta)(Disk 2 of 6)(Workbench)[m].adf",
-					CreateMinimalAmigaDosDisk(includeWorkbenchDesktop: true));
-			}
-
-			var options = CopperScreenStartupOptions.Parse(
-				new[] { "--profile", "kickstart31-workbench31", archivePath },
-				AppContext.BaseDirectory);
-
-			Assert.Null(options.Error);
-			Assert.NotEqual(Path.GetFullPath(archivePath), options.DiskPath);
-			Assert.EndsWith(".adf", options.DiskPath, StringComparison.OrdinalIgnoreCase);
-			Assert.True(File.Exists(options.DiskPath));
-			var fileSystem = new AmigaDosFileSystem(AmigaDiskImage.Load(options.DiskPath!));
-			Assert.True(fileSystem.TryFindEntry("System/Workbench", out var workbenchEntry));
-			Assert.True(workbenchEntry.IsFile);
-			Assert.NotEqual(Path.GetFullPath(archivePath), options.DriveDiskPaths[1]);
-			Assert.EndsWith(".adf", options.DriveDiskPaths[1], StringComparison.OrdinalIgnoreCase);
-			Assert.True(File.Exists(options.DriveDiskPaths[1]));
-			var installFileSystem = new AmigaDosFileSystem(AmigaDiskImage.Load(options.DriveDiskPaths[1]!));
-			Assert.False(installFileSystem.TryFindEntry("System/Workbench", out _));
 		}
 		finally
 		{
@@ -1058,13 +1025,6 @@ public sealed class CopperScreenArchitectureTests
 		return data;
 	}
 
-	private static void WriteZipEntry(ZipArchive archive, string name, byte[] data)
-	{
-		var entry = archive.CreateEntry(name);
-		using var stream = entry.Open();
-		stream.Write(data, 0, data.Length);
-	}
-
 	private static void WriteDirectoryHeader(byte[] data, int block, int parent, string name, int secondaryType, int size = 0)
 	{
 		var offset = block * 512;
@@ -1084,5 +1044,12 @@ public sealed class CopperScreenArchitectureTests
 		data[offset + 1] = (byte)(value >> 16);
 		data[offset + 2] = (byte)(value >> 8);
 		data[offset + 3] = (byte)value;
+	}
+
+	private static AmigaBootController GetBoot(CopperScreenEmulator emulator)
+	{
+		return (AmigaBootController)typeof(CopperScreenEmulator)
+			.GetField("_boot", BindingFlags.NonPublic | BindingFlags.Instance)!
+			.GetValue(emulator)!;
 	}
 }

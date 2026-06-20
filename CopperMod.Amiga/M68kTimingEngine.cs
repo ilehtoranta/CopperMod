@@ -83,6 +83,8 @@ namespace CopperMod.Amiga
         MoveLongBriefIndexedToAddress,
         MoveLongAddressIndirectToAddressIndirect,
         MoveLongAbsoluteLongToData,
+        MoveLongAbsoluteWordToAddressDisplacement,
+        MoveLongAbsoluteLongToAddressDisplacement,
         MoveLongDataToAbsoluteLong,
         MoveLongAddressToAbsoluteLong,
         MoveByteDataToData,
@@ -404,7 +406,9 @@ namespace CopperMod.Amiga
         }
 
         public M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
-            => _profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
+            => _profile.FixedInstructionNativeCycles is int fixedCycles
+                ? M68kInstructionPlan.CreateFlat(key, "fixed JIT fallback", fixedCycles)
+                : _profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
                 ? M68030TimingModel.GetPlan(key)
                 : M68020TimingModel.GetPlan(key);
 
@@ -601,6 +605,8 @@ namespace CopperMod.Amiga
                 M68kInstructionTimingKey.MoveLongBriefIndexedToAddress => M68kInstructionPlan.CreateFlat(key, "MOVEA.L (d8,An,Xn),An", 8),
                 M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect => M68kInstructionPlan.CreateFlat(key, "MOVE.L (An),(An)", 8),
                 M68kInstructionTimingKey.MoveLongAbsoluteLongToData => M68kInstructionPlan.CreateFlat(key, "MOVE.L (xxx).L,Dn", 8),
+                M68kInstructionTimingKey.MoveLongAbsoluteWordToAddressDisplacement => M68kInstructionPlan.CreateFlat(key, "MOVE.L (xxx).W,(d16,An)", 8),
+                M68kInstructionTimingKey.MoveLongAbsoluteLongToAddressDisplacement => M68kInstructionPlan.CreateFlat(key, "MOVE.L (xxx).L,(d16,An)", 10),
                 M68kInstructionTimingKey.MoveLongDataToAbsoluteLong => M68kInstructionPlan.CreateFlat(key, "MOVE.L Dn,(xxx).L", 6),
                 M68kInstructionTimingKey.MoveLongAddressToAbsoluteLong => M68kInstructionPlan.CreateFlat(key, "MOVE.L An,(xxx).L", 6),
                 M68kInstructionTimingKey.MoveByteDataToData => M68kInstructionPlan.CreateFlat(key, "MOVE.B Dn,Dn", 2),
@@ -813,6 +819,8 @@ namespace CopperMod.Amiga
                 M68kInstructionTimingKey.MoveLongBriefIndexedToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L (d8,An,Xn),An", 8, 1, 1),
                 M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (An),(An)", 8, 1, 1),
                 M68kInstructionTimingKey.MoveLongAbsoluteLongToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).L,Dn", 8, 1, 1),
+                M68kInstructionTimingKey.MoveLongAbsoluteWordToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).W,(d16,An)", 8, 1, 1),
+                M68kInstructionTimingKey.MoveLongAbsoluteLongToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).L,(d16,An)", 10, 1, 1),
                 M68kInstructionTimingKey.MoveLongDataToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L Dn,(xxx).L", 6, 1, 1),
                 M68kInstructionTimingKey.MoveLongAddressToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,(xxx).L", 6, 1, 1),
                 M68kInstructionTimingKey.MoveByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,Dn", 2, 1, 1),
@@ -980,6 +988,21 @@ namespace CopperMod.Amiga
 
         public byte ReadByte(uint address, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastCiaAPortAAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus ciaFastBus &&
+                ciaFastBus.TryReadFastByte(address, accessKind, out var ciaFastValue))
+            {
+                CompleteMinimalBlockingFastAccess();
+                return ciaFastValue;
+            }
+
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryReadFastByte(address, accessKind, out var fastValue))
+            {
+                return fastValue;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             var value = _bus.ReadByte(address, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Byte, ref cycle);
@@ -989,6 +1012,19 @@ namespace CopperMod.Amiga
 
         public ushort ReadWord(uint address, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastInstructionFetch(address, accessKind) &&
+                _bus is IM68kCodeReader codeReader)
+            {
+                return codeReader.ReadHostWord(address);
+            }
+
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryReadFastWord(address, accessKind, out var fastValue))
+            {
+                return fastValue;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             var value = _bus.ReadWord(address, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
@@ -998,6 +1034,13 @@ namespace CopperMod.Amiga
 
         public uint ReadLong(uint address, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryReadFastLong(address, accessKind, out var fastValue))
+            {
+                return fastValue;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             var value = _bus.ReadLong(address, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Long, ref cycle);
@@ -1007,6 +1050,21 @@ namespace CopperMod.Amiga
 
         public void WriteByte(uint address, byte value, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastCiaAPortAAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus ciaFastBus &&
+                ciaFastBus.TryWriteFastByte(address, value, accessKind))
+            {
+                RecordMinimalPostedFastAccess();
+                return;
+            }
+
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryWriteFastByte(address, value, accessKind))
+            {
+                return;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             _bus.WriteByte(address, value, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Byte, ref cycle);
@@ -1015,6 +1073,13 @@ namespace CopperMod.Amiga
 
         public void WriteWord(uint address, ushort value, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryWriteFastWord(address, value, accessKind))
+            {
+                return;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             _bus.WriteWord(address, value, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
@@ -1023,6 +1088,13 @@ namespace CopperMod.Amiga
 
         public void WriteLong(uint address, uint value, AmigaBusAccessKind accessKind)
         {
+            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
+                _bus is IM68kFastMemoryBus fastBus &&
+                fastBus.TryWriteFastLong(address, value, accessKind))
+            {
+                return;
+            }
+
             var cycle = GetBusRequestMachineCycle();
             _bus.WriteLong(address, value, ref cycle, accessKind);
             AddProfileWaitStates(address, M68020BusWidth.Long, ref cycle);
@@ -1033,6 +1105,51 @@ namespace CopperMod.Amiga
         {
             var nativeReady = Math.Max(_state.NativeCycles, _timing.BusControllerAvailableNativeCycle);
             return Math.Max(_state.Cycles, _profile.NativeToMachineCycles(nativeReady));
+        }
+
+        private bool CanUseFastInstructionFetch(uint address, AmigaBusAccessKind accessKind)
+        {
+            if (!_profile.FastInstructionFetch ||
+                accessKind != AmigaBusAccessKind.CpuInstructionFetch)
+            {
+                return false;
+            }
+
+            return _profile.GetBusTimingRule(address).Target is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or
+                M68020MemoryTarget.Rom or
+                M68020MemoryTarget.HostTrap;
+        }
+
+        private bool CanUseFastNonChipMemoryAccess(uint address, AmigaBusAccessKind accessKind)
+        {
+            if (!_profile.FastNonChipMemoryAccess ||
+                accessKind == AmigaBusAccessKind.CpuInstructionFetch)
+            {
+                return false;
+            }
+
+            var target = _profile.GetBusTimingRule(address).Target;
+            return target is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or
+                M68020MemoryTarget.Rom;
+        }
+
+        private bool CanUseFastCiaAPortAAccess(uint address, AmigaBusAccessKind accessKind)
+            => _profile.FastCiaAPortAAccess &&
+                accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+                (address & 0x00FF_FFFFu) == 0x00BF_E001u;
+
+        private void CompleteMinimalBlockingFastAccess()
+        {
+            _timing.CompleteBlockingBusAccess(GetBusRequestMachineCycle() + 1);
+        }
+
+        private void RecordMinimalPostedFastAccess()
+        {
+            _timing.RecordPostedBusCompletion(GetBusRequestMachineCycle() + 1);
         }
 
         private void AddProfileWaitStates(uint address, M68020BusWidth transferWidth, ref long cycle)

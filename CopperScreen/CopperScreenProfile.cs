@@ -39,6 +39,7 @@ internal sealed class CopperScreenProfile
 		CopperScreenKickstartSource kickstartSource,
 		string? kickstartRomPath,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
+		IReadOnlyList<CopperScreenHardfileSettings> hardDrives,
 		CopperScreenInputOptions input,
 		CopperScreenPresentationOptions presentationOptions,
 		bool autoStartWorkbenchStartupSequence,
@@ -59,6 +60,7 @@ internal sealed class CopperScreenProfile
 		KickstartSource = kickstartSource;
 		KickstartRomPath = kickstartRomPath;
 		MediaDrives = mediaDrives;
+		HardDrives = hardDrives;
 		Input = input;
 		PresentationOptions = presentationOptions;
 		AutoStartWorkbenchStartupSequence = autoStartWorkbenchStartupSequence;
@@ -95,6 +97,8 @@ internal sealed class CopperScreenProfile
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
 
+	public IReadOnlyList<CopperScreenHardfileSettings> HardDrives { get; }
+
 	public CopperScreenInputOptions Input { get; }
 
 	public CopperScreenPresentationOptions PresentationOptions { get; }
@@ -120,6 +124,11 @@ internal sealed class CopperScreenProfile
 			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
 			.WithRealTimeClock(RtcEnabled)
 			.WithFloppyDriveCount(FloppyDriveCount)
+			.WithHardfiles(HardDrives.Select(drive => new AmigaHardfileConfiguration(
+				drive.Unit,
+				drive.Path,
+				drive.ReadOnly,
+				drive.CreateSizeBytes)))
 			.WithCpu(M68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
@@ -199,8 +208,8 @@ internal sealed class CopperScreenProfile
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
 			"expanded-m68040-rom" or "expanded-m68040-kickstart" or "expanded-68040-kickstart-rom" => "expanded-m68040-kickstart-rom",
 			"expanded-m68040-jit-rom" or "expanded-m68040-jit-kickstart" or "expanded-68040-jit-kickstart-rom" => "expanded-m68040-jit-kickstart-rom",
-			"expanded-m68040-jit-kickstart31" or "expanded-m68040-jit-workbench31" or "kickstart31-workbench31" or "workbench31-040jit" => "expanded-m68040-jit-kickstart31-workbench31",
 			"expanded-m68040-jit-sysinfo" or "expanded-m68040-jit-kickstart31-sysinfo" or "kickstart31-sysinfo" or "sysinfo-040jit" => "expanded-m68040-jit-kickstart31-sysinfo",
+			"copperhdf" or "kickstart31-copperhdf" or "copperhdf-040jit" or "expanded-m68040-jit-copperhdf" => "expanded-m68040-jit-kickstart31-copperhdf",
 			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized
 		};
@@ -235,9 +244,10 @@ internal sealed class CopperScreenProfile
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
 		var floppyDriveAudio = ParseFloppyDriveAudio(config.Audio?.FloppyDriveSounds);
 		var mediaDrives = ParseMediaDrives(config.Media);
+		var hardDrives = ParseHardDrives(config.HardDrives);
 		var input = ParseInputOptions(config.Input);
 		var presentationOptions = ParsePresentationOptions(config.Presentation);
-		var autoStartWorkbenchStartupSequence = config.Workbench?.AutoStartStartupSequence ?? false;
+		var autoStartWorkbenchStartupSequence = config.Workbench?.AutoStartStartupSequence ?? true;
 		if (floppyDriveCount is < 1 or > 4)
 		{
 			throw new InvalidOperationException("machine.floppyDriveCount must be between 1 and 4.");
@@ -264,6 +274,7 @@ internal sealed class CopperScreenProfile
 			kickstartSource,
 			string.IsNullOrWhiteSpace(kickstart.Path) ? null : kickstart.Path.Trim(),
 			mediaDrives,
+			hardDrives,
 			input,
 			presentationOptions,
 			autoStartWorkbenchStartupSequence,
@@ -285,11 +296,12 @@ internal sealed class CopperScreenProfile
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
+		IReadOnlyList<CopperScreenHardfileSettings> hardDrives,
 		CopperScreenInputOptions input,
 		string? configPath = null,
 		CopperScreenPresentationOptions? presentationOptions = null,
 		string? kickstartRomPath = null,
-		bool autoStartWorkbenchStartupSequence = false)
+		bool autoStartWorkbenchStartupSequence = true)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -312,6 +324,7 @@ internal sealed class CopperScreenProfile
 			kickstartSource,
 			string.IsNullOrWhiteSpace(kickstartRomPath) ? null : kickstartRomPath.Trim(),
 			mediaDrives,
+			hardDrives,
 			input,
 			presentationOptions ?? CopperScreenPresentationOptions.Default,
 			autoStartWorkbenchStartupSequence,
@@ -489,6 +502,44 @@ internal sealed class CopperScreenProfile
 		return drives;
 	}
 
+	private static IReadOnlyList<CopperScreenHardfileSettings> ParseHardDrives(HardDriveFile[]? config)
+	{
+		if (config == null || config.Length == 0)
+		{
+			return Array.Empty<CopperScreenHardfileSettings>();
+		}
+
+		var drives = new List<CopperScreenHardfileSettings>(config.Length);
+		for (var i = 0; i < config.Length; i++)
+		{
+			var drive = config[i];
+			var unit = drive.Unit ?? i;
+			if (unit < 0)
+			{
+				throw new InvalidOperationException("hardDrives[].unit cannot be negative.");
+			}
+
+			if (string.IsNullOrWhiteSpace(drive.Path))
+			{
+				throw new InvalidOperationException("hardDrives[].path is required.");
+			}
+
+			var sizeMb = drive.SizeMb ?? 0;
+			if (sizeMb < 0)
+			{
+				throw new InvalidOperationException("hardDrives[].sizeMb cannot be negative.");
+			}
+
+			drives.Add(new CopperScreenHardfileSettings(
+				unit,
+				drive.Path.Trim(),
+				drive.ReadOnly,
+				sizeMb == 0 ? 0 : checked((long)sizeMb * 1024L * 1024L)));
+		}
+
+		return drives;
+	}
+
 	private static CopperScreenInputOptions ParseInputOptions(InputFile? config)
 	{
 		if (config == null)
@@ -588,6 +639,7 @@ internal sealed class CopperScreenProfile
 			CopperScreenKickstartSource.CopperStart,
 			null,
 			Array.Empty<CopperScreenMediaDriveSettings>(),
+			Array.Empty<CopperScreenHardfileSettings>(),
 			CopperScreenInputOptions.Default,
 			CopperScreenPresentationOptions.Default,
 			false,
@@ -612,6 +664,8 @@ internal sealed class CopperScreenProfile
 
 		public MediaFile? Media { get; set; }
 
+		public HardDriveFile[]? HardDrives { get; set; }
+
 		public InputFile? Input { get; set; }
 
 		public PresentationFile? Presentation { get; set; }
@@ -621,7 +675,7 @@ internal sealed class CopperScreenProfile
 
 	private sealed class WorkbenchFile
 	{
-		public bool AutoStartStartupSequence { get; set; }
+		public bool? AutoStartStartupSequence { get; set; }
 	}
 
 	private sealed class MachineFile
@@ -685,6 +739,17 @@ internal sealed class CopperScreenProfile
 		public string? DiskPath { get; set; }
 
 		public bool? WriteProtected { get; set; }
+	}
+
+	private sealed class HardDriveFile
+	{
+		public int? Unit { get; set; }
+
+		public string? Path { get; set; }
+
+		public bool ReadOnly { get; set; }
+
+		public int? SizeMb { get; set; }
 	}
 
 	private sealed class InputFile

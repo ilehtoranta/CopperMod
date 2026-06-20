@@ -33,7 +33,11 @@ namespace CopperMod.Amiga
             string name,
             M68kAcceleratorModel model,
             int nativeCyclesPerMachineCycle,
-            M68020BusTimingRule[] busTiming)
+            M68020BusTimingRule[] busTiming,
+            int? fixedInstructionNativeCycles = null,
+            bool fastInstructionFetch = false,
+            bool fastNonChipMemoryAccess = false,
+            bool fastCiaAPortAAccess = false)
         {
             if (nativeCyclesPerMachineCycle <= 0)
             {
@@ -43,10 +47,22 @@ namespace CopperMod.Amiga
                     "Native cycles per machine cycle must be positive.");
             }
 
+            if (fixedInstructionNativeCycles is < 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(fixedInstructionNativeCycles),
+                    fixedInstructionNativeCycles,
+                    "Fixed instruction cycles must be non-negative when provided.");
+            }
+
             Name = name ?? throw new ArgumentNullException(nameof(name));
             Model = model;
             NativeCyclesPerMachineCycle = nativeCyclesPerMachineCycle;
             BusTiming = busTiming ?? throw new ArgumentNullException(nameof(busTiming));
+            FixedInstructionNativeCycles = fixedInstructionNativeCycles;
+            FastInstructionFetch = fastInstructionFetch;
+            FastNonChipMemoryAccess = fastNonChipMemoryAccess;
+            FastCiaAPortAAccess = fastCiaAPortAAccess;
         }
 
         public static M68020CpuProfile OcsAccelerator14Mhz { get; } = new(
@@ -95,7 +111,8 @@ namespace CopperMod.Amiga
                 new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
-            });
+            },
+            fixedInstructionNativeCycles: 1);
 
         public static M68020CpuProfile Ocs68040JitMaxSpeed { get; } = new(
             "Ocs68040_JitMaxSpeed",
@@ -111,7 +128,11 @@ namespace CopperMod.Amiga
                 new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
-            });
+            },
+            fixedInstructionNativeCycles: 1,
+            fastInstructionFetch: true,
+            fastNonChipMemoryAccess: true,
+            fastCiaAPortAAccess: true);
 
         public string Name { get; }
 
@@ -127,6 +148,14 @@ namespace CopperMod.Amiga
         public int NativeCyclesPerMachineCycle { get; }
 
         public IReadOnlyList<M68020BusTimingRule> BusTiming { get; }
+
+        public int? FixedInstructionNativeCycles { get; }
+
+        public bool FastInstructionFetch { get; }
+
+        public bool FastNonChipMemoryAccess { get; }
+
+        public bool FastCiaAPortAAccess { get; }
 
         internal static M68020CpuProfile CreateForTesting(
             string name,

@@ -440,6 +440,7 @@ internal sealed class MainWindow : Window
 		if (_presenter.TryMapPointToFramebuffer(position, out var framebufferPoint))
 		{
 			var mousePoint = MapPresentationPointToAmigaMousePoint(framebufferPoint);
+			runtime.SetMousePresentationPosition((int)Math.Round(framebufferPoint.X), (int)Math.Round(framebufferPoint.Y));
 			if (_lastMouseX.HasValue && _lastMouseY.HasValue)
 			{
 				var deltaX = ConsumeWholeMouseDelta(ref _mouseDeltaRemainderX, mousePoint.X - _lastMouseX.Value);

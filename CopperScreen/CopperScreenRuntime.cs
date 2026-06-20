@@ -371,6 +371,12 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public void MoveMousePort(int deltaX, int deltaY)
 		=> Post(emulator => emulator.MoveMousePort(deltaX, deltaY));
 
+	public void SetMousePortPosition(int x, int y)
+		=> Post(emulator => emulator.SetMousePortPosition(x, y));
+
+	public void SetMousePresentationPosition(int x, int y)
+		=> Post(emulator => emulator.SetMousePresentationPosition(x, y));
+
 	public void SetMouseButtons(bool primaryFirePressed, bool secondFirePressed)
 		=> Post(emulator => emulator.SetMouseButtons(primaryFirePressed, secondFirePressed));
 

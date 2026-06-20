@@ -741,7 +741,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                if (!IsBlitterDmaEnabled())
+                if (RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
                 {
                     _currentCycle = Math.Max(_currentCycle, targetCycle);
                     return;
@@ -776,7 +776,7 @@ namespace CopperMod.Amiga
                 return _currentCycle;
             }
 
-            if (!IsBlitterDmaEnabled())
+            if (RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
             {
                 return long.MaxValue;
             }
@@ -1333,9 +1333,16 @@ namespace CopperMod.Amiga
             return (_bus.Paula.Dmacon & (DmaMasterEnable | DmaBlitterEnable)) == (DmaMasterEnable | DmaBlitterEnable);
         }
 
+        private bool RequiresDmaForCurrentBlit()
+        {
+            return _lineMode
+                ? _useC
+                : _useA || _useB || _useC || _useD;
+        }
+
         private bool ShouldStallCpu()
         {
-            return _busy && IsBlitterDmaEnabled() && (_bus.Paula.Dmacon & DmaBlitterNasty) != 0;
+            return _busy && RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled() && (_bus.Paula.Dmacon & DmaBlitterNasty) != 0;
         }
 
         private int GetAreaWordCycles()

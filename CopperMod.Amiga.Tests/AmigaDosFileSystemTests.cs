@@ -102,11 +102,27 @@ public sealed class AmigaDosFileSystemTests
 		Assert.True(fileSystem.TryCreateLaunchRequest("Project", out var request, out var requestMessage), requestMessage);
 
 		boot.StartWorkbenchSession(disk);
+		for (var i = 0; i < 8; i++)
+		{
+			machine.Cpu.State.D[i] = 0xD0D0_0000u + (uint)i;
+			machine.Cpu.State.A[i] = 0xA0A0_0000u + (uint)i;
+		}
+
 		Assert.True(boot.TryLaunchProgram(request, out var result, out var launchMessage), launchMessage);
 
 		Assert.Equal(result.EntryAddress, machine.Cpu.State.ProgramCounter);
 		Assert.Equal((uint)result.StartupArguments.Length, machine.Cpu.State.D[0]);
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Cpu.State.A[6]);
+		for (var register = 1; register < 8; register++)
+		{
+			Assert.Equal(0u, machine.Cpu.State.D[register]);
+		}
+
+		for (var register = 1; register < 6; register++)
+		{
+			Assert.Equal(0u, machine.Cpu.State.A[register]);
+		}
+
 		Assert.Equal("C/Tool", result.ExecutablePath);
 		Assert.Equal(8192, result.StackSize);
 		var startup = ReadCString(machine.Bus, machine.Cpu.State.A[0], 256);
@@ -116,7 +132,7 @@ public sealed class AmigaDosFileSystemTests
 	}
 
 	[Fact]
-	public void BootControllerAutoRunStartupSequenceLaunchesSystemWorkbenchForLoadWb()
+	public void BootControllerAutoRunStartupSequenceLaunchesLoadWbFromDiskWhenSystemWorkbenchExists()
 	{
 		var disk = CreateBootableWorkbenchStartupDisk();
 		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
@@ -132,12 +148,14 @@ public sealed class AmigaDosFileSystemTests
 		Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Contains("AMIGA_BOOT_DOS_WORKBENCH_MEDIA_INCOMPLETE", StringComparison.Ordinal));
 		Assert.Contains(result.Diagnostics, diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
-			diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
+			diagnostic.Message.Contains("C/LoadWB", StringComparison.OrdinalIgnoreCase));
 		Assert.Contains(result.Diagnostics, diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_DOS_AUTOSTART" &&
-			diagnostic.Message.Contains("C:LoadWB via System/Workbench", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_NATIVE");
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST");
+			diagnostic.Message.Contains("C:LoadWB", StringComparison.OrdinalIgnoreCase) &&
+			!diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
+		Assert.DoesNotContain(result.Diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 		Assert.Equal(0x00FF_FFFCu, result.FinalProgramCounter);
 	}
 
@@ -163,11 +181,13 @@ public sealed class AmigaDosFileSystemTests
 			diagnostic.Code == "AMIGA_BOOT_DOS_AUTOSTART" &&
 			diagnostic.Message.Contains("C:LoadWB", StringComparison.OrdinalIgnoreCase) &&
 			!diagnostic.Message.Contains("System/Workbench", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST");
+		Assert.DoesNotContain(result.Diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 	}
 
 	[Fact]
-	public void BootControllerAutoRunStartupSequenceAttachesWorkbenchAfterNativeLoadWbOpensWorkbenchLibrary()
+	public void BootControllerAutoRunStartupSequenceDoesNotAttachWorkbenchAfterNativeLoadWbOpensWorkbenchLibrary()
 	{
 		var disk = CreateBootableWorkbenchStartupDisk(
 			includeSystemWorkbench: false,
@@ -183,16 +203,17 @@ public sealed class AmigaDosFileSystemTests
 		var result = boot.BootFromDisk(disk, maxInstructions: 20_000, AmigaBootRunMode.ContinueAfterBootDiskRead);
 
 		var diagnostics = result.Diagnostics.ToArray();
-		var launchIndex = Array.FindIndex(diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE");
+		var launchIndex = Array.FindIndex(diagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("C/LoadWB", StringComparison.OrdinalIgnoreCase));
 		var openIndex = Array.FindIndex(diagnostics, diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_OPEN_LIBRARY" &&
 			diagnostic.Message.Contains("workbench.library", StringComparison.OrdinalIgnoreCase));
-		var attachIndex = Array.FindIndex(diagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST" &&
-			diagnostic.Message.Contains("called workbench.library", StringComparison.OrdinalIgnoreCase));
 		Assert.True(launchIndex >= 0, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
 		Assert.True(openIndex > launchIndex, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
-		Assert.True(attachIndex > openIndex, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
+		Assert.DoesNotContain(diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 		Assert.Equal(0x00FF_FFFCu, result.FinalProgramCounter);
 	}
 
@@ -220,13 +241,12 @@ public sealed class AmigaDosFileSystemTests
 		var workbenchOpenIndex = Array.FindIndex(diagnostics, diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_OPEN_LIBRARY" &&
 			diagnostic.Message.Contains("workbench.library", StringComparison.OrdinalIgnoreCase));
-		var attachIndex = Array.FindIndex(diagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST" &&
-			diagnostic.Message.Contains("called workbench.library", StringComparison.OrdinalIgnoreCase));
 		Assert.True(dosOpenIndex >= 0, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
 		Assert.True(readArgsIndex > dosOpenIndex, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
 		Assert.True(workbenchOpenIndex > readArgsIndex, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
-		Assert.True(attachIndex > workbenchOpenIndex, string.Join(Environment.NewLine, diagnostics.Select(FormatDiagnostic)));
+		Assert.DoesNotContain(diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 		Assert.Equal(0x00FF_FFFCu, result.FinalProgramCounter);
 	}
 
@@ -294,7 +314,12 @@ public sealed class AmigaDosFileSystemTests
 		Assert.Contains(result.Diagnostics, diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_HOST" &&
 			diagnostic.Message.Contains("Assign", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST");
+		Assert.Contains(result.Diagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("C/LoadWB", StringComparison.OrdinalIgnoreCase));
+		Assert.DoesNotContain(result.Diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 	}
 
 	[Fact]
@@ -327,7 +352,12 @@ public sealed class AmigaDosFileSystemTests
 			diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_HOST" &&
 			diagnostic.Message.Contains("SetPatch", StringComparison.OrdinalIgnoreCase) &&
 			diagnostic.Message.Contains("68040.library", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST");
+		Assert.Contains(result.Diagnostics, diagnostic =>
+			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
+			diagnostic.Message.Contains("C/LoadWB", StringComparison.OrdinalIgnoreCase));
+		Assert.DoesNotContain(result.Diagnostics, diagnostic =>
+			diagnostic.Code.Contains("WORKBENCH", StringComparison.OrdinalIgnoreCase) ||
+			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 	}
 
 	private static AmigaDiskImage CreateWorkbenchDisk()

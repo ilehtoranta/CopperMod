@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CopperMod.Amiga
 {
@@ -50,6 +52,8 @@ namespace CopperMod.Amiga
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
 
         public AmigaKickstartConfiguration KickstartConfiguration { get; private set; } = AmigaKickstartConfiguration.HostShim13;
+
+        public IReadOnlyList<AmigaHardfileConfiguration> Hardfiles { get; private set; } = Array.Empty<AmigaHardfileConfiguration>();
 
         public static AmigaMachineOptions ForProfile(AmigaMachineProfile profile)
         {
@@ -192,6 +196,12 @@ namespace CopperMod.Amiga
             return this;
         }
 
+        public AmigaMachineOptions WithHardfiles(IEnumerable<AmigaHardfileConfiguration> hardfiles)
+        {
+            Hardfiles = hardfiles?.ToArray() ?? Array.Empty<AmigaHardfileConfiguration>();
+            return this;
+        }
+
         private static bool IsPowerOfTwo(int value)
         {
             return value > 0 && (value & (value - 1)) == 0;
@@ -216,7 +226,9 @@ namespace CopperMod.Amiga
                 options.RealFastRamSize,
                 options.RealFastRamBase,
                 options.HardwareSpecializationEnabled,
-                options.RealTimeClockEnabled);
+                options.RealTimeClockEnabled,
+                null,
+                options.Hardfiles);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {
@@ -243,7 +255,10 @@ namespace CopperMod.Amiga
         public AmigaKickstartHost Kickstart { get; }
 
         public void Dispose()
-            => Cpu.Dispose();
+        {
+            Cpu.Dispose();
+            Bus.Dispose();
+        }
 
         public void ResetHardware()
         {

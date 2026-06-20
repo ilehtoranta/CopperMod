@@ -241,6 +241,26 @@ public sealed class AmigaCiaTests
 	}
 
 	[Fact]
+	public void CiaTodHighMidLowReadReturnsLatchedCounter()
+	{
+		var cia = new AmigaCia(AmigaCiaId.A);
+		cia.Reset();
+		var events = new List<AmigaCiaInterruptEvent>();
+
+		cia.WriteRegister(0x08, 0xFE, 0, events);
+		cia.WriteRegister(0x09, 0x00, 0, events);
+		cia.WriteRegister(0x0A, 0x00, 0, events);
+
+		Assert.Equal(0x00, cia.ReadRegister(0x0A));
+		cia.IncrementTod(100, events);
+		cia.IncrementTod(200, events);
+
+		Assert.Equal(0x00, cia.ReadRegister(0x09));
+		Assert.Equal(0xFE, cia.ReadRegister(0x08));
+		Assert.Equal(0x01, cia.ReadRegister(0x09));
+	}
+
+	[Fact]
 	public void KeyboardKeyDownQueuesCiaASerialDataInterrupt()
 	{
 		var bus = new AmigaBus();

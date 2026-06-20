@@ -11,6 +11,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private const int DefaultAudioChannels = 2;
 	private const int DiskSwapEjectFrames = 25;
 	private const int MouseButtonEdgePulseFrames = 2;
+	private const int DefaultBootMaxInstructionsPerFrame = 100_000;
+	private const int JitM68040BootMaxInstructionsPerFrame = 2_000_000;
+	private const long JitM68040BootRunAheadCyclesPerFrame = 250_000_000;
 	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 	private const string RunningStatusText = "boot program running:";
 	private readonly AmigaMachine _machine;
@@ -22,6 +25,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly string? _startupError;
 	private readonly string?[] _initialDriveDiskPaths;
 	private readonly bool?[] _initialDriveWriteProtected;
+	private readonly IReadOnlyList<CopperScreenHardfileSettings> _initialHardDrives;
 	private readonly float[] _frameAudio;
 	private readonly int[] _interlacePresentationFrame;
 	private readonly Action<long, long> _renderFrameAudioUntil;
@@ -65,10 +69,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_presentationOptions = startupOptions.Profile.PresentationOptions;
 		_initialDriveDiskPaths = startupOptions.DriveDiskPaths.ToArray();
 		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
+		_initialHardDrives = startupOptions.HardDrives;
 		_machine = new AmigaMachine(machineOptions);
 		_boot = new AmigaBootController(_machine);
-		_boot.AutoStartWorkbenchDefaultTool = _profile.AutoStartWorkbenchStartupSequence;
-		_boot.AutoRunStartupSequence = _profile.AutoStartWorkbenchStartupSequence;
+		var enableHostWorkbenchStartup = !_profile.UsesKickstartRom && _profile.AutoStartWorkbenchStartupSequence;
+		_boot.AutoStartWorkbenchDefaultTool = enableHostWorkbenchStartup;
+		_boot.AutoRunStartupSequence = enableHostWorkbenchStartup;
 		Width = _machine.Bus.Display.Width;
 		Height = _machine.Bus.Display.Height;
 		Framebuffer = new int[Width * Height];
@@ -261,6 +267,15 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithCpu(M68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
 		}
 
+		if (startupOptions.HardDrives.Count != 0)
+		{
+			machineOptions.WithHardfiles(startupOptions.HardDrives.Select(drive => new AmigaHardfileConfiguration(
+				drive.Unit,
+				drive.Path,
+				drive.ReadOnly,
+				drive.CreateSizeBytes)));
+		}
+
 		if (!startupOptions.Profile.UsesKickstartRom)
 		{
 			return machineOptions;
@@ -317,12 +332,19 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	private static string? FindDefaultRomImage(CopperScreenKickstartSource source, string baseDirectory)
 	{
-		return source == CopperScreenKickstartSource.DiagRom
-			? FindDefaultRomImage(
+		return source switch
+		{
+			CopperScreenKickstartSource.DiagRom => FindDefaultRomImage(
 				baseDirectory,
 				Path.Combine("ROM", "DiagROM", "diagrom-a500.rom"),
-				Path.Combine("ROM", "DiagROM", "diagrom.rom"))
-			: FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "Kickstart_13.rom"));
+				Path.Combine("ROM", "DiagROM", "diagrom.rom")),
+			CopperScreenKickstartSource.Kickstart13Rom => FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "Kickstart_13.rom")),
+			CopperScreenKickstartSource.KickstartRom => FindDefaultRomImage(
+				baseDirectory,
+				Path.Combine("ROM", "kickstart-3.1-a500.rom"),
+				Path.Combine("ROM", "Kickstart_13.rom")),
+			_ => FindDefaultRomImage(baseDirectory, Path.Combine("ROM", "Kickstart_13.rom"))
+		};
 	}
 
 	private static string GetRomDisplayName(CopperScreenKickstartSource source)
@@ -334,9 +356,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		};
 
 	private static string GetDefaultRomHint(CopperScreenKickstartSource source)
-		=> source == CopperScreenKickstartSource.DiagRom
-			? "ROM\\DiagROM\\diagrom-a500.rom or ROM\\DiagROM\\diagrom.rom"
-			: "ROM\\Kickstart_13.rom";
+		=> source switch
+		{
+			CopperScreenKickstartSource.DiagRom => "ROM\\DiagROM\\diagrom-a500.rom or ROM\\DiagROM\\diagrom.rom",
+			CopperScreenKickstartSource.KickstartRom => "ROM\\kickstart-3.1-a500.rom or ROM\\Kickstart_13.rom",
+			_ => "ROM\\Kickstart_13.rom"
+		};
 
 	private static string? FindDefaultRomImage(string baseDirectory, string relativePath)
 		=> FindDefaultRomImage(baseDirectory, [relativePath]);
@@ -627,6 +652,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "diagrom-blank.adf");
 		}
 
+		if (_profile.UsesKickstartRom && _initialHardDrives.Count != 0)
+		{
+			return AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "copperhdf-blank-df0.adf");
+		}
+
 		throw new InvalidOperationException("A disk image is required to boot this profile.");
 	}
 
@@ -819,6 +849,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return false;
 		}
 
+		if (_profile.UsesKickstartRom)
+		{
+			message = "Direct CopperBench launch is only available for CopperStart profiles; real Kickstart ROM profiles must boot through the ROM.";
+			StatusText = message;
+			return false;
+		}
+
 		try
 		{
 			var disk = AmigaDiskImage.Load(DiskPath);
@@ -863,6 +900,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public void MoveMousePort(int deltaX, int deltaY)
 	{
+		_boot.MoveSyntheticMouse(deltaX, deltaY);
 		for (var portIndex = 0; portIndex < _joystickActionsByPort.Length; portIndex++)
 		{
 			if (_inputOptions.IsMousePort(portIndex))
@@ -872,8 +910,19 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 	}
 
+	public void SetMousePortPosition(int x, int y)
+	{
+		_boot.SetSyntheticMousePosition(x, y);
+	}
+
+	public void SetMousePresentationPosition(int x, int y)
+	{
+		_boot.SetSyntheticMousePresentationPosition(x, y);
+	}
+
 	public void SetMouseButtons(bool primaryFirePressed, bool secondFirePressed)
 	{
+		_boot.SetSyntheticMouseButtons(primaryFirePressed, secondFirePressed);
 		if (primaryFirePressed && !_mousePrimaryFirePressed)
 		{
 			_mousePrimaryFirePulseFrames = Math.Max(_mousePrimaryFirePulseFrames, MouseButtonEdgePulseFrames);
@@ -992,7 +1041,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return;
 		}
 
-		if (DiskPath == null && !_profile.BootsWithoutDisk)
+		if (DiskPath == null && !_profile.BootsWithoutDisk && _initialHardDrives.Count == 0)
 		{
 			_frameAudio.AsSpan().Clear();
 			InvalidateInterlacePresentationHistory();
@@ -1044,9 +1093,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_targetCycle += PalFrameCycles;
+		var executionTargetCycle = GetBootExecutionTargetCycle(_targetCycle);
 		BeginFrameAudio(_targetCycle);
 		AmigaBootResult result;
-		result = _boot.ContinueExecutionUntilCycle(_targetCycle, maxInstructions: 100_000, _renderFrameAudioUntil);
+		result = _boot.ContinueExecutionUntilCycle(
+			executionTargetCycle,
+			GetBootMaxInstructionsPerFrame(),
+			_renderFrameAudioUntil);
 
 		FinishFrameAudio();
 		if (HandleBootResult(result))
@@ -1061,6 +1114,21 @@ internal sealed class CopperScreenEmulator : IDisposable
 		RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle);
 
 		AdvanceInputPulse();
+	}
+
+	private int GetBootMaxInstructionsPerFrame()
+		=> _profile.CpuBackend == M68kBackendKind.JitM68040
+			? JitM68040BootMaxInstructionsPerFrame
+			: DefaultBootMaxInstructionsPerFrame;
+
+	private long GetBootExecutionTargetCycle(long frameTargetCycle)
+	{
+		if (_profile.CpuBackend != M68kBackendKind.JitM68040)
+		{
+			return frameTargetCycle;
+		}
+
+		return Math.Max(frameTargetCycle, _machine.Cpu.State.Cycles + JitM68040BootRunAheadCyclesPerFrame);
 	}
 
 	[HotPath]
@@ -1462,7 +1530,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		var fatalStatus = BuildFatalStatus(result.Diagnostics);
-		StatusText = fatalStatus ?? (GetHostWorkbenchDesktopStatus(result.Diagnostics) ?? RunningStatusText);
+		StatusText = fatalStatus ?? RunningStatusText;
 		if (fatalStatus == null)
 		{
 			return false;
@@ -1477,59 +1545,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return true;
 	}
 
-	private static string? GetHostWorkbenchDesktopStatus(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
-	{
-		for (var i = 0; i < diagnostics.Count; i++)
-		{
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_HOST")
-			{
-				return "Workbench 3.1 desktop (native LoadWB bridge)";
-			}
-
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST")
-			{
-				return "Workbench 3.1 desktop (System/Workbench bridge)";
-			}
-
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST")
-			{
-				return "Workbench 3.1 install media (native LoadWB bridge)";
-			}
-		}
-
-		return HasHostWorkbenchDesktopDiagnostic(diagnostics)
-			? "Workbench 3.1 desktop (host bridge)"
-			: null;
-	}
-
 	private static bool HasWorkbenchHandoffDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
 	{
 		for (var i = 0; i < diagnostics.Count; i++)
 		{
 			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_WORKBENCH_HANDOFF")
-			{
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private static bool HasHostWorkbenchDesktopDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)
-	{
-		for (var i = 0; i < diagnostics.Count; i++)
-		{
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_HOST")
-			{
-				return true;
-			}
-
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_SYSTEM_WORKBENCH_HOST")
-			{
-				return true;
-			}
-
-			if (diagnostics[i].Code == "AMIGA_BOOT_DOS_LOADWB_NATIVE_INSTALL_HOST")
 			{
 				return true;
 			}

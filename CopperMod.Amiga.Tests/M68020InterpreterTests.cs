@@ -49,6 +49,56 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
+	public void MovepLongReadsSpacedMemoryBytesIntoDataRegister()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x0549, 0x0010); // MOVEP.L $10(A1),D2
+		bus.WriteWord(0x3010, 0x1200);
+		bus.WriteWord(0x3012, 0x3400);
+		bus.WriteWord(0x3014, 0x5600);
+		bus.WriteWord(0x3016, 0x7800);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[1] = 0x3000;
+		cpu.State.D[2] = 0xFFFF_FFFF;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.D[2]);
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void MovepWordWritesSpacedMemoryBytesAndPreservesStatusRegister()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x0189, 0x0010); // MOVEP.W D0,$10(A1)
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[1] = 0x3000;
+		cpu.State.D[0] = 0xAABB_CDEF;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xCD, ReadByte(bus, 0x3010));
+		Assert.Equal(0xEF, ReadByte(bus, 0x3012));
+		Assert.Equal(M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry,
+			cpu.State.StatusRegister);
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void LongBraUsesThirtyTwoBitDisplacement()
 	{
 		var bus = new ZeroWaitCodeBus();
@@ -2051,6 +2101,35 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
 		Assert.Equal(8, cpu.State.NativeCycles);
 		Assert.Equal(4, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void MoveLongAbsoluteLongToAddressDisplacementCopiesMemoryAndSetsFlags()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x2779, 0x0000, 0x0004, 0x0564); // MOVE.L $00000004.L,$0564(A3)
+		bus.WriteLong(0x0000_0004, 0x00C0_0DA8);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[3] = 0x00C0_7264;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x00C0_0DA8u, bus.ReadLong(0x00C0_77C8));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
+		Assert.Equal(10, cpu.State.NativeCycles);
+		Assert.Equal(5, cpu.State.Cycles);
 	}
 
 	[Fact]
@@ -5204,6 +5283,12 @@ public sealed class M68020InterpreterTests
 		{
 			bus.WriteWord(address + (uint)(i * 2), words[i]);
 		}
+	}
+
+	private static byte ReadByte(ZeroWaitCodeBus bus, uint address)
+	{
+		long cycle = 0;
+		return bus.ReadByte(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
 	}
 
 	private sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader

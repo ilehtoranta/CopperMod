@@ -32,7 +32,7 @@ namespace CopperMod.Amiga
         DiskPassiveInput
     }
 
-    internal sealed class AmigaBus : IM68kBus, IM68kCodeReader
+    internal sealed class AmigaBus : IM68kBus, IM68kCodeReader, IAmigaCpuPhysicalAddressMap
     {
         private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
@@ -47,6 +47,7 @@ namespace CopperMod.Amiga
         private readonly uint[] _expansionCodePageGenerations;
         private readonly uint[] _realFastCodePageGenerations;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
+        private readonly Dictionary<ushort, Action<M68kCpuState>> _relocatableHostTrapStubs = new Dictionary<ushort, Action<M68kCpuState>>();
         private readonly List<MappedMemoryRegion> _mappedMemoryRegions = new List<MappedMemoryRegion>();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>(16);
         private readonly AmigaCiaInterruptEvent[] _drainedCiaInterruptBuffer = new AmigaCiaInterruptEvent[MaxPendingInterruptEvents];
@@ -91,7 +92,8 @@ namespace CopperMod.Amiga
             uint realFastRamBase = AmigaConstants.A500RealFastRamBase,
             bool enableHardwareSpecialization = false,
             bool realTimeClockEnabled = false,
-            Func<DateTimeOffset>? realTimeClockNowProvider = null)
+            Func<DateTimeOffset>? realTimeClockNowProvider = null,
+            IEnumerable<AmigaHardfileConfiguration>? hardfiles = null)
         {
             if (chipRamSize <= 0)
             {
@@ -146,6 +148,7 @@ namespace CopperMod.Amiga
                 _useChipSlotScheduler;
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
+            CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
             Display = new OcsDisplay(this, enableLiveDisplayDma);
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
@@ -167,6 +170,8 @@ namespace CopperMod.Amiga
         public Paula Paula { get; }
 
         public AmigaDiskController Disk { get; }
+
+        public CopperHdfController CopperHdf { get; }
 
         public OcsDisplay Display { get; }
 
@@ -222,6 +227,8 @@ namespace CopperMod.Amiga
 
         public bool RealTimeClockEnabled => _realTimeClock != null;
 
+        public bool StrictCpuPhysicalDataMapping { get; set; }
+
         public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => Paula.Writes;
 
         public IReadOnlyList<AmigaBusAccessResult> BusAccesses => _busAccesses;
@@ -238,6 +245,9 @@ namespace CopperMod.Amiga
 
         internal void ConfigureDiskDivergenceTrace(string backend, Func<AmigaDiskTraceCpuContext>? cpuContextProvider)
             => Disk.ConfigureDivergenceTrace(backend, cpuContextProvider);
+
+        public void Dispose()
+            => CopperHdf.Dispose();
 
         internal void EnableLiveAgnusDma()
         {
@@ -280,10 +290,12 @@ namespace CopperMod.Amiga
             Array.Clear(_pendingCustomBytes);
             Array.Clear(_pendingCustomByteWritten);
             _hostTrapStubs.Clear();
+            _relocatableHostTrapStubs.Clear();
             _nextHostTrapId = 1;
             _mappedMemoryRegions.Clear();
             _romOverlayRegion = null;
             _romOverlayEnabled = true;
+            StrictCpuPhysicalDataMapping = false;
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             ClearChipSlots();
@@ -300,6 +312,7 @@ namespace CopperMod.Amiga
 
             Paula.Reset();
             Disk.Reset();
+            CopperHdf.Reset();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -327,39 +340,61 @@ namespace CopperMod.Amiga
         public ushort RegisterHostTrapStub(uint address, Action<M68kCpuState> callback)
         {
             address = NormalizeAddress(address);
-            var trapId = _nextHostTrapId++;
-            if (trapId == 0)
-            {
-                throw new AmigaEmulationException("Host trap id space exhausted.");
-            }
-
+            var trapId = AllocateHostTrapId();
             _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
             TouchCodePages(address, 4);
             NotifyJitEligibleMemoryWritten(address, 4);
             return trapId;
         }
 
+        public ushort RegisterRelocatableHostTrapStub(Action<M68kCpuState> callback)
+        {
+            var trapId = AllocateHostTrapId();
+            _relocatableHostTrapStubs[trapId] = callback ?? throw new ArgumentNullException(nameof(callback));
+            return trapId;
+        }
+
         public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
         {
             instructionProgramCounter = NormalizeAddress(instructionProgramCounter);
-            if (!_hostTrapStubs.TryGetValue(instructionProgramCounter, out var stub) ||
-                stub.TrapId != trapId)
+            if (_hostTrapStubs.TryGetValue(instructionProgramCounter, out var stub) &&
+                stub.TrapId == trapId)
             {
-                return false;
+                stub.Callback(state);
+                return true;
             }
 
-            stub.Callback(state);
-            return true;
+            if (_relocatableHostTrapStubs.TryGetValue(trapId, out var callback) &&
+                TryReadRelocatableHostTrapId(instructionProgramCounter, out var actualTrapId) &&
+                actualTrapId == trapId)
+            {
+                callback(state);
+                return true;
+            }
+
+            return false;
         }
 
         public bool HasHostTrapStub(uint address)
         {
             address = NormalizeAddress(address);
-            return _hostTrapStubs.ContainsKey(address);
+            return _hostTrapStubs.ContainsKey(address) ||
+                TryReadRelocatableHostTrapId(address, out _);
         }
 
         bool IM68kCodeReader.HasHostTrapStub(uint address)
             => HasHostTrapStub(address);
+
+        private ushort AllocateHostTrapId()
+        {
+            var trapId = _nextHostTrapId++;
+            if (trapId == 0)
+            {
+                throw new AmigaEmulationException("Host trap id space exhausted.");
+            }
+
+            return trapId;
+        }
 
         public void ResetExternalDevices(long cycle)
         {
@@ -374,6 +409,7 @@ namespace CopperMod.Amiga
             AudioFilterEnabled = false;
             Paula.Reset();
             Disk.Reset();
+            CopperHdf.Reset();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -719,6 +755,26 @@ namespace CopperMod.Amiga
             }
         }
 
+        public void CopyFromMemory(uint address, Span<byte> destination)
+        {
+            if (destination.IsEmpty)
+            {
+                return;
+            }
+
+            address = NormalizeAddress(address);
+            if (TryGetContiguousReadableSpan(address, destination.Length, out var source))
+            {
+                source.CopyTo(destination);
+                return;
+            }
+
+            for (var i = 0; i < destination.Length; i++)
+            {
+                destination[i] = ReadByte(address + (uint)i);
+            }
+        }
+
         public void ClearMemory(uint address, int byteCount)
         {
             if (byteCount <= 0)
@@ -757,6 +813,35 @@ namespace CopperMod.Amiga
             return IsChipRamRange(address, byteCount) ||
                 IsExpansionRamRange(address, byteCount) ||
                 IsRealFastRamRange(address, byteCount);
+        }
+
+        public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, AmigaBusAccessKind accessKind)
+        {
+            if (byteCount < 0)
+            {
+                return false;
+            }
+
+            if (byteCount == 0)
+            {
+                return true;
+            }
+
+            if (address > 0x00FF_FFFFu ||
+                (uint)(byteCount - 1) > 0x00FF_FFFFu - address)
+            {
+                return false;
+            }
+
+            for (var offset = 0; offset < byteCount; offset++)
+            {
+                if (!IsCpuPhysicalByteMapped(address + (uint)offset, accessKind))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1817,6 +1902,12 @@ namespace CopperMod.Amiga
                 return AmigaBusAccessTarget.HostTrap;
             }
 
+            if (CopperHdf.ContainsAutoConfigAddress(address) ||
+                CopperHdf.ContainsBoardAddress(address))
+            {
+                return AmigaBusAccessTarget.Rom;
+            }
+
             for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
             {
                 if (_mappedMemoryRegions[i].Contains(address))
@@ -1888,6 +1979,16 @@ namespace CopperMod.Amiga
                 return ReadCiaRegisterValue(cia, ciaRegister);
             }
 
+            if (CopperHdf.ContainsAutoConfigAddress(address))
+            {
+                return CopperHdf.ReadAutoConfigByte(address);
+            }
+
+            if (CopperHdf.ContainsBoardAddress(address))
+            {
+                return CopperHdf.ReadBoardByte(address);
+            }
+
             for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
             {
                 if (_mappedMemoryRegions[i].TryReadByte(address, out var value))
@@ -1897,6 +1998,55 @@ namespace CopperMod.Amiga
             }
 
             return 0;
+        }
+
+        private bool IsCpuPhysicalByteMapped(uint address, AmigaBusAccessKind accessKind)
+        {
+            if (address > 0x00FF_FFFFu)
+            {
+                return false;
+            }
+
+            if (IsRomOverlayAddress(address))
+            {
+                return true;
+            }
+
+            if (TryReadHostTrapStubByte(address, out _))
+            {
+                return true;
+            }
+
+            if (CopperHdf.ContainsAutoConfigAddress(address) ||
+                CopperHdf.ContainsBoardAddress(address))
+            {
+                return true;
+            }
+
+            for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
+            {
+                if (_mappedMemoryRegions[i].Contains(address))
+                {
+                    return true;
+                }
+            }
+
+            if (!StrictCpuPhysicalDataMapping &&
+                accessKind != AmigaBusAccessKind.CpuInstructionFetch)
+            {
+                return true;
+            }
+
+            if (address < _chipRamDecodeSize)
+            {
+                return address < _chipRam.Length;
+            }
+
+            return IsRealFastRamAddress(address) ||
+                (_realTimeClock != null && AmigaRealTimeClock.ContainsAddress(address)) ||
+                IsExpansionRamAddress(address) ||
+                (address >= 0x00DFF000 && address < 0x00DFF200) ||
+                TryGetCiaRegister(address, out _, out _);
         }
 
         private byte ReadCiaRegisterValue(AmigaCia cia, int ciaRegister)
@@ -1935,6 +2085,20 @@ namespace CopperMod.Amiga
 
             value = 0;
             return false;
+        }
+
+        private bool TryReadRelocatableHostTrapId(uint address, out ushort trapId)
+        {
+            address = NormalizeAddress(address);
+            var opcode = (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
+            if (opcode != HostTrapOpcode)
+            {
+                trapId = 0;
+                return false;
+            }
+
+            trapId = (ushort)((ReadRawByte(address + 2) << 8) | ReadRawByte(address + 3));
+            return _relocatableHostTrapStubs.ContainsKey(trapId);
         }
 
         private void UpdateBeamPositionForCustomRead(ushort offset, long cycle)
@@ -2182,6 +2346,23 @@ namespace CopperMod.Amiga
             }
 
             CompleteJitZeroWaitWrite(address, byteCount);
+            return true;
+        }
+
+        internal bool TryWriteJitMaxSpeedColorRegister(uint address, uint value, M68kOperandSize size, long cycle)
+        {
+            if (!_useChipSlotScheduler || size != M68kOperandSize.Word)
+            {
+                return false;
+            }
+
+            address = NormalizeAddress(address);
+            if (address < 0x00DFF180 || address > 0x00DFF1BE || (address & 1) != 0)
+            {
+                return false;
+            }
+
+            WriteRawWord(address, (ushort)value, cycle);
             return true;
         }
 
@@ -2698,7 +2879,7 @@ namespace CopperMod.Amiga
                 if (cia == CiaA && ciaRegister == 0)
                 {
                     AudioFilterEnabled = (value & 0x02) == 0;
-                    _romOverlayEnabled = (value & 0x01) != 0;
+                    _romOverlayEnabled = (value & 0x01) == 0;
                 }
 
                 if (cia == CiaB && ciaRegister is 1 or 3)
@@ -2706,6 +2887,24 @@ namespace CopperMod.Amiga
                     Disk.WriteCiaBRegister(1, cia.ReadPortRegister(1, 0xFF), grantedCycle);
                 }
 
+                return;
+            }
+
+            if (CopperHdf.ContainsAutoConfigAddress(address))
+            {
+                var wasConfigured = CopperHdf.IsConfigured;
+                CopperHdf.WriteAutoConfigByte(address, value);
+                if (!wasConfigured && CopperHdf.IsConfigured)
+                {
+                    CopperHdf.InstallBootstrapTraps(this);
+                }
+
+                return;
+            }
+
+            if (CopperHdf.ContainsBoardAddress(address))
+            {
+                CopperHdf.TryWriteBoardByte(address, value);
                 return;
             }
 
@@ -2937,6 +3136,32 @@ namespace CopperMod.Amiga
         }
 
         private bool TryGetContiguousWritableSpan(uint address, int byteCount, out Span<byte> span)
+        {
+            if (IsContiguousChipRamRange(address, byteCount))
+            {
+                span = _chipRam.AsSpan(GetChipRamOffset(address), byteCount);
+                return true;
+            }
+
+            if (IsExpansionRamRange(address, byteCount))
+            {
+                var offset = checked((int)(address - ExpansionRamBase));
+                span = _expansionRam.AsSpan(offset, byteCount);
+                return true;
+            }
+
+            if (IsRealFastRamRange(address, byteCount))
+            {
+                var offset = checked((int)(address - RealFastRamBase));
+                span = _realFastRam.AsSpan(offset, byteCount);
+                return true;
+            }
+
+            span = default;
+            return false;
+        }
+
+        private bool TryGetContiguousReadableSpan(uint address, int byteCount, out ReadOnlySpan<byte> span)
         {
             if (IsContiguousChipRamRange(address, byteCount))
             {

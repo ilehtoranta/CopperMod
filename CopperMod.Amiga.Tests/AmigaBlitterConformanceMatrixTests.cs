@@ -844,6 +844,20 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.DoesNotContain(bus.BusAccesses, access => access.Request.Requester == AmigaBusRequester.Blitter);
 	}
 
+	[Fact]
+	public void BlitterNoChannelBlitCompletesWhileDmaIsDisabled()
+	{
+		var bus = new AmigaBus();
+		ConfigureAreaBlit(bus, 0x0000);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		var completionCycle = bus.Blitter.GetPredictedCompletionCycle();
+		bus.AdvanceDmaTo(completionCycle);
+
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.DoesNotContain(bus.BusAccesses, access => access.Request.Requester == AmigaBusRequester.Blitter);
+	}
+
 	private static void ConfigureAreaBlit(
 		AmigaBus bus,
 		ushort bltcon0,
