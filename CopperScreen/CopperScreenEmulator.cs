@@ -273,7 +273,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 				drive.Unit,
 				drive.Path,
 				drive.ReadOnly,
-				drive.CreateSizeBytes)));
+				drive.CreateSizeBytes,
+				drive.Mode,
+				drive.Partition)));
 		}
 
 		if (!startupOptions.Profile.UsesKickstartRom)

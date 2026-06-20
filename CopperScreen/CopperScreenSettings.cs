@@ -392,7 +392,9 @@ internal static class CopperScreenProfileStore
 							Unit = drive.Unit,
 							Path = drive.Path,
 							ReadOnly = drive.ReadOnly,
-							SizeMb = drive.CreateSizeBytes == 0 ? null : checked((int)(drive.CreateSizeBytes / (1024 * 1024)))
+							SizeMb = drive.CreateSizeBytes == 0 ? null : checked((int)(drive.CreateSizeBytes / (1024 * 1024))),
+							Mode = drive.Mode == AmigaHardfileMountMode.Auto ? null : FormatHardfileMountMode(drive.Mode),
+							Partition = HardDrivePartitionFile.FromMetadata(drive.Partition)
 						})
 						.ToArray(),
 				Input = IsDefaultInput(draft.Input)
@@ -450,6 +452,14 @@ internal static class CopperScreenProfileStore
 				left.Right.SequenceEqual(right.Right, StringComparer.OrdinalIgnoreCase) &&
 				left.Fire.SequenceEqual(right.Fire, StringComparer.OrdinalIgnoreCase) &&
 				left.SecondFire.SequenceEqual(right.SecondFire, StringComparer.OrdinalIgnoreCase);
+
+		private static string FormatHardfileMountMode(AmigaHardfileMountMode mode)
+			=> mode switch
+			{
+				AmigaHardfileMountMode.RigidDiskBlock => "rdb",
+				AmigaHardfileMountMode.Partition => "partition",
+				_ => "auto"
+			};
 	}
 
 	private sealed class MachineFile
@@ -524,6 +534,82 @@ internal static class CopperScreenProfileStore
 		public bool ReadOnly { get; set; }
 
 		public int? SizeMb { get; set; }
+
+		public string? Mode { get; set; }
+
+		public HardDrivePartitionFile? Partition { get; set; }
+	}
+
+	private sealed class HardDrivePartitionFile
+	{
+		public string? DeviceName { get; set; }
+
+		public uint? TableSize { get; set; }
+
+		public uint? SizeBlockLongs { get; set; }
+
+		public uint? SectorOrigin { get; set; }
+
+		public uint? Surfaces { get; set; }
+
+		public uint? SectorsPerBlock { get; set; }
+
+		public uint? BlocksPerTrack { get; set; }
+
+		public uint? ReservedBlocks { get; set; }
+
+		public uint? PreAllocBlocks { get; set; }
+
+		public uint? Interleave { get; set; }
+
+		public uint? LowCylinder { get; set; }
+
+		public uint? HighCylinder { get; set; }
+
+		public uint? NumBuffers { get; set; }
+
+		public uint? BufferMemoryType { get; set; }
+
+		public string? MaxTransfer { get; set; }
+
+		public string? Mask { get; set; }
+
+		public int? BootPriority { get; set; }
+
+		public string? DosType { get; set; }
+
+		public static HardDrivePartitionFile? FromMetadata(AmigaHardfilePartitionMetadata? metadata)
+		{
+			if (metadata == null)
+			{
+				return null;
+			}
+
+			return new HardDrivePartitionFile
+			{
+				DeviceName = metadata.DeviceName,
+				TableSize = metadata.TableSize,
+				SizeBlockLongs = metadata.SizeBlockLongs,
+				SectorOrigin = metadata.SectorOrigin,
+				Surfaces = metadata.Surfaces,
+				SectorsPerBlock = metadata.SectorsPerBlock,
+				BlocksPerTrack = metadata.BlocksPerTrack,
+				ReservedBlocks = metadata.ReservedBlocks,
+				PreAllocBlocks = metadata.PreAllocBlocks,
+				Interleave = metadata.Interleave,
+				LowCylinder = metadata.LowCylinder,
+				HighCylinder = metadata.HighCylinder,
+				NumBuffers = metadata.NumBuffers,
+				BufferMemoryType = metadata.BufferMemoryType,
+				MaxTransfer = FormatOptionalHex(metadata.MaxTransfer),
+				Mask = FormatOptionalHex(metadata.Mask),
+				BootPriority = metadata.BootPriority,
+				DosType = FormatOptionalHex(metadata.DosType)
+			};
+		}
+
+		private static string? FormatOptionalHex(uint? value)
+			=> value.HasValue ? "$" + value.Value.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) : null;
 	}
 
 	private sealed class InputFile

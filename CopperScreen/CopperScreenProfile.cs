@@ -128,7 +128,9 @@ internal sealed class CopperScreenProfile
 				drive.Unit,
 				drive.Path,
 				drive.ReadOnly,
-				drive.CreateSizeBytes)))
+				drive.CreateSizeBytes,
+				drive.Mode,
+				drive.Partition)))
 			.WithCpu(AmigaM68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
@@ -534,10 +536,123 @@ internal sealed class CopperScreenProfile
 				unit,
 				drive.Path.Trim(),
 				drive.ReadOnly,
-				sizeMb == 0 ? 0 : checked((long)sizeMb * 1024L * 1024L)));
+				sizeMb == 0 ? 0 : checked((long)sizeMb * 1024L * 1024L),
+				ParseHardfileMountMode(drive.Mode),
+				ParseHardfilePartition(drive.Partition)));
 		}
 
 		return drives;
+	}
+
+	private static AmigaHardfileMountMode ParseHardfileMountMode(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return AmigaHardfileMountMode.Auto;
+		}
+
+		return value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty) switch
+		{
+			"auto" => AmigaHardfileMountMode.Auto,
+			"rdb" or "rigiddiskblock" => AmigaHardfileMountMode.RigidDiskBlock,
+			"partition" or "partitionhdf" => AmigaHardfileMountMode.Partition,
+			_ => throw new InvalidOperationException($"Unsupported hardDrives[].mode '{value}'.")
+		};
+	}
+
+	private static AmigaHardfilePartitionMetadata? ParseHardfilePartition(HardDrivePartitionFile? config)
+	{
+		if (config == null)
+		{
+			return null;
+		}
+
+		return new AmigaHardfilePartitionMetadata
+		{
+			DeviceName = string.IsNullOrWhiteSpace(config.DeviceName) ? null : config.DeviceName.Trim(),
+			TableSize = config.TableSize,
+			SizeBlockLongs = config.SizeBlockLongs,
+			SectorOrigin = config.SectorOrigin,
+			Surfaces = config.Surfaces,
+			SectorsPerBlock = config.SectorsPerBlock,
+			BlocksPerTrack = config.BlocksPerTrack,
+			ReservedBlocks = config.ReservedBlocks,
+			PreAllocBlocks = config.PreAllocBlocks,
+			Interleave = config.Interleave,
+			LowCylinder = config.LowCylinder,
+			HighCylinder = config.HighCylinder,
+			NumBuffers = config.NumBuffers,
+			BufferMemoryType = config.BufferMemoryType,
+			MaxTransfer = ParseOptionalUInt(config.MaxTransfer, "hardDrives[].partition.maxTransfer"),
+			Mask = ParseOptionalUInt(config.Mask, "hardDrives[].partition.mask"),
+			BootPriority = config.BootPriority,
+			DosType = ParseOptionalDosType(config.DosType)
+		};
+	}
+
+	private static uint? ParseOptionalUInt(string? value, string name)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return null;
+		}
+
+		var trimmed = value.Trim();
+		if (trimmed.StartsWith("$", StringComparison.Ordinal))
+		{
+			return uint.Parse(trimmed[1..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+		}
+
+		if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+		{
+			return uint.Parse(trimmed[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+		}
+
+		if (!uint.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+		{
+			throw new InvalidOperationException($"{name} must be an unsigned integer, $hex, or 0xhex value.");
+		}
+
+		return parsed;
+	}
+
+	private static uint? ParseOptionalDosType(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return null;
+		}
+
+		var trimmed = value.Trim();
+		if (trimmed.StartsWith("$", StringComparison.Ordinal))
+		{
+			return uint.Parse(trimmed[1..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+		}
+
+		if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+		{
+			return uint.Parse(trimmed[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+		}
+
+		if (trimmed.Length is >= 5 and <= 6 && trimmed[3] == '\\')
+		{
+			var suffix = trimmed[4..];
+			var lastByte = byte.Parse(suffix, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+			return ((uint)trimmed[0] << 24) |
+				((uint)trimmed[1] << 16) |
+				((uint)trimmed[2] << 8) |
+				lastByte;
+		}
+
+		if (trimmed.Length == 4)
+		{
+			return ((uint)trimmed[0] << 24) |
+				((uint)trimmed[1] << 16) |
+				((uint)trimmed[2] << 8) |
+				trimmed[3];
+		}
+
+		throw new InvalidOperationException("hardDrives[].partition.dosType must be $hex, 0xhex, a 4-byte tag, or a DOS\\n tag.");
 	}
 
 	private static CopperScreenInputOptions ParseInputOptions(InputFile? config)
@@ -750,6 +865,49 @@ internal sealed class CopperScreenProfile
 		public bool ReadOnly { get; set; }
 
 		public int? SizeMb { get; set; }
+
+		public string? Mode { get; set; }
+
+		public HardDrivePartitionFile? Partition { get; set; }
+	}
+
+	private sealed class HardDrivePartitionFile
+	{
+		public string? DeviceName { get; set; }
+
+		public uint? TableSize { get; set; }
+
+		public uint? SizeBlockLongs { get; set; }
+
+		public uint? SectorOrigin { get; set; }
+
+		public uint? Surfaces { get; set; }
+
+		public uint? SectorsPerBlock { get; set; }
+
+		public uint? BlocksPerTrack { get; set; }
+
+		public uint? ReservedBlocks { get; set; }
+
+		public uint? PreAllocBlocks { get; set; }
+
+		public uint? Interleave { get; set; }
+
+		public uint? LowCylinder { get; set; }
+
+		public uint? HighCylinder { get; set; }
+
+		public uint? NumBuffers { get; set; }
+
+		public uint? BufferMemoryType { get; set; }
+
+		public string? MaxTransfer { get; set; }
+
+		public string? Mask { get; set; }
+
+		public int? BootPriority { get; set; }
+
+		public string? DosType { get; set; }
 	}
 
 	private sealed class InputFile

@@ -644,6 +644,85 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void ProfileStoreRoundTripsHardfilePartitionMetadata()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		try
+		{
+			var profilePath = Path.Combine(baseDirectory, "Profiles", "hdf-metadata.json");
+			File.WriteAllText(profilePath, """
+			{
+			  "id": "hdf-metadata",
+			  "displayName": "HDF Metadata",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512,
+			    "pseudoFastRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "KickstartRom"
+			  },
+			  "hardDrives": [
+			    {
+			      "unit": 2,
+			      "path": "disk.hdf",
+			      "readOnly": true,
+			      "mode": "partition",
+			      "partition": {
+			        "deviceName": "DH7",
+			        "surfaces": 4,
+			        "sectorsPerBlock": 1,
+			        "blocksPerTrack": 63,
+			        "reservedBlocks": 4,
+			        "numBuffers": 80,
+			        "maxTransfer": "$001FE000",
+			        "mask": "$7FFFFFFC",
+			        "bootPriority": 3,
+			        "dosType": "DOS\\6"
+			      }
+			    }
+			  ]
+			}
+			""");
+
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, baseDirectory, out var profile, out var error), error);
+			var drive = Assert.Single(profile.HardDrives);
+			Assert.Equal(2, drive.Unit);
+			Assert.True(drive.ReadOnly);
+			Assert.Equal(AmigaHardfileMountMode.Partition, drive.Mode);
+			Assert.NotNull(drive.Partition);
+			Assert.Equal("DH7", drive.Partition.DeviceName);
+			Assert.Equal(4u, drive.Partition.Surfaces);
+			Assert.Equal(63u, drive.Partition.BlocksPerTrack);
+			Assert.Equal(0x001F_E000u, drive.Partition.MaxTransfer);
+			Assert.Equal(0x7FFF_FFFCu, drive.Partition.Mask);
+			Assert.Equal(3, drive.Partition.BootPriority);
+			Assert.Equal(0x444F_5306u, drive.Partition.DosType);
+
+			var draft = CopperScreenSettingsDraft.FromProfile(profile);
+			var savedPath = CopperScreenProfileStore.Save(draft, baseDirectory);
+			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out error), error);
+			var loadedDrive = Assert.Single(loaded.HardDrives);
+			Assert.Equal(AmigaHardfileMountMode.Partition, loadedDrive.Mode);
+			Assert.NotNull(loadedDrive.Partition);
+			Assert.Equal("DH7", loadedDrive.Partition.DeviceName);
+			Assert.Equal(0x444F_5306u, loadedDrive.Partition.DosType);
+			Assert.Equal(0x001F_E000u, loadedDrive.Partition.MaxTransfer);
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
 	public void ProfileStoreRoundTripsKickstartRomPath()
 	{
 		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
