@@ -9,6 +9,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-DotNet {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]] $Arguments
+    )
+
+    & dotnet @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $project = Join-Path $repoRoot "Copper68k\Copper68k.csproj"
 $testProject = Join-Path $repoRoot "CopperMod.Amiga.Tests\CopperMod.Amiga.Tests.csproj"
@@ -24,16 +36,16 @@ else {
 New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
 if (-not $NoRestore) {
-    dotnet restore $project
-    dotnet restore $testProject
+    Invoke-DotNet restore $project
+    Invoke-DotNet restore $testProject
 }
 
-dotnet build $project `
+Invoke-DotNet build $project `
     -c $Configuration `
     --no-restore
 
 if (-not $SkipTests) {
-    dotnet test $testProject `
+    Invoke-DotNet test $testProject `
         -c $Configuration `
         --no-restore `
         --filter $testFilter
@@ -44,7 +56,7 @@ if ($Version) {
     $packProperties += "/p:PackageVersion=$Version"
 }
 
-dotnet pack $project `
+Invoke-DotNet pack $project `
     -c $Configuration `
     --no-restore `
     -o $packageDir `

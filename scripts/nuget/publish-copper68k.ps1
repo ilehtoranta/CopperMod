@@ -12,6 +12,18 @@ param(
 $ErrorActionPreference = "Stop"
 $cmdlet = $PSCmdlet
 
+function Invoke-DotNet {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]] $Arguments
+    )
+
+    & dotnet @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
 $resolvedPackage = Resolve-Path -LiteralPath $PackagePath
 $packageFile = Get-Item -LiteralPath $resolvedPackage.Path
 
@@ -60,7 +72,7 @@ function Invoke-NuGetPush {
     }
 
     if ($cmdlet.ShouldProcess($Path, "Publish $Label to $Source")) {
-        & dotnet @arguments
+        Invoke-DotNet @arguments
     }
 }
 
