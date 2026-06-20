@@ -10,12 +10,6 @@ using System.Threading;
 
 namespace CopperMod.Amiga
 {
-    internal enum M68kJitCpuModel
-    {
-        M68000,
-        M68040
-    }
-
     internal sealed class M68kJitOptions
     {
         public M68kJitOptions(
@@ -104,7 +98,7 @@ namespace CopperMod.Amiga
 
         private readonly IM68kBus _bus;
         private readonly AmigaBus? _amigaBus;
-        private readonly IAmigaCpuPhysicalAddressMap? _physicalAddressMap;
+        private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -416,7 +410,7 @@ namespace CopperMod.Amiga
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             ArgumentNullException.ThrowIfNull(options);
             _amigaBus = bus as AmigaBus;
-            _physicalAddressMap = bus as IAmigaCpuPhysicalAddressMap;
+            _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _cpuModel = options.CpuModel;
             _cacheFlushOnlyInvalidation = options.CacheFlushOnlyInvalidation;
             _minimalCycleTiming = options.MinimalCycleTiming;
@@ -1897,7 +1891,7 @@ namespace CopperMod.Amiga
 
             var instructionPc = Normalize(State.LastInstructionProgramCounter);
             var stackedProgramCounter = fault.StackedProgramCounter ??
-                (fault.AccessKind == AmigaBusAccessKind.CpuInstructionFetch
+                (fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch
                     ? fault.LogicalAddress
                     : instructionPc);
             var previousCycle = _compiledInstructionCycleFloorActive
@@ -1969,7 +1963,7 @@ namespace CopperMod.Amiga
             value = 0;
             if (!TryTranslateM68040Address(
                 logicalAddress,
-                AmigaBusAccessKind.CpuInstructionFetch,
+                M68kBusAccessKind.CpuInstructionFetch,
                 write: false,
                 byteCount: 2,
                 out var physicalAddress,
@@ -1988,10 +1982,10 @@ namespace CopperMod.Amiga
                 }
 
                 var cycle = State.Cycles;
-                value = _bus.ReadWord(physicalAddress, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+                value = _bus.ReadWord(physicalAddress, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
                 return true;
             }
-            catch (Exception ex) when (ex is AmigaEmulationException or IndexOutOfRangeException or M68kCodeReadException)
+            catch (Exception ex) when (ex is AmigaEmulationException or M68kEmulationException or IndexOutOfRangeException or M68kCodeReadException)
             {
                 value = 0;
                 return false;
@@ -2020,7 +2014,7 @@ namespace CopperMod.Amiga
 
             return TryTranslateM68040Address(
                     logicalAddress,
-                    AmigaBusAccessKind.CpuInstructionFetch,
+                    M68kBusAccessKind.CpuInstructionFetch,
                     write: false,
                     byteCount: 2,
                     out var physicalAddress,
@@ -2058,7 +2052,7 @@ namespace CopperMod.Amiga
                 var logical = Normalize(logicalRoot + (uint)offset);
                 if (!TryTranslateM68040Address(
                         logical,
-                        AmigaBusAccessKind.CpuInstructionFetch,
+                        M68kBusAccessKind.CpuInstructionFetch,
                         write: false,
                         byteCount: 2,
                         out var physical,
@@ -2087,7 +2081,7 @@ namespace CopperMod.Amiga
 
             return TryTranslateM68040Address(
                     logicalRoot,
-                    AmigaBusAccessKind.CpuInstructionFetch,
+                    M68kBusAccessKind.CpuInstructionFetch,
                     write: false,
                     byteCount: 2,
                     out var physical,
@@ -2097,7 +2091,7 @@ namespace CopperMod.Amiga
 
         private bool TryTranslateM68040Address(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             out uint physicalAddress,
             out M68040MmuFault fault)
@@ -2111,7 +2105,7 @@ namespace CopperMod.Amiga
 
         private bool TryTranslateM68040Address(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             int byteCount,
             out uint physicalAddress,
@@ -2156,14 +2150,14 @@ namespace CopperMod.Amiga
             State.M68040Mmu.BypassTranslation = true;
             try
             {
-                if (!IsM68040PhysicalAddressMapped(physicalAddress, 4, AmigaBusAccessKind.CpuDataRead))
+                if (!IsM68040PhysicalAddressMapped(physicalAddress, 4, M68kBusAccessKind.CpuDataRead))
                 {
                     throw new AmigaEmulationException(
                         $"MC68040 MMU table read from unmapped physical address 0x{physicalAddress:X8}.");
                 }
 
                 var cycle = State.Cycles;
-                return _bus.ReadLong(Normalize(physicalAddress), ref cycle, AmigaBusAccessKind.CpuDataRead);
+                return _bus.ReadLong(Normalize(physicalAddress), ref cycle, M68kBusAccessKind.CpuDataRead);
             }
             finally
             {
@@ -2174,7 +2168,7 @@ namespace CopperMod.Amiga
         private bool IsM68040PhysicalAddressMapped(
             uint physicalAddress,
             int byteCount,
-            AmigaBusAccessKind accessKind)
+            M68kBusAccessKind accessKind)
             => _physicalAddressMap == null ||
                 _physicalAddressMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
 
@@ -2191,7 +2185,7 @@ namespace CopperMod.Amiga
             {
                 return _owner.TryTranslateM68040Address(
                         address,
-                        AmigaBusAccessKind.CpuInstructionFetch,
+                        M68kBusAccessKind.CpuInstructionFetch,
                         write: false,
                         byteCount: 2,
                         out var physical,
@@ -8060,7 +8054,7 @@ namespace CopperMod.Amiga
 
             return TryTranslateM68040Address(
                     programCounter,
-                    AmigaBusAccessKind.CpuInstructionFetch,
+                    M68kBusAccessKind.CpuInstructionFetch,
                     write: false,
                     byteCount: 2,
                     out var physical,
@@ -9645,7 +9639,7 @@ namespace CopperMod.Amiga
 
             if (size == M68kOperandSize.Byte)
             {
-                return _bus.ReadByte(address, ref cycles, AmigaBusAccessKind.CpuDataRead);
+                return _bus.ReadByte(address, ref cycles, M68kBusAccessKind.CpuDataRead);
             }
 
             if ((address & 1) != 0)
@@ -9657,8 +9651,8 @@ namespace CopperMod.Amiga
             }
 
             return size == M68kOperandSize.Word
-                ? _bus.ReadWord(address, ref cycles, AmigaBusAccessKind.CpuDataRead)
-                : _bus.ReadLong(address, ref cycles, AmigaBusAccessKind.CpuDataRead);
+                ? _bus.ReadWord(address, ref cycles, M68kBusAccessKind.CpuDataRead)
+                : _bus.ReadLong(address, ref cycles, M68kBusAccessKind.CpuDataRead);
         }
 
         private void WriteMemoryValueForV2Batch(uint address, uint value, M68kOperandSize size)
@@ -9710,7 +9704,7 @@ namespace CopperMod.Amiga
 
             if (size == M68kOperandSize.Byte)
             {
-                _bus.WriteByte(address, (byte)value, ref cycles, AmigaBusAccessKind.CpuDataWrite);
+                _bus.WriteByte(address, (byte)value, ref cycles, M68kBusAccessKind.CpuDataWrite);
                 return;
             }
 
@@ -9724,11 +9718,11 @@ namespace CopperMod.Amiga
 
             if (size == M68kOperandSize.Word)
             {
-                _bus.WriteWord(address, (ushort)value, ref cycles, AmigaBusAccessKind.CpuDataWrite);
+                _bus.WriteWord(address, (ushort)value, ref cycles, M68kBusAccessKind.CpuDataWrite);
             }
             else
             {
-                _bus.WriteLong(address, value, ref cycles, AmigaBusAccessKind.CpuDataWrite);
+                _bus.WriteLong(address, value, ref cycles, M68kBusAccessKind.CpuDataWrite);
             }
         }
 
@@ -9752,9 +9746,9 @@ namespace CopperMod.Amiga
         {
             return size switch
             {
-                M68kOperandSize.Byte => ReadPhysicalByte(address, AmigaBusAccessKind.CpuDataRead),
-                M68kOperandSize.Word => ReadPhysicalWord(address, AmigaBusAccessKind.CpuDataRead),
-                _ => ReadPhysicalLong(address, AmigaBusAccessKind.CpuDataRead)
+                M68kOperandSize.Byte => ReadPhysicalByte(address, M68kBusAccessKind.CpuDataRead),
+                M68kOperandSize.Word => ReadPhysicalWord(address, M68kBusAccessKind.CpuDataRead),
+                _ => ReadPhysicalLong(address, M68kBusAccessKind.CpuDataRead)
             };
         }
 
@@ -9762,15 +9756,15 @@ namespace CopperMod.Amiga
         {
             if (size == M68kOperandSize.Byte)
             {
-                WritePhysicalByte(address, (byte)value, AmigaBusAccessKind.CpuDataWrite);
+                WritePhysicalByte(address, (byte)value, M68kBusAccessKind.CpuDataWrite);
             }
             else if (size == M68kOperandSize.Word)
             {
-                WritePhysicalWord(address, (ushort)value, AmigaBusAccessKind.CpuDataWrite);
+                WritePhysicalWord(address, (ushort)value, M68kBusAccessKind.CpuDataWrite);
             }
             else
             {
-                WritePhysicalLong(address, value, AmigaBusAccessKind.CpuDataWrite);
+                WritePhysicalLong(address, value, M68kBusAccessKind.CpuDataWrite);
             }
         }
 
@@ -9839,14 +9833,14 @@ namespace CopperMod.Amiga
         private uint TranslateM68040DataAddress(uint address, bool write, M68kOperandSize size)
             => TranslateM68040MemoryAddress(
                 address,
-                write ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                write ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead,
                 write,
                 (int)size);
 
-        private uint TranslateM68040MemoryAddress(uint address, AmigaBusAccessKind accessKind, bool write)
+        private uint TranslateM68040MemoryAddress(uint address, M68kBusAccessKind accessKind, bool write)
             => TranslateM68040MemoryAddress(address, accessKind, write, byteCount: 1);
 
-        private uint TranslateM68040MemoryAddress(uint address, AmigaBusAccessKind accessKind, bool write, int byteCount)
+        private uint TranslateM68040MemoryAddress(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
         {
             if (_cpuModel != M68kJitCpuModel.M68040)
             {
@@ -9858,27 +9852,27 @@ namespace CopperMod.Amiga
                 return Normalize(physical);
             }
 
-            var stackedProgramCounter = accessKind == AmigaBusAccessKind.CpuInstructionFetch
+            var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch
                 ? address
                 : State.LastInstructionProgramCounter;
             throw new M68040MmuFaultException(fault with { StackedProgramCounter = stackedProgramCounter });
         }
 
-        private byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             address = TranslateM68040MemoryAddress(address, accessKind, write: false, byteCount: 1);
             return ReadPhysicalByte(address, accessKind);
         }
 
-        private byte ReadPhysicalByte(uint address, AmigaBusAccessKind accessKind)
+        private byte ReadPhysicalByte(uint address, M68kBusAccessKind accessKind)
         {
-            if (accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+            if (accessKind != M68kBusAccessKind.CpuInstructionFetch &&
                 TryReadM68040MaxSpeedCiaAPortA(address, M68kOperandSize.Byte, out var ciaValue))
             {
                 return (byte)ciaValue;
             }
 
-            if (accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+            if (accessKind != M68kBusAccessKind.CpuInstructionFetch &&
                 TryReadM68040MaxSpeedZeroWaitMemory(address, M68kOperandSize.Byte, out var fastValue))
             {
                 return (byte)fastValue;
@@ -9890,7 +9884,7 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        private ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             if ((address & 1) != 0)
             {
@@ -9901,9 +9895,9 @@ namespace CopperMod.Amiga
             return ReadPhysicalWord(address, accessKind);
         }
 
-        private ushort ReadPhysicalWord(uint address, AmigaBusAccessKind accessKind)
+        private ushort ReadPhysicalWord(uint address, M68kBusAccessKind accessKind)
         {
-            if (accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+            if (accessKind != M68kBusAccessKind.CpuInstructionFetch &&
                 TryReadM68040MaxSpeedZeroWaitMemory(address, M68kOperandSize.Word, out var fastValue))
             {
                 return (ushort)fastValue;
@@ -9924,15 +9918,15 @@ namespace CopperMod.Amiga
 
             address = TranslateM68040MemoryAddress(
                 address,
-                AmigaBusAccessKind.CpuDataRead,
+                M68kBusAccessKind.CpuDataRead,
                 write: false,
                 byteCount: 4);
-            return ReadPhysicalLong(address, AmigaBusAccessKind.CpuDataRead);
+            return ReadPhysicalLong(address, M68kBusAccessKind.CpuDataRead);
         }
 
-        private uint ReadPhysicalLong(uint address, AmigaBusAccessKind accessKind)
+        private uint ReadPhysicalLong(uint address, M68kBusAccessKind accessKind)
         {
-            if (accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+            if (accessKind != M68kBusAccessKind.CpuInstructionFetch &&
                 TryReadM68040MaxSpeedZeroWaitMemory(address, M68kOperandSize.Long, out var fastValue))
             {
                 return fastValue;
@@ -9948,13 +9942,13 @@ namespace CopperMod.Amiga
         {
             address = TranslateM68040MemoryAddress(
                 address,
-                AmigaBusAccessKind.CpuDataWrite,
+                M68kBusAccessKind.CpuDataWrite,
                 write: true,
                 byteCount: 1);
-            WritePhysicalByte(address, value, AmigaBusAccessKind.CpuDataWrite);
+            WritePhysicalByte(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
-        private void WritePhysicalByte(uint address, byte value, AmigaBusAccessKind accessKind)
+        private void WritePhysicalByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
             if (TryWriteM68040MaxSpeedCiaAPortA(address, value, M68kOperandSize.Byte))
             {
@@ -9980,13 +9974,13 @@ namespace CopperMod.Amiga
 
             address = TranslateM68040MemoryAddress(
                 address,
-                AmigaBusAccessKind.CpuDataWrite,
+                M68kBusAccessKind.CpuDataWrite,
                 write: true,
                 byteCount: 2);
-            WritePhysicalWord(address, value, AmigaBusAccessKind.CpuDataWrite);
+            WritePhysicalWord(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
-        private void WritePhysicalWord(uint address, ushort value, AmigaBusAccessKind accessKind)
+        private void WritePhysicalWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
             if (TryWriteM68040MaxSpeedColorRegister(address, value, M68kOperandSize.Word, State.Cycles))
             {
@@ -10012,13 +10006,13 @@ namespace CopperMod.Amiga
 
             address = TranslateM68040MemoryAddress(
                 address,
-                AmigaBusAccessKind.CpuDataWrite,
+                M68kBusAccessKind.CpuDataWrite,
                 write: true,
                 byteCount: 4);
-            WritePhysicalLong(address, value, AmigaBusAccessKind.CpuDataWrite);
+            WritePhysicalLong(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
-        private void WritePhysicalLong(uint address, uint value, AmigaBusAccessKind accessKind)
+        private void WritePhysicalLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
             if (TryWriteM68040MaxSpeedZeroWaitMemory(address, value, M68kOperandSize.Long))
             {

@@ -1,8 +1,8 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal readonly struct M68kCodeGenerationStamp
+    public readonly struct M68kCodeGenerationStamp
     {
         public M68kCodeGenerationStamp(uint[] pages, uint[] generations)
         {
@@ -17,7 +17,7 @@ namespace CopperMod.Amiga
         public bool IsEmpty => Pages == null || Generations == null || Pages.Length == 0;
     }
 
-    internal readonly struct M68kJitCodeSnapshot
+    public readonly struct M68kJitCodeSnapshot
     {
         public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostTrapStubAddresses)
         {
@@ -38,7 +38,7 @@ namespace CopperMod.Amiga
         public bool IsEmpty => Bytes == null || Bytes.Length == 0;
     }
 
-    internal sealed class M68kSnapshotCodeReader : IM68kCodeReader
+    public sealed class M68kSnapshotCodeReader : IM68kCodeReader
     {
         private const int CodeGenerationPageSize = 1 << 8;
         private readonly M68kJitCodeSnapshot _snapshot;

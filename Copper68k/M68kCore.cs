@@ -1,28 +1,28 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal enum M68kOperandSize
+    public enum M68kOperandSize
     {
         Byte = 1,
         Word = 2,
         Long = 4
     }
 
-    internal interface IM68kBus
+    public interface IM68kBus
     {
-        byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind);
+        byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
-        ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind);
+        ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
-        uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind);
+        uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
-        void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind);
+        void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind);
 
-        void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind);
+        void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind);
 
-        void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind);
+        void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind);
 
         bool HasHostTrapStub(uint address);
 
@@ -31,27 +31,27 @@ namespace CopperMod.Amiga
         void ResetExternalDevices(long cycle);
     }
 
-    internal interface IAmigaCpuPhysicalAddressMap
+    public interface IM68kPhysicalAddressMap
     {
-        bool IsCpuPhysicalAddressMapped(uint address, int byteCount, AmigaBusAccessKind accessKind);
+        bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind);
     }
 
-    internal interface IM68kFastMemoryBus
+    public interface IM68kFastMemoryBus
     {
-        bool TryReadFastByte(uint address, AmigaBusAccessKind accessKind, out byte value);
+        bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value);
 
-        bool TryReadFastWord(uint address, AmigaBusAccessKind accessKind, out ushort value);
+        bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value);
 
-        bool TryReadFastLong(uint address, AmigaBusAccessKind accessKind, out uint value);
+        bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value);
 
-        bool TryWriteFastByte(uint address, byte value, AmigaBusAccessKind accessKind);
+        bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind);
 
-        bool TryWriteFastWord(uint address, ushort value, AmigaBusAccessKind accessKind);
+        bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind);
 
-        bool TryWriteFastLong(uint address, uint value, AmigaBusAccessKind accessKind);
+        bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
-    internal enum M68kTraceBatchWakeSource
+    public enum M68kTraceBatchWakeSource
     {
         Unknown = 0,
         TargetCycle,
@@ -65,7 +65,7 @@ namespace CopperMod.Amiga
         Blitter
     }
 
-    internal interface IM68kCore : IDisposable
+    public interface IM68kCore : IDisposable
     {
         M68kCpuState State { get; }
 
@@ -78,43 +78,43 @@ namespace CopperMod.Amiga
         void RequestInterrupt(int level, uint vectorAddress);
     }
 
-    internal interface IM68kInstructionBoundary
+    public interface IM68kInstructionBoundary
     {
         bool BeforeInstruction();
 
         void AfterInstruction(long previousCycle, long currentCycle);
     }
 
-    internal interface IM68kTraceBatchDiagnosticsBoundary
+    public interface IM68kTraceBatchDiagnosticsBoundary
     {
         M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; }
     }
 
-    internal interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
+    public interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
     {
         bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles);
     }
 
-    internal interface IM68kPureCpuTraceBatchBoundary : IM68kInstructionBoundary
+    public interface IM68kPureCpuTraceBatchBoundary : IM68kInstructionBoundary
     {
         bool TryBeginPureCpuTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
 
         void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
-    internal interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
+    public interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
     {
         bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
 
         void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
-    internal interface IM68kBatchCore : IM68kCore
+    public interface IM68kBatchCore : IM68kCore
     {
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
     }
 
-    internal enum M68kBackendKind
+    public enum M68kBackendKind
     {
         AccurateM68000 = 0,
         AccurateM68020 = 1,
@@ -126,12 +126,12 @@ namespace CopperMod.Amiga
         JitM68040 = 7
     }
 
-    internal interface IM68kCoreFactory
+    public interface IM68kCoreFactory
     {
         IM68kCore Create(M68kBackendKind backend, IM68kBus bus);
     }
 
-    internal sealed class M68kCoreFactory : IM68kCoreFactory
+    public sealed class M68kCoreFactory : IM68kCoreFactory
     {
         public static M68kCoreFactory Default { get; } = new M68kCoreFactory();
 
@@ -159,19 +159,19 @@ namespace CopperMod.Amiga
 
             if (backend == M68kBackendKind.JitM68000)
             {
-                return new M68kJitCore(bus);
+                throw new M68kEmulationException("The M68k JIT backend is host-specific and is not provided by Copper68k.");
             }
 
             if (backend == M68kBackendKind.JitM68040)
             {
-                return M68kJitCore.CreateM68040(bus);
+                throw new M68kEmulationException("The M68k JIT backend is host-specific and is not provided by Copper68k.");
             }
 
-            throw new AmigaEmulationException($"The requested M68k backend is not implemented: {backend}.");
+            throw new M68kEmulationException($"The requested M68k backend is not implemented: {backend}.");
         }
     }
 
-    internal sealed class M68kCpuState
+    public sealed class M68kCpuState
     {
         public const ushort Carry = 0x0001;
         public const ushort Overflow = 0x0002;
@@ -560,7 +560,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class UnsupportedM68kOpcodeException : AmigaEmulationException
+    public sealed class UnsupportedM68kOpcodeException : M68kEmulationException
     {
         public UnsupportedM68kOpcodeException(ushort opcode, uint programCounter)
             : base($"Unsupported MC68000 opcode 0x{opcode:X4} at 0x{programCounter:X8}.")
@@ -574,7 +574,7 @@ namespace CopperMod.Amiga
         public uint ProgramCounter { get; }
     }
 
-    internal sealed class M68kAddressErrorException : Exception
+    public sealed class M68kAddressErrorException : Exception
     {
         public static M68kAddressErrorException Instance { get; } = new M68kAddressErrorException();
 
@@ -583,7 +583,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class M68kIllegalInstructionException : Exception
+    public sealed class M68kIllegalInstructionException : Exception
     {
         public static M68kIllegalInstructionException Instance { get; } = new M68kIllegalInstructionException();
 
@@ -592,7 +592,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    public sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
@@ -2561,7 +2561,7 @@ namespace CopperMod.Amiga
 
         private ushort FetchWord()
         {
-            var value = ReadWord(State.ProgramCounter, AmigaBusAccessKind.CpuInstructionFetch);
+            var value = ReadWord(State.ProgramCounter, M68kBusAccessKind.CpuInstructionFetch);
             State.ProgramCounter += 2;
             return value;
         }
@@ -2573,7 +2573,7 @@ namespace CopperMod.Amiga
             return ((uint)high << 16) | low;
         }
 
-        private byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             var cycle = State.Cycles;
             var value = _bus.ReadByte(address, ref cycle, accessKind);
@@ -2581,7 +2581,7 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        private ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             if ((address & 1) != 0)
             {
@@ -2599,12 +2599,12 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: false, AmigaBusAccessKind.CpuDataRead);
+                RaiseAddressError(address, isWrite: false, M68kBusAccessKind.CpuDataRead);
                 throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
-            var value = _bus.ReadLong(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
             State.Cycles = cycle;
             return value;
         }
@@ -2612,7 +2612,7 @@ namespace CopperMod.Amiga
         private void WriteByte(uint address, byte value)
         {
             var cycle = State.Cycles;
-            _bus.WriteByte(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteByte(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
 
@@ -2620,12 +2620,12 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: true, AmigaBusAccessKind.CpuDataWrite);
+                RaiseAddressError(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
                 throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
-            _bus.WriteWord(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteWord(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
 
@@ -2633,12 +2633,12 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: true, AmigaBusAccessKind.CpuDataWrite);
+                RaiseAddressError(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
                 throw M68kAddressErrorException.Instance;
             }
 
             var cycle = State.Cycles;
-            _bus.WriteLong(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+            _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
 
@@ -2709,7 +2709,7 @@ namespace CopperMod.Amiga
             AddCycles(cycles);
         }
 
-        private void RaiseAddressError(uint faultAddress, bool isWrite, AmigaBusAccessKind accessKind)
+        private void RaiseAddressError(uint faultAddress, bool isWrite, M68kBusAccessKind accessKind)
         {
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister |= M68kCpuState.Supervisor;
@@ -2726,10 +2726,10 @@ namespace CopperMod.Amiga
             uint faultAddress,
             ushort savedStatusRegister,
             bool isWrite,
-            AmigaBusAccessKind accessKind)
+            M68kBusAccessKind accessKind)
         {
             _ = faultAddress;
-            var instruction = accessKind == AmigaBusAccessKind.CpuInstructionFetch;
+            var instruction = accessKind == M68kBusAccessKind.CpuInstructionFetch;
             var supervisor = (savedStatusRegister & M68kCpuState.Supervisor) != 0;
             var functionCode = instruction
                 ? (supervisor ? 0x06 : 0x02)
@@ -2907,7 +2907,7 @@ namespace CopperMod.Amiga
 
                         break;
                     default:
-                        throw new AmigaEmulationException("Cannot write to an immediate MC68000 operand.");
+                        throw new M68kEmulationException("Cannot write to an immediate MC68000 operand.");
                 }
             }
         }

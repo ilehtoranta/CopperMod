@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal enum M68kInstructionFamily
+    public enum M68kInstructionFamily
     {
         Move,
         MovePeripheral,
@@ -31,24 +31,24 @@ namespace CopperMod.Amiga
         Unknown
     }
 
-    internal enum M68kJitTarget
+    public enum M68kJitTarget
     {
         None,
         MultiplyDivide,
         NegNot
     }
 
-    internal readonly record struct M68kInstructionFamilyFrequency(
+    public readonly record struct M68kInstructionFamilyFrequency(
         M68kInstructionFamily Family,
         string FamilyName,
         long Count);
 
-    internal readonly record struct M68kJitTargetFrequency(
+    public readonly record struct M68kJitTargetFrequency(
         M68kJitTarget Target,
         string TargetName,
         long Count);
 
-    internal readonly record struct M68kOpcodeFrequency(
+    public readonly record struct M68kOpcodeFrequency(
         ushort Opcode,
         string Mnemonic,
         M68kInstructionFamily Family,
@@ -57,7 +57,7 @@ namespace CopperMod.Amiga
         string JitTargetName,
         long Count);
 
-    internal readonly record struct M68kInstructionFrequencySnapshot(
+    public readonly record struct M68kInstructionFrequencySnapshot(
         long TotalInstructions,
         IReadOnlyList<M68kInstructionFamilyFrequency> Families,
         IReadOnlyList<M68kJitTargetFrequency> JitTargets,
@@ -70,7 +70,7 @@ namespace CopperMod.Amiga
             Array.Empty<M68kOpcodeFrequency>());
     }
 
-    internal interface IM68kInstructionFrequencyProvider
+    public interface IM68kInstructionFrequencyProvider
     {
         bool InstructionFrequencyEnabled { get; set; }
 
@@ -79,7 +79,7 @@ namespace CopperMod.Amiga
         void ResetInstructionFrequency();
     }
 
-    internal sealed class M68kInstructionFrequencyMatrix
+    public sealed class M68kInstructionFrequencyMatrix
     {
         private readonly long[] _familyCounts = new long[Enum.GetValues<M68kInstructionFamily>().Length];
         private readonly long[] _jitTargetCounts = new long[Enum.GetValues<M68kJitTarget>().Length];
@@ -162,7 +162,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal static class M68kInstructionClassifier
+    public static class M68kInstructionClassifier
     {
         public static M68kInstructionFamily GetFamily(ushort opcode)
         {

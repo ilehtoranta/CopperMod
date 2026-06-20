@@ -161,7 +161,7 @@ public sealed class AmigaCiaTests
 	{
 		var bus = new AmigaBus();
 
-		Assert.False(bus.AudioFilterEnabled);
+		Assert.True(bus.AudioFilterEnabled);
 		bus.WriteByte(0x00BFE001, 0x00, 0);
 		Assert.True(bus.AudioFilterEnabled);
 		bus.WriteByte(0x00BFE001, 0x02, 0);

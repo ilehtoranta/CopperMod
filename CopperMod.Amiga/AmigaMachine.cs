@@ -47,7 +47,7 @@ namespace CopperMod.Amiga
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
-        public IM68kCoreFactory CpuFactory { get; private set; } = M68kCoreFactory.Default;
+        public IM68kCoreFactory CpuFactory { get; private set; } = AmigaM68kCoreFactory.Default;
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
 

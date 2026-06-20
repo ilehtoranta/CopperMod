@@ -61,10 +61,11 @@ namespace CopperMod.Amiga
 
         public long TimerAIntervalCycles => _timerA.LatchTicks * CpuCyclesPerCiaTick;
 
-        public void Reset(byte initialPortA = 0)
+        public void Reset(byte initialPortA = 0, byte initialPortADataDirection = 0)
         {
             Array.Clear(_registers);
             _registers[0] = initialPortA;
+            _registers[2] = initialPortADataDirection;
             _todCounter = 0;
             _todAlarm = 0;
             _todReadLatch = 0;

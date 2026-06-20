@@ -4,6 +4,7 @@
 [![CopperMod.Med](https://img.shields.io/nuget/v/CopperMod.Med?label=CopperMod.Med)](https://www.nuget.org/packages/CopperMod.Med)
 [![CopperMod.ProTracker](https://img.shields.io/nuget/v/CopperMod.ProTracker?label=CopperMod.ProTracker)](https://www.nuget.org/packages/CopperMod.ProTracker)
 [![CopperMod.Sid](https://img.shields.io/nuget/v/CopperMod.Sid?label=CopperMod.Sid)](https://www.nuget.org/packages/CopperMod.Sid)
+[![Copper68k](https://img.shields.io/nuget/v/Copper68k?label=Copper68k)](https://www.nuget.org/packages/Copper68k)
 [![CopperMod.Cust](https://img.shields.io/nuget/v/CopperMod.Cust?label=CopperMod.Cust)](https://www.nuget.org/packages/CopperMod.Cust)
 [![CopperDisk](https://img.shields.io/nuget/v/CopperDisk?label=CopperDisk)](https://www.nuget.org/packages/CopperDisk)
 
@@ -60,6 +61,7 @@ Reusable libraries are published on NuGet:
 | [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED MMD module parser and renderer. |
 | [CopperMod.ProTracker](https://www.nuget.org/packages/CopperMod.ProTracker) | ProTracker MOD parser and renderer. |
 | [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parser and SID renderer. |
+| [Copper68k](https://www.nuget.org/packages/Copper68k) | Reusable Motorola 68000-family CPU emulation core. |
 | [CopperMod.Cust](https://www.nuget.org/packages/CopperMod.Cust) | Amiga CUST loader and Paula playback sandbox. |
 | [CopperDisk](https://www.nuget.org/packages/CopperDisk) | Managed Amiga ADF and IPF disk image library. |
 
@@ -252,6 +254,7 @@ and upload the generated zip files plus `SHA256SUMS.txt`.
 - `CopperMod.Med` - MED / OctaMED backend.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.
+- `Copper68k` - reusable Motorola 68000-family CPU emulation core.
 - `CopperDisk` - managed Amiga ADF / IPF disk image library.
 - `CopperMod.Amiga` - shared Amiga 500 emulation core.
 - `CopperScreen` - Avalonia Amiga 500 emulator front-end.

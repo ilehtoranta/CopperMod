@@ -1,8 +1,8 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal enum M68kAcceleratorModel
+    public enum M68kAcceleratorModel
     {
         M68020,
         M68030,
@@ -10,7 +10,7 @@ namespace CopperMod.Amiga
     }
 
     [Flags]
-    internal enum M68kTimingBarrier
+    public enum M68kTimingBarrier
     {
         None = 0,
         FlushPipeline = 1 << 0,
@@ -21,7 +21,7 @@ namespace CopperMod.Amiga
         ReadModifyWrite = 1 << 5
     }
 
-    internal enum M68kInstructionTimingKey
+    public enum M68kInstructionTimingKey
     {
         Idle,
         Nop,
@@ -134,6 +134,7 @@ namespace CopperMod.Amiga
         AddxLongDataToData,
         AddLongPostIncrementToData,
         AddWordDataToAddressDisplacement,
+        AddLongDataToAddressDisplacement,
         AddaLongImmediateToAddress,
         AddaLongDataToAddress,
         AddaLongAddressDisplacementToAddress,
@@ -227,7 +228,7 @@ namespace CopperMod.Amiga
         BsrLong
     }
 
-    internal readonly record struct M68kInstructionPlan(
+    public readonly record struct M68kInstructionPlan(
         M68kInstructionTimingKey Key,
         string Name,
         int NativeCycles,
@@ -253,7 +254,7 @@ namespace CopperMod.Amiga
             => new(key, name, cacheCaseCycles, headCycles, tailCycles, UsesHeadTail: true, barriers);
     }
 
-    internal readonly record struct M68kExecutedInstructionTiming(
+    public readonly record struct M68kExecutedInstructionTiming(
         M68kInstructionPlan Plan,
         int OverlapCycles,
         long StartNativeCycle,
@@ -263,7 +264,7 @@ namespace CopperMod.Amiga
         public long ElapsedNativeCycles => EndNativeCycle - StartNativeCycle;
     }
 
-    internal sealed class M68kPipelineState
+    public sealed class M68kPipelineState
     {
         public long InstructionBoundaryNativeCycle { get; set; }
 
@@ -282,7 +283,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class M68kInstructionCache
+    public sealed class M68kInstructionCache
     {
         private readonly uint[] _tags;
         private readonly bool[] _valid;
@@ -372,7 +373,7 @@ namespace CopperMod.Amiga
             => (int)((lineAddress / (uint)_lineSize) % (uint)_tags.Length);
     }
 
-    internal sealed class M68kTimingEngine
+    public sealed class M68kTimingEngine
     {
         private readonly M68020CpuProfile _profile;
         private readonly M68kCpuState _state;
@@ -539,7 +540,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal static class M68020TimingModel
+    public static class M68020TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
         {
@@ -656,6 +657,7 @@ namespace CopperMod.Amiga
                 M68kInstructionTimingKey.AddxLongDataToData => M68kInstructionPlan.CreateFlat(key, "ADDX.L Dn,Dn", 2),
                 M68kInstructionTimingKey.AddLongPostIncrementToData => M68kInstructionPlan.CreateFlat(key, "ADD.L (An)+,Dn", 6),
                 M68kInstructionTimingKey.AddWordDataToAddressDisplacement => M68kInstructionPlan.CreateFlat(key, "ADD.W Dn,(d16,An)", 9),
+                M68kInstructionTimingKey.AddLongDataToAddressDisplacement => M68kInstructionPlan.CreateFlat(key, "ADD.L Dn,(d16,An)", 13),
                 M68kInstructionTimingKey.AddaLongImmediateToAddress => M68kInstructionPlan.CreateFlat(key, "ADDA.L #<data>,An", 6),
                 M68kInstructionTimingKey.AddaLongDataToAddress => M68kInstructionPlan.CreateFlat(key, "ADDA.L Dn,An", 2),
                 M68kInstructionTimingKey.AddaLongAddressDisplacementToAddress => M68kInstructionPlan.CreateFlat(key, "ADDA.L (d16,An),An", 7),
@@ -753,7 +755,7 @@ namespace CopperMod.Amiga
             => M68kTimingBarrier.Exception | M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus;
     }
 
-    internal static class M68030TimingModel
+    public static class M68030TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
         {
@@ -870,6 +872,7 @@ namespace CopperMod.Amiga
                 M68kInstructionTimingKey.AddxLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "ADDX.L Dn,Dn", 2, 1, 1),
                 M68kInstructionTimingKey.AddLongPostIncrementToData => M68kInstructionPlan.CreateHeadTail(key, "ADD.L (An)+,Dn", 6, 1, 1),
                 M68kInstructionTimingKey.AddWordDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "ADD.W Dn,(d16,An)", 9, 1, 1),
+                M68kInstructionTimingKey.AddLongDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "ADD.L Dn,(d16,An)", 13, 1, 1),
                 M68kInstructionTimingKey.AddaLongImmediateToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L #<data>,An", 6, 1, 1),
                 M68kInstructionTimingKey.AddaLongDataToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L Dn,An", 2, 1, 1),
                 M68kInstructionTimingKey.AddaLongAddressDisplacementToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L (d16,An),An", 7, 1, 1),
@@ -967,7 +970,7 @@ namespace CopperMod.Amiga
             => M68kTimingBarrier.Exception | M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus;
     }
 
-    internal sealed class M68kAcceleratorBusBridge
+    public sealed class M68kAcceleratorBusBridge
     {
         private readonly IM68kBus _bus;
         private readonly M68020CpuProfile _profile;
@@ -986,7 +989,7 @@ namespace CopperMod.Amiga
             _timing = timing ?? throw new ArgumentNullException(nameof(timing));
         }
 
-        public byte ReadByte(uint address, AmigaBusAccessKind accessKind)
+        public byte ReadByte(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastCiaAPortAAccess(address, accessKind) &&
                 _bus is IM68kFastMemoryBus ciaFastBus &&
@@ -1010,7 +1013,7 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        public ushort ReadWord(uint address, AmigaBusAccessKind accessKind)
+        public ushort ReadWord(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastInstructionFetch(address, accessKind) &&
                 _bus is IM68kCodeReader codeReader)
@@ -1032,7 +1035,7 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        public uint ReadLong(uint address, AmigaBusAccessKind accessKind)
+        public uint ReadLong(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _bus is IM68kFastMemoryBus fastBus &&
@@ -1048,7 +1051,7 @@ namespace CopperMod.Amiga
             return value;
         }
 
-        public void WriteByte(uint address, byte value, AmigaBusAccessKind accessKind)
+        public void WriteByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastCiaAPortAAccess(address, accessKind) &&
                 _bus is IM68kFastMemoryBus ciaFastBus &&
@@ -1071,7 +1074,7 @@ namespace CopperMod.Amiga
             _timing.RecordPostedBusCompletion(cycle);
         }
 
-        public void WriteWord(uint address, ushort value, AmigaBusAccessKind accessKind)
+        public void WriteWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _bus is IM68kFastMemoryBus fastBus &&
@@ -1086,7 +1089,7 @@ namespace CopperMod.Amiga
             _timing.RecordPostedBusCompletion(cycle);
         }
 
-        public void WriteLong(uint address, uint value, AmigaBusAccessKind accessKind)
+        public void WriteLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _bus is IM68kFastMemoryBus fastBus &&
@@ -1107,10 +1110,10 @@ namespace CopperMod.Amiga
             return Math.Max(_state.Cycles, _profile.NativeToMachineCycles(nativeReady));
         }
 
-        private bool CanUseFastInstructionFetch(uint address, AmigaBusAccessKind accessKind)
+        private bool CanUseFastInstructionFetch(uint address, M68kBusAccessKind accessKind)
         {
             if (!_profile.FastInstructionFetch ||
-                accessKind != AmigaBusAccessKind.CpuInstructionFetch)
+                accessKind != M68kBusAccessKind.CpuInstructionFetch)
             {
                 return false;
             }
@@ -1122,10 +1125,10 @@ namespace CopperMod.Amiga
                 M68020MemoryTarget.HostTrap;
         }
 
-        private bool CanUseFastNonChipMemoryAccess(uint address, AmigaBusAccessKind accessKind)
+        private bool CanUseFastNonChipMemoryAccess(uint address, M68kBusAccessKind accessKind)
         {
             if (!_profile.FastNonChipMemoryAccess ||
-                accessKind == AmigaBusAccessKind.CpuInstructionFetch)
+                accessKind == M68kBusAccessKind.CpuInstructionFetch)
             {
                 return false;
             }
@@ -1137,9 +1140,9 @@ namespace CopperMod.Amiga
                 M68020MemoryTarget.Rom;
         }
 
-        private bool CanUseFastCiaAPortAAccess(uint address, AmigaBusAccessKind accessKind)
+        private bool CanUseFastCiaAPortAAccess(uint address, M68kBusAccessKind accessKind)
             => _profile.FastCiaAPortAAccess &&
-                accessKind != AmigaBusAccessKind.CpuInstructionFetch &&
+                accessKind != M68kBusAccessKind.CpuInstructionFetch &&
                 (address & 0x00FF_FFFFu) == 0x00BF_E001u;
 
         private void CompleteMinimalBlockingFastAccess()
@@ -1168,7 +1171,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class UnsupportedM68kTimingException : AmigaEmulationException
+    public sealed class UnsupportedM68kTimingException : M68kEmulationException
     {
         public UnsupportedM68kTimingException(ushort opcode, uint programCounter, M68020CpuProfile profile)
             : base($"Unsupported exact {profile.ModelName} timing for opcode 0x{opcode:X4} at 0x{programCounter:X8} in profile {profile.Name}.")

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj" />
+    <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
     <ProjectReference Include="..\CopperScreen\CopperScreen.csproj" />
   </ItemGroup>
 

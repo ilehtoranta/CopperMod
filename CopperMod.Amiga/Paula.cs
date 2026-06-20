@@ -10,7 +10,7 @@ namespace CopperMod.Amiga
         private const ushort AudioInterruptMask = 0x0780;
         private const ushort WritableDmaconMask = 0x07FF;
         private const ushort WritableIntreqMask = 0x3FFF;
-        private const ushort IdleSerdatr = 0x30FF;
+        private const ushort IdleSerdatr = 0x3000;
         private const float VoiceScale = 0.25f;
         private const int MaxCapturedWrites = 65536;
         private const int MaxPendingInterruptEvents = 65536;

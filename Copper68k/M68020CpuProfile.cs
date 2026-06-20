@@ -1,16 +1,16 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal enum M68020BusWidth
+    public enum M68020BusWidth
     {
         Byte = 1,
         Word = 2,
         Long = 4
     }
 
-    internal enum M68020MemoryTarget
+    public enum M68020MemoryTarget
     {
         ChipRam,
         ExpansionRam,
@@ -22,13 +22,16 @@ namespace CopperMod.Amiga
         Unmapped
     }
 
-    internal readonly record struct M68020BusTimingRule(
+    public readonly record struct M68020BusTimingRule(
         M68020MemoryTarget Target,
         M68020BusWidth Width,
         int WaitStates);
 
-    internal sealed class M68020CpuProfile
+    public sealed class M68020CpuProfile
     {
+        private const uint DefaultRealFastRamBase = 0x0020_0000;
+        private const uint DefaultExpansionRamBase = 0x00C0_0000;
+
         private M68020CpuProfile(
             string name,
             M68kAcceleratorModel model,
@@ -192,7 +195,7 @@ namespace CopperMod.Amiga
                 return M68020MemoryTarget.ChipRam;
             }
 
-            if (address >= AmigaConstants.A500RealFastRamBase && address < 0x00A0_0000)
+            if (address >= DefaultRealFastRamBase && address < 0x00A0_0000)
             {
                 return M68020MemoryTarget.RealFastRam;
             }
@@ -202,7 +205,7 @@ namespace CopperMod.Amiga
                 return M68020MemoryTarget.Cia;
             }
 
-            if (address >= AmigaConstants.A500BootPseudoFastRamBase && address < 0x00D0_0000)
+            if (address >= DefaultExpansionRamBase && address < 0x00D0_0000)
             {
                 return M68020MemoryTarget.ExpansionRam;
             }

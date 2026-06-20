@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal sealed class M68040FpuState
+    public sealed class M68040FpuState
     {
         public const uint ConditionNan = 0x0100_0000;
         public const uint ConditionInfinity = 0x0200_0000;
@@ -109,7 +109,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal enum M68040FpuJitKind
+    public enum M68040FpuJitKind
     {
         Operation = 0,
         MoveToEa = 1,
@@ -120,7 +120,7 @@ namespace CopperMod.Amiga
         RestoreState = 6
     }
 
-    internal static class M68040FpuHelpers
+    public static class M68040FpuHelpers
     {
         public const uint NullStateFrame = 0x0000_0000;
         public const uint NullStateFrameSize = 4;
@@ -173,7 +173,7 @@ namespace CopperMod.Amiga
                 1 => BitConverter.Int32BitsToSingle(unchecked((int)value)),
                 4 => unchecked((short)(value & 0xFFFF)),
                 6 => unchecked((sbyte)(value & 0xFF)),
-                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
+                _ => throw new M68kEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
             };
         }
 
@@ -185,7 +185,7 @@ namespace CopperMod.Amiga
                 1 => unchecked((uint)BitConverter.SingleToInt32Bits((float)value)),
                 4 => (currentValue & 0xFFFF_0000u) | unchecked((ushort)(short)value),
                 6 => (currentValue & 0xFFFF_FF00u) | unchecked((byte)(sbyte)value),
-                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
+                _ => throw new M68kEmulationException($"Unsupported MC68040 FPU data-register format {format}.")
             };
         }
 
@@ -205,7 +205,7 @@ namespace CopperMod.Amiga
                         ((ulong)extension1 << 32) |
                         immediate))),
                 6 => unchecked((sbyte)(byte)immediate),
-                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU immediate format {format}.")
+                _ => throw new M68kEmulationException($"Unsupported MC68040 FPU immediate format {format}.")
             };
         }
 
@@ -272,7 +272,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class M68040MmuState
+    public sealed class M68040MmuState
     {
         private const uint TranslationEnable = 0x8000_0000;
         private readonly Dictionary<ulong, uint> _atc = [];
@@ -362,7 +362,7 @@ namespace CopperMod.Amiga
 
         public bool TryTranslate(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             bool supervisor,
             Func<uint, uint> readPhysicalLong,
@@ -402,7 +402,7 @@ namespace CopperMod.Amiga
             {
                 descriptor = readPhysicalLong(descriptorAddress);
             }
-            catch (Exception ex) when (ex is AmigaEmulationException or IndexOutOfRangeException)
+            catch (Exception ex) when (ex is M68kEmulationException or IndexOutOfRangeException)
             {
                 return Fault(logicalAddress, accessKind, write, supervisor, 0x0000_0002, out fault);
             }
@@ -424,7 +424,7 @@ namespace CopperMod.Amiga
 
         public void Probe(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             bool supervisor,
             Func<uint, uint> readPhysicalLong)
@@ -434,7 +434,7 @@ namespace CopperMod.Amiga
 
         private bool TryAcceptPhysical(
             uint candidate,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             out uint physicalAddress,
             out M68040MmuFault fault)
@@ -446,13 +446,20 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (accessKind != M68kBusAccessKind.CpuInstructionFetch)
+            {
+                physicalAddress = candidate & 0x00FF_FFFFu;
+                fault = default;
+                return true;
+            }
+
             physicalAddress = 0;
             return Fault(candidate, accessKind, write, supervisor: true, 0x0000_0010, out fault);
         }
 
         private bool Fault(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             bool supervisor,
             uint status,
@@ -463,9 +470,9 @@ namespace CopperMod.Amiga
             return false;
         }
 
-        private bool MatchesTransparent(uint address, AmigaBusAccessKind accessKind, bool write, bool supervisor)
+        private bool MatchesTransparent(uint address, M68kBusAccessKind accessKind, bool write, bool supervisor)
         {
-            var instruction = accessKind == AmigaBusAccessKind.CpuInstructionFetch;
+            var instruction = accessKind == M68kBusAccessKind.CpuInstructionFetch;
             return MatchesTransparentRegister(address, instruction ? InstructionTransparentTranslation0 : DataTransparentTranslation0, write, supervisor) ||
                 MatchesTransparentRegister(address, instruction ? InstructionTransparentTranslation1 : DataTransparentTranslation1, write, supervisor);
         }
@@ -499,20 +506,20 @@ namespace CopperMod.Amiga
             return (addressByte & ~maskByte) == (baseByte & ~maskByte);
         }
 
-        private static ulong CreateAtcKey(uint page, AmigaBusAccessKind accessKind, bool supervisor)
+        private static ulong CreateAtcKey(uint page, M68kBusAccessKind accessKind, bool supervisor)
             => ((ulong)page << 8) |
-                ((ulong)(accessKind == AmigaBusAccessKind.CpuInstructionFetch ? 1u : 0u) << 1) |
+                ((ulong)(accessKind == M68kBusAccessKind.CpuInstructionFetch ? 1u : 0u) << 1) |
                 (supervisor ? 1u : 0u);
     }
 
-    internal readonly record struct M68040MmuFault(
+    public readonly record struct M68040MmuFault(
         uint LogicalAddress,
-        AmigaBusAccessKind AccessKind,
+        M68kBusAccessKind AccessKind,
         bool Write,
         uint Status,
         uint? StackedProgramCounter = null);
 
-    internal sealed class UnsupportedM68040InstructionException : AmigaEmulationException
+    public sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
         public UnsupportedM68040InstructionException(
             ushort opcode,
@@ -536,7 +543,7 @@ namespace CopperMod.Amiga
         public Exception? OriginalException { get; }
     }
 
-    internal sealed class M68040MmuFaultException : AmigaEmulationException
+    public sealed class M68040MmuFaultException : M68kEmulationException
     {
         public M68040MmuFaultException(M68040MmuFault fault)
             : base($"MC68040 MMU fault at logical address 0x{fault.LogicalAddress:X8}.")
@@ -547,37 +554,37 @@ namespace CopperMod.Amiga
         public M68040MmuFault Fault { get; }
     }
 
-    internal sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
+    public sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
     {
         private readonly IM68kBus _physicalBus;
         private readonly IM68kCodeReader? _codeReader;
-        private readonly IAmigaCpuPhysicalAddressMap? _physicalAddressMap;
+        private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly M68kCpuState _state;
 
         public M68040LogicalBus(IM68kBus physicalBus, M68kCpuState state)
         {
             _physicalBus = physicalBus ?? throw new ArgumentNullException(nameof(physicalBus));
             _codeReader = physicalBus as IM68kCodeReader;
-            _physicalAddressMap = physicalBus as IAmigaCpuPhysicalAddressMap;
+            _physicalAddressMap = physicalBus as IM68kPhysicalAddressMap;
             _state = state ?? throw new ArgumentNullException(nameof(state));
         }
 
-        public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+        public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadByte(Translate(address, accessKind, write: false, byteCount: 1), ref cycle, accessKind);
 
-        public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+        public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadWord(Translate(address, accessKind, write: false, byteCount: 2), ref cycle, accessKind);
 
-        public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+        public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadLong(Translate(address, accessKind, write: false, byteCount: 4), ref cycle, accessKind);
 
-        public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
+        public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteByte(Translate(address, accessKind, write: true, byteCount: 1), value, ref cycle, accessKind);
 
-        public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
+        public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteWord(Translate(address, accessKind, write: true, byteCount: 2), value, ref cycle, accessKind);
 
-        public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
+        public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4), value, ref cycle, accessKind);
 
         public bool HasHostTrapStub(uint address)
@@ -585,7 +592,7 @@ namespace CopperMod.Amiga
             try
             {
                 return _physicalBus.HasHostTrapStub(
-                    Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2));
+                    Translate(address, M68kBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2));
             }
             catch (M68040MmuFaultException)
             {
@@ -597,7 +604,7 @@ namespace CopperMod.Amiga
         {
             var physicalPc = Translate(
                 instructionProgramCounter,
-                AmigaBusAccessKind.CpuInstructionFetch,
+                M68kBusAccessKind.CpuInstructionFetch,
                 write: false,
                 byteCount: 2);
             return _physicalBus.TryInvokeHostTrap(physicalPc, trapId, state);
@@ -608,89 +615,83 @@ namespace CopperMod.Amiga
 
         public ushort ReadHostWord(uint address)
         {
-            var physical = Translate(address, AmigaBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2);
+            var physical = Translate(address, M68kBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2);
             if (_codeReader != null)
             {
                 return _codeReader.ReadHostWord(physical);
             }
 
             var cycle = _state.Cycles;
-            return _physicalBus.ReadWord(physical, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+            return _physicalBus.ReadWord(physical, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
         }
 
-        public bool TryReadFastByte(uint address, AmigaBusAccessKind accessKind, out byte value)
+        public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 1);
-            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
             {
-                value = amigaBus.ReadHostByte(physical);
-                return true;
+                return fastBus.TryReadFastByte(physical, accessKind, out value);
             }
 
             value = 0;
             return false;
         }
 
-        public bool TryReadFastWord(uint address, AmigaBusAccessKind accessKind, out ushort value)
+        public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 2);
-            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
             {
-                value = amigaBus.ReadHostWord(physical);
-                return true;
+                return fastBus.TryReadFastWord(physical, accessKind, out value);
             }
 
             value = 0;
             return false;
         }
 
-        public bool TryReadFastLong(uint address, AmigaBusAccessKind accessKind, out uint value)
+        public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 4);
-            if (_physicalBus is AmigaBus amigaBus && CanFastReadPhysical(physical))
+            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
             {
-                value = amigaBus.ReadHostLong(physical);
-                return true;
+                return fastBus.TryReadFastLong(physical, accessKind, out value);
             }
 
             value = 0;
             return false;
         }
 
-        public bool TryWriteFastByte(uint address, byte value, AmigaBusAccessKind accessKind)
+        public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 1);
-            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            amigaBus.WriteHostByte(physical, value);
-            return true;
+            return fastBus.TryWriteFastByte(physical, value, accessKind);
         }
 
-        public bool TryWriteFastWord(uint address, ushort value, AmigaBusAccessKind accessKind)
+        public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 2);
-            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            amigaBus.WriteHostWord(physical, value);
-            return true;
+            return fastBus.TryWriteFastWord(physical, value, accessKind);
         }
 
-        public bool TryWriteFastLong(uint address, uint value, AmigaBusAccessKind accessKind)
+        public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 4);
-            if (_physicalBus is not AmigaBus amigaBus || !CanFastWritePhysical(physical))
+            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            amigaBus.WriteHostLong(physical, value);
-            return true;
+            return fastBus.TryWriteFastLong(physical, value, accessKind);
         }
 
         private static bool CanFastReadPhysical(uint physical)
@@ -706,7 +707,7 @@ namespace CopperMod.Amiga
                 M68020MemoryTarget.ExpansionRam or
                 M68020MemoryTarget.RealFastRam;
 
-        private uint Translate(uint address, AmigaBusAccessKind accessKind, bool write, int byteCount)
+        private uint Translate(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
         {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
             if (_state.M68040Mmu.TryTranslate(
@@ -734,13 +735,13 @@ namespace CopperMod.Amiga
                 WithStackedProgramCounter(fault, address, accessKind));
         }
 
-        private bool IsPhysicalAddressMapped(uint physicalAddress, int byteCount, AmigaBusAccessKind accessKind)
+        private bool IsPhysicalAddressMapped(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
             => _physicalAddressMap == null ||
                 _physicalAddressMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
 
         private static M68040MmuFault CreatePhysicalAddressFault(
             uint logicalAddress,
-            AmigaBusAccessKind accessKind,
+            M68kBusAccessKind accessKind,
             bool write,
             bool supervisor)
         {
@@ -753,9 +754,9 @@ namespace CopperMod.Amiga
         private M68040MmuFault WithStackedProgramCounter(
             M68040MmuFault fault,
             uint logicalAddress,
-            AmigaBusAccessKind accessKind)
+            M68kBusAccessKind accessKind)
         {
-            var stackedProgramCounter = accessKind == AmigaBusAccessKind.CpuInstructionFetch
+            var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch
                 ? logicalAddress
                 : _state.LastInstructionProgramCounter;
             return fault with { StackedProgramCounter = stackedProgramCounter };
@@ -767,14 +768,14 @@ namespace CopperMod.Amiga
             _state.M68040Mmu.BypassTranslation = true;
             try
             {
-                if (!IsPhysicalAddressMapped(physicalAddress, 4, AmigaBusAccessKind.CpuDataRead))
+                if (!IsPhysicalAddressMapped(physicalAddress, 4, M68kBusAccessKind.CpuDataRead))
                 {
-                    throw new AmigaEmulationException(
+                    throw new M68kEmulationException(
                         $"MC68040 MMU table read from unmapped physical address 0x{physicalAddress:X8}.");
                 }
 
                 var cycle = _state.Cycles;
-                return _physicalBus.ReadLong(physicalAddress, ref cycle, AmigaBusAccessKind.CpuDataRead);
+                return _physicalBus.ReadLong(physicalAddress, ref cycle, M68kBusAccessKind.CpuDataRead);
             }
             finally
             {
@@ -783,7 +784,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal readonly struct M68040ApproximateFallbackCheckpoint
+    public readonly struct M68040ApproximateFallbackCheckpoint
     {
         private readonly uint _d0;
         private readonly uint _d1;
@@ -898,7 +899,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class M68040Interpreter : M68020Interpreter
+    public sealed class M68040Interpreter : M68020Interpreter
     {
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;
@@ -1111,7 +1112,7 @@ namespace CopperMod.Amiga
                 var address = State.A[opcode & 7];
                 State.M68040Mmu.Probe(
                     address,
-                    AmigaBusAccessKind.CpuDataRead,
+                    M68kBusAccessKind.CpuDataRead,
                     write,
                     (State.StatusRegister & M68kCpuState.Supervisor) != 0,
                     ReadPhysicalLong);
@@ -1513,7 +1514,7 @@ namespace CopperMod.Amiga
             {
                 State.M68040Mmu.Status = fault.Status;
                 var stackedProgramCounter = fault.StackedProgramCounter ??
-                    (fault.AccessKind == AmigaBusAccessKind.CpuInstructionFetch
+                    (fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch
                         ? fault.LogicalAddress
                         : State.LastInstructionProgramCounter);
                 RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
@@ -1527,7 +1528,7 @@ namespace CopperMod.Amiga
         private uint ReadPhysicalLong(uint physicalAddress)
         {
             var cycle = State.Cycles;
-            return _physicalBus.ReadLong(physicalAddress, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            return _physicalBus.ReadLong(physicalAddress, ref cycle, M68kBusAccessKind.CpuDataRead);
         }
     }
 }

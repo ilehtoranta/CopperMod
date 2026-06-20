@@ -69,11 +69,13 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void SerialDataReadReportsIdleTransmitEmptyAndReceiveBits()
+	public void SerialDataReadReportsIdleTransmitEmptyWithoutReceiveBufferData()
 	{
 		var bus = CreatePaulaComponentBus();
 
-		Assert.Equal(0x30FF, bus.ReadWord(0x00DFF018));
+		var serdatr = bus.ReadWord(0x00DFF018);
+		Assert.Equal(0x3000, serdatr);
+		Assert.NotEqual(0x007F, serdatr & 0x007F);
 	}
 
 	[Fact]

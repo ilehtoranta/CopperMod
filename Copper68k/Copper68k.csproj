@@ -4,17 +4,19 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Amiga</PackageId>
-    <Title>CopperMod.Amiga</Title>
+    <NoWarn>1701;1702;NU1900;1591</NoWarn>
+    <PackageId>Copper68k</PackageId>
+    <Title>Copper68k</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Internal Amiga hardware emulation core layered on Copper68k for CUST playback and emulator hosts.</Description>
+    <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;paula;cia;m68k</PackageTags>
+    <PackageTags>emulation;m68000;m68k;68000;68020;68030;68040;cpu</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>copper68k-icon.png</PackageIcon>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
@@ -22,20 +24,20 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
+    <NoWarn>$(NoWarn);1701;1702;NU1900;1591</NoWarn>
     <Optimize>true</Optimize>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
+    <NoWarn>$(NoWarn);1701;1702;NU1900;1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="copper68k-icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
     <ProjectReference Include="..\CopperMod.PerformanceAnalyzers\CopperMod.PerformanceAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

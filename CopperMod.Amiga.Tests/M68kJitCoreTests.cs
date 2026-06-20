@@ -14,7 +14,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = new AmigaBus();
 
-		var cpu = M68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
 
 		Assert.IsType<M68kJitCore>(cpu);
 	}
@@ -22,7 +22,7 @@ public sealed class M68kJitCoreTests
 	[Fact]
 	public void FactoryCreatesM68040JitBackendWithM68040State()
 	{
-		using var cpu = M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, new AmigaBus());
+		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, new AmigaBus());
 
 		var jit = Assert.IsType<M68kJitCore>(cpu);
 		Assert.True(jit.State.M68020StackModeEnabled);
@@ -35,7 +35,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateRealFastCodeBus();
 		WriteWords(bus, RealFastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		var boundary = new PureBatchBoundary();
 
@@ -66,7 +66,7 @@ public sealed class M68kJitCoreTests
 		rom[2] = 0x60; // BRA.S loop
 		rom[3] = 0xFC;
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		var boundary = new PureBatchBoundary();
 
@@ -99,7 +99,7 @@ public sealed class M68kJitCoreTests
 		}
 
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		var boundary = new PureBatchBoundary();
 
@@ -126,7 +126,7 @@ public sealed class M68kJitCoreTests
 			0x60FE);                // BRA.S self
 
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		var boundary = new PureBatchBoundary();
 
@@ -153,7 +153,7 @@ public sealed class M68kJitCoreTests
 			0x60FE);
 
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		cpu.State.D[0] = 0xFFFF;
 
@@ -188,7 +188,7 @@ public sealed class M68kJitCoreTests
 		WriteLong(rom, 0x10C, 0x0000_0003);
 
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		cpu.State.A[0] = romBase + 0x100;
 		cpu.State.D[1] = 3;
@@ -223,7 +223,7 @@ public sealed class M68kJitCoreTests
 			0x60FE);
 
 		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
 		cpu.State.A[0] = romBase;
 		cpu.State.D[1] = 0xFFFF;
@@ -256,7 +256,7 @@ public sealed class M68kJitCoreTests
 			hostHits++;
 			state.D[0] = 0x1234_5678;
 		});
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 
 		cpu.ExecuteInstruction();
@@ -289,7 +289,7 @@ public sealed class M68kJitCoreTests
 			0x60F6); // BRA.S start
 		bus.WriteLong(sourceAddress, sourceValue);
 		bus.WriteLong(destinationAddress, 0);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		cpu.State.A[3] = addressBase;
 		EnableM68040InstructionCache(cpu);
@@ -312,7 +312,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(bus, RealFastCodeBase, 0x007C, 0x2000); // ORI.W #$2000,SR
 		WriteWords(bus, handler, 0x4E71); // NOP
 		bus.WriteLong(8u * 4u, handler);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, supervisorStack);
 		EnableM68040InstructionCache(cpu);
 		var boundary = new PureBatchBoundary();
@@ -360,7 +360,7 @@ public sealed class M68kJitCoreTests
 		bus.WriteLong(4, execBase);
 		bus.WriteLong(execBase + 0x114, task);
 		bus.WriteLong(task + 0x32, trapCode);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, stack);
 		EnableM68040InstructionCache(cpu);
 		var boundary = new PureBatchBoundary();
@@ -394,7 +394,7 @@ public sealed class M68kJitCoreTests
 		var bus = CreateRealFastCodeBus();
 		WriteWords(bus, RealFastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
 		WriteWords(bus, flushCode, 0xF500, 0x0000); // PFLUSH
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		EnableM68040InstructionCache(cpu);
 		var boundary = new PureBatchBoundary();
@@ -433,7 +433,7 @@ public sealed class M68kJitCoreTests
 		bus.WriteLong(physicalData, 0xCAFE_BABEu);
 		bus.WriteLong(root + 4, physicalCode | 1u);
 		bus.WriteLong(root + 12, physicalData | 1u);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalCode, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
@@ -462,7 +462,7 @@ public sealed class M68kJitCoreTests
 			state.ProgramCounter = logicalTrap + 8;
 		});
 		bus.WriteLong(root + 4, physicalTrap | 1u);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalTrap, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
@@ -491,7 +491,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(bus, handler, 0x4E71); // NOP
 		bus.WriteLong(0x0000_3000, 0x1234_5678u);
 		bus.WriteLong(2 * 4, handler);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
@@ -520,7 +520,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = new AmigaBus(chipRamSize: 512 * 1024);
 		bus.WriteLong(2 * 4, 0x0000_2400);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(0x0010_0004, 0x8000);
 		EnableM68040InstructionCache(cpu);
 
@@ -542,7 +542,7 @@ public sealed class M68kJitCoreTests
 			0xF200, 0x4080, // FMOVE.L D0,FP1
 			0xF200, 0x00A2, // FADD.X FP0,FP1
 			0x60F6); // BRA.S first FMOVE
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.D[0] = 3;
@@ -681,7 +681,7 @@ public sealed class M68kJitCoreTests
 		bus.WriteLong(physicalData, unchecked((uint)BitConverter.SingleToInt32Bits(6.25f)));
 		bus.WriteLong(root + 4, physicalCode | 1u);
 		bus.WriteLong(root + 12, physicalData | 1u);
-		var cpu = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalCode, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
@@ -4577,7 +4577,7 @@ public sealed class M68kJitCoreTests
 		var interpreterBus = CreateRealFastCodeBus();
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
+		var jit = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
 		var interpreter = new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -4631,7 +4631,7 @@ public sealed class M68kJitCoreTests
 		var interpreterBus = CreateRealFastCodeBus();
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
+		var jit = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
 		var interpreter = new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -5127,7 +5127,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(jitBus, RealFastCodeBase, words);
 		initializeBus?.Invoke(interpreterBus, jitBus);
 		var interpreter = new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
-		var jit = (M68kJitCore)M68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
+		var jit = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.ResetStackPointers(0x4000, 0, supervisorMode: true);

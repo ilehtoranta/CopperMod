@@ -1,8 +1,8 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal enum M68kJitOperation
+    public enum M68kJitOperation
     {
         Nop,
         Moveq,
@@ -64,7 +64,7 @@ namespace CopperMod.Amiga
         M68040Fallback
     }
 
-    internal enum M68kJitEaKind
+    public enum M68kJitEaKind
     {
         None,
         DataRegister,
@@ -81,7 +81,7 @@ namespace CopperMod.Amiga
         Immediate
     }
 
-    internal enum M68kJitBailoutReason
+    public enum M68kJitBailoutReason
     {
         None,
         UnsupportedOpcode,
@@ -94,7 +94,7 @@ namespace CopperMod.Amiga
         SelfModifiedCode
     }
 
-    internal readonly struct M68kDecodedEa
+    public readonly struct M68kDecodedEa
     {
         public M68kDecodedEa(
             M68kJitEaKind kind,
@@ -149,7 +149,7 @@ namespace CopperMod.Amiga
                 M68kJitEaKind.AbsoluteLong;
     }
 
-    internal readonly struct M68kDecodedInstruction
+    public readonly struct M68kDecodedInstruction
     {
         public M68kDecodedInstruction(
             uint programCounter,
@@ -238,14 +238,14 @@ namespace CopperMod.Amiga
         public bool StopsTrace { get; }
     }
 
-    internal interface IM68kCodeReader
+    public interface IM68kCodeReader
     {
         bool HasHostTrapStub(uint address);
 
         ushort ReadHostWord(uint address);
     }
 
-    internal sealed class M68kCodeReadException : Exception
+    public sealed class M68kCodeReadException : Exception
     {
         public static M68kCodeReadException Instance { get; } = new M68kCodeReadException();
 
@@ -255,7 +255,7 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal static class M68kDecoder
+    public static class M68kDecoder
     {
         [Flags]
         private enum EaAllowed

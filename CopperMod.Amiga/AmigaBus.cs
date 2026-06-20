@@ -32,7 +32,7 @@ namespace CopperMod.Amiga
         DiskPassiveInput
     }
 
-    internal sealed class AmigaBus : IM68kBus, IM68kCodeReader, IAmigaCpuPhysicalAddressMap
+    internal sealed class AmigaBus : IM68kBus, IM68kCodeReader, IM68kPhysicalAddressMap, IM68kFastMemoryBus
     {
         private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
@@ -40,6 +40,10 @@ namespace CopperMod.Amiga
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
+        private const byte CiaAPortAResetLatch = 0xFC;
+        private const byte CiaAPortAResetDataDirection = 0x03;
+        private const byte CiaAPortAOverlayBit = 0x01;
+        private const byte CiaAPortAAudioFilterBit = 0x02;
         private readonly byte[] _chipRam;
         private readonly byte[] _expansionRam;
         private readonly byte[] _realFastRam;
@@ -161,7 +165,7 @@ namespace CopperMod.Amiga
             _nextVerticalBlankCycle = _palFrameCycles;
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
-            CiaA.Reset(0x02);
+            ResetCiaAForHardwareReset();
             CiaB.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             AudioDmaMinimumPeriod = audioDmaMinimumPeriod;
@@ -301,10 +305,9 @@ namespace CopperMod.Amiga
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             _realTimeClock?.ResetControlRegisters();
-            CiaA.Reset(0x02);
+            ResetCiaAForHardwareReset();
             CiaB.Reset();
             Keyboard.Reset();
-            AudioFilterEnabled = false;
             foreach (var gamePort in _gamePorts)
             {
                 gamePort.Reset();
@@ -405,8 +408,10 @@ namespace CopperMod.Amiga
             _busAccesses.Clear();
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
-            _romOverlayEnabled = true;
-            AudioFilterEnabled = false;
+            ResetCiaAForHardwareReset();
+            CiaB.Reset();
+            Keyboard.Reset();
+            UpdateCiaAPortAOutputSideEffects();
             Paula.Reset();
             Disk.Reset();
             CopperHdf.Reset();
@@ -455,6 +460,77 @@ namespace CopperMod.Amiga
 
             return value;
         }
+
+        byte IM68kBus.ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => ReadByte(address, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        ushort IM68kBus.ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => ReadWord(address, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        uint IM68kBus.ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => ReadLong(address, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        void IM68kBus.WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+            => WriteByte(address, value, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        void IM68kBus.WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+            => WriteWord(address, value, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        void IM68kBus.WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+            => WriteLong(address, value, ref cycle, ToAmigaBusAccessKind(accessKind));
+
+        bool IM68kPhysicalAddressMap.IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
+            => IsCpuPhysicalAddressMapped(address, byteCount, ToAmigaBusAccessKind(accessKind));
+
+        bool IM68kFastMemoryBus.TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
+        {
+            _ = accessKind;
+            value = ReadHostByte(address);
+            return true;
+        }
+
+        bool IM68kFastMemoryBus.TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
+        {
+            _ = accessKind;
+            value = ReadHostWord(address);
+            return true;
+        }
+
+        bool IM68kFastMemoryBus.TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
+        {
+            _ = accessKind;
+            value = ReadHostLong(address);
+            return true;
+        }
+
+        bool IM68kFastMemoryBus.TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
+        {
+            _ = accessKind;
+            WriteHostByte(address, value);
+            return true;
+        }
+
+        bool IM68kFastMemoryBus.TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
+        {
+            _ = accessKind;
+            WriteHostWord(address, value);
+            return true;
+        }
+
+        bool IM68kFastMemoryBus.TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
+        {
+            _ = accessKind;
+            WriteHostLong(address, value);
+            return true;
+        }
+
+        private static AmigaBusAccessKind ToAmigaBusAccessKind(M68kBusAccessKind accessKind)
+            => accessKind switch
+            {
+                M68kBusAccessKind.CpuInstructionFetch => AmigaBusAccessKind.CpuInstructionFetch,
+                M68kBusAccessKind.CpuDataWrite => AmigaBusAccessKind.CpuDataWrite,
+                _ => AmigaBusAccessKind.CpuDataRead
+            };
 
         public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
         {
@@ -827,15 +903,23 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (address > 0x00FF_FFFFu ||
-                (uint)(byteCount - 1) > 0x00FF_FFFFu - address)
+            if ((StrictCpuPhysicalDataMapping ||
+                    accessKind == AmigaBusAccessKind.CpuInstructionFetch) &&
+                (address > 0x00FF_FFFFu ||
+                    (uint)(byteCount - 1) > 0x00FF_FFFFu - address))
+            {
+                return false;
+            }
+
+            if (byteCount > 0x0100_0000)
             {
                 return false;
             }
 
             for (var offset = 0; offset < byteCount; offset++)
             {
-                if (!IsCpuPhysicalByteMapped(address + (uint)offset, accessKind))
+                var byteAddress = NormalizeAddress(address + (uint)offset);
+                if (!IsCpuPhysicalByteMapped(byteAddress, accessKind))
                 {
                     return false;
                 }
@@ -2878,8 +2962,12 @@ namespace CopperMod.Amiga
                 cia.WriteRegister(ciaRegister, value, grantedCycle, _pendingCiaInterrupts);
                 if (cia == CiaA && ciaRegister == 0)
                 {
-                    AudioFilterEnabled = (value & 0x02) == 0;
-                    _romOverlayEnabled = (value & 0x01) == 0;
+                    UpdateCiaAPortAOutputSideEffects();
+                }
+
+                if (cia == CiaA && ciaRegister == 2)
+                {
+                    UpdateCiaAPortAOutputSideEffects();
                 }
 
                 if (cia == CiaB && ciaRegister is 1 or 3)
@@ -3304,6 +3392,19 @@ namespace CopperMod.Amiga
 
             offset = 0;
             return false;
+        }
+
+        private void ResetCiaAForHardwareReset()
+        {
+            CiaA.Reset(CiaAPortAResetLatch, CiaAPortAResetDataDirection);
+            AudioFilterEnabled = (CiaA.ReadPortRegister(0, 0xFF) & CiaAPortAAudioFilterBit) == 0;
+        }
+
+        private void UpdateCiaAPortAOutputSideEffects()
+        {
+            var portA = CiaA.ReadPortRegister(0, 0xFF);
+            AudioFilterEnabled = (portA & CiaAPortAAudioFilterBit) == 0;
+            _romOverlayEnabled = (portA & CiaAPortAOverlayBit) != 0;
         }
 
         private bool IsRomOverlayAddress(uint address)

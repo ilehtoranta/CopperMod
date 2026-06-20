@@ -481,7 +481,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x4210); // CLR.B (A0)
 		var cycle = 0L;
-		bus.WriteByte(0x0000_0400, 0xFF, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_0400, 0xFF, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0000_0400;
@@ -494,7 +494,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x0000_0400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x0000_0400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -511,7 +511,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x422E, 0x0245); // CLR.B $0245(A6)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E6C3, 0xFF, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E6C3, 0xFF, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -524,7 +524,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x0006_E6C3, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x0006_E6C3, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -627,7 +627,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0xFF, bus.ReadByte(0x00BF_E200, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0xFF, bus.ReadByte(0x00BF_E200, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -656,7 +656,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x24, bus.ReadByte(0x0000_0400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x24, bus.ReadByte(0x0000_0400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -883,7 +883,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0039, 0x00F8, 0x00BF, 0xD100); // ORI.B #$F8,$BFD100.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_D100, 0x01, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_D100, 0x01, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -895,7 +895,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0xF9, bus.ReadByte(0x00BF_D100, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0xF9, bus.ReadByte(0x00BF_D100, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -912,7 +912,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0239, 0x0087, 0x00BF, 0xD100); // ANDI.B #$87,$BFD100.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_D100, 0x78, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_D100, 0x78, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -924,7 +924,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x00BF_D100, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BF_D100, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -1144,7 +1144,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0, bus.ReadByte(0x0006_E578, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0, bus.ReadByte(0x0006_E578, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -1173,7 +1173,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0, bus.ReadByte(0x0000_2010, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0, bus.ReadByte(0x0000_2010, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -1758,7 +1758,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x1E18); // MOVE.B (A0)+,D7
 		var cycle = 0L;
-		bus.WriteByte(0x0000_2000, 0x80, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_2000, 0x80, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0000_2000;
@@ -1789,7 +1789,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x1010); // MOVE.B (A0),D0
 		var cycle = 0L;
-		bus.WriteByte(0x0000_2000, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_2000, 0x00, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0000_2000;
@@ -1820,7 +1820,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x1C2E, 0x0100); // MOVE.B $0100(A6),D6
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E57E, 0x80, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E57E, 0x80, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -1850,7 +1850,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x1230, 0x0000); // MOVE.B 0(A0,D0.W),D1
 		var cycle = 0L;
-		bus.WriteByte(0x00F9_0AFA, 0x7F, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00F9_0AFA, 0x7F, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x00F9_0AF6;
@@ -1910,7 +1910,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x1239, 0x00BF, 0xE001); // MOVE.B $BFE001.L,D1
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_E001, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_E001, 0x00, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.D[1] = 0x1234_56FF;
@@ -2149,7 +2149,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0xAA, bus.ReadByte(0x0000_0400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0xAA, bus.ReadByte(0x0000_0400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2178,7 +2178,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x80, bus.ReadByte(0x0000_0400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x80, bus.ReadByte(0x0000_0400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2207,7 +2207,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x00, bus.ReadByte(0x0000_0401, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x0000_0401, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2238,7 +2238,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x30, bus.ReadByte(0x0000_2010, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x30, bus.ReadByte(0x0000_2010, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2269,7 +2269,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x8F, bus.ReadByte(0x0000_3FFF, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x8F, bus.ReadByte(0x0000_3FFF, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(0x0000_3FFFu, cpu.State.A[0]);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -2300,7 +2300,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x7F, bus.ReadByte(0x0000_0400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x7F, bus.ReadByte(0x0000_0400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(0x0000_0401u, cpu.State.A[0]);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -2330,7 +2330,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x00, bus.ReadByte(0x0000_03FF, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x0000_03FF, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(0x0000_03FFu, cpu.State.A[0]);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -2360,7 +2360,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x80, bus.ReadByte(0x0000_03FE, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x80, bus.ReadByte(0x0000_03FE, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(0x0000_03FEu, cpu.State.A[7]);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
@@ -2378,7 +2378,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x12D8); // MOVE.B (A0)+,(A1)+
 		var cycle = 0L;
-		bus.WriteByte(0x0000_2000, 0x80, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_2000, 0x80, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0000_2000;
@@ -2392,7 +2392,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0L;
-		Assert.Equal(0x80, bus.ReadByte(0x0000_2400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x80, bus.ReadByte(0x0000_2400, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.Equal(0x0000_2001u, cpu.State.A[0]);
 		Assert.Equal(0x0000_2401u, cpu.State.A[1]);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
@@ -2423,7 +2423,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x80, bus.ReadByte(0x00DF_F180, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x80, bus.ReadByte(0x00DF_F180, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2451,7 +2451,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		var cycle = 0L;
-		Assert.Equal(0x81, bus.ReadByte(0x00DF_F181, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x81, bus.ReadByte(0x00DF_F181, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -2602,7 +2602,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0C10, 0x0002); // CMPI.B #2,(A0)
 		var cycle = 0L;
-		bus.WriteByte(0x00F9_0503, 2, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00F9_0503, 2, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x00F9_0503;
@@ -2630,7 +2630,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0C2E, 0x0001, 0x008A); // CMPI.B #1,$008A(A6)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E508, 1, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E508, 1, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -2987,7 +2987,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0xBE10); // CMP.B (A0),D7
 		var cycle = 0L;
-		bus.WriteByte(0x0000_0400, 0x20, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_0400, 0x20, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0000_0400;
@@ -3015,7 +3015,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0xB02E, 0x0079); // CMP.B $0079(A6),D0
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E4F7, 3, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E4F7, 3, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.D[0] = 0x0000_0003;
@@ -3044,7 +3044,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0xB039, 0x0000, 0x0400); // CMP.B $00000400.L,D0
 		var cycle = 0L;
-		bus.WriteByte(0x0000_0400, 0x0A, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0000_0400, 0x0A, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.D[0] = 0x1234_560A;
@@ -3154,7 +3154,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x042E, 0x0008, 0x0245); // SUBI.B #8,$0245(A6)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E6C3, 0x03, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E6C3, 0x03, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -3165,7 +3165,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0xFB, bus.ReadByte(0x0006_E6C3, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0xFB, bus.ReadByte(0x0006_E6C3, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -3493,7 +3493,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0610, 0x0030); // ADDI.B #$30,(A0)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E4C2, 0x03, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E4C2, 0x03, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[0] = 0x0006_E4C2;
@@ -3507,7 +3507,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x33, bus.ReadByte(0x0006_E4C2, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x33, bus.ReadByte(0x0006_E4C2, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -3524,7 +3524,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x062E, 0x0001, 0x0101); // ADDI.B #1,$0101(A6)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E57F, 0xFF, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E57F, 0xFF, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -3535,7 +3535,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x0006_E57F, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x0006_E57F, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -3624,6 +3624,37 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
+	public void AddLongDataToAddressDisplacementAddsToMemoryAndSetsFlags()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xD7A9, 0x0004); // ADD.L D3,$0004(A1)
+		bus.WriteLong(0x0000_2004, 0x0000_0030);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[1] = 0x0000_2000;
+		cpu.State.A[3] = 0xDEAD_BEEF;
+		cpu.State.D[3] = 0x0007_7328;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0007_7358u, bus.ReadLong(0x0000_2004));
+		Assert.Equal(0xDEAD_BEEFu, cpu.State.A[3]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+		Assert.Equal(13, cpu.State.NativeCycles);
+		Assert.Equal(7, cpu.State.Cycles);
+	}
+
+	[Fact]
 	public void AddaLongImmediateToAddressRegisterLeavesFlagsUnchanged()
 	{
 		var bus = new ZeroWaitCodeBus();
@@ -3684,7 +3715,7 @@ public sealed class M68020InterpreterTests
 	public void AddaLongAddressDisplacementToAddressRegisterLeavesFlagsUnchanged()
 	{
 		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0xD3AE, 0x0382); // ADDA.L $0382(A6),A1
+		WriteWords(bus, CodeBase, 0xD3EE, 0x0382); // ADDA.L $0382(A6),A1
 		bus.WriteLong(0x0006_E800, 0x0000_1001);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
@@ -4520,7 +4551,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0839, 0x0006, 0x00BF, 0xE001); // BTST #6,$BFE001.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_E001, 0x40, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_E001, 0x40, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -4548,7 +4579,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x0879, 0x0001, 0x00BF, 0xE001); // BCHG #1,$BFE001.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_E001, 0x02, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_E001, 0x02, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -4561,7 +4592,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x00BF_E001, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BF_E001, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -4578,7 +4609,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x08B9, 0x0006, 0x00BF, 0xEE01); // BCLR #6,$BFEE01.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_EE01, 0x40, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_EE01, 0x40, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -4591,7 +4622,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x00BF_EE01, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BF_EE01, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -4608,7 +4639,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x08F9, 0x0001, 0x00BF, 0xE001); // BSET #1,$BFE001.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_E001, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_E001, 0x00, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -4620,7 +4651,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x02, bus.ReadByte(0x00BF_E001, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x02, bus.ReadByte(0x00BF_E001, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -4637,7 +4668,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x08EE, 0x0005, 0x00FD); // BSET #5,$00FD(A6)
 		var cycle = 0L;
-		bus.WriteByte(0x0006_E57B, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x0006_E57B, 0x00, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.A[6] = 0x0006_E47E;
@@ -4650,7 +4681,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x20, bus.ReadByte(0x0006_E57B, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x20, bus.ReadByte(0x0006_E57B, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -4851,7 +4882,7 @@ public sealed class M68020InterpreterTests
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x51F9, 0x00BF, 0xEC01); // SF $BFEC01.L
 		var cycle = 0L;
-		bus.WriteByte(0x00BF_EC01, 0xAA, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteByte(0x00BF_EC01, 0xAA, ref cycle, M68kBusAccessKind.CpuDataWrite);
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
@@ -4864,7 +4895,7 @@ public sealed class M68020InterpreterTests
 		cpu.ExecuteInstruction();
 
 		cycle = 0;
-		Assert.Equal(0x00, bus.ReadByte(0x00BF_EC01, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BF_EC01, ref cycle, M68kBusAccessKind.CpuDataRead));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -5288,7 +5319,7 @@ public sealed class M68020InterpreterTests
 	private static byte ReadByte(ZeroWaitCodeBus bus, uint address)
 	{
 		long cycle = 0;
-		return bus.ReadByte(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		return bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
 	}
 
 	private sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
@@ -5299,16 +5330,16 @@ public sealed class M68020InterpreterTests
 
 		public int WriteMachineDelay { get; init; }
 
-		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = cycle;
 			_ = accessKind;
 			return _memory[Normalize(address)];
 		}
 
-		public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			if (accessKind == AmigaBusAccessKind.CpuInstructionFetch)
+			if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
 			{
 				InstructionFetchWords++;
 			}
@@ -5316,28 +5347,28 @@ public sealed class M68020InterpreterTests
 			return ReadWord(address);
 		}
 
-		public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = cycle;
 			_ = accessKind;
 			return ReadLong(address);
 		}
 
-		public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = accessKind;
 			_memory[Normalize(address)] = value;
 			cycle += WriteMachineDelay;
 		}
 
-		public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = accessKind;
 			WriteWord(address, value);
 			cycle += WriteMachineDelay;
 		}
 
-		public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = accessKind;
 			WriteLong(address, value);

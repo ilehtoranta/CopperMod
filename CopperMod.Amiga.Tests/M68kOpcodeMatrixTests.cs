@@ -144,23 +144,23 @@ public sealed class M68kOpcodeMatrixTests
 	{
 		public byte[] Memory { get; } = new byte[0x0100_0000];
 
-		public List<(uint Address, AmigaBusAccessKind Kind, AmigaBusAccessSize Size, bool IsWrite)> Accesses { get; } = new();
+		public List<(uint Address, M68kBusAccessKind Kind, AmigaBusAccessSize Size, bool IsWrite)> Accesses { get; } = new();
 
 		public int ExternalResetCount { get; private set; }
 
-		public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, false));
 			return Memory[address];
 		}
 
-		public ushort ReadWord(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, false));
 			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
 		}
 
-		public uint ReadLong(uint address, ref long cycle, AmigaBusAccessKind accessKind)
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, false));
 			return ((uint)Memory[address] << 24) |
@@ -169,19 +169,19 @@ public sealed class M68kOpcodeMatrixTests
 				Memory[address + 3];
 		}
 
-		public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, true));
 			Memory[address] = value;
 		}
 
-		public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, true));
 			WriteWordRaw(address, value);
 		}
 
-		public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, true));
 			WriteLongRaw(address, value);

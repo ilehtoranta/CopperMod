@@ -1,9 +1,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    public class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         protected const ushort Format0ExceptionFrame = 0x0000;
@@ -821,6 +821,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((opcode & 0xF1F8) == 0xD1A8)
+            {
+                ExecuteAddLongDataToAddressDisplacement(opcode);
+                return true;
+            }
+
             if ((opcode & 0xF1FF) == 0xD1FC)
             {
                 ExecuteAddaLongImmediateToAddress(opcode);
@@ -833,7 +839,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if ((opcode & 0xF1F8) == 0xD1A8)
+            if ((opcode & 0xF1F8) == 0xD1E8)
             {
                 ExecuteAddaLongAddressDisplacementToAddress(opcode);
                 return true;
@@ -2822,6 +2828,22 @@ namespace CopperMod.Amiga
             CompleteTiming(M68kInstructionTimingKey.AddWordDataToAddressDisplacement);
         }
 
+        private void ExecuteAddLongDataToAddressDisplacement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var sourceRegister = (opcode >> 9) & 7;
+            var destinationRegister = opcode & 7;
+            var displacement = unchecked((int)(short)FetchWord());
+            var address = unchecked((uint)(State.A[destinationRegister] + displacement));
+            var destination = ReadLong(address);
+            var source = State.D[sourceRegister];
+            var result = destination + source;
+            WriteLong(address, result);
+            SetAddFlags(destination, source, result, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.AddLongDataToAddressDisplacement);
+        }
+
         private void ExecuteAddaLongImmediateToAddress(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -4117,7 +4139,7 @@ namespace CopperMod.Amiga
             var address = State.ProgramCounter;
             var value = _bus is IM68kCodeReader codeReader && _timing.ProbeInstructionCache(address)
                 ? codeReader.ReadHostWord(address)
-                : ReadWord(address, AmigaBusAccessKind.CpuInstructionFetch);
+                : ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
             State.ProgramCounter += 2;
             return value;
         }
@@ -4129,34 +4151,34 @@ namespace CopperMod.Amiga
             return ((uint)high << 16) | low;
         }
 
-        protected byte ReadByte(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        protected byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             return _busBridge.ReadByte(address, accessKind);
         }
 
-        protected ushort ReadWord(uint address, AmigaBusAccessKind accessKind = AmigaBusAccessKind.CpuDataRead)
+        protected ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             return _busBridge.ReadWord(address, accessKind);
         }
 
         protected uint ReadLong(uint address)
         {
-            return _busBridge.ReadLong(address, AmigaBusAccessKind.CpuDataRead);
+            return _busBridge.ReadLong(address, M68kBusAccessKind.CpuDataRead);
         }
 
         protected void WriteByte(uint address, byte value)
         {
-            _busBridge.WriteByte(address, value, AmigaBusAccessKind.CpuDataWrite);
+            _busBridge.WriteByte(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void WriteWord(uint address, ushort value)
         {
-            _busBridge.WriteWord(address, value, AmigaBusAccessKind.CpuDataWrite);
+            _busBridge.WriteWord(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void WriteLong(uint address, uint value)
         {
-            _busBridge.WriteLong(address, value, AmigaBusAccessKind.CpuDataWrite);
+            _busBridge.WriteLong(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void PushWord(ushort value)

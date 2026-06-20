@@ -264,7 +264,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		if (startupOptions.CpuBackendOverride.HasValue)
 		{
-			machineOptions.WithCpu(M68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
+			machineOptions.WithCpu(AmigaM68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
 		}
 
 		if (startupOptions.HardDrives.Count != 0)
@@ -640,7 +640,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		InsertAdjacentExternalDisks(diskPath, markChanged);
 	}
 
-	private AmigaDiskImage LoadInitialBootDisk()
+	private AmigaDiskImage? LoadInitialBootDisk()
 	{
 		if (DiskPath != null)
 		{
@@ -652,9 +652,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "diagrom-blank.adf");
 		}
 
-		if (_profile.UsesKickstartRom && _initialHardDrives.Count != 0)
+		if (_profile.UsesKickstartRom)
 		{
-			return AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "copperhdf-blank-df0.adf");
+			return null;
 		}
 
 		throw new InvalidOperationException("A disk image is required to boot this profile.");
@@ -786,7 +786,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return _diskName;
 		}
 
-		return _profile.BootsWithoutDisk ? _profile.DisplayName : "insert disk image";
+		return _profile.BootsWithoutDisk || _profile.UsesKickstartRom ? _profile.DisplayName : "insert disk image";
 	}
 
 	public bool TogglePaused()
@@ -1041,7 +1041,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return;
 		}
 
-		if (DiskPath == null && !_profile.BootsWithoutDisk && _initialHardDrives.Count == 0)
+		if (DiskPath == null && !_profile.BootsWithoutDisk && !_profile.UsesKickstartRom)
 		{
 			_frameAudio.AsSpan().Clear();
 			InvalidateInterlacePresentationHistory();
@@ -1068,11 +1068,18 @@ internal sealed class CopperScreenEmulator : IDisposable
 				_initialDiskImageOverride = null;
 				if (_profile.UsesKickstartRom)
 				{
-					_boot.StartKickstartRomBoot(disk);
+					if (disk == null)
+					{
+						_boot.StartKickstartRomBoot();
+					}
+					else
+					{
+						_boot.StartKickstartRomBoot(disk);
+					}
 				}
 				else
 				{
-					_boot.StartBootFromDisk(disk);
+					_boot.StartBootFromDisk(disk ?? throw new InvalidOperationException("A disk image is required to boot this profile."));
 				}
 
 				ApplyConfiguredBootDriveWriteProtection();

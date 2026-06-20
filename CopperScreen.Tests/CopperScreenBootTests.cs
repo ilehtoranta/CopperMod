@@ -39,21 +39,22 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void NoDiskRealKickstartDoesNotRenderCopperStartInsertDiskScreen()
+	public void NoDiskRealKickstartStartsRomWithEmptyDf0()
 	{
 		var romPath = Path.Combine(Path.GetTempPath(), "copperscreen-test-kickstart-" + Guid.NewGuid().ToString("N") + ".rom");
-		File.WriteAllBytes(romPath, new byte[8]);
+		File.WriteAllBytes(romPath, CreateMinimalKickstartRom());
 		try
 		{
-			var emulator = CopperScreenEmulator.Create(
-				new[] { "--profile", "expanded-kickstart13", "--kickstart-rom", romPath },
+			using var emulator = CopperScreenEmulator.Create(
+				new[] { "--profile", "expanded-m68040-jit-kickstart-rom", "--kickstart-rom", romPath },
 				AppContext.BaseDirectory);
+			var machine = GetMachine(emulator);
 
 			emulator.RenderNextFrame();
 
-			Assert.Equal("insert disk image", emulator.StatusText);
-			Assert.Equal(unchecked((int)0xFF05070E), emulator.Framebuffer[0]);
-			Assert.DoesNotContain(unchecked((int)0xFF1B4AA8), emulator.Framebuffer);
+			Assert.DoesNotContain("insert disk image", emulator.StatusText, StringComparison.OrdinalIgnoreCase);
+			Assert.False(machine.Bus.Disk.Drive0.HasDisk);
+			Assert.Equal(0x00F8_0008u, machine.Cpu.State.ProgramCounter);
 		}
 		finally
 		{
@@ -2867,6 +2868,15 @@ public sealed class CopperScreenBootTests
 			3 => machine.Bus.Disk.Drive3,
 			_ => throw new ArgumentOutOfRangeException(nameof(driveIndex))
 		};
+	}
+
+	private static byte[] CreateMinimalKickstartRom()
+	{
+		var rom = new byte[512 * 1024];
+		BigEndian.WriteUInt32(rom, 0, 0x0000_0400);
+		BigEndian.WriteUInt32(rom, 4, 0x00F8_0008);
+		BigEndian.WriteUInt16(rom, 8, 0x60FE);
+		return rom;
 	}
 
 	private static bool IsWaitingOnUnavailableExternalDrive(AmigaMachine machine)

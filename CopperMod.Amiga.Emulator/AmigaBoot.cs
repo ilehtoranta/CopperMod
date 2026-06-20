@@ -291,6 +291,7 @@ namespace CopperMod.Amiga
 
         public void StartBootFromDisk(AmigaDiskImage disk)
         {
+            ArgumentNullException.ThrowIfNull(disk);
             ResetBootState(disk);
             ValidateBootBlock(disk.BootBlock);
             _machine.Bus.CopyToChipRam(BootBlockAddress, disk.BootBlock);
@@ -348,6 +349,17 @@ namespace CopperMod.Amiga
 
         public void StartKickstartRomBoot(AmigaDiskImage disk)
         {
+            ArgumentNullException.ThrowIfNull(disk);
+            StartKickstartRomBootCore(disk);
+        }
+
+        public void StartKickstartRomBoot()
+        {
+            StartKickstartRomBootCore(null);
+        }
+
+        private void StartKickstartRomBootCore(AmigaDiskImage? disk)
+        {
             if (_machine.Kickstart.Configuration.Backend != AmigaKickstartBackendKind.RomImage)
             {
                 throw new InvalidOperationException("Kickstart ROM boot requires a ROM-backed Kickstart configuration.");
@@ -382,9 +394,8 @@ namespace CopperMod.Amiga
             ResetBootState(disk, installHostShim: true);
         }
 
-        private void ResetBootState(AmigaDiskImage disk, bool installHostShim)
+        private void ResetBootState(AmigaDiskImage? disk, bool installHostShim)
         {
-            ArgumentNullException.ThrowIfNull(disk);
             _diagnostics.Clear();
             _dosHandles.Clear();
             _dosLocks.Clear();
@@ -470,7 +481,15 @@ namespace CopperMod.Amiga
             _startupSequenceFailAt = 10;
             _kickstartRomBootActive = false;
             PendingWorkbenchLaunchRequest = null;
-            Drive0.Insert(disk);
+            if (disk == null)
+            {
+                Drive0.Eject();
+            }
+            else
+            {
+                Drive0.Insert(disk);
+            }
+
             Drive1.Eject();
             Drive2.Eject();
             Drive3.Eject();

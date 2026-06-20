@@ -132,7 +132,8 @@ public sealed class AmigaCiaConformanceMatrixTests
     {
         var bus = new AmigaBus();
 
-        Assert.Equal(0x02, bus.CiaA.ReadPortLatch(0));
+        Assert.Equal(0xFC, bus.CiaA.ReadPortLatch(0));
+        Assert.Equal(0x03, bus.CiaA.ReadRegister(0x02));
         Assert.Equal(0x00, bus.CiaB.ReadPortLatch(0));
         Assert.Equal(0x00, bus.CiaA.InterruptMask);
         Assert.Equal(0x00, bus.CiaB.PendingInterrupts);
@@ -164,11 +165,11 @@ public sealed class AmigaCiaConformanceMatrixTests
         Assert.Equal(0x12, bus.ReadByte(0x00000000));
         bus.WriteByte(0x00BFE001, 0x00, 0);
         Assert.True(bus.AudioFilterEnabled);
-        Assert.Equal(0x12, bus.ReadByte(0x00000000));
+        Assert.Equal(0x00, bus.ReadByte(0x00000000));
 
         bus.WriteByte(0x00BFE001, 0x03, 0);
         Assert.False(bus.AudioFilterEnabled);
-        Assert.Equal(0x00, bus.ReadByte(0x00000000));
+        Assert.Equal(0x12, bus.ReadByte(0x00000000));
     }
 
     private static void CiaBPortBDrivesDiskControlPins()

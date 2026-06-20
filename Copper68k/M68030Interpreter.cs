@@ -1,8 +1,8 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
-    internal sealed class M68030Interpreter : M68020Interpreter
+    public sealed class M68030Interpreter : M68020Interpreter
     {
         public M68030Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : base(bus, profile)

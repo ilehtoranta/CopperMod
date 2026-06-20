@@ -129,7 +129,7 @@ internal sealed class CopperScreenProfile
 				drive.Path,
 				drive.ReadOnly,
 				drive.CreateSizeBytes)))
-			.WithCpu(M68kCoreFactory.Default, CpuBackend)
+			.WithCpu(AmigaM68kCoreFactory.Default, CpuBackend)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(false);
 	}

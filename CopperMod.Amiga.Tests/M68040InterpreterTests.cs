@@ -599,6 +599,23 @@ public sealed class M68040InterpreterTests
 		Assert.Equal(0u, cpu.State.M68040Mmu.Status);
 	}
 
+	[Fact]
+	public void CpuHighThirtyTwoBitUnmappedDataProbeUsesOpenBusInsteadOfBusError()
+	{
+		var bus = new AmigaBus(chipRamSize: 512 * 1024);
+		WriteWords(bus, CodeBase, 0x2039, 0xFFA0, 0x4A80); // MOVE.L $FFA04A80.L,D0
+		bus.WriteLong(2u * 4, 0x0000_2400);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(CodeBase + 6u, cpu.State.ProgramCounter);
+		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.Equal(StackBase, cpu.State.A[7]);
+		Assert.Equal(0u, cpu.State.M68040Mmu.Status);
+	}
+
 	private static void WriteWords(AmigaBus bus, uint address, params ushort[] words)
 	{
 		for (var i = 0; i < words.Length; i++)
