@@ -11,7 +11,6 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-DotNet {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
         [string[]] $Arguments
     )
 
@@ -36,19 +35,14 @@ else {
 New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
 if (-not $NoRestore) {
-    Invoke-DotNet restore $project
-    Invoke-DotNet restore $testProject
+    Invoke-DotNet -Arguments @("restore", $project)
+    Invoke-DotNet -Arguments @("restore", $testProject)
 }
 
-Invoke-DotNet build $project `
-    -c $Configuration `
-    --no-restore
+Invoke-DotNet -Arguments @("build", $project, "-c", $Configuration, "--no-restore")
 
 if (-not $SkipTests) {
-    Invoke-DotNet test $testProject `
-        -c $Configuration `
-        --no-restore `
-        --filter $testFilter
+    Invoke-DotNet -Arguments @("test", $testProject, "-c", $Configuration, "--no-restore", "--filter", $testFilter)
 }
 
 $packProperties = @("/p:EnablePackageValidation=true")
@@ -56,11 +50,8 @@ if ($Version) {
     $packProperties += "/p:PackageVersion=$Version"
 }
 
-Invoke-DotNet pack $project `
-    -c $Configuration `
-    --no-restore `
-    -o $packageDir `
-    @packProperties
+$packArguments = @("pack", $project, "-c", $Configuration, "--no-restore", "-o", $packageDir) + $packProperties
+Invoke-DotNet -Arguments $packArguments
 
 if (-not $Version) {
     [xml] $projectXml = Get-Content $project

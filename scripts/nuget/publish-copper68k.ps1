@@ -14,7 +14,6 @@ $cmdlet = $PSCmdlet
 
 function Invoke-DotNet {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
         [string[]] $Arguments
     )
 
@@ -72,7 +71,7 @@ function Invoke-NuGetPush {
     }
 
     if ($cmdlet.ShouldProcess($Path, "Publish $Label to $Source")) {
-        Invoke-DotNet @arguments
+        Invoke-DotNet -Arguments $arguments
     }
 }
 
