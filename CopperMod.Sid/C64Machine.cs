@@ -305,7 +305,8 @@ namespace CopperMod.Sid
             Span<float> destination,
             AudioRenderOptionsAdapter options,
             ReadOnlySpan<long> sampleTargetCycles,
-            long cycleCount)
+            long cycleCount,
+            bool phasePsidPlayAtTickMidpoint = false)
         {
             var frames = destination.Length / options.ChannelCount;
             if (frames != sampleTargetCycles.Length)
@@ -320,9 +321,14 @@ namespace CopperMod.Sid
                 return;
             }
 
-            var frameEndCycle = Cpu.Cycles + tickCycles;
-            var psidPlayActive = BeginPsidFrame();
-            var psidPlayStarted = psidPlayActive;
+            var frameStartCycle = Cpu.Cycles;
+            var frameEndCycle = frameStartCycle + tickCycles;
+            var psidPlayCycle = phasePsidPlayAtTickMidpoint
+                ? frameStartCycle + (tickCycles / 2)
+                : frameStartCycle;
+            var psidPlayPending = !_module.RunsContinuously && _module.PlayAddress != 0;
+            var psidPlayActive = false;
+            var psidPlayStarted = false;
             for (var outputFrame = 0; outputFrame < sampleTargetCycles.Length; outputFrame++)
             {
                 var targetCycle = sampleTargetCycles[outputFrame];
@@ -335,17 +341,14 @@ namespace CopperMod.Sid
                 {
                     RunCycles(Math.Max(0, targetCycle - Cpu.Cycles), advanceSidToFinalCycle: false);
                 }
-                else if (psidPlayActive)
-                {
-                    RunPsidPlayUntil(targetCycle, ref psidPlayActive);
-                    if (Cpu.Cycles < targetCycle)
-                    {
-                        AdvanceSidOnly(targetCycle - Cpu.Cycles);
-                    }
-                }
                 else
                 {
-                    AdvanceSidOnly(Math.Max(0, targetCycle - Cpu.Cycles));
+                    AdvancePsidFramePlaybackTo(
+                        targetCycle,
+                        psidPlayCycle,
+                        ref psidPlayPending,
+                        ref psidPlayActive,
+                        ref psidPlayStarted);
                 }
 
                 var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
@@ -358,17 +361,14 @@ namespace CopperMod.Sid
                 {
                     RunCycles(frameEndCycle - Cpu.Cycles, advanceSidToFinalCycle: false);
                 }
-                else if (psidPlayActive)
-                {
-                    RunPsidPlayUntil(frameEndCycle, ref psidPlayActive);
-                    if (Cpu.Cycles < frameEndCycle)
-                    {
-                        AdvanceSidOnly(frameEndCycle - Cpu.Cycles);
-                    }
-                }
                 else
                 {
-                    AdvanceSidOnly(frameEndCycle - Cpu.Cycles);
+                    AdvancePsidFramePlaybackTo(
+                        frameEndCycle,
+                        psidPlayCycle,
+                        ref psidPlayPending,
+                        ref psidPlayActive,
+                        ref psidPlayStarted);
                 }
             }
 
@@ -452,6 +452,40 @@ namespace CopperMod.Sid
             {
                 active = false;
             }
+        }
+
+        [HotPath]
+        private void AdvancePsidFramePlaybackTo(
+            long targetCycle,
+            long playCycle,
+            ref bool playPending,
+            ref bool playActive,
+            ref bool playStarted)
+        {
+            if (playPending && targetCycle >= playCycle)
+            {
+                if (Cpu.Cycles < playCycle)
+                {
+                    AdvanceSidOnly(playCycle - Cpu.Cycles);
+                }
+
+                playActive = BeginPsidFrame();
+                playStarted |= playActive;
+                playPending = false;
+            }
+
+            if (playActive)
+            {
+                RunPsidPlayUntil(targetCycle, ref playActive);
+                if (Cpu.Cycles < targetCycle)
+                {
+                    AdvanceSidOnly(targetCycle - Cpu.Cycles);
+                }
+
+                return;
+            }
+
+            AdvanceSidOnly(Math.Max(0, targetCycle - Cpu.Cycles));
         }
 
         [HotPath]

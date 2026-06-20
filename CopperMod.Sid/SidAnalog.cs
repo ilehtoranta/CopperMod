@@ -112,8 +112,8 @@ namespace CopperMod.Sid
             return (waveformMask & 0xF0) switch
             {
                 0x00 => 1.0,
-                0x40 => 0.72,
-                _ => 0.695
+                0x40 => 0.66,
+                _ => 0.65
             };
         }
 

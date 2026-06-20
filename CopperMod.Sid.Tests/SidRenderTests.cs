@@ -119,6 +119,32 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void VbiPsidPlayRoutineIsPhasedAtMidFrame()
+	{
+		var song = (SidSong)new SidFormat().Load(CreateOneWritePsid(speed: 0));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+
+		song.RenderTick(buffer, options);
+
+		var write = Assert.Single(song.SidWrites.Where(write => write.Register == 0x18 && write.Value == 0x0F));
+		Assert.Equal((SidConstants.PalCyclesPerFrame / 2) + 5, write.Cycle);
+	}
+
+	[Fact]
+	public void CiaTimedPsidPlayRoutineStillStartsAtTickStart()
+	{
+		var song = (SidSong)new SidFormat().Load(CreateOneWritePsid(speed: 1));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+
+		song.RenderTick(buffer, options);
+
+		var write = Assert.Single(song.SidWrites.Where(write => write.Register == 0x18 && write.Value == 0x0F));
+		Assert.Equal(5, write.Cycle);
+	}
+
+	[Fact]
 	public void GetCurrentTickFrameCountPeeksWithoutAdvancingSampleClock()
 	{
 		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(SidFixtureBuilder.SimpleToneProgram()));
@@ -652,6 +678,25 @@ public sealed class SidRenderTests
 		var machine = GetMachine(song);
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (bool)cpu.GetType().GetProperty("Halted")!.GetValue(cpu)!;
+	}
+
+	private static byte[] CreateOneWritePsid(uint speed)
+	{
+		return SidFixtureBuilder.CreatePsid(
+			new byte[]
+			{
+				0x60,             // init: RTS
+				0xA9, 0x0F,       // play: LDA #$0F
+				0x8D, 0x18, 0xD4, // STA $D418
+				0x60              // RTS
+			},
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: 0x1001,
+			songs: 1,
+			startSong: 1,
+			speed: speed,
+			title: "One Write Phase");
 	}
 
 	private static object GetMachine(SidSong song)

@@ -210,6 +210,11 @@ public sealed class C64MachineTests
 		Assert.Equal(testCase.ExpectedRegister, write.Register);
 		Assert.Equal(testCase.ExpectedValue, write.Value);
 
+		Assert.DoesNotContain(trace.Frames, frame =>
+			frame.Cycle == testCase.ExpectedWriteCycle &&
+			frame.VoiceIndex == testCase.ExpectedRegister / 7 &&
+			frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+
 		var forwarded = Assert.Single(trace.Frames, frame =>
 			frame.Cycle == testCase.ExpectedWriteCycle + 1 &&
 			frame.VoiceIndex == testCase.ExpectedRegister / 7 &&
@@ -261,6 +266,14 @@ public sealed class C64MachineTests
 			.Select(frame => frame.Cycle)
 			.ToArray();
 		Assert.Equal([101L], forwarded);
+
+		var sameCycle = Assert.Single(trace.Frames, frame => frame.Cycle == 100 && frame.VoiceIndex == 0);
+		Assert.Equal(0x00, sameCycle.Control);
+		Assert.False(sameCycle.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+
+		var nextCycle = Assert.Single(trace.Frames, frame => frame.Cycle == 101 && frame.VoiceIndex == 0);
+		Assert.Equal(0x21, nextCycle.Control);
+		Assert.True(nextCycle.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
 	}
 
 	[Fact]
