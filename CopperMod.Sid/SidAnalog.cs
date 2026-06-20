@@ -28,6 +28,16 @@ namespace CopperMod.Sid
             return GetWaveformDac(model)[value & 0x0FFF];
         }
 
+        public static double ScaleWaveformOutput(double waveform, int waveformMask, SidChipModel model)
+        {
+            if (model != SidChipModel.Mos6581)
+            {
+                return waveform;
+            }
+
+            return waveform * Mos6581WaveformOutputScale(waveformMask);
+        }
+
         public static double ConvertEnvelope(int envelope, SidChipModel model)
         {
             return GetEnvelope(model)[Math.Clamp(envelope, 0, 255)];
@@ -95,6 +105,16 @@ namespace CopperMod.Sid
             return model == SidChipModel.Mos8580
                 ? Math.Pow(0.82, activeWaveforms - 1)
                 : Math.Pow(0.34, activeWaveforms - 1);
+        }
+
+        private static double Mos6581WaveformOutputScale(int waveformMask)
+        {
+            return (waveformMask & 0xF0) switch
+            {
+                0x00 => 1.0,
+                0x40 => 0.72,
+                _ => 0.695
+            };
         }
 
         public static bool UsesCombinedWaveformTable(int waveformMask, SidChipModel model)

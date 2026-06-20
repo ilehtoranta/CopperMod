@@ -8,7 +8,7 @@ public sealed class SidChipTests
 		var chip = CreateSawVoice();
 		var range = MeasureRange(chip, warmupCycles: 3000, measuredCycles: 1024);
 
-		Assert.True(range > 0.5, $"Expected SID oscillator to cover a broad sawtooth range, got {range:0.000}.");
+		Assert.True(range > 0.45, $"Expected SID oscillator to cover a broad sawtooth range, got {range:0.000}.");
 	}
 
 	[Fact]
@@ -837,7 +837,7 @@ public sealed class SidChipTests
 
 		var range = MeasureRange(chip, warmupCycles: 0, measuredCycles: 24000);
 
-		Assert.True(range > 0.5, $"Expected release rate 9 to keep a hard-restarted voice alive across two PAL frames, got range {range:0.000}.");
+		Assert.True(range > 0.4, $"Expected release rate 9 to keep a hard-restarted voice alive across two PAL frames, got range {range:0.000}.");
 	}
 
 	private static SidChip CreateSawVoice()

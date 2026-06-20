@@ -320,7 +320,6 @@ public sealed class SidPlayFpWaveformOracleTests
 		startInfo.ArgumentList.Add("-cwa");
 		startInfo.ArgumentList.Add("-vpf");
 		startInfo.ArgumentList.Add("-mof");
-		startInfo.ArgumentList.Add("-m");
 		startInfo.ArgumentList.Add("-f" + SampleRate.ToString(CultureInfo.InvariantCulture));
 		startInfo.ArgumentList.Add("-p32");
 		startInfo.ArgumentList.Add("-t" + FormatSidPlayFpDuration(RenderSeconds));

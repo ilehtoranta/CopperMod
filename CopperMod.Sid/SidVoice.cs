@@ -392,18 +392,21 @@ namespace CopperMod.Sid
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform)
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: false, applyNoiseWriteback: true, out _);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform, out SidWaveformTrace trace)
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: true, applyNoiseWriteback: true, out trace);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
         public double RenderOutputFast(SidVoice? syncSource, SidChipModel model)
         {
             var waveform = RenderWaveformFast(syncSource, model);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 

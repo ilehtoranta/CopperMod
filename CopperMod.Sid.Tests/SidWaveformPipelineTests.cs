@@ -287,7 +287,7 @@ public sealed class SidWaveformPipelineTests
 		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), frame.NoiseDac);
 		Assert.Equal(0u, frame.WaveformDac);
 		Assert.True(frame.NoiseUsesPostShiftRegister);
-		Assert.InRange(frame.WaveformOutput, -0.44, -0.42);
+		Assert.InRange(frame.WaveformOutput, -0.31, -0.29);
 	}
 
 	[Fact]
@@ -391,7 +391,7 @@ public sealed class SidWaveformPipelineTests
 		var gateOnWaveform = Frame(gateOnTrace, cycle: 1, voice: 0).WaveformOutput;
 
 		Assert.True(gateOffWaveform > gateOnWaveform);
-		Assert.InRange(gateOffWaveform - gateOnWaveform, 0.84, 0.86);
+		Assert.InRange(gateOffWaveform - gateOnWaveform, 0.58, 0.60);
 	}
 
 	private static SidChip CreateTracedChip(out SidCycleTrace trace)
