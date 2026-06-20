@@ -126,6 +126,7 @@ changes.
 
 ## Status
 
-Copper68k is an accuracy-oriented emulator core extracted for reuse. The public
-API is intentionally small and may continue to tighten before a stable 1.0
-release.
+Copper68k 1.0 is an accuracy-oriented emulator core with a stable, intentionally
+small public API. Applications should create cores through `M68kCoreFactory` and
+depend on `IM68kBus`, `IM68kCore`, `M68kCpuModel`, and `M68kCpuState` rather
+than implementation-specific interpreter classes.
