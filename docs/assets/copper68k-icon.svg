@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Copper68k icon</title>
+  <desc id="desc">Copper family striped tile with a stylized Motorola 68000 CPU chip.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="4" x2="0" y2="124" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1c2734"/>
+      <stop offset="0.58" stop-color="#09131d"/>
+      <stop offset="1" stop-color="#050910"/>
+    </linearGradient>
+    <linearGradient id="stripeShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="32" y1="18" x2="92" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#46515e"/>
+      <stop offset="0.42" stop-color="#202935"/>
+      <stop offset="1" stop-color="#0c1118"/>
+    </linearGradient>
+    <linearGradient id="chipFace" x1="0" y1="20" x2="0" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.3" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.34"/>
+    </linearGradient>
+    <filter id="stripeGlow" x="-12%" y="-80%" width="124%" height="260%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="chipShadow" x="-25%" y="-25%" width="150%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="3" flood-color="#000000" flood-opacity="0.65"/>
+    </filter>
+    <clipPath id="tileClip">
+      <rect x="4" y="4" width="120" height="120" rx="8"/>
+    </clipPath>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="8" fill="#050910"/>
+  <rect x="5" y="5" width="118" height="118" rx="7" fill="url(#tile)" stroke="#566a80" stroke-width="2"/>
+  <g clip-path="url(#tileClip)">
+    <rect x="10" y="59" width="108" height="59" fill="#020407" opacity="0.54"/>
+    <g filter="url(#stripeGlow)">
+      <g>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="#ff1412"/>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="none" stroke="#ff5b55" stroke-opacity="0.55"/>
+      </g>
+      <g>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="#ff9310"/>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="none" stroke="#ffc04a" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="#ffec00"/>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="none" stroke="#fff86b" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="#00d714"/>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="none" stroke="#55ff65" stroke-opacity="0.42"/>
+      </g>
+      <g>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="#00d0e1"/>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="none" stroke="#61f5ff" stroke-opacity="0.44"/>
+      </g>
+      <g>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="#004aec"/>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="none" stroke="#4d84ff" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="#ae00e5"/>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="none" stroke="#df5bff" stroke-opacity="0.5"/>
+      </g>
+    </g>
+    <rect x="14" y="58" width="100" height="2" fill="#000000" opacity="0.55"/>
+    <rect x="14" y="117" width="100" height="2" fill="#000000" opacity="0.46"/>
+  </g>
+
+  <g filter="url(#chipShadow)">
+    <rect x="23" y="18" width="82" height="68" rx="8" fill="#070b10" stroke="#111923" stroke-width="2"/>
+    <rect x="27" y="20" width="74" height="64" rx="7" fill="url(#chip)" stroke="#6d7885" stroke-width="1.6"/>
+    <rect x="31" y="24" width="66" height="56" rx="4" fill="url(#chipFace)" stroke="#070b10" stroke-opacity="0.7"/>
+    <path d="M28 25v54M100 25v54" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1"/>
+    <path d="M24 29v48M104 29v48" fill="none" stroke="#000000" stroke-opacity="0.45" stroke-width="1"/>
+    <text x="64" y="53" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="800" fill="#f0f3f6">68000</text>
+    <text x="64" y="67" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="9" font-weight="700" fill="#8fa0b2">M68K CPU</text>
+    <rect x="36" y="72" width="56" height="2" rx="1" fill="#ffffff" opacity="0.12"/>
+  </g>
+
+  <rect x="6" y="6" width="116" height="116" rx="7" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="5" y="5" width="118" height="118" rx="7" fill="none" stroke="#000000" stroke-opacity="0.72"/>
+</svg>

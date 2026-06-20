@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Copper icon base</title>
+  <desc id="desc">Dark rounded application tile with the Copper family rainbow stripe motif.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="4" x2="0" y2="124" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1c2734"/>
+      <stop offset="0.58" stop-color="#09131d"/>
+      <stop offset="1" stop-color="#050910"/>
+    </linearGradient>
+    <linearGradient id="stripeShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.22"/>
+    </linearGradient>
+    <filter id="stripeGlow" x="-12%" y="-80%" width="124%" height="260%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="tileClip">
+      <rect x="4" y="4" width="120" height="120" rx="8"/>
+    </clipPath>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="8" fill="#050910"/>
+  <rect x="5" y="5" width="118" height="118" rx="7" fill="url(#tile)" stroke="#566a80" stroke-width="2"/>
+  <g clip-path="url(#tileClip)">
+    <rect x="10" y="59" width="108" height="59" fill="#020407" opacity="0.54"/>
+    <g filter="url(#stripeGlow)">
+      <g>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="#ff1412"/>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="62" width="100" height="6" rx="1" fill="none" stroke="#ff5b55" stroke-opacity="0.55"/>
+      </g>
+      <g>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="#ff9310"/>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="70" width="100" height="6" rx="1" fill="none" stroke="#ffc04a" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="#ffec00"/>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="78" width="100" height="6" rx="1" fill="none" stroke="#fff86b" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="#00d714"/>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="86" width="100" height="6" rx="1" fill="none" stroke="#55ff65" stroke-opacity="0.42"/>
+      </g>
+      <g>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="#00d0e1"/>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="94" width="100" height="6" rx="1" fill="none" stroke="#61f5ff" stroke-opacity="0.44"/>
+      </g>
+      <g>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="#004aec"/>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="102" width="100" height="6" rx="1" fill="none" stroke="#4d84ff" stroke-opacity="0.5"/>
+      </g>
+      <g>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="#ae00e5"/>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="url(#stripeShade)"/>
+        <rect x="14" y="110" width="100" height="6" rx="1" fill="none" stroke="#df5bff" stroke-opacity="0.5"/>
+      </g>
+    </g>
+    <rect x="14" y="58" width="100" height="2" fill="#000000" opacity="0.55"/>
+    <rect x="14" y="117" width="100" height="2" fill="#000000" opacity="0.46"/>
+  </g>
+
+  <rect x="6" y="6" width="116" height="116" rx="7" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="5" y="5" width="118" height="118" rx="7" fill="none" stroke="#000000" stroke-opacity="0.72"/>
+</svg>
