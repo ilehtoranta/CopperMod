@@ -189,6 +189,35 @@ public sealed class C64MachineTests
 		Assert.Equal(0x0F, machine.SidWrites[0].Value);
 	}
 
+	[Fact]
+	public void PsidSidWritesIgnoreProcessorPortIoBanking()
+	{
+		var module = SidParser.Parse(SidFixtureBuilder.CreatePsid(
+			new byte[]
+			{
+				0xA9, 0x30,       // LDA #$30
+				0x8D, 0x01, 0x00, // STA $0001; bank I/O out on a real C64
+				0x60,             // RTS
+				0xA9, 0x08,       // LDA #$08
+				0x8D, 0x18, 0xD4, // STA $D418
+				0x60              // RTS
+			},
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: 0x1006,
+			songs: 1,
+			startSong: 1,
+			flags: (1 << 2) | (1 << 4)));
+		var machine = new C64Machine(module);
+		machine.Reset(0);
+
+		machine.BeginFrame();
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(0x18, write.Register);
+		Assert.Equal(0x08, write.Value);
+	}
+
 	[Theory]
 	[MemberData(nameof(CpuSidWriteCases))]
 	public void CpuWritesReachSidOnExpectedBusCycleAndForwardOnNextSidCycle(CpuSidWriteCase testCase)

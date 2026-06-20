@@ -1309,6 +1309,11 @@ namespace CopperMod.Sid
         [HotPath]
         private bool IsIoVisible()
         {
+            if (_module.Kind == SidFileKind.Psid)
+            {
+                return true;
+            }
+
             var value = ProcessorPortEffectiveValue;
             return (value & 0x04) != 0 && (value & 0x03) != 0;
         }
