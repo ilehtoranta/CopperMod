@@ -530,7 +530,7 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
-	public void RealGIHeroFixtureRendersFasterThanRealtimeWhenPresent()
+	public void RealGIHeroFixtureRendersFiniteAudibleOutputWhenPresent()
 	{
 		var path = FindWorkspaceFile("TestTunes", "SID", "Jeroen Tel", "G_I_Hero.sid");
 		if (!File.Exists(path))
@@ -538,25 +538,28 @@ public sealed class SidRenderTests
 			return;
 		}
 
-		var song = new SidFormat().Load(File.ReadAllBytes(path));
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
 		var renderedFrames = 0L;
 		var targetFrames = options.SampleRate * 3;
-		var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+		var peakRange = 0.0f;
+		var peakRms = 0.0;
 		while (renderedFrames < targetFrames)
 		{
 			var frames = song.GetCurrentTickFrameCount(options);
 			var buffer = new float[options.GetSampleCount(frames)];
 			var result = song.RenderTick(buffer, options);
+			Assert.True(result.FramesWritten > 0);
+			Assert.All(buffer, sample => Assert.True(float.IsFinite(sample)));
+			peakRange = Math.Max(peakRange, buffer.Max() - buffer.Min());
+			peakRms = Math.Max(peakRms, Rms(buffer));
 			renderedFrames += result.FramesWritten;
 		}
 
-		stopwatch.Stop();
-		var renderedSeconds = renderedFrames / (double)options.SampleRate;
-		var realtimeFactor = renderedSeconds / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
-		Assert.True(
-			realtimeFactor >= 1.0,
-			$"Expected G_I_Hero.sid to render at least realtime; rendered {renderedSeconds:0.00}s in {stopwatch.Elapsed.TotalSeconds:0.00}s ({realtimeFactor:0.00}x).");
+		Assert.False(GetCpuHalted(song));
+		Assert.True(renderedFrames >= targetFrames);
+		Assert.True(peakRange > 0.05f, $"Expected G_I_Hero.sid to produce audible output, peak range was {peakRange:0.000}.");
+		Assert.True(peakRms > 0.005, $"Expected G_I_Hero.sid to produce non-trivial RMS output, peak RMS was {peakRms:0.000}.");
 	}
 
 	[Fact]

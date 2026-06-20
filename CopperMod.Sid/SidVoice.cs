@@ -29,6 +29,8 @@ namespace CopperMod.Sid
         private uint _phase;
         private uint _noise = NoiseResetValue;
         private uint _noiseShiftLatch = NoiseResetValue;
+        private uint _pulseDac;
+        private uint _pulseNextDac;
         private int _envelopeCounter;
         private int _rateCounter;
         private int _exponentialCounter;
@@ -36,6 +38,9 @@ namespace CopperMod.Sid
         private bool _previousGate;
         private bool _envelopeZeroHold = true;
         private bool _envelopeMaxHold;
+        private bool _envelopeCountingUp;
+        private bool _envelopeCounterEnabled;
+        private bool _envelopeDirectionChangePending;
         private bool _noiseResetHeld;
         private bool _noiseResetReleasePending;
         private int _noiseShiftNextPhase;
@@ -81,6 +86,8 @@ namespace CopperMod.Sid
             _phase = PhaseResetValue;
             _noise = NoiseResetValue;
             _noiseShiftLatch = NoiseResetValue;
+            _pulseDac = 0;
+            _pulseNextDac = 0;
             _envelopeCounter = 0;
             _rateCounter = 0;
             _exponentialCounter = 0;
@@ -88,6 +95,9 @@ namespace CopperMod.Sid
             _previousGate = false;
             _envelopeZeroHold = true;
             _envelopeMaxHold = false;
+            _envelopeCountingUp = false;
+            _envelopeCounterEnabled = false;
+            _envelopeDirectionChangePending = false;
             _noiseResetHeld = false;
             _noiseResetReleasePending = false;
             _noiseShiftNextPhase = 0;
@@ -111,6 +121,8 @@ namespace CopperMod.Sid
             _phase = source._phase;
             _noise = source._noise;
             _noiseShiftLatch = source._noiseShiftLatch;
+            _pulseDac = source._pulseDac;
+            _pulseNextDac = source._pulseNextDac;
             _envelopeCounter = source._envelopeCounter;
             _rateCounter = source._rateCounter;
             _exponentialCounter = source._exponentialCounter;
@@ -118,6 +130,9 @@ namespace CopperMod.Sid
             _previousGate = source._previousGate;
             _envelopeZeroHold = source._envelopeZeroHold;
             _envelopeMaxHold = source._envelopeMaxHold;
+            _envelopeCountingUp = source._envelopeCountingUp;
+            _envelopeCounterEnabled = source._envelopeCounterEnabled;
+            _envelopeDirectionChangePending = source._envelopeDirectionChangePending;
             _noiseResetHeld = source._noiseResetHeld;
             _noiseResetReleasePending = source._noiseResetReleasePending;
             _noiseShiftNextPhase = source._noiseShiftNextPhase;
@@ -179,29 +194,15 @@ namespace CopperMod.Sid
 
         public void ClockEnvelope()
         {
-            _rateCounter = (_rateCounter + 1) & RateCounterMask;
-            if (_rateCounter != GetRatePeriod())
+            if (!ClockEnvelopeRateCounter())
             {
                 return;
             }
 
-            _rateCounter = 0;
             switch (_envelopeState)
             {
                 case Attack:
-                    if (!_envelopeMaxHold)
-                    {
-                        StepEnvelopeUp();
-                    }
-
-                    if (_envelopeCounter >= 0xFF)
-                    {
-                        _envelopeCounter = 0xFF;
-                        _envelopeMaxHold = true;
-                        _exponentialCounter = 0;
-                        _envelopeState = Decay;
-                    }
-
+                    ClockAttack();
                     break;
                 case Decay:
                 case Sustain:
@@ -210,55 +211,97 @@ namespace CopperMod.Sid
                 case Release:
                     if (!_envelopeZeroHold && ClockExponentialCounter())
                     {
-                        StepEnvelopeDown(holdAtZero: true);
+                        StepEnvelope(up: false, holdAtTerminal: true);
                     }
 
                     break;
             }
         }
 
+        private bool ClockEnvelopeRateCounter()
+        {
+            _rateCounter = (_rateCounter + 1) & RateCounterMask;
+            if (_rateCounter != GetRatePeriod())
+            {
+                return false;
+            }
+
+            _rateCounter = 0;
+            return true;
+        }
+
+        private void ClockAttack()
+        {
+            if (!_envelopeMaxHold)
+            {
+                StepEnvelope(up: true, holdAtTerminal: true);
+            }
+
+            if (_envelopeCounter >= 0xFF)
+            {
+                _envelopeCounter = 0xFF;
+                _envelopeMaxHold = true;
+                _exponentialCounter = 0;
+                SetEnvelopePhase(Decay);
+            }
+        }
+
         private void ClockDecaySustain()
         {
             var sustain = GetSustainLevel();
-            if (_envelopeCounter <= sustain)
+            if (_envelopeCounter == sustain)
             {
-                _envelopeCounter = sustain;
-                _envelopeZeroHold = sustain == 0;
+                _envelopeZeroHold = _envelopeCounter == 0;
                 _exponentialCounter = 0;
                 _envelopeState = Sustain;
+                _envelopeCounterEnabled = false;
                 return;
             }
 
             _envelopeState = Decay;
+            _envelopeCounterEnabled = true;
             if (ClockExponentialCounter())
             {
-                StepEnvelopeDown(holdAtZero: sustain == 0);
+                StepEnvelope(up: false, holdAtTerminal: sustain == 0);
             }
 
-            if (_envelopeCounter <= sustain)
+            if (_envelopeCounter == sustain)
             {
-                _envelopeCounter = sustain;
-                _envelopeZeroHold = sustain == 0;
+                _envelopeZeroHold = _envelopeCounter == 0;
                 _exponentialCounter = 0;
                 _envelopeState = Sustain;
+                _envelopeCounterEnabled = false;
             }
         }
 
-        private void StepEnvelopeUp()
+        private void StepEnvelope(bool up, bool holdAtTerminal)
         {
-            _envelopeCounter = (_envelopeCounter + 1) & 0xFF;
-            _envelopeZeroHold = false;
-            _envelopeMaxHold = _envelopeCounter == 0xFF;
-            _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
-        }
-
-        private void StepEnvelopeDown(bool holdAtZero)
-        {
-            _envelopeCounter = (_envelopeCounter - 1) & 0xFF;
-            _envelopeMaxHold = false;
-            if (_envelopeCounter == 0 && holdAtZero)
+            _envelopeCounter = up
+                ? (_envelopeCounter + 1) & 0xFF
+                : (_envelopeCounter - 1) & 0xFF;
+            if (_envelopeDirectionChangePending)
             {
-                _envelopeZeroHold = true;
+                _envelopeDirectionChangePending = false;
+            }
+
+            _envelopeCounterEnabled = true;
+            if (up)
+            {
+                _envelopeZeroHold = false;
+                _envelopeMaxHold = _envelopeCounter == 0xFF && holdAtTerminal;
+                if (_envelopeMaxHold)
+                {
+                    _envelopeCounterEnabled = false;
+                }
+            }
+            else
+            {
+                _envelopeMaxHold = false;
+                _envelopeZeroHold = _envelopeCounter == 0 && holdAtTerminal;
+                if (_envelopeZeroHold)
+                {
+                    _envelopeCounterEnabled = false;
+                }
             }
 
             _cycleEvents |= SidCycleTraceEvents.EnvelopeStep;
@@ -273,6 +316,7 @@ namespace CopperMod.Sid
                 _rateCounter > newPeriod)
             {
                 _envelopeZeroHold = false;
+                _envelopeCounterEnabled = true;
                 _exponentialCounter = Math.Max(_exponentialCounter, GetExponentialPeriod(0) - 1);
             }
         }
@@ -292,6 +336,19 @@ namespace CopperMod.Sid
         {
             _phase = 0;
             _cycleEvents |= SidCycleTraceEvents.SyncReset;
+        }
+
+        public void ClockPulse()
+        {
+            if (TestEnabled)
+            {
+                _pulseDac = 0x0FFF;
+                _pulseNextDac = 0x0FFF;
+                return;
+            }
+
+            _pulseDac = _pulseNextDac;
+            _pulseNextDac = GetPulseComparatorDac();
         }
 
         public void ClockNoise(bool oscillatorBit19Rising)
@@ -398,9 +455,11 @@ namespace CopperMod.Sid
                 var attackFromZeroHold = _envelopeState == Release &&
                     _envelopeCounter == 0 &&
                     _envelopeZeroHold;
-                _envelopeState = Attack;
+                var holdAtMaximum = _envelopeCounter == 0xFF && !_envelopeCounterEnabled;
+                SetEnvelopePhase(Attack);
                 _envelopeZeroHold = false;
-                _envelopeMaxHold = _envelopeCounter == 0xFF;
+                _envelopeMaxHold = holdAtMaximum;
+                _envelopeCounterEnabled = !_envelopeMaxHold;
                 if (attackFromZeroHold)
                 {
                     _rateCounter = 0;
@@ -411,9 +470,11 @@ namespace CopperMod.Sid
             }
             else if (!gate && _previousGate)
             {
-                _envelopeState = Release;
+                var wasCounterEnabled = _envelopeCounterEnabled;
+                SetEnvelopePhase(Release);
                 _envelopeMaxHold = false;
-                _envelopeZeroHold = _envelopeCounter == 0;
+                _envelopeZeroHold = _envelopeCounter == 0 && !wasCounterEnabled;
+                _envelopeCounterEnabled = !_envelopeZeroHold;
                 _cycleEvents |= SidCycleTraceEvents.GateFalling;
             }
 
@@ -911,6 +972,11 @@ namespace CopperMod.Sid
 
         private uint GetPulseDac()
         {
+            return _pulseDac;
+        }
+
+        private uint GetPulseComparatorDac()
+        {
             return ((_phase >> 12) & 0x0FFF) >= (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
         }
 
@@ -943,6 +1009,18 @@ namespace CopperMod.Sid
         private int GetSustainLevel()
         {
             return ((SustainRelease >> 4) & 0x0F) * 0x11;
+        }
+
+        private void SetEnvelopePhase(int state)
+        {
+            var countingUp = state == Attack;
+            if (_envelopeCountingUp != countingUp)
+            {
+                _envelopeDirectionChangePending = true;
+            }
+
+            _envelopeCountingUp = countingUp;
+            _envelopeState = state;
         }
 
         private bool ClockExponentialCounter()

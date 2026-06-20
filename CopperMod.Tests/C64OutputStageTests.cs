@@ -99,6 +99,23 @@ public sealed class C64OutputStageTests
 		Assert.Equal(original, samples);
 	}
 
+	[Fact]
+	public void C64ProfileDecaysConstantSidDcWhileCleanProfilePreservesIt()
+	{
+		const int sampleRate = 44100;
+		var c64Samples = Enumerable.Repeat(0.35f, sampleRate).ToArray();
+		var cleanSamples = c64Samples.ToArray();
+
+		new C64OutputStage(C64OutputProfile.C64).Process(c64Samples, channels: 1, sampleRate);
+		new C64OutputStage(C64OutputProfile.Clean).Process(cleanSamples, channels: 1, sampleRate);
+
+		var c64Initial = Math.Abs(c64Samples[0]);
+		var c64Late = c64Samples.Skip(sampleRate - 4096).Max(Math.Abs);
+		Assert.True(c64Initial > 0.15f, $"Expected C64 profile to pass the initial SID DC edge, got {c64Initial:0.000}.");
+		Assert.True(c64Late < c64Initial * 0.05f, $"Expected C64 profile to decay steady SID DC, initial {c64Initial:0.000}, late {c64Late:0.000}.");
+		Assert.All(cleanSamples, sample => Assert.Equal(0.35f, sample));
+	}
+
 	private static double Rms(float[] samples, int start, int count)
 	{
 		var sumSquares = 0.0;

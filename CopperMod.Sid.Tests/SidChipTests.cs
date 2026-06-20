@@ -230,6 +230,99 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void Mos6581StoppedVoicesPreserveVolumeRestDcBeforeBoardCoupling()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x18, 0x00);
+		RenderCycles(chip, 24000);
+
+		var frame = CaptureOutputStageFrame(chip, cycles: 512);
+		var expectedOffset = SidAnalog.VolumeOffset(0x00, SidChipModel.Mos6581);
+
+		AssertClose(expectedOffset, frame.VolumeOffset);
+		Assert.True(Math.Abs(frame.VolumeOffset) > 0.02, $"Expected 6581 volume-zero rest DC before board coupling, got {frame.VolumeOffset:0.000}.");
+		Assert.True(double.IsFinite(frame.AnalogOutputVoltage));
+		Assert.True(double.IsFinite(frame.AnalogLowPassVoltage));
+		Assert.True(double.IsFinite(frame.FinalSample));
+		Assert.True(Math.Abs(frame.FinalSample) > 0.005, $"Expected SID core to preserve non-zero DC before C64OutputStage, got {frame.FinalSample:0.000}.");
+	}
+
+	[Fact]
+	public void Mos8580StoppedVoicesPreserveVolumeOffsetBeforeBoardCoupling()
+	{
+		var chip = new SidChip(SidChipModel.Mos8580, 0xD400);
+		chip.Write(0x18, 0x0F);
+		RenderCycles(chip, 12000);
+
+		var frame = CaptureOutputStageFrame(chip, cycles: 512);
+		var expectedOffset = SidAnalog.VolumeOffset(0x0F, SidChipModel.Mos8580);
+
+		AssertClose(expectedOffset, frame.VolumeOffset);
+		AssertClose(frame.VolumeOffset, frame.PreSoftClipSample);
+		Assert.True(double.IsFinite(frame.PostSoftClipSample));
+		Assert.True(double.IsFinite(frame.FinalSample));
+		Assert.True(Math.Abs(frame.FinalSample) > 0.005, $"Expected SID core to preserve MOS8580 volume offset before board coupling, got {frame.FinalSample:0.000}.");
+	}
+
+	[Fact]
+	public void D418StoppedVoiceStepKeepsDcTransientThenSettlesToVolumeOffset()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x18, 0x08);
+		RenderCycles(chip, 12000);
+
+		var outputStageTrace = new SidOutputStageTrace();
+		chip.OutputStageTrace = outputStageTrace;
+		outputStageTrace.BeginFrame();
+		chip.Write(0x18, 0x03);
+		RenderCycles(chip, 256);
+		var stepFrame = outputStageTrace.EndFrame();
+
+		Assert.Equal(1, stepFrame.D418Writes);
+		AssertClose(SidAnalog.VolumeOffset(0x03, SidChipModel.Mos6581), stepFrame.VolumeOffset);
+		Assert.True(Math.Abs(stepFrame.VolumeTransientCurrent) > 0.001, $"Expected D418 transient current before board coupling, got {stepFrame.VolumeTransientCurrent:0.000000}.");
+		Assert.True(Math.Abs(stepFrame.PreSoftClipSample - stepFrame.VolumeOffset) > 0.001, "Expected pre-board SID output to include the D418 transient in addition to the volume offset.");
+
+		RenderCycles(chip, 48000);
+		var settledFrame = CaptureOutputStageFrame(chip, cycles: 512);
+
+		AssertClose(SidAnalog.VolumeOffset(0x03, SidChipModel.Mos6581), settledFrame.VolumeOffset);
+		Assert.InRange(Math.Abs(settledFrame.VolumeTransientCurrent), 0.0, 0.001);
+	}
+
+	[Fact]
+	public void FilterRoutingDoesNotRemoveVolumeDcBeforeBoardCoupling()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		chip.Write(0x18, 0x1F);
+		RenderCycles(chip, 12000);
+		var before = CaptureOutputStageFrame(chip, cycles: 256);
+
+		chip.Write(0x17, 0x07);
+		RenderCycles(chip, 12000);
+		var after = CaptureOutputStageFrame(chip, cycles: 256);
+
+		AssertClose(before.VolumeOffset, after.VolumeOffset);
+		Assert.True(Math.Abs(after.VolumeOffset) > 0.02, $"Expected filter routing to preserve D418 DC before board coupling, got {after.VolumeOffset:0.000}.");
+		Assert.True(double.IsFinite(after.FinalSample));
+		Assert.True(Math.Abs(after.FinalSample) > 0.005, $"Expected routed filter state to preserve SID-core DC before C64OutputStage, got {after.FinalSample:0.000}.");
+	}
+
+	[Fact]
+	public void Mos6581AnalogOutputTraceIncludesMixedVoltageAndVolumeOffset()
+	{
+		var chip = CreatePulseVoice();
+		RenderCycles(chip, 12000);
+
+		var frame = CaptureOutputStageFrame(chip, cycles: 512);
+
+		Assert.True(Math.Abs(frame.AnalogMixedVoltage) > 0.001, $"Expected analog trace to include mixed voice/filter voltage, got {frame.AnalogMixedVoltage:0.000000}.");
+		Assert.True(Math.Abs(frame.VolumeOffset) > 0.02, $"Expected analog trace to include D418 volume offset, got {frame.VolumeOffset:0.000}.");
+		Assert.True(double.IsFinite(frame.AnalogOutputVoltage));
+		Assert.True(double.IsFinite(frame.FinalSample));
+	}
+
+	[Fact]
 	public void ReferenceMeasuredProfileAddsFilterRoutingClicks()
 	{
 		var balanced = MeasureFilterRoutingClick(SidEmulationProfile.Balanced);
@@ -645,6 +738,17 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
+	public void NoiseShiftRegisterDoesNotLeakToAllOnesWithoutTestBit()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+
+		chip.Render(SidVoice.NoiseTestAllOnesDelayCycles * 2);
+
+		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.NotEqual(0x7FFFFFu, chip.DebugState.Voices[0].NoiseShiftRegister);
+	}
+
+	[Fact]
 	public void ReleasingTestAfterNoiseLeakShiftsFromAllOnes()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
@@ -827,6 +931,15 @@ public sealed class SidChipTests
 		}
 
 		return Math.Max(Math.Abs(min - before), Math.Abs(max - before));
+	}
+
+	private static SidOutputStageFrame CaptureOutputStageFrame(SidChip chip, int cycles)
+	{
+		var outputStageTrace = new SidOutputStageTrace();
+		chip.OutputStageTrace = outputStageTrace;
+		outputStageTrace.BeginFrame();
+		RenderCycles(chip, cycles);
+		return outputStageTrace.EndFrame();
 	}
 
 	private static double MeasureSettledD418Output(byte registerValue, SidChipModel model)

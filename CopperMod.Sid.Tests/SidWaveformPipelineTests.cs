@@ -161,7 +161,7 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void PulseComparatorTogglesWhenTopAccumulatorBitsReachPulseWidth()
+	public void PulseComparatorTogglesOneCycleAfterTopAccumulatorBitsReachPulseWidth()
 	{
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
@@ -170,18 +170,21 @@ public sealed class SidWaveformPipelineTests
 		chip.Write(0x03, 0x00);
 		chip.Write(0x04, 0x40);
 
-		chip.Render(2);
+		chip.Render(3);
 
 		var before = Frame(trace, cycle: 1, voice: 0);
 		var crossing = Frame(trace, cycle: 2, voice: 0);
+		var delayed = Frame(trace, cycle: 3, voice: 0);
 		Assert.False(before.PulseHigh);
 		Assert.Equal(0u, before.WaveformDac);
-		Assert.True(crossing.PulseHigh);
-		Assert.Equal(0xFFFu, crossing.WaveformDac);
+		Assert.False(crossing.PulseHigh);
+		Assert.Equal(0u, crossing.WaveformDac);
+		Assert.True(delayed.PulseHigh);
+		Assert.Equal(0xFFFu, delayed.WaveformDac);
 	}
 
 	[Fact]
-	public void PulseWidthWriteAffectsComparatorBeforeWaveformOutputOnForwardedCycle()
+	public void PulseWidthWriteAffectsWaveformOutputOneCycleAfterForwardedCycle()
 	{
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
@@ -192,13 +195,62 @@ public sealed class SidWaveformPipelineTests
 		chip.Render(1);
 
 		chip.Write(0x02, 0x01);
+		chip.Render(2);
+
+		var forwarded = Frame(trace, cycle: 2, voice: 0);
+		var delayed = Frame(trace, cycle: 3, voice: 0);
+		Assert.True(forwarded.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+		Assert.False(forwarded.PulseHigh);
+		Assert.Equal((ushort)0x001, forwarded.PulseWidth);
+		Assert.Equal(0u, forwarded.WaveformDac);
+		Assert.True(delayed.PulseHigh);
+		Assert.Equal((ushort)0x001, delayed.PulseWidth);
+		Assert.Equal(0xFFFu, delayed.WaveformDac);
+	}
+
+	[Fact]
+	public void TestBitForcesPulseWaveformHighImmediately()
+	{
+		var chip = CreateTracedChip(out var trace);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x10);
+		chip.Write(0x02, 0xFF);
+		chip.Write(0x03, 0x0F);
+		chip.Write(0x04, 0x48);
+
 		chip.Render(1);
 
-		var frame = Frame(trace, cycle: 2, voice: 0);
-		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+		var frame = Frame(trace, cycle: 1, voice: 0);
+		Assert.True(
+			frame.Events.HasFlag(SidCycleTraceEvents.TestBitReset) ||
+			frame.Events.HasFlag(SidCycleTraceEvents.TestBitHeld));
 		Assert.True(frame.PulseHigh);
-		Assert.Equal((ushort)0x001, frame.PulseWidth);
 		Assert.Equal(0xFFFu, frame.WaveformDac);
+	}
+
+	[Fact]
+	public void ClearingTestBitKeepsPulseHighForOneLatchedCycle()
+	{
+		var chip = CreateTracedChip(out var trace);
+		chip.Write(0x00, 0x00);
+		chip.Write(0x01, 0x10);
+		chip.Write(0x02, 0xFF);
+		chip.Write(0x03, 0x0F);
+		chip.Write(0x04, 0x48);
+		chip.Render(2);
+
+		chip.Write(0x04, 0x40);
+		chip.Render(2);
+
+		var release = Frame(trace, cycle: 3, voice: 0);
+		var delayed = Frame(trace, cycle: 4, voice: 0);
+		Assert.True(release.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+		Assert.False(release.Events.HasFlag(SidCycleTraceEvents.TestBitHeld));
+		Assert.Equal(0x1000u, release.Accumulator);
+		Assert.True(release.PulseHigh);
+		Assert.Equal(0xFFFu, release.WaveformDac);
+		Assert.False(delayed.PulseHigh);
+		Assert.Equal(0u, delayed.WaveformDac);
 	}
 
 	[Fact]
@@ -287,9 +339,9 @@ public sealed class SidWaveformPipelineTests
 		chip.Write(0x03, 0x00);
 		chip.Write(0x04, control);
 
-		chip.Render(1);
+		chip.Render(2);
 
-		var frame = Frame(trace, cycle: 1, voice: 0);
+		var frame = Frame(trace, cycle: 2, voice: 0);
 		Assert.Equal(control & 0xF0, frame.Waveform);
 		Assert.True(frame.PulseHigh);
 		Assert.True(frame.WaveformDac <= 0x0FFFu);
@@ -319,9 +371,9 @@ public sealed class SidWaveformPipelineTests
 		chip.Write(0x03, 0x00);
 		chip.Write(0x04, 0x50);
 
-		chip.Render(1);
+		chip.Render(2);
 
-		var frame = Frame(trace, cycle: 1, voice: 0);
+		var frame = Frame(trace, cycle: 2, voice: 0);
 		Assert.Equal(0x50, frame.Waveform);
 		Assert.True(frame.PulseHigh);
 		Assert.Equal(0xFFFu, frame.WaveformDac);

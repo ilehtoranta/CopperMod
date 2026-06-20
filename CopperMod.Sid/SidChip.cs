@@ -407,6 +407,10 @@ namespace CopperMod.Sid
                 chipVoice3.ResetOscillator();
             }
 
+            chipVoice1.ClockPulse();
+            chipVoice2.ClockPulse();
+            chipVoice3.ClockPulse();
+
             chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
             chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
             chipVoice3.ClockNoise(SidVoice.NoiseClockRising(previousPhase3, chipVoice3.Phase));
@@ -472,6 +476,10 @@ namespace CopperMod.Sid
                 chipVoice3.ResetOscillator();
             }
 
+            chipVoice1.ClockPulse();
+            chipVoice2.ClockPulse();
+            chipVoice3.ClockPulse();
+
             chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
             chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
             chipVoice3.ClockNoise(SidVoice.NoiseClockRising(previousPhase3, chipVoice3.Phase));
@@ -523,6 +531,10 @@ namespace CopperMod.Sid
             {
                 chipVoice3.ResetOscillator();
             }
+
+            chipVoice1.ClockPulse();
+            chipVoice2.ClockPulse();
+            chipVoice3.ClockPulse();
 
             chipVoice1.ClockNoise(SidVoice.NoiseClockRising(previousPhase1, chipVoice1.Phase));
             chipVoice2.ClockNoise(SidVoice.NoiseClockRising(previousPhase2, chipVoice2.Phase));
@@ -740,8 +752,9 @@ namespace CopperMod.Sid
             var volumeTransientTarget = _volumeRegisterTransientTarget;
             var volumeTransient = _volumeRegisterTransient +
                 ((volumeTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
-            var preSoftClip = voiceSignal + _volumeOffset + volumeTransient;
-            var output = SidAnalog.SoftClip(preSoftClip);
+            // Keep the SID-core output DC-bearing. Board coupling/DC blocking is handled by C64OutputStage.
+            var sidCoreOutputSample = voiceSignal + _volumeOffset + volumeTransient;
+            var output = SidAnalog.SoftClip(sidCoreOutputSample);
             _volumeRegisterTransient = volumeTransient;
             _volumeRegisterTransientTarget *= _volumeRegisterTransientDecay;
             _outputLowPassState += (output - _outputLowPassState) * _outputLowPassAlpha;
@@ -753,7 +766,7 @@ namespace CopperMod.Sid
                     _volumeOffset,
                     volumeTransientTarget,
                     volumeTransient,
-                    preSoftClip,
+                    sidCoreOutputSample,
                     output,
                     0.0,
                     0.0,
@@ -770,7 +783,8 @@ namespace CopperMod.Sid
             var volumeTransientTarget = _volumeRegisterTransientTarget;
             var volumeTransient = _volumeRegisterTransient +
                 ((volumeTransientTarget - _volumeRegisterTransient) * _volumeRegisterTransientSlew);
-            var preSoftClip = _volumeOffset + volumeTransient;
+            // Keep the analog SID output DC-bearing. Board coupling/DC blocking is handled by C64OutputStage.
+            var volumeControlSample = _volumeOffset + volumeTransient;
             var outputVoltage = filter.ApplyOutputStageVoltage(
                 mixedVoltage,
                 _masterVolume,
@@ -789,7 +803,7 @@ namespace CopperMod.Sid
                     _volumeOffset,
                     volumeTransientTarget,
                     volumeTransient,
-                    preSoftClip,
+                    volumeControlSample,
                     outputSample,
                     mixedVoltage,
                     outputVoltage,

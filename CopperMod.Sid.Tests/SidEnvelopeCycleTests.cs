@@ -267,6 +267,102 @@ public sealed class SidEnvelopeCycleTests
 	}
 
 	[Fact]
+	public void QuickGateFromZeroHoldWrapsDownAfterReleaseDividerExpires()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0, state: Release, zeroHold: true);
+
+		chip.Write(0x04, 0x11);
+		chip.Render(1);
+		chip.Write(0x04, 0x10);
+		chip.Render((RatePeriods[0] * 30) - 2);
+
+		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
+
+		chip.Render(RatePeriods[0]);
+
+		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
+	}
+
+	[Fact]
+	public void QuickGateFromMaximumHoldWrapsUpOnNextAttackStep()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0xFF, state: Attack, zeroHold: false);
+
+		chip.Write(0x04, 0x10);
+		chip.Render(1);
+		chip.Write(0x04, 0x11);
+		chip.Render(RatePeriods[0] - 1);
+
+		Assert.Equal(0x00, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Attack, chip.DebugState.Voices[0].EnvelopeState);
+	}
+
+	[Fact]
+	public void RaisingSustainAboveCurrentEnvelopeDoesNotClampEnvelopeUpward()
+	{
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x20, control: 0x11);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: 0x22, state: Sustain, zeroHold: false);
+
+		chip.Write(0x06, 0x30);
+		chip.Render(RatePeriods[0] * 3);
+
+		Assert.Equal(0x22, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
+
+		chip.Render(RatePeriods[0]);
+
+		Assert.Equal(0x21, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
+	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(1)]
+	[InlineData(7)]
+	[InlineData(14)]
+	[InlineData(15)]
+	public void SustainComparatorStopsOnlyOnRepeatedNibbleTarget(int sustainNibble)
+	{
+		var target = sustainNibble * 0x11;
+		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: (byte)(sustainNibble << 4), control: 0x11);
+		chip.Render(1);
+		SetEnvelope(chip, envelope: target, state: Decay, zeroHold: target == 0);
+
+		chip.Render(RatePeriods[0]);
+
+		Assert.Equal(target, chip.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(Sustain, chip.DebugState.Voices[0].EnvelopeState);
+	}
+
+	[Fact]
+	public void PendingEnvelopeDirectionStateIsCopied()
+	{
+		var source = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
+		var copy = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
+		source.Render(1);
+		copy.Render(1);
+		SetEnvelope(source, envelope: 0xFF, state: Attack, zeroHold: false);
+		source.Write(0x04, 0x10);
+		source.Render(1);
+		source.Write(0x04, 0x11);
+
+		copy.CopyStateFrom(source);
+		source.Render(RatePeriods[0]);
+		copy.Render(RatePeriods[0]);
+
+		Assert.Equal(source.DebugState.Voices[0].EnvelopeCounter, copy.DebugState.Voices[0].EnvelopeCounter);
+		Assert.Equal(source.DebugState.Voices[0].EnvelopeState, copy.DebugState.Voices[0].EnvelopeState);
+		Assert.Equal(source.DebugState.Voices[0].RateCounter, copy.DebugState.Voices[0].RateCounter);
+	}
+
+	[Fact]
 	public void EnvelopeBugStateMatchesFastAndTracedPaths()
 	{
 		var fast = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
@@ -316,6 +412,14 @@ public sealed class SidEnvelopeCycleTests
 		SetField(voice, "_exponentialCounter", 0);
 		SetField(voice, "_envelopeZeroHold", zeroHold ?? (state == Release && envelope == 0));
 		SetField(voice, "_envelopeMaxHold", state == Attack && envelope == 0xFF);
+		SetField(voice, "_envelopeCountingUp", state == Attack);
+		SetField(
+			voice,
+			"_envelopeCounterEnabled",
+			(state == Release && envelope == 0)
+				? !(zeroHold ?? true)
+				: !(state == Attack && envelope == 0xFF));
+		SetField(voice, "_envelopeDirectionChangePending", false);
 	}
 
 	private static SidVoice GetVoice(SidChip chip)
