@@ -964,6 +964,7 @@ public sealed class M68kJitCoreTests
 		cpu.State.ProgramCounter = FastCodeBase;
 		cpu.State.Cycles = 0;
 		cpu.State.SetActiveStackPointer(0x4000);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
 		var boundary = new InterruptAfterFirstInstructionBoundary(cpu);
 
 		var executed = cpu.ExecuteInstructions(4, null, boundary);
@@ -3400,7 +3401,6 @@ public sealed class M68kJitCoreTests
 		_ = jit.ExecuteInstructions(600, jit.State.Cycles + 500_000, new PureBatchBoundary());
 		Assert.True(jit.Counters.V2TraceHits > 0);
 		jit.State.ProgramCounter = FastCodeBase;
-		jit.State.StatusRegister = M68kCpuState.Supervisor;
 		jit.State.Cycles = 0;
 		jit.State.Halted = false;
 		jit.State.Stopped = false;
@@ -3409,6 +3409,7 @@ public sealed class M68kJitCoreTests
 		Array.Clear(jit.State.D);
 		Array.Clear(jit.State.A);
 		jit.State.ResetStackPointers(0x4000, 0, supervisorMode: true);
+		jit.State.StatusRegister = M68kCpuState.ResetStatusRegister;
 		jit.State.A[0] = 0x2000;
 		for (var i = 0; i < 512; i++)
 		{

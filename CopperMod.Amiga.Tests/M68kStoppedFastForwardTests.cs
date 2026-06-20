@@ -59,6 +59,7 @@ public sealed class M68kStoppedFastForwardTests
 		bus.WriteLong(0x70, 0x0000_2000);
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(FastCodeBase, 0x4000);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
 		cpu.State.Stopped = true;
 		var boundary = new InterruptingFastForwardBoundary(() => cpu.RequestInterrupt(4, 0x70));
 

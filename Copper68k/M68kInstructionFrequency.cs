@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Copper68k
 {
-    public enum M68kInstructionFamily
+    internal enum M68kInstructionFamily
     {
         Move,
         MovePeripheral,
@@ -31,24 +31,24 @@ namespace Copper68k
         Unknown
     }
 
-    public enum M68kJitTarget
+    internal enum M68kJitTarget
     {
         None,
         MultiplyDivide,
         NegNot
     }
 
-    public readonly record struct M68kInstructionFamilyFrequency(
+    internal readonly record struct M68kInstructionFamilyFrequency(
         M68kInstructionFamily Family,
         string FamilyName,
         long Count);
 
-    public readonly record struct M68kJitTargetFrequency(
+    internal readonly record struct M68kJitTargetFrequency(
         M68kJitTarget Target,
         string TargetName,
         long Count);
 
-    public readonly record struct M68kOpcodeFrequency(
+    internal readonly record struct M68kOpcodeFrequency(
         ushort Opcode,
         string Mnemonic,
         M68kInstructionFamily Family,
@@ -57,7 +57,7 @@ namespace Copper68k
         string JitTargetName,
         long Count);
 
-    public readonly record struct M68kInstructionFrequencySnapshot(
+    internal readonly record struct M68kInstructionFrequencySnapshot(
         long TotalInstructions,
         IReadOnlyList<M68kInstructionFamilyFrequency> Families,
         IReadOnlyList<M68kJitTargetFrequency> JitTargets,
@@ -70,7 +70,7 @@ namespace Copper68k
             Array.Empty<M68kOpcodeFrequency>());
     }
 
-    public interface IM68kInstructionFrequencyProvider
+    internal interface IM68kInstructionFrequencyProvider
     {
         bool InstructionFrequencyEnabled { get; set; }
 
@@ -79,7 +79,7 @@ namespace Copper68k
         void ResetInstructionFrequency();
     }
 
-    public sealed class M68kInstructionFrequencyMatrix
+    internal sealed class M68kInstructionFrequencyMatrix
     {
         private readonly long[] _familyCounts = new long[Enum.GetValues<M68kInstructionFamily>().Length];
         private readonly long[] _jitTargetCounts = new long[Enum.GetValues<M68kJitTarget>().Length];
@@ -162,7 +162,7 @@ namespace Copper68k
         }
     }
 
-    public static class M68kInstructionClassifier
+    internal static class M68kInstructionClassifier
     {
         public static M68kInstructionFamily GetFamily(ushort opcode)
         {

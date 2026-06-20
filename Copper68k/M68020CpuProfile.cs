@@ -3,14 +3,14 @@ using System.Collections.Generic;
 
 namespace Copper68k
 {
-    public enum M68020BusWidth
+    internal enum M68020BusWidth
     {
         Byte = 1,
         Word = 2,
         Long = 4
     }
 
-    public enum M68020MemoryTarget
+    internal enum M68020MemoryTarget
     {
         ChipRam,
         ExpansionRam,
@@ -22,12 +22,12 @@ namespace Copper68k
         Unmapped
     }
 
-    public readonly record struct M68020BusTimingRule(
+    internal readonly record struct M68020BusTimingRule(
         M68020MemoryTarget Target,
         M68020BusWidth Width,
         int WaitStates);
 
-    public sealed class M68020CpuProfile
+    internal sealed class M68020CpuProfile
     {
         private const uint DefaultRealFastRamBase = 0x0020_0000;
         private const uint DefaultExpansionRamBase = 0x00C0_0000;
@@ -68,7 +68,7 @@ namespace Copper68k
             FastCiaAPortAAccess = fastCiaAPortAAccess;
         }
 
-        public static M68020CpuProfile OcsAccelerator14Mhz { get; } = new(
+        internal static M68020CpuProfile OcsAccelerator14Mhz { get; } = new(
             "Ocs68020_14MHz",
             M68kAcceleratorModel.M68020,
             nativeCyclesPerMachineCycle: 2,
@@ -84,7 +84,7 @@ namespace Copper68k
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
             });
 
-        public static M68020CpuProfile Ocs68030Accelerator14Mhz { get; } = new(
+        internal static M68020CpuProfile Ocs68030Accelerator14Mhz { get; } = new(
             "Ocs68030_14MHz",
             M68kAcceleratorModel.M68030,
             nativeCyclesPerMachineCycle: 2,
@@ -100,7 +100,7 @@ namespace Copper68k
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
             });
 
-        public static M68020CpuProfile Ocs68040Accelerator25Mhz { get; } = new(
+        internal static M68020CpuProfile Ocs68040Accelerator25Mhz { get; } = new(
             "Ocs68040_25MHz",
             M68kAcceleratorModel.M68040,
             nativeCyclesPerMachineCycle: 4,
@@ -117,7 +117,7 @@ namespace Copper68k
             },
             fixedInstructionNativeCycles: 1);
 
-        public static M68020CpuProfile Ocs68040JitMaxSpeed { get; } = new(
+        internal static M68020CpuProfile Ocs68040JitMaxSpeed { get; } = new(
             "Ocs68040_JitMaxSpeed",
             M68kAcceleratorModel.M68040,
             nativeCyclesPerMachineCycle: 1,
@@ -137,28 +137,28 @@ namespace Copper68k
             fastNonChipMemoryAccess: true,
             fastCiaAPortAAccess: true);
 
-        public string Name { get; }
+        internal string Name { get; }
 
-        public M68kAcceleratorModel Model { get; }
+        internal M68kAcceleratorModel Model { get; }
 
-        public string ModelName => Model switch
+        internal string ModelName => Model switch
         {
             M68kAcceleratorModel.M68030 => "MC68030",
             M68kAcceleratorModel.M68040 => "MC68040",
             _ => "MC68020"
         };
 
-        public int NativeCyclesPerMachineCycle { get; }
+        internal int NativeCyclesPerMachineCycle { get; }
 
-        public IReadOnlyList<M68020BusTimingRule> BusTiming { get; }
+        internal IReadOnlyList<M68020BusTimingRule> BusTiming { get; }
 
-        public int? FixedInstructionNativeCycles { get; }
+        internal int? FixedInstructionNativeCycles { get; }
 
-        public bool FastInstructionFetch { get; }
+        internal bool FastInstructionFetch { get; }
 
-        public bool FastNonChipMemoryAccess { get; }
+        internal bool FastNonChipMemoryAccess { get; }
 
-        public bool FastCiaAPortAAccess { get; }
+        internal bool FastCiaAPortAAccess { get; }
 
         internal static M68020CpuProfile CreateForTesting(
             string name,
@@ -167,13 +167,13 @@ namespace Copper68k
             params M68020BusTimingRule[] busTiming)
             => new(name, model, nativeCyclesPerMachineCycle, busTiming);
 
-        public long NativeToMachineCycles(long nativeCycles)
+        internal long NativeToMachineCycles(long nativeCycles)
             => (nativeCycles + NativeCyclesPerMachineCycle - 1) / NativeCyclesPerMachineCycle;
 
-        public long MachineToNativeCycles(long machineCycles)
+        internal long MachineToNativeCycles(long machineCycles)
             => machineCycles * NativeCyclesPerMachineCycle;
 
-        public M68020BusTimingRule GetBusTimingRule(uint address)
+        internal M68020BusTimingRule GetBusTimingRule(uint address)
         {
             var target = ClassifyTarget(address);
             for (var i = 0; i < BusTiming.Count; i++)
@@ -187,7 +187,7 @@ namespace Copper68k
             return new M68020BusTimingRule(target, M68020BusWidth.Word, 0);
         }
 
-        public static M68020MemoryTarget ClassifyTarget(uint address)
+        internal static M68020MemoryTarget ClassifyTarget(uint address)
         {
             address &= 0x00FF_FFFF;
             if (address < 0x0020_0000)

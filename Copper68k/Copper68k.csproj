@@ -4,16 +4,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>1701;1702;NU1900;1591</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
     <PackageId>Copper68k</PackageId>
     <Title>Copper68k</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends.</Description>
     <PackageVersion>1.0.0</PackageVersion>
+    <PackageReleaseNotes>Initial Copper68k package release with MC68000, MC68020, MC68030, and MC68040 interpreter cores behind a small bus/core API; package icon, README, XML API documentation, symbols, and Source Link metadata.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <PackageTags>emulation;m68000;m68k;68000;68020;68030;68040;cpu</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copper68k-icon.png</PackageIcon>
@@ -24,20 +28,21 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>$(NoWarn);1701;1702;NU1900;1591</NoWarn>
+    <NoWarn>$(NoWarn);1701;1702;NU1900</NoWarn>
     <Optimize>true</Optimize>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>$(NoWarn);1701;1702;NU1900;1591</NoWarn>
+    <NoWarn>$(NoWarn);1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="copper68k-icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
     <ProjectReference Include="..\CopperMod.PerformanceAnalyzers\CopperMod.PerformanceAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

@@ -182,6 +182,7 @@ public sealed class M68020InterpreterTests
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
 		cpu.State.VectorBaseRegister = 0x0400;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
 
 		cpu.RequestInterrupt(3, 27u * 4);
 

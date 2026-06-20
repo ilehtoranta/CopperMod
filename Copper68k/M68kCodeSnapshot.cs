@@ -2,7 +2,7 @@ using System;
 
 namespace Copper68k
 {
-    public readonly struct M68kCodeGenerationStamp
+    internal readonly struct M68kCodeGenerationStamp
     {
         public M68kCodeGenerationStamp(uint[] pages, uint[] generations)
         {
@@ -17,7 +17,7 @@ namespace Copper68k
         public bool IsEmpty => Pages == null || Generations == null || Pages.Length == 0;
     }
 
-    public readonly struct M68kJitCodeSnapshot
+    internal readonly struct M68kJitCodeSnapshot
     {
         public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostTrapStubAddresses)
         {
@@ -38,7 +38,7 @@ namespace Copper68k
         public bool IsEmpty => Bytes == null || Bytes.Length == 0;
     }
 
-    public sealed class M68kSnapshotCodeReader : IM68kCodeReader
+    internal sealed class M68kSnapshotCodeReader : IM68kCodeReader
     {
         private const int CodeGenerationPageSize = 1 << 8;
         private readonly M68kJitCodeSnapshot _snapshot;

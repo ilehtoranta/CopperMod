@@ -47,7 +47,7 @@ namespace CopperMod.Amiga
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
-        public IM68kCoreFactory CpuFactory { get; private set; } = AmigaM68kCoreFactory.Default;
+        public IM68kBackendCoreFactory CpuFactory { get; private set; } = AmigaM68kCoreFactory.Default;
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
 
@@ -80,7 +80,7 @@ namespace CopperMod.Amiga
             return options;
         }
 
-        public AmigaMachineOptions WithCpu(IM68kCoreFactory factory, M68kBackendKind backend)
+        public AmigaMachineOptions WithCpu(IM68kBackendCoreFactory factory, M68kBackendKind backend)
         {
             CpuFactory = factory ?? throw new ArgumentNullException(nameof(factory));
             CpuBackend = backend;

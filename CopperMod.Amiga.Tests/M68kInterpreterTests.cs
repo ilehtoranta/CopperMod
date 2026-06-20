@@ -1214,7 +1214,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x001D, ReadWord(bus.Memory, 0x2FF2));
 		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x3010, ReadWord(bus.Memory, 0x2FF8));
-		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
 		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
 	}
 
@@ -1236,7 +1236,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x000D, ReadWord(bus.Memory, 0x2FF2));
 		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x3080, ReadWord(bus.Memory, 0x2FF8));
-		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
 		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
 		Assert.Equal(0x00, bus.Memory[0x2001]);
 	}
@@ -1256,7 +1256,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x0016, ReadWord(bus.Memory, 0x2FF2));
 		Assert.Equal(0x0000_1001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x0000, ReadWord(bus.Memory, 0x2FF8));
-		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
 		Assert.Equal(0x0000_1001u, ReadLong(bus.Memory, 0x2FFC));
 	}
 
@@ -1273,7 +1273,7 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
 		Assert.Equal(0x2FFAu, cpu.State.A[7]);
-		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
 		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 
@@ -1290,7 +1290,7 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
 		Assert.Equal(0x2FFAu, cpu.State.A[7]);
-		Assert.Equal((ushort)M68kCpuState.Supervisor, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
 		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 

@@ -3,40 +3,145 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
+    /// <summary>
+    /// Operand sizes used by 68k integer instructions and bus accesses.
+    /// </summary>
     public enum M68kOperandSize
     {
+        /// <summary>
+        /// An 8-bit operand.
+        /// </summary>
         Byte = 1,
+
+        /// <summary>
+        /// A 16-bit operand.
+        /// </summary>
         Word = 2,
+
+        /// <summary>
+        /// A 32-bit operand.
+        /// </summary>
         Long = 4
     }
 
+    /// <summary>
+    /// CPU models exposed by the Copper68k factory.
+    /// </summary>
+    public enum M68kCpuModel
+    {
+        /// <summary>
+        /// Motorola MC68000-compatible execution.
+        /// </summary>
+        M68000 = 0,
+
+        /// <summary>
+        /// Motorola MC68020-compatible execution.
+        /// </summary>
+        M68020 = 1,
+
+        /// <summary>
+        /// Motorola MC68030-compatible execution.
+        /// </summary>
+        M68030 = 2,
+
+        /// <summary>
+        /// Motorola MC68040-compatible execution.
+        /// </summary>
+        M68040 = 3
+    }
+
+    /// <summary>
+    /// Bus interface used by Copper68k cores to access memory, devices, and host traps.
+    /// </summary>
+    /// <remarks>
+    /// Bus implementations receive the current CPU cycle by reference and may advance it to model
+    /// memory wait states or device latency. Multi-byte values are transferred in 68k big-endian order.
+    /// </remarks>
     public interface IM68kBus
     {
+        /// <summary>
+        /// Reads one byte from the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
+        /// <returns>The byte read from the bus.</returns>
         byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Reads one 16-bit big-endian word from the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
+        /// <returns>The word read from the bus.</returns>
         ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Reads one 32-bit big-endian long word from the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
+        /// <returns>The long word read from the bus.</returns>
         uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Writes one byte to the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="value">The byte to write.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
         void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Writes one 16-bit big-endian word to the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="value">The word to write.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
         void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Writes one 32-bit big-endian long word to the emulated bus.
+        /// </summary>
+        /// <param name="address">The 32-bit CPU address.</param>
+        /// <param name="value">The long word to write.</param>
+        /// <param name="cycle">The current CPU cycle, which the bus may advance.</param>
+        /// <param name="accessKind">The reason for the bus access.</param>
         void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind);
 
+        /// <summary>
+        /// Determines whether an instruction address contains a host trap stub.
+        /// </summary>
+        /// <param name="address">The instruction address to probe.</param>
+        /// <returns><see langword="true"/> if the host wants to intercept the instruction.</returns>
         bool HasHostTrapStub(uint address);
 
+        /// <summary>
+        /// Invokes a host trap previously identified by <see cref="HasHostTrapStub"/>.
+        /// </summary>
+        /// <param name="instructionProgramCounter">The address of the host trap instruction.</param>
+        /// <param name="trapId">The trap identifier word following the trap opcode.</param>
+        /// <param name="state">The mutable CPU state at the trap point.</param>
+        /// <returns><see langword="true"/> if the host handled the trap.</returns>
         bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state);
 
+        /// <summary>
+        /// Notifies external devices that the 68k RESET instruction was executed.
+        /// </summary>
+        /// <param name="cycle">The CPU cycle at which the reset notification occurs.</param>
         void ResetExternalDevices(long cycle);
     }
 
-    public interface IM68kPhysicalAddressMap
+    internal interface IM68kPhysicalAddressMap
     {
         bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind);
     }
 
-    public interface IM68kFastMemoryBus
+    internal interface IM68kFastMemoryBus
     {
         bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value);
 
@@ -51,7 +156,7 @@ namespace Copper68k
         bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
-    public enum M68kTraceBatchWakeSource
+    internal enum M68kTraceBatchWakeSource
     {
         Unknown = 0,
         TargetCycle,
@@ -65,56 +170,82 @@ namespace Copper68k
         Blitter
     }
 
+    /// <summary>
+    /// Common interface for Copper68k CPU cores.
+    /// </summary>
     public interface IM68kCore : IDisposable
     {
+        /// <summary>
+        /// Gets the mutable CPU register and execution state.
+        /// </summary>
         M68kCpuState State { get; }
 
+        /// <summary>
+        /// Executes one logical CPU instruction or one idle cycle while halted or stopped.
+        /// </summary>
+        /// <returns>The number of machine cycles advanced by the instruction.</returns>
         int ExecuteInstruction();
 
+        /// <summary>
+        /// Resets the CPU core to a supplied entry point and supervisor stack pointer.
+        /// </summary>
+        /// <param name="programCounter">The reset program counter.</param>
+        /// <param name="stackPointer">The reset supervisor stack pointer.</param>
         void Reset(uint programCounter, uint stackPointer);
 
+        /// <summary>
+        /// Starts executing a host-provided subroutine and pushes a return address on the active stack.
+        /// </summary>
+        /// <param name="address">The subroutine entry address.</param>
+        /// <param name="stackPointer">The stack pointer to use before pushing the return address.</param>
+        /// <param name="returnAddress">The return address to push.</param>
         void BeginSubroutine(uint address, uint stackPointer, uint returnAddress);
 
+        /// <summary>
+        /// Requests an interrupt at the specified level.
+        /// </summary>
+        /// <param name="level">The interrupt priority level, from 1 through 7.</param>
+        /// <param name="vectorAddress">The byte offset of the vector entry in the active vector table.</param>
         void RequestInterrupt(int level, uint vectorAddress);
     }
 
-    public interface IM68kInstructionBoundary
+    internal interface IM68kInstructionBoundary
     {
         bool BeforeInstruction();
 
         void AfterInstruction(long previousCycle, long currentCycle);
     }
 
-    public interface IM68kTraceBatchDiagnosticsBoundary
+    internal interface IM68kTraceBatchDiagnosticsBoundary
     {
         M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; }
     }
 
-    public interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
+    internal interface IM68kStoppedCpuFastForwardBoundary : IM68kInstructionBoundary
     {
         bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles);
     }
 
-    public interface IM68kPureCpuTraceBatchBoundary : IM68kInstructionBoundary
+    internal interface IM68kPureCpuTraceBatchBoundary : IM68kInstructionBoundary
     {
         bool TryBeginPureCpuTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
 
         void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
-    public interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
+    internal interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
     {
         bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
 
         void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
-    public interface IM68kBatchCore : IM68kCore
+    internal interface IM68kBatchCore : IM68kCore
     {
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
     }
 
-    public enum M68kBackendKind
+    internal enum M68kBackendKind
     {
         AccurateM68000 = 0,
         AccurateM68020 = 1,
@@ -126,16 +257,56 @@ namespace Copper68k
         JitM68040 = 7
     }
 
+    /// <summary>
+    /// Creates Copper68k CPU cores for public CPU models.
+    /// </summary>
     public interface IM68kCoreFactory
+    {
+        /// <summary>
+        /// Creates a CPU core for the requested model.
+        /// </summary>
+        /// <param name="model">The CPU model to emulate.</param>
+        /// <param name="bus">The bus implementation used by the CPU core.</param>
+        /// <returns>A new CPU core instance.</returns>
+        IM68kCore Create(M68kCpuModel model, IM68kBus bus);
+    }
+
+    internal interface IM68kBackendCoreFactory : IM68kCoreFactory
     {
         IM68kCore Create(M68kBackendKind backend, IM68kBus bus);
     }
 
-    public sealed class M68kCoreFactory : IM68kCoreFactory
+    /// <summary>
+    /// Default factory for Copper68k interpreter cores.
+    /// </summary>
+    public sealed class M68kCoreFactory : IM68kBackendCoreFactory
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="M68kCoreFactory"/> class.
+        /// </summary>
+        public M68kCoreFactory()
+        {
+        }
+
+        /// <summary>
+        /// Gets the shared default factory instance.
+        /// </summary>
         public static M68kCoreFactory Default { get; } = new M68kCoreFactory();
 
-        public IM68kCore Create(M68kBackendKind backend, IM68kBus bus)
+        /// <inheritdoc />
+        public IM68kCore Create(M68kCpuModel model, IM68kBus bus)
+        {
+            return model switch
+            {
+                M68kCpuModel.M68000 => new M68kInterpreter(bus),
+                M68kCpuModel.M68020 => new M68020Interpreter(bus),
+                M68kCpuModel.M68030 => new M68030Interpreter(bus),
+                M68kCpuModel.M68040 => new M68040Interpreter(bus),
+                _ => throw new M68kEmulationException($"The requested M68k CPU model is not implemented: {model}.")
+            };
+        }
+
+        internal IM68kCore Create(M68kBackendKind backend, IM68kBus bus)
         {
             if (backend == M68kBackendKind.AccurateM68000)
             {
@@ -169,109 +340,214 @@ namespace Copper68k
 
             throw new M68kEmulationException($"The requested M68k backend is not implemented: {backend}.");
         }
+
+        IM68kCore IM68kBackendCoreFactory.Create(M68kBackendKind backend, IM68kBus bus)
+            => Create(backend, bus);
     }
 
+    /// <summary>
+    /// Mutable 68k register, control, and timing state shared by Copper68k cores.
+    /// </summary>
     public sealed class M68kCpuState
     {
+        /// <summary>
+        /// Condition-code bit for carry.
+        /// </summary>
         public const ushort Carry = 0x0001;
+
+        /// <summary>
+        /// Condition-code bit for overflow.
+        /// </summary>
         public const ushort Overflow = 0x0002;
+
+        /// <summary>
+        /// Condition-code bit for zero.
+        /// </summary>
         public const ushort Zero = 0x0004;
+
+        /// <summary>
+        /// Condition-code bit for negative.
+        /// </summary>
         public const ushort Negative = 0x0008;
+
+        /// <summary>
+        /// Condition-code bit for extend.
+        /// </summary>
         public const ushort Extend = 0x0010;
+
+        /// <summary>
+        /// Status-register bit for 68020+ master stack mode.
+        /// </summary>
         public const ushort Master = 0x1000;
+
+        /// <summary>
+        /// Status-register bit for supervisor mode.
+        /// </summary>
         public const ushort Supervisor = 0x2000;
+
+        /// <summary>
+        /// Hardware reset status register value: supervisor mode with interrupt mask 7.
+        /// </summary>
         public const ushort ResetStatusRegister = 0x2700;
         private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
+        /// <summary>
+        /// Gets the eight data registers D0 through D7.
+        /// </summary>
         public uint[] D { get; } = new uint[8];
 
+        /// <summary>
+        /// Gets the eight address registers A0 through A7. A7 is the currently active stack pointer.
+        /// </summary>
         public uint[] A { get; } = new uint[8];
 
         private ushort _statusRegister = Supervisor;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="M68kCpuState"/> class.
+        /// </summary>
+        public M68kCpuState()
+        {
+        }
+
+        /// <summary>
+        /// Gets or sets the program counter.
+        /// </summary>
         public uint ProgramCounter { get; set; }
 
+        /// <summary>
+        /// Gets or sets the 16-bit status register.
+        /// </summary>
+        /// <remarks>
+        /// Setting this property updates the active A7 stack pointer when supervisor/user or
+        /// 68020+ master/interrupt stack mode changes.
+        /// </remarks>
         public ushort StatusRegister
         {
             get => _statusRegister;
             set => SetStatusRegister(value);
         }
 
+        /// <summary>
+        /// Gets the saved user stack pointer.
+        /// </summary>
         public uint UserStackPointer { get; private set; }
 
+        /// <summary>
+        /// Gets the saved supervisor stack pointer.
+        /// </summary>
         public uint SupervisorStackPointer { get; private set; }
 
+        /// <summary>
+        /// Gets the 68020+ interrupt stack pointer.
+        /// </summary>
         public uint InterruptStackPointer => SupervisorStackPointer;
 
+        /// <summary>
+        /// Gets the 68020+ master stack pointer.
+        /// </summary>
         public uint MasterStackPointer { get; private set; }
 
+        /// <summary>
+        /// Gets or sets the 68010+ vector base register.
+        /// </summary>
         public uint VectorBaseRegister { get; set; }
 
+        /// <summary>
+        /// Gets or sets the 68020+ source function-code register value.
+        /// </summary>
         public uint SourceFunctionCode { get; set; }
 
+        /// <summary>
+        /// Gets or sets the 68020+ destination function-code register value.
+        /// </summary>
         public uint DestinationFunctionCode { get; set; }
 
+        /// <summary>
+        /// Gets or sets the 68020+/68040 cache control register value.
+        /// </summary>
         public uint CacheControlRegister { get; set; }
 
+        /// <summary>
+        /// Gets or sets the 68040 cache address register value.
+        /// </summary>
         public uint CacheAddressRegister { get; set; }
 
-        public M68040FpuState M68040Fpu { get; } = new M68040FpuState();
+        internal M68040FpuState M68040Fpu { get; } = new M68040FpuState();
 
-        public M68040MmuState M68040Mmu { get; } = new M68040MmuState();
+        internal M68040MmuState M68040Mmu { get; } = new M68040MmuState();
 
+        /// <summary>
+        /// Gets or sets the elapsed 68k machine-cycle count.
+        /// </summary>
         public long Cycles { get; set; }
 
+        /// <summary>
+        /// Gets or sets the elapsed native-cycle count used by 68020+ timing profiles.
+        /// </summary>
         public long NativeCycles { get; set; }
 
+        /// <summary>
+        /// Gets or sets whether the core is halted.
+        /// </summary>
         public bool Halted { get; set; }
 
+        /// <summary>
+        /// Gets or sets whether the core is stopped by the STOP instruction.
+        /// </summary>
         public bool Stopped { get; set; }
 
+        /// <summary>
+        /// Gets or sets the last fetched opcode.
+        /// </summary>
         public ushort LastOpcode { get; set; }
 
+        /// <summary>
+        /// Gets or sets the program counter of the last instruction start.
+        /// </summary>
         public uint LastInstructionProgramCounter { get; set; }
 
-        public int LastExceptionVector { get; set; } = -1;
+        internal int LastExceptionVector { get; set; } = -1;
 
-        public int FirstExceptionVector { get; set; } = -1;
+        internal int FirstExceptionVector { get; set; } = -1;
 
-        public uint FirstExceptionStackedProgramCounter { get; set; }
+        internal uint FirstExceptionStackedProgramCounter { get; set; }
 
-        public ushort FirstExceptionStatusRegister { get; set; }
+        internal ushort FirstExceptionStatusRegister { get; set; }
 
-        public ushort FirstExceptionOpcode { get; set; }
+        internal ushort FirstExceptionOpcode { get; set; }
 
-        public uint FirstExceptionInstructionProgramCounter { get; set; }
+        internal uint FirstExceptionInstructionProgramCounter { get; set; }
 
-        public uint FirstExceptionD0 { get; set; }
+        internal uint FirstExceptionD0 { get; set; }
 
-        public uint FirstExceptionD1 { get; set; }
+        internal uint FirstExceptionD1 { get; set; }
 
-        public uint FirstExceptionA0 { get; set; }
+        internal uint FirstExceptionA0 { get; set; }
 
-        public uint FirstExceptionA6 { get; set; }
+        internal uint FirstExceptionA6 { get; set; }
 
-        public uint FirstExceptionA7 { get; set; }
+        internal uint FirstExceptionA7 { get; set; }
 
-        public uint LastExceptionStackedProgramCounter { get; set; }
+        internal uint LastExceptionStackedProgramCounter { get; set; }
 
-        public ushort LastExceptionStatusRegister { get; set; }
+        internal ushort LastExceptionStatusRegister { get; set; }
 
-        public ushort LastExceptionOpcode { get; set; }
+        internal ushort LastExceptionOpcode { get; set; }
 
-        public uint LastExceptionInstructionProgramCounter { get; set; }
+        internal uint LastExceptionInstructionProgramCounter { get; set; }
 
-        public uint LastExceptionD0 { get; set; }
+        internal uint LastExceptionD0 { get; set; }
 
-        public uint LastExceptionD1 { get; set; }
+        internal uint LastExceptionD1 { get; set; }
 
-        public uint LastExceptionA0 { get; set; }
+        internal uint LastExceptionA0 { get; set; }
 
-        public uint LastExceptionA6 { get; set; }
+        internal uint LastExceptionA6 { get; set; }
 
-        public uint LastExceptionA7 { get; set; }
+        internal uint LastExceptionA7 { get; set; }
 
-        public void RecordException(int vector, uint stackedProgramCounter, ushort savedStatusRegister)
+        internal void RecordException(int vector, uint stackedProgramCounter, ushort savedStatusRegister)
         {
             if (vector < 0)
             {
@@ -312,19 +588,29 @@ namespace Copper68k
             LastExceptionA7 = A[7];
         }
 
-        public bool M68020StackModeEnabled { get; private set; }
+        internal bool M68020StackModeEnabled { get; private set; }
 
-        public void EnableM68020StackMode()
+        internal void EnableM68020StackMode()
         {
             M68020StackModeEnabled = true;
             SetStatusRegister(_statusRegister);
         }
 
+        /// <summary>
+        /// Tests whether a status-register flag or mask is set.
+        /// </summary>
+        /// <param name="flag">The flag or mask to test.</param>
+        /// <returns><see langword="true"/> if all bits in <paramref name="flag"/> are set.</returns>
         public bool GetFlag(ushort flag)
         {
             return (_statusRegister & flag) != 0;
         }
 
+        /// <summary>
+        /// Sets or clears a status-register flag or mask.
+        /// </summary>
+        /// <param name="flag">The flag or mask to update.</param>
+        /// <param name="value"><see langword="true"/> to set the bits; <see langword="false"/> to clear them.</param>
         public void SetFlag(ushort flag, bool value)
         {
             if ((flag & ~ConditionCodeMask) == 0)
@@ -340,6 +626,12 @@ namespace Copper68k
                 : (ushort)(_statusRegister & ~flag);
         }
 
+        /// <summary>
+        /// Resets the saved user/supervisor stack pointers and selects the active stack pointer.
+        /// </summary>
+        /// <param name="supervisorStackPointer">The supervisor stack pointer value.</param>
+        /// <param name="userStackPointer">The user stack pointer value.</param>
+        /// <param name="supervisorMode">Whether A7 should select the supervisor stack.</param>
         public void ResetStackPointers(uint supervisorStackPointer, uint userStackPointer, bool supervisorMode)
         {
             SupervisorStackPointer = supervisorStackPointer;
@@ -349,6 +641,10 @@ namespace Copper68k
             _statusRegister = supervisorMode ? Supervisor : (ushort)0;
         }
 
+        /// <summary>
+        /// Sets A7 and the currently active saved stack pointer.
+        /// </summary>
+        /// <param name="stackPointer">The new active stack pointer value.</param>
         public void SetActiveStackPointer(uint stackPointer)
         {
             A[7] = stackPointer;
@@ -368,6 +664,10 @@ namespace Copper68k
             }
         }
 
+        /// <summary>
+        /// Sets the saved user stack pointer.
+        /// </summary>
+        /// <param name="stackPointer">The user stack pointer value.</param>
         public void SetUserStackPointer(uint stackPointer)
         {
             UserStackPointer = stackPointer;
@@ -377,6 +677,10 @@ namespace Copper68k
             }
         }
 
+        /// <summary>
+        /// Sets the saved interrupt stack pointer.
+        /// </summary>
+        /// <param name="stackPointer">The interrupt stack pointer value.</param>
         public void SetInterruptStackPointer(uint stackPointer)
         {
             SupervisorStackPointer = stackPointer;
@@ -386,6 +690,10 @@ namespace Copper68k
             }
         }
 
+        /// <summary>
+        /// Sets the saved master stack pointer.
+        /// </summary>
+        /// <param name="stackPointer">The master stack pointer value.</param>
         public void SetMasterStackPointer(uint stackPointer)
         {
             MasterStackPointer = stackPointer;
@@ -395,6 +703,10 @@ namespace Copper68k
             }
         }
 
+        /// <summary>
+        /// Enters supervisor mode while preserving the current user stack as the active stack.
+        /// </summary>
+        /// <returns>The previous supervisor stack pointer, or zero if already in supervisor mode.</returns>
         public uint EnterSupervisorModeWithUserStack()
         {
             if (GetFlag(Supervisor))
@@ -409,6 +721,10 @@ namespace Copper68k
             return oldSupervisorStackPointer;
         }
 
+        /// <summary>
+        /// Returns to user mode after <see cref="EnterSupervisorModeWithUserStack"/>.
+        /// </summary>
+        /// <param name="supervisorStackPointer">The supervisor stack pointer to restore.</param>
         public void ReturnToUserModeWithUserStack(uint supervisorStackPointer)
         {
             if (!GetFlag(Supervisor))
@@ -509,6 +825,11 @@ namespace Copper68k
         private static bool UsesInterruptStack(ushort statusRegister)
             => (statusRegister & Supervisor) != 0 && (statusRegister & Master) == 0;
 
+        /// <summary>
+        /// Updates the negative and zero condition codes from a sized value.
+        /// </summary>
+        /// <param name="value">The value to test.</param>
+        /// <param name="size">The operand size that defines the mask and sign bit.</param>
         public void SetNegativeZero(uint value, M68kOperandSize size)
         {
             var mask = Mask(size);
@@ -528,6 +849,11 @@ namespace Copper68k
             _statusRegister = (ushort)status;
         }
 
+        /// <summary>
+        /// Gets the value mask for an operand size.
+        /// </summary>
+        /// <param name="size">The operand size.</param>
+        /// <returns>The unsigned mask for that operand size.</returns>
         public static uint Mask(M68kOperandSize size)
         {
             return size switch
@@ -538,6 +864,11 @@ namespace Copper68k
             };
         }
 
+        /// <summary>
+        /// Gets the sign bit for an operand size.
+        /// </summary>
+        /// <param name="size">The operand size.</param>
+        /// <returns>The sign bit for that operand size.</returns>
         public static uint SignBit(M68kOperandSize size)
         {
             return size switch
@@ -548,6 +879,12 @@ namespace Copper68k
             };
         }
 
+        /// <summary>
+        /// Sign-extends a byte, word, or long value to 32 bits.
+        /// </summary>
+        /// <param name="value">The value to sign-extend.</param>
+        /// <param name="size">The original operand size.</param>
+        /// <returns>The 32-bit sign-extended value.</returns>
         public static uint SignExtend(uint value, M68kOperandSize size)
         {
             value &= Mask(size);
@@ -560,8 +897,16 @@ namespace Copper68k
         }
     }
 
+    /// <summary>
+    /// Exception thrown when the 68000 interpreter encounters an unsupported opcode.
+    /// </summary>
     public sealed class UnsupportedM68kOpcodeException : M68kEmulationException
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UnsupportedM68kOpcodeException"/> class.
+        /// </summary>
+        /// <param name="opcode">The unsupported opcode.</param>
+        /// <param name="programCounter">The instruction address where the opcode was fetched.</param>
         public UnsupportedM68kOpcodeException(ushort opcode, uint programCounter)
             : base($"Unsupported MC68000 opcode 0x{opcode:X4} at 0x{programCounter:X8}.")
         {
@@ -569,12 +914,18 @@ namespace Copper68k
             ProgramCounter = programCounter;
         }
 
+        /// <summary>
+        /// Gets the unsupported opcode.
+        /// </summary>
         public ushort Opcode { get; }
 
+        /// <summary>
+        /// Gets the instruction address where the opcode was fetched.
+        /// </summary>
         public uint ProgramCounter { get; }
     }
 
-    public sealed class M68kAddressErrorException : Exception
+    internal sealed class M68kAddressErrorException : Exception
     {
         public static M68kAddressErrorException Instance { get; } = new M68kAddressErrorException();
 
@@ -583,7 +934,7 @@ namespace Copper68k
         }
     }
 
-    public sealed class M68kIllegalInstructionException : Exception
+    internal sealed class M68kIllegalInstructionException : Exception
     {
         public static M68kIllegalInstructionException Instance { get; } = new M68kIllegalInstructionException();
 
@@ -592,7 +943,7 @@ namespace Copper68k
         }
     }
 
-    public sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    internal sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
@@ -607,7 +958,7 @@ namespace Copper68k
         {
         }
 
-        public M68kInterpreter(IM68kBus bus, M68kCpuState state, M68kInstructionFrequencyMatrix? instructionFrequency = null)
+        internal M68kInterpreter(IM68kBus bus, M68kCpuState state, M68kInstructionFrequencyMatrix? instructionFrequency = null)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             State = state ?? throw new ArgumentNullException(nameof(state));
@@ -616,23 +967,35 @@ namespace Copper68k
 
         public M68kCpuState State { get; }
 
-        public bool InstructionFrequencyEnabled
+        internal bool InstructionFrequencyEnabled
         {
             get => _instructionFrequency.Enabled;
             set => _instructionFrequency.Enabled = value;
         }
 
-        public M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
+        internal M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
             => _instructionFrequency.CaptureSnapshot();
 
-        public void ResetInstructionFrequency()
+        internal void ResetInstructionFrequency()
             => _instructionFrequency.Reset();
+
+        bool IM68kInstructionFrequencyProvider.InstructionFrequencyEnabled
+        {
+            get => InstructionFrequencyEnabled;
+            set => InstructionFrequencyEnabled = value;
+        }
+
+        M68kInstructionFrequencySnapshot IM68kInstructionFrequencyProvider.CaptureInstructionFrequency()
+            => CaptureInstructionFrequency();
+
+        void IM68kInstructionFrequencyProvider.ResetInstructionFrequency()
+            => ResetInstructionFrequency();
 
         public void Dispose()
         {
         }
 
-        public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
+        internal int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {
             ArgumentNullException.ThrowIfNull(boundary);
             var instructions = 0;
@@ -666,6 +1029,9 @@ namespace Copper68k
 
             return instructions;
         }
+
+        int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
+            => ExecuteInstructions(maxInstructions, targetCycle, boundary);
 
         public int ExecuteInstruction()
         {

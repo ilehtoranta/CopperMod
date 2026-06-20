@@ -19,6 +19,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Pack Copper68k NuGet
+        shell: pwsh
+        run: .\scripts\nuget\pack-copper68k.ps1
+
       - name: Build CopperScreen
         run: dotnet build CopperScreen\CopperScreen.csproj --configuration Release
 

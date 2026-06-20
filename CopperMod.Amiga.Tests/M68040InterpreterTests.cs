@@ -214,8 +214,8 @@ public sealed class M68040InterpreterTests
 
 		Assert.Equal(0x3004u, cpu.State.A[0]);
 		Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
-		Assert.Equal(0, cpu.Timing.LastInstructionTiming.Plan.NativeCycles);
-		Assert.Equal(0, cpu.Timing.LastInstructionTiming.ElapsedNativeCycles);
+		Assert.Equal(1, cpu.Timing.LastInstructionTiming.Plan.NativeCycles);
+		Assert.Equal(1, cpu.Timing.LastInstructionTiming.ElapsedNativeCycles);
 		Assert.True(cpu.State.Cycles > 0);
 	}
 

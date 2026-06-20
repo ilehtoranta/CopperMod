@@ -2,7 +2,7 @@ using System;
 
 namespace Copper68k
 {
-    public enum M68kJitOperation
+    internal enum M68kJitOperation
     {
         Nop,
         Moveq,
@@ -64,7 +64,7 @@ namespace Copper68k
         M68040Fallback
     }
 
-    public enum M68kJitEaKind
+    internal enum M68kJitEaKind
     {
         None,
         DataRegister,
@@ -81,7 +81,7 @@ namespace Copper68k
         Immediate
     }
 
-    public enum M68kJitBailoutReason
+    internal enum M68kJitBailoutReason
     {
         None,
         UnsupportedOpcode,
@@ -94,7 +94,7 @@ namespace Copper68k
         SelfModifiedCode
     }
 
-    public readonly struct M68kDecodedEa
+    internal readonly struct M68kDecodedEa
     {
         public M68kDecodedEa(
             M68kJitEaKind kind,
@@ -149,7 +149,7 @@ namespace Copper68k
                 M68kJitEaKind.AbsoluteLong;
     }
 
-    public readonly struct M68kDecodedInstruction
+    internal readonly struct M68kDecodedInstruction
     {
         public M68kDecodedInstruction(
             uint programCounter,
@@ -238,14 +238,14 @@ namespace Copper68k
         public bool StopsTrace { get; }
     }
 
-    public interface IM68kCodeReader
+    internal interface IM68kCodeReader
     {
         bool HasHostTrapStub(uint address);
 
         ushort ReadHostWord(uint address);
     }
 
-    public sealed class M68kCodeReadException : Exception
+    internal sealed class M68kCodeReadException : Exception
     {
         public static M68kCodeReadException Instance { get; } = new M68kCodeReadException();
 
@@ -255,7 +255,7 @@ namespace Copper68k
         }
     }
 
-    public static class M68kDecoder
+    internal static class M68kDecoder
     {
         [Flags]
         private enum EaAllowed

@@ -2,7 +2,7 @@ using System;
 
 namespace Copper68k
 {
-    public enum M68kAcceleratorModel
+    internal enum M68kAcceleratorModel
     {
         M68020,
         M68030,
@@ -10,7 +10,7 @@ namespace Copper68k
     }
 
     [Flags]
-    public enum M68kTimingBarrier
+    internal enum M68kTimingBarrier
     {
         None = 0,
         FlushPipeline = 1 << 0,
@@ -21,7 +21,7 @@ namespace Copper68k
         ReadModifyWrite = 1 << 5
     }
 
-    public enum M68kInstructionTimingKey
+    internal enum M68kInstructionTimingKey
     {
         Idle,
         Nop,
@@ -228,7 +228,7 @@ namespace Copper68k
         BsrLong
     }
 
-    public readonly record struct M68kInstructionPlan(
+    internal readonly record struct M68kInstructionPlan(
         M68kInstructionTimingKey Key,
         string Name,
         int NativeCycles,
@@ -254,7 +254,7 @@ namespace Copper68k
             => new(key, name, cacheCaseCycles, headCycles, tailCycles, UsesHeadTail: true, barriers);
     }
 
-    public readonly record struct M68kExecutedInstructionTiming(
+    internal readonly record struct M68kExecutedInstructionTiming(
         M68kInstructionPlan Plan,
         int OverlapCycles,
         long StartNativeCycle,
@@ -264,7 +264,7 @@ namespace Copper68k
         public long ElapsedNativeCycles => EndNativeCycle - StartNativeCycle;
     }
 
-    public sealed class M68kPipelineState
+    internal sealed class M68kPipelineState
     {
         public long InstructionBoundaryNativeCycle { get; set; }
 
@@ -283,7 +283,7 @@ namespace Copper68k
         }
     }
 
-    public sealed class M68kInstructionCache
+    internal sealed class M68kInstructionCache
     {
         private readonly uint[] _tags;
         private readonly bool[] _valid;
@@ -373,7 +373,7 @@ namespace Copper68k
             => (int)((lineAddress / (uint)_lineSize) % (uint)_tags.Length);
     }
 
-    public sealed class M68kTimingEngine
+    internal sealed class M68kTimingEngine
     {
         private readonly M68020CpuProfile _profile;
         private readonly M68kCpuState _state;
@@ -540,7 +540,7 @@ namespace Copper68k
         }
     }
 
-    public static class M68020TimingModel
+    internal static class M68020TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
         {
@@ -755,7 +755,7 @@ namespace Copper68k
             => M68kTimingBarrier.Exception | M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus;
     }
 
-    public static class M68030TimingModel
+    internal static class M68030TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
         {
@@ -970,7 +970,7 @@ namespace Copper68k
             => M68kTimingBarrier.Exception | M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus;
     }
 
-    public sealed class M68kAcceleratorBusBridge
+    internal sealed class M68kAcceleratorBusBridge
     {
         private readonly IM68kBus _bus;
         private readonly M68020CpuProfile _profile;
@@ -1171,7 +1171,7 @@ namespace Copper68k
         }
     }
 
-    public sealed class UnsupportedM68kTimingException : M68kEmulationException
+    internal sealed class UnsupportedM68kTimingException : M68kEmulationException
     {
         public UnsupportedM68kTimingException(ushort opcode, uint programCounter, M68020CpuProfile profile)
             : base($"Unsupported exact {profile.ModelName} timing for opcode 0x{opcode:X4} at 0x{programCounter:X8} in profile {profile.Name}.")

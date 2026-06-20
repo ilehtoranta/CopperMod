@@ -3,22 +3,27 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
-    public class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    internal class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         protected const ushort Format0ExceptionFrame = 0x0000;
         protected readonly IM68kBus _bus;
-        protected readonly M68020CpuProfile _profile;
-        protected readonly M68kInstructionFrequencyMatrix _instructionFrequency;
-        protected readonly M68kTimingEngine _timing;
-        protected readonly M68kAcceleratorBusBridge _busBridge;
+        internal readonly M68020CpuProfile _profile;
+        internal readonly M68kInstructionFrequencyMatrix _instructionFrequency;
+        internal readonly M68kTimingEngine _timing;
+        internal readonly M68kAcceleratorBusBridge _busBridge;
 
-        public M68020Interpreter(IM68kBus bus, M68020CpuProfile profile)
+        public M68020Interpreter(IM68kBus bus)
+            : this(bus, M68020CpuProfile.OcsAccelerator14Mhz)
+        {
+        }
+
+        internal M68020Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : this(bus, profile, new M68kCpuState())
         {
         }
 
-        public M68020Interpreter(
+        internal M68020Interpreter(
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,
@@ -35,27 +40,39 @@ namespace Copper68k
 
         public M68kCpuState State { get; }
 
-        public M68020CpuProfile Profile => _profile;
+        internal M68020CpuProfile Profile => _profile;
 
-        public M68kTimingEngine Timing => _timing;
+        internal M68kTimingEngine Timing => _timing;
 
-        public bool InstructionFrequencyEnabled
+        internal bool InstructionFrequencyEnabled
         {
             get => _instructionFrequency.Enabled;
             set => _instructionFrequency.Enabled = value;
         }
 
-        public M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
+        internal M68kInstructionFrequencySnapshot CaptureInstructionFrequency()
             => _instructionFrequency.CaptureSnapshot();
 
-        public void ResetInstructionFrequency()
+        internal void ResetInstructionFrequency()
             => _instructionFrequency.Reset();
+
+        bool IM68kInstructionFrequencyProvider.InstructionFrequencyEnabled
+        {
+            get => InstructionFrequencyEnabled;
+            set => InstructionFrequencyEnabled = value;
+        }
+
+        M68kInstructionFrequencySnapshot IM68kInstructionFrequencyProvider.CaptureInstructionFrequency()
+            => CaptureInstructionFrequency();
+
+        void IM68kInstructionFrequencyProvider.ResetInstructionFrequency()
+            => ResetInstructionFrequency();
 
         public void Dispose()
         {
         }
 
-        public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
+        internal int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {
             ArgumentNullException.ThrowIfNull(boundary);
             var instructions = 0;
@@ -90,6 +107,9 @@ namespace Copper68k
 
             return instructions;
         }
+
+        int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
+            => ExecuteInstructions(maxInstructions, targetCycle, boundary);
 
         public virtual int ExecuteInstruction()
         {
@@ -4046,7 +4066,7 @@ namespace Copper68k
             _instructionFrequency.Record(opcode);
         }
 
-        protected virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
+        internal virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
         {
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
@@ -4200,7 +4220,7 @@ namespace Copper68k
             return value;
         }
 
-        protected void CompleteTiming(M68kInstructionTimingKey key)
+        internal void CompleteTiming(M68kInstructionTimingKey key)
         {
             _timing.CompleteInstruction(_timing.GetPlan(key));
         }

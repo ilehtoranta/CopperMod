@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Copper68k
 {
-    public sealed class M68040FpuState
+    internal sealed class M68040FpuState
     {
         public const uint ConditionNan = 0x0100_0000;
         public const uint ConditionInfinity = 0x0200_0000;
@@ -109,7 +109,7 @@ namespace Copper68k
         }
     }
 
-    public enum M68040FpuJitKind
+    internal enum M68040FpuJitKind
     {
         Operation = 0,
         MoveToEa = 1,
@@ -120,7 +120,7 @@ namespace Copper68k
         RestoreState = 6
     }
 
-    public static class M68040FpuHelpers
+    internal static class M68040FpuHelpers
     {
         public const uint NullStateFrame = 0x0000_0000;
         public const uint NullStateFrameSize = 4;
@@ -272,7 +272,7 @@ namespace Copper68k
         }
     }
 
-    public sealed class M68040MmuState
+    internal sealed class M68040MmuState
     {
         private const uint TranslationEnable = 0x8000_0000;
         private readonly Dictionary<ulong, uint> _atc = [];
@@ -512,14 +512,14 @@ namespace Copper68k
                 (supervisor ? 1u : 0u);
     }
 
-    public readonly record struct M68040MmuFault(
+    internal readonly record struct M68040MmuFault(
         uint LogicalAddress,
         M68kBusAccessKind AccessKind,
         bool Write,
         uint Status,
         uint? StackedProgramCounter = null);
 
-    public sealed class UnsupportedM68040InstructionException : M68kEmulationException
+    internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
         public UnsupportedM68040InstructionException(
             ushort opcode,
@@ -543,7 +543,7 @@ namespace Copper68k
         public Exception? OriginalException { get; }
     }
 
-    public sealed class M68040MmuFaultException : M68kEmulationException
+    internal sealed class M68040MmuFaultException : M68kEmulationException
     {
         public M68040MmuFaultException(M68040MmuFault fault)
             : base($"MC68040 MMU fault at logical address 0x{fault.LogicalAddress:X8}.")
@@ -554,7 +554,7 @@ namespace Copper68k
         public M68040MmuFault Fault { get; }
     }
 
-    public sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
+    internal sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
     {
         private readonly IM68kBus _physicalBus;
         private readonly IM68kCodeReader? _codeReader;
@@ -784,7 +784,7 @@ namespace Copper68k
         }
     }
 
-    public readonly struct M68040ApproximateFallbackCheckpoint
+    internal readonly struct M68040ApproximateFallbackCheckpoint
     {
         private readonly uint _d0;
         private readonly uint _d1;
@@ -899,19 +899,24 @@ namespace Copper68k
         }
     }
 
-    public sealed class M68040Interpreter : M68020Interpreter
+    internal sealed class M68040Interpreter : M68020Interpreter
     {
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;
         private readonly IM68kBus _physicalBus;
         private readonly M68kInterpreter _approximateIntegerFallback;
 
-        public M68040Interpreter(IM68kBus bus, M68020CpuProfile profile)
+        public M68040Interpreter(IM68kBus bus)
+            : this(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
+        {
+        }
+
+        internal M68040Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : this(bus, profile, new M68kCpuState())
         {
         }
 
-        public M68040Interpreter(
+        internal M68040Interpreter(
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,

@@ -62,12 +62,12 @@ namespace CopperMod.Cust
         {
         }
 
-        public CustMachine(HunkFile hunk, DeliTagTable tags, IM68kCoreFactory cpuFactory, M68kBackendKind cpuBackend)
+        public CustMachine(HunkFile hunk, DeliTagTable tags, IM68kBackendCoreFactory cpuFactory, M68kBackendKind cpuBackend)
             : this(hunk, tags, null, cpuFactory, cpuBackend)
         {
         }
 
-        public CustMachine(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext, IM68kCoreFactory cpuFactory, M68kBackendKind cpuBackend)
+        public CustMachine(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext, IM68kBackendCoreFactory cpuFactory, M68kBackendKind cpuBackend)
             : this(hunk, tags, loadContext, cpuFactory, cpuBackend, AmigaKickstartConfiguration.HostShim13)
         {
         }
@@ -76,7 +76,7 @@ namespace CopperMod.Cust
             HunkFile hunk,
             DeliTagTable tags,
             ModuleLoadContext? loadContext,
-            IM68kCoreFactory cpuFactory,
+            IM68kBackendCoreFactory cpuFactory,
             M68kBackendKind cpuBackend,
             AmigaKickstartConfiguration kickstartConfiguration)
         {

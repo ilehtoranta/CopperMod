@@ -2,9 +2,14 @@ using System;
 
 namespace Copper68k
 {
-    public sealed class M68030Interpreter : M68020Interpreter
+    internal sealed class M68030Interpreter : M68020Interpreter
     {
-        public M68030Interpreter(IM68kBus bus, M68020CpuProfile profile)
+        public M68030Interpreter(IM68kBus bus)
+            : this(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz)
+        {
+        }
+
+        internal M68030Interpreter(IM68kBus bus, M68020CpuProfile profile)
             : base(bus, profile)
         {
             if (profile.Model != M68kAcceleratorModel.M68030)
@@ -13,7 +18,7 @@ namespace Copper68k
             }
         }
 
-        public M68030Interpreter(
+        internal M68030Interpreter(
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,
