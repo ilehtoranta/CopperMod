@@ -28,12 +28,9 @@ if (-not $NoRestore) {
     dotnet restore $testProject
 }
 
-$buildProperties = @("/p:NoWarn=1701%3B1702%3BNU1900")
-
 dotnet build $project `
     -c $Configuration `
-    --no-restore `
-    @buildProperties
+    --no-restore
 
 if (-not $SkipTests) {
     dotnet test $testProject `
