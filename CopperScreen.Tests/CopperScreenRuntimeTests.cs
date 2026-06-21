@@ -164,6 +164,28 @@ public sealed class CopperScreenRuntimeTests
 	}
 
 	[Fact]
+	public void LoadedExtendedAdfDefaultsWriteProtectedReadOnlyAndPreserved()
+	{
+		using var temp = new TempDiskFile(".adf");
+		var adf = new byte[AmigaDiskImage.StandardAdfSize];
+		adf[0] = (byte)'D';
+		adf[1] = (byte)'O';
+		adf[2] = (byte)'S';
+		File.WriteAllBytes(temp.Path, CreateExtendedAdf(adf, [0x44, 0x89, 0xA0, 0x00], rawBitLength: 20));
+		var loaded = AmigaDiskImage.Load(temp.Path);
+		var emulator = CopperScreenEmulator.CreateWithLoadedDisk([temp.Path], AppContext.BaseDirectory, loaded);
+		emulator.RenderNextFrame();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator, new FakeAudioOutput());
+		var state = runtime.CurrentState;
+
+		Assert.False(loaded.CanWriteTracks);
+		Assert.True(loaded.HasPreservedTrackData);
+		Assert.True(state.Drives[0].HasDisk);
+		Assert.True(state.Drives[0].WriteProtected);
+		Assert.EndsWith(".adf", state.Drives[0].DiskName, StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
 	public async Task FramePublishedNotifiesPresentationLoop()
 	{
 		using var audio = new FakeAudioOutput();
@@ -477,6 +499,40 @@ public sealed class CopperScreenRuntimeTests
 		return image;
 	}
 
+	private static byte[] CreateExtendedAdf(byte[] adf, byte[] rawTrack, int rawBitLength)
+	{
+		const int trackHeaderLength = 12;
+		const int headerLength = 12;
+		const int trackBytes = AmigaDiskImage.SectorsPerTrack * AmigaDiskImage.SectorSize;
+		var tableLength = headerLength + (AmigaDiskImage.TrackCount * trackHeaderLength);
+		var image = new byte[tableLength + rawTrack.Length + ((AmigaDiskImage.TrackCount - 1) * trackBytes)];
+		"UAE-1ADF"u8.CopyTo(image);
+		WriteUInt16(image, 10, AmigaDiskImage.TrackCount);
+		var dataOffset = tableLength;
+		for (var track = 0; track < AmigaDiskImage.TrackCount; track++)
+		{
+			var headerOffset = headerLength + (track * trackHeaderLength);
+			if (track == 0)
+			{
+				WriteUInt16(image, headerOffset + 2, 1);
+				WriteUInt32(image, headerOffset + 4, rawTrack.Length);
+				WriteUInt32(image, headerOffset + 8, rawBitLength);
+				rawTrack.CopyTo(image.AsSpan(dataOffset));
+				dataOffset += rawTrack.Length;
+			}
+			else
+			{
+				WriteUInt16(image, headerOffset + 2, 0);
+				WriteUInt32(image, headerOffset + 4, trackBytes);
+				WriteUInt32(image, headerOffset + 8, 0);
+				adf.AsSpan(track * trackBytes, trackBytes).CopyTo(image.AsSpan(dataOffset));
+				dataOffset += trackBytes;
+			}
+		}
+
+		return image;
+	}
+
 	private static ushort Crc(ReadOnlySpan<byte> data)
 	{
 		var crc = 0;
@@ -514,6 +570,14 @@ public sealed class CopperScreenRuntimeTests
 		data[offset] = (byte)(value >> 16);
 		data[offset + 1] = (byte)(value >> 8);
 		data[offset + 2] = (byte)value;
+	}
+
+	private static void WriteUInt32(Span<byte> data, int offset, int value)
+	{
+		data[offset] = (byte)(value >> 24);
+		data[offset + 1] = (byte)(value >> 16);
+		data[offset + 2] = (byte)(value >> 8);
+		data[offset + 3] = (byte)value;
 	}
 
 	private static void DrainPresentationFrames(CopperScreenRuntime runtime, ref long lastSeenFrameNumber)

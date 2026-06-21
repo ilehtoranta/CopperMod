@@ -131,10 +131,10 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("write-dma", "ADF write DMA updates writable in-memory media");
 			yield return DiskConformanceRow.Executable("write-dma", "write-protect and read-only media block media mutation");
 			yield return DiskConformanceRow.Executable("write-dma", "WORDSYNC gates write DMA start");
-			yield return DiskConformanceRow.Pending("wordsync", "MSBSYNC/GCR byte sync mode", "ADKCON MSBSYNC is recorded by Paula but not implemented by disk input.");
-			yield return DiskConformanceRow.Pending("timing", "ADKCON FAST two-microsecond bit-cell mode", "The drive stream currently derives timing from encoded track length and 300 RPM.");
-			yield return DiskConformanceRow.Pending("write-dma", "MFM/GCR precompensation and write splice edge cases", "Precompensation bits are not consumed without a write path.");
-			yield return DiskConformanceRow.Pending("hardware-bugs", "last three write bits and possible missing final read word", "Documented floppy hardware quirks are not modeled.");
+			yield return DiskConformanceRow.Executable("wordsync", "MSBSYNC/GCR byte sync mode");
+			yield return DiskConformanceRow.Executable("timing", "ADKCON FAST two-microsecond bit-cell mode");
+			yield return DiskConformanceRow.Executable("write-dma", "MFM/GCR precompensation and write splice edge cases");
+			yield return DiskConformanceRow.Pending("hardware-bugs", "last three write bits and possible missing final read word", "Requires a Paula internal disk-buffer pipeline model; byte-backed tracks preserve digital bits but do not yet model the documented lost-final-word quirk.");
 		}
 	}
 
@@ -180,11 +180,9 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	{
 		var pendingRows = MatrixRows.Where(row => row.Status == DiskRowStatus.Pending).ToArray();
 
-		Assert.NotEmpty(pendingRows);
+		var pending = Assert.Single(pendingRows);
 		Assert.All(pendingRows, row => Assert.False(string.IsNullOrWhiteSpace(row.Reason)));
-		Assert.Contains(pendingRows, row => row.Group == "write-dma");
-		Assert.Contains(pendingRows, row => row.Group == "wordsync" && row.Name.Contains("MSBSYNC", StringComparison.Ordinal));
-		Assert.Contains(pendingRows, row => row.Group == "hardware-bugs");
+		Assert.Equal("hardware-bugs", pending.Group);
 	}
 
 	[Fact]
@@ -400,6 +398,43 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		Assert.Equal(row.Payload, ReadChipWord(bus, DmaBase));
 		Assert.Equal(0x2468, ReadChipWord(bus, DmaBase + 2));
+	}
+
+	[Fact]
+	public void MsbSyncDmaStartsAfterHighByteOfDskSync()
+	{
+		var bus = CreateBusWithTrackBytes(0x99, 0x44, 0xAB, 0xCD, 0x24, 0x68);
+		bus.WriteWord(0x00DFF07E, SyncWord);
+		bus.WriteWord(0x00DFF09E, 0x8200);
+		bus.Paula.AdvanceTo(0);
+
+		StartDiskDma(bus, DmaBase, words: 2);
+		CompleteDiskDma(bus);
+
+		Assert.Equal(0xABCD, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x2468, ReadChipWord(bus, DmaBase + 2));
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Started));
+		Assert.Equal(AmigaDiskSyncMode.Byte, started.SyncMode);
+		Assert.False(started.WordSyncEnabled);
+		Assert.Equal(16, started.SourceBit);
+		Assert.Equal(16, started.SyncWaitBits);
+	}
+
+	[Fact]
+	public void MsbSyncWordEqualUsesHighByteOfDskSync()
+	{
+		var trackBytes = new byte[] { 0x12, 0x44, 0x00, 0x99 };
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		bus.WriteWord(0x00DFF07E, SyncWord, readyCycle);
+		bus.WriteWord(0x00DFF09E, 0x8200, readyCycle);
+		bus.Paula.AdvanceTo(readyCycle);
+
+		bus.AdvanceDmaTo(readyCycle + DiskByteCycleCount(trackBytes.Length, 2));
+
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & 0x1000);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01A) & 0x1000);
 	}
 
 	[Fact]
@@ -667,6 +702,36 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void EmulatorIpfLoadPreservesExactNonWordTrackBitLength()
+	{
+		using var temp = new TempDiskFile(".ipf");
+		File.WriteAllBytes(temp.Path, CreateSingleRawIpfTrack(startBit: 5, trackBits: 42));
+
+		var disk = AmigaDiskImage.Load(temp.Path);
+
+		var track = disk.ReadEncodedTrack(0, 0);
+		Assert.Equal(42, track.BitLength);
+		Assert.Equal(5, track.StartBit);
+		Assert.Equal(0x4489, track.ReadUInt16AtBit(5));
+	}
+
+	[Fact]
+	public void EmulatorExtendedAdfLoadPreservesExactNonWordTrackBitLength()
+	{
+		using var temp = new TempDiskFile(".adf");
+		File.WriteAllBytes(temp.Path, CreateSingleRawExtendedAdfTrack(trackBits: 20));
+
+		var disk = AmigaDiskImage.Load(temp.Path);
+
+		var track = disk.ReadEncodedTrack(0, 0);
+		Assert.True(disk.HasPreservedTrackData);
+		Assert.False(disk.CanWriteTracks);
+		Assert.Equal(20, track.BitLength);
+		Assert.Equal(0, track.StartBit);
+		Assert.Equal(0x4489, track.ReadUInt16AtBit(0));
+	}
+
+	[Fact]
 	public void DskdatWriteLatchesDataRegisterWithoutStartingWriteDma()
 	{
 		var bus = CreateDiskComponentBus();
@@ -796,6 +861,31 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void WriteDmaSplicesAtBitAccurateSyncOffsetAndRecordsPrecompSelection()
+	{
+		const int SyncShiftBits = 3;
+		var sourceTrack = ShiftTrackBits(WordsToBytes(SyncWord, 0xAAAA, 0xBBBB), SyncShiftBits);
+		var disk = new WritableTrackDisk(sourceTrack);
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(disk, writeProtected: false);
+		var cycle = PrepareDiskDma(bus);
+		bus.WriteWord(0x00DFF09E, 0xE400, cycle);
+		bus.Paula.AdvanceTo(cycle);
+		SetDiskPointer(bus, DmaBase, cycle);
+		WriteChipWord(bus, DmaBase, 0x5AA5);
+
+		WriteDsklenStartSequence(bus, words: 1, cycle, writeMode: true);
+		CompleteDiskDma(bus);
+
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Started));
+		Assert.Equal(AmigaDiskSyncMode.Word, started.SyncMode);
+		Assert.Equal(0x6000, started.Adkcon & 0x6000);
+		Assert.Equal(SyncShiftBits + 16, started.SourceBit);
+		Assert.Equal(SyncWord, disk.Track.ReadUInt16AtBit(SyncShiftBits));
+		Assert.Equal(0x5AA5, disk.Track.ReadUInt16AtBit(started.SourceBit));
+	}
+
+	[Fact]
 	public void DskdatrReflectsRawInputWordAndDoesNotClearDskbytr()
 	{
 		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };
@@ -878,6 +968,24 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void DmaTraceRecordsBlockedStartReason()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		SetDiskPointer(bus, DmaBase, readyCycle);
+
+		WriteDsklenStartSequence(bus, words: 1, readyCycle);
+
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		var blocked = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.StartBlocked));
+		Assert.Equal(AmigaDiskDmaBlockedReason.DmaDisabled, blocked.BlockedReason);
+		Assert.Equal(1, blocked.RequestedWords);
+		Assert.Equal(DmaBase, blocked.TargetAddress);
+		Assert.Equal(AmigaDiskSyncMode.None, blocked.SyncMode);
+	}
+
+	[Fact]
 	public void DivergenceTraceRecordsDsklenArmingDmaWordsAndDiskInterrupt()
 	{
 		using var trace = new EnvironmentVariableScope("COPPER_DISK_DIVERGENCE_TRACE", "1");
@@ -952,6 +1060,24 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		Assert.NotNull(candidate);
 		Assert.InRange(candidate.Value, seedCycle + 1, seedCycle + byteCycles);
+	}
+
+	[Fact]
+	public void AdkconFastUsesTwoMicrosecondBitCellsForActiveDiskDma()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222);
+		var cycle = PrepareDiskDma(bus);
+		bus.WriteWord(0x00DFF09E, 0x8100, cycle);
+		bus.Paula.AdvanceTo(cycle);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, words: 2, cycle);
+
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Started));
+		var expectedFastCycles = FastDiskBitCycleCount(16) * 2;
+		var normalCycles = DiskByteCycleCount(trackByteLength: 4, byteCount: 4);
+		Assert.Equal(expectedFastCycles, started.CompletionCycle - cycle);
+		Assert.True(started.CompletionCycle - cycle < normalCycles);
 	}
 
 	[Fact]
@@ -1243,6 +1369,11 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			AmigaConstants.A500PalCpuClockHz / (trackByteLength * 5.0) * byteCount);
 	}
 
+	private static long FastDiskBitCycleCount(int bitCount)
+	{
+		return (long)Math.Ceiling(AmigaConstants.A500PalCpuClockHz / 500_000.0 * bitCount);
+	}
+
 	private static AmigaFloppyDrive GetDrive(AmigaBus bus, int drive)
 	{
 		return drive switch
@@ -1306,6 +1437,158 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 				data[offset + index] = (byte)((sector * 19 + index * 5 + cylinder + head) & 0xFF);
 			}
 		}
+	}
+
+	private static byte[] CreateSingleRawIpfTrack(int startBit, int trackBits)
+	{
+		const int DataBits = 32;
+		const int GapBits = 2;
+		using var stream = new MemoryStream();
+		WriteIpfChunk(stream, "CAPS", Array.Empty<byte>());
+		WriteIpfChunk(stream, "INFO", BuildIpfInfo());
+		WriteIpfChunk(stream, "IMGE", BuildIpfImageDescriptor(startBit, DataBits, GapBits, trackBits));
+		var payload = BuildIpfRawDataPayload(GapBits);
+		WriteIpfChunk(stream, "DATA", BuildIpfDataHeader(payload.Length), payload);
+		return stream.ToArray();
+	}
+
+	private static byte[] CreateSingleRawExtendedAdfTrack(int trackBits)
+	{
+		const int HeaderLength = 12;
+		const int TrackHeaderLength = 12;
+		const int TrackBytes = AmigaDiskImage.SectorsPerTrack * AmigaDiskImage.SectorSize;
+		var rawTrack = new byte[] { 0x44, 0x89, 0xA0, 0x00 };
+		var tableLength = HeaderLength + (AmigaDiskImage.TrackCount * TrackHeaderLength);
+		var image = new byte[tableLength + rawTrack.Length + ((AmigaDiskImage.TrackCount - 1) * TrackBytes)];
+		"UAE-1ADF"u8.CopyTo(image);
+		WriteUInt16(image, 10, AmigaDiskImage.TrackCount);
+		var dataOffset = tableLength;
+		for (var track = 0; track < AmigaDiskImage.TrackCount; track++)
+		{
+			var headerOffset = HeaderLength + (track * TrackHeaderLength);
+			if (track == 0)
+			{
+				WriteUInt16(image, headerOffset + 2, 1);
+				WriteUInt32(image, headerOffset + 4, rawTrack.Length);
+				WriteUInt32(image, headerOffset + 8, trackBits);
+				rawTrack.CopyTo(image.AsSpan(dataOffset));
+				dataOffset += rawTrack.Length;
+			}
+			else
+			{
+				WriteUInt16(image, headerOffset + 2, 0);
+				WriteUInt32(image, headerOffset + 4, TrackBytes);
+				WriteUInt32(image, headerOffset + 8, 0);
+				dataOffset += TrackBytes;
+			}
+		}
+
+		return image;
+	}
+
+	private static byte[] BuildIpfInfo()
+	{
+		using var stream = new MemoryStream();
+		WriteUInt32(stream, 1);
+		WriteUInt32(stream, 1);
+		WriteUInt32(stream, 1);
+		for (var i = 0; i < 9; i++)
+		{
+			WriteUInt32(stream, 0);
+		}
+
+		WriteUInt32(stream, 1);
+		for (var i = 0; i < 8; i++)
+		{
+			WriteUInt32(stream, 0);
+		}
+
+		return stream.ToArray();
+	}
+
+	private static byte[] BuildIpfImageDescriptor(int startBit, int dataBits, int gapBits, int trackBits)
+	{
+		using var stream = new MemoryStream();
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 2);
+		WriteUInt32(stream, 1);
+		WriteUInt32(stream, (uint)((trackBits + 7) / 8));
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, (uint)startBit);
+		WriteUInt32(stream, (uint)dataBits);
+		WriteUInt32(stream, (uint)gapBits);
+		WriteUInt32(stream, (uint)trackBits);
+		WriteUInt32(stream, 1);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 1);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 0);
+		return stream.ToArray();
+	}
+
+	private static byte[] BuildIpfDataHeader(int dataSize)
+	{
+		using var stream = new MemoryStream();
+		WriteUInt32(stream, (uint)dataSize);
+		WriteUInt32(stream, (uint)(dataSize * 8));
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 1);
+		return stream.ToArray();
+	}
+
+	private static byte[] BuildIpfRawDataPayload(int gapBits)
+	{
+		using var stream = new MemoryStream();
+		WriteUInt32(stream, 32);
+		WriteUInt32(stream, (uint)gapBits);
+		WriteUInt32(stream, 4);
+		WriteUInt32(stream, (uint)((gapBits + 7) / 8));
+		WriteUInt32(stream, 2);
+		WriteUInt32(stream, 0);
+		WriteUInt32(stream, 0xA5);
+		WriteUInt32(stream, 32);
+		stream.WriteByte(0x24);
+		stream.WriteByte(4);
+		stream.Write(WordsToBytes(SyncWord, 0x1234));
+		stream.WriteByte(0);
+		return stream.ToArray();
+	}
+
+	private static void WriteIpfChunk(Stream stream, string id, byte[] payload, byte[]? trailingData = null)
+	{
+		stream.Write(System.Text.Encoding.ASCII.GetBytes(id));
+		WriteUInt32(stream, (uint)(12 + payload.Length));
+		WriteUInt32(stream, 0);
+		stream.Write(payload);
+		if (trailingData != null)
+		{
+			stream.Write(trailingData);
+		}
+	}
+
+	private static void WriteUInt32(Stream stream, uint value)
+	{
+		stream.WriteByte((byte)(value >> 24));
+		stream.WriteByte((byte)(value >> 16));
+		stream.WriteByte((byte)(value >> 8));
+		stream.WriteByte((byte)value);
+	}
+
+	private static void WriteUInt16(Span<byte> data, int offset, int value)
+	{
+		data[offset] = (byte)(value >> 8);
+		data[offset + 1] = (byte)value;
+	}
+
+	private static void WriteUInt32(Span<byte> data, int offset, int value)
+	{
+		data[offset] = (byte)(value >> 24);
+		data[offset + 1] = (byte)(value >> 16);
+		data[offset + 2] = (byte)(value >> 8);
+		data[offset + 3] = (byte)value;
 	}
 
 	private static void WriteZip(string path, string entryName, byte[] data)
@@ -1437,6 +1720,62 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		ushort Word1,
 		ushort Word2,
 		ushort Word3);
+
+	private sealed class WritableTrackDisk : IAmigaDiskImage
+	{
+		private readonly byte[] _data = new byte[AmigaDiskImage.StandardAdfSize];
+
+		public WritableTrackDisk(AmigaEncodedTrack track)
+		{
+			Track = track;
+		}
+
+		public AmigaEncodedTrack Track { get; private set; }
+
+		public byte[] Data => _data;
+
+		public string Name => "writable-track.ipf";
+
+		public bool HasCompleteSectorData => false;
+
+		public bool HasPreservedTrackData => true;
+
+		public bool DefaultWriteProtected => false;
+
+		public bool IsDirty { get; private set; }
+
+		public bool CanWriteTracks => true;
+
+		public ReadOnlySpan<byte> BootBlock => _data.AsSpan(0, 1024);
+
+		public ReadOnlySpan<byte> ReadSector(int cylinder, int head, int sector)
+		{
+			return ReadSector(AmigaDiskImage.GetLogicalSector(cylinder, head, sector));
+		}
+
+		public ReadOnlySpan<byte> ReadSector(int logicalSector)
+		{
+			var offset = logicalSector * AmigaDiskImage.SectorSize;
+			return _data.AsSpan(offset, AmigaDiskImage.SectorSize);
+		}
+
+		public ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount)
+		{
+			return _data.AsSpan(byteOffset, byteCount);
+		}
+
+		public AmigaEncodedTrack ReadEncodedTrack(int cylinder, int head)
+		{
+			return Track;
+		}
+
+		public bool TryWriteEncodedTrack(int cylinder, int head, AmigaEncodedTrack track)
+		{
+			Track = track;
+			IsDirty = true;
+			return true;
+		}
+	}
 
 	private sealed class TempDiskFile : IDisposable
 	{

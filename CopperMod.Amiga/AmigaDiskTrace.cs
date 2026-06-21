@@ -14,6 +14,7 @@ namespace CopperMod.Amiga
         DmaCompleted,
         DmaCancelled,
         DmaStopped,
+        DmaStartBlocked,
         DmaSyncMissing,
         DiskInterruptWrite
     }

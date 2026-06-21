@@ -161,8 +161,11 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA pending sprite pointer rewrite replaces previous pending X");
 			yield return SpriteConformanceRow.Executable("attached-colors", "odd attached sprite with transparent or missing even partner");
 			yield return SpriteConformanceRow.Executable("dma-list", "hardware one-line gap requirement between reused sprite images");
-			yield return SpriteConformanceRow.Pending("undocumented-ocs", "BPLxDAT latch enables sprites outside normal bitplane area", "Requires a latch-level Denise/BPLxDAT model.");
+			yield return SpriteConformanceRow.Executable("undocumented-ocs", "BPLxDAT latch enables sprites outside normal bitplane area");
+			yield return SpriteConformanceRow.Executable("undocumented-ocs", "DDFSTRT sprite-slot stealing");
+			yield return SpriteConformanceRow.Executable("undocumented-ocs", "DDFSTRT denied DATB latch reuse");
 			yield return SpriteConformanceRow.Pending("undocumented-ocs", "sprite vertical stop and previous-line data edge cases", "Requires tighter sprite DMA slot and shift-register timing.");
+			yield return SpriteConformanceRow.Pending("undocumented-ocs", "DDFSTRT refresh pointer conflicts", "Thread-derived refresh corruption needs exact cycle/pixel reproduction before implementation.");
 		}
 	}
 
@@ -387,7 +390,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void AttachedManualSpriteRepeatsFollowingScanLinesUntilCtlDisarmsIt()
 	{
-		var bus = CreateDisplayComponentBus();
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
 		const ushort color = 0x0F00;
 		SetColor(bus, 21, color);
 		var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
@@ -406,6 +409,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
+		bus.AdvanceDmaTo(FrameCycles());
 		bus.Display.RenderFrame(frame, 0, FrameCycles());
 
 		Assert.Equal(ToBgra(color), Pixel(frame, StandardX, StandardY));
@@ -861,6 +865,85 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var frame = RenderLowResFrame(bus);
 
 		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void DdfStartAt18DeniesCompleteSpriteOutput()
+	{
+		var bus = CreateDisplayComponentBus();
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x8000);
+		bus.WriteWord(0x00DFF092, 0x0018);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x6000);
+		EnableSpriteDma(bus, 0x8320);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
+	public void DdfStartShrinkAfterDescriptorFetchReusesPreviousSpriteDatb()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		SetColor(bus, SingleSpriteColorIndex(0, 2), 0x00F0);
+		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 2, 0x0000, 0x0000);
+		WriteChipWord(bus, SpriteListBase + 6, 0x8000);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x6000);
+		EnableSpriteDma(bus, 0x8320);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY - 1));
+		bus.WriteWord(0x00DFF092, 0x0018, RowCycle(StandardY + 1) - AmigaConstants.A500PalCpuCyclesPerColorClock);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.AdvanceDmaTo(FrameCycles());
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0x00F0), Pixel(frame, StandardX, StandardY));
+		Assert.Equal(ToBgra(0x00F0), Pixel(frame, StandardX, StandardY + 1));
+	}
+
+	[Fact]
+	public void Bpl1DatWriteEnablesSpriteVisibilityBeforeLateDdfStartAndRendersSpan()
+	{
+		var bus = CreateDisplayComponentBus();
+		var spanX = OutputXForHorizontal(0x60);
+		var spriteX = spanX + 20;
+		SetColor(bus, 1, 0x0F00);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x00F0);
+		WriteManualSprite(bus, sprite: 0, spriteX, StandardY, 1, 0x8000, 0x0000);
+		bus.WriteWord(0x00DFF092, 0x0080);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		bus.WriteWord(0x00DFF110, 0x8000, OutputCycle(StandardY, 0x60));
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, spanX, StandardY));
+		Assert.Equal(ToBgra(0x00F0), Pixel(frame, spriteX, StandardY));
+	}
+
+	[Fact]
+	public void SpriteBeforeLateDdfStartStaysHiddenWithoutBpl1DatLoad()
+	{
+		var bus = CreateDisplayComponentBus();
+		var spriteX = OutputXForHorizontal(0x60) + 20;
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x00F0);
+		WriteManualSprite(bus, sprite: 0, spriteX, StandardY, 1, 0x8000, 0x0000);
+		bus.WriteWord(0x00DFF092, 0x0080);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		Assert.Equal(ToBgra(0), Pixel(frame, spriteX, StandardY));
 	}
 
 	[Fact]
@@ -1584,6 +1667,18 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	private static long FrameCycles()
 	{
 		return (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
+	}
+
+	private static long OutputCycle(int row, int horizontal)
+	{
+		var lineCycles = AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz / AmigaConstants.A500PalRasterLines;
+		var displayRow = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
+		return (long)Math.Round((lineCycles * displayRow) + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock));
+	}
+
+	private static int OutputXForHorizontal(int horizontal)
+	{
+		return Math.Clamp((horizontal - 0x38) * 2, 0, AmigaConstants.PalLowResWidth);
 	}
 
 	private static long AfterSpriteMatchCycle(int row, int x)

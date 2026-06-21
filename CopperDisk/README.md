@@ -1,24 +1,26 @@
 # CopperDisk
 
 CopperDisk is a managed Amiga floppy disk-image library for emulator hosts and
-disk tools. It loads standard 880 KiB ADF sector images, gzip-compressed ADZ
-images, read-only DMS images, decodes SPS/CAPS IPF images into raw Amiga track
-streams, and exposes both decoded AmigaDOS sectors and encoded track data
-through one small API.
+disk tools. It loads standard 880 KiB ADF sector images, modern UAE extended
+ADF images, gzip-compressed ADZ images, read-only DMS images, decodes SPS/CAPS
+IPF images into raw Amiga track streams, and exposes both decoded AmigaDOS
+sectors and encoded track data through one small API.
 
 The package targets .NET 10 and has no external runtime dependencies.
 
 ## Supported Images
 
-- `.adf`: standard 880 KiB AmigaDOS sector images.
-- `.adz`: gzip-compressed standard ADF sector images, loaded read-only.
+- `.adf`: standard 880 KiB AmigaDOS sector images, plus modern `UAE-1ADF`
+  extended ADF images.
+- `.adz`: gzip-compressed standard or modern extended ADF images, loaded read-only.
 - `.dms`: unencrypted standard DD Disk Masher images, loaded read-only.
 - `.ipf`: SPS/CAPS IPF images decoded to raw track streams.
 - `.zip`: an archive containing exactly one `.adf`, `.adz`, `.dms`, or `.ipf` entry.
 
-ADF media is writable at the sector-image level. ADZ, DMS, IPF, and
-encoded-track media are read-only, but still expose a best-effort decoded sector
-view when sectors can be recognized.
+Standard ADF media is writable at the sector-image level. Extended ADF, ADZ,
+DMS, IPF, and encoded-track media are read-only, but still expose a best-effort
+decoded sector view when sectors can be recognized. Extended ADF support targets
+modern `UAE-1ADF` images; old `UAE--ADF` images are rejected.
 
 ## Third-Party Notices
 
@@ -43,8 +45,9 @@ Console.WriteLine(track.Features);
 ```
 
 `AmigaDiskLoader.Load` accepts direct ADF/ADZ/DMS/IPF paths and ZIP files
-containing exactly one supported image. Direct and ZIP-wrapped IPF files use the
-same optional decode options:
+containing exactly one supported image. ADF and ADZ inputs are routed by content,
+so modern extended ADF images can use the usual `.adf` or `.adz` extension.
+Direct and ZIP-wrapped IPF files use the same optional decode options:
 
 ```csharp
 var loaded = AmigaDiskLoader.Load(

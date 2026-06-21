@@ -114,10 +114,11 @@ dotnet run --project .\CopperScreen -- "path\to\disk.zip"
 ```
 
 Disk image loading is provided by the managed `CopperDisk` library. It parses
-ADF sector images, decompresses ADZ and unencrypted standard DD DMS images, and
-decodes SPS / CAPS IPF images into raw Amiga track streams for CopperScreen's
-floppy path. This is still part of emulator bring-up, so tricky protection
-schemes may continue to expose missing floppy-controller or disk-DMA behavior.
+standard and modern extended ADF images, decompresses ADZ and unencrypted
+standard DD DMS images, and decodes SPS / CAPS IPF images into raw Amiga track
+streams for CopperScreen's floppy path. This is still part of emulator bring-up,
+so tricky protection schemes may continue to expose missing floppy-controller or
+disk-DMA behavior.
 
 By default CopperScreen starts from the `expanded-copperstart` profile config in
 `CopperScreen\Profiles`. Profiles are JSON files that describe the machine

@@ -25,6 +25,11 @@ namespace CopperMod.Amiga
         private readonly bool _defaultWriteProtected;
         private readonly string _name;
         private byte[]? _sectorData;
+        private static readonly IpfDecodeOptions EmulatorIpfDecodeOptions = new IpfDecodeOptions
+        {
+            AlignTracksToWord = false,
+            StartAtIndex = true
+        };
 
         private AmigaDiskImage(IAmigaDiskMedia media, string name, bool hasPreservedTrackData, bool defaultWriteProtected)
         {
@@ -70,11 +75,11 @@ namespace CopperMod.Amiga
         {
             return WrapDiskException(() =>
             {
-                var result = AmigaDiskLoader.Load(path);
+                var result = AmigaDiskLoader.Load(path, EmulatorIpfDecodeOptions);
                 return new AmigaDiskImage(
                     result.Media,
                     result.DisplayName,
-                    HasPreservedExtension(result.DisplayName),
+                    UsesPreservedTrackData(result.Media, result.DisplayName),
                     GetDefaultWriteProtected(path, result.DisplayName));
             });
         }
@@ -264,6 +269,9 @@ namespace CopperMod.Amiga
 
         private static bool HasPreservedExtension(string displayName)
             => displayName.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase);
+
+        private static bool UsesPreservedTrackData(IAmigaDiskMedia media, string displayName)
+            => media is IAmigaPreservedTrackDiskMedia || HasPreservedExtension(displayName);
 
         private static bool GetDefaultWriteProtected(string path, string displayName)
         {

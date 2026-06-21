@@ -31,7 +31,7 @@ public static class AmigaDiskLoader
         var extension = Path.GetExtension(path);
         if (extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
         {
-            return new AmigaDiskLoadResult(FromAdfBytes(File.ReadAllBytes(path)), Path.GetFileName(path));
+            return new AmigaDiskLoadResult(LoadAdfBytesByContent(File.ReadAllBytes(path)), Path.GetFileName(path));
         }
 
         if (extension.Equals(".adz", StringComparison.OrdinalIgnoreCase))
@@ -96,12 +96,22 @@ public static class AmigaDiskLoader
             using var gzip = new GZipStream(input, CompressionMode.Decompress);
             using var output = new MemoryStream(AmigaDiskGeometry.StandardAdfSize);
             gzip.CopyTo(output);
-            return new ReadOnlyAdfDiskMedia(output.ToArray());
+            return LoadReadOnlyAdfBytesByContent(output.ToArray());
         }
         catch (InvalidDataException ex)
         {
             throw new AmigaDiskException($"Unable to decode ADZ disk image: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Decodes a modern UAE extended ADF image into read-only track-backed sector media.
+    /// </summary>
+    /// <param name="extendedAdfImage">The UAE-1ADF image bytes.</param>
+    /// <returns>Read-only Amiga sector media backed by the decoded extended ADF tracks.</returns>
+    public static IAmigaSectorDiskMedia FromExtendedAdfBytes(ReadOnlySpan<byte> extendedAdfImage)
+    {
+        return FromEncodedTracks(ExtendedAdfDecoder.Decode(extendedAdfImage));
     }
 
     /// <summary>
@@ -211,7 +221,7 @@ public static class AmigaDiskLoader
         var extension = Path.GetExtension(name);
         if (extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
         {
-            return FromAdfBytes(data);
+            return LoadAdfBytesByContent(data);
         }
 
         if (extension.Equals(".adz", StringComparison.OrdinalIgnoreCase))
@@ -230,5 +240,27 @@ public static class AmigaDiskLoader
         }
 
         throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, or .zip.");
+    }
+
+    private static IAmigaDiskMedia LoadAdfBytesByContent(byte[] data)
+    {
+        if (ExtendedAdfDecoder.IsModernExtendedAdf(data) ||
+            ExtendedAdfDecoder.IsOldExtendedAdf(data))
+        {
+            return FromExtendedAdfBytes(data);
+        }
+
+        return FromAdfBytes(data);
+    }
+
+    private static IAmigaSectorDiskMedia LoadReadOnlyAdfBytesByContent(byte[] data)
+    {
+        if (ExtendedAdfDecoder.IsModernExtendedAdf(data) ||
+            ExtendedAdfDecoder.IsOldExtendedAdf(data))
+        {
+            return FromExtendedAdfBytes(data);
+        }
+
+        return new ReadOnlyAdfDiskMedia(data);
     }
 }

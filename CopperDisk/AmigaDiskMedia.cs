@@ -31,6 +31,17 @@ public interface IAmigaDiskMedia
 }
 
 /// <summary>
+/// Marks media whose encoded track stream preserves source track data.
+/// </summary>
+/// <remarks>
+/// Hosts can use this marker when file extensions are not enough to identify track-preserving media, such as
+/// UAE extended ADF images that commonly still use the <c>.adf</c> extension.
+/// </remarks>
+public interface IAmigaPreservedTrackDiskMedia : IAmigaDiskMedia
+{
+}
+
+/// <summary>
 /// Represents one encoded Amiga floppy track stream.
 /// </summary>
 public interface IAmigaTrack

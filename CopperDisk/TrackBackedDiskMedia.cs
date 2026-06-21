@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace CopperDisk;
 
-internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia
+internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia, IAmigaPreservedTrackDiskMedia
 {
     private readonly AmigaEncodedTrack[] _encodedTracks;
 

@@ -78,6 +78,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
                 break;
             case "DDF controls line stride":
                 DataFetchControlsLineStride();
+                LowResDdfStopSecondHalfIncludesContainingFetchBlock();
                 break;
             case "BPL1MOD advances odd plane rows":
                 Bpl1ModAdvancesOddPlaneRows();
@@ -140,7 +141,13 @@ public sealed class AmigaBitplaneConformanceMatrixTests
                 BpldatWritesTriggerDeniseShiftGroup();
                 CopperBpldatWritesAreTimedWithinTheLine();
                 BpldatDisabledPlanesDoNotContribute();
+                BpldatShiftGroupHonorsBplcon1Delay();
                 LiveDmaCapturePreservesTimedBpldatWrites();
+                break;
+            case "OCS 7-plane mode and HAM plus dual-playfield interaction":
+                OcsBpu7FetchesFourPlanesButDecodesSixLatches();
+                OcsBpu7LatchedPlaneAffectsDualPlayfieldDecode();
+                OcsBpu7LatchedPlaneAffectsHamDecode();
                 break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for bitplane row '{row.Name}'.");
@@ -188,8 +195,11 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("undocumented-ocs", "OCS bitplane DMA enable inside DDF waits for next line"),
         Executable("dma-control", "Copper BPLCON0 disable before DDF suppresses same-line pixels"),
         Executable("undocumented-ocs", "BPLxDAT Denise latch and sprite-enable timing"),
-        Pending("undocumented-ocs", "OCS 7-plane mode and HAM plus dual-playfield interaction", "Requires BPLxDAT latch and mode-combination modelling."),
-        Pending("undocumented-ocs", "DDFSTRT sprite-slot stealing and refresh conflicts", "Requires a fuller Agnus DMA conflict model."),
+        Executable("undocumented-ocs", "OCS 7-plane mode and HAM plus dual-playfield interaction"),
+        Pending("undocumented-ocs", "DDFSTRT refresh pointer conflicts", "Thread-derived refresh corruption needs exact cycle/pixel reproduction before implementation."),
+        Pending("undocumented-ocs", "illegal DDFSTOP sync corruption", "Thread-derived illegal-display corruption lacks deterministic OCS pixel/cycle expectations."),
+        Pending("undocumented-ocs", "VHPOSW/strobe/blanking side effects", "Requires deterministic beam-strobe tests before changing the display state machine."),
+        Pending("undocumented-ocs", "too-early BPLCON1 miss side effects", "The latch model covers normal delay matching; exact missed-compare blanking still needs a deterministic repro."),
         Pending("resolution", "ECS/AGA superhires and productivity modes", "Out of scope for A500 PAL OCS."),
         Pending("palette", "genlock/borderblank analog display effects", "Out of scope for game/demo-relevant OCS digital framebuffer tests.")
     };
@@ -1046,6 +1056,28 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
     }
 
+    private static void LowResDdfStopSecondHalfIncludesContainingFetchBlock()
+    {
+        var bus = CreateDisplayBus();
+        SetBitplanePointer(bus, 0, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000 + (14 * 2), 0x8000);
+        bus.WriteWord(0x00DFF092, 0x004A);
+        bus.WriteWord(0x00DFF094, 0x00B6);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.WriteWord(0x00DFF100, 0x1000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        var x = StandardX + ((0x48 - 0x38) * 2) + (14 * 16);
+        Assert.Equal(0xFFFF0000u, Pixel(frame, x, StandardY));
+        Assert.Contains(
+            bus.BusAccesses,
+            access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+                access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+                access.Request.Address == 0x1000 + (14u * 2u));
+    }
+
     private static void BitplaneFetchesUseHrmLowResSlotOrder()
     {
         foreach (var planeCount in new[] { 1, 3, 6 })
@@ -1293,6 +1325,83 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.Display.RenderFrame(frame, 0, FrameCycles());
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, x, StandardY));
+    }
+
+    private static void BpldatShiftGroupHonorsBplcon1Delay()
+    {
+        var bus = CreateDisplayBus();
+        var writeCycle = OutputCycle(StandardY, 0x70);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var x = OutputXForHorizontal(0x70);
+        bus.WriteWord(0x00DFF102, 0x0004);
+        bus.WriteWord(0x00DFF100, 0x1000, 0);
+        bus.WriteWord(0x00DFF110, 0x8000, writeCycle);
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFF000000u, Pixel(frame, x, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, x + 4, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, x + 20, StandardY));
+    }
+
+    private static void OcsBpu7FetchesFourPlanesButDecodesSixLatches()
+    {
+        var bus = CreateDisplayBus();
+        SetColor(bus, 16, 0x00F0);
+        for (var plane = 0; plane < 6; plane++)
+        {
+            SetBitplanePointer(bus, plane, (uint)(0x1000 + (plane * 0x100)));
+        }
+
+        bus.WriteWord(0x00DFF118, 0x8000);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x0038);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.WriteWord(0x00DFF100, 0x7000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY));
+        Assert.InRange(
+            bus.BusAccesses.Count(
+                access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+                    access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+                    access.Request.Address == 0x1400),
+            0,
+            1);
+        Assert.DoesNotContain(
+            bus.BusAccesses,
+            access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+                access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+                access.Request.Address == 0x1500);
+    }
+
+    private static void OcsBpu7LatchedPlaneAffectsDualPlayfieldDecode()
+    {
+        var bus = CreateDisplayBus();
+        SetColor(bus, 4, 0x0F00);
+        bus.WriteWord(0x00DFF118, 0x8000);
+        bus.WriteWord(0x00DFF100, 0x7400);
+
+        var frame = RenderLowResFrame(bus);
+
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+    }
+
+    private static void OcsBpu7LatchedPlaneAffectsHamDecode()
+    {
+        var bus = new AmigaBus();
+        SetBitplanePointer(bus, 0, 0x1000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        bus.WriteWord(0x00DFF11A, 0x8000);
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x0038);
+        bus.WriteWord(0x00DFF100, 0x7800);
+
+        var frame = RenderLowResFrame(bus);
+
+        Assert.Equal(0xFF110000u, Pixel(frame, StandardX, StandardY));
     }
 
     private static void LiveDmaCapturePreservesTimedBpldatWrites()

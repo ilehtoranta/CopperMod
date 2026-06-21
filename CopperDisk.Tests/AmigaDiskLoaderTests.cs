@@ -221,6 +221,153 @@ public sealed class AmigaDiskLoaderTests
     }
 
     [Fact]
+    public void LoadAcceptsStandardAdfAsWritableMedia()
+    {
+        using var temp = new TempDiskFile(".adf");
+        File.WriteAllBytes(temp.Path, CreateStandardAdf());
+
+        var result = AmigaDiskLoader.Load(temp.Path);
+
+        Assert.IsAssignableFrom<IWritableAmigaSectorDiskMedia>(result.Media);
+        Assert.False(result.Media is IAmigaPreservedTrackDiskMedia);
+    }
+
+    [Fact]
+    public void FromExtendedAdfBytesLoadsNormalTracksAsReadOnlyPreservedMedia()
+    {
+        var data = CreateStandardAdf();
+        data[0] = (byte)'D';
+        data[1] = (byte)'O';
+        data[2] = (byte)'S';
+        data[AmigaDiskGeometry.SectorSize] = 0x63;
+        FillTrackPattern(data, cylinder: 12, head: 1);
+
+        var media = AmigaDiskLoader.FromExtendedAdfBytes(CreateExtendedAdf(data));
+        var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
+
+        Assert.False(media is IWritableAmigaDiskMedia);
+        Assert.True(media is IAmigaPreservedTrackDiskMedia);
+        Assert.True(sectorMedia.HasCompleteDecodedSectorData);
+        Assert.Equal((byte)'D', sectorMedia.BootBlock.Span[0]);
+        Assert.Equal(0x63, sectorMedia.ReadSector(1).Span[0]);
+        Assert.Equal(data[((12 * AmigaDiskGeometry.HeadCount + 1) * AmigaDiskGeometry.SectorsPerTrack + 4) * AmigaDiskGeometry.SectorSize],
+            sectorMedia.ReadSector(12, 1, 4).Span[0]);
+        var track = Assert.IsType<AmigaEncodedTrack>(media.ReadTrack(0, 0));
+        Assert.True((track.Features & AmigaTrackFeatures.PreservedTrackData) != 0);
+        Assert.True(ContainsWord(track, 0x4489));
+    }
+
+    [Fact]
+    public void FromExtendedAdfBytesPreservesRawMfmTrackBytesAndBitLength()
+    {
+        var raw = new byte[] { 0x44, 0x89, 0xA0, 0x00 };
+
+        var media = AmigaDiskLoader.FromExtendedAdfBytes(CreateExtendedAdf(
+            overrides: new ExtendedAdfTrackOverride(0, 1, raw, BitLength: 20)));
+        var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
+        var track = Assert.IsType<AmigaEncodedTrack>(media.ReadTrack(0, 0));
+
+        Assert.True(media is IAmigaPreservedTrackDiskMedia);
+        Assert.False(sectorMedia.HasCompleteDecodedSectorData);
+        Assert.Equal(20, track.BitLength);
+        Assert.Equal(raw, track.EncodedData.ToArray());
+        Assert.True((track.Features & AmigaTrackFeatures.PreservedTrackData) != 0);
+        Assert.Equal(0x4489, track.ReadUInt16AtBit(0));
+    }
+
+    [Fact]
+    public void FromExtendedAdfBytesLoadsMixedTracksAsReadOnlyPreservedMedia()
+    {
+        var data = CreateStandardAdf();
+        data[AmigaDiskGeometry.SectorsPerTrack * AmigaDiskGeometry.SectorSize] = 0x7E;
+        var raw = new byte[] { 0x12, 0x34, 0x50, 0x00 };
+
+        var media = AmigaDiskLoader.FromExtendedAdfBytes(CreateExtendedAdf(
+            data,
+            new ExtendedAdfTrackOverride(0, 1, raw, BitLength: 20)));
+        var sectorMedia = Assert.IsAssignableFrom<IAmigaSectorDiskMedia>(media);
+
+        Assert.False(media is IWritableAmigaDiskMedia);
+        Assert.True(media is IAmigaPreservedTrackDiskMedia);
+        Assert.False(sectorMedia.HasCompleteDecodedSectorData);
+        Assert.Equal(0x7E, sectorMedia.ReadSector(0, 1, 0).Span[0]);
+    }
+
+    [Fact]
+    public void LoadRoutesExtendedAdfByMagic()
+    {
+        using var temp = new TempDiskFile(".adf");
+        File.WriteAllBytes(temp.Path, CreateExtendedAdf());
+
+        var result = AmigaDiskLoader.Load(temp.Path);
+
+        Assert.False(result.Media is IWritableAmigaDiskMedia);
+        Assert.True(result.Media is IAmigaPreservedTrackDiskMedia);
+    }
+
+    [Fact]
+    public void FromAdzBytesRoutesExtendedAdfByMagic()
+    {
+        var media = AmigaDiskLoader.FromAdzBytes(Gzip(CreateExtendedAdf()));
+
+        Assert.False(media is IWritableAmigaDiskMedia);
+        Assert.True(media is IAmigaPreservedTrackDiskMedia);
+    }
+
+    [Fact]
+    public void LoadAcceptsZipWithSingleExtendedAdfImage()
+    {
+        using var temp = new TempDiskFile(".zip");
+        WriteZip(temp.Path, ("disk.adf", CreateExtendedAdf()));
+
+        var result = AmigaDiskLoader.Load(temp.Path);
+
+        Assert.Equal("disk.adf", result.DisplayName);
+        Assert.True(result.Media is IAmigaPreservedTrackDiskMedia);
+    }
+
+    [Fact]
+    public void LoadAcceptsZipWithSingleExtendedAdzImage()
+    {
+        using var temp = new TempDiskFile(".zip");
+        WriteZip(temp.Path, ("disk.adz", Gzip(CreateExtendedAdf())));
+
+        var result = AmigaDiskLoader.Load(temp.Path);
+
+        Assert.Equal("disk.adz", result.DisplayName);
+        Assert.True(result.Media is IAmigaPreservedTrackDiskMedia);
+    }
+
+    [Theory]
+    [InlineData(ExtendedAdfInvalidKind.OldFormat)]
+    [InlineData(ExtendedAdfInvalidKind.UnsupportedTrackType)]
+    [InlineData(ExtendedAdfInvalidKind.Multirevolution)]
+    [InlineData(ExtendedAdfInvalidKind.WrongTrackCount)]
+    [InlineData(ExtendedAdfInvalidKind.BadNormalTrackSize)]
+    [InlineData(ExtendedAdfInvalidKind.InvalidBitLength)]
+    [InlineData(ExtendedAdfInvalidKind.HighDensity)]
+    [InlineData(ExtendedAdfInvalidKind.TruncatedData)]
+    [InlineData(ExtendedAdfInvalidKind.TrailingData)]
+    public void FromExtendedAdfBytesRejectsUnsupportedOrDamagedImages(ExtendedAdfInvalidKind kind)
+    {
+        var image = kind switch
+        {
+            ExtendedAdfInvalidKind.OldFormat => CreateOldExtendedAdf(),
+            ExtendedAdfInvalidKind.UnsupportedTrackType => CreateExtendedAdf(overrides: new ExtendedAdfTrackOverride(0, 2, [0, 0], 16)),
+            ExtendedAdfInvalidKind.Multirevolution => CreateExtendedAdf(overrides: new ExtendedAdfTrackOverride(0, 1, [0, 0], 16, RevolutionMinusOne: 1)),
+            ExtendedAdfInvalidKind.WrongTrackCount => CreateExtendedAdf(trackCount: AmigaDiskGeometry.TrackCount - 1),
+            ExtendedAdfInvalidKind.BadNormalTrackSize => CreateExtendedAdf(overrides: new ExtendedAdfTrackOverride(0, 0, [0, 0], 0)),
+            ExtendedAdfInvalidKind.InvalidBitLength => CreateExtendedAdf(overrides: new ExtendedAdfTrackOverride(0, 1, [0, 0], 17)),
+            ExtendedAdfInvalidKind.HighDensity => CreateExtendedAdf(overrides: new ExtendedAdfTrackOverride(0, 1, new byte[20_002], 16)),
+            ExtendedAdfInvalidKind.TruncatedData => CreateExtendedAdf()[..^1],
+            ExtendedAdfInvalidKind.TrailingData => [.. CreateExtendedAdf(), 0xAA],
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+
+        Assert.Throws<AmigaDiskException>(() => AmigaDiskLoader.FromExtendedAdfBytes(image));
+    }
+
+    [Fact]
     public void FromAdzBytesLoadsReadOnlySectorMedia()
     {
         var data = CreateStandardAdf();
@@ -404,6 +551,69 @@ public sealed class AmigaDiskLoaderTests
         }
 
         return false;
+    }
+
+    private static byte[] CreateExtendedAdf(
+        byte[]? adf = null,
+        ExtendedAdfTrackOverride? overrides = null,
+        int trackCount = AmigaDiskGeometry.TrackCount)
+    {
+        return CreateExtendedAdf(adf, trackCount, overrides.HasValue ? [overrides.Value] : []);
+    }
+
+    private static byte[] CreateExtendedAdf(
+        byte[]? adf,
+        int trackCount,
+        params ExtendedAdfTrackOverride[] overrides)
+    {
+        adf ??= CreateStandardAdf();
+        var overrideByTrack = overrides.ToDictionary(item => item.Track);
+        var trackData = new byte[trackCount][];
+        var trackTypes = new byte[trackCount];
+        var trackRevolutions = new byte[trackCount];
+        var trackBitLengths = new int[trackCount];
+        var totalLength = ExtendedAdfHeaderLength + (trackCount * ExtendedAdfTrackHeaderLength);
+        for (var track = 0; track < trackCount; track++)
+        {
+            if (overrideByTrack.TryGetValue(track, out var trackOverride))
+            {
+                trackData[track] = trackOverride.Data;
+                trackTypes[track] = trackOverride.Type;
+                trackRevolutions[track] = trackOverride.RevolutionMinusOne;
+                trackBitLengths[track] = trackOverride.BitLength;
+            }
+            else
+            {
+                trackData[track] = adf.AsSpan(track * ExtendedAdfNormalTrackBytes, ExtendedAdfNormalTrackBytes).ToArray();
+                trackTypes[track] = 0;
+                trackBitLengths[track] = 0;
+            }
+
+            totalLength += trackData[track].Length;
+        }
+
+        var image = new byte[totalLength];
+        "UAE-1ADF"u8.CopyTo(image);
+        WriteUInt16(image, 10, trackCount);
+        var dataOffset = ExtendedAdfHeaderLength + (trackCount * ExtendedAdfTrackHeaderLength);
+        for (var track = 0; track < trackCount; track++)
+        {
+            var headerOffset = ExtendedAdfHeaderLength + (track * ExtendedAdfTrackHeaderLength);
+            WriteUInt16(image, headerOffset + 2, (trackRevolutions[track] << 8) | trackTypes[track]);
+            WriteUInt32(image, headerOffset + 4, trackData[track].Length);
+            WriteUInt32(image, headerOffset + 8, trackBitLengths[track]);
+            trackData[track].CopyTo(image.AsSpan(dataOffset));
+            dataOffset += trackData[track].Length;
+        }
+
+        return image;
+    }
+
+    private static byte[] CreateOldExtendedAdf()
+    {
+        var image = new byte[12];
+        "UAE--ADF"u8.CopyTo(image);
+        return image;
     }
 
     private static void WriteZip(string path, params (string Name, byte[] Data)[] entries)
@@ -625,7 +835,39 @@ public sealed class AmigaDiskLoaderTests
         data[offset + 2] = (byte)value;
     }
 
+    private static void WriteUInt32(Span<byte> data, int offset, int value)
+    {
+        data[offset] = (byte)(value >> 24);
+        data[offset + 1] = (byte)(value >> 16);
+        data[offset + 2] = (byte)(value >> 8);
+        data[offset + 3] = (byte)value;
+    }
+
+    private const int ExtendedAdfHeaderLength = 12;
+    private const int ExtendedAdfTrackHeaderLength = 12;
+    private const int ExtendedAdfNormalTrackBytes = AmigaDiskGeometry.SectorsPerTrack * AmigaDiskGeometry.SectorSize;
+
     private const int DmsCylinderBytes = AmigaDiskGeometry.HeadCount * AmigaDiskGeometry.SectorsPerTrack * AmigaDiskGeometry.SectorSize;
+
+    public enum ExtendedAdfInvalidKind
+    {
+        OldFormat,
+        UnsupportedTrackType,
+        Multirevolution,
+        WrongTrackCount,
+        BadNormalTrackSize,
+        InvalidBitLength,
+        HighDensity,
+        TruncatedData,
+        TrailingData
+    }
+
+    private readonly record struct ExtendedAdfTrackOverride(
+        int Track,
+        byte Type,
+        byte[] Data,
+        int BitLength,
+        byte RevolutionMinusOne = 0);
 
     public enum DmsInvalidKind
     {

@@ -1316,7 +1316,7 @@ namespace CopperMod.Amiga
                             row,
                             spriteIndex,
                             word,
-                            status == TimelineFetchStatus.Granted ? timeline.GetSpriteWord(row, spriteIndex, word) : (ushort)0,
+                            timeline.GetSpriteWord(row, spriteIndex, word),
                             denied: status == TimelineFetchStatus.Denied);
                     }
                 }
@@ -2382,16 +2382,25 @@ namespace CopperMod.Amiga
             state.Dmacon = _dmacon;
             state.Bpl1Mod = _bpl1mod;
             state.Bpl2Mod = _bpl2mod;
-            state.PlaneCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplanePointers.Length);
+            state.PlaneCount = GetAgnusBitplaneFetchPlaneCount();
+            state.DecodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = GetDataFetchStartValue();
             state.FetchSlotStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
             state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot();
             Array.Copy(_bitplanePointers, state.BitplanePointers, _bitplanePointers.Length);
             Array.Copy(_bitplaneBaseRows, state.BitplaneBaseRows, _bitplaneBaseRows.Length);
+            Array.Copy(_bitplaneDataRegisters, state.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
             state.PlaneHasRowMask = 0;
             for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
             {
+                if (IsLatchedOnlyOcsBpu7Plane(state.Bplcon0, plane))
+                {
+                    state.BitplaneRowAddresses[plane] = 0;
+                    state.PlaneHasRowMask |= (byte)(1 << plane);
+                    continue;
+                }
+
                 var displaySourceY = row - state.BitplaneBaseRows[plane];
                 if (displaySourceY < 0)
                 {
@@ -3225,13 +3234,23 @@ namespace CopperMod.Amiga
                             if (statusA == TimelineFetchStatus.NotAttempted &&
                                 IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 0))
                             {
-                                timeline.RecordSpriteDataFetch(y, spriteIndex, 0, 0, granted: false);
+                                timeline.RecordSpriteDataFetch(
+                                    y,
+                                    spriteIndex,
+                                    0,
+                                    0,
+                                    granted: false);
                             }
 
                             if (statusB == TimelineFetchStatus.NotAttempted &&
                                 IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 1))
                             {
-                                timeline.RecordSpriteDataFetch(y, spriteIndex, 1, 0, granted: false);
+                                timeline.RecordSpriteDataFetch(
+                                    y,
+                                    spriteIndex,
+                                    1,
+                                    0,
+                                    granted: false);
                             }
 
                             statusA = timeline.GetSpriteFetchStatus(y, spriteIndex, 0);
@@ -3291,10 +3310,31 @@ namespace CopperMod.Amiga
 
                         for (var word = 0; word < LiveSpriteWordsPerChannel; word++)
                         {
-                            if (timeline.GetSpriteFetchStatus(y, spriteIndex, word) == TimelineFetchStatus.NotAttempted &&
+                            var status = timeline.GetSpriteFetchStatus(y, spriteIndex, word);
+                            if (status == TimelineFetchStatus.Denied && word == 1)
+                            {
+                                var value = GetDeniedSpriteDataLatch(timeline, command, y, spriteIndex, word);
+                                if (value != timeline.GetSpriteWord(y, spriteIndex, word))
+                                {
+                                    timeline.RecordSpriteDataFetch(
+                                        y,
+                                        spriteIndex,
+                                        word,
+                                        value,
+                                        granted: false);
+                                }
+                            }
+
+                            if (status == TimelineFetchStatus.NotAttempted &&
                                 IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, word))
                             {
-                                timeline.RecordSpriteDataFetch(y, spriteIndex, word, 0, granted: false);
+                                var value = GetDeniedSpriteDataLatch(timeline, command, y, spriteIndex, word);
+                                timeline.RecordSpriteDataFetch(
+                                    y,
+                                    spriteIndex,
+                                    word,
+                                    value,
+                                    granted: false);
                                 continue;
                             }
 
@@ -3348,7 +3388,12 @@ namespace CopperMod.Amiga
                     out var value,
                     out var access))
             {
-                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                timeline.RecordSpriteDataFetch(
+                    row,
+                    spriteIndex,
+                    word,
+                    0,
+                    granted: false);
                 return;
             }
 
@@ -3374,7 +3419,13 @@ namespace CopperMod.Amiga
 
             if (IsTimelineSpriteSlotUnavailable(timeline, row, spriteIndex, word))
             {
-                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                var deniedValue = GetDeniedSpriteDataLatch(timeline, command, row, spriteIndex, word);
+                timeline.RecordSpriteDataFetch(
+                    row,
+                    spriteIndex,
+                    word,
+                    deniedValue,
+                    granted: false);
                 return true;
             }
 
@@ -3395,13 +3446,64 @@ namespace CopperMod.Amiga
                     out var value,
                     out var access))
             {
-                timeline.RecordSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                timeline.RecordSpriteDataFetch(
+                    row,
+                    spriteIndex,
+                    word,
+                    0,
+                    granted: false);
                 return true;
             }
 
             RecordLiveDisplayDmaCycle(access.GrantedCycle);
             timeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted: true);
             return true;
+        }
+
+        private static bool HasPriorTimelineSpriteDatb(
+            DisplayFrameTimeline timeline,
+            SpriteFrameCommand command,
+            int row,
+            int spriteIndex)
+            => TryGetPriorTimelineSpriteDatb(timeline, command, row, spriteIndex, out _);
+
+        private static ushort GetDeniedSpriteDataLatch(
+            DisplayFrameTimeline timeline,
+            SpriteFrameCommand command,
+            int row,
+            int spriteIndex,
+            int word)
+        {
+            return word == 1 &&
+                TryGetPriorTimelineSpriteDatb(timeline, command, row, spriteIndex, out var value)
+                    ? value
+                    : (ushort)0;
+        }
+
+        private static bool TryGetPriorTimelineSpriteDatb(
+            DisplayFrameTimeline timeline,
+            SpriteFrameCommand command,
+            int row,
+            int spriteIndex,
+            out ushort value)
+        {
+            value = 0;
+            var valid = false;
+            for (var y = 0; y < row; y++)
+            {
+                var status = timeline.GetSpriteFetchStatus(y, spriteIndex, 1);
+                if (status == TimelineFetchStatus.Granted)
+                {
+                    value = timeline.GetSpriteWord(y, spriteIndex, 1);
+                    valid = true;
+                }
+                else if (status == TimelineFetchStatus.Denied && valid)
+                {
+                    value = timeline.GetSpriteWord(y, spriteIndex, 1);
+                }
+            }
+
+            return valid;
         }
 
         private bool IsTimelineSpriteSlotUnavailable(DisplayFrameTimeline timeline, int row, int spriteIndex, int word)
@@ -3411,7 +3513,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            return !IsSpriteDmaEnabled(state.Dmacon) || !IsSpriteDmaChannelAvailable(state, spriteIndex);
+            return !IsSpriteDmaEnabled(state.Dmacon) || !IsSpriteDmaSlotAvailable(state, spriteIndex, word);
         }
 
         private bool TryGetTimelineStateForSpriteSlot(
@@ -3545,6 +3647,7 @@ namespace CopperMod.Amiga
 
             Array.Copy(state.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
             Array.Copy(state.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
+            Array.Copy(state.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
         }
 
         private bool TryRenderTimelineLowResLineFastPath(
@@ -3615,10 +3718,25 @@ namespace CopperMod.Amiga
                 left.Bpl1Mod == right.Bpl1Mod &&
                 left.Bpl2Mod == right.Bpl2Mod &&
                 left.PlaneCount == right.PlaneCount &&
+                left.DecodePlaneCount == right.DecodePlaneCount &&
                 left.FetchWords == right.FetchWords &&
                 left.DataFetchStart == right.DataFetchStart &&
                 left.FetchSlotStride == right.FetchSlotStride &&
-                left.PlaneHasRowMask == right.PlaneHasRowMask;
+                left.PlaneHasRowMask == right.PlaneHasRowMask &&
+                HasSameBitplaneDataRegisters(left, right);
+        }
+
+        private static bool HasSameBitplaneDataRegisters(DisplayTimelineState left, DisplayTimelineState right)
+        {
+            for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
+            {
+                if (left.BitplaneDataRegisters[plane] != right.BitplaneDataRegisters[plane])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private bool IsTimelineLowResLineFastPathSupported(int row, DisplayLineSegment segment, DisplayTimelineState state)
@@ -3650,7 +3768,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
+            var planeCount = Math.Clamp(state.DecodePlaneCount, 0, LiveBitplanePlaneCount);
             var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
             if (planeCount <= 0 || fetchWords <= 0)
             {
@@ -3748,7 +3866,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
+            var planeCount = Math.Clamp(state.DecodePlaneCount, 0, LiveBitplanePlaneCount);
             var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
             var window = GetEffectiveDisplayWindow();
             if (window.Width <= 0 || window.Height <= 0 || fetchWords <= 0)
@@ -3943,7 +4061,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                if (!TryGetTimelineBitplaneWord(row, plane, word, timeline, out var data))
+                if (!TryGetTimelineBitplaneWord(row, plane, word, state, timeline, out var data))
                 {
                     return false;
                 }
@@ -3986,7 +4104,7 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                if (!TryGetTimelineBitplaneWord(row, plane, word, timeline, out var data))
+                if (!TryGetTimelineBitplaneWord(row, plane, word, state, timeline, out var data))
                 {
                     pixel = default;
                     return false;
@@ -4004,9 +4122,16 @@ namespace CopperMod.Amiga
             int row,
             int plane,
             int word,
+            DisplayTimelineState state,
             DisplayFrameTimeline timeline,
             out ushort data)
         {
+            if (IsLatchedOnlyOcsBpu7Plane(state.Bplcon0, plane))
+            {
+                data = state.BitplaneDataRegisters[plane];
+                return true;
+            }
+
             var status = timeline.GetBitplaneFetchStatus(row, plane, word);
             if (status == TimelineFetchStatus.NotAttempted)
             {
@@ -4034,6 +4159,12 @@ namespace CopperMod.Amiga
                 if ((planeHasRowMask & (1 << plane)) == 0)
                 {
                     words[plane] = 0;
+                    continue;
+                }
+
+                if (IsLatchedOnlyOcsBpu7Plane(state.Bplcon0, plane))
+                {
+                    words[plane] = state.BitplaneDataRegisters[plane];
                     continue;
                 }
 
@@ -5275,6 +5406,18 @@ namespace CopperMod.Amiga
 
         private ushort ReadBitplaneWordForPresentation(uint address, int row, int plane, int word)
         {
+            if (plane >= GetAgnusBitplaneFetchPlaneCount())
+            {
+                return IsLatchedOnlyOcsBpu7Plane(_bplcon0, plane)
+                    ? _bitplaneDataRegisters[plane]
+                    : (ushort)0;
+            }
+
+            if (IsLatchedOnlyOcsBpu7Plane(_bplcon0, plane))
+            {
+                return _bitplaneDataRegisters[plane];
+            }
+
             if (_renderingLiveCapture && TryReadLiveCapturedBitplaneWord(row, plane, word, out var captured))
             {
                 return captured;
@@ -5327,7 +5470,13 @@ namespace CopperMod.Amiga
             int spriteIndex,
             int word,
             out ushort value)
-            => TryReadSpriteWordForPresentation(address, row, spriteIndex, word, out value, recordLiveCapture: false);
+            => TryReadSpriteWordForPresentation(
+                address,
+                row,
+                spriteIndex,
+                word,
+                out value,
+                recordLiveCapture: false);
 
         private bool TryReadSpriteWordForPresentation(
             uint address,
@@ -5366,7 +5515,7 @@ namespace CopperMod.Amiga
                 return TryReadPreviousLiveSpriteWord(row, spriteIndex, word, out value, out var denied) && !denied;
             }
 
-            if (!IsSpriteDmaChannelAvailable(spriteIndex))
+            if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
                 value = 0;
                 RecordMissedSpriteDmaSlot(recordLiveCapture);
@@ -5393,12 +5542,30 @@ namespace CopperMod.Amiga
                 RecordSpriteDmaFetch(access.GrantedCycle, recordLiveCapture);
             }
 
+            LoadSpriteDataRegister(spriteIndex, word, value);
             if (recordLiveCapture)
             {
                 StoreLiveCapturedSpriteWord(row, spriteIndex, word, value);
             }
 
             return true;
+        }
+
+        private void LoadSpriteDataRegister(int spriteIndex, int word, ushort value)
+        {
+            if ((uint)spriteIndex >= (uint)_sprites.Length)
+            {
+                return;
+            }
+
+            if (word == 0)
+            {
+                _sprites[spriteIndex].DataA = value;
+            }
+            else if (word == 1)
+            {
+                _sprites[spriteIndex].DataB = value;
+            }
         }
 
         private bool TryReadPreviousLiveSpriteWord(
@@ -5887,10 +6054,45 @@ namespace CopperMod.Amiga
             }
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
-            var captured = TryReadSpriteWordForPresentation(address, row, spriteIndex, word, out var value, recordLiveCapture: true);
+            var captured = TryReadSpriteWordForPresentation(
+                address,
+                row,
+                spriteIndex,
+                word,
+                out var value,
+                recordLiveCapture: true);
+            if (!captured &&
+                word == 1 &&
+                !IsSpriteDmaSlotAvailable(spriteIndex, word) &&
+                TryGetPriorLiveSpriteDatb(row, spriteIndex, out var priorDatb))
+            {
+                value = priorDatb;
+            }
+
             var granted = captured && _bus.IsHrmChipSlotReserved(slotCycle);
             RecordTimelineSpriteDataFetch(row, spriteIndex, word, value, granted);
             return granted;
+        }
+
+        private bool TryGetPriorLiveSpriteDatb(int row, int spriteIndex, out ushort value)
+        {
+            value = 0;
+            var valid = false;
+            for (var y = 0; y < row; y++)
+            {
+                var status = _displayTimeline.GetSpriteFetchStatus(y, spriteIndex, 1);
+                if (status == TimelineFetchStatus.Granted)
+                {
+                    value = _displayTimeline.GetSpriteWord(y, spriteIndex, 1);
+                    valid = true;
+                }
+                else if (status == TimelineFetchStatus.Denied && valid)
+                {
+                    value = _displayTimeline.GetSpriteWord(y, spriteIndex, 1);
+                }
+            }
+
+            return valid;
         }
 
         private bool TryCaptureLiveSpriteControlWord(
@@ -6248,7 +6450,8 @@ namespace CopperMod.Amiga
             snapshot.Bpl1Mod = _bpl1mod;
             snapshot.Bpl2Mod = _bpl2mod;
             snapshot.DisplayWindowVerticallyOpen = _liveDisplayWindowVerticallyOpen;
-            snapshot.PlaneCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplanePointers.Length);
+            snapshot.PlaneCount = GetAgnusBitplaneFetchPlaneCount();
+            snapshot.DecodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
             snapshot.FetchWords = GetDataFetchWordCount();
             snapshot.DataFetchStart = GetDataFetchStartValue();
             snapshot.FetchSlotStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
@@ -6256,6 +6459,7 @@ namespace CopperMod.Amiga
             Array.Copy(fallbackState.BitplanePointers, snapshot.BitplanePointers, fallbackState.BitplanePointers.Length);
             Array.Copy(fallbackState.BitplaneBaseRows, snapshot.BitplaneBaseRows, fallbackState.BitplaneBaseRows.Length);
             Array.Copy(fallbackState.BitplaneRowAddresses, snapshot.BitplaneRowAddresses, fallbackState.BitplaneRowAddresses.Length);
+            Array.Copy(_bitplaneDataRegisters, snapshot.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
             snapshot.PlaneHasRowMask = fallbackState.PlaneHasRowMask;
 
             return snapshot.Index;
@@ -6419,7 +6623,7 @@ namespace CopperMod.Amiga
 
                 if (!bitplaneDmaWasEnabled && IsBitplaneDmaEnabled(_dmacon))
                 {
-                    var planeCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
+                    var planeCount = GetAgnusBitplaneFetchPlaneCount();
                     SetBitplaneBaseRows(0, planeCount, GetBitplaneDmaEnableBaseRow(cycle));
                 }
 
@@ -6428,8 +6632,8 @@ namespace CopperMod.Amiga
 
             if (offset == 0x100)
             {
-                var oldPlaneCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
-                var newPlaneCount = Math.Min((value >> 12) & 0x7, _bitplaneBaseRows.Length);
+                var oldPlaneCount = GetAgnusBitplaneFetchPlaneCount();
+                var newPlaneCount = GetAgnusBitplaneFetchPlaneCount(value);
                 AnchorActiveBitplanePointersToCurrentRow(oldPlaneCount);
                 _bplcon0 = value;
 
@@ -6741,7 +6945,7 @@ namespace CopperMod.Amiga
 
         private void AnchorActiveBitplanePointersToCurrentRow()
         {
-            AnchorActiveBitplanePointersToCurrentRow(Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length));
+            AnchorActiveBitplanePointersToCurrentRow(GetAgnusBitplaneFetchPlaneCount());
         }
 
         private void AnchorActiveBitplanePointersToCurrentRow(int planeCount)
@@ -6786,7 +6990,7 @@ namespace CopperMod.Amiga
 
         private void RebaseInactiveBitplaneRowsToDisplayWindow()
         {
-            var planeCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
+            var planeCount = GetAgnusBitplaneFetchPlaneCount();
             if (planeCount == 0)
             {
                 return;
@@ -6802,7 +7006,7 @@ namespace CopperMod.Amiga
 
         private void RebaseActiveBitplaneRowsToLiveFrameStart()
         {
-            var planeCount = Math.Min((_bplcon0 >> 12) & 0x7, _bitplaneBaseRows.Length);
+            var planeCount = GetAgnusBitplaneFetchPlaneCount();
             if (planeCount == 0 || !IsBitplaneDmaEnabled(_dmacon))
             {
                 return;
@@ -7025,8 +7229,8 @@ namespace CopperMod.Amiga
                 xClipStop = AmigaConstants.PalLowResWidth;
             }
 
-            var planeCount = (_bplcon0 >> 12) & 0x7;
-            if (planeCount == 0)
+            var decodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
+            if (decodePlaneCount == 0)
             {
                 return;
             }
@@ -7039,7 +7243,8 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            planeCount = Math.Min(planeCount, _bitplanePointers.Length);
+            var fetchPlaneCount = GetAgnusBitplaneFetchPlaneCount();
+            var planeCount = Math.Min(decodePlaneCount, _bitplanePointers.Length);
             var planeWords = _renderPlaneWords;
             var planeHasRow = _renderPlaneHasRow;
             var window = GetEffectiveDisplayWindow();
@@ -7073,6 +7278,28 @@ namespace CopperMod.Amiga
                     _lastBitplaneRows++;
                     for (var plane = 0; plane < planeCount; plane++)
                     {
+                        if (IsLatchedOnlyOcsBpu7Plane(_bplcon0, plane))
+                        {
+                            planeHasRow[plane] = true;
+                            for (var word = 0; word < fetchWords; word++)
+                            {
+                                planeWords[plane, word] = _bitplaneDataRegisters[plane];
+                            }
+
+                            continue;
+                        }
+
+                        if (plane >= fetchPlaneCount)
+                        {
+                            planeHasRow[plane] = false;
+                            for (var word = 0; word < fetchWords; word++)
+                            {
+                                planeWords[plane, word] = 0;
+                            }
+
+                            continue;
+                        }
+
                         var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
                         var rowStride = (fetchWords * 2) + mod;
                         var displaySourceY = y - _bitplaneBaseRows[plane];
@@ -7105,28 +7332,32 @@ namespace CopperMod.Amiga
                         }
                     }
 
-                    var xStart = Math.Max(clipLeft, Math.Max(0, originX));
-                    var xStop = Math.Min(clipRight, Math.Min(AmigaConstants.PalLowResWidth, originX + drawPixels + (highResolution ? 8 : 16)));
+                    var xStart = hasBitplaneDataSpans
+                        ? clipLeft
+                        : Math.Max(clipLeft, Math.Max(0, originX));
+                    var xStop = hasBitplaneDataSpans
+                        ? clipRight
+                        : Math.Min(clipRight, Math.Min(AmigaConstants.PalLowResWidth, originX + drawPixels + (highResolution ? 8 : 16)));
                     var hamColor = _colors[0];
                     if (!highResolution && !dualPlayfield && !holdAndModify && zeroScroll)
                     {
                         for (var x = xStart; x < xStop; x++)
                         {
-                            var relativeX = x - originX;
-                            if ((uint)relativeX >= (uint)fetchPixels)
-                            {
-                                continue;
-                            }
-
-                            var word = relativeX >> 4;
-                            if ((uint)word >= MaxBitplaneFetchWords)
-                            {
-                                continue;
-                            }
-
-                            var mask = 1 << (15 - (relativeX & 0x0F));
                             if (!TryGetBitplaneDataSpanColorIndex(x, y, planeCount, highResolution: false, hiresSubPixel: -1, out var colorIndex))
                             {
+                                var relativeX = x - originX;
+                                if ((uint)relativeX >= (uint)fetchPixels)
+                                {
+                                    continue;
+                                }
+
+                                var word = relativeX >> 4;
+                                if ((uint)word >= MaxBitplaneFetchWords)
+                                {
+                                    continue;
+                                }
+
+                                var mask = 1 << (15 - (relativeX & 0x0F));
                                 colorIndex = 0;
                                 for (var plane = 0; plane < planeCount; plane++)
                                 {
@@ -7490,21 +7721,21 @@ namespace CopperMod.Amiga
                     continue;
                 }
 
-                var relativeX = x - span.XStart;
-                if (highResolution)
-                {
-                    relativeX = (relativeX * 2) + Math.Clamp(hiresSubPixel, 0, 1);
-                }
-
-                if ((uint)relativeX >= 16)
-                {
-                    return false;
-                }
-
-                var bit = 15 - relativeX;
                 var enabledPlanes = Math.Min(planeCount, _bitplaneDataRegisters.Length);
                 for (var plane = 0; plane < enabledPlanes; plane++)
                 {
+                    var relativeX = x - span.XStart - GetPlaneHorizontalScroll(plane);
+                    if (highResolution)
+                    {
+                        relativeX = (relativeX * 2) + Math.Clamp(hiresSubPixel, 0, 1);
+                    }
+
+                    if ((uint)relativeX >= 16)
+                    {
+                        continue;
+                    }
+
+                    var bit = 15 - relativeX;
                     colorIndex |= ((span.GetWord(plane) >> bit) & 1) << plane;
                 }
 
@@ -7725,6 +7956,48 @@ namespace CopperMod.Amiga
             return (bplcon0 & 0x8000) != 0;
         }
 
+        private int GetRequestedBitplaneCount()
+            => GetRequestedBitplaneCount(_bplcon0);
+
+        private static int GetRequestedBitplaneCount(ushort bplcon0)
+            => (bplcon0 >> 12) & 0x7;
+
+        private int GetAgnusBitplaneFetchPlaneCount()
+            => GetAgnusBitplaneFetchPlaneCount(_bplcon0);
+
+        private static int GetAgnusBitplaneFetchPlaneCount(ushort bplcon0)
+        {
+            var requested = GetRequestedBitplaneCount(bplcon0);
+            if (requested <= 0)
+            {
+                return 0;
+            }
+
+            if (IsHighResolutionEnabled(bplcon0))
+            {
+                return Math.Min(requested, HighResBitplaneFetchSlotsByPlane.Length);
+            }
+
+            return requested == 7
+                ? 4
+                : Math.Min(requested, LiveBitplanePlaneCount);
+        }
+
+        private int GetDeniseBitplaneDecodePlaneCount()
+            => GetDeniseBitplaneDecodePlaneCount(_bplcon0);
+
+        private static int GetDeniseBitplaneDecodePlaneCount(ushort bplcon0)
+        {
+            var requested = GetRequestedBitplaneCount(bplcon0);
+            return Math.Clamp(requested, 0, LiveBitplanePlaneCount);
+        }
+
+        private static bool IsLatchedOnlyOcsBpu7Plane(ushort bplcon0, int plane)
+            => !IsHighResolutionEnabled(bplcon0) &&
+                GetRequestedBitplaneCount(bplcon0) == 7 &&
+                plane >= 4 &&
+                plane < LiveBitplanePlaneCount;
+
         private bool IsDualPlayfieldEnabled()
         {
             return (_bplcon0 & 0x0400) != 0;
@@ -7752,7 +8025,15 @@ namespace CopperMod.Amiga
 
         private int GetDataFetchStopValue()
         {
-            return _ddfStop & (IsHighResolutionEnabled() ? 0x00FC : 0x00F8);
+            if (IsHighResolutionEnabled())
+            {
+                return _ddfStop & 0x00FC;
+            }
+
+            var blockStart = _ddfStop & 0x00F8;
+            return (_ddfStop & 0x0004) != 0
+                ? blockStart + 8
+                : blockStart;
         }
 
         private void RenderSprites(Span<uint> bgra)
@@ -7989,8 +8270,7 @@ namespace CopperMod.Amiga
                 first.YStart == second.YStart &&
                 first.YStop == second.YStop &&
                 first.Attached == second.Attached &&
-                first.ManualDataA == second.ManualDataA &&
-                first.ManualDataB == second.ManualDataB &&
+                SpriteDescriptorDataMatches(first, second) &&
                 later.Row <= first.YStart;
         }
 
@@ -8010,9 +8290,16 @@ namespace CopperMod.Amiga
                 first.Attached == second.Attached &&
                 first.DataAddress == second.DataAddress &&
                 first.IsDma == second.IsDma &&
-                first.ManualDataA == second.ManualDataA &&
-                first.ManualDataB == second.ManualDataB &&
+                SpriteDescriptorDataMatches(first, second) &&
                 earlier.Row <= later.Row;
+        }
+
+        private static bool SpriteDescriptorDataMatches(SpriteDescriptor left, SpriteDescriptor right)
+        {
+            return left.IsDma == right.IsDma &&
+                (left.IsDma ||
+                    (left.ManualDataA == right.ManualDataA &&
+                        left.ManualDataB == right.ManualDataB));
         }
 
         private static int FindAttachedEvenSprite(
@@ -8311,9 +8598,40 @@ namespace CopperMod.Amiga
             return spriteIndex < GetUsableSpriteDmaChannelCount();
         }
 
+        private bool IsSpriteDmaSlotAvailable(int spriteIndex, int word)
+        {
+            if (GetAgnusBitplaneFetchPlaneCount() == 0 || !IsBitplaneDmaEnabledForRendering())
+            {
+                return true;
+            }
+
+            var ddfStart = GetDataFetchStartValue();
+            if (!IsHighResolutionEnabled() && ddfStart <= 0x0018 && spriteIndex == 0)
+            {
+                return word == 0;
+            }
+
+            return IsSpriteDmaChannelAvailable(spriteIndex);
+        }
+
         private static bool IsSpriteDmaChannelAvailable(DisplayTimelineState state, int spriteIndex)
         {
             return spriteIndex < GetUsableSpriteDmaChannelCount(state);
+        }
+
+        private static bool IsSpriteDmaSlotAvailable(DisplayTimelineState state, int spriteIndex, int word)
+        {
+            if (state.PlaneCount == 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return true;
+            }
+
+            if (!IsHighResolutionEnabled(state.Bplcon0) && state.DataFetchStart <= 0x0018 && spriteIndex == 0)
+            {
+                return word == 0;
+            }
+
+            return IsSpriteDmaChannelAvailable(state, spriteIndex);
         }
 
         private int GetUsableSpriteDmaChannelCount()
@@ -8436,8 +8754,20 @@ namespace CopperMod.Amiga
             var address = sprite.DataAddress;
             for (var y = sprite.YStart; y < sprite.YStop; y++)
             {
-                if (TryReadSpriteWordForPresentation(address, y, spriteIndex, 0, out var dataA) &&
-                    TryReadSpriteWordForPresentation(AddDmaPointerOffset(address, 2), y, spriteIndex, 1, out var dataB))
+                if (TryReadSpriteWordForPresentation(
+                        address,
+                        y,
+                        spriteIndex,
+                        0,
+                        out var dataA,
+                        recordLiveCapture: false) &&
+                    TryReadSpriteWordForPresentation(
+                        AddDmaPointerOffset(address, 2),
+                        y,
+                        spriteIndex,
+                        1,
+                        out var dataB,
+                        recordLiveCapture: false))
                 {
                     RenderSpriteLine(bgra, spriteIndex, sprite.X, y, dataA, dataB);
                 }
@@ -8589,8 +8919,20 @@ namespace CopperMod.Amiga
             }
 
             var address = AddDmaPointerOffset(sprite.DataAddress, (y - sprite.YStart) * 4);
-            if (!TryReadSpriteWordForPresentation(address, y, command.SpriteIndex, 0, out var dataA) ||
-                !TryReadSpriteWordForPresentation(AddDmaPointerOffset(address, 2), y, command.SpriteIndex, 1, out var dataB))
+            if (!TryReadSpriteWordForPresentation(
+                    address,
+                    y,
+                    command.SpriteIndex,
+                    0,
+                    out var dataA,
+                    recordLiveCapture: false) ||
+                !TryReadSpriteWordForPresentation(
+                    AddDmaPointerOffset(address, 2),
+                    y,
+                    command.SpriteIndex,
+                    1,
+                    out var dataB,
+                    recordLiveCapture: false))
             {
                 return ((ushort)0, (ushort)0);
             }
@@ -8627,10 +8969,17 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            var hasPriorDatb = HasPriorTimelineSpriteDatb(timeline, command, y, command.SpriteIndex);
+            if (statusB == TimelineFetchStatus.Denied && !hasPriorDatb)
+            {
+                return true;
+            }
+
             dataA = statusA == TimelineFetchStatus.Granted
                 ? timeline.GetSpriteWord(y, command.SpriteIndex, 0)
                 : (ushort)0;
-            dataB = statusB == TimelineFetchStatus.Granted
+            dataB = statusB == TimelineFetchStatus.Granted ||
+                (statusB == TimelineFetchStatus.Denied && hasPriorDatb)
                 ? timeline.GetSpriteWord(y, command.SpriteIndex, 1)
                 : (ushort)0;
             return true;
@@ -8741,6 +9090,11 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (!IsSpritePastDeniseOutputEnable(x, y))
+            {
+                return false;
+            }
+
             var mask = _playfieldPriorityMasks[(y * AmigaConstants.PalLowResWidth) + x];
             if (mask == 0)
             {
@@ -8776,6 +9130,31 @@ namespace CopperMod.Amiga
                 x < window.X + window.Width &&
                 y >= window.Y &&
                 y < window.Y + window.Height;
+        }
+
+        private bool IsSpritePastDeniseOutputEnable(int x, int y)
+        {
+            if (GetRequestedBitplaneCount() <= 0)
+            {
+                return true;
+            }
+
+            var dataFetchStartX = GetDataFetchStartX(GetSpriteDisplayWindow(x, y));
+            if (x >= dataFetchStartX)
+            {
+                return true;
+            }
+
+            for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _bitplaneDataSpans[i];
+                if (span.Row == y && span.XStart <= x)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private DisplayWindow GetSpriteDisplayWindow(int x, int y)
@@ -9477,8 +9856,9 @@ namespace CopperMod.Amiga
                     Attached == other.Attached &&
                     DataAddress == other.DataAddress &&
                     IsDma == other.IsDma &&
-                    ManualDataA == other.ManualDataA &&
-                    ManualDataB == other.ManualDataB;
+                    (IsDma ||
+                        (ManualDataA == other.ManualDataA &&
+                            ManualDataB == other.ManualDataB));
             }
 
             public SpriteDescriptor WithYStop(int yStop)
@@ -9531,6 +9911,7 @@ namespace CopperMod.Amiga
             public short Bpl1Mod;
             public short Bpl2Mod;
             public int PlaneCount;
+            public int DecodePlaneCount;
             public int FetchWords;
             public int DataFetchStart;
             public int FetchSlotStride;
@@ -9539,6 +9920,7 @@ namespace CopperMod.Amiga
             public readonly uint[] BitplanePointers = new uint[6];
             public readonly int[] BitplaneBaseRows = new int[6];
             public readonly uint[] BitplaneRowAddresses = new uint[6];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
         }
 
         private sealed class DisplayFrameTimeline
@@ -9708,10 +10090,12 @@ namespace CopperMod.Amiga
                     left.Bpl1Mod == right.Bpl1Mod &&
                     left.Bpl2Mod == right.Bpl2Mod &&
                     left.PlaneCount == right.PlaneCount &&
+                    left.DecodePlaneCount == right.DecodePlaneCount &&
                     left.FetchWords == right.FetchWords &&
                     left.DataFetchStart == right.DataFetchStart &&
                     left.FetchSlotStride == right.FetchSlotStride &&
-                    left.PlaneHasRowMask == right.PlaneHasRowMask;
+                    left.PlaneHasRowMask == right.PlaneHasRowMask &&
+                    HasSameBitplaneDataRegisters(left, right);
             }
 
             public DisplayTimelineState AddStateSnapshot()
@@ -10132,6 +10516,7 @@ namespace CopperMod.Amiga
             public short Bpl1Mod;
             public short Bpl2Mod;
             public int PlaneCount;
+            public int DecodePlaneCount;
             public int FetchWords;
             public int DataFetchStart;
             public int FetchSlotStride;
@@ -10140,6 +10525,7 @@ namespace CopperMod.Amiga
             public readonly uint[] BitplanePointers = new uint[6];
             public readonly int[] BitplaneBaseRows = new int[6];
             public readonly uint[] BitplaneRowAddresses = new uint[6];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
         }
 
         private enum TimelineFetchStatus : byte

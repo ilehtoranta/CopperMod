@@ -147,14 +147,17 @@ public static class IpfDecoder
         {
             var blocks = ReadBlocks(info, image, data.Data.Span);
             var descriptorBits = blocks.Sum(block => checked((int)block.BlockBits + (int)block.GapBits));
-            var trackBits = descriptorBits;
+            var trackBits = image.TrackBits == 0
+                ? descriptorBits
+                : checked((int)image.TrackBits);
+            if (trackBits < descriptorBits)
+            {
+                throw new IpfDecodeException($"Track {image.Cylinder}/{image.Head} descriptor length {trackBits} bits is shorter than its block streams ({descriptorBits} bits).");
+            }
+
             if (options.AlignTracksToWord && (trackBits & 15) != 0)
             {
                 trackBits += 16 - (trackBits & 15);
-            }
-            else if ((trackBits & 7) != 0)
-            {
-                trackBits += 8 - (trackBits & 7);
             }
 
             var writer = new TrackBitWriter(trackBits);

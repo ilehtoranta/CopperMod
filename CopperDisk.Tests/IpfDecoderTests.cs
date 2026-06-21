@@ -150,6 +150,39 @@ public sealed class IpfDecoderTests
         Assert.Equal(0, result.Media.ReadTrack(0, 0).StartBit);
     }
 
+    [Fact]
+    public void DecodeExactModePreservesNonWordAndNonByteAlignedDescriptorTrackBits()
+    {
+        var image = CreateSingleRawTrackIpf(
+            startBit: 5,
+            new byte[] { 0x44, 0x89, 0x12, 0x34 },
+            gapBits: 2,
+            trackBits: 42);
+
+        var disk = IpfDecoder.Decode(image, new IpfDecodeOptions { AlignTracksToWord = false });
+
+        var track = Assert.Single(disk.Tracks);
+        Assert.Equal(42, track.BitLength);
+        Assert.Equal(5, track.StartBit);
+        Assert.Equal(6, track.EncodedData.Length);
+        Assert.Equal(0x4489u, ReadBits(track.EncodedData.Span, track.BitLength, 5, 16));
+        Assert.Equal(0x1234u, ReadBits(track.EncodedData.Span, track.BitLength, 21, 16));
+    }
+
+    [Fact]
+    public void DecodeDefaultKeepsPublicWordAlignedIpfTracks()
+    {
+        var image = CreateSingleRawTrackIpf(
+            startBit: 5,
+            new byte[] { 0x44, 0x89, 0x12, 0x34 },
+            gapBits: 2,
+            trackBits: 42);
+
+        var disk = IpfDecoder.Decode(image);
+
+        Assert.Equal(48, Assert.Single(disk.Tracks).BitLength);
+    }
+
     private static byte[] CreateSingleTrackIpf()
     {
         using var stream = new MemoryStream();
@@ -167,11 +200,16 @@ public sealed class IpfDecoderTests
 
     private static byte[] CreateSingleRawTrackIpf(int startBit, byte[] data)
     {
+        return CreateSingleRawTrackIpf(startBit, data, gapBits: 8, trackBits: data.Length * 8 + 8);
+    }
+
+    private static byte[] CreateSingleRawTrackIpf(int startBit, byte[] data, int gapBits, int trackBits)
+    {
         using var stream = new MemoryStream();
         WriteChunk(stream, "CAPS", Array.Empty<byte>());
         WriteChunk(stream, "INFO", BuildInfo());
-        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit, data.Length * 8, gapBits: 8, blockCount: 1));
-        var payload = BuildRawDataPayload(data);
+        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit, data.Length * 8, gapBits, trackBits, blockCount: 1));
+        var payload = BuildRawDataPayload(data, gapBits);
         WriteChunk(stream, "DATA", BuildDataHeader(payload.Length), payload);
         return stream.ToArray();
     }
@@ -182,7 +220,7 @@ public sealed class IpfDecoderTests
         using var stream = new MemoryStream();
         WriteChunk(stream, "CAPS", Array.Empty<byte>());
         WriteChunk(stream, "INFO", BuildInfo());
-        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit: 0, dataBits: 32, gapBits: 8, blockCount: 2));
+        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit: 0, dataBits: 32, gapBits: 8, trackBits: 40, blockCount: 2));
         WriteChunk(stream, "DATA", BuildDataHeader(payload.Length), payload);
         return stream.ToArray();
     }
@@ -237,10 +275,9 @@ public sealed class IpfDecoderTests
         return stream.ToArray();
     }
 
-    private static byte[] BuildRawImageDescriptor(int startBit, int dataBits, int gapBits, int blockCount)
+    private static byte[] BuildRawImageDescriptor(int startBit, int dataBits, int gapBits, int trackBits, int blockCount)
     {
         using var stream = new MemoryStream();
-        var trackBits = checked(dataBits + gapBits);
         var trackBytes = (trackBits + 7) / 8;
         WriteUInt32(stream, 0); // cylinder
         WriteUInt32(stream, 0); // head
@@ -294,13 +331,13 @@ public sealed class IpfDecoderTests
         return stream.ToArray();
     }
 
-    private static byte[] BuildRawDataPayload(byte[] data)
+    private static byte[] BuildRawDataPayload(byte[] data, int gapBits = 8)
     {
         using var stream = new MemoryStream();
         WriteUInt32(stream, (uint)(data.Length * 8)); // block bits
-        WriteUInt32(stream, 8); // gap bits
+        WriteUInt32(stream, (uint)gapBits);
         WriteUInt32(stream, (uint)data.Length); // CAPS block byte size
-        WriteUInt32(stream, 1); // CAPS gap byte size
+        WriteUInt32(stream, (uint)((gapBits + 7) / 8)); // CAPS gap byte size
         WriteUInt32(stream, 2); // raw encoder
         WriteUInt32(stream, 0); // flags
         WriteUInt32(stream, 0xA5); // gap value
