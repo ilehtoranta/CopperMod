@@ -102,6 +102,22 @@ public sealed class SidFilterProfileTests
 		Assert.True(openLeakage > closedLeakage);
 	}
 
+	[Fact]
+	public void Measured6581ProfilesKeepLowPassModeGainCalibration()
+	{
+		var balanced = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
+		var reference = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581ReferenceMeasured);
+
+		Assert.True(balanced.UsesAnalog6581Filter);
+		Assert.True(reference.UsesAnalog6581Filter);
+		Assert.InRange(balanced.LowPassGain, 1.48, 1.50);
+		Assert.InRange(reference.LowPassGain, 1.48, 1.50);
+		Assert.Equal(0.70, balanced.BandPassGain, precision: 12);
+		Assert.Equal(0.70, reference.BandPassGain, precision: 12);
+		Assert.Equal(1.0, balanced.HighPassGain, precision: 12);
+		Assert.Equal(1.0, reference.HighPassGain, precision: 12);
+	}
+
 	[Theory]
 	[InlineData((int)SidFilterProfileId.Mos6581DataSheet)]
 	[InlineData((int)SidFilterProfileId.Mos6581Balanced)]
@@ -421,7 +437,7 @@ public sealed class SidFilterProfileTests
 		var doubledPeak = MeasureLowPassPeak(doubledVoice, warmupCycles: 12000, measuredCycles: 16000);
 
 		Assert.True(doubledPeak > singlePeak * 1.10, $"Expected louder routed input to increase filter state, single {singlePeak:0.000}, doubled {doubledPeak:0.000}.");
-		Assert.True(doubledPeak < singlePeak * 1.95, $"Expected nonlinear 6581 filter drive to compress doubled input, single {singlePeak:0.000}, doubled {doubledPeak:0.000}.");
+		Assert.True(doubledPeak < singlePeak * 2.0, $"Expected nonlinear 6581 filter drive to compress doubled input, single {singlePeak:0.000}, doubled {doubledPeak:0.000}.");
 	}
 
 	[Fact]

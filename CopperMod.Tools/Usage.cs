@@ -6,6 +6,7 @@ internal static class Usage
 		Usage:
 		  coppermod-tools render <input> --out <output> [options]
 		  coppermod-tools generate-sid-d418-matrices --input <Pex root> --out <generated C# file>
+		  coppermod-tools compare-sidtest5 <split PRG dir> --out <work dir> [options]
 
 		Options:
 		  --format wav|pcm|mp3|bmp   Optional when output extension is .wav, .pcm, .mp3, or .bmp.
@@ -30,5 +31,16 @@ internal static class Usage
 		  --bitmap-width <pixels>    Default: 1024. BMP output only.
 		  --bitmap-height <pixels>   Default: 256. BMP output only.
 		  --overwrite                Replace an existing output file.
+
+		sidtest5 comparison options:
+		  --reference-dir <dir>      Existing or generated SidPlayFP WAVs. Default: <work dir>\sidplayfp.
+		  --candidate-dir <dir>      Existing or generated CopperMod WAVs. Default: <work dir>\coppermod.
+		  --sidplayfp <path>         Render missing SidPlayFP references with forced PAL/6581 reSIDfp.
+		  --c64-rom <path>           16 KiB BASIC+KERNAL ROM for PRG execution.
+		  --seconds <number>         Default: 3.
+		  --sample-rate <hz>         Default: 48000.
+		  --sid-profile balanced|reference Default: balanced.
+		  --overwrite-reference      Re-render SidPlayFP reference WAVs.
+		  --overwrite-candidate      Re-render CopperMod candidate WAVs.
 		""";
 }

@@ -112,7 +112,7 @@ namespace CopperMod.Sid
             return (waveformMask & 0xF0) switch
             {
                 0x00 => 1.0,
-                0x40 => 0.66,
+                0x40 => 0.54,
                 _ => 0.65
             };
         }
@@ -577,6 +577,11 @@ namespace CopperMod.Sid
             {
                 var active = CountSelectedWaveforms(mask);
                 gain[mask] = active <= 1 ? 1.0 : Math.Pow(0.46, active - 1);
+                if (mask == 0x30)
+                {
+                    gain[mask] = 0.58;
+                }
+
                 if ((mask & 0x80) != 0 && active > 1)
                 {
                     gain[mask] *= 0.88;

@@ -1215,17 +1215,17 @@ namespace CopperMod.Sid
             }
         }
 
-        private static double SelectFilterOutput(double low, double band, double high, int filterMode)
+        private double SelectFilterOutput(double low, double band, double high, int filterMode)
         {
             return filterMode switch
             {
-                0x10 => low,
-                0x20 => band,
-                0x30 => low + band,
-                0x40 => high,
-                0x50 => low + high,
-                0x60 => band + high,
-                0x70 => low + band + high,
+                0x10 => low * _profile.LowPassGain,
+                0x20 => band * _profile.BandPassGain,
+                0x30 => (low * _profile.LowPassGain) + (band * _profile.BandPassGain),
+                0x40 => high * _profile.HighPassGain,
+                0x50 => (low * _profile.LowPassGain) + (high * _profile.HighPassGain),
+                0x60 => (band * _profile.BandPassGain) + (high * _profile.HighPassGain),
+                0x70 => (low * _profile.LowPassGain) + (band * _profile.BandPassGain) + (high * _profile.HighPassGain),
                 _ => 0.0
             };
         }

@@ -322,7 +322,8 @@ namespace CopperMod.Sid
             resonanceDamping: 1.22,
             minDamping: 0.42,
             maxDamping: 1.95,
-            bandPassGain: 0.90,
+            lowPassGain: 1.49,
+            bandPassGain: 0.70,
             lowCutoffResonanceBoost: 0.50,
             filterVoiceLeakageGain: 0.025,
             dampingTable: BuildDampingTable(
@@ -367,7 +368,8 @@ namespace CopperMod.Sid
             resonanceDamping: 1.23,
             minDamping: 0.40,
             maxDamping: 1.95,
-            bandPassGain: 0.90,
+            lowPassGain: 1.49,
+            bandPassGain: 0.70,
             lowCutoffResonanceBoost: 0.54,
             filterVoiceLeakageGain: 0.027,
             dampingTable: BuildDampingTable(

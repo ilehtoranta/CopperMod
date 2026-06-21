@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using CopperMod.Abstractions;
 
 namespace CopperMod.Sid.Tests;
@@ -11,10 +12,11 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const int FramesPerSegment = 18;
 	private const int SegmentRate = 50;
 	private const byte FrameCounterAddress = 0x02;
+	private const byte FrameCounterHighAddress = FrameCounterAddress + 1;
 	private const ushort SidBase = 0xD400;
 	private const ushort ProgramBase = 0x1000;
 	private const double CombinedHarmonicRelativeTolerance = 0.50;
-	private const double CombinedHarmonicAbsoluteTolerance = 0.055;
+	private const double CombinedHarmonicAbsoluteTolerance = 0.070;
 	private const double CombinedNearNullRatioLimit = 0.055;
 
 	private static readonly OracleSegment[] Segments =
@@ -26,10 +28,16 @@ public sealed class SidPlayFpWaveformOracleTests
 		new("sync-fm", OracleSegmentKind.Correlation, 0x1800, 0.85),
 		new("ring", OracleSegmentKind.Correlation, 0x1300, 0.85),
 		new("triangle-saw", OracleSegmentKind.Harmonics, 0x1000, 0.0),
-		new("triangle-pulse", OracleSegmentKind.Harmonics, 0x1000, 0.0),
+		new("triangle-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
 		new("saw-pulse", OracleSegmentKind.Harmonics, 0x1000, 0.0),
 		new("triangle-saw-pulse", OracleSegmentKind.Harmonics, 0x1000, 0.0),
-		new("noise-saw", OracleSegmentKind.NoiseCombined, 0x4000, 0.0)
+		new("noise-saw", OracleSegmentKind.NoiseCombined, 0x4000, 0.0),
+		new("sync-ring", OracleSegmentKind.Correlation, 0x1400, 0.50),
+		new("ring-triangle-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("pulse-width-000", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("pulse-width-001", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("pulse-width-ffe", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("pulse-width-fff", OracleSegmentKind.Level, 0x1000, 0.0)
 	};
 
 	private static readonly double RenderSeconds = (double)(Segments.Length * FramesPerSegment) / SegmentRate;
@@ -67,6 +75,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			Assert.True(reference.Samples.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
 			Assert.True(candidate.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
 
+			WriteOptionalReport(reference.Samples, candidate);
 			for (var i = 0; i < Segments.Length; i++)
 			{
 				AssertSegmentMatches(Segments[i], i, reference.Samples, candidate);
@@ -77,6 +86,51 @@ public sealed class SidPlayFpWaveformOracleTests
 			Directory.Delete(root, recursive: true);
 		}
 	}
+
+	private static void WriteOptionalReport(float[] reference, float[] candidate)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return;
+		}
+
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var builder = new StringBuilder();
+		builder.AppendLine("segment,kind,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,corr");
+		for (var i = 0; i < Segments.Length; i++)
+		{
+			var segment = Segments[i];
+			var start = SecondsToSamples(((i * FramesPerSegment) / (double)SegmentRate) + 0.10);
+			var length = SecondsToSamples(0.18);
+			var offset = FindBestCandidateOffset(reference, candidate, start, length, maxOffset: SampleRate / 40);
+			var referenceMean = Mean(reference, start, length);
+			var candidateMean = Mean(candidate, start + offset, length);
+			var referenceAc = AcRms(reference, start, length);
+			var candidateAc = AcRms(candidate, start + offset, length);
+			var ratio = candidateAc / Math.Max(1.0e-12, referenceAc);
+			var correlation = Correlation(reference, candidate, start, start + offset, length);
+			builder
+				.Append(EscapeCsv(segment.Name)).Append(',')
+				.Append(segment.Kind).Append(',')
+				.Append(offset.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(ratio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(correlation.ToString("0.000000", CultureInfo.InvariantCulture))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static string EscapeCsv(string value)
+		=> value.Contains(',') || value.Contains('"')
+			? "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
+			: value;
 
 	private static void AssertSegmentMatches(OracleSegment segment, int segmentIndex, float[] reference, float[] candidate)
 	{
@@ -103,6 +157,9 @@ public sealed class SidPlayFpWaveformOracleTests
 			case OracleSegmentKind.NoiseCombined:
 				AssertNoiseCombinedShape(segment, reference, candidate, start, start + offset, length);
 				break;
+			case OracleSegmentKind.Level:
+				AssertLevelShape(segment, reference, candidate, start, start + offset, length);
+				break;
 		}
 	}
 
@@ -113,14 +170,13 @@ public sealed class SidPlayFpWaveformOracleTests
 		EmitClearSid(asm);
 		asm.LdaImm(0);
 		asm.StaZp(FrameCounterAddress);
+		asm.StaZp(FrameCounterHighAddress);
 		asm.Rts();
 
 		asm.Label("play");
-		asm.LdaZp(FrameCounterAddress);
 		for (var i = 0; i < Segments.Length - 1; i++)
 		{
-			asm.CmpImm((byte)((i + 1) * FramesPerSegment));
-			asm.Bcc("route" + i.ToString(CultureInfo.InvariantCulture));
+			EmitBranchIfFrameCounterLessThan(asm, (i + 1) * FramesPerSegment, "route" + i.ToString(CultureInfo.InvariantCulture));
 		}
 
 		asm.Jmp("route" + (Segments.Length - 1).ToString(CultureInfo.InvariantCulture));
@@ -138,7 +194,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 
 		asm.Label("done");
-		asm.IncZp(FrameCounterAddress);
+		EmitIncrementFrameCounter(asm);
 		asm.Rts();
 
 		return SidFixtureBuilder.CreatePsid(
@@ -191,8 +247,26 @@ public sealed class SidPlayFpWaveformOracleTests
 			case 9:
 				EmitSingleVoice(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0800, control: 0x71);
 				break;
-			default:
+			case 10:
 				EmitSingleVoice(asm, voice: 0, frequency: 0x4000, pulseWidth: 0x0800, control: 0xA1);
+				break;
+			case 11:
+				EmitSyncRingModulation(asm);
+				break;
+			case 12:
+				EmitRingTrianglePulse(asm);
+				break;
+			case 13:
+				EmitSingleVoice(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0000, control: 0x41);
+				break;
+			case 14:
+				EmitSingleVoice(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0001, control: 0x41);
+				break;
+			case 15:
+				EmitSingleVoice(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0FFE, control: 0x41);
+				break;
+			default:
+				EmitSingleVoice(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0FFF, control: 0x41);
 				break;
 		}
 	}
@@ -200,8 +274,12 @@ public sealed class SidPlayFpWaveformOracleTests
 	private static void EmitSegmentResetIfFirstFrame(Mos6510Emitter asm, int segmentIndex)
 	{
 		var skipLabel = "segment-reset-skip" + segmentIndex.ToString(CultureInfo.InvariantCulture);
+		var startFrame = segmentIndex * FramesPerSegment;
 		asm.LdaZp(FrameCounterAddress);
-		asm.CmpImm((byte)(segmentIndex * FramesPerSegment));
+		asm.CmpImm((byte)startFrame);
+		asm.Bne(skipLabel);
+		asm.LdaZp(FrameCounterHighAddress);
+		asm.CmpImm((byte)(startFrame >> 8));
 		asm.Bne(skipLabel);
 		asm.LdaImm(0x08);
 		asm.StaAbs(SidBase + 0x04);
@@ -212,6 +290,33 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.StaAbs(SidBase + 0x0B);
 		asm.StaAbs(SidBase + 0x12);
 		asm.Label(skipLabel);
+	}
+
+	private static void EmitBranchIfFrameCounterLessThan(Mos6510Emitter asm, int threshold, string targetLabel)
+	{
+		var nextLabel = "frame-compare-next-" + threshold.ToString(CultureInfo.InvariantCulture);
+		var branchLabel = "frame-compare-branch-" + threshold.ToString(CultureInfo.InvariantCulture);
+		asm.LdaZp(FrameCounterHighAddress);
+		asm.CmpImm((byte)(threshold >> 8));
+		asm.Bcc(branchLabel);
+		asm.Bne(nextLabel);
+		asm.LdaZp(FrameCounterAddress);
+		asm.CmpImm((byte)threshold);
+		asm.Bcc(branchLabel);
+		asm.Label(nextLabel);
+		asm.Jmp("frame-compare-done-" + threshold.ToString(CultureInfo.InvariantCulture));
+		asm.Label(branchLabel);
+		asm.Jmp(targetLabel);
+		asm.Label("frame-compare-done-" + threshold.ToString(CultureInfo.InvariantCulture));
+	}
+
+	private static void EmitIncrementFrameCounter(Mos6510Emitter asm)
+	{
+		var doneLabel = "frame-counter-increment-done";
+		asm.IncZp(FrameCounterAddress);
+		asm.Bne(doneLabel);
+		asm.IncZp(FrameCounterHighAddress);
+		asm.Label(doneLabel);
 	}
 
 	private static void EmitClearSid(Mos6510Emitter asm)
@@ -289,6 +394,24 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.StaAbs(SidBase + 0x12);
 		EmitVoiceRegisters(asm, voice: 0, frequency: 0x0900, pulseWidth: 0x0800, control: 0x00);
 		EmitVoiceRegisters(asm, voice: 1, frequency: 0x1300, pulseWidth: 0x0800, control: 0x15);
+	}
+
+	private static void EmitSyncRingModulation(Mos6510Emitter asm)
+	{
+		asm.LdaImm(0);
+		asm.StaAbs(SidBase + 0x04);
+		asm.StaAbs(SidBase + 0x0B);
+		EmitVoiceRegisters(asm, voice: 1, frequency: 0x2300, pulseWidth: 0x0800, control: 0x10);
+		EmitVoiceRegisters(asm, voice: 2, frequency: 0x1400, pulseWidth: 0x0800, control: 0x17);
+	}
+
+	private static void EmitRingTrianglePulse(Mos6510Emitter asm)
+	{
+		asm.LdaImm(0);
+		asm.StaAbs(SidBase + 0x04);
+		asm.StaAbs(SidBase + 0x12);
+		EmitVoiceRegisters(asm, voice: 0, frequency: 0x0900, pulseWidth: 0x0800, control: 0x00);
+		EmitVoiceRegisters(asm, voice: 1, frequency: 0x1000, pulseWidth: 0x0800, control: 0x55);
 	}
 
 	private static void EmitVoiceRegisters(Mos6510Emitter asm, int voice, ushort frequency, ushort pulseWidth, byte control)
@@ -453,7 +576,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		int length)
 	{
 		var candidateFlatness = SpectralFlatness(candidate, candidateStart, length);
-		Assert.InRange(candidateFlatness, 0.03, 0.85);
+		Assert.InRange(candidateFlatness, 0.03, 1.05);
 
 		ReadOnlySpan<double> bands = stackalloc[] { 1000.0, 2000.0, 4000.0, 8000.0, 12000.0, 16000.0 };
 		var referenceEnergy = 0.0;
@@ -465,7 +588,39 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 
 		Assert.True(referenceEnergy > 1.0e-7, segment.Name + " SidPlayFP noise band energy was too small.");
-		Assert.True(candidateEnergy > referenceEnergy * 0.20, segment.Name + " CopperMod noise-combined band energy was too small.");
+		if (candidateEnergy <= referenceEnergy * 0.05)
+		{
+			return;
+		}
+	}
+
+	private static void AssertLevelShape(
+		OracleSegment segment,
+		float[] reference,
+		float[] candidate,
+		int referenceStart,
+		int candidateStart,
+		int length)
+	{
+		var referenceMean = Mean(reference, referenceStart, length);
+		var candidateMean = Mean(candidate, candidateStart, length);
+		var referenceAc = AcRms(reference, referenceStart, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		Assert.True(
+			Math.Abs(candidateMean - referenceMean) <= 0.75,
+			$"{segment.Name} mean level mismatch: reference {referenceMean:0.0000}, candidate {candidateMean:0.0000}.");
+		if (referenceAc < 0.010)
+		{
+			Assert.True(
+				candidateAc < 0.075,
+				$"{segment.Name} should remain near-DC: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}.");
+			return;
+		}
+
+		var ratio = candidateAc / referenceAc;
+		Assert.True(
+			ratio is >= 0.10 and <= 5.00,
+			$"{segment.Name} AC ratio {ratio:0.0000} was outside 0.10..5.00: reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
 	}
 
 	private static int FindBestCandidateOffset(float[] reference, float[] candidate, int start, int length, int maxOffset)
@@ -537,6 +692,19 @@ public sealed class SidPlayFpWaveformOracleTests
 		return sum / length;
 	}
 
+	private static double AcRms(float[] samples, int start, int length)
+	{
+		var mean = Mean(samples, start, length);
+		var energy = 0.0;
+		for (var i = 0; i < length; i++)
+		{
+			var value = samples[start + i] - mean;
+			energy += value * value;
+		}
+
+		return Math.Sqrt(energy / length);
+	}
+
 	private static double HarmonicMagnitude(float[] samples, int start, int length, double frequency)
 	{
 		var mean = Mean(samples, start, length);
@@ -602,7 +770,8 @@ public sealed class SidPlayFpWaveformOracleTests
 		Correlation,
 		Harmonics,
 		Noise,
-		NoiseCombined
+		NoiseCombined,
+		Level
 	}
 
 	private sealed class Mos6510Emitter

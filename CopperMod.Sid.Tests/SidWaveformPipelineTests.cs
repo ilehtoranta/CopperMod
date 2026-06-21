@@ -161,7 +161,7 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void PulseComparatorTogglesOneCycleAfterTopAccumulatorBitsReachPulseWidth()
+	public void PulseComparatorDropsOneCycleAfterTopAccumulatorBitsReachPulseWidth()
 	{
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
@@ -177,10 +177,10 @@ public sealed class SidWaveformPipelineTests
 		var delayed = Frame(trace, cycle: 3, voice: 0);
 		Assert.False(before.PulseHigh);
 		Assert.Equal(0u, before.WaveformDac);
-		Assert.False(crossing.PulseHigh);
-		Assert.Equal(0u, crossing.WaveformDac);
-		Assert.True(delayed.PulseHigh);
-		Assert.Equal(0xFFFu, delayed.WaveformDac);
+		Assert.True(crossing.PulseHigh);
+		Assert.Equal(0xFFFu, crossing.WaveformDac);
+		Assert.False(delayed.PulseHigh);
+		Assert.Equal(0u, delayed.WaveformDac);
 	}
 
 	[Fact]
@@ -200,12 +200,12 @@ public sealed class SidWaveformPipelineTests
 		var forwarded = Frame(trace, cycle: 2, voice: 0);
 		var delayed = Frame(trace, cycle: 3, voice: 0);
 		Assert.True(forwarded.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
-		Assert.False(forwarded.PulseHigh);
+		Assert.True(forwarded.PulseHigh);
 		Assert.Equal((ushort)0x001, forwarded.PulseWidth);
-		Assert.Equal(0u, forwarded.WaveformDac);
-		Assert.True(delayed.PulseHigh);
+		Assert.Equal(0xFFFu, forwarded.WaveformDac);
+		Assert.False(delayed.PulseHigh);
 		Assert.Equal((ushort)0x001, delayed.PulseWidth);
-		Assert.Equal(0xFFFu, delayed.WaveformDac);
+		Assert.Equal(0u, delayed.WaveformDac);
 	}
 
 	[Fact]
@@ -249,8 +249,8 @@ public sealed class SidWaveformPipelineTests
 		Assert.Equal(0x1000u, release.Accumulator);
 		Assert.True(release.PulseHigh);
 		Assert.Equal(0xFFFu, release.WaveformDac);
-		Assert.False(delayed.PulseHigh);
-		Assert.Equal(0u, delayed.WaveformDac);
+		Assert.True(delayed.PulseHigh);
+		Assert.Equal(0xFFFu, delayed.WaveformDac);
 	}
 
 	[Fact]
@@ -335,8 +335,8 @@ public sealed class SidWaveformPipelineTests
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
 		chip.Write(0x01, 0x30);
-		chip.Write(0x02, 0x00);
-		chip.Write(0x03, 0x00);
+		chip.Write(0x02, 0xFF);
+		chip.Write(0x03, 0x0F);
 		chip.Write(0x04, control);
 
 		chip.Render(2);
@@ -362,13 +362,13 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void Mos6581TrianglePulseTraceUsesContentionDacForTiming()
+	public void Mos6581TrianglePulseTraceUsesTriangleDacWhenPulseIsHigh()
 	{
 		var chip = CreateTracedChip(out var trace);
 		chip.Write(0x00, 0x00);
 		chip.Write(0x01, 0x70);
-		chip.Write(0x02, 0x00);
-		chip.Write(0x03, 0x00);
+		chip.Write(0x02, 0xFF);
+		chip.Write(0x03, 0x0F);
 		chip.Write(0x04, 0x50);
 
 		chip.Render(2);
@@ -376,7 +376,7 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 2, voice: 0);
 		Assert.Equal(0x50, frame.Waveform);
 		Assert.True(frame.PulseHigh);
-		Assert.Equal(0xFFFu, frame.WaveformDac);
+		Assert.Equal(0x01Cu, frame.WaveformDac);
 	}
 
 	[Fact]

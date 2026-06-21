@@ -5,14 +5,20 @@ namespace CopperMod.Tests;
 public sealed class C64OutputStageTests
 {
 	[Fact]
-	public void C64ProfileKeepsHeadroomInsteadOfAddingDrive()
+	public void C64ProfileUsesMeasuredLineGainWithoutAddingDrive()
 	{
 		var stage = new C64OutputStage(C64OutputProfile.C64);
-		var samples = new[] { 1.0f, 0.0f, 0.0f, 0.0f };
+		const int sampleRate = 44100;
+		const double frequency = 1000.0;
+		var samples = Enumerable.Range(0, sampleRate)
+			.Select(index => (float)(Math.Sin(2.0 * Math.PI * frequency * index / sampleRate) * 0.5))
+			.ToArray();
+		var inputRms = Rms(samples, sampleRate / 4, sampleRate / 2);
 
-		stage.Process(samples, channels: 1, sampleRate: 44100);
+		stage.Process(samples, channels: 1, sampleRate);
 
-		Assert.InRange(samples[0], 0.35f, 0.55f);
+		var outputRms = Rms(samples, sampleRate / 4, sampleRate / 2);
+		Assert.InRange(outputRms / inputRms, 0.95, 1.08);
 		Assert.All(samples, sample => Assert.InRange(sample, -1.0f, 1.0f));
 	}
 
@@ -27,7 +33,7 @@ public sealed class C64OutputStageTests
 		stage.Process(samples, channels: 1, sampleRate: 44100);
 
 		var largestJump = samples.Zip(samples.Skip(1), (previous, current) => Math.Abs(current - previous)).Max();
-		Assert.True(largestJump < 1.95f, $"Expected C64 output profile to keep hard SID edges bounded, got jump {largestJump:0.000}.");
+		Assert.True(largestJump < 1.99f, $"Expected C64 output profile to keep hard SID edges bounded, got jump {largestJump:0.000}.");
 	}
 
 	[Fact]

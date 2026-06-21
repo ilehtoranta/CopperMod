@@ -22,6 +22,12 @@ internal static class CopperModTools
 				return 0;
 			}
 
+			if (SidTest5ComparisonCommand.IsCommand(args))
+			{
+				SidTest5ComparisonCommand.Run(args, output);
+				return 0;
+			}
+
 			var options = RenderCommandOptions.Parse(args);
 			Render(options, output);
 			return 0;

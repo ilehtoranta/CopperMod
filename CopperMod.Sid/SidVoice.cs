@@ -16,6 +16,7 @@ namespace CopperMod.Sid
         private const uint NoiseClockBit = 0x00080000;
         private const uint NoiseRegisterMask = 0x007FFFFF;
         private const uint NoiseResetValue = 0x7FFFF8;
+        private const double Mos6581TrianglePulseContentionScale = 0.48;
         internal const int NoiseTestAllOnesDelayCycles = 0x4000;
         private static readonly int[] NoiseDacRegisterBits = { 22, 20, 16, 13, 11, 7, 4, 2 };
         private static readonly int[] NoiseDacWaveformBits = { 11, 10, 9, 8, 7, 6, 5, 4 };
@@ -393,6 +394,7 @@ namespace CopperMod.Sid
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: false, applyNoiseWriteback: true, out _);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -400,6 +402,7 @@ namespace CopperMod.Sid
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: true, applyNoiseWriteback: true, out trace);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -407,6 +410,7 @@ namespace CopperMod.Sid
         {
             var waveform = RenderWaveformFast(syncSource, model);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
 
@@ -603,6 +607,18 @@ namespace CopperMod.Sid
                 : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
         }
 
+        private double ScaleModulatedTriangleOutput(double waveform, SidChipModel model)
+        {
+            if (model != SidChipModel.Mos6581 ||
+                (_control & 0xF0) != 0x10 ||
+                (_control & 0x04) == 0)
+            {
+                return waveform;
+            }
+
+            return waveform * (((_control & 0x02) != 0) ? 1.29 : 0.86);
+        }
+
         private double RenderMos6581TrianglePulse(
             uint triangleDac,
             uint pulseDac,
@@ -629,7 +645,7 @@ namespace CopperMod.Sid
                     SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
             }
 
-            var contentionDac = GetMos6581TrianglePulseContentionDac();
+            var contentionDac = triangleDac;
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             UpdateOscillatorReadLatch(contentionDac);
             trace = captureTrace
@@ -642,7 +658,7 @@ namespace CopperMod.Sid
                     noiseUsesPostShiftRegister: false)
                 : default;
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+                Mos6581TrianglePulseContentionScale) + mos6581TrianglePulseBias;
         }
 
         private double RenderWaveformFast(SidVoice? syncSource, SidChipModel model)
@@ -799,12 +815,11 @@ namespace CopperMod.Sid
                     SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
             }
 
-            _ = GetTriangleDac(syncSource, out _, out _, out _);
-            var contentionDac = GetMos6581TrianglePulseContentionDac();
+            var contentionDac = GetTriangleDac(syncSource, out _, out _, out _);
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
             UpdateOscillatorReadLatch(contentionDac);
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + mos6581TrianglePulseBias;
+                Mos6581TrianglePulseContentionScale) + mos6581TrianglePulseBias;
         }
 
         private void RefreshMos6581TrianglePulseReadback(SidVoice? syncSource)
@@ -816,16 +831,8 @@ namespace CopperMod.Sid
                 return;
             }
 
-            _ = GetTriangleDac(syncSource, out _, out _, out _);
-            var contentionDac = GetMos6581TrianglePulseContentionDac();
+            var contentionDac = GetTriangleDac(syncSource, out _, out _, out _);
             UpdateOscillatorReadLatch(contentionDac);
-        }
-
-        private uint GetMos6581TrianglePulseContentionDac()
-        {
-            var pulseWidth = (uint)(PulseWidth & 0x0FFF);
-            var pulsePhase = (GetSawDac() - pulseWidth) & 0x0FFFu;
-            return pulsePhase < 0x0140u ? 0x0FFFu : 0u;
         }
 
         private double GetMos6581TrianglePulseBias()
@@ -980,7 +987,13 @@ namespace CopperMod.Sid
 
         private uint GetPulseComparatorDac()
         {
-            return ((_phase >> 12) & 0x0FFF) >= (PulseWidth & 0x0FFF) ? 0x0FFFu : 0u;
+            var pulseWidth = PulseWidth & 0x0FFF;
+            if (pulseWidth == 0)
+            {
+                return 0x0FFFu;
+            }
+
+            return ((_phase >> 12) & 0x0FFF) < pulseWidth ? 0x0FFFu : 0u;
         }
 
         private uint GetNoiseDac()

@@ -5,7 +5,7 @@ public sealed class C64OutputStage
 	private static readonly C64OutputStageProfile C64Profile = new C64OutputStageProfile(
 		DcBlockCutoffHz: 1.59,
 		OutputLowPassCutoffHz: 24000.0,
-		OutputHeadroom: 0.555f,
+		OutputHeadroom: 1.04f,
 		Drive: 0.0f);
 
 	private float[] _lowPassState = Array.Empty<float>();
