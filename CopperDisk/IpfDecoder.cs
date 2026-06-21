@@ -12,8 +12,8 @@ namespace CopperDisk;
 /// <remarks>
 /// This is an expert API for emulator and disk-tool hosts that need direct access to decoded track streams.
 /// The decoder currently materializes weak data deterministically and reports
-/// <see cref="AmigaTrackFeatures.ApproximateWeakData"/>; stored IPF gap streams and unknown block encoders
-/// are rejected with <see cref="IpfDecodeException"/>.
+/// <see cref="AmigaTrackFeatures.ApproximateWeakData"/>. Stored IPF gap streams are decoded when present;
+/// malformed gap streams and unknown block encoders are rejected with <see cref="IpfDecodeException"/>.
 /// </remarks>
 public static class IpfDecoder
 {
