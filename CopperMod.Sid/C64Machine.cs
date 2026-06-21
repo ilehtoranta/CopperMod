@@ -55,6 +55,7 @@ namespace CopperMod.Sid
         private bool _nmiPending;
         private C64InterruptSource _lastInterruptSource;
         private BasicRsidRunner? _basicRunner;
+        private bool _psidPlayActive;
         private long _psidCiaTimerAIntervalCycles;
         private bool _psidCiaTimerATouched;
         private long _pendingCpuStallCycles;
@@ -152,6 +153,7 @@ namespace CopperMod.Sid
             _nmiPending = false;
             _lastInterruptSource = C64InterruptSource.None;
             _basicRunner = null;
+            _psidPlayActive = false;
             _psidCiaTimerAIntervalCycles = GetDefaultPsidCiaTimerAIntervalCycles();
             _psidCiaTimerATouched = false;
             _pendingCpuStallCycles = 0;
@@ -234,9 +236,18 @@ namespace CopperMod.Sid
 
             if (_module.PlayAddress != 0)
             {
-                Cpu.BeginSubroutine(_module.PlayAddress, 0);
+                if (!_psidPlayActive)
+                {
+                    Cpu.BeginSubroutine(_module.PlayAddress, 0);
+                    _psidPlayActive = true;
+                }
+
                 RunUntilSubroutineReturn(250_000);
-                FinishPsidPlayRoutine();
+                if (Cpu.ProgramCounter == 0xFFFF || Cpu.Halted)
+                {
+                    _psidPlayActive = false;
+                    FinishPsidPlayRoutine();
+                }
             }
         }
 
@@ -326,9 +337,7 @@ namespace CopperMod.Sid
             var psidPlayCycle = phasePsidPlayAtTickMidpoint
                 ? frameStartCycle + (tickCycles / 2)
                 : frameStartCycle;
-            var psidPlayPending = !_module.RunsContinuously && _module.PlayAddress != 0;
-            var psidPlayActive = false;
-            var psidPlayStarted = false;
+            var psidPlayPending = !_psidPlayActive && !_module.RunsContinuously && _module.PlayAddress != 0;
             for (var outputFrame = 0; outputFrame < sampleTargetCycles.Length; outputFrame++)
             {
                 var targetCycle = sampleTargetCycles[outputFrame];
@@ -346,9 +355,7 @@ namespace CopperMod.Sid
                     AdvancePsidFramePlaybackTo(
                         targetCycle,
                         psidPlayCycle,
-                        ref psidPlayPending,
-                        ref psidPlayActive,
-                        ref psidPlayStarted);
+                        ref psidPlayPending);
                 }
 
                 var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
@@ -366,15 +373,8 @@ namespace CopperMod.Sid
                     AdvancePsidFramePlaybackTo(
                         frameEndCycle,
                         psidPlayCycle,
-                        ref psidPlayPending,
-                        ref psidPlayActive,
-                        ref psidPlayStarted);
+                        ref psidPlayPending);
                 }
-            }
-
-            if (psidPlayStarted && !psidPlayActive)
-            {
-                FinishPsidPlayRoutine();
             }
 
             Sid.AdvanceTo(frameEndCycle);
@@ -458,25 +458,29 @@ namespace CopperMod.Sid
         private void AdvancePsidFramePlaybackTo(
             long targetCycle,
             long playCycle,
-            ref bool playPending,
-            ref bool playActive,
-            ref bool playStarted)
+            ref bool playPending)
         {
-            if (playPending && targetCycle >= playCycle)
+            if (!_psidPlayActive && playPending && targetCycle >= playCycle)
             {
                 if (Cpu.Cycles < playCycle)
                 {
                     AdvanceSidOnly(playCycle - Cpu.Cycles);
                 }
 
-                playActive = BeginPsidFrame();
-                playStarted |= playActive;
+                _psidPlayActive = BeginPsidFrame();
                 playPending = false;
             }
 
-            if (playActive)
+            if (_psidPlayActive)
             {
-                RunPsidPlayUntil(targetCycle, ref playActive);
+                var active = true;
+                RunPsidPlayUntil(targetCycle, ref active);
+                if (!active)
+                {
+                    _psidPlayActive = false;
+                    FinishPsidPlayRoutine();
+                }
+
                 if (Cpu.Cycles < targetCycle)
                 {
                     AdvanceSidOnly(targetCycle - Cpu.Cycles);

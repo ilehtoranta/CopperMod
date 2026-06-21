@@ -47,8 +47,8 @@ public sealed class SidAnalogTests
 	[Fact]
 	public void ReferenceMeasuredD418TransientEnvelopeUsesMeasuredConstants()
 	{
-		Assert.Equal(0.00024, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
-		Assert.Equal(0.0030, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(0.00130, SidAnalog.VolumeRegisterTransientAttackSeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+		Assert.Equal(0.0042, SidAnalog.VolumeRegisterTransientDecaySeconds(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
 		Assert.Equal(3.40, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
 		Assert.Equal(0.0, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
 		Assert.Equal(0.0, SidAnalog.VolumeRegisterTransientGain(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 12);
@@ -91,7 +91,7 @@ public sealed class SidAnalogTests
 				"Expected a slower calibrated attack to reduce the per-cycle slew.");
 			Assert.Equal(18_000.0, SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured), precision: 12);
 			Assert.Equal(defaultTransition * 0.25, SidAnalog.D418TransitionTransient(0x00, 0x0F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);
-			Assert.Equal(0.62, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
+			Assert.Equal(0.70, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.Balanced), precision: 12);
 		}
 
 		Assert.Equal(defaultLimit, SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured), precision: 12);

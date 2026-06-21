@@ -18,6 +18,9 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const double CombinedHarmonicRelativeTolerance = 0.50;
 	private const double CombinedHarmonicAbsoluteTolerance = 0.070;
 	private const double CombinedNearNullRatioLimit = 0.055;
+	private const int WeakSpotAdsrFrames = 45;
+	private const int WeakSpotD418Frames = 64;
+	private const int WeakSpotCombinedFrames = 24;
 
 	private static readonly OracleSegment[] Segments =
 	{
@@ -41,6 +44,17 @@ public sealed class SidPlayFpWaveformOracleTests
 	};
 
 	private static readonly double RenderSeconds = (double)(Segments.Length * FramesPerSegment) / SegmentRate;
+	private static readonly WeakSpotSegment[] WeakSpotSegments =
+	{
+		new("sidtest5-adsr-piano", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotAdsrFrames),
+		new("sidtest5-d418-volume", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotD418Frames),
+		new("sidtest5-combined-triangle-saw", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-triangle-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-saw-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-all-three", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames)
+	};
+
+	private static readonly double WeakSpotRenderSeconds = WeakSpotSegments.Sum(segment => segment.Frames) / (double)SegmentRate;
 
 	[Fact]
 	public void OptionalGeneratedWaveformFixtureMatchesSidPlayFpOracle()
@@ -66,7 +80,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			var wavPath = Path.Combine(root, "input.wav");
 			File.WriteAllBytes(sidPath, CreateOracleSid());
 
-			RunSidPlayFp(sidPlayFp, root);
+			RunSidPlayFp(sidPlayFp, root, RenderSeconds);
 			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected oracle WAV: " + wavPath);
 
 			var reference = MeasurementWav.Read(wavPath);
@@ -79,6 +93,53 @@ public sealed class SidPlayFpWaveformOracleTests
 			for (var i = 0; i < Segments.Length; i++)
 			{
 				AssertSegmentMatches(Segments[i], i, reference.Samples, candidate);
+			}
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void OptionalGeneratedWeakSpotFixtureMatchesSidPlayFpOracle()
+	{
+		if (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var sidPlayFp = Environment.GetEnvironmentVariable("SIDPLAYFP_EXE");
+		if (string.IsNullOrWhiteSpace(sidPlayFp))
+		{
+			sidPlayFp = @"D:\Models\sidplayfp-3.0.2-ucrt64\sidplayfp.exe";
+		}
+
+		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+
+		var root = Path.Combine(Path.GetTempPath(), "coppermod-sidplayfp-weakspots-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(root);
+		try
+		{
+			var sidPath = Path.Combine(root, "input.sid");
+			var wavPath = Path.Combine(root, "input.wav");
+			File.WriteAllBytes(sidPath, CreateWeakSpotOracleSid());
+
+			RunSidPlayFp(sidPlayFp, root, WeakSpotRenderSeconds);
+			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected weak-spot oracle WAV: " + wavPath);
+
+			var reference = MeasurementWav.Read(wavPath);
+			var candidate = RenderCopperMod(sidPath, WeakSpotRenderSeconds);
+			Assert.Equal(SampleRate, reference.SampleRate);
+			Assert.True(reference.Samples.Length >= SecondsToSamples(WeakSpotRenderSeconds) - SampleRate / 20);
+			Assert.True(candidate.Length >= SecondsToSamples(WeakSpotRenderSeconds) - SampleRate / 20);
+
+			WriteOptionalWeakSpotReport(reference.Samples, candidate);
+			var startFrame = 0;
+			for (var i = 0; i < WeakSpotSegments.Length; i++)
+			{
+				AssertWeakSpotSegmentMatches(WeakSpotSegments[i], startFrame, reference.Samples, candidate);
+				startFrame += WeakSpotSegments[i].Frames;
 			}
 		}
 		finally
@@ -132,6 +193,47 @@ public sealed class SidPlayFpWaveformOracleTests
 			? "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
 			: value;
 
+	private static void WriteOptionalWeakSpotReport(float[] reference, float[] candidate)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_WEAKSPOT_ORACLE_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return;
+		}
+
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var builder = new StringBuilder();
+		builder.AppendLine("segment,kind,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,corr");
+		var startFrame = 0;
+		for (var i = 0; i < WeakSpotSegments.Length; i++)
+		{
+			var segment = WeakSpotSegments[i];
+			var (start, length) = WeakSpotWindow(startFrame, segment.Frames);
+			var offset = FindBestCandidateOffset(reference, candidate, start, length, maxOffset: SampleRate / 40);
+			var referenceMean = Mean(reference, start, length);
+			var candidateMean = Mean(candidate, start + offset, length);
+			var referenceAc = AcRms(reference, start, length);
+			var candidateAc = AcRms(candidate, start + offset, length);
+			var ratio = candidateAc / Math.Max(1.0e-12, referenceAc);
+			var correlation = Correlation(reference, candidate, start, start + offset, length);
+			builder
+				.Append(EscapeCsv(segment.Name)).Append(',')
+				.Append(segment.Kind).Append(',')
+				.Append(offset.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(ratio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(correlation.ToString("0.000000", CultureInfo.InvariantCulture))
+				.AppendLine();
+			startFrame += segment.Frames;
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
 	private static void AssertSegmentMatches(OracleSegment segment, int segmentIndex, float[] reference, float[] candidate)
 	{
 		var start = SecondsToSamples(((segmentIndex * FramesPerSegment) / (double)SegmentRate) + 0.10);
@@ -149,7 +251,7 @@ public sealed class SidPlayFpWaveformOracleTests
 					$"{segment.Name} correlation {correlation:0.000} was below {segment.MinimumCorrelation:0.000} at candidate offset {offset}.");
 				break;
 			case OracleSegmentKind.Harmonics:
-				AssertHarmonicRatios(segment, reference, candidate, start, start + offset, length);
+				AssertHarmonicRatios(segment.Name, segment.Frequency, reference, candidate, start, start + offset, length);
 				break;
 			case OracleSegmentKind.Noise:
 				AssertNoiseShape(segment, reference, candidate, start, start + offset, length);
@@ -158,9 +260,48 @@ public sealed class SidPlayFpWaveformOracleTests
 				AssertNoiseCombinedShape(segment, reference, candidate, start, start + offset, length);
 				break;
 			case OracleSegmentKind.Level:
-				AssertLevelShape(segment, reference, candidate, start, start + offset, length);
+				AssertLevelShape(segment.Name, reference, candidate, start, start + offset, length);
 				break;
 		}
+	}
+
+	private static void AssertWeakSpotSegmentMatches(
+		WeakSpotSegment segment,
+		int startFrame,
+		float[] reference,
+		float[] candidate)
+	{
+		var (start, length) = WeakSpotWindow(startFrame, segment.Frames);
+		Assert.True(reference.Length > start + length, segment.Name + " reference window is outside the SidPlayFP capture.");
+		Assert.True(candidate.Length > start + length, segment.Name + " candidate window is outside the CopperMod render.");
+
+		var offset = FindBestCandidateOffset(reference, candidate, start, length, maxOffset: SampleRate / 40);
+		switch (segment.Kind)
+		{
+			case OracleSegmentKind.Harmonics:
+				AssertHarmonicRatios(segment.Name, segment.Frequency, reference, candidate, start, start + offset, length);
+				break;
+			case OracleSegmentKind.Level:
+				AssertLevelShape(segment.Name, reference, candidate, start, start + offset, length);
+				break;
+			case OracleSegmentKind.Correlation:
+				var correlation = Correlation(reference, candidate, start, start + offset, length);
+				Assert.True(
+					correlation >= segment.MinimumCorrelation,
+					$"{segment.Name} correlation {correlation:0.000} was below {segment.MinimumCorrelation:0.000} at candidate offset {offset}.");
+				break;
+		}
+	}
+
+	private static (int Start, int Length) WeakSpotWindow(int startFrame, int frames)
+	{
+		var segmentStartSeconds = startFrame / (double)SegmentRate;
+		var segmentSeconds = frames / (double)SegmentRate;
+		var skipSeconds = Math.Min(0.10, segmentSeconds * 0.20);
+		var tailSeconds = Math.Min(0.06, segmentSeconds * 0.15);
+		var start = SecondsToSamples(segmentStartSeconds + skipSeconds);
+		var length = SecondsToSamples(Math.Max(0.08, segmentSeconds - skipSeconds - tailSeconds));
+		return (start, length);
 	}
 
 	private static byte[] CreateOracleSid()
@@ -207,6 +348,58 @@ public sealed class SidPlayFpWaveformOracleTests
 			speed: 0,
 			flags: (1 << 2) | (1 << 4),
 			title: "CopperMod SID Waveform Oracle",
+			author: "CopperMod",
+			released: "2026");
+	}
+
+	private static byte[] CreateWeakSpotOracleSid()
+	{
+		var asm = new Mos6510Emitter(ProgramBase);
+		asm.Label("init");
+		EmitClearSid(asm);
+		asm.LdaImm(0);
+		asm.StaZp(FrameCounterAddress);
+		asm.StaZp(FrameCounterHighAddress);
+		asm.Rts();
+
+		asm.Label("play");
+		var cumulativeFrames = 0;
+		for (var i = 0; i < WeakSpotSegments.Length - 1; i++)
+		{
+			cumulativeFrames += WeakSpotSegments[i].Frames;
+			EmitBranchIfFrameCounterLessThan(asm, cumulativeFrames, "weak-route" + i.ToString(CultureInfo.InvariantCulture));
+		}
+
+		asm.Jmp("weak-route" + (WeakSpotSegments.Length - 1).ToString(CultureInfo.InvariantCulture));
+		for (var i = 0; i < WeakSpotSegments.Length; i++)
+		{
+			asm.Label("weak-route" + i.ToString(CultureInfo.InvariantCulture));
+			asm.Jmp("weak-segment" + i.ToString(CultureInfo.InvariantCulture));
+		}
+
+		var startFrame = 0;
+		for (var i = 0; i < WeakSpotSegments.Length; i++)
+		{
+			asm.Label("weak-segment" + i.ToString(CultureInfo.InvariantCulture));
+			EmitWeakSpotSegment(asm, i, startFrame);
+			asm.Jmp("weak-done");
+			startFrame += WeakSpotSegments[i].Frames;
+		}
+
+		asm.Label("weak-done");
+		EmitIncrementFrameCounter(asm);
+		asm.Rts();
+
+		return SidFixtureBuilder.CreatePsid(
+			asm.ToArray(),
+			loadAddress: ProgramBase,
+			initAddress: ProgramBase,
+			playAddress: asm.AddressOf("play"),
+			songs: 1,
+			startSong: 1,
+			speed: 0,
+			flags: (1 << 2) | (1 << 4),
+			title: "CopperMod SID Weak Spot Oracle",
 			author: "CopperMod",
 			released: "2026");
 	}
@@ -271,10 +464,41 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	private static void EmitSegmentResetIfFirstFrame(Mos6510Emitter asm, int segmentIndex)
+	private static void EmitWeakSpotSegment(Mos6510Emitter asm, int segmentIndex, int startFrame)
 	{
-		var skipLabel = "segment-reset-skip" + segmentIndex.ToString(CultureInfo.InvariantCulture);
-		var startFrame = segmentIndex * FramesPerSegment;
+		EmitSegmentResetIfFirstFrame(asm, "weak-" + segmentIndex.ToString(CultureInfo.InvariantCulture), startFrame);
+		switch (segmentIndex)
+		{
+			case 0:
+				EmitWeakSpotAdsrPiano(asm, startFrame);
+				break;
+			case 1:
+				EmitWeakSpotD418Sweep(asm, startFrame);
+				break;
+			case 2:
+				EmitWeakSpotCombinedMask(asm, control: 0x31);
+				break;
+			case 3:
+				EmitWeakSpotCombinedMask(asm, control: 0x51);
+				break;
+			case 4:
+				EmitWeakSpotCombinedMask(asm, control: 0x61);
+				break;
+			default:
+				EmitWeakSpotCombinedMask(asm, control: 0x71);
+				break;
+		}
+	}
+
+	private static void EmitSegmentResetIfFirstFrame(Mos6510Emitter asm, int segmentIndex)
+		=> EmitSegmentResetIfFirstFrame(
+			asm,
+			segmentIndex.ToString(CultureInfo.InvariantCulture),
+			segmentIndex * FramesPerSegment);
+
+	private static void EmitSegmentResetIfFirstFrame(Mos6510Emitter asm, string labelSuffix, int startFrame)
+	{
+		var skipLabel = "segment-reset-skip" + labelSuffix;
 		asm.LdaZp(FrameCounterAddress);
 		asm.CmpImm((byte)startFrame);
 		asm.Bne(skipLabel);
@@ -294,8 +518,9 @@ public sealed class SidPlayFpWaveformOracleTests
 
 	private static void EmitBranchIfFrameCounterLessThan(Mos6510Emitter asm, int threshold, string targetLabel)
 	{
-		var nextLabel = "frame-compare-next-" + threshold.ToString(CultureInfo.InvariantCulture);
-		var branchLabel = "frame-compare-branch-" + threshold.ToString(CultureInfo.InvariantCulture);
+		var labelStem = "frame-compare-" + threshold.ToString(CultureInfo.InvariantCulture) + "-" + targetLabel;
+		var nextLabel = labelStem + "-next";
+		var branchLabel = labelStem + "-branch";
 		asm.LdaZp(FrameCounterHighAddress);
 		asm.CmpImm((byte)(threshold >> 8));
 		asm.Bcc(branchLabel);
@@ -304,10 +529,10 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.CmpImm((byte)threshold);
 		asm.Bcc(branchLabel);
 		asm.Label(nextLabel);
-		asm.Jmp("frame-compare-done-" + threshold.ToString(CultureInfo.InvariantCulture));
+		asm.Jmp(labelStem + "-done");
 		asm.Label(branchLabel);
 		asm.Jmp(targetLabel);
-		asm.Label("frame-compare-done-" + threshold.ToString(CultureInfo.InvariantCulture));
+		asm.Label(labelStem + "-done");
 	}
 
 	private static void EmitIncrementFrameCounter(Mos6510Emitter asm)
@@ -357,6 +582,90 @@ public sealed class SidPlayFpWaveformOracleTests
 
 		asm.LdaImm(0x0F);
 		asm.StaAbs(SidBase + 0x18);
+	}
+
+	private static void EmitWeakSpotAdsrPiano(Mos6510Emitter asm, int startFrame)
+	{
+		var onLabel = "weak-adsr-on";
+		var offLabel = "weak-adsr-off";
+		var doneLabel = "weak-adsr-done";
+		EmitWeakSpotVoiceSetup(asm, attackDecay: 0x0D, sustainRelease: 0x08, control: 0x20);
+		ReadOnlySpan<int> gates = stackalloc[] { 2, 8, 10, 16, 18, 24, 26, 32, 34 };
+		for (var i = 0; i < gates.Length; i++)
+		{
+			EmitBranchIfFrameCounterLessThan(asm, startFrame + gates[i], (i & 1) == 0 ? onLabel : offLabel);
+		}
+
+		asm.Jmp(offLabel);
+		asm.Label(onLabel);
+		asm.LdaImm(0x21);
+		asm.StaAbs(SidBase + 0x04);
+		asm.Jmp(doneLabel);
+		asm.Label(offLabel);
+		asm.LdaImm(0x20);
+		asm.StaAbs(SidBase + 0x04);
+		asm.Label(doneLabel);
+	}
+
+	private static void EmitWeakSpotD418Sweep(Mos6510Emitter asm, int startFrame)
+	{
+		EmitWeakSpotVoiceSetup(asm, attackDecay: 0x00, sustainRelease: 0xF0, control: 0x11);
+		var doneLabel = "weak-d418-done";
+		for (var frame = 0; frame < WeakSpotD418Frames; frame++)
+		{
+			var label = "weak-d418-frame-" + frame.ToString(CultureInfo.InvariantCulture);
+			EmitBranchIfFrameCounterLessThan(asm, startFrame + frame + 1, label);
+		}
+
+		asm.Jmp("weak-d418-frame-" + (WeakSpotD418Frames - 1).ToString(CultureInfo.InvariantCulture));
+		for (var frame = 0; frame < WeakSpotD418Frames; frame++)
+		{
+			var label = "weak-d418-frame-" + frame.ToString(CultureInfo.InvariantCulture);
+			var volume = WeakSpotD418VolumeForFrame(frame);
+			asm.Label(label);
+			asm.LdaImm((byte)volume);
+			asm.StaAbs(SidBase + 0x18);
+			asm.Jmp(doneLabel);
+		}
+
+		asm.Label(doneLabel);
+	}
+
+	private static int WeakSpotD418VolumeForFrame(int frame)
+	{
+		var phase = frame & 0x1F;
+		return phase < 16 ? 15 - phase : phase - 16;
+	}
+
+	private static void EmitWeakSpotCombinedMask(Mos6510Emitter asm, byte control)
+	{
+		EmitWeakSpotVoiceSetup(asm, attackDecay: 0x00, sustainRelease: 0xF0, control);
+	}
+
+	private static void EmitWeakSpotVoiceSetup(Mos6510Emitter asm, byte attackDecay, byte sustainRelease, byte control)
+	{
+		asm.LdaImm(0);
+		asm.StaAbs(SidBase + 0x0B);
+		asm.StaAbs(SidBase + 0x12);
+		asm.StaAbs(SidBase + 0x15);
+		asm.StaAbs(SidBase + 0x16);
+		asm.StaAbs(SidBase + 0x17);
+		asm.LdaImm(0x0F);
+		asm.StaAbs(SidBase + 0x18);
+		asm.LdaImm(0x31);
+		asm.StaAbs(SidBase + 0x00);
+		asm.LdaImm(0x1C);
+		asm.StaAbs(SidBase + 0x01);
+		asm.LdaImm(0);
+		asm.StaAbs(SidBase + 0x02);
+		asm.LdaImm(0x08);
+		asm.StaAbs(SidBase + 0x03);
+		asm.LdaImm(attackDecay);
+		asm.StaAbs(SidBase + 0x05);
+		asm.LdaImm(sustainRelease);
+		asm.StaAbs(SidBase + 0x06);
+		asm.LdaImm(control);
+		asm.StaAbs(SidBase + 0x04);
 	}
 
 	private static void EmitSingleVoice(Mos6510Emitter asm, int voice, ushort frequency, ushort pulseWidth, byte control)
@@ -429,7 +738,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.StaAbs((ushort)(SidBase + offset + 4));
 	}
 
-	private static void RunSidPlayFp(string sidPlayFp, string workingDirectory)
+	private static void RunSidPlayFp(string sidPlayFp, string workingDirectory, double renderSeconds)
 	{
 		var startInfo = new ProcessStartInfo
 		{
@@ -445,7 +754,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		startInfo.ArgumentList.Add("-mof");
 		startInfo.ArgumentList.Add("-f" + SampleRate.ToString(CultureInfo.InvariantCulture));
 		startInfo.ArgumentList.Add("-p32");
-		startInfo.ArgumentList.Add("-t" + FormatSidPlayFpDuration(RenderSeconds));
+		startInfo.ArgumentList.Add("-t" + FormatSidPlayFpDuration(renderSeconds));
 		startInfo.ArgumentList.Add("-w");
 		startInfo.ArgumentList.Add("input.sid");
 
@@ -482,14 +791,15 @@ public sealed class SidPlayFpWaveformOracleTests
 	}
 
 	private static void AssertHarmonicRatios(
-		OracleSegment segment,
+		string segmentName,
+		ushort frequency,
 		float[] reference,
 		float[] candidate,
 		int referenceStart,
 		int candidateStart,
 		int length)
 	{
-		var fundamental = SidFrequencyToHz(segment.Frequency);
+		var fundamental = SidFrequencyToHz(frequency);
 		var referenceMagnitudes = new double[8];
 		var candidateMagnitudes = new double[8];
 		var referenceTotal = 0.0;
@@ -502,8 +812,8 @@ public sealed class SidPlayFpWaveformOracleTests
 			candidateTotal += candidateMagnitudes[harmonic - 1];
 		}
 
-		Assert.True(referenceTotal > 1.0e-7, segment.Name + " SidPlayFP harmonic energy was too small.");
-		Assert.True(candidateTotal > 1.0e-7, segment.Name + " CopperMod harmonic energy was too small.");
+		Assert.True(referenceTotal > 1.0e-7, segmentName + " SidPlayFP harmonic energy was too small.");
+		Assert.True(candidateTotal > 1.0e-7, segmentName + " CopperMod harmonic energy was too small.");
 		for (var harmonic = 1; harmonic <= 8; harmonic++)
 		{
 			var referenceRatio = referenceMagnitudes[harmonic - 1] / referenceTotal;
@@ -512,7 +822,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			{
 				Assert.True(
 					candidateRatio < CombinedNearNullRatioLimit,
-					$"{segment.Name} harmonic {harmonic} should stay near-null: reference {referenceRatio:0.0000}, candidate {candidateRatio:0.0000}. " +
+					$"{segmentName} harmonic {harmonic} should stay near-null: reference {referenceRatio:0.0000}, candidate {candidateRatio:0.0000}. " +
 						"Reference [" + FormatRatios(referenceMagnitudes, referenceTotal) + "], candidate [" + FormatRatios(candidateMagnitudes, candidateTotal) + "].");
 				continue;
 			}
@@ -526,7 +836,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			var absoluteError = Math.Abs(candidateRatio - referenceRatio);
 			Assert.True(
 				relativeError <= CombinedHarmonicRelativeTolerance || absoluteError <= CombinedHarmonicAbsoluteTolerance,
-				$"{segment.Name} harmonic {harmonic} ratio mismatch: reference {referenceRatio:0.0000}, candidate {candidateRatio:0.0000}, relative error {relativeError:0.000}, absolute error {absoluteError:0.0000}. " +
+				$"{segmentName} harmonic {harmonic} ratio mismatch: reference {referenceRatio:0.0000}, candidate {candidateRatio:0.0000}, relative error {relativeError:0.000}, absolute error {absoluteError:0.0000}. " +
 					"Reference [" + FormatRatios(referenceMagnitudes, referenceTotal) + "], candidate [" + FormatRatios(candidateMagnitudes, candidateTotal) + "].");
 		}
 	}
@@ -595,7 +905,7 @@ public sealed class SidPlayFpWaveformOracleTests
 	}
 
 	private static void AssertLevelShape(
-		OracleSegment segment,
+		string segmentName,
 		float[] reference,
 		float[] candidate,
 		int referenceStart,
@@ -608,19 +918,19 @@ public sealed class SidPlayFpWaveformOracleTests
 		var candidateAc = AcRms(candidate, candidateStart, length);
 		Assert.True(
 			Math.Abs(candidateMean - referenceMean) <= 0.75,
-			$"{segment.Name} mean level mismatch: reference {referenceMean:0.0000}, candidate {candidateMean:0.0000}.");
+			$"{segmentName} mean level mismatch: reference {referenceMean:0.0000}, candidate {candidateMean:0.0000}.");
 		if (referenceAc < 0.010)
 		{
 			Assert.True(
 				candidateAc < 0.075,
-				$"{segment.Name} should remain near-DC: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}.");
+				$"{segmentName} should remain near-DC: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}.");
 			return;
 		}
 
 		var ratio = candidateAc / referenceAc;
 		Assert.True(
 			ratio is >= 0.10 and <= 5.00,
-			$"{segment.Name} AC ratio {ratio:0.0000} was outside 0.10..5.00: reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
+			$"{segmentName} AC ratio {ratio:0.0000} was outside 0.10..5.00: reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
 	}
 
 	private static int FindBestCandidateOffset(float[] reference, float[] candidate, int start, int length, int maxOffset)
@@ -764,6 +1074,13 @@ public sealed class SidPlayFpWaveformOracleTests
 		OracleSegmentKind Kind,
 		ushort Frequency,
 		double MinimumCorrelation);
+
+	private sealed record WeakSpotSegment(
+		string Name,
+		OracleSegmentKind Kind,
+		ushort Frequency,
+		double MinimumCorrelation,
+		int Frames);
 
 	private enum OracleSegmentKind
 	{

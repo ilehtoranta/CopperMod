@@ -16,7 +16,8 @@ namespace CopperMod.Sid
         private const uint NoiseClockBit = 0x00080000;
         private const uint NoiseRegisterMask = 0x007FFFFF;
         private const uint NoiseResetValue = 0x7FFFF8;
-        private const double Mos6581TrianglePulseContentionScale = 0.48;
+        private const double Mos6581TrianglePulseContentionScale = 0.66;
+        private const double Mos6581TrianglePulseRingContentionScale = 0.48;
         internal const int NoiseTestAllOnesDelayCycles = 0x4000;
         private static readonly int[] NoiseDacRegisterBits = { 22, 20, 16, 13, 11, 7, 4, 2 };
         private static readonly int[] NoiseDacWaveformBits = { 11, 10, 9, 8, 7, 6, 5, 4 };
@@ -647,6 +648,7 @@ namespace CopperMod.Sid
 
             var contentionDac = triangleDac;
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
+            var contentionScale = GetMos6581TrianglePulseContentionScale();
             UpdateOscillatorReadLatch(contentionDac);
             trace = captureTrace
                 ? new SidWaveformTrace(
@@ -658,7 +660,7 @@ namespace CopperMod.Sid
                     noiseUsesPostShiftRegister: false)
                 : default;
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                Mos6581TrianglePulseContentionScale) + mos6581TrianglePulseBias;
+                contentionScale) + mos6581TrianglePulseBias;
         }
 
         private double RenderWaveformFast(SidVoice? syncSource, SidChipModel model)
@@ -817,9 +819,10 @@ namespace CopperMod.Sid
 
             var contentionDac = GetTriangleDac(syncSource, out _, out _, out _);
             var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
+            var contentionScale = GetMos6581TrianglePulseContentionScale();
             UpdateOscillatorReadLatch(contentionDac);
             return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                Mos6581TrianglePulseContentionScale) + mos6581TrianglePulseBias;
+                contentionScale) + mos6581TrianglePulseBias;
         }
 
         private void RefreshMos6581TrianglePulseReadback(SidVoice? syncSource)
@@ -838,6 +841,13 @@ namespace CopperMod.Sid
         private double GetMos6581TrianglePulseBias()
         {
             return (_control & 0x01) == 0 ? -0.55 : -1.4;
+        }
+
+        private double GetMos6581TrianglePulseContentionScale()
+        {
+            return (_control & 0x04) == 0
+                ? Mos6581TrianglePulseContentionScale
+                : Mos6581TrianglePulseRingContentionScale;
         }
 
         private void ResetForTestBit()

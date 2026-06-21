@@ -176,6 +176,22 @@ public sealed class SidRenderTests
 		Assert.Equal(SidIntegerMath.DivRoundNearest(SidConstants.PalCpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz), GetCpuCycle(song));
 	}
 
+	[Fact]
+	public void LongPsidPlayRoutineContinuesAcrossRenderTicks()
+	{
+		var song = (SidSong)new SidFormat().Load(CreateLongPlayPsid());
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+
+		_ = RenderNextTick(song, options);
+
+		Assert.Contains(song.SidWrites, write => write.Register == 0x00 && write.Value == 0x01);
+		Assert.DoesNotContain(song.SidWrites, write => write.Register == 0x01 && write.Value == 0x02);
+
+		_ = RenderNextTick(song, options);
+
+		Assert.Contains(song.SidWrites, write => write.Register == 0x01 && write.Value == 0x02);
+	}
+
 	[Theory]
 	[MemberData(nameof(MixerFilterWorkloads))]
 	public void RealMixerFilterWorkloadsRemainFiniteAndAudibleWhenPresent(string name, int subSongIndex, string[] pathParts)
@@ -697,6 +713,33 @@ public sealed class SidRenderTests
 			startSong: 1,
 			speed: speed,
 			title: "One Write Phase");
+	}
+
+	private static byte[] CreateLongPlayPsid()
+	{
+		return SidFixtureBuilder.CreatePsid(
+			new byte[]
+			{
+				0x60,             // init: RTS
+				0xA9, 0x01,       // play: LDA #$01
+				0x8D, 0x00, 0xD4, // STA $D400
+				0xA0, 0x14,       // LDY #$14
+				0xA2, 0xFF,       // LDX #$FF
+				0xCA,             // DEX
+				0xD0, 0xFD,       // BNE DEX
+				0x88,             // DEY
+				0xD0, 0xF8,       // BNE LDX #$FF
+				0xA9, 0x02,       // LDA #$02
+				0x8D, 0x01, 0xD4, // STA $D401
+				0x60              // RTS
+			},
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: 0x1001,
+			songs: 1,
+			startSong: 1,
+			speed: 1,
+			title: "Long Play");
 	}
 
 	private static object GetMachine(SidSong song)

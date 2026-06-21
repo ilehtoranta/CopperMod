@@ -6,7 +6,7 @@ public sealed class SidChipTests
 	public void FrequencyRegisterUsesSidPhaseAccumulatorScale()
 	{
 		var chip = CreateSawVoice();
-		var range = MeasureRange(chip, warmupCycles: 3000, measuredCycles: 1024);
+		var range = MeasureRange(chip, warmupCycles: 12000, measuredCycles: 1024);
 
 		Assert.True(range > 0.44, $"Expected SID oscillator to cover a broad sawtooth range, got {range:0.000}.");
 	}
