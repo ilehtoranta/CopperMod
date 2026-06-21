@@ -102,21 +102,22 @@ is available in the workspace.
 ## CopperScreen
 
 `CopperScreen` is the Amiga 500 PAL emulator front-end in this workspace. It can
-boot ADF and IPF disk images directly, or a ZIP containing exactly one ADF or
-IPF image:
+boot ADF, ADZ, DMS, and IPF disk images directly, or a ZIP containing exactly one
+supported disk image:
 
 ```powershell
 dotnet run --project .\CopperScreen -- "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- "path\to\disk.adz"
+dotnet run --project .\CopperScreen -- "path\to\disk.dms"
 dotnet run --project .\CopperScreen -- "path\to\disk.ipf"
 dotnet run --project .\CopperScreen -- "path\to\disk.zip"
 ```
 
-ADF and IPF image loading is provided by the managed `CopperDisk` library. It
-parses ADF sector images and decodes SPS / CAPS IPF images into raw Amiga track
-streams for CopperScreen's floppy path, so protected or non-standard disks can
-be tested without converting them to sector ADF images first. This is still part
-of emulator bring-up, so tricky protection schemes may continue to expose
-missing floppy-controller or disk-DMA behavior.
+Disk image loading is provided by the managed `CopperDisk` library. It parses
+ADF sector images, decompresses ADZ and unencrypted standard DD DMS images, and
+decodes SPS / CAPS IPF images into raw Amiga track streams for CopperScreen's
+floppy path. This is still part of emulator bring-up, so tricky protection
+schemes may continue to expose missing floppy-controller or disk-DMA behavior.
 
 By default CopperScreen starts from the `expanded-copperstart` profile config in
 `CopperScreen\Profiles`. Profiles are JSON files that describe the machine

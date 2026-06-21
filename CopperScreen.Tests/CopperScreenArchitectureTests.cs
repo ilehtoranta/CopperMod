@@ -30,6 +30,12 @@ public sealed class CopperScreenArchitectureTests
     }
 
 	[Fact]
+	public void DiskPickerIncludesSupportedFloppyImageFormats()
+	{
+		Assert.Equal(["*.adf", "*.adz", "*.dms", "*.ipf", "*.zip"], MainWindow.AmigaDiskImagePickerPatterns);
+	}
+
+	[Fact]
 	public void StartupProfilesExposeVanillaAndExpandedCopperStartAndKickstartCombinations()
 	{
 		AssertProfile("vanilla-copperstart", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.CopperStart, 0, 1);

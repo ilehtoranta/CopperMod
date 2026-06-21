@@ -274,6 +274,8 @@ namespace CopperMod.Amiga
             }
 
             return pathExtension.Equals(".adf", StringComparison.OrdinalIgnoreCase) ||
+                pathExtension.Equals(".adz", StringComparison.OrdinalIgnoreCase) ||
+                pathExtension.Equals(".dms", StringComparison.OrdinalIgnoreCase) ||
                 pathExtension.Equals(".ipf", StringComparison.OrdinalIgnoreCase) ||
                 HasPreservedExtension(displayName);
         }

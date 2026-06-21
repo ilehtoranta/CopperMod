@@ -947,6 +947,29 @@ public sealed class CopperScreenBootTests
 		}
 	}
 
+	[Theory]
+	[InlineData(".adz")]
+	[InlineData(".dms")]
+	public void NextDiskResolutionPreservesCompressedDiskExtension(string extension)
+	{
+		var directory = CreateTempDirectory();
+		try
+		{
+			var diskOnePath = Path.Combine(directory, "Game (Disk 1 of 2)" + extension);
+			var diskTwoPath = Path.Combine(directory, "Game (Disk 2 of 2)" + extension);
+			File.WriteAllBytes(diskOnePath, Array.Empty<byte>());
+			File.WriteAllBytes(diskTwoPath, Array.Empty<byte>());
+
+			var resolved = CopperScreenEmulator.ResolveNextDiskPath(diskOnePath);
+
+			Assert.Equal(Path.GetFullPath(diskTwoPath), resolved);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
 	[Fact]
 	public void InsertNextDiskUpdatesCurrentImageWhenMatchingDiskExists()
 	{

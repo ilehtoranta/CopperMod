@@ -48,7 +48,7 @@
         <h2 id="status-title">Experimental, but already doing real Amiga work.</h2>
       </div>
       <p>
-        CopperScreen can boot ADF and IPF disk images, render OCS graphics,
+        CopperScreen can boot ADF, ADZ, DMS, and IPF disk images, render OCS graphics,
         play Paula audio, exercise CIA timing, and test either CopperStart or a
         local Kickstart 1.3 ROM. Compatibility is still improving game by game.
       </p>
@@ -65,7 +65,7 @@
       </article>
       <article>
         <h2>Disk Images</h2>
-        <p>ADF, ZIP-wrapped ADF, and managed IPF decoding feed the raw floppy-controller path for loader and protection testing.</p>
+        <p>ADF, ADZ, DMS, ZIP-wrapped images, and managed IPF decoding feed the raw floppy-controller path for loader and protection testing.</p>
       </article>
       <article>
         <h2>Profiles</h2>
@@ -87,7 +87,7 @@
           <img class="product-shot" src="assets/copperscreen-full-contact.png" alt="CopperScreen running the Full Contact intro screen">
           <div class="product-copy">
             <h3>CopperScreen</h3>
-            <p>Amiga 500 PAL emulator front-end for ADF, IPF, and ZIP-wrapped disk images.</p>
+            <p>Amiga 500 PAL emulator front-end for ADF, ADZ, DMS, IPF, and ZIP-wrapped disk images.</p>
             <div class="download-actions" aria-label="CopperScreen downloads">
               <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-win-x64-self-contained.zip">Windows x64</a>
               <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-dotnet.zip">Portable .NET</a>
@@ -120,6 +120,7 @@
         </p>
       </div>
       <pre><code>dotnet run --project .\CopperScreen -- "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- "path\to\disk.dms"
 dotnet run --project .\CopperScreen -- --profile expanded-copperstart "path\to\disk.zip"</code></pre>
     </section>
   </main>

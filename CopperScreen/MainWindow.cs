@@ -20,6 +20,7 @@ internal sealed class MainWindow : Window
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
+	internal static readonly string[] AmigaDiskImagePickerPatterns = ["*.adf", "*.adz", "*.dms", "*.ipf", "*.zip"];
 	private long _presentedFrames;
 	private CopperScreenRuntime? _runtime;
 	private readonly CopperBenchViewModel _bench;
@@ -1838,7 +1839,7 @@ internal sealed class MainWindow : Window
 			{
 				new FilePickerFileType("Amiga disk images")
 				{
-					Patterns = new[] { "*.adf", "*.ipf", "*.zip" }
+					Patterns = AmigaDiskImagePickerPatterns
 				}
 			}
 		});
@@ -2613,7 +2614,7 @@ internal sealed class MainWindow : Window
 			{
 				new FilePickerFileType("Amiga disk images")
 				{
-					Patterns = new[] { "*.adf", "*.ipf", "*.zip" }
+					Patterns = AmigaDiskImagePickerPatterns
 				}
 			}
 		});

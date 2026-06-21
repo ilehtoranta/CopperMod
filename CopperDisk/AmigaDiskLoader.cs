@@ -7,7 +7,7 @@ using System.Linq;
 namespace CopperDisk;
 
 /// <summary>
-/// Loads Amiga ADF, IPF, and ZIP-wrapped disk images into CopperDisk media objects.
+/// Loads Amiga ADF, ADZ, DMS, IPF, and ZIP-wrapped disk images into CopperDisk media objects.
 /// </summary>
 /// <remarks>
 /// Loader methods are intended for package consumers that need emulator-ready media rather than a filesystem-level
@@ -16,7 +16,7 @@ namespace CopperDisk;
 public static class AmigaDiskLoader
 {
     /// <summary>
-    /// Loads an ADF, IPF, or ZIP file containing exactly one ADF or IPF image.
+    /// Loads an ADF, ADZ, DMS, IPF, or ZIP file containing exactly one supported disk image.
     /// </summary>
     /// <param name="path">The disk image path.</param>
     /// <param name="ipfOptions">Optional IPF decode options used for direct or ZIP-wrapped IPF images.</param>
@@ -34,6 +34,16 @@ public static class AmigaDiskLoader
             return new AmigaDiskLoadResult(FromAdfBytes(File.ReadAllBytes(path)), Path.GetFileName(path));
         }
 
+        if (extension.Equals(".adz", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AmigaDiskLoadResult(FromAdzBytes(File.ReadAllBytes(path)), Path.GetFileName(path));
+        }
+
+        if (extension.Equals(".dms", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AmigaDiskLoadResult(FromDmsBytes(File.ReadAllBytes(path)), Path.GetFileName(path));
+        }
+
         if (extension.Equals(".ipf", StringComparison.OrdinalIgnoreCase))
         {
             return new AmigaDiskLoadResult(FromIpfBytes(File.ReadAllBytes(path), ipfOptions), Path.GetFileName(path));
@@ -45,25 +55,22 @@ public static class AmigaDiskLoader
             var entries = archive.Entries
                 .Where(entry =>
                     !string.IsNullOrEmpty(entry.Name) &&
-                    (entry.Name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
-                        entry.Name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase)))
+                    IsSupportedDiskEntryName(entry.Name))
                 .ToArray();
             if (entries.Length != 1)
             {
-                throw new AmigaDiskException("A zipped disk image must contain exactly one ADF or IPF file.");
+                throw new AmigaDiskException("A zipped disk image must contain exactly one ADF, ADZ, DMS, or IPF file.");
             }
 
             using var stream = entries[0].Open();
             using var memory = new MemoryStream();
             stream.CopyTo(memory);
             var data = memory.ToArray();
-            var media = entries[0].Name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase)
-                ? FromIpfBytes(data, ipfOptions)
-                : FromAdfBytes(data);
+            var media = LoadBytesByExtension(entries[0].Name, data, ipfOptions);
             return new AmigaDiskLoadResult(media, entries[0].Name);
         }
 
-        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .ipf, or .zip.");
+        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, or .zip.");
     }
 
     /// <summary>
@@ -74,6 +81,37 @@ public static class AmigaDiskLoader
     public static IWritableAmigaSectorDiskMedia FromAdfBytes(byte[] ownedData)
     {
         return new AdfDiskMedia(ownedData ?? throw new ArgumentNullException(nameof(ownedData)));
+    }
+
+    /// <summary>
+    /// Decompresses a gzip-compressed ADF image into read-only sector media.
+    /// </summary>
+    /// <param name="adzImage">The ADZ image bytes.</param>
+    /// <returns>Read-only Amiga sector media backed by the decompressed ADF image.</returns>
+    public static IAmigaSectorDiskMedia FromAdzBytes(ReadOnlySpan<byte> adzImage)
+    {
+        try
+        {
+            using var input = new MemoryStream(adzImage.ToArray(), writable: false);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream(AmigaDiskGeometry.StandardAdfSize);
+            gzip.CopyTo(output);
+            return new ReadOnlyAdfDiskMedia(output.ToArray());
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new AmigaDiskException($"Unable to decode ADZ disk image: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Decodes a DMS disk image into read-only sector media.
+    /// </summary>
+    /// <param name="dmsImage">The DMS image bytes.</param>
+    /// <returns>Read-only Amiga sector media backed by the decoded ADF image.</returns>
+    public static IAmigaSectorDiskMedia FromDmsBytes(ReadOnlySpan<byte> dmsImage)
+    {
+        return new ReadOnlyAdfDiskMedia(DmsDecoder.Decode(dmsImage));
     }
 
     /// <summary>
@@ -160,5 +198,37 @@ public static class AmigaDiskLoader
         }
 
         return tracks;
+    }
+
+    private static bool IsSupportedDiskEntryName(string name)
+        => name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".adz", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".dms", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase);
+
+    private static IAmigaDiskMedia LoadBytesByExtension(string name, byte[] data, IpfDecodeOptions? ipfOptions)
+    {
+        var extension = Path.GetExtension(name);
+        if (extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromAdfBytes(data);
+        }
+
+        if (extension.Equals(".adz", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromAdzBytes(data);
+        }
+
+        if (extension.Equals(".dms", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromDmsBytes(data);
+        }
+
+        if (extension.Equals(".ipf", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromIpfBytes(data, ipfOptions);
+        }
+
+        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, or .zip.");
     }
 }

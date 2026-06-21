@@ -138,6 +138,31 @@ public sealed class CopperScreenRuntimeTests
 		Assert.True(protectedAgain.State.Drives[0].WriteProtected);
 	}
 
+	[Theory]
+	[InlineData(".adz")]
+	[InlineData(".dms")]
+	public void LoadedCompressedDiskDefaultsWriteProtectedAndReadOnly(string extension)
+	{
+		using var temp = new TempDiskFile(extension);
+		var adf = new byte[AmigaDiskImage.StandardAdfSize];
+		adf[0] = (byte)'D';
+		adf[1] = (byte)'O';
+		adf[2] = (byte)'S';
+		File.WriteAllBytes(temp.Path, extension.Equals(".adz", StringComparison.OrdinalIgnoreCase)
+			? Gzip(adf)
+			: CreateDms(adf));
+		var loaded = AmigaDiskImage.Load(temp.Path);
+		var emulator = CopperScreenEmulator.CreateWithLoadedDisk([temp.Path], AppContext.BaseDirectory, loaded);
+		emulator.RenderNextFrame();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator, new FakeAudioOutput());
+		var state = runtime.CurrentState;
+
+		Assert.False(loaded.CanWriteTracks);
+		Assert.True(state.Drives[0].HasDisk);
+		Assert.True(state.Drives[0].WriteProtected);
+		Assert.EndsWith(extension, state.Drives[0].DiskName, StringComparison.OrdinalIgnoreCase);
+	}
+
 	[Fact]
 	public async Task FramePublishedNotifiesPresentationLoop()
 	{
@@ -399,6 +424,96 @@ public sealed class CopperScreenRuntimeTests
 		Assert.NotNull(publish);
 		Array.Fill(emulator.Framebuffer, pixel);
 		publish.Invoke(runtime, [1, queuedAudioBuffers]);
+	}
+
+	private static byte[] Gzip(byte[] data)
+	{
+		using var memory = new MemoryStream();
+		using (var gzip = new System.IO.Compression.GZipStream(memory, System.IO.Compression.CompressionLevel.SmallestSize, leaveOpen: true))
+		{
+			gzip.Write(data);
+		}
+
+		return memory.ToArray();
+	}
+
+	private static byte[] CreateDms(byte[] adf)
+	{
+		const int cylinderBytes = AmigaDiskImage.HeadCount * AmigaDiskImage.SectorsPerTrack * AmigaDiskImage.SectorSize;
+		var body = new List<byte>();
+		for (var cylinder = 0; cylinder < AmigaDiskImage.CylinderCount; cylinder++)
+		{
+			var cylinderData = adf.AsSpan(cylinder * cylinderBytes, cylinderBytes).ToArray();
+			var trackHeader = new byte[20];
+			trackHeader[0] = (byte)'T';
+			trackHeader[1] = (byte)'R';
+			WriteUInt16(trackHeader, 2, cylinder);
+			WriteUInt16(trackHeader, 6, cylinderData.Length);
+			WriteUInt16(trackHeader, 8, cylinderData.Length);
+			WriteUInt16(trackHeader, 10, cylinderData.Length);
+			WriteUInt16(trackHeader, 14, Checksum(cylinderData));
+			WriteUInt16(trackHeader, 16, Crc(cylinderData));
+			WriteUInt16(trackHeader, 18, Crc(trackHeader.AsSpan(0, 18)));
+			body.AddRange(trackHeader);
+			body.AddRange(cylinderData);
+		}
+
+		var header = new byte[56];
+		header[0] = (byte)'D';
+		header[1] = (byte)'M';
+		header[2] = (byte)'S';
+		header[3] = (byte)'!';
+		WriteUInt16(header, 16, 0);
+		WriteUInt16(header, 18, AmigaDiskImage.CylinderCount - 1);
+		WriteUInt24(header, 21, body.Count);
+		WriteUInt24(header, 25, AmigaDiskImage.StandardAdfSize);
+		WriteUInt16(header, 46, 111);
+		WriteUInt16(header, 50, 0);
+		WriteUInt16(header, 52, 0);
+		WriteUInt16(header, 54, Crc(header.AsSpan(4, 50)));
+		var image = new byte[header.Length + body.Count];
+		header.CopyTo(image, 0);
+		body.CopyTo(image, header.Length);
+		return image;
+	}
+
+	private static ushort Crc(ReadOnlySpan<byte> data)
+	{
+		var crc = 0;
+		foreach (var value in data)
+		{
+			crc ^= value;
+			for (var bit = 0; bit < 8; bit++)
+			{
+				crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xA001 : crc >> 1;
+			}
+		}
+
+		return (ushort)crc;
+	}
+
+	private static ushort Checksum(ReadOnlySpan<byte> data)
+	{
+		var checksum = 0;
+		foreach (var value in data)
+		{
+			checksum = (checksum + value) & 0xFFFF;
+		}
+
+		return (ushort)checksum;
+	}
+
+	private static void WriteUInt16(Span<byte> data, int offset, int value)
+	{
+		data[offset] = (byte)(value >> 8);
+		data[offset + 1] = (byte)value;
+	}
+
+	private static void WriteUInt24(Span<byte> data, int offset, int value)
+	{
+		data[offset] = (byte)(value >> 16);
+		data[offset + 1] = (byte)(value >> 8);
+		data[offset + 2] = (byte)value;
 	}
 
 	private static void DrainPresentationFrames(CopperScreenRuntime runtime, ref long lastSeenFrameNumber)

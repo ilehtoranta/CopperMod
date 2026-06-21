@@ -1,21 +1,30 @@
 # CopperDisk
 
 CopperDisk is a managed Amiga floppy disk-image library for emulator hosts and
-disk tools. It loads standard 880 KiB ADF sector images, decodes SPS/CAPS IPF
-images into raw Amiga track streams, and exposes both decoded AmigaDOS sectors
-and encoded track data through one small API.
+disk tools. It loads standard 880 KiB ADF sector images, gzip-compressed ADZ
+images, read-only DMS images, decodes SPS/CAPS IPF images into raw Amiga track
+streams, and exposes both decoded AmigaDOS sectors and encoded track data
+through one small API.
 
 The package targets .NET 10 and has no external runtime dependencies.
 
 ## Supported Images
 
 - `.adf`: standard 880 KiB AmigaDOS sector images.
+- `.adz`: gzip-compressed standard ADF sector images, loaded read-only.
+- `.dms`: unencrypted standard DD Disk Masher images, loaded read-only.
 - `.ipf`: SPS/CAPS IPF images decoded to raw track streams.
-- `.zip`: an archive containing exactly one `.adf` or `.ipf` entry.
+- `.zip`: an archive containing exactly one `.adf`, `.adz`, `.dms`, or `.ipf` entry.
 
-ADF media is writable at the sector-image level. IPF and encoded-track media are
-read-only, but still expose a best-effort decoded sector view when sectors can be
-recognized.
+ADF media is writable at the sector-image level. ADZ, DMS, IPF, and
+encoded-track media are read-only, but still expose a best-effort decoded sector
+view when sectors can be recognized.
+
+## Third-Party Notices
+
+DMS support follows the file-format validation and decrunch behavior of the
+public-domain xDMS unpacker by Andre Rodrigues de la Rocha. See
+`THIRD-PARTY-NOTICES.md` for details.
 
 ## Loading Disk Images
 
@@ -33,9 +42,9 @@ Console.WriteLine(track.BitLength);
 Console.WriteLine(track.Features);
 ```
 
-`AmigaDiskLoader.Load` accepts direct ADF/IPF paths and ZIP files containing
-exactly one ADF or IPF image. Direct and ZIP-wrapped IPF files use the same
-optional decode options:
+`AmigaDiskLoader.Load` accepts direct ADF/ADZ/DMS/IPF paths and ZIP files
+containing exactly one supported image. Direct and ZIP-wrapped IPF files use the
+same optional decode options:
 
 ```csharp
 var loaded = AmigaDiskLoader.Load(

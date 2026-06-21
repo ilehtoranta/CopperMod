@@ -2,21 +2,22 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperDisk</PackageId>
     <Title>CopperDisk</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Managed Amiga ADF and IPF disk image library.</Description>
+    <Description>Managed Amiga ADF, ADZ, DMS, and IPF disk image library.</Description>
     <PackageVersion>2.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;adf;ipf;disk</PackageTags>
+    <PackageTags>amiga;emulation;adf;adz;dms;ipf;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copperdisk-icon.png</PackageIcon>
-    <PackageReleaseNotes>ADF, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable ADF media; ReadOnlySpan IPF input; package icon, README, and XML API documentation.</PackageReleaseNotes>
+    <PackageReleaseNotes>ADF, ADZ, DMS, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable ADF media; ReadOnlySpan IPF input; package icon, README, and XML API documentation.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
@@ -33,6 +34,7 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
     <None Include="copperdisk-icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
