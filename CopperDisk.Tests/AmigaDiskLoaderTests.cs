@@ -42,6 +42,42 @@ public sealed class AmigaDiskLoaderTests
     }
 
     [Fact]
+    public void StandardAdfTrackEncoderUsesPalSizedSyntheticRevolution()
+    {
+        const int expectedSectorBytes = 0x440 * AmigaDiskGeometry.SectorsPerTrack;
+        const int expectedGapBytes = 0x2BC;
+        const int expectedTrackBytes = expectedSectorBytes + expectedGapBytes;
+        var media = AmigaDiskLoader.FromAdfBytes(CreateStandardAdf());
+
+        var encoded = AmigaDosTrackEncoder.EncodeTrack(media, cylinder: 0, head: 0);
+        var track = AmigaEncodedTrack.FromBytes(encoded);
+
+        Assert.Equal(12_668, AmigaDosTrackEncoder.EncodedTrackByteCount);
+        Assert.Equal(expectedTrackBytes, encoded.Length);
+        Assert.Equal(101_344, track.BitLength);
+        Assert.Equal(0x44, encoded[4]);
+        Assert.Equal(0x89, encoded[5]);
+        Assert.Equal(0x44, encoded[expectedSectorBytes - 0x440 + 4]);
+        Assert.Equal(0x89, encoded[expectedSectorBytes - 0x440 + 5]);
+        for (var offset = expectedSectorBytes; offset < encoded.Length; offset++)
+        {
+            Assert.Equal(0xAA, encoded[offset]);
+        }
+    }
+
+    [Fact]
+    public void UnformattedTrackUsesPalSizedSyntheticRevolution()
+    {
+        var track = AmigaDosTrackEncoder.CreateUnformattedTrack();
+
+        Assert.Equal(12_668, track.Length);
+        foreach (var value in track)
+        {
+            Assert.Equal(0xAA, value);
+        }
+    }
+
+    [Fact]
     public void FromEncodedTracksPreservesTrackDataAndDecodesKnownSectorsBestEffort()
     {
         var data = CreateStandardAdf();

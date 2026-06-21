@@ -1696,12 +1696,13 @@ public sealed class CopperScreenBootTests
 			}
 		}
 
-		var cubeRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: 0, y0: 0, width: 180, height: 170);
-		var strayRightRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: 220, y0: 0, width: 100, height: 170);
+		var deepOverscanShift = (AmigaConstants.PalLowResOverscanBorderX - 16) * 2;
+		var cubeRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: deepOverscanShift, y0: 0, width: 320, height: 170);
+		var strayRightRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: deepOverscanShift + 328, y0: 0, width: 100, height: 170);
 		Assert.StartsWith("boot program running:", emulator.StatusText);
 		Assert.DoesNotContain("AMIGA_BOOT_UNSUPPORTED_OPCODE", emulator.StatusText);
 		Assert.DoesNotContain("AMIGA_BOOT_FAULT", emulator.StatusText);
-		Assert.True(cubeRegion > 8_000, $"Expected the filled cube/viewport in the top-left region, saw {cubeRegion} non-black pixels.");
+		Assert.True(cubeRegion > 40_000, $"Expected the filled cube/viewport in the top-left region, saw {cubeRegion} non-black pixels.");
 		Assert.True(strayRightRegion < 250, $"Expected the polygon line blits to stay out of the top-right region, saw {strayRightRegion} non-black pixels.");
 	}
 
@@ -2398,6 +2399,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-copperstart", diskPath }, AppContext.BaseDirectory);
+		emulator.SetPresentationOptions(new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.StableWeave));
 		var reachedHamDisplay = false;
 		uint? previousLaceChecksum = null;
 		var stableLaceFrames = 0;

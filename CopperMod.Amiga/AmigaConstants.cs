@@ -37,11 +37,13 @@ namespace CopperMod.Amiga
         public const uint A500RealFastRamBase = 0x0020_0000;
         public const int PalLowResStandardWidth = 320;
         public const int PalLowResStandardHeight = 256;
-        public const int PalLowResOverscanBorderX = 16;
+        // Deep PAL overscan is asymmetric horizontally: the standard display
+        // starts 32 low-res pixels into a 358-pixel capture field.
+        public const int PalLowResOverscanBorderX = 32;
         public const int PalLowResOverscanBorderY = 16;
-        public const int PalLowResWidth = PalLowResStandardWidth + (PalLowResOverscanBorderX * 2);
-        public const int PalLowResHeight = PalLowResStandardHeight + (PalLowResOverscanBorderY * 2);
-        public const int PalHighResWidth = PalLowResWidth * 2;
-        public const int PalHighResHeight = PalLowResHeight * 2;
+        public const int PalLowResWidth = 358;
+        public const int PalLowResHeight = 285;
+        public const int PalHighResWidth = 716;
+        public const int PalHighResHeight = 570;
     }
 }

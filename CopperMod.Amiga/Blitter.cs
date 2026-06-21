@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga
 {
@@ -526,6 +527,9 @@ namespace CopperMod.Amiga
         private long _lastDmaCycle;
         private int _completedMicroOps;
         private bool _completionPending;
+        private readonly List<DeferredRegisterWrite> _deferredRegisterWrites = new List<DeferredRegisterWrite>();
+        private bool _deferredRestartPending;
+        private ushort _deferredRestartBltsize;
         private BlitterCompiledKernel _activeKernel;
         private BlitterAreaKernelState _areaKernelState;
 
@@ -623,6 +627,9 @@ namespace CopperMod.Amiga
             _lastDmaCycle = 0;
             _completedMicroOps = 0;
             _completionPending = false;
+            _deferredRegisterWrites.Clear();
+            _deferredRestartPending = false;
+            _deferredRestartBltsize = 0;
             _activeKernel = default;
             _areaKernelState = default;
         }
@@ -651,6 +658,36 @@ namespace CopperMod.Amiga
         public bool Busy => _busy;
 
         public void WriteRegister(ushort offset, ushort value, long cycle)
+        {
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
+            AdvanceTo(cycle);
+            if (offset == 0x058)
+            {
+                if (_busy)
+                {
+                    _deferredRestartPending = true;
+                    _deferredRestartBltsize = value;
+                    return;
+                }
+
+                StartBlit(value, cycle);
+                return;
+            }
+
+            if (_busy && ShouldDeferBusyRegisterWrite(offset))
+            {
+                _deferredRegisterWrites.Add(new DeferredRegisterWrite(offset, value));
+                return;
+            }
+
+            ApplyRegisterWrite(offset, value);
+            if (offset == 0x040 && _busy && (value & 0x0100) == 0)
+            {
+                _useD = false;
+            }
+        }
+
+        private void ApplyRegisterWrite(ushort offset, ushort value)
         {
             switch (offset)
             {
@@ -690,9 +727,6 @@ namespace CopperMod.Amiga
                 case 0x056:
                     _destinationD = _bus.WriteChipDmaPointerLow(_destinationD, value);
                     break;
-                case 0x058:
-                    StartBlit(value, cycle);
-                    break;
                 case 0x060:
                     _sourceCModulo = unchecked((short)value);
                     break;
@@ -717,6 +751,14 @@ namespace CopperMod.Amiga
                     _dataAShift = (_bltcon0 >> 12) & 0x0F;
                     break;
             }
+        }
+
+        private static bool ShouldDeferBusyRegisterWrite(ushort offset)
+        {
+            return offset == 0x044 ||
+                offset == 0x046 ||
+                (offset >= 0x048 && offset <= 0x056) ||
+                (offset >= 0x060 && offset <= 0x066);
         }
 
         public void AdvanceTo(long targetCycle)
@@ -887,7 +929,7 @@ namespace CopperMod.Amiga
             _activeSourceBModulo = _sourceBModulo;
             _activeSourceCModulo = _sourceCModulo;
             _activeDestinationDModulo = _destinationDModulo;
-            _fillEnabled = (_bltcon1 & (Bltcon1InclusiveFill | Bltcon1ExclusiveFill)) != 0;
+            _fillEnabled = _descending && (_bltcon1 & (Bltcon1InclusiveFill | Bltcon1ExclusiveFill)) != 0;
             _fillExclusive = (_bltcon1 & Bltcon1ExclusiveFill) != 0;
             _fillCarryInitial = (_bltcon1 & Bltcon1FillCarryIn) != 0;
             _fillCarry = _fillCarryInitial;
@@ -991,6 +1033,7 @@ namespace CopperMod.Amiga
         {
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
+            stepEnd += GetAreaFillIdlePhaseDelay(stepStart, stepEnd);
             var nextReadCycle = stepStart;
             var nextCycle = stepEnd;
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
@@ -1317,15 +1360,45 @@ namespace CopperMod.Amiga
             }
 
             _completionPending = false;
-            _busy = false;
-            _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            FinishCompletedBlit();
         }
 
         private void FinalizePendingCompletion()
         {
             _completionPending = false;
+            FinishCompletedBlit();
+        }
+
+        private void FinishCompletedBlit()
+        {
             _busy = false;
             _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            ApplyDeferredRegisterWrites();
+            if (!_deferredRestartPending)
+            {
+                return;
+            }
+
+            var bltsize = _deferredRestartBltsize;
+            _deferredRestartPending = false;
+            _deferredRestartBltsize = 0;
+            StartBlit(bltsize, _currentCycle);
+        }
+
+        private void ApplyDeferredRegisterWrites()
+        {
+            if (_deferredRegisterWrites.Count == 0)
+            {
+                return;
+            }
+
+            for (var i = 0; i < _deferredRegisterWrites.Count; i++)
+            {
+                var write = _deferredRegisterWrites[i];
+                ApplyRegisterWrite(write.Offset, write.Value);
+            }
+
+            _deferredRegisterWrites.Clear();
         }
 
         private bool IsBlitterDmaEnabled()
@@ -1364,6 +1437,23 @@ namespace CopperMod.Amiga
             }
 
             return ticks;
+        }
+
+        private long GetAreaFillIdlePhaseDelay(long stepStart, long stepEnd)
+        {
+            if (!_fillEnabled || _useC)
+            {
+                return 0;
+            }
+
+            var delay = 0L;
+            var idleCycle = stepEnd - (2 * ChipSlotCycles);
+            while (_bus.IsFixedDmaSlotReserved(idleCycle + delay))
+            {
+                delay += ChipSlotCycles;
+            }
+
+            return delay;
         }
 
         private static int GetLinePixelCycles()
@@ -1461,5 +1551,18 @@ namespace CopperMod.Amiga
 
         private static ushort ApplyMinterm(byte minterm, ushort sourceA, ushort sourceB, ushort sourceC)
             => BlitterKernelMath.ApplyMinterm(minterm, sourceA, sourceB, sourceC);
+
+        private readonly struct DeferredRegisterWrite
+        {
+            public DeferredRegisterWrite(ushort offset, ushort value)
+            {
+                Offset = offset;
+                Value = value;
+            }
+
+            public ushort Offset { get; }
+
+            public ushort Value { get; }
+        }
     }
 }

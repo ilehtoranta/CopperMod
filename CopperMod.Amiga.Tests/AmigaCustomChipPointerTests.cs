@@ -83,7 +83,7 @@ public sealed class AmigaCustomChipPointerTests
         bus.WriteWord(0x00DFF096, 0x8220);
         bus.Paula.AdvanceTo(0);
         bus.WriteWord(0x00DFF1A2, 0x0F00);
-        var (pos, ctl) = EncodeSpritePosition(24, 30, 1);
+        var (pos, ctl) = EncodeSpritePosition(AmigaConstants.PalLowResOverscanBorderX, 30, 1);
         BigEndian.WriteUInt16(bus.ChipRam, 0x0420, pos);
         BigEndian.WriteUInt16(bus.ChipRam, 0x0422, ctl);
         BigEndian.WriteUInt16(bus.ChipRam, 0x0424, 0x8000);
@@ -94,7 +94,7 @@ public sealed class AmigaCustomChipPointerTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, 24, 30));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, AmigaConstants.PalLowResOverscanBorderX, 30));
     }
 
     private static uint Pixel(uint[] frame, int x, int y)

@@ -50,10 +50,10 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	{
 		get
 		{
-			yield return new object[] { new PositionRow("even horizontal start", 24, 32, 1) };
-			yield return new object[] { new PositionRow("odd horizontal start from SPRxCTL bit 0", 25, 33, 1) };
-			yield return new object[] { new PositionRow("VSTART high bit from SPRxCTL", 24, 230, 4) };
-			yield return new object[] { new PositionRow("last visible standard PAL display row", 24, AmigaConstants.PalLowResOverscanBorderY + AmigaConstants.PalLowResStandardHeight - 1, 1) };
+			yield return new object[] { new PositionRow("even horizontal start", StandardX, StandardY, 1) };
+			yield return new object[] { new PositionRow("odd horizontal start from SPRxCTL bit 0", StandardX + 1, StandardY + 1, 1) };
+			yield return new object[] { new PositionRow("VSTART high bit from SPRxCTL", StandardX, 230, 4) };
+			yield return new object[] { new PositionRow("last visible standard PAL display row", StandardX, AmigaConstants.PalLowResOverscanBorderY + AmigaConstants.PalLowResStandardHeight - 1, 1) };
 		}
 	}
 
@@ -805,12 +805,12 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		EnableSpriteDma(bus, 0x8220);
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		SetColor(bus, SingleSpriteColorIndex(0, 2), 0x00F0);
-		WriteSpriteDmaBlock(bus, SpriteListBase, 24, 30, 1, 0x8000, 0x0000, terminate: false);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, 30, 1, 0x8000, 0x0000, terminate: false);
 		WriteSpriteDmaBlock(bus, SpriteListBase + 8, 40, 60, 1, 0x0000, 0x8000);
 		SetSpritePointer(bus, sprite: 0, SpriteListBase);
 		var frame = RenderLowResFrame(bus);
 
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, 24, 30));
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, 30));
 		Assert.Equal(ToBgra(0x00F0), Pixel(frame, 40, 60));
 	}
 

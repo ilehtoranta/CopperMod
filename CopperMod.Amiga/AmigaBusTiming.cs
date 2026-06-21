@@ -434,11 +434,14 @@ namespace CopperMod.Amiga
         private AgnusChipSlotSnapshot? _lastDeniedFixedSlot;
         private AgnusChipSlotSnapshot? _lastDeniedFixedSlotBlocker;
         private int _deniedFixedSlotCount;
+        private int _niceBlitterCpuMisses;
         private long _slotGrantCount;
         private long _currentCycle;
         private long _nextRefreshCommitCycle;
         private AgnusPalBeamPosition _beam;
         private bool _beamValid;
+
+        public bool BlitterPriorityEnabled { get; set; }
 
         public void Clear()
         {
@@ -448,6 +451,7 @@ namespace CopperMod.Amiga
             _lastDeniedFixedSlot = null;
             _lastDeniedFixedSlotBlocker = null;
             _deniedFixedSlotCount = 0;
+            _niceBlitterCpuMisses = 0;
             Array.Clear(_deniedFixedSlotCountsByOwner);
             Array.Clear(_deniedFixedSlotBlockerCountsByOwner);
             _slotGrantCount = 0;
@@ -456,6 +460,7 @@ namespace CopperMod.Amiga
             _nextRefreshCommitCycle = 0;
             _beam = default;
             _beamValid = false;
+            BlitterPriorityEnabled = false;
         }
 
         public void ClearLiveDisplaySlotsFrom(long cycle)
@@ -651,6 +656,18 @@ namespace CopperMod.Amiga
             System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
             return AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle) || TryGetSlot(slotCycle, out _);
+        }
+
+        public bool IsFixedDmaReserved(long cycle)
+        {
+            System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
+            if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+            {
+                return true;
+            }
+
+            return TryGetSlot(slotCycle, out var slot) && IsFixedDmaOwner(slot.Owner);
         }
 
         public AmigaBusAccessResult? LastReservation => _lastReservation;
@@ -859,7 +876,22 @@ namespace CopperMod.Amiga
                     existing.Matches(request) ||
                     existing.Priority < AgnusChipSlotPriority.Cpu)
                 {
+                    _niceBlitterCpuMisses = 0;
                     return candidate;
+                }
+
+                if (existing.Owner == AgnusChipSlotOwner.Blitter && !BlitterPriorityEnabled)
+                {
+                    _niceBlitterCpuMisses++;
+                    if (_niceBlitterCpuMisses >= 3)
+                    {
+                        _niceBlitterCpuMisses = 0;
+                        return candidate;
+                    }
+                }
+                else
+                {
+                    _niceBlitterCpuMisses = 0;
                 }
 
                 candidate += SlotCycles * 2;
@@ -1068,6 +1100,15 @@ namespace CopperMod.Amiga
             return owner == AgnusChipSlotOwner.Bitplane ||
                 owner == AgnusChipSlotOwner.Sprite ||
                 owner == AgnusChipSlotOwner.Copper;
+        }
+
+        private static bool IsFixedDmaOwner(AgnusChipSlotOwner owner)
+        {
+            return owner == AgnusChipSlotOwner.Refresh ||
+                owner == AgnusChipSlotOwner.Bitplane ||
+                owner == AgnusChipSlotOwner.Sprite ||
+                owner == AgnusChipSlotOwner.Disk ||
+                owner == AgnusChipSlotOwner.Paula;
         }
 
         private static AgnusChipSlotOwner GetOwner(AmigaBusRequester requester)

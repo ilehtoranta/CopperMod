@@ -13,7 +13,7 @@ namespace CopperDisk;
 public static class AmigaDosTrackEncoder
 {
     private const int EncodedSectorBytes = 0x440;
-    private const int EncodedTrackGapBytes = 0x140;
+    private const int EncodedTrackGapBytes = 0x2BC;
 
     /// <summary>
     /// The number of bytes in a generated standard AmigaDOS encoded track.

@@ -201,6 +201,43 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void NonNastyBlitterYieldsThirdConsecutiveCpuMiss()
+	{
+		var bus = new AmigaBus();
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var firstSlot = 20L;
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1000, firstSlot);
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + (2 * slotCycles));
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (4 * slotCycles));
+
+		var cycle = firstSlot;
+		_ = bus.ReadWord(0x00001006, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
+		Assert.Equal(firstSlot + (4 * slotCycles), cpu.GrantedCycle);
+		Assert.Equal(firstSlot + (5 * slotCycles), cycle);
+	}
+
+	[Fact]
+	public void NastyBlitterDoesNotYieldThirdConsecutiveCpuMiss()
+	{
+		var bus = new AmigaBus();
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var firstSlot = 20L;
+		bus.WriteWord(0x00DFF096, 0x8640);
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1000, firstSlot);
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + (2 * slotCycles));
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (4 * slotCycles));
+
+		var cycle = firstSlot;
+		_ = bus.ReadWord(0x00001006, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
+		Assert.Equal(firstSlot + (6 * slotCycles), cpu.GrantedCycle);
+		Assert.Equal(firstSlot + (7 * slotCycles), cycle);
+	}
+
+	[Fact]
 	public void LiveAgnusBeamSchedulerUsesIntegerBeamGrid()
 	{
 		var bus = new AmigaBus();

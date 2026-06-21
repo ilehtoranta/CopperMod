@@ -138,8 +138,8 @@ public sealed class FramebufferPresenterTests
 	[Fact]
 	public void PresentationViewportUsesHighResolutionFullAndCroppedCoordinates()
 	{
-		Assert.Equal(new PixelRect(0, 0, 704, 576), MainWindow.FullOverscanPresentationViewport);
-		Assert.Equal(new PixelRect(32, 32, 640, 512), MainWindow.CroppedPresentationViewport);
+		Assert.Equal(new PixelRect(0, 0, 716, 570), MainWindow.FullOverscanPresentationViewport);
+		Assert.Equal(new PixelRect(64, 32, 640, 512), MainWindow.CroppedPresentationViewport);
 	}
 
 	[Fact]
@@ -151,7 +151,7 @@ public sealed class FramebufferPresenterTests
 			new Point(480, 384),
 			out var center));
 
-		Assert.Equal(352, center.X, precision: 6);
+		Assert.Equal(384, center.X, precision: 6);
 		Assert.Equal(288, center.Y, precision: 6);
 	}
 

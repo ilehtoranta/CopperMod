@@ -1120,7 +1120,7 @@ public sealed class AmigaBootMemoryTests
 		addGListState.A[1] = gadget;
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -438), addGListState));
 
-		boot.SetSyntheticMousePresentationPosition(32 + 520, 32 + (184 * 2));
+		boot.SetSyntheticMousePresentationPosition((AmigaConstants.PalLowResOverscanBorderX * 2) + 520, 32 + (184 * 2));
 		boot.SetSyntheticMouseButtons(primaryPressed: true, secondPressed: false);
 		boot.SetSyntheticMouseButtons(primaryPressed: false, secondPressed: false);
 		var getMsgState = new M68kCpuState();
@@ -1293,7 +1293,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(256, bus.ReadWord(screenAddress + ScreenHeightOffset));
 
 		var bitMapAddress = screenAddress + ScreenBitMapOffset;
-		Assert.Equal(AmigaConstants.PalLowResWidth / 8, bus.ReadWord(bitMapAddress + BitMapBytesPerRowOffset));
+		Assert.Equal(((AmigaConstants.PalLowResWidth + 15) & ~15) / 8, bus.ReadWord(bitMapAddress + BitMapBytesPerRowOffset));
 		Assert.Equal(256, bus.ReadWord(bitMapAddress + BitMapRowsOffset));
 		Assert.Equal((byte)2, bus.ReadByte(bitMapAddress + BitMapDepthOffset));
 		Assert.InRange(bus.ReadLong(bitMapAddress + BitMapPlanesOffset), 1u, (uint)bus.ChipRam.Length - 1);

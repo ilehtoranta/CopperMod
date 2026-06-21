@@ -1869,6 +1869,7 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private AmigaBusAccessResult ArbitrateChipSlot(AmigaBusAccessRequest request, AmigaBusAccessResult baseResult)
         {
+            _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
             if (LiveAgnusDmaEnabled &&
                 request.Size == AmigaBusAccessSize.Word &&
                 Display.HasLiveDisplayWork() &&
@@ -1898,6 +1899,11 @@ namespace CopperMod.Amiga
         private bool TryReserveExactFixedDmaSlot(AmigaBusAccessRequest request, out AmigaBusAccessResult result)
         {
             return _hrmSlotEngine.TryReserveExactFixedDmaSlot(request, out result);
+        }
+
+        internal bool IsFixedDmaSlotReserved(long cycle)
+        {
+            return _hrmSlotEngine.IsFixedDmaReserved(cycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

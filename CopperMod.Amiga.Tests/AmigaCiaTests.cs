@@ -285,6 +285,7 @@ public sealed class AmigaCiaTests
 			.WithLiveAgnusDma(false));
 		machine.Bus.WriteLong(0x68, 0x0000_2000);
 		machine.Cpu.Reset(0x1000, 0x3000);
+		machine.Cpu.State.StatusRegister = (ushort)(machine.Cpu.State.StatusRegister & 0xF8FF);
 		machine.Bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqPorts));
 		machine.Bus.Paula.AdvanceTo(0);
 		machine.Bus.AbleCiaInterrupts(AmigaCiaId.A, 0x80 | AmigaCia.SerialInterruptMask, 0);

@@ -858,6 +858,116 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.DoesNotContain(bus.BusAccesses, access => access.Request.Requester == AmigaBusRequester.Blitter);
 	}
 
+	[Fact]
+	public void BusyBltsizeRestartsAfterDeferredPointerWrites()
+	{
+		var bus = new AmigaBus();
+		WriteWord(bus, SourceA, 0x1111);
+		WriteWord(bus, SourceA + 2, 0x2222);
+		ConfigureAreaBlit(bus, 0x09F0);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		var busyCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle + 1;
+		bus.Blitter.WriteRegister(0x050, 0x0000, busyCycle);
+		bus.Blitter.WriteRegister(0x052, (ushort)(SourceA + 2), busyCycle);
+		bus.Blitter.WriteRegister(0x054, 0x0000, busyCycle);
+		bus.Blitter.WriteRegister(0x056, (ushort)(DestinationD + 2), busyCycle);
+		bus.Blitter.WriteRegister(0x058, 0x0041, busyCycle);
+
+		RunBlitterUntilIdle(bus);
+
+		Assert.Equal(0x1111, ReadWord(bus, DestinationD));
+		Assert.Equal(0x2222, ReadWord(bus, DestinationD + 2));
+	}
+
+	[Fact]
+	public void BusyBltcon0DDisableSuppressesDestinationWrites()
+	{
+		var bus = new AmigaBus();
+		WriteWord(bus, SourceA, 0x1111);
+		WriteWord(bus, SourceA + 2, 0x2222);
+		WriteWord(bus, DestinationD, 0xAAAA);
+		WriteWord(bus, DestinationD + 2, 0xBBBB);
+		ConfigureAreaBlit(bus, 0x09F0);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0042);
+		bus.Blitter.WriteRegister(0x040, 0x08F0, bus.Blitter.CaptureSnapshot().NextDmaCycle + 1);
+		RunBlitterUntilIdle(bus);
+
+		Assert.Equal(0xAAAA, ReadWord(bus, DestinationD));
+		Assert.Equal(0xBBBB, ReadWord(bus, DestinationD + 2));
+	}
+
+	[Fact]
+	public void BusyBltcon1WriteDoesNotMutateActiveAreaSnapshot()
+	{
+		var bus = new AmigaBus();
+		WriteWord(bus, SourceA, 0x0008);
+		ConfigureAreaBlit(bus, 0x09F0, bltcon1: 0x0012);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		bus.Blitter.WriteRegister(0x042, 0x0000, bus.Blitter.CaptureSnapshot().NextDmaCycle + 1);
+		RunBlitterUntilIdle(bus);
+
+		Assert.Equal(HrmReference.ApplyFill(0x0008, exclusive: true, fillCarryIn: false), ReadWord(bus, DestinationD));
+	}
+
+	[Fact]
+	public void AreaFillBitsWithoutDescendingModeDoNotFillOrAddIdleCPhase()
+	{
+		var bus = new AmigaBus();
+		WriteWord(bus, SourceA, 0x0008);
+		ConfigureAreaBlit(bus, 0x09F0, bltcon1: 0x0010);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		var expectedCompletion = startCycle + 4;
+		bus.AdvanceDmaTo(expectedCompletion);
+
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.Equal(expectedCompletion, bus.Blitter.CaptureSnapshot().CurrentCycle);
+		Assert.Equal(0x0008, ReadWord(bus, DestinationD));
+	}
+
+	[Fact]
+	public void DescendingFillIdleCPhaseWaitsForFixedDmaSlotsWithoutBusAccess()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var fetchCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			((0x38 + HrmLowResFetchSlotByPlane[0]) * slotCycles);
+		WriteWord(bus, SourceA, 0x0008);
+		ConfigureAreaBlit(bus, 0x09F0, bltcon1: 0x0012);
+		EnableBlitterDma(bus);
+		Assert.True(bus.TryReserveDisplayDmaSlot(
+			AmigaBusRequester.Bitplane,
+			AmigaBusAccessKind.Bitplane,
+			0x7000,
+			fetchCycle,
+			out var reserved));
+		Assert.Equal(fetchCycle, reserved.GrantedCycle);
+
+		bus.Blitter.WriteRegister(0x058, 0x0041, fetchCycle - (2 * slotCycles));
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		Assert.Equal(fetchCycle - slotCycles, startCycle);
+		var nominalCompletion = startCycle + 6;
+
+		bus.AdvanceDmaTo(nominalCompletion);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+		bus.AdvanceDmaTo(nominalCompletion + slotCycles);
+
+		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
+		Assert.DoesNotContain(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.RequestedCycle == fetchCycle);
+	}
+
 	private static void ConfigureAreaBlit(
 		AmigaBus bus,
 		ushort bltcon0,
