@@ -175,7 +175,7 @@ public static class IpfDecoder
                     gapBits += trackBits - descriptorBits;
                 }
 
-                WriteGeneratedGap(block, gapBits, context);
+                WriteGapStream(data.Data.Span, block, gapBits, context);
             }
 
             return new IpfTrack(
@@ -184,7 +184,8 @@ public static class IpfDecoder
                 trackBits,
                 startBit,
                 writer.ToArray(),
-                context.Features | AmigaTrackFeatures.PreservedTrackData);
+                context.Features | AmigaTrackFeatures.PreservedTrackData,
+                context.Regions);
         }
 
         private static ImageBlock[] ReadBlocks(InfoDescriptor info, ImageDescriptor image, ReadOnlySpan<byte> data)
@@ -245,7 +246,11 @@ public static class IpfDecoder
                 }
 
                 var remaining = targetBits - (context.Writer.BitsWritten - startWritten);
-                WriteElement(element, block.EncoderType, remaining, context);
+                var progress = WriteElement(element, block.EncoderType, remaining, context);
+                if (progress == 0)
+                {
+                    throw new IpfDecodeException($"Unable to make progress while decoding block {blockIndex}.");
+                }
             }
 
             var written = context.Writer.BitsWritten - startWritten;
@@ -255,16 +260,55 @@ public static class IpfDecoder
             }
         }
 
-        private static void WriteGeneratedGap(ImageBlock block, int gapBits, TrackEncodingContext context)
+        private static void WriteGapStream(ReadOnlySpan<byte> data, ImageBlock block, int gapBits, TrackEncodingContext context)
         {
             if (gapBits <= 0)
             {
                 return;
             }
 
-            if ((block.Flags & (BlockFlagGap0 | BlockFlagGap1)) != 0)
+            if ((block.Flags & (BlockFlagGap0 | BlockFlagGap1)) == 0)
             {
-                throw new IpfDecodeException("Stored IPF gap streams are not implemented yet.");
+                WriteGeneratedGap(block, gapBits, context);
+                return;
+            }
+
+            var streamStart = checked((int)block.GapOffset);
+            if (streamStart < 0 || streamStart >= data.Length)
+            {
+                throw new IpfDecodeException("Stored IPF gap stream offset is outside the DATA chunk.");
+            }
+
+            var state = new StreamReadState(data.Slice(streamStart), (block.Flags & BlockFlagDataSizeInBits) != 0);
+            var written = 0;
+            while (written < gapBits)
+            {
+                var element = state.ReadElement();
+                if (element.Type == StreamElementType.End)
+                {
+                    break;
+                }
+
+                var progress = WriteElement(element, block.EncoderType, gapBits - written, context);
+                if (progress == 0)
+                {
+                    throw new IpfDecodeException("Unable to make progress while decoding a stored IPF gap stream.");
+                }
+
+                written += progress;
+            }
+
+            if (written != gapBits)
+            {
+                throw new IpfDecodeException($"Stored IPF gap stream decoded {written} bits but expected {gapBits} bits.");
+            }
+        }
+
+        private static void WriteGeneratedGap(ImageBlock block, int gapBits, TrackEncodingContext context)
+        {
+            if (gapBits <= 0)
+            {
+                return;
             }
 
             if (block.EncoderType == RawEncoder)
@@ -293,12 +337,13 @@ public static class IpfDecoder
             }
         }
 
-        private static void WriteElement(
+        private static int WriteElement(
             StreamElement element,
             uint encoderType,
             int maxOutputBits,
             TrackEncodingContext context)
         {
+            var startWritten = context.Writer.BitsWritten;
             switch (element.Type)
             {
                 case StreamElementType.Mark:
@@ -323,14 +368,16 @@ public static class IpfDecoder
                     break;
                 case StreamElementType.WeakData:
                     context.Features |= AmigaTrackFeatures.WeakData | AmigaTrackFeatures.ApproximateWeakData;
+                    var weakBits = Math.Min(element.BitCount, maxOutputBits);
+                    context.AddRegion(context.Writer.Position, weakBits, AmigaTrackFeatures.WeakData | AmigaTrackFeatures.ApproximateWeakData);
                     if (encoderType == MfmEncoder)
                     {
                         Span<byte> zero = stackalloc byte[1];
                         zero[0] = 0;
                         var written = 0;
-                        while (written < maxOutputBits)
+                        while (written < weakBits)
                         {
-                            var progress = context.WriteMfm(zero, maxOutputBits - written);
+                            var progress = context.WriteMfm(zero, weakBits - written);
                             if (progress == 0)
                             {
                                 throw new IpfDecodeException("Unable to make progress while generating weak MFM data.");
@@ -341,13 +388,15 @@ public static class IpfDecoder
                     }
                     else
                     {
-                        context.Writer.WriteZeroBits(maxOutputBits);
+                        context.Writer.WriteZeroBits(weakBits);
                     }
 
                     break;
                 default:
                     throw new IpfDecodeException($"Unsupported stream element {element.Type}.");
             }
+
+            return context.Writer.BitsWritten - startWritten;
         }
 
         private static InfoDescriptor ReadInfo(ReadOnlySpan<byte> data, int offset, int payloadSize)
@@ -502,9 +551,11 @@ public static class IpfDecoder
 
         public AmigaTrackFeatures Features { get; set; }
 
+        public List<AmigaTrackRegion> Regions { get; } = new List<AmigaTrackRegion>();
+
         private bool PreviousDataBit { get; set; }
 
-        public void WriteRaw(ReadOnlySpan<byte> data, int bitCount, int maxOutputBits)
+        public int WriteRaw(ReadOnlySpan<byte> data, int bitCount, int maxOutputBits)
         {
             var bits = Math.Min(bitCount, maxOutputBits);
             for (var index = 0; index < bits; index++)
@@ -513,6 +564,8 @@ public static class IpfDecoder
                 Writer.WriteBit(bit);
                 PreviousDataBit = bit;
             }
+
+            return bits;
         }
 
         public int WriteMfm(ReadOnlySpan<byte> data, int maxOutputBits)
@@ -538,6 +591,24 @@ public static class IpfDecoder
             }
 
             return written;
+        }
+
+        public void AddRegion(int startBit, int bitCount, AmigaTrackFeatures features)
+        {
+            if (bitCount <= 0 || Writer.BitLength <= 0 || features == AmigaTrackFeatures.None)
+            {
+                return;
+            }
+
+            var start = AmigaEncodedTrack.WrapBitOffset(startBit, Writer.BitLength);
+            var remaining = Math.Min(bitCount, Writer.BitLength);
+            while (remaining > 0)
+            {
+                var length = Math.Min(remaining, Writer.BitLength - start);
+                Regions.Add(new AmigaTrackRegion(start, length, features));
+                remaining -= length;
+                start = 0;
+            }
         }
     }
 

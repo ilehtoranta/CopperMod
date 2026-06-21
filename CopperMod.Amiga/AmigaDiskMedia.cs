@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CopperMod.Amiga
 {
@@ -53,6 +55,16 @@ namespace CopperMod.Amiga
             int bitLength,
             int startBit,
             AmigaTrackFeatures features = AmigaTrackFeatures.None)
+            : this(encodedData, bitLength, startBit, features, regions: null)
+        {
+        }
+
+        public AmigaEncodedTrack(
+            ReadOnlyMemory<byte> encodedData,
+            int bitLength,
+            int startBit,
+            AmigaTrackFeatures features,
+            IReadOnlyList<AmigaTrackRegion>? regions)
         {
             if (encodedData.IsEmpty)
             {
@@ -78,6 +90,7 @@ namespace CopperMod.Amiga
             BitLength = bitLength;
             StartBit = startBit;
             Features = features;
+            Regions = NormalizeRegions(regions, bitLength);
         }
 
         public ReadOnlyMemory<byte> EncodedData { get; }
@@ -87,6 +100,8 @@ namespace CopperMod.Amiga
         public int StartBit { get; }
 
         public AmigaTrackFeatures Features { get; }
+
+        public IReadOnlyList<AmigaTrackRegion> Regions { get; }
 
         public int ByteLength => (BitLength + 7) / 8;
 
@@ -148,6 +163,27 @@ namespace CopperMod.Amiga
 
             return value;
         }
+
+        private static IReadOnlyList<AmigaTrackRegion> NormalizeRegions(IReadOnlyList<AmigaTrackRegion>? regions, int trackBitLength)
+        {
+            if (regions == null || regions.Count == 0)
+            {
+                return Array.Empty<AmigaTrackRegion>();
+            }
+
+            var normalized = regions.ToArray();
+            for (var index = 0; index < normalized.Length; index++)
+            {
+                var region = normalized[index];
+                if (region.StartBit >= trackBitLength ||
+                    region.BitLength > trackBitLength - region.StartBit)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(regions), "Track regions must be fully inside the encoded track.");
+                }
+            }
+
+            return Array.AsReadOnly(normalized);
+        }
     }
 
     [Flags]
@@ -156,6 +192,35 @@ namespace CopperMod.Amiga
         None = 0,
         PreservedTrackData = 1 << 0,
         WeakData = 1 << 1,
-        ApproximateWeakData = 1 << 2
+        ApproximateWeakData = 1 << 2,
+        FluxCapture = 1 << 3,
+        ApproximateIndex = 1 << 4,
+        NoFlux = 1 << 5
+    }
+
+    internal readonly struct AmigaTrackRegion
+    {
+        public AmigaTrackRegion(int startBit, int bitLength, AmigaTrackFeatures features)
+        {
+            if (startBit < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(startBit));
+            }
+
+            if (bitLength <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bitLength));
+            }
+
+            StartBit = startBit;
+            BitLength = bitLength;
+            Features = features;
+        }
+
+        public int StartBit { get; }
+
+        public int BitLength { get; }
+
+        public AmigaTrackFeatures Features { get; }
     }
 }

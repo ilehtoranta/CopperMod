@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CopperDisk;
 
@@ -33,6 +35,24 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
         int bitLength,
         int startBit,
         AmigaTrackFeatures features = AmigaTrackFeatures.None)
+        : this(encodedData, bitLength, startBit, features, regions: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AmigaEncodedTrack"/> struct.
+    /// </summary>
+    /// <param name="encodedData">The encoded track bytes. The caller owns this memory and must not mutate it while the track is in use.</param>
+    /// <param name="bitLength">The number of meaningful bits in <paramref name="encodedData"/>.</param>
+    /// <param name="startBit">The bit position corresponding to the physical index position.</param>
+    /// <param name="features">Feature flags for the track stream.</param>
+    /// <param name="regions">Feature-marked bit ranges inside the track stream.</param>
+    public AmigaEncodedTrack(
+        ReadOnlyMemory<byte> encodedData,
+        int bitLength,
+        int startBit,
+        AmigaTrackFeatures features,
+        IReadOnlyList<AmigaTrackRegion>? regions)
     {
         if (encodedData.IsEmpty)
         {
@@ -58,6 +78,7 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
         BitLength = bitLength;
         StartBit = startBit;
         Features = features;
+        Regions = NormalizeRegions(regions, bitLength);
     }
 
     /// <summary>
@@ -79,6 +100,11 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
     /// Gets feature flags for the track stream.
     /// </summary>
     public AmigaTrackFeatures Features { get; }
+
+    /// <summary>
+    /// Gets feature-marked bit ranges inside the encoded stream.
+    /// </summary>
+    public IReadOnlyList<AmigaTrackRegion> Regions { get; }
 
     /// <summary>
     /// Gets the number of bytes that contain meaningful encoded bits.
@@ -172,5 +198,26 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
         }
 
         return value;
+    }
+
+    private static IReadOnlyList<AmigaTrackRegion> NormalizeRegions(IReadOnlyList<AmigaTrackRegion>? regions, int trackBitLength)
+    {
+        if (regions == null || regions.Count == 0)
+        {
+            return Array.Empty<AmigaTrackRegion>();
+        }
+
+        var normalized = regions.ToArray();
+        for (var index = 0; index < normalized.Length; index++)
+        {
+            var region = normalized[index];
+            if (region.StartBit >= trackBitLength ||
+                region.BitLength > trackBitLength - region.StartBit)
+            {
+                throw new ArgumentOutOfRangeException(nameof(regions), "Track regions must be fully inside the encoded track.");
+            }
+        }
+
+        return Array.AsReadOnly(normalized);
     }
 }

@@ -1237,6 +1237,69 @@ namespace CopperMod.Amiga
             return new AmigaDeviceWordReadResult(value, access);
         }
 
+        internal long PredictDiskDmaCompletionCycle(long requestedCycle)
+        {
+            requestedCycle = Math.Max(0, requestedCycle);
+            if (!_useChipSlotScheduler)
+            {
+                return requestedCycle;
+            }
+
+            var grant = PredictDiskDmaGrantCycle(requestedCycle);
+            return grant + AgnusChipSlotScheduler.SlotCycles;
+        }
+
+        internal long PredictDiskDmaGrantCycle(long requestedCycle)
+        {
+            requestedCycle = Math.Max(0, requestedCycle);
+            return _useChipSlotScheduler
+                ? AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Disk)
+                : requestedCycle;
+        }
+
+        internal bool TryReserveDiskDmaSlotThrough(
+            uint address,
+            bool isWrite,
+            long requestedCycle,
+            long latestGrantCycle,
+            out AmigaBusAccessResult access)
+        {
+            address = MaskChipDmaAddress(address);
+            requestedCycle = Math.Max(0, requestedCycle);
+            latestGrantCycle = Math.Max(0, latestGrantCycle);
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Disk,
+                AmigaBusAccessKind.DiskDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            if (!_useChipSlotScheduler)
+            {
+                access = new AmigaBusAccessResult(request, requestedCycle, requestedCycle);
+                return requestedCycle <= latestGrantCycle;
+            }
+
+            return _hrmSlotEngine.TryReserveFixedDmaSlotThrough(
+                request,
+                AgnusChipSlotOwner.Disk,
+                latestGrantCycle,
+                out access);
+        }
+
+        internal ushort ReadChipDmaWordAtGrantedSlot(uint address, long grantedCycle)
+        {
+            address = MaskChipDmaAddress(address);
+            return ReadChipWordForPresentation(address, grantedCycle);
+        }
+
+        internal void WriteChipDmaWordAtGrantedSlot(uint address, ushort value, long grantedCycle)
+        {
+            address = MaskChipDmaAddress(address);
+            WriteChipDmaWord(address, value, grantedCycle);
+        }
+
         public void WriteChipWordForDevice(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
         {
             _ = WriteChipWordForDeviceWithResult(requester, kind, address, value, requestedCycle);

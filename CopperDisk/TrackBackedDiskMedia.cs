@@ -82,7 +82,8 @@ internal sealed class TrackBackedDiskMedia : IAmigaSectorDiskMedia, IAmigaPreser
                 track.EncodedData,
                 track.BitLength,
                 track.StartBit,
-                track.Features | AmigaTrackFeatures.PreservedTrackData);
+                track.Features | AmigaTrackFeatures.PreservedTrackData,
+                track.Regions);
         }
 
         return tracks;

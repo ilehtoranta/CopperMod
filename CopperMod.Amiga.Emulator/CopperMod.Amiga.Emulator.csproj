@@ -8,13 +8,14 @@
     <Title>CopperMod.Amiga.Emulator</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Full Amiga emulator host services, boot helpers, and disk media adapters layered on CopperMod.Amiga.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;adf;ipf;disk;boot</PackageTags>
+    <PackageTags>amiga;emulation;adf;ipf;scp;disk;boot</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Disk adapter pass with SCP loading, CopperDisk track-region mapping, preserved IPF/SCP feature flags, and coordinated CopperDisk 2.1.0 integration.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>

@@ -584,6 +584,27 @@ namespace CopperMod.Amiga
             return TryCommitFixedSlot(request, owner, granted, out result);
         }
 
+        internal bool TryReserveFixedDmaSlotThrough(
+            AmigaBusAccessRequest request,
+            AgnusChipSlotOwner owner,
+            long latestGrantCycle,
+            out AmigaBusAccessResult result)
+        {
+            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner);
+            while (candidate <= latestGrantCycle)
+            {
+                if (TryCommitFixedSlot(request, owner, candidate, out result))
+                {
+                    return true;
+                }
+
+                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner);
+            }
+
+            result = new AmigaBusAccessResult(request, candidate, candidate);
+            return false;
+        }
+
         [HotPath]
         public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
         {

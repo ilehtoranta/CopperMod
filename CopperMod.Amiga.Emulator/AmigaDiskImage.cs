@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using CopperDisk;
 using CopperDiskEncodedTrack = CopperDisk.AmigaEncodedTrack;
 using CopperDiskTrackFeatures = CopperDisk.AmigaTrackFeatures;
+using CopperDiskTrackRegion = CopperDisk.AmigaTrackRegion;
 using CoreEncodedTrack = CopperMod.Amiga.AmigaEncodedTrack;
 using CoreTrackFeatures = CopperMod.Amiga.AmigaTrackFeatures;
+using CoreTrackRegion = CopperMod.Amiga.AmigaTrackRegion;
 
 namespace CopperMod.Amiga
 {
@@ -75,7 +78,9 @@ namespace CopperMod.Amiga
         {
             return WrapDiskException(() =>
             {
-                var result = AmigaDiskLoader.Load(path, EmulatorIpfDecodeOptions);
+                var result = AmigaDiskLoader.Load(
+                    path,
+                    new AmigaDiskLoadOptions { Ipf = EmulatorIpfDecodeOptions });
                 return new AmigaDiskImage(
                     result.Media,
                     result.DisplayName,
@@ -213,7 +218,8 @@ namespace CopperMod.Amiga
                 track.EncodedData,
                 track.BitLength,
                 track.StartBit,
-                ToCoreFeatures(track.Features));
+                ToCoreFeatures(track.Features),
+                ToCoreRegions(track.Regions));
         }
 
         private static CopperDiskEncodedTrack ToCopperDiskTrack(CoreEncodedTrack track)
@@ -222,7 +228,8 @@ namespace CopperMod.Amiga
                 track.EncodedData,
                 track.BitLength,
                 track.StartBit,
-                ToCopperDiskFeatures(track.Features));
+                ToCopperDiskFeatures(track.Features),
+                ToCopperDiskRegions(track.Regions));
         }
 
         private static CoreTrackFeatures ToCoreFeatures(CopperDiskTrackFeatures features)
@@ -241,6 +248,21 @@ namespace CopperMod.Amiga
             if ((features & CopperDiskTrackFeatures.ApproximateWeakData) != 0)
             {
                 converted |= CoreTrackFeatures.ApproximateWeakData;
+            }
+
+            if ((features & CopperDiskTrackFeatures.FluxCapture) != 0)
+            {
+                converted |= CoreTrackFeatures.FluxCapture;
+            }
+
+            if ((features & CopperDiskTrackFeatures.ApproximateIndex) != 0)
+            {
+                converted |= CoreTrackFeatures.ApproximateIndex;
+            }
+
+            if ((features & CopperDiskTrackFeatures.NoFlux) != 0)
+            {
+                converted |= CoreTrackFeatures.NoFlux;
             }
 
             return converted;
@@ -264,11 +286,51 @@ namespace CopperMod.Amiga
                 converted |= CopperDiskTrackFeatures.ApproximateWeakData;
             }
 
+            if ((features & CoreTrackFeatures.FluxCapture) != 0)
+            {
+                converted |= CopperDiskTrackFeatures.FluxCapture;
+            }
+
+            if ((features & CoreTrackFeatures.ApproximateIndex) != 0)
+            {
+                converted |= CopperDiskTrackFeatures.ApproximateIndex;
+            }
+
+            if ((features & CoreTrackFeatures.NoFlux) != 0)
+            {
+                converted |= CopperDiskTrackFeatures.NoFlux;
+            }
+
+            return converted;
+        }
+
+        private static CoreTrackRegion[] ToCoreRegions(IReadOnlyList<CopperDiskTrackRegion> regions)
+        {
+            var converted = new CoreTrackRegion[regions.Count];
+            for (var i = 0; i < converted.Length; i++)
+            {
+                var region = regions[i];
+                converted[i] = new CoreTrackRegion(region.StartBit, region.BitLength, ToCoreFeatures(region.Features));
+            }
+
+            return converted;
+        }
+
+        private static CopperDiskTrackRegion[] ToCopperDiskRegions(IReadOnlyList<CoreTrackRegion> regions)
+        {
+            var converted = new CopperDiskTrackRegion[regions.Count];
+            for (var i = 0; i < converted.Length; i++)
+            {
+                var region = regions[i];
+                converted[i] = new CopperDiskTrackRegion(region.StartBit, region.BitLength, ToCopperDiskFeatures(region.Features));
+            }
+
             return converted;
         }
 
         private static bool HasPreservedExtension(string displayName)
-            => displayName.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase);
+            => displayName.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase) ||
+                displayName.EndsWith(".scp", StringComparison.OrdinalIgnoreCase);
 
         private static bool UsesPreservedTrackData(IAmigaDiskMedia media, string displayName)
             => media is IAmigaPreservedTrackDiskMedia || HasPreservedExtension(displayName);
@@ -285,6 +347,7 @@ namespace CopperMod.Amiga
                 pathExtension.Equals(".adz", StringComparison.OrdinalIgnoreCase) ||
                 pathExtension.Equals(".dms", StringComparison.OrdinalIgnoreCase) ||
                 pathExtension.Equals(".ipf", StringComparison.OrdinalIgnoreCase) ||
+                pathExtension.Equals(".scp", StringComparison.OrdinalIgnoreCase) ||
                 HasPreservedExtension(displayName);
         }
 

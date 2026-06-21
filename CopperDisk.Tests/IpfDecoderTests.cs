@@ -183,6 +183,30 @@ public sealed class IpfDecoderTests
         Assert.Equal(48, Assert.Single(disk.Tracks).BitLength);
     }
 
+    [Fact]
+    public void DecodeSpsStoredRawGapStream()
+    {
+        var disk = IpfDecoder.Decode(CreateStoredRawGapIpf());
+
+        var track = Assert.Single(disk.Tracks);
+        Assert.Equal(16, track.BitLength);
+        Assert.Equal(new byte[] { 0xDE, 0xF0 }, track.EncodedData.ToArray());
+        Assert.Equal(AmigaTrackFeatures.PreservedTrackData, track.Features);
+    }
+
+    [Fact]
+    public void DecodeWeakDataExposesApproximateWeakRegion()
+    {
+        var disk = IpfDecoder.Decode(CreateWeakRawIpf());
+
+        var track = Assert.Single(disk.Tracks);
+        var region = Assert.Single(track.Regions);
+        Assert.Equal(0, region.StartBit);
+        Assert.Equal(8, region.BitLength);
+        Assert.Equal(AmigaTrackFeatures.WeakData | AmigaTrackFeatures.ApproximateWeakData, region.Features);
+        Assert.Equal(AmigaTrackFeatures.PreservedTrackData | AmigaTrackFeatures.WeakData | AmigaTrackFeatures.ApproximateWeakData, track.Features);
+    }
+
     private static byte[] CreateSingleTrackIpf()
     {
         using var stream = new MemoryStream();
@@ -225,11 +249,33 @@ public sealed class IpfDecoderTests
         return stream.ToArray();
     }
 
-    private static byte[] BuildInfo()
+    private static byte[] CreateStoredRawGapIpf()
+    {
+        var payload = BuildStoredRawGapPayload();
+        using var stream = new MemoryStream();
+        WriteChunk(stream, "CAPS", Array.Empty<byte>());
+        WriteChunk(stream, "INFO", BuildInfo(encoder: 2));
+        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit: 0, dataBits: 8, gapBits: 8, trackBits: 16, blockCount: 1));
+        WriteChunk(stream, "DATA", BuildDataHeader(payload.Length), payload);
+        return stream.ToArray();
+    }
+
+    private static byte[] CreateWeakRawIpf()
+    {
+        var payload = BuildWeakRawPayload();
+        using var stream = new MemoryStream();
+        WriteChunk(stream, "CAPS", Array.Empty<byte>());
+        WriteChunk(stream, "INFO", BuildInfo(encoder: 2));
+        WriteChunk(stream, "IMGE", BuildRawImageDescriptor(startBit: 0, dataBits: 8, gapBits: 0, trackBits: 8, blockCount: 1));
+        WriteChunk(stream, "DATA", BuildDataHeader(payload.Length), payload);
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildInfo(uint encoder = 1)
     {
         using var stream = new MemoryStream();
         WriteUInt32(stream, 1); // floppy disk
-        WriteUInt32(stream, 1); // CAPS encoder
+        WriteUInt32(stream, encoder); // CAPS/SPS encoder
         WriteUInt32(stream, 1); // encoder revision
         WriteUInt32(stream, 0); // release
         WriteUInt32(stream, 0); // revision
@@ -327,6 +373,48 @@ public sealed class IpfDecoderTests
         stream.WriteByte(0x22); // data, one-byte size
         stream.WriteByte(0x01);
         stream.WriteByte(0xA1);
+        stream.WriteByte(0x00); // end
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildStoredRawGapPayload()
+    {
+        using var stream = new MemoryStream();
+        const uint DataOffset = 32;
+        const uint GapOffset = 36;
+        WriteUInt32(stream, 8); // block bits
+        WriteUInt32(stream, 8); // gap bits
+        WriteUInt32(stream, GapOffset);
+        WriteUInt32(stream, 0);
+        WriteUInt32(stream, 2); // raw encoder
+        WriteUInt32(stream, 1); // stored gap 0
+        WriteUInt32(stream, 0xA5); // generated gap fallback, unused
+        WriteUInt32(stream, DataOffset);
+        stream.WriteByte(0x24); // raw, one-byte size
+        stream.WriteByte(0x01);
+        stream.WriteByte(0xDE);
+        stream.WriteByte(0x00); // end data stream
+        stream.WriteByte(0x24); // raw, one-byte size
+        stream.WriteByte(0x01);
+        stream.WriteByte(0xF0);
+        stream.WriteByte(0x00); // end gap stream
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildWeakRawPayload()
+    {
+        using var stream = new MemoryStream();
+        const uint DataOffset = 32;
+        WriteUInt32(stream, 8); // block bits
+        WriteUInt32(stream, 0); // gap bits
+        WriteUInt32(stream, 0);
+        WriteUInt32(stream, 0);
+        WriteUInt32(stream, 2); // raw encoder
+        WriteUInt32(stream, 0x04); // stream sizes are in bits
+        WriteUInt32(stream, 0);
+        WriteUInt32(stream, DataOffset);
+        stream.WriteByte(0x25); // weak data, one-byte size
+        stream.WriteByte(0x08);
         stream.WriteByte(0x00); // end
         return stream.ToArray();
     }

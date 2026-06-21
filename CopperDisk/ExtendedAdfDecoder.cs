@@ -169,7 +169,7 @@ internal static class ExtendedAdfDecoder
     private static AmigaEncodedTrack ToEncodedTrack(IAmigaTrack track)
         => track is AmigaEncodedTrack encoded
             ? encoded
-            : new AmigaEncodedTrack(track.EncodedData, track.BitLength, track.StartBit, track.Features);
+            : new AmigaEncodedTrack(track.EncodedData, track.BitLength, track.StartBit, track.Features, track.Regions);
 
     private static bool HasMagic(ReadOnlySpan<byte> image, byte b0, byte b1, byte b2, byte b3, byte b4, byte b5, byte b6, byte b7)
         => image.Length >= MagicLength &&

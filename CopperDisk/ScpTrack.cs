@@ -4,18 +4,18 @@ using System.Collections.Generic;
 namespace CopperDisk;
 
 /// <summary>
-/// A single decoded IPF floppy track.
+/// A single decoded SuperCard Pro track.
 /// </summary>
-public sealed class IpfTrack : IAmigaTrack
+public sealed class ScpTrack : IAmigaTrack
 {
-    internal IpfTrack(
+    internal ScpTrack(
         int cylinder,
         int head,
         int bitLength,
         int startBit,
         byte[] encodedData,
         AmigaTrackFeatures features,
-        IReadOnlyList<AmigaTrackRegion>? regions = null)
+        IReadOnlyList<AmigaTrackRegion>? regions)
     {
         Cylinder = cylinder;
         Head = head;
@@ -51,7 +51,6 @@ public sealed class IpfTrack : IAmigaTrack
     /// <summary>
     /// Gets the decoded encoded-track bytes.
     /// </summary>
-    /// <remarks>The returned memory is a read-only view over decoder-owned backing storage.</remarks>
     public ReadOnlyMemory<byte> EncodedData { get; }
 
     /// <summary>

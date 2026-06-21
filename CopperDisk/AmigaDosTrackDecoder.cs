@@ -286,6 +286,6 @@ public static class AmigaDosTrackDecoder
     {
         return track is AmigaEncodedTrack encoded
             ? encoded
-            : new AmigaEncodedTrack(track.EncodedData, track.BitLength, track.StartBit, track.Features);
+            : new AmigaEncodedTrack(track.EncodedData, track.BitLength, track.StartBit, track.Features, track.Regions);
     }
 }

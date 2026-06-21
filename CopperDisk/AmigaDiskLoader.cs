@@ -7,7 +7,7 @@ using System.Linq;
 namespace CopperDisk;
 
 /// <summary>
-/// Loads Amiga ADF, ADZ, DMS, IPF, and ZIP-wrapped disk images into CopperDisk media objects.
+/// Loads Amiga ADF, ADZ, DMS, IPF, SCP, and ZIP-wrapped disk images into CopperDisk media objects.
 /// </summary>
 /// <remarks>
 /// Loader methods are intended for package consumers that need emulator-ready media rather than a filesystem-level
@@ -16,18 +16,40 @@ namespace CopperDisk;
 public static class AmigaDiskLoader
 {
     /// <summary>
-    /// Loads an ADF, ADZ, DMS, IPF, or ZIP file containing exactly one supported disk image.
+    /// Loads an ADF, ADZ, DMS, IPF, SCP, or ZIP file containing exactly one supported disk image.
+    /// </summary>
+    /// <param name="path">The disk image path.</param>
+    /// <returns>The loaded media and display name.</returns>
+    public static AmigaDiskLoadResult Load(string path)
+    {
+        return Load(path, AmigaDiskLoadOptions.Default);
+    }
+
+    /// <summary>
+    /// Loads an ADF, ADZ, DMS, IPF, SCP, or ZIP file containing exactly one supported disk image.
     /// </summary>
     /// <param name="path">The disk image path.</param>
     /// <param name="ipfOptions">Optional IPF decode options used for direct or ZIP-wrapped IPF images.</param>
     /// <returns>The loaded media and display name.</returns>
-    public static AmigaDiskLoadResult Load(string path, IpfDecodeOptions? ipfOptions = null)
+    public static AmigaDiskLoadResult Load(string path, IpfDecodeOptions? ipfOptions)
+    {
+        return Load(path, new AmigaDiskLoadOptions { Ipf = ipfOptions });
+    }
+
+    /// <summary>
+    /// Loads an ADF, ADZ, DMS, IPF, SCP, or ZIP file containing exactly one supported disk image.
+    /// </summary>
+    /// <param name="path">The disk image path.</param>
+    /// <param name="options">Optional format-specific decode options.</param>
+    /// <returns>The loaded media and display name.</returns>
+    public static AmigaDiskLoadResult Load(string path, AmigaDiskLoadOptions? options)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
             throw new ArgumentException("A disk image path is required.", nameof(path));
         }
 
+        options ??= AmigaDiskLoadOptions.Default;
         var extension = Path.GetExtension(path);
         if (extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
         {
@@ -46,7 +68,12 @@ public static class AmigaDiskLoader
 
         if (extension.Equals(".ipf", StringComparison.OrdinalIgnoreCase))
         {
-            return new AmigaDiskLoadResult(FromIpfBytes(File.ReadAllBytes(path), ipfOptions), Path.GetFileName(path));
+            return new AmigaDiskLoadResult(FromIpfBytes(File.ReadAllBytes(path), options.Ipf), Path.GetFileName(path));
+        }
+
+        if (extension.Equals(".scp", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AmigaDiskLoadResult(FromScpBytes(File.ReadAllBytes(path), options.Scp), Path.GetFileName(path));
         }
 
         if (extension.Equals(".zip", StringComparison.OrdinalIgnoreCase))
@@ -59,18 +86,18 @@ public static class AmigaDiskLoader
                 .ToArray();
             if (entries.Length != 1)
             {
-                throw new AmigaDiskException("A zipped disk image must contain exactly one ADF, ADZ, DMS, or IPF file.");
+                throw new AmigaDiskException("A zipped disk image must contain exactly one ADF, ADZ, DMS, IPF, or SCP file.");
             }
 
             using var stream = entries[0].Open();
             using var memory = new MemoryStream();
             stream.CopyTo(memory);
             var data = memory.ToArray();
-            var media = LoadBytesByExtension(entries[0].Name, data, ipfOptions);
+            var media = LoadBytesByExtension(entries[0].Name, data, options);
             return new AmigaDiskLoadResult(media, entries[0].Name);
         }
 
-        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, or .zip.");
+        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, .scp, or .zip.");
     }
 
     /// <summary>
@@ -148,7 +175,8 @@ public static class AmigaDiskLoader
                     track.EncodedData,
                     track.BitLength,
                     track.StartBit,
-                    track.Features);
+                    track.Features,
+                    track.Regions);
             }
 
             return FromEncodedTracks(tracks);
@@ -156,6 +184,42 @@ public static class AmigaDiskLoader
         catch (IpfDecodeException ex)
         {
             throw new AmigaDiskException($"Unable to decode IPF disk image: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Decodes an SCP image into sector media with preserved encoded track streams.
+    /// </summary>
+    /// <param name="scpImage">The SCP image bytes. The input is read during decoding and is not retained by the returned media.</param>
+    /// <param name="options">Optional SCP decode options.</param>
+    /// <returns>Read-only Amiga sector media backed by decoded SCP tracks.</returns>
+    public static IAmigaSectorDiskMedia FromScpBytes(ReadOnlySpan<byte> scpImage, ScpDecodeOptions? options = null)
+    {
+        try
+        {
+            var scp = ScpDecoder.Decode(scpImage, options);
+            var tracks = CreateUnformattedTrackSet();
+            foreach (var track in scp.Tracks)
+            {
+                if ((uint)track.Cylinder >= AmigaDiskGeometry.CylinderCount ||
+                    (uint)track.Head >= AmigaDiskGeometry.HeadCount)
+                {
+                    continue;
+                }
+
+                tracks[(track.Cylinder * AmigaDiskGeometry.HeadCount) + track.Head] = new AmigaEncodedTrack(
+                    track.EncodedData,
+                    track.BitLength,
+                    track.StartBit,
+                    track.Features,
+                    track.Regions);
+            }
+
+            return FromEncodedTracks(tracks);
+        }
+        catch (ScpDecodeException ex)
+        {
+            throw new AmigaDiskException($"Unable to decode SCP disk image: {ex.Message}", ex);
         }
     }
 
@@ -214,9 +278,10 @@ public static class AmigaDiskLoader
         => name.EndsWith(".adf", StringComparison.OrdinalIgnoreCase) ||
             name.EndsWith(".adz", StringComparison.OrdinalIgnoreCase) ||
             name.EndsWith(".dms", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase);
+            name.EndsWith(".ipf", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".scp", StringComparison.OrdinalIgnoreCase);
 
-    private static IAmigaDiskMedia LoadBytesByExtension(string name, byte[] data, IpfDecodeOptions? ipfOptions)
+    private static IAmigaDiskMedia LoadBytesByExtension(string name, byte[] data, AmigaDiskLoadOptions options)
     {
         var extension = Path.GetExtension(name);
         if (extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
@@ -236,10 +301,15 @@ public static class AmigaDiskLoader
 
         if (extension.Equals(".ipf", StringComparison.OrdinalIgnoreCase))
         {
-            return FromIpfBytes(data, ipfOptions);
+            return FromIpfBytes(data, options.Ipf);
         }
 
-        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, or .zip.");
+        if (extension.Equals(".scp", StringComparison.OrdinalIgnoreCase))
+        {
+            return FromScpBytes(data, options.Scp);
+        }
+
+        throw new AmigaDiskException("Unsupported disk image extension. Expected .adf, .adz, .dms, .ipf, .scp, or .zip.");
     }
 
     private static IAmigaDiskMedia LoadAdfBytesByContent(byte[] data)

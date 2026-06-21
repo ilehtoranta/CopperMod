@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CopperDisk;
 
@@ -66,6 +67,11 @@ public interface IAmigaTrack
     /// Gets feature flags that describe the encoded stream.
     /// </summary>
     AmigaTrackFeatures Features { get; }
+
+    /// <summary>
+    /// Gets feature-marked bit ranges inside the encoded stream.
+    /// </summary>
+    IReadOnlyList<AmigaTrackRegion> Regions { get; }
 }
 
 /// <summary>
@@ -177,5 +183,20 @@ public enum AmigaTrackFeatures
     /// <summary>
     /// Weak data was approximated into deterministic bytes.
     /// </summary>
-    ApproximateWeakData = 1 << 2
+    ApproximateWeakData = 1 << 2,
+
+    /// <summary>
+    /// The track was decoded from a flux-level capture.
+    /// </summary>
+    FluxCapture = 1 << 3,
+
+    /// <summary>
+    /// The physical index position is approximate rather than capture-aligned.
+    /// </summary>
+    ApproximateIndex = 1 << 4,
+
+    /// <summary>
+    /// The source describes an interval without flux transitions.
+    /// </summary>
+    NoFlux = 1 << 5
 }

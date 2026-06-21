@@ -8,16 +8,16 @@
     <PackageId>CopperDisk</PackageId>
     <Title>CopperDisk</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Managed Amiga ADF, extended ADF, ADZ, DMS, and IPF disk image library.</Description>
-    <PackageVersion>2.0.0</PackageVersion>
+    <Description>Managed Amiga ADF, extended ADF, ADZ, DMS, IPF, and SCP disk image library.</Description>
+    <PackageVersion>2.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;adf;adz;dms;ipf;disk</PackageTags>
+    <PackageTags>amiga;emulation;adf;adz;dms;ipf;scp;flux;disk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copperdisk-icon.png</PackageIcon>
-    <PackageReleaseNotes>Standard and modern extended ADF, ADZ, DMS, IPF, and ZIP-wrapped disk loading; decoded AmigaDOS sector and encoded track APIs; writable standard ADF media; ReadOnlySpan IPF input; package icon, README, and XML API documentation.</PackageReleaseNotes>
+    <PackageReleaseNotes>SCP read-only loading for Amiga DD flux captures, ZIP-wrapped SCP support, aggregate loader options, IPF stored gap streams, weak/no-flux track regions, and preserved region metadata through encoded track APIs. Standard ADF synthetic revolutions remain 6334 MFM words.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>

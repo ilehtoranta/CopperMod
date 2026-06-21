@@ -8,13 +8,14 @@
     <Title>CopperMod.Amiga</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Internal Amiga hardware emulation core layered on Copper68k for CUST playback and emulator hosts.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>amiga;emulation;paula;cia;m68k</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Disk fidelity pass with preserved track-region metadata, bus-slot-driven Paula disk DMA completion, non-WORDSYNC recovered-word phase handling, and per-drive CIA-B index phase.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>

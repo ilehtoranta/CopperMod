@@ -3295,7 +3295,8 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteByte(0x00BFD300, 0xFF, 0);
         bus.WriteByte(0x00BFD100, 0x77, 0);
         bus.WriteByte(0x00BFD100, 0xFF, 0);
-        var indexCycle = (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 5);
+        var indexCycle = AmigaConstants.A500PalCpuCyclesPerCiaTick +
+            (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 5);
 
         bus.AdvanceCiasTo(indexCycle - 1);
         Assert.Empty(bus.DrainCiaInterrupts());
