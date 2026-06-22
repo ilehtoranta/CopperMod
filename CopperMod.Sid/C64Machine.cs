@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Copper6510;
 
 namespace CopperMod.Sid
 {
-    internal sealed class C64Machine : ICpuBus
+    internal sealed class C64Machine : IMos6510Bus
     {
         private readonly byte[] _ram = new byte[65536];
         private readonly byte[] _colorRam = new byte[0x400];
@@ -508,11 +509,11 @@ namespace CopperMod.Sid
         [HotPath]
         public byte Read(ushort address)
         {
-            return Read(address, cycleOffset: 0, CpuBusAccessKind.Read);
+            return Read(address, cycleOffset: 0, Mos6510BusAccessKind.Read);
         }
 
         [HotPath]
-        public byte Read(ushort address, int cycleOffset = 0, CpuBusAccessKind kind = CpuBusAccessKind.Read)
+        public byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read)
         {
             var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
             var readCycle = busCycle.Cycle;
@@ -579,7 +580,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        public void Write(ushort address, byte value, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Write)
+        public void Write(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write)
         {
             var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
             var writeCycle = busCycle.Cycle;
@@ -608,7 +609,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        public void Idle(ushort address, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Idle)
+        public void Idle(ushort address, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle)
         {
             var busCycle = ResolveCpuBusCycle(cycleOffset, kind);
             AdvanceHardwareTo(busCycle.Cycle);
@@ -856,10 +857,10 @@ namespace CopperMod.Sid
             }
         }
 
-        private bool TryHandleKernalOpcodeFetch(ushort address, CpuBusAccessKind kind, out byte value)
+        private bool TryHandleKernalOpcodeFetch(ushort address, Mos6510BusAccessKind kind, out byte value)
         {
             value = 0;
-            if (kind != CpuBusAccessKind.OpcodeFetch)
+            if (kind != Mos6510BusAccessKind.OpcodeFetch)
             {
                 return false;
             }
@@ -1167,7 +1168,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private CpuBusCycleResolution ResolveCpuBusCycle(int cycleOffset, CpuBusAccessKind kind)
+        private CpuBusCycleResolution ResolveCpuBusCycle(int cycleOffset, Mos6510BusAccessKind kind)
         {
             var offset = Math.Max(0, cycleOffset);
             var requestedCycle = Cpu.Cycles + offset + _pendingCpuStallCycles;
@@ -1196,13 +1197,13 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private void CaptureCpuBusRead(CpuBusCycleResolution busCycle, ushort address, byte value, CpuBusAccessKind kind)
+        private void CaptureCpuBusRead(CpuBusCycleResolution busCycle, ushort address, byte value, Mos6510BusAccessKind kind)
         {
             CpuBusTrace?.Add(new CpuBusTraceFrame(
                 busCycle.RequestedCycle,
                 busCycle.Cycle,
                 busCycle.CycleOffset,
-                kind == CpuBusAccessKind.OpcodeFetch ? value : Cpu.LastOpcode,
+                kind == Mos6510BusAccessKind.OpcodeFetch ? value : Cpu.LastOpcode,
                 address,
                 value,
                 kind,
@@ -1210,7 +1211,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private void CaptureCpuBusWrite(CpuBusCycleResolution busCycle, ushort address, byte value, CpuBusAccessKind kind)
+        private void CaptureCpuBusWrite(CpuBusCycleResolution busCycle, ushort address, byte value, Mos6510BusAccessKind kind)
         {
             CpuBusTrace?.Add(new CpuBusTraceFrame(
                 busCycle.RequestedCycle,
@@ -1224,7 +1225,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private void CaptureCpuBusIdle(CpuBusCycleResolution busCycle, ushort address, CpuBusAccessKind kind)
+        private void CaptureCpuBusIdle(CpuBusCycleResolution busCycle, ushort address, Mos6510BusAccessKind kind)
         {
             CpuBusTrace?.Add(new CpuBusTraceFrame(
                 busCycle.RequestedCycle,
@@ -1238,11 +1239,11 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        private static bool IsCpuBusWrite(CpuBusAccessKind kind)
+        private static bool IsCpuBusWrite(Mos6510BusAccessKind kind)
         {
-            return kind == CpuBusAccessKind.Write ||
-                kind == CpuBusAccessKind.DummyWrite ||
-                kind == CpuBusAccessKind.StackWrite;
+            return kind == Mos6510BusAccessKind.Write ||
+                kind == Mos6510BusAccessKind.DummyWrite ||
+                kind == Mos6510BusAccessKind.StackWrite;
         }
 
         private readonly struct CpuBusCycleResolution
@@ -1549,8 +1550,8 @@ namespace CopperMod.Sid
 
         private ushort ReadResetVector()
         {
-            var low = Read(0xFFFC, cycleOffset: 0, CpuBusAccessKind.Read);
-            var high = Read(0xFFFD, cycleOffset: 0, CpuBusAccessKind.Read);
+            var low = Read(0xFFFC, cycleOffset: 0, Mos6510BusAccessKind.Read);
+            var high = Read(0xFFFD, cycleOffset: 0, Mos6510BusAccessKind.Read);
             return (ushort)(low | (high << 8));
         }
 

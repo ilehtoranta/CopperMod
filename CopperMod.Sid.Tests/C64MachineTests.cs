@@ -1,3 +1,5 @@
+using Copper6510;
+
 namespace CopperMod.Sid.Tests;
 
 public sealed class C64MachineTests
@@ -494,7 +496,7 @@ public sealed class C64MachineTests
 		Assert.Equal(0x21, write.Value);
 		Assert.Equal(expectedWriteCycle + 1, machine.Cpu.Cycles);
 		Assert.Equal(43, write.Cycle - targetWriteCycle);
-		var opcodeFetch = Assert.Single(cpuTrace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		var opcodeFetch = Assert.Single(cpuTrace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OpcodeFetch);
 		Assert.True(opcodeFetch.DelayedByVic);
 		Assert.Equal(43, opcodeFetch.DelayCycles);
 		Assert.Contains(trace.Frames, frame =>
@@ -529,7 +531,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OperandFetch);
 		Assert.Equal(targetOperandCycle, operand.RequestedCycle);
 		Assert.Equal(targetOperandCycle + 43, operand.Cycle);
 		Assert.True(operand.DelayedByVic);
@@ -551,7 +553,7 @@ public sealed class C64MachineTests
 
 		Assert.Equal(expectedEndCycle, machine.Cpu.Cycles);
 		Assert.Equal(43, expectedReadCycle - targetReadCycle);
-		var read = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Read && frame.Address == 0xD41B);
+		var read = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.Read && frame.Address == 0xD41B);
 		Assert.True(read.DelayedByVic);
 		Assert.Equal(expectedReadCycle, read.Cycle);
 	}
@@ -569,7 +571,7 @@ public sealed class C64MachineTests
 		machine.RunCycles(4);
 
 		var stackReads = trace.Frames
-			.Where(frame => frame.Kind == CpuBusAccessKind.StackRead)
+			.Where(frame => frame.Kind == Mos6510BusAccessKind.StackRead)
 			.ToArray();
 		Assert.Contains(stackReads, frame =>
 			frame.RequestedCycle == targetStackReadCycle &&
@@ -630,7 +632,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(4);
 
-		var write = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Write && frame.Address == 0xD011);
+		var write = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.Write && frame.Address == 0xD011);
 		Assert.Equal(targetWriteCycle, write.Cycle);
 		Assert.False(write.DelayedByVic);
 		Assert.True(machine.DebugState.Vic.BadlineActive);
@@ -651,7 +653,7 @@ public sealed class C64MachineTests
 		machine.RunCycles(4);
 		machine.AdvanceNativeCycles(2);
 
-		var write = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.Write && frame.Address == 0xD011);
+		var write = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.Write && frame.Address == 0xD011);
 		Assert.Equal(targetWriteCycle, write.Cycle);
 		Assert.False(write.DelayedByVic);
 		Assert.False(machine.DebugState.Vic.BadlineActive);
@@ -669,7 +671,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OpcodeFetch);
 		Assert.Equal(targetFetchCycle, opcode.RequestedCycle);
 		Assert.Equal(targetFetchCycle + 40, opcode.Cycle);
 		Assert.True(opcode.DelayedByVic);
@@ -706,7 +708,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OpcodeFetch);
 		Assert.Equal(targetFetchCycle, opcode.RequestedCycle);
 		Assert.Equal(targetFetchCycle + 3, opcode.Cycle);
 		Assert.True(opcode.DelayedByVic);
@@ -724,7 +726,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OperandFetch);
 		Assert.Equal(targetOperandCycle, operand.RequestedCycle);
 		Assert.Equal(targetOperandCycle + 6, operand.Cycle);
 		Assert.True(operand.DelayedByVic);
@@ -743,7 +745,7 @@ public sealed class C64MachineTests
 		dataRead.RunCycles(4);
 
 		Assert.Contains(dataTrace.Frames, frame =>
-			frame.Kind == CpuBusAccessKind.Read &&
+			frame.Kind == Mos6510BusAccessKind.Read &&
 			frame.Address == 0xD41B &&
 			frame.RequestedCycle >= dataTargetCycle &&
 			frame.DelayedByVic);
@@ -758,7 +760,7 @@ public sealed class C64MachineTests
 		stackRead.RunCycles(4);
 
 		Assert.Contains(stackTrace.Frames, frame =>
-			frame.Kind == CpuBusAccessKind.StackRead &&
+			frame.Kind == Mos6510BusAccessKind.StackRead &&
 			frame.RequestedCycle >= stackTargetCycle &&
 			frame.DelayedByVic);
 		Assert.Equal(0x6A, stackRead.Cpu.A);
@@ -783,7 +785,7 @@ public sealed class C64MachineTests
 
 		read.RunCycles(2);
 
-		var operand = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OperandFetch);
+		var operand = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OperandFetch);
 		Assert.Equal(readCycle + 6, operand.Cycle);
 	}
 
@@ -799,7 +801,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OpcodeFetch);
 		Assert.Equal(targetFetchCycle + 42, opcode.Cycle);
 		Assert.True(opcode.DelayedByVic);
 	}
@@ -908,7 +910,7 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(2);
 
-		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == CpuBusAccessKind.OpcodeFetch);
+		var opcode = Assert.Single(trace.Frames, frame => frame.Kind == Mos6510BusAccessKind.OpcodeFetch);
 		Assert.Equal(targetFetchCycle + 40, opcode.Cycle);
 		Assert.True(opcode.DelayedByVic);
 		Assert.Equal(0x42, machine.Cpu.A);

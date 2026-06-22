@@ -1,21 +1,8 @@
 using System.Collections.Generic;
+using Copper6510;
 
 namespace CopperMod.Sid
 {
-    internal enum CpuBusAccessKind
-    {
-        OpcodeFetch,
-        OperandFetch,
-        Read,
-        Write,
-        DummyRead,
-        DummyWrite,
-        StackRead,
-        StackWrite,
-        VectorRead,
-        Idle
-    }
-
     internal sealed class CpuBusTrace
     {
         private readonly List<CpuBusTraceFrame> _frames = new List<CpuBusTraceFrame>();
@@ -42,7 +29,7 @@ namespace CopperMod.Sid
             byte opcode,
             ushort address,
             byte? value,
-            CpuBusAccessKind kind,
+            Mos6510BusAccessKind kind,
             bool delayedByVic)
         {
             RequestedCycle = requestedCycle;
@@ -67,7 +54,7 @@ namespace CopperMod.Sid
 
         public byte? Value { get; }
 
-        public CpuBusAccessKind Kind { get; }
+        public Mos6510BusAccessKind Kind { get; }
 
         public bool DelayedByVic { get; }
 

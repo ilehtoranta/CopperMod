@@ -22,9 +22,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Copper6510\Copper6510.csproj" />
-    <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
-    <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />
-    <ProjectReference Include="..\CopperMod.Tools\CopperMod.Tools.csproj" />
   </ItemGroup>
 
 </Project>
