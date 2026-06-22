@@ -21,6 +21,11 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const int WeakSpotAdsrFrames = 45;
 	private const int WeakSpotD418Frames = 64;
 	private const int WeakSpotCombinedFrames = 24;
+	private const ushort WeakSpotAdsrFrequency = 0x1C31;
+	private const double AdsrTraceStepSeconds = 0.004;
+	private const double AdsrTraceWindowSeconds = 0.012;
+
+	private static readonly int[] AdsrPianoGateFrames = { 2, 8, 10, 16, 18, 24, 26, 32, 34 };
 
 	private static readonly OracleSegment[] Segments =
 	{
@@ -46,7 +51,7 @@ public sealed class SidPlayFpWaveformOracleTests
 	private static readonly double RenderSeconds = (double)(Segments.Length * FramesPerSegment) / SegmentRate;
 	private static readonly WeakSpotSegment[] WeakSpotSegments =
 	{
-		new("sidtest5-adsr-piano", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotAdsrFrames),
+		new("sidtest5-adsr-piano", OracleSegmentKind.Level, WeakSpotAdsrFrequency, 0.0, WeakSpotAdsrFrames),
 		new("sidtest5-d418-volume", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotD418Frames),
 		new("sidtest5-combined-triangle-saw", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
 		new("sidtest5-combined-triangle-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
@@ -55,6 +60,7 @@ public sealed class SidPlayFpWaveformOracleTests
 	};
 
 	private static readonly double WeakSpotRenderSeconds = WeakSpotSegments.Sum(segment => segment.Frames) / (double)SegmentRate;
+	private static readonly double AdsrRestartRenderSeconds = WeakSpotAdsrFrames / (double)SegmentRate;
 
 	[Fact]
 	public void OptionalGeneratedWaveformFixtureMatchesSidPlayFpOracle()
@@ -129,18 +135,80 @@ public sealed class SidPlayFpWaveformOracleTests
 			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected weak-spot oracle WAV: " + wavPath);
 
 			var reference = MeasurementWav.Read(wavPath);
-			var candidate = RenderCopperMod(sidPath, WeakSpotRenderSeconds);
+			var captureAdsrTrace = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_TRACE_REPORT"));
+			var candidateRender = RenderCopperModDiagnostic(sidPath, WeakSpotRenderSeconds, captureAdsrTrace);
+			var candidate = candidateRender.Samples;
 			Assert.Equal(SampleRate, reference.SampleRate);
 			Assert.True(reference.Samples.Length >= SecondsToSamples(WeakSpotRenderSeconds) - SampleRate / 20);
 			Assert.True(candidate.Length >= SecondsToSamples(WeakSpotRenderSeconds) - SampleRate / 20);
 
 			WriteOptionalWeakSpotReport(reference.Samples, candidate);
+			WriteOptionalAdsrPianoTraceReport(reference.Samples, candidate, candidateRender.ChannelSamples, candidateRender.SidWrites);
 			var startFrame = 0;
 			for (var i = 0; i < WeakSpotSegments.Length; i++)
 			{
 				AssertWeakSpotSegmentMatches(WeakSpotSegments[i], startFrame, reference.Samples, candidate);
 				startFrame += WeakSpotSegments[i].Frames;
 			}
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void OptionalGeneratedAdsrRestartFixtureMatchesSidPlayFpOracle()
+	{
+		if (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_RESTART_ORACLE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var sidPlayFp = Environment.GetEnvironmentVariable("SIDPLAYFP_EXE");
+		if (string.IsNullOrWhiteSpace(sidPlayFp))
+		{
+			sidPlayFp = @"D:\Models\sidplayfp-3.0.2-ucrt64\sidplayfp.exe";
+		}
+
+		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+
+		var root = Path.Combine(Path.GetTempPath(), "coppermod-sidplayfp-adsr-restart-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(root);
+		try
+		{
+			var sidPath = Path.Combine(root, "input.sid");
+			var wavPath = Path.Combine(root, "input.wav");
+			// Reuse the weak-spot PSID and render only the ADSR segment, preserving
+			// the real sidtest5 route/play-routine cycle offsets.
+			File.WriteAllBytes(sidPath, CreateWeakSpotOracleSid());
+
+			RunSidPlayFp(sidPlayFp, root, AdsrRestartRenderSeconds);
+			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected ADSR restart oracle WAV: " + wavPath);
+
+			var reference = MeasurementWav.Read(wavPath);
+			var reportPath = Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_RESTART_REPORT");
+			var captureDiagnostics = !string.IsNullOrWhiteSpace(reportPath);
+			var candidateRender = RenderCopperModDiagnostic(sidPath, AdsrRestartRenderSeconds, captureDiagnostics);
+			var candidate = candidateRender.Samples;
+			Assert.Equal(SampleRate, reference.SampleRate);
+			Assert.True(reference.Samples.Length >= SecondsToSamples(AdsrRestartRenderSeconds) - SampleRate / 20);
+			Assert.True(candidate.Length >= SecondsToSamples(AdsrRestartRenderSeconds) - SampleRate / 20);
+
+			if (!string.IsNullOrWhiteSpace(reportPath))
+			{
+				WriteAdsrPianoTraceReport(
+					reportPath,
+					reference.Samples,
+					candidate,
+					candidateRender.ChannelSamples,
+					candidateRender.SidWrites);
+			}
+
+			var (start, length) = WeakSpotWindow(0, WeakSpotAdsrFrames);
+			var offset = FindBestCandidateOffset(reference.Samples, candidate, start, length, maxOffset: SampleRate / 40);
+			AssertAdsrRestartShape(reference.Samples, candidate, start, start + offset, length);
 		}
 		finally
 		{
@@ -234,6 +302,496 @@ public sealed class SidPlayFpWaveformOracleTests
 		File.WriteAllText(path, builder.ToString());
 	}
 
+	private static void WriteOptionalAdsrPianoTraceReport(
+		float[] reference,
+		float[] candidate,
+		float[][]? candidateChannels,
+		SidRegisterWrite[]? candidateWrites)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_TRACE_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return;
+		}
+
+		WriteAdsrPianoTraceReport(path, reference, candidate, candidateChannels, candidateWrites);
+	}
+
+	private static void WriteAdsrPianoTraceReport(
+		string path,
+		float[] reference,
+		float[] candidate,
+		float[][]? candidateChannels,
+		SidRegisterWrite[]? candidateWrites)
+	{
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var candidateVoice0 = candidateChannels is { Length: > 0 } ? candidateChannels[0] : null;
+		var rows = BuildAdsrPianoTraceRows(reference, candidate, candidateVoice0, candidateWrites);
+		var builder = new StringBuilder();
+		builder.AppendLine("time_ms,frame,gate,alignment_offset_samples,ref_ac,cand_ac,ac_ratio,cand_voice0_ac,final_to_voice0_ac,ref_fund,cand_fund,fund_ratio,cand_voice0_fund,final_to_voice0_fund,cand_envelope,cand_envelope_dac,cand_state,cand_rate_counter,cand_exponential_counter,cand_control");
+		for (var i = 0; i < rows.Count; i++)
+		{
+			var row = rows[i];
+			builder
+				.Append(row.TimeMilliseconds.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.Frame.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.Gate ? "1" : "0").Append(',')
+				.Append(row.AlignmentOffsetSamples.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.ReferenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.CandidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.CandidateVoice0Ac.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.FinalToVoice0AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.ReferenceFundamental.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.CandidateFundamental.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.FundamentalRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.CandidateVoice0Fundamental.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.FinalToVoice0FundamentalRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.EnvelopeCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.EnvelopeDac.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatEnvelopeState(row.EnvelopeState)).Append(',')
+				.Append(row.RateCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.ExponentialCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append("0x").Append(row.Control.ToString("X2", CultureInfo.InvariantCulture))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+		WriteAdsrPianoPulseSummary(path, rows);
+		WriteAdsrPianoGateEdgeReport(path);
+		WriteAdsrPianoSidWriteReport(path, candidateWrites);
+	}
+
+	private static IReadOnlyList<AdsrPianoTraceRow> BuildAdsrPianoTraceRows(
+		float[] reference,
+		float[] candidate,
+		float[]? candidateVoice0,
+		SidRegisterWrite[]? candidateWrites)
+	{
+		var debugRows = BuildCopperModAdsrPianoDebugTrace(candidateWrites);
+		var rows = new List<AdsrPianoTraceRow>(debugRows.Count);
+		var windowLength = Math.Max(32, SecondsToSamples(AdsrTraceWindowSeconds));
+		var fundamental = SidFrequencyToHz(WeakSpotAdsrFrequency);
+		var (alignmentStart, alignmentLength) = WeakSpotWindow(0, WeakSpotAdsrFrames);
+		var alignmentOffset = FindBestCandidateOffset(reference, candidate, alignmentStart, alignmentLength, maxOffset: SampleRate / 40);
+		for (var i = 0; i < debugRows.Count; i++)
+		{
+			var debug = debugRows[i];
+			var center = SecondsToSamples(debug.TimeSeconds);
+			var referenceStart = WindowStart(reference.Length, center - alignmentOffset, windowLength);
+			var candidateStart = WindowStart(candidate.Length, center, windowLength);
+			var referenceAc = AcRms(reference, referenceStart, windowLength);
+			var candidateAc = AcRms(candidate, candidateStart, windowLength);
+			var referenceFundamental = HarmonicMagnitude(reference, referenceStart, windowLength, fundamental);
+			var candidateFundamental = HarmonicMagnitude(candidate, candidateStart, windowLength, fundamental);
+			var candidateVoice0Ac = double.NaN;
+			var candidateVoice0Fundamental = double.NaN;
+			if (candidateVoice0 != null && candidateVoice0.Length >= windowLength)
+			{
+				var voice0Start = WindowStart(candidateVoice0.Length, center, windowLength);
+				candidateVoice0Ac = AcRms(candidateVoice0, voice0Start, windowLength);
+				candidateVoice0Fundamental = HarmonicMagnitude(candidateVoice0, voice0Start, windowLength, fundamental);
+			}
+
+			rows.Add(new AdsrPianoTraceRow(
+				debug.TimeSeconds * 1000.0,
+				debug.Frame,
+				debug.Gate,
+				alignmentOffset,
+				referenceAc,
+				candidateAc,
+				candidateAc / Math.Max(1.0e-12, referenceAc),
+				candidateVoice0Ac,
+				RatioOrNaN(candidateAc, candidateVoice0Ac),
+				referenceFundamental,
+				candidateFundamental,
+				candidateFundamental / Math.Max(1.0e-12, referenceFundamental),
+				candidateVoice0Fundamental,
+				RatioOrNaN(candidateFundamental, candidateVoice0Fundamental),
+				debug.EnvelopeCounter,
+				debug.EnvelopeDac,
+				debug.EnvelopeState,
+				debug.RateCounter,
+				debug.ExponentialCounter,
+				debug.Control));
+		}
+
+		return rows;
+	}
+
+	private static int WindowStart(int sampleCount, int center, int length)
+	{
+		if (sampleCount <= length)
+		{
+			return 0;
+		}
+
+		return Math.Clamp(center - (length / 2), 0, sampleCount - length);
+	}
+
+	private static double RatioOrNaN(double numerator, double denominator)
+		=> double.IsNaN(denominator) ? double.NaN : numerator / Math.Max(1.0e-12, denominator);
+
+	private static IReadOnlyList<AdsrPianoDebugRow> BuildCopperModAdsrPianoDebugTrace(SidRegisterWrite[]? capturedWrites)
+	{
+		var replayWrites = BuildAdsrPianoReplayWrites(capturedWrites);
+		if (replayWrites.Length > 0)
+		{
+			return BuildCopperModAdsrPianoDebugTraceFromWrites(replayWrites);
+		}
+
+		return BuildCopperModAdsrPianoDebugTraceFromFrameEdges();
+	}
+
+	private static SidRegisterWrite[] BuildAdsrPianoReplayWrites(SidRegisterWrite[]? capturedWrites)
+	{
+		if (capturedWrites == null)
+		{
+			return Array.Empty<SidRegisterWrite>();
+		}
+
+		var maxCycle = WeakSpotAdsrFrames * (long)SidConstants.PalCyclesPerFrame;
+		return capturedWrites
+			.Where(write =>
+				write.ChipIndex == 0 &&
+				write.Cycle >= 0 &&
+				write.Cycle < maxCycle &&
+				IsAdsrPianoProbeRegister(write.Register))
+			.OrderBy(write => write.Cycle)
+			.ToArray();
+	}
+
+	private static IReadOnlyList<AdsrPianoDebugRow> BuildCopperModAdsrPianoDebugTraceFromWrites(SidRegisterWrite[] writes)
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidBase, SidConstants.PalCpuCyclesPerSecond);
+		var rows = new List<AdsrPianoDebugRow>();
+		var currentCycle = 0L;
+		var nextWrite = 0;
+		var totalSeconds = WeakSpotAdsrFrames / (double)SegmentRate;
+		for (var timeSeconds = AdsrTraceStepSeconds; timeSeconds < totalSeconds; timeSeconds += AdsrTraceStepSeconds)
+		{
+			var targetCycle = (long)Math.Round(timeSeconds * SidConstants.PalCpuCyclesPerSecond);
+			AdvanceAdsrPianoTraceTo(chip, writes, ref currentCycle, ref nextWrite, targetCycle);
+			rows.Add(CreateAdsrPianoDebugRow(chip, timeSeconds));
+		}
+
+		return rows;
+	}
+
+	private static void AdvanceAdsrPianoTraceTo(
+		SidChip chip,
+		SidRegisterWrite[] writes,
+		ref long currentCycle,
+		ref int nextWrite,
+		long targetCycle)
+	{
+		while (nextWrite < writes.Length && writes[nextWrite].Cycle <= targetCycle)
+		{
+			var write = writes[nextWrite++];
+			if (write.Cycle > currentCycle)
+			{
+				chip.Render(write.Cycle - currentCycle);
+				currentCycle = write.Cycle;
+			}
+
+			chip.Write(write.Register, write.Value, write.Cycle);
+		}
+
+		if (targetCycle > currentCycle)
+		{
+			chip.Render(targetCycle - currentCycle);
+			currentCycle = targetCycle;
+		}
+	}
+
+	private static IReadOnlyList<AdsrPianoDebugRow> BuildCopperModAdsrPianoDebugTraceFromFrameEdges()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidBase, SidConstants.PalCpuCyclesPerSecond);
+		var rows = new List<AdsrPianoDebugRow>();
+		var currentCycle = 0L;
+		var nextFrame = 0;
+		var totalSeconds = WeakSpotAdsrFrames / (double)SegmentRate;
+		for (var timeSeconds = AdsrTraceStepSeconds; timeSeconds < totalSeconds; timeSeconds += AdsrTraceStepSeconds)
+		{
+			var targetCycle = (long)Math.Round(timeSeconds * SidConstants.PalCpuCyclesPerSecond);
+			AdvanceAdsrPianoTraceTo(chip, ref currentCycle, ref nextFrame, targetCycle);
+			rows.Add(CreateAdsrPianoDebugRow(chip, timeSeconds));
+		}
+
+		return rows;
+	}
+
+	private static AdsrPianoDebugRow CreateAdsrPianoDebugRow(SidChip chip, double timeSeconds)
+	{
+		var voice = chip.DebugState.Voices[0];
+		return new AdsrPianoDebugRow(
+			timeSeconds,
+			(int)Math.Floor(timeSeconds * SegmentRate),
+			(voice.Control & 0x01) != 0,
+			voice.EnvelopeCounter,
+			SidAnalog.ConvertEnvelope(voice.EnvelopeCounter, SidChipModel.Mos6581),
+			voice.EnvelopeState,
+			voice.RateCounter,
+			voice.ExponentialCounter,
+			voice.Control);
+	}
+
+	private static void AdvanceAdsrPianoTraceTo(SidChip chip, ref long currentCycle, ref int nextFrame, long targetCycle)
+	{
+		while (nextFrame < WeakSpotAdsrFrames && nextFrame * (long)SidConstants.PalCyclesPerFrame <= targetCycle)
+		{
+			var frameCycle = nextFrame * (long)SidConstants.PalCyclesPerFrame;
+			if (frameCycle > currentCycle)
+			{
+				chip.Render(frameCycle - currentCycle);
+				currentCycle = frameCycle;
+			}
+
+			ApplyAdsrPianoFrameWrites(chip, nextFrame);
+			nextFrame++;
+		}
+
+		if (targetCycle > currentCycle)
+		{
+			chip.Render(targetCycle - currentCycle);
+			currentCycle = targetCycle;
+		}
+	}
+
+	private static void ApplyAdsrPianoFrameWrites(SidChip chip, int frame)
+	{
+		if (frame == 0)
+		{
+			chip.Write(0x04, 0x08);
+			chip.Write(0x0B, 0x08);
+			chip.Write(0x12, 0x08);
+			chip.Write(0x04, 0x00);
+			chip.Write(0x0B, 0x00);
+			chip.Write(0x12, 0x00);
+		}
+
+		chip.Write(0x0B, 0x00);
+		chip.Write(0x12, 0x00);
+		chip.Write(0x15, 0x00);
+		chip.Write(0x16, 0x00);
+		chip.Write(0x17, 0x00);
+		chip.Write(0x18, 0x0F);
+		chip.Write(0x00, 0x31);
+		chip.Write(0x01, 0x1C);
+		chip.Write(0x02, 0x00);
+		chip.Write(0x03, 0x08);
+		chip.Write(0x05, 0x0D);
+		chip.Write(0x06, 0x08);
+		chip.Write(0x04, 0x20);
+		chip.Write(0x04, IsAdsrPianoGateOnFrame(frame) ? (byte)0x21 : (byte)0x20);
+	}
+
+	private static bool IsAdsrPianoGateOnFrame(int frame)
+	{
+		for (var i = 0; i < AdsrPianoGateFrames.Length; i++)
+		{
+			if (frame < AdsrPianoGateFrames[i])
+			{
+				return (i & 1) == 0;
+			}
+		}
+
+		return false;
+	}
+
+	private static void WriteAdsrPianoPulseSummary(string tracePath, IReadOnlyList<AdsrPianoTraceRow> rows)
+	{
+		var directory = Path.GetDirectoryName(tracePath) ?? ".";
+		var fileName = Path.GetFileNameWithoutExtension(tracePath) + "-pulses.csv";
+		var path = Path.Combine(directory, fileName);
+		var builder = new StringBuilder();
+		builder.AppendLine("pulse,on_ms,off_ms,ref_peak,cand_peak,peak_ratio,cand_voice0_peak,final_to_voice0_peak,ref_gate_off,cand_gate_off,gate_off_ratio,cand_voice0_gate_off,final_to_voice0_gate_off,ref_tail_40ms,cand_tail_40ms,tail_40ms_ratio,cand_voice0_tail_40ms,final_to_voice0_tail_40ms,cand_env_peak,cand_env_gate_off,cand_env_tail_40ms,cand_state_tail_40ms");
+		ReadOnlySpan<int> pulseFrames = stackalloc[] { 0, 8, 16, 24, 32 };
+		for (var i = 0; i < pulseFrames.Length; i++)
+		{
+			var onSeconds = pulseFrames[i] / (double)SegmentRate;
+			var offSeconds = (pulseFrames[i] + 2) / (double)SegmentRate;
+			var peakRows = rows
+				.Where(row => row.TimeMilliseconds >= onSeconds * 1000.0 && row.TimeMilliseconds < (offSeconds + 0.040) * 1000.0)
+				.ToArray();
+			var peak = peakRows
+				.OrderByDescending(row => row.ReferenceAc)
+				.FirstOrDefault();
+			var gateOff = NearestAdsrTraceRow(rows, offSeconds);
+			var tail = NearestAdsrTraceRow(rows, offSeconds + 0.040);
+			builder
+				.Append((i + 1).ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append((onSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((offSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.ReferenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.CandidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.CandidateVoice0Ac.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.FinalToVoice0AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.ReferenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.CandidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.CandidateVoice0Ac.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.FinalToVoice0AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.ReferenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.CandidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.CandidateVoice0Ac.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.FinalToVoice0AcRatio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(peak.EnvelopeCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(gateOff.EnvelopeCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(tail.EnvelopeCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatEnvelopeState(tail.EnvelopeState))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static void WriteAdsrPianoGateEdgeReport(string tracePath)
+	{
+		var directory = Path.GetDirectoryName(tracePath) ?? ".";
+		var fileName = Path.GetFileNameWithoutExtension(tracePath) + "-gate-edges.csv";
+		var path = Path.Combine(directory, fileName);
+		var rows = BuildAdsrPianoGateEdgeRows();
+		var builder = new StringBuilder();
+		builder.AppendLine("frame,time_ms,intended_gate,before_control,before_env,before_state,after_write_control,after_write_env,after_write_state,after_one_cycle_control,after_one_cycle_env,after_one_cycle_state,after_one_cycle_rate_counter,after_one_cycle_exponential_counter");
+		for (var i = 0; i < rows.Count; i++)
+		{
+			var row = rows[i];
+			builder
+				.Append(row.Frame.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.TimeMilliseconds.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.IntendedGate ? "1" : "0").Append(',')
+				.Append("0x").Append(row.BeforeControl.ToString("X2", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.BeforeEnvelope.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatEnvelopeState(row.BeforeEnvelopeState)).Append(',')
+				.Append("0x").Append(row.AfterWriteControl.ToString("X2", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.AfterWriteEnvelope.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatEnvelopeState(row.AfterWriteEnvelopeState)).Append(',')
+				.Append("0x").Append(row.AfterOneCycleControl.ToString("X2", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.AfterOneCycleEnvelope.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatEnvelopeState(row.AfterOneCycleEnvelopeState)).Append(',')
+				.Append(row.AfterOneCycleRateCounter.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.AfterOneCycleExponentialCounter.ToString(CultureInfo.InvariantCulture))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static IReadOnlyList<AdsrPianoGateEdgeRow> BuildAdsrPianoGateEdgeRows()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, SidBase, SidConstants.PalCpuCyclesPerSecond);
+		var rows = new List<AdsrPianoGateEdgeRow>(WeakSpotAdsrFrames);
+		var currentCycle = 0L;
+		for (var frame = 0; frame < WeakSpotAdsrFrames; frame++)
+		{
+			var frameCycle = frame * (long)SidConstants.PalCyclesPerFrame;
+			if (frameCycle > currentCycle)
+			{
+				chip.Render(frameCycle - currentCycle);
+				currentCycle = frameCycle;
+			}
+
+			var before = chip.DebugState.Voices[0];
+			ApplyAdsrPianoFrameWrites(chip, frame);
+			var afterWrite = chip.DebugState.Voices[0];
+			chip.Render(1);
+			currentCycle++;
+			var afterOneCycle = chip.DebugState.Voices[0];
+			rows.Add(new AdsrPianoGateEdgeRow(
+				frame,
+				frame * 1000.0 / SegmentRate,
+				IsAdsrPianoGateOnFrame(frame),
+				before.Control,
+				before.EnvelopeCounter,
+				before.EnvelopeState,
+				afterWrite.Control,
+				afterWrite.EnvelopeCounter,
+				afterWrite.EnvelopeState,
+				afterOneCycle.Control,
+				afterOneCycle.EnvelopeCounter,
+				afterOneCycle.EnvelopeState,
+				afterOneCycle.RateCounter,
+				afterOneCycle.ExponentialCounter));
+		}
+
+		return rows;
+	}
+
+	private static void WriteAdsrPianoSidWriteReport(string tracePath, SidRegisterWrite[]? writes)
+	{
+		if (writes == null)
+		{
+			return;
+		}
+
+		var directory = Path.GetDirectoryName(tracePath) ?? ".";
+		var fileName = Path.GetFileNameWithoutExtension(tracePath) + "-sid-writes.csv";
+		var path = Path.Combine(directory, fileName);
+		var builder = new StringBuilder();
+		builder.AppendLine("index,cycle,frame,frame_cycle,chip,register,value");
+		var maxCycle = WeakSpotAdsrFrames * (long)SidConstants.PalCyclesPerFrame;
+		var index = 0;
+		for (var i = 0; i < writes.Length; i++)
+		{
+			var write = writes[i];
+			if (write.ChipIndex != 0 ||
+				write.Cycle < 0 ||
+				write.Cycle >= maxCycle ||
+				!IsAdsrPianoProbeRegister(write.Register))
+			{
+				continue;
+			}
+
+			builder
+				.Append(index.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(write.Cycle.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append((write.Cycle / SidConstants.PalCyclesPerFrame).ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append((write.Cycle % SidConstants.PalCyclesPerFrame).ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(write.ChipIndex.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append("0x").Append(write.Register.ToString("X2", CultureInfo.InvariantCulture)).Append(',')
+				.Append("0x").Append(write.Value.ToString("X2", CultureInfo.InvariantCulture))
+				.AppendLine();
+			index++;
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static bool IsAdsrPianoProbeRegister(byte register)
+		=> register is <= 0x06 or 0x0B or 0x12 or >= 0x15 and <= 0x18;
+
+	private static AdsrPianoTraceRow NearestAdsrTraceRow(IReadOnlyList<AdsrPianoTraceRow> rows, double timeSeconds)
+	{
+		var timeMilliseconds = timeSeconds * 1000.0;
+		var best = rows[0];
+		var bestDistance = Math.Abs(best.TimeMilliseconds - timeMilliseconds);
+		for (var i = 1; i < rows.Count; i++)
+		{
+			var distance = Math.Abs(rows[i].TimeMilliseconds - timeMilliseconds);
+			if (distance < bestDistance)
+			{
+				best = rows[i];
+				bestDistance = distance;
+			}
+		}
+
+		return best;
+	}
+
+	private static string FormatEnvelopeState(int state)
+		=> state switch
+		{
+			0 => "attack",
+			1 => "decay",
+			2 => "sustain",
+			3 => "release",
+			_ => "unknown"
+		};
+
 	private static void AssertSegmentMatches(OracleSegment segment, int segmentIndex, float[] reference, float[] candidate)
 	{
 		var start = SecondsToSamples(((segmentIndex * FramesPerSegment) / (double)SegmentRate) + 0.10);
@@ -291,6 +849,22 @@ public sealed class SidPlayFpWaveformOracleTests
 					$"{segment.Name} correlation {correlation:0.000} was below {segment.MinimumCorrelation:0.000} at candidate offset {offset}.");
 				break;
 		}
+	}
+
+	private static void AssertAdsrRestartShape(float[] reference, float[] candidate, int referenceStart, int candidateStart, int length)
+	{
+		var referenceAc = AcRms(reference, referenceStart, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		var ratio = candidateAc / Math.Max(1.0e-12, referenceAc);
+		var correlation = Correlation(reference, candidate, referenceStart, candidateStart, length);
+		Assert.True(referenceAc > 0.050, "ADSR restart SidPlayFP reference was unexpectedly quiet.");
+		Assert.True(candidateAc > 0.020, "ADSR restart CopperMod candidate was unexpectedly quiet.");
+		Assert.True(
+			ratio is >= 0.20 and <= 2.50,
+			$"ADSR restart AC ratio {ratio:0.0000} was outside 0.20..2.50: reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
+		Assert.True(
+			correlation >= 0.25,
+			$"ADSR restart correlation {correlation:0.0000} was below 0.25.");
 	}
 
 	private static (int Start, int Length) WeakSpotWindow(int startFrame, int frames)
@@ -769,25 +1343,53 @@ public sealed class SidPlayFpWaveformOracleTests
 	}
 
 	private static float[] RenderCopperMod(string sidPath, double seconds)
+		=> RenderCopperModDiagnostic(sidPath, seconds, captureChannels: false).Samples;
+
+	private static CopperModDiagnosticRender RenderCopperModDiagnostic(string sidPath, double seconds, bool captureChannels)
 	{
 		using var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(sidPath));
 		((ISidEmulationProfileController)song).SidEmulationProfile = SidEmulationProfile.Balanced;
+		var channelProvider = (IModuleChannelWaveformProvider)song;
+		channelProvider.ChannelWaveformCaptureEnabled = captureChannels;
 		var options = new AudioRenderOptions(SampleRate, channelCount: 1);
 		var targetFrames = SecondsToSamples(seconds);
 		var samples = new List<float>(targetFrames + SampleRate);
+		var channelSamples = captureChannels
+			? new[] { new List<float>(targetFrames), new List<float>(targetFrames), new List<float>(targetFrames) }
+			: null;
 		while (samples.Count < targetFrames)
 		{
 			var frames = song.GetCurrentTickFrameCount(options);
 			var buffer = new float[options.GetSampleCount(frames)];
 			var result = song.RenderTick(buffer, options);
 			var written = Math.Min(result.SamplesWritten, buffer.Length);
-			for (var i = 0; i < written && samples.Count < targetFrames; i++)
+			var framesToKeep = Math.Min(written / options.ChannelCount, targetFrames - samples.Count);
+			for (var i = 0; i < framesToKeep * options.ChannelCount; i++)
 			{
 				samples.Add(buffer[i]);
 			}
+
+			if (channelSamples == null)
+			{
+				continue;
+			}
+
+			var waveform = channelProvider.LastChannelWaveform;
+			Assert.NotNull(waveform);
+			for (var channel = 0; channel < channelSamples.Length && channel < waveform.Channels.Count; channel++)
+			{
+				var source = waveform.Channels[channel].Samples;
+				for (var i = 0; i < framesToKeep && i < source.Length; i++)
+				{
+					channelSamples[channel].Add(source[i]);
+				}
+			}
 		}
 
-		return samples.ToArray();
+		return new CopperModDiagnosticRender(
+			samples.ToArray(),
+			channelSamples?.Select(channel => channel.ToArray()).ToArray(),
+			captureChannels ? song.SidWrites.ToArray() : null);
 	}
 
 	private static void AssertHarmonicRatios(
@@ -1081,6 +1683,60 @@ public sealed class SidPlayFpWaveformOracleTests
 		ushort Frequency,
 		double MinimumCorrelation,
 		int Frames);
+
+	private sealed record CopperModDiagnosticRender(
+		float[] Samples,
+		float[][]? ChannelSamples,
+		SidRegisterWrite[]? SidWrites);
+
+	private readonly record struct AdsrPianoDebugRow(
+		double TimeSeconds,
+		int Frame,
+		bool Gate,
+		int EnvelopeCounter,
+		double EnvelopeDac,
+		int EnvelopeState,
+		int RateCounter,
+		int ExponentialCounter,
+		byte Control);
+
+	private readonly record struct AdsrPianoTraceRow(
+		double TimeMilliseconds,
+		int Frame,
+		bool Gate,
+		int AlignmentOffsetSamples,
+		double ReferenceAc,
+		double CandidateAc,
+		double AcRatio,
+		double CandidateVoice0Ac,
+		double FinalToVoice0AcRatio,
+		double ReferenceFundamental,
+		double CandidateFundamental,
+		double FundamentalRatio,
+		double CandidateVoice0Fundamental,
+		double FinalToVoice0FundamentalRatio,
+		int EnvelopeCounter,
+		double EnvelopeDac,
+		int EnvelopeState,
+		int RateCounter,
+		int ExponentialCounter,
+		byte Control);
+
+	private readonly record struct AdsrPianoGateEdgeRow(
+		int Frame,
+		double TimeMilliseconds,
+		bool IntendedGate,
+		byte BeforeControl,
+		int BeforeEnvelope,
+		int BeforeEnvelopeState,
+		byte AfterWriteControl,
+		int AfterWriteEnvelope,
+		int AfterWriteEnvelopeState,
+		byte AfterOneCycleControl,
+		int AfterOneCycleEnvelope,
+		int AfterOneCycleEnvelopeState,
+		int AfterOneCycleRateCounter,
+		int AfterOneCycleExponentialCounter);
 
 	private enum OracleSegmentKind
 	{
