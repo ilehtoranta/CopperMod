@@ -1737,30 +1737,16 @@ namespace Copper68k
         }
 
         private static uint GetMask(M68kOperandSize size)
-        {
-            return size switch
-            {
-                M68kOperandSize.Byte => 0xFF,
-                M68kOperandSize.Word => 0xFFFF,
-                _ => 0xFFFF_FFFF
-            };
-        }
+            => M68kCpuState.Mask(size);
 
         private static uint GetSignBit(M68kOperandSize size)
-        {
-            return size switch
-            {
-                M68kOperandSize.Byte => 0x80,
-                M68kOperandSize.Word => 0x8000,
-                _ => 0x8000_0000
-            };
-        }
+            => M68kCpuState.SignBit(size);
 
         private static uint GetBranchTarget(M68kDecodedInstruction instruction)
             => Normalize(instruction.BranchBase + unchecked((uint)instruction.Displacement));
 
         private static uint AddressIncrement(int register, M68kOperandSize size)
-            => size == M68kOperandSize.Byte && register == 7 ? 2u : (uint)size;
+            => M68kIntegerSemantics.AddressIncrement(register, size);
 
         private static uint Normalize(uint address)
             => address & 0x00FF_FFFF;
