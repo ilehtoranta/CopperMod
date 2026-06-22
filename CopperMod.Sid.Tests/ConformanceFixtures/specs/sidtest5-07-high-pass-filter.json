@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "sidtest5-07-high-pass-filter",
+  "sidtestCategory": 7,
+  "name": "HIGH-PASS FILTER",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.96,
+  "binary": "binaries/sidtest5-07-high-pass-filter.sid",
+  "tags": [ "sidtest5-parity", "filter", "high-pass" ],
+  "targetLayer": "filter",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$20" },
+    { "address": "$d401", "value": "$18" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d404", "value": "$41" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d417", "value": "$f1" },
+    { "address": "$d418", "value": "$4f" }
+  ],
+  "segments": [
+    { "name": "high-pass-closed", "frames": 12, "writes": [ { "address": "$d415", "value": "$00" }, { "address": "$d416", "value": "$10" } ] },
+    { "name": "high-pass-low-mid", "frames": 12, "writes": [ { "address": "$d415", "value": "$00" }, { "address": "$d416", "value": "$50" } ] },
+    { "name": "high-pass-high-mid", "frames": 12, "writes": [ { "address": "$d415", "value": "$00" }, { "address": "$d416", "value": "$a0" } ] },
+    { "name": "high-pass-open", "frames": 12, "writes": [ { "address": "$d415", "value": "$07" }, { "address": "$d416", "value": "$ff" } ] }
+  ]
+}

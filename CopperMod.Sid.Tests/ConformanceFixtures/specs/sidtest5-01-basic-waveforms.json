@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "sidtest5-01-basic-waveforms",
+  "sidtestCategory": 1,
+  "name": "BASIC WAVEFORMS",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.96,
+  "binary": "binaries/sidtest5-01-basic-waveforms.sid",
+  "tags": [ "sidtest5-parity", "waveform" ],
+  "targetLayer": "sid-analog",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$31" },
+    { "address": "$d401", "value": "$1c" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "triangle", "frames": 12, "writes": [ { "address": "$d404", "value": "$11" } ] },
+    { "name": "saw", "frames": 12, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "pulse", "frames": 12, "writes": [ { "address": "$d404", "value": "$41" } ] },
+    { "name": "noise", "frames": 12, "writes": [ { "address": "$d404", "value": "$81" } ] }
+  ]
+}

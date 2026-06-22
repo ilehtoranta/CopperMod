@@ -177,6 +177,26 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void Mos6581PurePulseTinyWidthsSettleTowardHighRail()
+	{
+		var narrowLow = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x001, SidChipModel.Mos6581);
+		var narrowHigh = SidAnalog.ScalePulseWidthEdgeOutput(1.0, 0x40, 0x001, SidChipModel.Mos6581);
+		var tinyLow = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x010, SidChipModel.Mos6581);
+		var quarter = SidAnalog.ScalePulseWidthEdgeOutput(0.50, 0x40, 0x400, SidChipModel.Mos6581);
+		var square = SidAnalog.ScalePulseWidthEdgeOutput(0.50, 0x40, 0x800, SidChipModel.Mos6581);
+		var mos8580 = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x001, SidChipModel.Mos8580);
+		var combined = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x50, 0x001, SidChipModel.Mos6581);
+
+		Assert.InRange(narrowLow, 0.71, 0.73);
+		Assert.Equal(1.0, narrowHigh, precision: 12);
+		Assert.InRange(tinyLow, 0.67, 0.69);
+		Assert.InRange(quarter, 0.46, 0.48);
+		Assert.Equal(0.50, square, precision: 12);
+		Assert.Equal(-1.0, mos8580, precision: 12);
+		Assert.Equal(-1.0, combined, precision: 12);
+	}
+
+	[Fact]
 	public void Mos6581EnvelopeMultiplierIsSlightlyNonLinear()
 	{
 		var linearMidpoint = SidAnalog.ConvertEnvelope(128, SidChipModel.Mos8580);

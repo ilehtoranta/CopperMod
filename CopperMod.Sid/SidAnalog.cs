@@ -38,6 +38,33 @@ namespace CopperMod.Sid
             return waveform * Mos6581WaveformOutputScale(waveformMask);
         }
 
+        public static double ScalePulseWidthEdgeOutput(double waveform, int waveformMask, ushort pulseWidth, SidChipModel model)
+        {
+            if (model != SidChipModel.Mos6581 || (waveformMask & 0xF0) != 0x40)
+            {
+                return waveform;
+            }
+
+            var width = pulseWidth & 0x0FFF;
+            if (width == 0 || width >= 0x0800)
+            {
+                return waveform;
+            }
+
+            if (width < 0x0100)
+            {
+                var edgeSettling = width == 1
+                    ? 0.14
+                    : 0.055 + (0.845 * Math.Pow(width / 256.0, 0.75));
+                var heldHighBias = 1.0 - edgeSettling;
+                return (waveform * edgeSettling) + heldHighBias;
+            }
+
+            var normalizedWidth = (width - 0x0100) / 1792.0;
+            var edgeScale = 0.90 + (0.10 * normalizedWidth);
+            return waveform * edgeScale;
+        }
+
         public static double ConvertEnvelope(int envelope, SidChipModel model)
         {
             return GetEnvelope(model)[Math.Clamp(envelope, 0, 255)];

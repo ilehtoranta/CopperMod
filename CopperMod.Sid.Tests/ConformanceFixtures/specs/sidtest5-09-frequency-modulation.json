@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "sidtest5-09-frequency-modulation",
+  "sidtestCategory": 9,
+  "name": "FREQUENCY MODULATION",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.96,
+  "binary": "binaries/sidtest5-09-frequency-modulation.sid",
+  "tags": [ "sidtest5-parity", "frequency-modulation" ],
+  "targetLayer": "digital",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d404", "value": "$21" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "fm-low", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$10" } ] },
+    { "name": "fm-rise-1", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$18" } ] },
+    { "name": "fm-rise-2", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$20" } ] },
+    { "name": "fm-high", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$30" } ] },
+    { "name": "fm-fall-1", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$20" } ] },
+    { "name": "fm-fall-2", "frames": 8, "writes": [ { "address": "$d400", "value": "$00" }, { "address": "$d401", "value": "$14" } ] }
+  ]
+}

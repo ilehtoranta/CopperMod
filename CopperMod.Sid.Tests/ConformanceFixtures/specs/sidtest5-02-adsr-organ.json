@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "sidtest5-02-adsr-organ",
+  "sidtestCategory": 2,
+  "name": "ADSR ORGAN",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.84,
+  "binary": "binaries/sidtest5-02-adsr-organ.sid",
+  "tags": [ "sidtest5-parity", "adsr", "organ" ],
+  "targetLayer": "digital",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$31" },
+    { "address": "$d401", "value": "$1c" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f8" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "organ-gate-on", "frames": 30, "writes": [ { "address": "$d404", "value": "$41" } ] },
+    { "name": "organ-release", "frames": 12, "writes": [ { "address": "$d404", "value": "$40" } ] }
+  ]
+}

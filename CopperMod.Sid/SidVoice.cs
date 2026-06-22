@@ -395,6 +395,7 @@ namespace CopperMod.Sid
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: false, applyNoiseWriteback: true, out _);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
@@ -403,6 +404,7 @@ namespace CopperMod.Sid
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: true, applyNoiseWriteback: true, out trace);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }
@@ -411,6 +413,7 @@ namespace CopperMod.Sid
         {
             var waveform = RenderWaveformFast(syncSource, model);
             waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
             return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
         }

@@ -12,6 +12,7 @@ internal static class SidTest5ComparisonCommand
 	private const int DefaultSampleRate = 48000;
 	private const double DefaultSeconds = 3.0;
 	private const int SidPlayFpTimeoutMilliseconds = 60000;
+	private const double ReferenceSilenceAcThreshold = 0.005;
 
 	private static readonly string[] TestNames =
 	{
@@ -276,6 +277,13 @@ internal static class SidTest5ComparisonCommand
 		}
 
 		var referenceAc = AcRms(reference.Samples, 0, length);
+		if (referenceAc < ReferenceSilenceAcThreshold)
+		{
+			throw new CommandLineException(
+				"SidPlayFP reference for sidtest5 test " + test.ToString(CultureInfo.InvariantCulture) + " appears silent " +
+				"(AC RMS " + FormatInvariant(referenceAc) + "). Check the reference render before using this report.");
+		}
+
 		var candidateAc = AcRms(candidate.Samples, 0, length);
 		return new SidTest5ComparisonResult(
 			test,
