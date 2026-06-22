@@ -4,22 +4,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $tag = "coppermod-v$Version"
-$out = ".\artifacts\release\CopperMod"
+$out = Join-Path $repoRoot "artifacts\release\CopperMod"
+$publishScript = ".\scripts\release\publish-coppermod.ps1"
 
 function Get-ReleaseAssets {
     if (-not (Test-Path $out)) {
-        throw "Release artifacts were not found at '$out'. Run .\publish-coppermod.ps1 -Version $Version first."
+        throw "Release artifacts were not found at '$out'. Run $publishScript -Version $Version first."
     }
 
     $zipAssets = @(Get-ChildItem $out -Filter *.zip -File | ForEach-Object { $_.FullName })
     if ($zipAssets.Count -eq 0) {
-        throw "No zip assets were found at '$out'. Run .\publish-coppermod.ps1 -Version $Version first."
+        throw "No zip assets were found at '$out'. Run $publishScript -Version $Version first."
     }
 
     $checksum = Join-Path $out "SHA256SUMS.txt"
     if (-not (Test-Path $checksum)) {
-        throw "Missing checksum file '$checksum'. Run .\publish-coppermod.ps1 -Version $Version first."
+        throw "Missing checksum file '$checksum'. Run $publishScript -Version $Version first."
     }
 
     return $zipAssets + $checksum

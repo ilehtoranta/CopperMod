@@ -232,11 +232,11 @@ a Windows self-contained zip and a portable .NET zip that can be run with
 `dotnet CopperMod.dll` or `dotnet CopperScreen.dll`.
 
 ```powershell
-.\publish-coppermod.ps1 -Version 1.0.0
-.\release-coppermod.ps1 -Version 1.0.0
+.\scripts\release\publish-coppermod.ps1 -Version 1.0.0
+.\scripts\release\release-coppermod.ps1 -Version 1.0.0
 
-.\publish-copperscreen.ps1 -Version 1.0.0
-.\release-copperscreen.ps1 -Version 1.0.0
+.\scripts\release\publish-copperscreen.ps1 -Version 1.0.0
+.\scripts\release\release-copperscreen.ps1 -Version 1.0.0
 ```
 
 The publish scripts strip `.pdb` and `.xml` files before zipping. CopperMod

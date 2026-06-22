@@ -488,12 +488,9 @@ CopperMod.Sid/ReferenceLinks
 CopperMod.Sid/References
 CopperMod.Sid.Compare/
 CopperMod.Sid.Compare.Tests/
-*.ps1
-!publish-coppermod.ps1
-!release-coppermod.ps1
-!publish-copperscreen.ps1
-!release-copperscreen.ps1
 !scripts/nuget/*.ps1
+!scripts/release/
+!scripts/release/*.ps1
 CopperScreen/TestImages
 CopperMod.Amiga/References
 *.csx
@@ -504,3 +501,6 @@ CopperMod.Amiga/References
 *.bgra
 *.rom
 GeneratedAudio
+CopperMod.Amiga.Emulator/Docs
+CopperMod.Sid/Docs
+CopperScreen/ROM

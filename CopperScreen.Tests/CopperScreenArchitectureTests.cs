@@ -67,14 +67,6 @@ public sealed class CopperScreenArchitectureTests
 			2,
 			M68kBackendKind.JitM68040,
 			8 * 1024 * 1024);
-		AssertProfile(
-			"expanded-m68040-jit-kickstart31-sysinfo",
-			AmigaMachineProfile.A500Pal512KBoot,
-			CopperScreenKickstartSource.KickstartRom,
-			512 * 1024,
-			2,
-			M68kBackendKind.JitM68040,
-			8 * 1024 * 1024);
 		AssertProfile("diagnostic-hrm-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
@@ -124,56 +116,6 @@ public sealed class CopperScreenArchitectureTests
 			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
 			return profile;
 		}
-	}
-
-	[Fact]
-	public void BundledKickstart31SysInfoM68040JitProfileResolvesRomAndDisk()
-	{
-		Assert.True(
-			CopperScreenProfile.TryLoad(
-				"sysinfo-040jit",
-				AppContext.BaseDirectory,
-				out var profile,
-				out var error),
-			error);
-
-		Assert.Equal("expanded-m68040-jit-kickstart31-sysinfo", profile.Id);
-		Assert.Equal(CopperScreenKickstartSource.KickstartRom, profile.KickstartSource);
-		Assert.Equal("ROM/kickstart-3.1-a500.rom", profile.KickstartRomPath);
-		Assert.Equal(M68kBackendKind.JitM68040, profile.CpuBackend);
-		Assert.True(profile.AutoStartWorkbenchStartupSequence);
-
-		var drive = Assert.Single(profile.MediaDrives);
-		Assert.Equal(0, drive.Index);
-		Assert.Equal("TestImages/Tools/SysInfo.adf", drive.DiskPath);
-		Assert.True(drive.WriteProtected);
-
-		var options = CopperScreenStartupOptions.Parse(
-			new[] { "--profile", "kickstart31-sysinfo" },
-			AppContext.BaseDirectory);
-		Assert.Null(options.Error);
-		Assert.EndsWith(Path.Combine("ROM", "kickstart-3.1-a500.rom"), options.KickstartRomPath);
-		Assert.EndsWith(Path.Combine("TestImages", "Tools", "SysInfo.adf"), options.DiskPath);
-	}
-
-	[Fact]
-	public void ExplicitCopperScreenRelativeSysInfoProfileAndDiskPathsResolveFromAppBaseDirectory()
-	{
-		var options = CopperScreenStartupOptions.Parse(
-			new[]
-			{
-				"--profile",
-				Path.Combine("CopperScreen", "Profiles", "expanded-m68040-jit-kickstart31-sysinfo.json"),
-				Path.Combine("CopperScreen", "TestImages", "Tools", "SysInfo.adf")
-			},
-			AppContext.BaseDirectory);
-
-		Assert.Null(options.Error);
-		Assert.Equal("expanded-m68040-jit-kickstart31-sysinfo", options.Profile.Id);
-		Assert.Equal(M68kBackendKind.JitM68040, options.Profile.CpuBackend);
-		Assert.EndsWith(Path.Combine("ROM", "kickstart-3.1-a500.rom"), options.KickstartRomPath);
-		Assert.EndsWith(Path.Combine("TestImages", "Tools", "SysInfo.adf"), options.DiskPath);
-		Assert.EndsWith(Path.Combine("TestImages", "Tools", "SysInfo.adf"), options.DriveDiskPaths[0]);
 	}
 
 	[Fact]

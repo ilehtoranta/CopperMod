@@ -2,7 +2,9 @@
 
 Copper68k is a reusable C# Motorola 68000-family CPU emulation core extracted
 from CopperScreen and CopperMod. It provides interpreter backends for MC68000,
-MC68020, MC68030, and MC68040-style execution behind a small bus/core API.
+MC68020, MC68030, and MC68040-style execution behind a small bus/core API, plus
+an opt-in MC68040 JIT backend for hosts that expose stable code snapshots and
+write invalidation.
 
 The package is intended for emulator projects that want to supply their own
 memory map, devices, interrupt sources, and host integration.
@@ -83,14 +85,41 @@ sealed class RamBus : IM68kBus
 
 ## CPU Models
 
-Use `M68kCpuModel` to select the interpreter backend:
+Use `M68kCpuModel` to select the default interpreter backend:
 
 - `M68000`: base 68000 interpreter with 68000-style exception frames.
 - `M68020`: 68020-style core with VBR, format-zero exception frames, and native-cycle timing state.
 - `M68030`: 68030-oriented interpreter profile.
 - `M68040`: 68040-oriented interpreter with the current integer/FPU/MMU support used by CopperScreen.
 
-Host-specific JIT backends are not part of the Copper68k NuGet package.
+`M68kCoreFactory.Create(model, bus)` always creates the interpreter path. Use
+the options overload only when you want a non-default execution mode.
+
+## MC68040 JIT
+
+The MC68040 JIT is included in the package as an opt-in backend. The concrete
+implementation remains internal; package consumers select it through
+`M68kCoreOptions`.
+
+```csharp
+using var cpu = M68kCoreFactory.Default.Create(
+    M68kCpuModel.M68040,
+    bus,
+    new M68kCoreOptions { ExecutionMode = M68kExecutionMode.Jit });
+```
+
+JIT mode is supported only for `M68kCpuModel.M68040`. Requesting it for another
+model throws `M68kEmulationException`.
+
+The bus must implement `IM68kJitBus`. That capability tells Copper68k which
+physical code ranges are eligible for compilation, lets the JIT capture immutable
+code snapshots for background compilation, and raises invalidation events when
+writable code changes.
+
+Hosts may also implement `IM68kJitFastMemoryBus` and
+`IM68kJitTimedMemoryBus` to expose direct fast-memory paths or host-specific
+timed device shortcuts. If those optional interfaces are absent, compiled traces
+fall back to normal `IM68kBus` memory access.
 
 ## Bus Contract
 
@@ -126,7 +155,8 @@ changes.
 
 ## Status
 
-Copper68k 1.0 is an accuracy-oriented emulator core with a stable, intentionally
-small public API. Applications should create cores through `M68kCoreFactory` and
-depend on `IM68kBus`, `IM68kCore`, `M68kCpuModel`, and `M68kCpuState` rather
-than implementation-specific interpreter classes.
+Copper68k 1.1 is an accuracy-oriented emulator core with a stable,
+intentionally small public API. Applications should create cores through
+`M68kCoreFactory` and depend on `IM68kBus`, `IM68kCore`, `M68kCpuModel`,
+`M68kCpuState`, and the optional JIT capability interfaces rather than
+implementation-specific interpreter or JIT classes.

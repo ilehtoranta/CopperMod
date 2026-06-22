@@ -8,9 +8,9 @@
     <PackageId>Copper68k</PackageId>
     <Title>Copper68k</Title>
     <Authors>CopperMod contributors</Authors>
-    <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends.</Description>
-    <PackageVersion>1.0.0</PackageVersion>
-    <PackageReleaseNotes>Initial Copper68k package release with MC68000, MC68020, MC68030, and MC68040 interpreter cores behind a small bus/core API; package icon, README, XML API documentation, symbols, and Source Link metadata.</PackageReleaseNotes>
+    <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
+    <PackageVersion>1.1.0</PackageVersion>
+    <PackageReleaseNotes>Adds an opt-in internal MC68040 JIT backend through M68kCoreOptions, public JIT bus capability interfaces for host integration, and keeps the default MC68040 factory path on the interpreter for source-compatible package consumers.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
@@ -18,7 +18,7 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
-    <PackageTags>emulation;m68000;m68k;68000;68020;68030;68040;cpu</PackageTags>
+    <PackageTags>emulation;m68000;m68k;68000;68020;68030;68040;cpu;jit</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copper68k-icon.png</PackageIcon>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>

@@ -210,7 +210,6 @@ internal sealed class CopperScreenProfile
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
 			"expanded-m68040-rom" or "expanded-m68040-kickstart" or "expanded-68040-kickstart-rom" => "expanded-m68040-kickstart-rom",
 			"expanded-m68040-jit-rom" or "expanded-m68040-jit-kickstart" or "expanded-68040-jit-kickstart-rom" => "expanded-m68040-jit-kickstart-rom",
-			"expanded-m68040-jit-sysinfo" or "expanded-m68040-jit-kickstart31-sysinfo" or "kickstart31-sysinfo" or "sysinfo-040jit" => "expanded-m68040-jit-kickstart31-sysinfo",
 			"copperhdf" or "kickstart31-copperhdf" or "copperhdf-040jit" or "expanded-m68040-jit-copperhdf" => "expanded-m68040-jit-kickstart31-copperhdf",
 			"diagrom" or "diag-rom" or "diagnostic-rom" => "expanded-diagrom",
 			_ => normalized

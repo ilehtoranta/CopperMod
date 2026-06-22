@@ -3,7 +3,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$out = ".\artifacts\release\CopperScreen"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$out = Join-Path $repoRoot "artifacts\release\CopperMod"
+$project = Join-Path $repoRoot "CopperMod\CopperMod.csproj"
 
 function Remove-DebugFiles($Path) {
     Get-ChildItem $Path -Recurse -Include *.pdb,*.xml -File |
@@ -13,8 +15,8 @@ function Remove-DebugFiles($Path) {
 Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $out -ItemType Directory | Out-Null
 
-$winOut = Join-Path $out "CopperScreen-win-x64-self-contained"
-dotnet publish .\CopperScreen\CopperScreen.csproj `
+$winOut = Join-Path $out "CopperMod-win-x64-self-contained"
+dotnet publish $project `
     -c Release `
     -r win-x64 `
     --self-contained true `
@@ -27,10 +29,10 @@ dotnet publish .\CopperScreen\CopperScreen.csproj `
     -o $winOut
 Remove-DebugFiles $winOut
 Compress-Archive "$winOut\*" `
-    (Join-Path $out "CopperScreen-$Version-win-x64-self-contained.zip")
+    (Join-Path $out "CopperMod-$Version-win-x64-self-contained.zip")
 
-$dotnetOut = Join-Path $out "CopperScreen-dotnet"
-dotnet publish .\CopperScreen\CopperScreen.csproj `
+$dotnetOut = Join-Path $out "CopperMod-dotnet"
+dotnet publish $project `
     -c Release `
     --self-contained false `
     -p:DebugType=None `
@@ -42,7 +44,7 @@ dotnet publish .\CopperScreen\CopperScreen.csproj `
     -o $dotnetOut
 Remove-DebugFiles $dotnetOut
 Compress-Archive "$dotnetOut\*" `
-    (Join-Path $out "CopperScreen-$Version-dotnet.zip")
+    (Join-Path $out "CopperMod-$Version-dotnet.zip")
 
 Get-FileHash "$out\*.zip" -Algorithm SHA256 |
     ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } |

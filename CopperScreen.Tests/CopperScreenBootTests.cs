@@ -63,60 +63,6 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void Kickstart31M68040JitSysInfoProfileLaunchesSysInfoWhenAvailable()
-	{
-		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
-		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Tools", "SysInfo.adf");
-		if (romPath == null || diskPath == null)
-		{
-			return;
-		}
-
-		using var emulator = CopperScreenEmulator.Create(
-			new[] { "--profile", "sysinfo-040jit", "--kickstart-rom", romPath },
-			AppContext.BaseDirectory);
-		Assert.Equal(Path.GetFullPath(diskPath), emulator.DiskPath);
-		Assert.Equal("JitM68040", emulator.CpuBackendName);
-
-		for (var frame = 0; frame < 600; frame++)
-		{
-			emulator.RenderNextFrame();
-			var diagnostics = GetDiagnostics(emulator);
-			var sysInfoLaunched = diagnostics.Any(diagnostic =>
-				diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
-				diagnostic.Message.Contains("SysInfo/SysInfo", StringComparison.OrdinalIgnoreCase));
-			var visibleFrame = emulator.Framebuffer.Count(pixel => (pixel & 0x00FF_FFFF) != 0) > 10_000 &&
-				emulator.Framebuffer.Distinct().Take(3).Count() >= 3;
-			if ((sysInfoLaunched && visibleFrame) || emulator.StatusText.Contains("AMIGA_BOOT_", StringComparison.Ordinal))
-			{
-				break;
-			}
-		}
-
-		var finalDiagnostics = GetDiagnostics(emulator);
-		var diagnosticText = string.Join(Environment.NewLine, finalDiagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
-		Assert.DoesNotContain(finalDiagnostics, diagnostic => diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT" or "AMIGA_BOOT_NULL_PC");
-		Assert.Contains(finalDiagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_HOST" &&
-			diagnostic.Message.Contains("SetPatch_1.38", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(finalDiagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
-			diagnostic.Message.Contains("C/Initialize", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(finalDiagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_COPPERBENCH_LAUNCH" &&
-			diagnostic.Message.Contains("SysInfo/SysInfo", StringComparison.OrdinalIgnoreCase));
-		Assert.Contains(finalDiagnostics, diagnostic =>
-			diagnostic.Code == "AMIGA_BOOT_DOS_STARTUP_CONTINUE" &&
-			diagnostic.Message.Contains("SysInfo/SysInfo", StringComparison.OrdinalIgnoreCase));
-		Assert.DoesNotContain(finalDiagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_SYSINFO_HOST");
-		Assert.DoesNotContain(finalDiagnostics, diagnostic => diagnostic.Code == "AMIGA_BOOT_TASK_TRAP_INVALID");
-		Assert.Equal("boot program running:", emulator.StatusText);
-		Assert.True(emulator.Framebuffer.Distinct().Count() >= 3, diagnosticText);
-		Assert.True(emulator.Framebuffer.Count(pixel => (pixel & 0x00FF_FFFF) != 0) > 10_000, diagnosticText);
-		Assert.True(emulator.JitCounters.CompiledTraces > 0, diagnosticText);
-	}
-
-	[Fact]
 	public void Kickstart31CopperHdfProfileReachesAutoconfigWithTemporaryHardfileWhenRomAvailable()
 	{
 		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");

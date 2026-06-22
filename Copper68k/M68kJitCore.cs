@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
     internal sealed class M68kJitOptions
     {
@@ -97,7 +97,10 @@ namespace CopperMod.Amiga
         private const ushort ArithmeticFlags = LogicFlags | M68kCpuState.Extend;
 
         private readonly IM68kBus _bus;
-        private readonly AmigaBus? _amigaBus;
+        private readonly IM68kJitBus? _jitBus;
+        private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
+        private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
+        private readonly M68kJitHostAdapter? _amigaBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
         private readonly M68kJitCpuModel _cpuModel;
@@ -287,67 +290,24 @@ namespace CopperMod.Amiga
                 new[] { typeof(int), typeof(int), typeof(uint), typeof(ushort), typeof(ushort) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledPea));
-        private static readonly FieldInfo AmigaBusField =
-            typeof(M68kJitCore).GetField(nameof(_amigaBus), BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(typeof(M68kJitCore).FullName, nameof(_amigaBus));
-        private static readonly FieldInfo AmigaBusRealFastRamField =
-            typeof(AmigaBus).GetField("_realFastRam", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(typeof(AmigaBus).FullName, "_realFastRam");
-        private static readonly FieldInfo AmigaBusRealFastRamBaseField =
-            typeof(AmigaBus).GetField("<RealFastRamBase>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(typeof(AmigaBus).FullName, "<RealFastRamBase>k__BackingField");
-        private static readonly FieldInfo AmigaBusRomOverlayRegionField =
-            typeof(AmigaBus).GetField("_romOverlayRegion", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(typeof(AmigaBus).FullName, "_romOverlayRegion");
-        private static readonly FieldInfo AmigaBusRomOverlayEnabledField =
-            typeof(AmigaBus).GetField("_romOverlayEnabled", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(typeof(AmigaBus).FullName, "_romOverlayEnabled");
-        private static readonly FieldInfo MappedMemoryRegionDataField =
-            AmigaBusRomOverlayRegionField.FieldType.GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(AmigaBusRomOverlayRegionField.FieldType.FullName, "_data");
-        private static readonly FieldInfo MappedMemoryRegionBaseAddressField =
-            AmigaBusRomOverlayRegionField.FieldType.GetField("<BaseAddress>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic) ??
-            throw new MissingFieldException(AmigaBusRomOverlayRegionField.FieldType.FullName, "<BaseAddress>k__BackingField");
+        private static readonly FieldInfo FastMemoryBusField =
+            typeof(M68kJitCore).GetField(nameof(_fastMemoryBus), BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingFieldException(typeof(M68kJitCore).FullName, nameof(_fastMemoryBus));
         private static readonly MethodInfo TryReadJitZeroWaitMemoryMethod =
-            typeof(AmigaBus).GetMethod(
-                nameof(AmigaBus.TryReadJitZeroWaitMemory),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(uint), typeof(M68kOperandSize), typeof(uint).MakeByRefType() },
-                modifiers: null) ??
-            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryReadJitZeroWaitMemory));
+            typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.TryReadJitZeroWaitMemory)) ??
+            throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.TryReadJitZeroWaitMemory));
         private static readonly MethodInfo TryWriteJitZeroWaitMemoryMethod =
-            typeof(AmigaBus).GetMethod(
-                nameof(AmigaBus.TryWriteJitZeroWaitMemory),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(uint), typeof(uint), typeof(M68kOperandSize) },
-                modifiers: null) ??
-            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryWriteJitZeroWaitMemory));
+            typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.TryWriteJitZeroWaitMemory)) ??
+            throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.TryWriteJitZeroWaitMemory));
         private static readonly MethodInfo TryGetJitZeroWaitReadMemoryMethod =
-            typeof(AmigaBus).GetMethod(
-                nameof(AmigaBus.TryGetJitZeroWaitReadMemory),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(uint), typeof(int), typeof(byte[]).MakeByRefType(), typeof(int).MakeByRefType() },
-                modifiers: null) ??
-            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryGetJitZeroWaitReadMemory));
+            typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.TryGetJitZeroWaitReadMemory)) ??
+            throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.TryGetJitZeroWaitReadMemory));
         private static readonly MethodInfo TryGetJitZeroWaitWriteMemoryMethod =
-            typeof(AmigaBus).GetMethod(
-                nameof(AmigaBus.TryGetJitZeroWaitWriteMemory),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(uint), typeof(int), typeof(byte[]).MakeByRefType(), typeof(int).MakeByRefType() },
-                modifiers: null) ??
-            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.TryGetJitZeroWaitWriteMemory));
+            typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.TryGetJitZeroWaitWriteMemory)) ??
+            throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.TryGetJitZeroWaitWriteMemory));
         private static readonly MethodInfo CompleteJitZeroWaitWriteMethod =
-            typeof(AmigaBus).GetMethod(
-                nameof(AmigaBus.CompleteJitZeroWaitWrite),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(uint), typeof(int) },
-                modifiers: null) ??
-            throw new MissingMethodException(typeof(AmigaBus).FullName, nameof(AmigaBus.CompleteJitZeroWaitWrite));
+            typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite)) ??
+            throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite));
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
         private bool _compiledInstructionCycleFloorActive;
@@ -409,7 +369,10 @@ namespace CopperMod.Amiga
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             ArgumentNullException.ThrowIfNull(options);
-            _amigaBus = bus as AmigaBus;
+            _jitBus = bus as IM68kJitBus;
+            _fastMemoryBus = bus as IM68kJitFastMemoryBus;
+            _timedMemoryBus = bus as IM68kJitTimedMemoryBus;
+            _amigaBus = _jitBus == null ? null : new M68kJitHostAdapter(bus, _jitBus, _fastMemoryBus, _timedMemoryBus);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _cpuModel = options.CpuModel;
             _cacheFlushOnlyInvalidation = options.CacheFlushOnlyInvalidation;
@@ -431,9 +394,9 @@ namespace CopperMod.Amiga
                     AsyncCompileQueueCapacity);
             }
 
-            if (_amigaBus != null && !_cacheFlushOnlyInvalidation)
+            if (_jitBus != null && !_cacheFlushOnlyInvalidation)
             {
-                _amigaBus.JitEligibleMemoryWritten += InvalidateWrittenCodeRange;
+                _jitBus.JitCodeRangeWritten += InvalidateWrittenCodeRange;
                 _subscribedToWriteInvalidation = true;
             }
         }
@@ -495,9 +458,9 @@ namespace CopperMod.Amiga
 
             _disposed = true;
             _asyncCompiler?.Dispose();
-            if (_amigaBus != null && _subscribedToWriteInvalidation)
+            if (_jitBus != null && _subscribedToWriteInvalidation)
             {
-                _amigaBus.JitEligibleMemoryWritten -= InvalidateWrittenCodeRange;
+                _jitBus.JitCodeRangeWritten -= InvalidateWrittenCodeRange;
                 _subscribedToWriteInvalidation = false;
             }
         }
@@ -1810,7 +1773,7 @@ namespace CopperMod.Amiga
                 value = _bus.ReadWord(physicalAddress, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
                 return true;
             }
-            catch (Exception ex) when (ex is AmigaEmulationException or M68kEmulationException or IndexOutOfRangeException or M68kCodeReadException)
+            catch (Exception ex) when (ex is M68kEmulationException or IndexOutOfRangeException or M68kCodeReadException)
             {
                 value = 0;
                 return false;
@@ -1834,7 +1797,10 @@ namespace CopperMod.Amiga
 
             if (_cpuModel != M68kJitCpuModel.M68040)
             {
-                return !_amigaBus.IsChipRamAddress(logicalAddress);
+                return _amigaBus.IsJitCodeAddress(
+                    logicalAddress,
+                    byteCount: 2,
+                    M68kBusAccessKind.CpuInstructionFetch);
             }
 
             return TryTranslateM68040Address(
@@ -1844,21 +1810,13 @@ namespace CopperMod.Amiga
                     byteCount: 2,
                     out var physicalAddress,
                     out _) &&
-                IsPhysicalJitCodeAddress(physicalAddress);
+                IsPhysicalJitCodeAddress(physicalAddress, byteCount: 2);
         }
 
-        private static bool IsPhysicalJitCodeAddress(uint physicalAddress)
-        {
-            if (physicalAddress > 0x00FF_FFFFu)
-            {
-                return false;
-            }
-
-            return M68020CpuProfile.ClassifyTarget(physicalAddress) is
-                M68020MemoryTarget.ExpansionRam or
-                M68020MemoryTarget.RealFastRam or
-                M68020MemoryTarget.Rom;
-        }
+        private bool IsPhysicalJitCodeAddress(uint physicalAddress, int byteCount)
+            => _amigaBus != null &&
+                physicalAddress <= 0x00FF_FFFFu &&
+                _amigaBus.IsJitCodeAddress(physicalAddress, byteCount, M68kBusAccessKind.CpuInstructionFetch);
 
         private bool CanUsePhysicalV2TraceCompilation(uint logicalRoot, int byteCount)
         {
@@ -1882,7 +1840,7 @@ namespace CopperMod.Amiga
                         byteCount: 2,
                         out var physical,
                         out _) ||
-                    !IsPhysicalJitCodeAddress(physical))
+                    !IsPhysicalJitCodeAddress(physical, byteCount: 2))
                 {
                     return false;
                 }
@@ -1977,7 +1935,7 @@ namespace CopperMod.Amiga
             {
                 if (!IsM68040PhysicalAddressMapped(physicalAddress, 4, M68kBusAccessKind.CpuDataRead))
                 {
-                    throw new AmigaEmulationException(
+                    throw new M68kEmulationException(
                         $"MC68040 MMU table read from unmapped physical address 0x{physicalAddress:X8}.");
                 }
 
@@ -1996,6 +1954,166 @@ namespace CopperMod.Amiga
             M68kBusAccessKind accessKind)
             => _physicalAddressMap == null ||
                 _physicalAddressMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
+
+        private sealed class M68kJitHostAdapter : IM68kCodeReader
+        {
+            private readonly IM68kBus _bus;
+            private readonly IM68kJitBus _jitBus;
+            private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
+            private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
+
+            public M68kJitHostAdapter(
+                IM68kBus bus,
+                IM68kJitBus jitBus,
+                IM68kJitFastMemoryBus? fastMemoryBus,
+                IM68kJitTimedMemoryBus? timedMemoryBus)
+            {
+                _bus = bus;
+                _jitBus = jitBus;
+                _fastMemoryBus = fastMemoryBus;
+                _timedMemoryBus = timedMemoryBus;
+            }
+
+            public bool HasHostTrapStub(uint address)
+                => _bus.HasHostTrapStub(Normalize(address));
+
+            public ushort ReadHostWord(uint address)
+                => _jitBus.ReadJitCodeWord(Normalize(address));
+
+            public uint GetCodePageGeneration(uint address)
+                => _jitBus.GetJitCodePageGeneration(Normalize(address));
+
+            public bool CodeRangeGenerationMatches(uint address, int byteCount, uint startGeneration, uint endGeneration)
+                => _jitBus.JitCodeRangeGenerationMatches(Normalize(address), byteCount, startGeneration, endGeneration);
+
+            public bool IsChipRamAddress(uint address)
+                => !_jitBus.IsJitCodeAddress(Normalize(address), 2, M68kBusAccessKind.CpuInstructionFetch);
+
+            public bool IsJitCodeAddress(uint address, int byteCount, M68kBusAccessKind accessKind)
+                => _jitBus.IsJitCodeAddress(Normalize(address), byteCount, accessKind);
+
+            public bool IsJitReadOnlyCodeAddress(uint address, int byteCount, M68kBusAccessKind accessKind)
+                => _jitBus.IsJitReadOnlyCodeAddress(Normalize(address), byteCount, accessKind);
+
+            public bool TryCaptureJitCodeSnapshot(uint root, int maxBytes, out M68kJitCodeSnapshot snapshot)
+                => _jitBus.TryCaptureJitCodeSnapshot(Normalize(root), maxBytes, out snapshot);
+
+            public bool TryReadJitZeroWaitMemory(uint address, M68kOperandSize size, out uint value)
+            {
+                if (_fastMemoryBus != null)
+                {
+                    return _fastMemoryBus.TryReadJitZeroWaitMemory(Normalize(address), size, out value);
+                }
+
+                value = 0;
+                return false;
+            }
+
+            public bool TryWriteJitZeroWaitMemory(uint address, uint value, M68kOperandSize size)
+                => _fastMemoryBus != null &&
+                    _fastMemoryBus.TryWriteJitZeroWaitMemory(Normalize(address), value, size);
+
+            public bool TryGetJitZeroWaitReadMemory(
+                uint address,
+                int byteCount,
+                out byte[] memory,
+                out int offset,
+                out M68kJitMemoryKind memoryKind)
+            {
+                if (_fastMemoryBus != null)
+                {
+                    return _fastMemoryBus.TryGetJitZeroWaitReadMemory(
+                        Normalize(address),
+                        byteCount,
+                        out memory,
+                        out offset,
+                        out memoryKind);
+                }
+
+                memory = Array.Empty<byte>();
+                offset = 0;
+                memoryKind = M68kJitMemoryKind.FastRam;
+                return false;
+            }
+
+            public bool TryGetJitZeroWaitWriteMemory(
+                uint address,
+                int byteCount,
+                out byte[] memory,
+                out int offset,
+                out M68kJitMemoryKind memoryKind)
+            {
+                if (_fastMemoryBus != null)
+                {
+                    return _fastMemoryBus.TryGetJitZeroWaitWriteMemory(
+                        Normalize(address),
+                        byteCount,
+                        out memory,
+                        out offset,
+                        out memoryKind);
+                }
+
+                memory = Array.Empty<byte>();
+                offset = 0;
+                memoryKind = M68kJitMemoryKind.FastRam;
+                return false;
+            }
+
+            public void CompleteJitZeroWaitWrite(uint address, int byteCount)
+                => _fastMemoryBus?.CompleteJitZeroWaitWrite(Normalize(address), byteCount);
+
+            public uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
+            {
+                if (_timedMemoryBus != null)
+                {
+                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, Normalize(address), size);
+                }
+
+                return size switch
+                {
+                    M68kOperandSize.Byte => _bus.ReadByte(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead),
+                    M68kOperandSize.Word => _bus.ReadWord(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead),
+                    _ => _bus.ReadLong(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead)
+                };
+            }
+
+            public void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
+            {
+                if (_timedMemoryBus != null)
+                {
+                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, Normalize(address), value, size);
+                    return;
+                }
+
+                if (size == M68kOperandSize.Byte)
+                {
+                    _bus.WriteByte(Normalize(address), (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                }
+                else if (size == M68kOperandSize.Word)
+                {
+                    _bus.WriteWord(Normalize(address), (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                }
+                else
+                {
+                    _bus.WriteLong(Normalize(address), value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                }
+            }
+
+            public bool TryReadJitMaxSpeedDeviceRegister(uint address, M68kOperandSize size, out uint value)
+            {
+                if (_timedMemoryBus != null)
+                {
+                    return _timedMemoryBus.TryReadJitMaxSpeedDeviceRegister(Normalize(address), size, out value);
+                }
+
+                value = 0;
+                return false;
+            }
+
+            public bool TryWriteJitMaxSpeedColorRegister(uint address, uint value, M68kOperandSize size, long cycle)
+                => _timedMemoryBus != null &&
+                    _timedMemoryBus.TryWriteJitMaxSpeedDeviceRegister(Normalize(address), value, size, cycle);
+        }
 
         private sealed class M68040JitCodeReader : IM68kCodeReader
         {
@@ -6078,17 +6196,17 @@ namespace CopperMod.Amiga
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
                     var fastOffset = il.DeclareLocal(typeof(int));
-                    var fastTarget = il.DeclareLocal(typeof(int));
-                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastTarget = il.DeclareLocal(typeof(M68kJitMemoryKind));
+                    var fastMemoryBus = il.DeclareLocal(typeof(IM68kJitFastMemoryBus));
                     var fastRead = il.DefineLabel();
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldfld, AmigaBusField);
-                    il.Emit(OpCodes.Stloc, amigaBus);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldfld, FastMemoryBusField);
+                    il.Emit(OpCodes.Stloc, fastMemoryBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Brfalse, slowRead);
                     EmitSelectV2InlineZeroWaitMemory(
                         il,
-                        amigaBus,
+                        fastMemoryBus,
                         address,
                         GetV2MemoryByteCount(size),
                         fastMemory,
@@ -6105,13 +6223,13 @@ namespace CopperMod.Amiga
                 else
                 {
                     var fastValue = il.DeclareLocal(typeof(uint));
-                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastMemoryBus = il.DeclareLocal(typeof(IM68kJitFastMemoryBus));
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldfld, AmigaBusField);
-                    il.Emit(OpCodes.Stloc, amigaBus);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldfld, FastMemoryBusField);
+                    il.Emit(OpCodes.Stloc, fastMemoryBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Brfalse, slowRead);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Ldloc, address);
                     il.Emit(OpCodes.Ldc_I4, (int)size);
                     il.Emit(OpCodes.Ldloca_S, fastValue);
@@ -6159,17 +6277,17 @@ namespace CopperMod.Amiga
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
                     var fastOffset = il.DeclareLocal(typeof(int));
-                    var fastTarget = il.DeclareLocal(typeof(int));
-                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastTarget = il.DeclareLocal(typeof(M68kJitMemoryKind));
+                    var fastMemoryBus = il.DeclareLocal(typeof(IM68kJitFastMemoryBus));
                     var fastWrite = il.DefineLabel();
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldfld, AmigaBusField);
-                    il.Emit(OpCodes.Stloc, amigaBus);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldfld, FastMemoryBusField);
+                    il.Emit(OpCodes.Stloc, fastMemoryBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Brfalse, slowWrite);
                     EmitSelectV2InlineZeroWaitMemory(
                         il,
-                        amigaBus,
+                        fastMemoryBus,
                         address,
                         GetV2MemoryByteCount(size),
                         fastMemory,
@@ -6180,7 +6298,7 @@ namespace CopperMod.Amiga
                         slowWrite);
                     il.MarkLabel(fastWrite);
                     EmitStoreV2ZeroWaitMemoryValue(il, fastMemory, fastOffset, value, size);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Ldloc, address);
                     il.Emit(OpCodes.Ldc_I4, GetV2MemoryByteCount(size));
                     il.Emit(OpCodes.Callvirt, CompleteJitZeroWaitWriteMethod);
@@ -6189,13 +6307,13 @@ namespace CopperMod.Amiga
                 }
                 else
                 {
-                    var amigaBus = il.DeclareLocal(typeof(AmigaBus));
+                    var fastMemoryBus = il.DeclareLocal(typeof(IM68kJitFastMemoryBus));
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldfld, AmigaBusField);
-                    il.Emit(OpCodes.Stloc, amigaBus);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldfld, FastMemoryBusField);
+                    il.Emit(OpCodes.Stloc, fastMemoryBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Brfalse, slowWrite);
-                    il.Emit(OpCodes.Ldloc, amigaBus);
+                    il.Emit(OpCodes.Ldloc, fastMemoryBus);
                     il.Emit(OpCodes.Ldloc, address);
                     il.Emit(OpCodes.Ldloc, value);
                     il.Emit(OpCodes.Ldc_I4, (int)size);
@@ -6227,7 +6345,7 @@ namespace CopperMod.Amiga
 
         private static void EmitSelectV2InlineZeroWaitMemory(
             ILGenerator il,
-            LocalBuilder amigaBus,
+            LocalBuilder fastMemoryBus,
             LocalBuilder address,
             int byteCount,
             LocalBuilder memory,
@@ -6238,9 +6356,6 @@ namespace CopperMod.Amiga
             Label fail)
         {
             var normalizedAddress = il.DeclareLocal(typeof(uint));
-            var baseAddress = il.DeclareLocal(typeof(uint));
-            var relativeOffset = il.DeclareLocal(typeof(uint));
-            var tryRom = allowRom ? il.DefineLabel() : fail;
             il.Emit(OpCodes.Ldloc, address);
             EmitLoadUIntConstant(il, 0x00FF_FFFF);
             il.Emit(OpCodes.And);
@@ -6253,91 +6368,15 @@ namespace CopperMod.Amiga
                 il.Emit(OpCodes.Brtrue, fail);
             }
 
-            il.Emit(OpCodes.Ldloc, amigaBus);
-            il.Emit(OpCodes.Ldfld, AmigaBusRealFastRamField);
-            il.Emit(OpCodes.Stloc, memory);
-            il.Emit(OpCodes.Ldloc, memory);
-            il.Emit(OpCodes.Brfalse, tryRom);
-            il.Emit(OpCodes.Ldloc, memory);
-            il.Emit(OpCodes.Ldlen);
-            il.Emit(OpCodes.Brfalse, tryRom);
-            il.Emit(OpCodes.Ldloc, amigaBus);
-            il.Emit(OpCodes.Ldfld, AmigaBusRealFastRamBaseField);
-            il.Emit(OpCodes.Stloc, baseAddress);
+            il.Emit(OpCodes.Ldloc, fastMemoryBus);
             il.Emit(OpCodes.Ldloc, normalizedAddress);
-            il.Emit(OpCodes.Ldloc, baseAddress);
-            il.Emit(OpCodes.Blt_Un, tryRom);
-            il.Emit(OpCodes.Ldloc, normalizedAddress);
-            il.Emit(OpCodes.Ldloc, baseAddress);
-            il.Emit(OpCodes.Sub);
-            il.Emit(OpCodes.Stloc, relativeOffset);
-            EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, tryRom);
-            il.Emit(OpCodes.Ldloc, relativeOffset);
-            il.Emit(OpCodes.Conv_I4);
-            il.Emit(OpCodes.Stloc, offset);
-            il.Emit(OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Stloc, targetKind);
-            il.Emit(OpCodes.Br, success);
-
-            if (allowRom)
-            {
-                var overlayRegion = il.DeclareLocal(AmigaBusRomOverlayRegionField.FieldType);
-                var tryOverlay = il.DefineLabel();
-                il.MarkLabel(tryRom);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Ldfld, AmigaBusRomOverlayRegionField);
-                il.Emit(OpCodes.Stloc, overlayRegion);
-                il.Emit(OpCodes.Ldloc, overlayRegion);
-                il.Emit(OpCodes.Brfalse, fail);
-                il.Emit(OpCodes.Ldloc, overlayRegion);
-                il.Emit(OpCodes.Ldfld, MappedMemoryRegionDataField);
-                il.Emit(OpCodes.Stloc, memory);
-                il.Emit(OpCodes.Ldloc, memory);
-                il.Emit(OpCodes.Brfalse, fail);
-                il.Emit(OpCodes.Ldloc, overlayRegion);
-                il.Emit(OpCodes.Ldfld, MappedMemoryRegionBaseAddressField);
-                il.Emit(OpCodes.Stloc, baseAddress);
-                il.Emit(OpCodes.Ldloc, normalizedAddress);
-                il.Emit(OpCodes.Ldloc, baseAddress);
-                il.Emit(OpCodes.Blt_Un, tryOverlay);
-                il.Emit(OpCodes.Ldloc, normalizedAddress);
-                il.Emit(OpCodes.Ldloc, baseAddress);
-                il.Emit(OpCodes.Sub);
-                il.Emit(OpCodes.Stloc, relativeOffset);
-                EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, tryOverlay);
-                il.Emit(OpCodes.Ldloc, relativeOffset);
-                il.Emit(OpCodes.Conv_I4);
-                il.Emit(OpCodes.Stloc, offset);
-                il.Emit(OpCodes.Ldc_I4_1);
-                il.Emit(OpCodes.Stloc, targetKind);
-                il.Emit(OpCodes.Br, success);
-
-                il.MarkLabel(tryOverlay);
-                il.Emit(OpCodes.Ldloc, amigaBus);
-                il.Emit(OpCodes.Ldfld, AmigaBusRomOverlayEnabledField);
-                il.Emit(OpCodes.Brfalse, fail);
-                il.Emit(OpCodes.Ldloc, normalizedAddress);
-                EmitLoadUIntConstant(il, 0x0008_0000);
-                il.Emit(OpCodes.Bge_Un, fail);
-                il.Emit(OpCodes.Ldloc, normalizedAddress);
-                il.Emit(OpCodes.Ldc_I4, byteCount - 1);
-                il.Emit(OpCodes.Add);
-                EmitLoadUIntConstant(il, 0x0008_0000);
-                il.Emit(OpCodes.Bge_Un, fail);
-                il.Emit(OpCodes.Ldloc, normalizedAddress);
-                il.Emit(OpCodes.Ldloc, memory);
-                il.Emit(OpCodes.Ldlen);
-                il.Emit(OpCodes.Conv_U4);
-                il.Emit(OpCodes.Rem_Un);
-                il.Emit(OpCodes.Stloc, relativeOffset);
-                EmitBranchIfV2InlineMemoryRangeTooSmall(il, memory, relativeOffset, byteCount, fail);
-                il.Emit(OpCodes.Ldloc, relativeOffset);
-                il.Emit(OpCodes.Conv_I4);
-                il.Emit(OpCodes.Stloc, offset);
-                il.Emit(OpCodes.Ldc_I4_2);
-                il.Emit(OpCodes.Stloc, targetKind);
-                il.Emit(OpCodes.Br, success);
-            }
+            il.Emit(OpCodes.Ldc_I4, byteCount);
+            il.Emit(OpCodes.Ldloca_S, memory);
+            il.Emit(OpCodes.Ldloca_S, offset);
+            il.Emit(OpCodes.Ldloca_S, targetKind);
+            il.Emit(OpCodes.Callvirt, allowRom ? TryGetJitZeroWaitReadMemoryMethod : TryGetJitZeroWaitWriteMemoryMethod);
+            il.Emit(OpCodes.Brtrue, success);
+            il.Emit(OpCodes.Br, fail);
         }
 
         private static void EmitBranchIfV2InlineMemoryRangeTooSmall(
@@ -8347,7 +8386,7 @@ namespace CopperMod.Amiga
                 5 => BitConverter.Int64BitsToDouble(unchecked((long)(((ulong)ReadMemoryValue(address, M68kOperandSize.Long) << 32) |
                     ReadMemoryValue(address + 4, M68kOperandSize.Long)))),
                 6 => unchecked((sbyte)ReadMemoryValue(address, M68kOperandSize.Byte)),
-                _ => throw new AmigaEmulationException($"Unsupported MC68040 FPU read format {format}.")
+                _ => throw new M68kEmulationException($"Unsupported MC68040 FPU read format {format}.")
             };
         }
 
@@ -8380,7 +8419,7 @@ namespace CopperMod.Amiga
                     WriteMemoryValue(address, unchecked((byte)(sbyte)value), M68kOperandSize.Byte);
                     break;
                 default:
-                    throw new AmigaEmulationException($"Unsupported MC68040 FPU write format {format}.");
+                    throw new M68kEmulationException($"Unsupported MC68040 FPU write format {format}.");
             }
         }
 
@@ -8394,7 +8433,7 @@ namespace CopperMod.Amiga
                 M68kJitEaKind.AddressPredecrement => ResolveM68040FpuPredecrement(ea.Register, byteSize, applySideEffects),
                 M68kJitEaKind.AddressDisplacement => unchecked((uint)(State.A[ea.Register] + (int)(short)ea.Extension0)),
                 M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
-                _ => throw new AmigaEmulationException("MC68040 FPU effective address is not memory-addressable.")
+                _ => throw new M68kEmulationException("MC68040 FPU effective address is not memory-addressable.")
             };
         }
 
@@ -8440,7 +8479,7 @@ namespace CopperMod.Amiga
                 M68kJitEaKind.AddressPredecrement => ResolveM68040FpuPredecrement(ea.Register, byteSize, applySideEffects),
                 M68kJitEaKind.AddressDisplacement => unchecked((uint)(State.A[ea.Register] + (int)(short)ea.Extension0)),
                 M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
-                _ => throw new AmigaEmulationException("MC68040 FPU state-frame address is not memory-addressable.")
+                _ => throw new M68kEmulationException("MC68040 FPU state-frame address is not memory-addressable.")
             };
         }
 
@@ -9371,7 +9410,7 @@ namespace CopperMod.Amiga
                 M68kJitEaKind.AbsoluteLong => ((uint)ea.Extension0 << 16) | ea.Extension1,
                 M68kJitEaKind.PcDisplacement => unchecked((uint)(ea.ExtensionAddress + (short)ea.Extension0)),
                 M68kJitEaKind.PcIndex => unchecked((uint)(ea.ExtensionAddress + ResolveIndex(ea.Extension0) + (sbyte)(ea.Extension0 & 0xFF))),
-                _ => throw new AmigaEmulationException("MC68000 JIT effective address is not memory-addressable.")
+                _ => throw new M68kEmulationException("MC68000 JIT effective address is not memory-addressable.")
             };
         }
 
@@ -9469,7 +9508,7 @@ namespace CopperMod.Amiga
 
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException(
+                throw new M68kEmulationException(
                     size == M68kOperandSize.Word
                         ? $"Odd MC68000 word read at 0x{address:X8}."
                         : $"Odd MC68000 long read at 0x{address:X8}.");
@@ -9535,7 +9574,7 @@ namespace CopperMod.Amiga
 
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException(
+                throw new M68kEmulationException(
                     size == M68kOperandSize.Word
                         ? $"Odd MC68000 word write at 0x{address:X8}."
                         : $"Odd MC68000 long write at 0x{address:X8}.");
@@ -9601,8 +9640,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            value = _amigaBus!.ReadHostByte(physicalAddress);
-            return true;
+            return _amigaBus!.TryReadJitMaxSpeedDeviceRegister(physicalAddress, size, out value);
         }
 
         private bool TryWriteM68040MaxSpeedCiaAPortA(uint physicalAddress, uint value, M68kOperandSize size)
@@ -9612,8 +9650,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            _amigaBus!.WriteHostByte(physicalAddress, (byte)value);
-            return true;
+            return _amigaBus!.TryWriteJitMaxSpeedColorRegister(physicalAddress, value, size, State.Cycles);
         }
 
         private bool TryWriteM68040MaxSpeedColorRegister(
@@ -9713,7 +9750,7 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
+                throw new M68kEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
             }
 
             address = TranslateM68040MemoryAddress(address, accessKind, write: false, byteCount: 2);
@@ -9738,7 +9775,7 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
+                throw new M68kEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
             }
 
             address = TranslateM68040MemoryAddress(
@@ -9794,7 +9831,7 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
+                throw new M68kEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
             }
 
             address = TranslateM68040MemoryAddress(
@@ -9826,7 +9863,7 @@ namespace CopperMod.Amiga
         {
             if ((address & 1) != 0)
             {
-                throw new AmigaEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
+                throw new M68kEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
             }
 
             address = TranslateM68040MemoryAddress(
@@ -10801,9 +10838,26 @@ namespace CopperMod.Amiga
             => CanUseJitForCacheState(Normalize(State.ProgramCounter));
 
         private bool CanUseJitForCacheState(uint root)
-            => _cpuModel != M68kJitCpuModel.M68040 ||
-                (State.CacheControlRegister & M68040InstructionCacheEnable) != 0 ||
-                M68020CpuProfile.ClassifyTarget(root) == M68020MemoryTarget.Rom;
+        {
+            if (_cpuModel != M68kJitCpuModel.M68040 ||
+                (State.CacheControlRegister & M68040InstructionCacheEnable) != 0)
+            {
+                return true;
+            }
+
+            return _amigaBus != null &&
+                TryTranslateM68040Address(
+                    root,
+                    M68kBusAccessKind.CpuInstructionFetch,
+                    write: false,
+                    byteCount: 2,
+                    out var physical,
+                    out _) &&
+                _amigaBus.IsJitReadOnlyCodeAddress(
+                    physical,
+                    byteCount: 2,
+                    M68kBusAccessKind.CpuInstructionFetch);
+        }
 
         private static uint Normalize(uint address)
         {

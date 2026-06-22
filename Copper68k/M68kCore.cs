@@ -277,7 +277,7 @@ namespace Copper68k
     }
 
     /// <summary>
-    /// Default factory for Copper68k interpreter cores.
+    /// Default factory for Copper68k CPU cores.
     /// </summary>
     public sealed class M68kCoreFactory : IM68kBackendCoreFactory
     {
@@ -306,6 +306,39 @@ namespace Copper68k
             };
         }
 
+        /// <summary>
+        /// Creates a CPU core for the requested model and execution options.
+        /// </summary>
+        /// <param name="model">The CPU model to emulate.</param>
+        /// <param name="bus">The bus implementation used by the CPU core.</param>
+        /// <param name="options">The core creation options.</param>
+        /// <returns>A new CPU core instance.</returns>
+        public IM68kCore Create(M68kCpuModel model, IM68kBus bus, M68kCoreOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            if (options.ExecutionMode == M68kExecutionMode.Interpreter)
+            {
+                return Create(model, bus);
+            }
+
+            if (options.ExecutionMode != M68kExecutionMode.Jit)
+            {
+                throw new M68kEmulationException($"The requested M68k execution mode is not implemented: {options.ExecutionMode}.");
+            }
+
+            if (model != M68kCpuModel.M68040)
+            {
+                throw new M68kEmulationException("Copper68k JIT execution is supported only for MC68040 cores.");
+            }
+
+            if (bus is not IM68kJitBus)
+            {
+                throw new M68kEmulationException("Copper68k MC68040 JIT execution requires a bus that implements IM68kJitBus.");
+            }
+
+            return M68kJitCore.CreateM68040(bus);
+        }
+
         internal IM68kCore Create(M68kBackendKind backend, IM68kBus bus)
         {
             if (backend == M68kBackendKind.AccurateM68000)
@@ -330,12 +363,12 @@ namespace Copper68k
 
             if (backend == M68kBackendKind.JitM68000)
             {
-                throw new M68kEmulationException("The M68k JIT backend is host-specific and is not provided by Copper68k.");
+                return new M68kJitCore(bus);
             }
 
             if (backend == M68kBackendKind.JitM68040)
             {
-                throw new M68kEmulationException("The M68k JIT backend is host-specific and is not provided by Copper68k.");
+                return M68kJitCore.CreateM68040(bus);
             }
 
             throw new M68kEmulationException($"The requested M68k backend is not implemented: {backend}.");

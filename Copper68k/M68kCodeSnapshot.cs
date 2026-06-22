@@ -2,23 +2,50 @@ using System;
 
 namespace Copper68k
 {
-    internal readonly struct M68kCodeGenerationStamp
+    /// <summary>
+    /// Records the generation values for code pages captured by a JIT code snapshot.
+    /// </summary>
+    public readonly struct M68kCodeGenerationStamp
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="M68kCodeGenerationStamp"/> struct.
+        /// </summary>
+        /// <param name="pages">The normalized code page base addresses.</param>
+        /// <param name="generations">The generation value for each page.</param>
         public M68kCodeGenerationStamp(uint[] pages, uint[] generations)
         {
             Pages = pages;
             Generations = generations;
         }
 
+        /// <summary>
+        /// Gets the normalized code page base addresses.
+        /// </summary>
         public uint[] Pages { get; }
 
+        /// <summary>
+        /// Gets the generation value for each page in <see cref="Pages"/>.
+        /// </summary>
         public uint[] Generations { get; }
 
+        /// <summary>
+        /// Gets a value indicating whether the stamp contains no page information.
+        /// </summary>
         public bool IsEmpty => Pages == null || Generations == null || Pages.Length == 0;
     }
 
-    internal readonly struct M68kJitCodeSnapshot
+    /// <summary>
+    /// Immutable byte snapshot used by the JIT compiler to decode code off the emulation thread.
+    /// </summary>
+    public readonly struct M68kJitCodeSnapshot
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="M68kJitCodeSnapshot"/> struct.
+        /// </summary>
+        /// <param name="root">The normalized root address captured by the snapshot.</param>
+        /// <param name="bytes">The captured instruction bytes.</param>
+        /// <param name="generationStamp">The generation stamp for pages covered by <paramref name="bytes"/>.</param>
+        /// <param name="hostTrapStubAddresses">Host trap stub addresses inside the captured range.</param>
         public M68kJitCodeSnapshot(uint root, byte[] bytes, M68kCodeGenerationStamp generationStamp, uint[] hostTrapStubAddresses)
         {
             Root = root;
@@ -27,14 +54,29 @@ namespace Copper68k
             HostTrapStubAddresses = hostTrapStubAddresses;
         }
 
+        /// <summary>
+        /// Gets the normalized root address captured by the snapshot.
+        /// </summary>
         public uint Root { get; }
 
+        /// <summary>
+        /// Gets the captured instruction bytes.
+        /// </summary>
         public byte[] Bytes { get; }
 
+        /// <summary>
+        /// Gets the generation stamp for pages covered by <see cref="Bytes"/>.
+        /// </summary>
         public M68kCodeGenerationStamp GenerationStamp { get; }
 
+        /// <summary>
+        /// Gets host trap stub addresses inside the captured range.
+        /// </summary>
         public uint[] HostTrapStubAddresses { get; }
 
+        /// <summary>
+        /// Gets a value indicating whether the snapshot contains no bytes.
+        /// </summary>
         public bool IsEmpty => Bytes == null || Bytes.Length == 0;
     }
 

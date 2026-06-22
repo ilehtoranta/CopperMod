@@ -32,7 +32,14 @@ namespace CopperMod.Amiga
         DiskPassiveInput
     }
 
-    internal sealed class AmigaBus : IM68kBus, IM68kCodeReader, IM68kPhysicalAddressMap, IM68kFastMemoryBus
+    internal sealed class AmigaBus :
+        IM68kBus,
+        IM68kCodeReader,
+        IM68kPhysicalAddressMap,
+        IM68kFastMemoryBus,
+        IM68kJitBus,
+        IM68kJitFastMemoryBus,
+        IM68kJitTimedMemoryBus
     {
         private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
@@ -81,6 +88,12 @@ namespace CopperMod.Amiga
         private ushort _nextHostTrapId = 1;
 
         internal event Action<uint, int>? JitEligibleMemoryWritten;
+
+        event Action<uint, int>? IM68kJitBus.JitCodeRangeWritten
+        {
+            add => JitEligibleMemoryWritten += value;
+            remove => JitEligibleMemoryWritten -= value;
+        }
 
         public AmigaBus(
             int chipRamSize = AmigaConstants.DefaultChipRamSize,
@@ -788,6 +801,53 @@ namespace CopperMod.Amiga
 
         ushort IM68kCodeReader.ReadHostWord(uint address)
             => ReadHostWord(address);
+
+        bool IM68kJitBus.IsJitCodeAddress(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
+        {
+            _ = accessKind;
+            if (byteCount <= 0)
+            {
+                return false;
+            }
+
+            physicalAddress = NormalizeAddress(physicalAddress);
+            var lastAddress = NormalizeAddress(physicalAddress + (uint)(byteCount - 1));
+            return IsJitSnapshotReadableAddress(physicalAddress) &&
+                IsJitSnapshotReadableAddress(lastAddress);
+        }
+
+        bool IM68kJitBus.IsJitReadOnlyCodeAddress(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
+        {
+            _ = accessKind;
+            if (byteCount <= 0)
+            {
+                return false;
+            }
+
+            physicalAddress = NormalizeAddress(physicalAddress);
+            var lastAddress = NormalizeAddress(physicalAddress + (uint)(byteCount - 1));
+            return ClassifyTarget(physicalAddress) == AmigaBusAccessTarget.Rom &&
+                ClassifyTarget(lastAddress) == AmigaBusAccessTarget.Rom;
+        }
+
+        ushort IM68kJitBus.ReadJitCodeWord(uint physicalAddress)
+            => ReadHostWord(physicalAddress);
+
+        uint IM68kJitBus.GetJitCodePageGeneration(uint physicalAddress)
+            => GetCodePageGeneration(physicalAddress);
+
+        bool IM68kJitBus.JitCodeRangeGenerationMatches(
+            uint physicalAddress,
+            int byteCount,
+            uint startGeneration,
+            uint endGeneration)
+            => CodeRangeGenerationMatches(physicalAddress, byteCount, startGeneration, endGeneration);
+
+        bool IM68kJitBus.TryCaptureJitCodeSnapshot(
+            uint physicalRoot,
+            int maxBytes,
+            out M68kJitCodeSnapshot snapshot)
+            => TryCaptureJitCodeSnapshot(physicalRoot, maxBytes, out snapshot);
 
         internal uint ReadHostLong(uint address)
         {
@@ -2466,6 +2526,9 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        bool IM68kJitFastMemoryBus.TryReadJitZeroWaitMemory(uint physicalAddress, M68kOperandSize size, out uint value)
+            => TryReadJitZeroWaitMemory(physicalAddress, size, out value);
+
         internal bool TryWriteJitZeroWaitMemory(uint address, uint value, M68kOperandSize size)
         {
             if (!_useChipSlotScheduler || (size != M68kOperandSize.Byte && (address & 1) != 0))
@@ -2502,6 +2565,9 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        bool IM68kJitFastMemoryBus.TryWriteJitZeroWaitMemory(uint physicalAddress, uint value, M68kOperandSize size)
+            => TryWriteJitZeroWaitMemory(physicalAddress, value, size);
+
         internal bool TryWriteJitMaxSpeedColorRegister(uint address, uint value, M68kOperandSize size, long cycle)
         {
             if (!_useChipSlotScheduler || size != M68kOperandSize.Word)
@@ -2517,6 +2583,39 @@ namespace CopperMod.Amiga
 
             WriteRawWord(address, (ushort)value, cycle);
             return true;
+        }
+
+        bool IM68kJitTimedMemoryBus.TryReadJitMaxSpeedDeviceRegister(
+            uint physicalAddress,
+            M68kOperandSize size,
+            out uint value)
+        {
+            value = 0;
+            if (!_useChipSlotScheduler ||
+                size != M68kOperandSize.Byte ||
+                (NormalizeAddress(physicalAddress) & 0x00FF_FFFFu) != 0x00BF_E001u)
+            {
+                return false;
+            }
+
+            value = ReadHostByte(physicalAddress);
+            return true;
+        }
+
+        bool IM68kJitTimedMemoryBus.TryWriteJitMaxSpeedDeviceRegister(
+            uint physicalAddress,
+            uint value,
+            M68kOperandSize size,
+            long cycle)
+        {
+            physicalAddress = NormalizeAddress(physicalAddress);
+            if (size == M68kOperandSize.Byte && physicalAddress == 0x00BF_E001u)
+            {
+                WriteHostByte(physicalAddress, (byte)value);
+                return true;
+            }
+
+            return TryWriteJitMaxSpeedColorRegister(physicalAddress, value, size, cycle);
         }
 
         internal bool TryCaptureJitCodeSnapshot(uint root, int maxBytes, out M68kJitCodeSnapshot snapshot)
@@ -2610,9 +2709,18 @@ namespace CopperMod.Amiga
         }
 
         internal bool TryGetJitZeroWaitReadMemory(uint address, int byteCount, out byte[] memory, out int offset)
+            => TryGetJitZeroWaitReadMemory(address, byteCount, out memory, out offset, out _);
+
+        private bool TryGetJitZeroWaitReadMemory(
+            uint address,
+            int byteCount,
+            out byte[] memory,
+            out int offset,
+            out M68kJitMemoryKind memoryKind)
         {
             memory = Array.Empty<byte>();
             offset = 0;
+            memoryKind = M68kJitMemoryKind.FastRam;
             if (!CanUseJitZeroWaitRegion(address, byteCount))
             {
                 return false;
@@ -2624,11 +2732,13 @@ namespace CopperMod.Amiga
             {
                 memory = _realFastRam;
                 offset = realFastOffset;
+                memoryKind = M68kJitMemoryKind.FastRam;
                 return true;
             }
 
             if (TryGetJitRomOverlayReadMemory(address, byteCount, out memory, out offset))
             {
+                memoryKind = M68kJitMemoryKind.Overlay;
                 return true;
             }
 
@@ -2636,6 +2746,7 @@ namespace CopperMod.Amiga
             {
                 if (_mappedMemoryRegions[i].TryGetContiguousReadMemory(address, byteCount, out memory, out offset))
                 {
+                    memoryKind = M68kJitMemoryKind.Rom;
                     return true;
                 }
             }
@@ -2645,10 +2756,27 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        bool IM68kJitFastMemoryBus.TryGetJitZeroWaitReadMemory(
+            uint physicalAddress,
+            int byteCount,
+            out byte[] memory,
+            out int offset,
+            out M68kJitMemoryKind memoryKind)
+            => TryGetJitZeroWaitReadMemory(physicalAddress, byteCount, out memory, out offset, out memoryKind);
+
         internal bool TryGetJitZeroWaitWriteMemory(uint address, int byteCount, out byte[] memory, out int offset)
+            => TryGetJitZeroWaitWriteMemory(address, byteCount, out memory, out offset, out _);
+
+        private bool TryGetJitZeroWaitWriteMemory(
+            uint address,
+            int byteCount,
+            out byte[] memory,
+            out int offset,
+            out M68kJitMemoryKind memoryKind)
         {
             memory = Array.Empty<byte>();
             offset = 0;
+            memoryKind = M68kJitMemoryKind.FastRam;
             if (!CanUseJitZeroWaitRegion(address, byteCount))
             {
                 return false;
@@ -2663,8 +2791,17 @@ namespace CopperMod.Amiga
 
             memory = _realFastRam;
             offset = realFastOffset;
+            memoryKind = M68kJitMemoryKind.FastRam;
             return true;
         }
+
+        bool IM68kJitFastMemoryBus.TryGetJitZeroWaitWriteMemory(
+            uint physicalAddress,
+            int byteCount,
+            out byte[] memory,
+            out int offset,
+            out M68kJitMemoryKind memoryKind)
+            => TryGetJitZeroWaitWriteMemory(physicalAddress, byteCount, out memory, out offset, out memoryKind);
 
         internal void CompleteJitZeroWaitWrite(uint address, int byteCount)
         {
@@ -2672,6 +2809,9 @@ namespace CopperMod.Amiga
             TouchCodePages(address, byteCount);
             NotifyJitEligibleMemoryWritten(address, byteCount);
         }
+
+        void IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite(uint physicalAddress, int byteCount)
+            => CompleteJitZeroWaitWrite(physicalAddress, byteCount);
 
         private static int GetJitMemoryByteCount(M68kOperandSize size)
         {
@@ -2731,6 +2871,9 @@ namespace CopperMod.Amiga
             return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
         }
 
+        uint IM68kJitTimedMemoryBus.ReadJitTimedMemory(ref long cycle, uint physicalAddress, M68kOperandSize size)
+            => ReadJitSlotAwareMemory(ref cycle, physicalAddress, size);
+
         internal void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
         {
             if (size == M68kOperandSize.Byte)
@@ -2749,6 +2892,13 @@ namespace CopperMod.Amiga
 
             WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
         }
+
+        void IM68kJitTimedMemoryBus.WriteJitTimedMemory(
+            ref long cycle,
+            uint physicalAddress,
+            uint value,
+            M68kOperandSize size)
+            => WriteJitSlotAwareMemory(ref cycle, physicalAddress, value, size);
 
         private uint ReadJitSlotAwareMemoryUnchecked(ref long cycle, uint address, M68kOperandSize size)
         {

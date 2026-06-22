@@ -8,13 +8,6 @@ namespace CopperMod.Amiga
             => M68kCoreFactory.Default.Create(model, bus);
 
         public IM68kCore Create(M68kBackendKind backend, IM68kBus bus)
-        {
-            return backend switch
-            {
-                M68kBackendKind.JitM68000 => new M68kJitCore(bus),
-                M68kBackendKind.JitM68040 => M68kJitCore.CreateM68040(bus),
-                _ => M68kCoreFactory.Default.Create(backend, bus)
-            };
-        }
+            => M68kCoreFactory.Default.Create(backend, bus);
     }
 }

@@ -31,6 +31,71 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void PublicFactoryKeepsM68040InterpreterByDefault()
+	{
+		using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68040, new AmigaBus());
+
+		Assert.IsType<M68040Interpreter>(cpu);
+	}
+
+	[Fact]
+	public void PublicFactoryCreatesM68040JitBackendWithOptions()
+	{
+		using var cpu = M68kCoreFactory.Default.Create(
+			M68kCpuModel.M68040,
+			new AmigaBus(),
+			new M68kCoreOptions { ExecutionMode = M68kExecutionMode.Jit });
+
+		Assert.IsType<M68kJitCore>(cpu);
+	}
+
+	[Theory]
+	[InlineData(M68kCpuModel.M68000)]
+	[InlineData(M68kCpuModel.M68020)]
+	[InlineData(M68kCpuModel.M68030)]
+	public void PublicFactoryRejectsJitForNonM68040Models(M68kCpuModel model)
+	{
+		var exception = Assert.Throws<M68kEmulationException>(() => M68kCoreFactory.Default.Create(
+			model,
+			new AmigaBus(),
+			new M68kCoreOptions { ExecutionMode = M68kExecutionMode.Jit }));
+
+		Assert.Contains("MC68040", exception.Message);
+	}
+
+	[Fact]
+	public void PublicFactoryRejectsJitWithoutJitBusCapability()
+	{
+		var exception = Assert.Throws<M68kEmulationException>(() => M68kCoreFactory.Default.Create(
+			M68kCpuModel.M68040,
+			new PlainRamBus(64 * 1024),
+			new M68kCoreOptions { ExecutionMode = M68kExecutionMode.Jit }));
+
+		Assert.Contains(nameof(IM68kJitBus), exception.Message);
+	}
+
+	[Fact]
+	public void M68040JitRunsWithGenericCopper68kJitBus()
+	{
+		var bus = new GenericJitRamBus(64 * 1024);
+		WriteWords(bus, 0x1000, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
+		using var cpu = M68kCoreFactory.Default.Create(
+			M68kCpuModel.M68040,
+			bus,
+			new M68kCoreOptions { ExecutionMode = M68kExecutionMode.Jit });
+		var jit = Assert.IsType<M68kJitCore>(cpu);
+		jit.Reset(0x1000, 0x2000);
+		EnableM68040InstructionCache(jit);
+		var boundary = new PureBatchBoundary();
+
+		ExecuteUntilTraceHits(jit, boundary, 1);
+
+		Assert.Equal(0x0000_0001u, jit.State.D[0]);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Fact]
 	public void M68040JitStartsWithCacheDisabledAndUsesFallbackForRamUntilInstructionCacheIsEnabled()
 	{
 		var bus = CreateRealFastCodeBus();
@@ -5014,6 +5079,15 @@ public sealed class M68kJitCoreTests
 		}
 	}
 
+	private static void WriteWords(PlainRamBus bus, uint address, params ushort[] words)
+	{
+		long cycle = 0;
+		for (var i = 0; i < words.Length; i++)
+		{
+			bus.WriteWord(address + (uint)(i * 2), words[i], ref cycle, M68kBusAccessKind.CpuDataWrite);
+		}
+	}
+
 	private static void WriteWords(byte[] memory, int address, params ushort[] words)
 	{
 		for (var i = 0; i < words.Length; i++)
@@ -5163,6 +5237,193 @@ public sealed class M68kJitCoreTests
 					System.Reflection.BindingFlags.Public |
 					System.Reflection.BindingFlags.NonPublic)!
 			.GetValue(trace);
+	}
+
+	private class PlainRamBus : IM68kBus
+	{
+		private readonly byte[] _memory;
+
+		public PlainRamBus(int size)
+		{
+			_memory = new byte[size];
+		}
+
+		protected int MemoryLength => _memory.Length;
+
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = cycle;
+			_ = accessKind;
+			return _memory[Normalize(address)];
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+			=> (ushort)((ReadByte(address, ref cycle, accessKind) << 8) |
+				ReadByte(address + 1, ref cycle, accessKind));
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+			=> ((uint)ReadWord(address, ref cycle, accessKind) << 16) |
+				ReadWord(address + 2, ref cycle, accessKind);
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = cycle;
+			_ = accessKind;
+			_memory[Normalize(address)] = value;
+			OnWrite(address, 1);
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			WriteByte(address, (byte)(value >> 8), ref cycle, accessKind);
+			WriteByte(address + 1, (byte)value, ref cycle, accessKind);
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			WriteWord(address, (ushort)(value >> 16), ref cycle, accessKind);
+			WriteWord(address + 2, (ushort)value, ref cycle, accessKind);
+		}
+
+		public bool HasHostTrapStub(uint address)
+		{
+			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
+			_ = state;
+			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
+		}
+
+		protected virtual void OnWrite(uint address, int byteCount)
+		{
+			_ = address;
+			_ = byteCount;
+		}
+
+		protected bool IsValidRange(uint address, int byteCount)
+			=> byteCount > 0 &&
+				address < (uint)_memory.Length &&
+				(uint)byteCount <= (uint)_memory.Length - address;
+
+		protected byte[] CopyRange(uint address, int byteCount)
+		{
+			var bytes = new byte[byteCount];
+			Array.Copy(_memory, checked((int)address), bytes, 0, byteCount);
+			return bytes;
+		}
+
+		protected int Normalize(uint address) => checked((int)(address % (uint)_memory.Length));
+	}
+
+	private sealed class GenericJitRamBus : PlainRamBus, IM68kJitBus
+	{
+		private const int PageSize = 256;
+		private readonly uint[] _pageGenerations;
+
+		public GenericJitRamBus(int size)
+			: base(size)
+		{
+			_pageGenerations = new uint[(size + PageSize - 1) / PageSize];
+		}
+
+		public event Action<uint, int>? JitCodeRangeWritten;
+
+		public bool IsJitCodeAddress(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			return IsValidRange(physicalAddress, byteCount);
+		}
+
+		public bool IsJitReadOnlyCodeAddress(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
+		{
+			_ = physicalAddress;
+			_ = byteCount;
+			_ = accessKind;
+			return false;
+		}
+
+		public ushort ReadJitCodeWord(uint physicalAddress)
+		{
+			long cycle = 0;
+			return ReadWord(physicalAddress, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+		}
+
+		public uint GetJitCodePageGeneration(uint physicalAddress)
+			=> _pageGenerations[GetPageIndex(physicalAddress)];
+
+		public bool JitCodeRangeGenerationMatches(
+			uint physicalAddress,
+			int byteCount,
+			uint startGeneration,
+			uint endGeneration)
+		{
+			if (!IsValidRange(physicalAddress, byteCount))
+			{
+				return false;
+			}
+
+			var startPage = GetPageIndex(physicalAddress);
+			var endPage = GetPageIndex(physicalAddress + (uint)byteCount - 1);
+			return _pageGenerations[startPage] == startGeneration &&
+				_pageGenerations[endPage] == endGeneration;
+		}
+
+		public bool TryCaptureJitCodeSnapshot(uint physicalRoot, int maxBytes, out M68kJitCodeSnapshot snapshot)
+		{
+			if (maxBytes <= 0 || physicalRoot >= (uint)MemoryLength)
+			{
+				snapshot = default;
+				return false;
+			}
+
+			var byteCount = Math.Min(maxBytes, MemoryLength - checked((int)physicalRoot));
+			var startPage = GetPageIndex(physicalRoot);
+			var endPage = GetPageIndex(physicalRoot + (uint)byteCount - 1);
+			var pageCount = endPage - startPage + 1;
+			var pages = new uint[pageCount];
+			var generations = new uint[pageCount];
+			for (var i = 0; i < pageCount; i++)
+			{
+				pages[i] = (uint)((startPage + i) * PageSize);
+				generations[i] = _pageGenerations[startPage + i];
+			}
+
+			snapshot = new M68kJitCodeSnapshot(
+				physicalRoot,
+				CopyRange(physicalRoot, byteCount),
+				new M68kCodeGenerationStamp(pages, generations),
+				Array.Empty<uint>());
+			return true;
+		}
+
+		protected override void OnWrite(uint address, int byteCount)
+		{
+			if (!IsValidRange(address, byteCount))
+			{
+				return;
+			}
+
+			var startPage = GetPageIndex(address);
+			var endPage = GetPageIndex(address + (uint)byteCount - 1);
+			for (var page = startPage; page <= endPage; page++)
+			{
+				_pageGenerations[page]++;
+			}
+
+			JitCodeRangeWritten?.Invoke(address, byteCount);
+		}
+
+		private int GetPageIndex(uint address) => Math.Min((int)(address / PageSize), _pageGenerations.Length - 1);
 	}
 
 	private class CountingBoundary : IM68kInstructionBoundary

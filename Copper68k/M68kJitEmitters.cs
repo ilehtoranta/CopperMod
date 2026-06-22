@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 
-namespace CopperMod.Amiga
+namespace Copper68k
 {
     internal enum M68kIlInstructionKind
     {
