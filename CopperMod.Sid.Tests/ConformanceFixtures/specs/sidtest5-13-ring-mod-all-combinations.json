@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "sidtest5-13-ring-mod-all-combinations",
+  "sidtestCategory": 13,
+  "name": "RING MOD ALL COMBINATIONS",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 1.0,
+  "binary": "binaries/sidtest5-13-ring-mod-all-combinations.sid",
+  "tags": [ "sidtest5-parity", "ring", "combined-wave" ],
+  "targetLayer": "mixed",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$00" },
+    { "address": "$d401", "value": "$24" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d40e", "value": "$00" },
+    { "address": "$d40f", "value": "$16" },
+    { "address": "$d412", "value": "$20" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "ring-triangle", "frames": 10, "writes": [ { "address": "$d404", "value": "$15" } ] },
+    { "name": "ring-triangle-saw", "frames": 10, "writes": [ { "address": "$d404", "value": "$35" } ] },
+    { "name": "ring-triangle-pulse", "frames": 10, "writes": [ { "address": "$d404", "value": "$55" } ] },
+    { "name": "ring-saw-pulse", "frames": 10, "writes": [ { "address": "$d404", "value": "$65" } ] },
+    { "name": "ring-triangle-saw-pulse", "frames": 10, "writes": [ { "address": "$d404", "value": "$75" } ] }
+  ]
+}

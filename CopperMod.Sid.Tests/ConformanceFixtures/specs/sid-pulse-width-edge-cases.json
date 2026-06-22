@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "id": "sid-pulse-width-edge-cases",
+  "sidtestCategory": 111,
+  "name": "PULSE WIDTH EDGE CASES",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 1.96,
+  "binary": "binaries/sid-pulse-width-edge-cases.sid",
+  "tags": [ "stress", "pulse", "edge" ],
+  "targetLayer": "sid-analog",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$31" },
+    { "address": "$d401", "value": "$1c" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d404", "value": "$41" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "settle-pw-800", "frames": 8, "writes": [] },
+    { "name": "pw-000", "frames": 10, "writes": [ { "address": "$d402", "value": "$00" }, { "address": "$d403", "value": "$00" } ] },
+    { "name": "pw-001", "frames": 10, "writes": [ { "address": "$d402", "value": "$01" }, { "address": "$d403", "value": "$00" } ] },
+    { "name": "pw-002", "frames": 10, "writes": [ { "address": "$d402", "value": "$02" }, { "address": "$d403", "value": "$00" } ] },
+    { "name": "pw-010", "frames": 10, "writes": [ { "address": "$d402", "value": "$10" }, { "address": "$d403", "value": "$00" } ] },
+    { "name": "pw-100", "frames": 10, "writes": [ { "address": "$d402", "value": "$00" }, { "address": "$d403", "value": "$01" } ] },
+    { "name": "pw-3e4", "frames": 10, "writes": [ { "address": "$d402", "value": "$e4" }, { "address": "$d403", "value": "$03" } ] },
+    { "name": "pw-800", "frames": 10, "writes": [ { "address": "$d402", "value": "$00" }, { "address": "$d403", "value": "$08" } ] },
+    { "name": "pw-ffe", "frames": 10, "writes": [ { "address": "$d402", "value": "$fe" }, { "address": "$d403", "value": "$0f" } ] },
+    { "name": "pw-fff", "frames": 10, "writes": [ { "address": "$d402", "value": "$ff" }, { "address": "$d403", "value": "$0f" } ] }
+  ]
+}

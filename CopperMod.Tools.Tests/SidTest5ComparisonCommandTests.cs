@@ -66,6 +66,44 @@ public sealed class SidTest5ComparisonCommandTests
 		Assert.Contains("Provide --sidplayfp", stderr.ToString());
 	}
 
+	[Fact]
+	public void CompareSidTest5RejectsSilentReferences()
+	{
+		using var temp = TemporaryDirectory.Create();
+		var prgDirectory = Path.Combine(temp.Path, "prg");
+		var referenceDirectory = Path.Combine(temp.Path, "ref");
+		var candidateDirectory = Path.Combine(temp.Path, "candidate");
+		Directory.CreateDirectory(prgDirectory);
+		Directory.CreateDirectory(referenceDirectory);
+		Directory.CreateDirectory(candidateDirectory);
+		for (var test = 1; test <= 14; test++)
+		{
+			File.WriteAllBytes(Path.Combine(prgDirectory, "sidtest5-test" + test.ToString("00") + ".prg"), new byte[] { 0x01, 0x08, 0x00, 0x00 });
+			WriteFloatWav(Path.Combine(referenceDirectory, "test" + test.ToString("00") + "-ref.wav"), new float[48_000]);
+			WriteFloatWav(Path.Combine(candidateDirectory, "test" + test.ToString("00") + "-player.wav"), CreateAlternatingSamples(48_000, 0.25f));
+		}
+
+		using var stdout = new StringWriter();
+		using var stderr = new StringWriter();
+		var exitCode = CopperModTools.Run(
+			new[]
+			{
+				"compare-sidtest5",
+				prgDirectory,
+				"--reference-dir",
+				referenceDirectory,
+				"--candidate-dir",
+				candidateDirectory,
+				"--out",
+				Path.Combine(temp.Path, "out")
+			},
+			stdout,
+			stderr);
+
+		Assert.Equal(1, exitCode);
+		Assert.Contains("SidPlayFP reference for sidtest5 test 1 appears silent", stderr.ToString());
+	}
+
 	private static void WriteFloatWav(string path, IReadOnlyList<float> samples)
 	{
 		using var stream = File.Create(path);
@@ -90,5 +128,16 @@ public sealed class SidTest5ComparisonCommandTests
 			BinaryPrimitives.WriteSingleLittleEndian(sampleBytes, sample);
 			writer.Write(sampleBytes);
 		}
+	}
+
+	private static float[] CreateAlternatingSamples(int count, float amplitude)
+	{
+		var samples = new float[count];
+		for (var i = 0; i < samples.Length; i++)
+		{
+			samples[i] = (i & 1) == 0 ? -amplitude : amplitude;
+		}
+
+		return samples;
 	}
 }

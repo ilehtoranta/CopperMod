@@ -134,7 +134,7 @@ internal sealed class RenderCommandOptions
 
 		if (!string.Equals(args[0], "render", StringComparison.OrdinalIgnoreCase))
 		{
-			throw new CommandLineException("Unknown command. Expected: render, " + SidD418MatrixGenerator.CommandName + ", or " + SidTest5ComparisonCommand.CommandName);
+			throw new CommandLineException("Unknown command. Expected: render, " + SidD418MatrixGenerator.CommandName + ", " + SidTest5ComparisonCommand.CommandName + ", or " + SidConformance.CommandName);
 		}
 
 		var positional = new List<string>();

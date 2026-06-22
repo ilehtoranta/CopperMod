@@ -84,13 +84,26 @@ public sealed class C64OutputStageTests
 
 		var initial = Math.Abs(samples[0]);
 		var after50Milliseconds = Math.Abs(samples[sampleRate / 20]);
+		var after200Milliseconds = Math.Abs(samples[sampleRate / 5]);
 		var after250Milliseconds = Math.Abs(samples[sampleRate / 4]);
+		var after700Milliseconds = Math.Abs(samples[sampleRate * 7 / 10]);
+		Assert.InRange(
+			after50Milliseconds / initial,
+			0.60f,
+			0.73f);
+		Assert.InRange(
+			after200Milliseconds / initial,
+			0.16f,
+			0.24f);
 		Assert.True(
-			after50Milliseconds > initial * 0.40f,
+			after50Milliseconds > initial * 0.55f,
 			$"Expected C64 output coupling to retain visible first-note droop, initial {initial:0.000}, 50 ms {after50Milliseconds:0.000}.");
 		Assert.True(
 			after250Milliseconds < initial * 0.20f,
 			$"Expected C64 output coupling to settle after the note attack window, initial {initial:0.000}, 250 ms {after250Milliseconds:0.000}.");
+		Assert.True(
+			after700Milliseconds < initial * 0.01f,
+			$"Expected C64 output coupling to decay steady DC by the late tail, initial {initial:0.000}, 700 ms {after700Milliseconds:0.000}.");
 	}
 
 	[Fact]

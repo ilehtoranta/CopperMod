@@ -36,15 +36,15 @@ public sealed class SidChipTests
 	public void PulseComparatorUsesSidPolarity()
 	{
 		var zeroWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0x000);
-		var oneWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0x001);
+		var narrowWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0x100);
 		var maxWidth = CreatePulseVoice(attackDecay: 0x00, sustainRelease: 0xF0, pulseWidth: 0xFFF);
 
 		var zeroSamples = CollectSamples(zeroWidth, warmupCycles: 4000, measuredCycles: 2048);
-		var oneSamples = CollectSamples(oneWidth, warmupCycles: 4000, measuredCycles: 2048);
+		var narrowSamples = CollectSamples(narrowWidth, warmupCycles: 4000, measuredCycles: 2048);
 		var maxSamples = CollectSamples(maxWidth, warmupCycles: 4000, measuredCycles: 2048);
 
-		Assert.True(zeroSamples.Average() > oneSamples.Average() + 0.1);
-		Assert.True(maxSamples.Average() > oneSamples.Average() + 0.1);
+		Assert.True(zeroSamples.Average() > narrowSamples.Average() + 0.1);
+		Assert.True(maxSamples.Average() > narrowSamples.Average() + 0.1);
 	}
 
 	[Fact]

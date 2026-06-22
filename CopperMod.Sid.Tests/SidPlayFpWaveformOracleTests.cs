@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using CopperMod.Abstractions;
+using CopperMod.Rendering;
 
 namespace CopperMod.Sid.Tests;
 
@@ -24,6 +25,10 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const ushort WeakSpotAdsrFrequency = 0x1C31;
 	private const double AdsrTraceStepSeconds = 0.004;
 	private const double AdsrTraceWindowSeconds = 0.012;
+	private const double ResetTransientRenderSeconds = 1.0;
+	private const double ResetTransientTailStartSeconds = 0.050;
+	private const double ResetTransientTailEndSeconds = 0.700;
+	private const double LegacyResetTransientDcBlockCutoffHz = 1.59;
 
 	private static readonly int[] AdsrPianoGateFrames = { 2, 8, 10, 16, 18, 24, 26, 32, 34 };
 
@@ -216,6 +221,51 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
+	[Fact]
+	public void OptionalGeneratedResetTransientFixtureReportsSidPlayFpComparison()
+	{
+		if (Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var sidPlayFp = Environment.GetEnvironmentVariable("SIDPLAYFP_EXE");
+		if (string.IsNullOrWhiteSpace(sidPlayFp))
+		{
+			sidPlayFp = @"D:\Models\sidplayfp-3.0.2-ucrt64\sidplayfp.exe";
+		}
+
+		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+
+		var root = Path.Combine(Path.GetTempPath(), "coppermod-sidplayfp-reset-transient-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(root);
+		try
+		{
+			var sidPath = Path.Combine(root, "input.sid");
+			var wavPath = Path.Combine(root, "input.wav");
+			File.WriteAllBytes(sidPath, CreateResetTransientOracleSid());
+			CopyOptionalResetTransientFixtureSid(sidPath);
+
+			RunSidPlayFp(sidPlayFp, root, ResetTransientRenderSeconds);
+			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected reset transient oracle WAV: " + wavPath);
+
+			var reference = MeasurementWav.Read(wavPath);
+			var candidateRaw = RenderCopperMod(sidPath, ResetTransientRenderSeconds);
+			var candidatePlayer = RenderCopperModPlayer(candidateRaw);
+			Assert.Equal(SampleRate, reference.SampleRate);
+			Assert.True(reference.Samples.Length >= SecondsToSamples(ResetTransientRenderSeconds) - SampleRate / 20);
+			Assert.True(candidateRaw.Length >= SecondsToSamples(ResetTransientRenderSeconds) - SampleRate / 20);
+			Assert.True(candidatePlayer.Length >= SecondsToSamples(ResetTransientRenderSeconds) - SampleRate / 20);
+
+			WriteOptionalResetTransientReport(reference.Samples, candidateRaw, candidatePlayer);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
 	private static void WriteOptionalReport(float[] reference, float[] candidate)
 	{
 		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_REPORT");
@@ -301,6 +351,288 @@ public sealed class SidPlayFpWaveformOracleTests
 
 		File.WriteAllText(path, builder.ToString());
 	}
+
+	private static void CopyOptionalResetTransientFixtureSid(string sidPath)
+	{
+		var fixturePath = Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_FIXTURE");
+		if (string.IsNullOrWhiteSpace(fixturePath))
+		{
+			var reportPath = Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_REPORT");
+			if (string.IsNullOrWhiteSpace(reportPath))
+			{
+				return;
+			}
+
+			fixturePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(reportPath)) ?? ".", "sidtest5-reset-transient.sid");
+		}
+
+		fixturePath = Path.GetFullPath(fixturePath);
+		Directory.CreateDirectory(Path.GetDirectoryName(fixturePath) ?? ".");
+		File.Copy(sidPath, fixturePath, overwrite: true);
+	}
+
+	private static void WriteOptionalResetTransientReport(float[] reference, float[] candidateRaw, float[] candidatePlayer)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			return;
+		}
+
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var builder = new StringBuilder();
+		builder.AppendLine("window_start_ms,window_end_ms,ref_ac,cand_raw_ac,cand_player_ac,raw_to_ref,player_to_ref,ref_peak,cand_raw_peak,cand_player_peak,ref_mean,cand_raw_mean,cand_player_mean");
+		var maxLength = Math.Min(reference.Length, Math.Min(candidateRaw.Length, candidatePlayer.Length));
+		ReadOnlySpan<double> windowEdges = stackalloc[] { 0.0, 0.010, 0.020, 0.050, 0.100, 0.200, 0.400, 0.700, 1.000 };
+		for (var i = 0; i < windowEdges.Length - 1; i++)
+		{
+			var start = SecondsToSamples(windowEdges[i]);
+			var length = SecondsToSamples(windowEdges[i + 1] - windowEdges[i]);
+			if (start + length > maxLength)
+			{
+				break;
+			}
+
+			var referenceAc = AcRms(reference, start, length);
+			var candidateRawAc = AcRms(candidateRaw, start, length);
+			var candidatePlayerAc = AcRms(candidatePlayer, start, length);
+			builder
+				.Append((windowEdges[i] * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((windowEdges[i + 1] * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateRawAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidatePlayerAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((candidateRawAc / Math.Max(1.0e-12, referenceAc)).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((candidatePlayerAc / Math.Max(1.0e-12, referenceAc)).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(PeakAbs(reference, start, length).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(PeakAbs(candidateRaw, start, length).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(PeakAbs(candidatePlayer, start, length).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(Mean(reference, start, length).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(Mean(candidateRaw, start, length).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(Mean(candidatePlayer, start, length).ToString("0.000000", CultureInfo.InvariantCulture))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+		WriteResetTransientEnvelopeReport(path, reference, candidateRaw, candidatePlayer);
+		var legacyPlayer = RenderCopperModPlayerForReport(candidateRaw, LegacyResetTransientDcBlockCutoffHz);
+		WriteResetTransientTailFitReport(path, reference, candidatePlayer, legacyPlayer);
+	}
+
+	private static void WriteResetTransientEnvelopeReport(
+		string summaryPath,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		var directory = Path.GetDirectoryName(summaryPath) ?? ".";
+		var fileName = Path.GetFileNameWithoutExtension(summaryPath) + "-envelope.csv";
+		var path = Path.Combine(directory, fileName);
+		var builder = new StringBuilder();
+		builder.AppendLine("time_ms,ref_rms,cand_raw_rms,cand_player_rms,raw_to_ref,player_to_ref");
+		var windowLength = SecondsToSamples(0.010);
+		var hop = SecondsToSamples(0.005);
+		var maxLength = Math.Min(reference.Length, Math.Min(candidateRaw.Length, candidatePlayer.Length));
+		for (var start = 0; start + windowLength <= maxLength; start += hop)
+		{
+			var centerSeconds = (start + (windowLength * 0.5)) / SampleRate;
+			var referenceRms = Rms(reference, start, windowLength);
+			var candidateRawRms = Rms(candidateRaw, start, windowLength);
+			var candidatePlayerRms = Rms(candidatePlayer, start, windowLength);
+			builder
+				.Append((centerSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(referenceRms.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidateRawRms.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(candidatePlayerRms.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((candidateRawRms / Math.Max(1.0e-12, referenceRms)).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((candidatePlayerRms / Math.Max(1.0e-12, referenceRms)).ToString("0.000000", CultureInfo.InvariantCulture))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static void WriteResetTransientTailFitReport(
+		string summaryPath,
+		float[] reference,
+		float[] candidatePlayer,
+		float[] legacyPlayer)
+	{
+		var directory = Path.GetDirectoryName(summaryPath) ?? ".";
+		var fileName = Path.GetFileNameWithoutExtension(summaryPath) + "-tail-fit.csv";
+		var path = Path.Combine(directory, fileName);
+		var maxLength = Math.Min(reference.Length, Math.Min(candidatePlayer.Length, legacyPlayer.Length));
+		var referenceEnvelope = BuildResetTransientTailEnvelope(reference, maxLength);
+		var candidateEnvelope = BuildResetTransientTailEnvelope(candidatePlayer, maxLength);
+		var legacyEnvelope = BuildResetTransientTailEnvelope(legacyPlayer, maxLength);
+		var referenceFit = FitResetTransientTail(referenceEnvelope);
+		var candidateFit = FitResetTransientTail(candidateEnvelope);
+		var legacyFit = FitResetTransientTail(legacyEnvelope);
+		var candidateLogRmse = LogRmseAgainst(referenceEnvelope, candidateEnvelope);
+		var legacyLogRmse = LogRmseAgainst(referenceEnvelope, legacyEnvelope);
+		var improvement = legacyLogRmse > 0.0
+			? (legacyLogRmse - candidateLogRmse) / legacyLogRmse
+			: double.NaN;
+
+		var builder = new StringBuilder();
+		builder.AppendLine("stream,fit_start_ms,fit_end_ms,effective_decay_cutoff_hz,tau_seconds,normalization_rms,log_fit_rmse,log_rmse_vs_sidplayfp,improvement_vs_legacy,points");
+		AppendResetTransientTailFitRow(
+			builder,
+			"sidplayfp",
+			referenceFit,
+			logRmseVsSidPlayFp: 0.0,
+			improvementVsLegacy: double.NaN);
+		AppendResetTransientTailFitRow(
+			builder,
+			"coppermod-player",
+			candidateFit,
+			candidateLogRmse,
+			improvement);
+		AppendResetTransientTailFitRow(
+			builder,
+			"coppermod-player-legacy-1.59hz",
+			legacyFit,
+			legacyLogRmse,
+			improvementVsLegacy: 0.0);
+
+		File.WriteAllText(path, builder.ToString());
+	}
+
+	private static TailEnvelopePoint[] BuildResetTransientTailEnvelope(float[] samples, int maxLength)
+	{
+		var rows = new List<TailEnvelopePoint>();
+		var windowLength = SecondsToSamples(0.010);
+		var hop = SecondsToSamples(0.005);
+		for (var start = 0; start + windowLength <= maxLength; start += hop)
+		{
+			var centerSeconds = (start + (windowLength * 0.5)) / (double)SampleRate;
+			if (centerSeconds < ResetTransientTailStartSeconds || centerSeconds > ResetTransientTailEndSeconds)
+			{
+				continue;
+			}
+
+			rows.Add(new TailEnvelopePoint(centerSeconds, Rms(samples, start, windowLength)));
+		}
+
+		return rows.ToArray();
+	}
+
+	private static TailFitResult FitResetTransientTail(TailEnvelopePoint[] envelope)
+	{
+		if (envelope.Length < 2)
+		{
+			return new TailFitResult(
+				CutoffHz: double.NaN,
+				TauSeconds: double.NaN,
+				Slope: double.NaN,
+				Intercept: double.NaN,
+				NormalizationRms: double.NaN,
+				LogFitRmse: double.NaN,
+				Points: envelope.Length);
+		}
+
+		var logs = NormalizedTailLogs(envelope);
+		var sumX = 0.0;
+		var sumY = 0.0;
+		for (var i = 0; i < envelope.Length; i++)
+		{
+			var x = envelope[i].TimeSeconds - ResetTransientTailStartSeconds;
+			sumX += x;
+			sumY += logs[i];
+		}
+
+		var meanX = sumX / envelope.Length;
+		var meanY = sumY / envelope.Length;
+		var numerator = 0.0;
+		var denominator = 0.0;
+		for (var i = 0; i < envelope.Length; i++)
+		{
+			var x = envelope[i].TimeSeconds - ResetTransientTailStartSeconds;
+			var dx = x - meanX;
+			numerator += dx * (logs[i] - meanY);
+			denominator += dx * dx;
+		}
+
+		var slope = numerator / Math.Max(1.0e-18, denominator);
+		var intercept = meanY - (slope * meanX);
+		var tauSeconds = slope < -1.0e-12 ? -1.0 / slope : double.NaN;
+		var cutoffHz = double.IsNaN(tauSeconds) ? double.NaN : 1.0 / (2.0 * Math.PI * tauSeconds);
+		var residualEnergy = 0.0;
+		for (var i = 0; i < envelope.Length; i++)
+		{
+			var x = envelope[i].TimeSeconds - ResetTransientTailStartSeconds;
+			var residual = logs[i] - (intercept + (slope * x));
+			residualEnergy += residual * residual;
+		}
+
+		return new TailFitResult(
+			cutoffHz,
+			tauSeconds,
+			slope,
+			intercept,
+			Math.Max(1.0e-18, envelope[0].Rms),
+			Math.Sqrt(residualEnergy / envelope.Length),
+			envelope.Length);
+	}
+
+	private static double LogRmseAgainst(TailEnvelopePoint[] reference, TailEnvelopePoint[] candidate)
+	{
+		var count = Math.Min(reference.Length, candidate.Length);
+		if (count == 0)
+		{
+			return double.NaN;
+		}
+
+		var referenceLogs = NormalizedTailLogs(reference);
+		var candidateLogs = NormalizedTailLogs(candidate);
+		var energy = 0.0;
+		for (var i = 0; i < count; i++)
+		{
+			var diff = candidateLogs[i] - referenceLogs[i];
+			energy += diff * diff;
+		}
+
+		return Math.Sqrt(energy / count);
+	}
+
+	private static double[] NormalizedTailLogs(TailEnvelopePoint[] envelope)
+	{
+		var normalization = Math.Max(1.0e-18, envelope[0].Rms);
+		var logs = new double[envelope.Length];
+		for (var i = 0; i < envelope.Length; i++)
+		{
+			logs[i] = Math.Log(Math.Max(1.0e-18, envelope[i].Rms) / normalization);
+		}
+
+		return logs;
+	}
+
+	private static void AppendResetTransientTailFitRow(
+		StringBuilder builder,
+		string stream,
+		TailFitResult fit,
+		double logRmseVsSidPlayFp,
+		double improvementVsLegacy)
+	{
+		builder
+			.Append(EscapeCsv(stream)).Append(',')
+			.Append((ResetTransientTailStartSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+			.Append((ResetTransientTailEndSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+			.Append(FormatReportDouble(fit.CutoffHz)).Append(',')
+			.Append(FormatReportDouble(fit.TauSeconds)).Append(',')
+			.Append(FormatReportDouble(fit.NormalizationRms)).Append(',')
+			.Append(FormatReportDouble(fit.LogFitRmse)).Append(',')
+			.Append(FormatReportDouble(logRmseVsSidPlayFp)).Append(',')
+			.Append(FormatReportDouble(improvementVsLegacy)).Append(',')
+			.Append(fit.Points.ToString(CultureInfo.InvariantCulture))
+			.AppendLine();
+	}
+
+	private static string FormatReportDouble(double value)
+		=> double.IsFinite(value)
+			? value.ToString("0.000000", CultureInfo.InvariantCulture)
+			: "NaN";
 
 	private static void WriteOptionalAdsrPianoTraceReport(
 		float[] reference,
@@ -978,6 +1310,39 @@ public sealed class SidPlayFpWaveformOracleTests
 			released: "2026");
 	}
 
+	private static byte[] CreateResetTransientOracleSid()
+	{
+		var asm = new Mos6510Emitter(ProgramBase);
+		asm.Label("init");
+		asm.LdaImm(0);
+		asm.StaZp(FrameCounterAddress);
+		asm.StaZp(FrameCounterHighAddress);
+		asm.Rts();
+
+		asm.Label("play");
+		asm.LdaZp(FrameCounterAddress);
+		asm.Bne("reset-transient-skip");
+		asm.LdaZp(FrameCounterHighAddress);
+		asm.Bne("reset-transient-skip");
+		EmitSidTest5RegisterResetBurst(asm);
+		asm.Label("reset-transient-skip");
+		EmitIncrementFrameCounter(asm);
+		asm.Rts();
+
+		return SidFixtureBuilder.CreatePsid(
+			asm.ToArray(),
+			loadAddress: ProgramBase,
+			initAddress: ProgramBase,
+			playAddress: asm.AddressOf("play"),
+			songs: 1,
+			startSong: 1,
+			speed: 0,
+			flags: (1 << 2) | (1 << 4),
+			title: "CopperMod SID Reset Transient",
+			author: "CopperMod",
+			released: "2026");
+	}
+
 	private static void EmitSegment(Mos6510Emitter asm, int segmentIndex)
 	{
 		EmitSegmentResetIfFirstFrame(asm, segmentIndex);
@@ -1134,6 +1499,18 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.StaAbs(SidBase + 0x04);
 		asm.StaAbs(SidBase + 0x0B);
 		asm.StaAbs(SidBase + 0x12);
+	}
+
+	private static void EmitSidTest5RegisterResetBurst(Mos6510Emitter asm)
+	{
+		asm.LdxImm(0x1F);
+		asm.Label("sidtest5-reset-loop");
+		asm.LdaImm(0x08);
+		asm.StaAbsX(SidBase);
+		asm.LdaImm(0x00);
+		asm.StaAbsX(SidBase);
+		asm.Dex();
+		asm.Bpl("sidtest5-reset-loop");
 	}
 
 	private static void EmitCommonSidSetup(Mos6510Emitter asm)
@@ -1344,6 +1721,43 @@ public sealed class SidPlayFpWaveformOracleTests
 
 	private static float[] RenderCopperMod(string sidPath, double seconds)
 		=> RenderCopperModDiagnostic(sidPath, seconds, captureChannels: false).Samples;
+
+	private static float[] RenderCopperModPlayer(float[] rawSamples)
+	{
+		var player = rawSamples.ToArray();
+		new C64OutputStage(C64OutputProfile.C64).Process(player, channels: 1, SampleRate);
+		return player;
+	}
+
+	private static float[] RenderCopperModPlayerForReport(float[] rawSamples, double dcBlockCutoffHz)
+	{
+		const double outputLowPassCutoffHz = 24000.0;
+		const float outputHeadroom = 1.04f;
+		var player = rawSamples.ToArray();
+		var lowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * outputLowPassCutoffHz / SampleRate);
+		var highPassAlpha = GetReportHighPassAlpha(dcBlockCutoffHz);
+		var lowPassState = 0.0f;
+		var dcPreviousInput = 0.0f;
+		var dcPreviousOutput = 0.0f;
+		for (var i = 0; i < player.Length; i++)
+		{
+			var lowPassOutput = lowPassState + ((player[i] - lowPassState) * (float)lowPassAlpha);
+			lowPassState = lowPassOutput;
+			var highPassOutput = (float)(highPassAlpha * (dcPreviousOutput + lowPassOutput - dcPreviousInput));
+			dcPreviousInput = lowPassOutput;
+			dcPreviousOutput = highPassOutput;
+			player[i] = Math.Clamp(highPassOutput * outputHeadroom, -1.0f, 1.0f);
+		}
+
+		return player;
+	}
+
+	private static double GetReportHighPassAlpha(double cutoffHz)
+	{
+		var rc = 1.0 / (2.0 * Math.PI * cutoffHz);
+		var dt = 1.0 / SampleRate;
+		return rc / (rc + dt);
+	}
 
 	private static CopperModDiagnosticRender RenderCopperModDiagnostic(string sidPath, double seconds, bool captureChannels)
 	{
@@ -1617,6 +2031,29 @@ public sealed class SidPlayFpWaveformOracleTests
 		return Math.Sqrt(energy / length);
 	}
 
+	private static double Rms(float[] samples, int start, int length)
+	{
+		var energy = 0.0;
+		for (var i = 0; i < length; i++)
+		{
+			var value = samples[start + i];
+			energy += value * value;
+		}
+
+		return Math.Sqrt(energy / length);
+	}
+
+	private static double PeakAbs(float[] samples, int start, int length)
+	{
+		var peak = 0.0;
+		for (var i = 0; i < length; i++)
+		{
+			peak = Math.Max(peak, Math.Abs(samples[start + i]));
+		}
+
+		return peak;
+	}
+
 	private static double HarmonicMagnitude(float[] samples, int start, int length, double frequency)
 	{
 		var mean = Mean(samples, start, length);
@@ -1688,6 +2125,19 @@ public sealed class SidPlayFpWaveformOracleTests
 		float[] Samples,
 		float[][]? ChannelSamples,
 		SidRegisterWrite[]? SidWrites);
+
+	private readonly record struct TailEnvelopePoint(
+		double TimeSeconds,
+		double Rms);
+
+	private readonly record struct TailFitResult(
+		double CutoffHz,
+		double TauSeconds,
+		double Slope,
+		double Intercept,
+		double NormalizationRms,
+		double LogFitRmse,
+		int Points);
 
 	private readonly record struct AdsrPianoDebugRow(
 		double TimeSeconds,

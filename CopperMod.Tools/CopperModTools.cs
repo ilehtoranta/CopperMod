@@ -28,6 +28,12 @@ internal static class CopperModTools
 				return 0;
 			}
 
+			if (SidConformance.IsCommand(args))
+			{
+				SidConformance.Run(args, output);
+				return 0;
+			}
+
 			var options = RenderCommandOptions.Parse(args);
 			Render(options, output);
 			return 0;

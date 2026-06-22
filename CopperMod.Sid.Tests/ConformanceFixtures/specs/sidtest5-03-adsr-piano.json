@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "sidtest5-03-adsr-piano",
+  "sidtestCategory": 3,
+  "name": "ADSR PIANO",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.9,
+  "binary": "binaries/sidtest5-03-adsr-piano.sid",
+  "tags": [ "sidtest5-parity", "adsr", "piano" ],
+  "targetLayer": "digital",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$31" },
+    { "address": "$d401", "value": "$1c" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$0d" },
+    { "address": "$d406", "value": "$08" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "piano-pulse-1-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "piano-pulse-1-off", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "piano-pulse-2-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "piano-pulse-2-off", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "piano-pulse-3-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "piano-pulse-3-off", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "piano-pulse-4-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "piano-pulse-4-off", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "piano-pulse-5-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "piano-tail", "frames": 11, "writes": [ { "address": "$d404", "value": "$20" } ] }
+  ]
+}
