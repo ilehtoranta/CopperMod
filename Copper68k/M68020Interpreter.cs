@@ -3235,8 +3235,8 @@ namespace Copper68k
 
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
             var result = subtract
-                ? SubtractBcdByte(destination, source, extend, out var carry)
-                : AddBcdByte(destination, source, extend, out carry);
+                ? M68kIntegerSemantics.SubtractBcdByte(destination, source, extend, out var carry)
+                : M68kIntegerSemantics.AddBcdByte(destination, source, extend, out carry);
 
             if (memoryMode)
             {
@@ -3318,7 +3318,7 @@ namespace Copper68k
             }
 
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
-            var result = SubtractBcdByte(0, destination, extend, out var carry);
+            var result = M68kIntegerSemantics.SubtractBcdByte(0, destination, extend, out var carry);
             if (mode == 0)
             {
                 WriteDataRegisterByte(register, result);
@@ -4269,99 +4269,47 @@ namespace Copper68k
         }
 
         private static int CountSetBits(ushort value)
-        {
-            var count = 0;
-            while (value != 0)
-            {
-                value &= (ushort)(value - 1);
-                count++;
-            }
-
-            return count;
-        }
+            => M68kIntegerSemantics.CountSetBits(value);
 
         private void SetCompareFlags(uint destination, uint source, M68kOperandSize size)
         {
-            var mask = size switch
-            {
-                M68kOperandSize.Byte => 0xFFu,
-                M68kOperandSize.Word => 0xFFFFu,
-                _ => 0xFFFF_FFFFu
-            };
-            var sign = size switch
-            {
-                M68kOperandSize.Byte => 0x80u,
-                M68kOperandSize.Word => 0x8000u,
-                _ => 0x8000_0000u
-            };
-            destination &= mask;
-            source &= mask;
-            var result = (destination - source) & mask;
-            State.SetNegativeZero(result, size);
-            State.SetFlag(M68kCpuState.Overflow, ((destination ^ source) & (destination ^ result) & sign) != 0);
-            State.SetFlag(M68kCpuState.Carry, source > destination);
+            var arithmetic = M68kIntegerSemantics.Subtract(destination, source, size);
+            State.SetNegativeZero(arithmetic.Value, size);
+            State.SetFlag(M68kCpuState.Overflow, arithmetic.Overflow);
+            State.SetFlag(M68kCpuState.Carry, arithmetic.Carry);
         }
 
         private void SetAddFlags(uint destination, uint source, uint result, M68kOperandSize size)
         {
-            var mask = size switch
-            {
-                M68kOperandSize.Byte => 0xFFu,
-                M68kOperandSize.Word => 0xFFFFu,
-                _ => 0xFFFF_FFFFu
-            };
-            var sign = size switch
-            {
-                M68kOperandSize.Byte => 0x80u,
-                M68kOperandSize.Word => 0x8000u,
-                _ => 0x8000_0000u
-            };
-            destination &= mask;
-            source &= mask;
-            result &= mask;
-            var fullResult = (ulong)destination + source;
-            var carry = fullResult > mask;
+            var arithmetic = M68kIntegerSemantics.CalculateAddFlags(destination, source, result, size);
             State.SetNegativeZero(result, size);
-            State.SetFlag(M68kCpuState.Overflow, ((~(destination ^ source) & (destination ^ result) & sign) != 0));
-            State.SetFlag(M68kCpuState.Carry, carry);
-            State.SetFlag(M68kCpuState.Extend, carry);
+            State.SetFlag(M68kCpuState.Overflow, arithmetic.Overflow);
+            State.SetFlag(M68kCpuState.Carry, arithmetic.Carry);
+            State.SetFlag(M68kCpuState.Extend, arithmetic.Carry);
         }
 
         private void SetAddxFlags(uint destination, uint source, uint result, M68kOperandSize size)
         {
-            var mask = size switch
-            {
-                M68kOperandSize.Byte => 0xFFu,
-                M68kOperandSize.Word => 0xFFFFu,
-                _ => 0xFFFF_FFFFu
-            };
-            var sign = size switch
-            {
-                M68kOperandSize.Byte => 0x80u,
-                M68kOperandSize.Word => 0x8000u,
-                _ => 0x8000_0000u
-            };
-            destination &= mask;
-            source &= mask;
-            result &= mask;
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1u : 0u;
-            var fullResult = (ulong)destination + source + extend;
-            var carry = fullResult > mask;
+            var arithmetic = M68kIntegerSemantics.CalculateAddFlags(destination, source, result, size, extend);
             if (result != 0)
             {
                 State.SetFlag(M68kCpuState.Zero, false);
             }
 
-            State.SetFlag(M68kCpuState.Negative, (result & sign) != 0);
-            State.SetFlag(M68kCpuState.Overflow, ((~(destination ^ source) & (destination ^ result) & sign) != 0));
-            State.SetFlag(M68kCpuState.Carry, carry);
-            State.SetFlag(M68kCpuState.Extend, carry);
+            State.SetFlag(M68kCpuState.Negative, (result & M68kCpuState.SignBit(size)) != 0);
+            State.SetFlag(M68kCpuState.Overflow, arithmetic.Overflow);
+            State.SetFlag(M68kCpuState.Carry, arithmetic.Carry);
+            State.SetFlag(M68kCpuState.Extend, arithmetic.Carry);
         }
 
         private void SetSubtractFlags(uint destination, uint source, uint result, M68kOperandSize size)
         {
-            SetCompareFlags(destination, source, size);
-            State.SetFlag(M68kCpuState.Extend, State.GetFlag(M68kCpuState.Carry));
+            var arithmetic = M68kIntegerSemantics.CalculateSubtractFlags(destination, source, result, size);
+            State.SetNegativeZero(arithmetic.Value, size);
+            State.SetFlag(M68kCpuState.Overflow, arithmetic.Overflow);
+            State.SetFlag(M68kCpuState.Carry, arithmetic.Carry);
+            State.SetFlag(M68kCpuState.Extend, arithmetic.Carry);
         }
 
         private void SetMoveFlags(uint value, M68kOperandSize size)
@@ -4369,44 +4317,6 @@ namespace Copper68k
             State.SetNegativeZero(value, size);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
-        }
-
-        private static byte AddBcdByte(byte destination, byte source, int extend, out bool carry)
-        {
-            var low = (destination & 0x0F) + (source & 0x0F) + extend;
-            var high = (destination >> 4) + (source >> 4);
-            if (low > 9)
-            {
-                low -= 10;
-                high++;
-            }
-
-            carry = high > 9;
-            if (carry)
-            {
-                high -= 10;
-            }
-
-            return (byte)((high << 4) | low);
-        }
-
-        private static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry)
-        {
-            var low = (destination & 0x0F) - (source & 0x0F) - extend;
-            var high = (destination >> 4) - (source >> 4);
-            if (low < 0)
-            {
-                low += 10;
-                high--;
-            }
-
-            carry = high < 0;
-            if (carry)
-            {
-                high += 10;
-            }
-
-            return (byte)((high << 4) | low);
         }
 
         private void SetBcdFlags(byte result, bool carry)
@@ -4493,21 +4403,17 @@ namespace Copper68k
 
         private uint CalculateBriefIndexedAddress(uint baseAddress, ushort extension, ushort opcode)
         {
-            if ((extension & 0x0100) != 0)
+            if (!M68kIntegerSemantics.TryCalculateM68020BriefIndexedAddress(
+                baseAddress,
+                extension,
+                State.D,
+                State.A,
+                out var address))
             {
                 throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
             }
 
-            var indexRegister = (extension >> 12) & 7;
-            var usesAddressRegister = (extension & 0x8000) != 0;
-            var usesLongIndex = (extension & 0x0800) != 0;
-            var scale = 1 << ((extension >> 9) & 0x3);
-            var displacement = unchecked((int)(sbyte)(extension & 0xFF));
-            var rawIndex = usesAddressRegister ? State.A[indexRegister] : State.D[indexRegister];
-            var index = usesLongIndex
-                ? unchecked((int)rawIndex)
-                : unchecked((int)(short)(rawIndex & 0xFFFF));
-            return unchecked((uint)(baseAddress + displacement + (index * scale)));
+            return address;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4530,30 +4436,6 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CheckCondition(int condition)
-        {
-            var status = State.StatusRegister;
-            return condition switch
-            {
-                0x0 => true,
-                0x1 => false,
-                0x2 => (status & (M68kCpuState.Carry | M68kCpuState.Zero)) == 0,
-                0x3 => (status & (M68kCpuState.Carry | M68kCpuState.Zero)) != 0,
-                0x4 => (status & M68kCpuState.Carry) == 0,
-                0x5 => (status & M68kCpuState.Carry) != 0,
-                0x6 => (status & M68kCpuState.Zero) == 0,
-                0x7 => (status & M68kCpuState.Zero) != 0,
-                0x8 => (status & M68kCpuState.Overflow) == 0,
-                0x9 => (status & M68kCpuState.Overflow) != 0,
-                0xA => (status & M68kCpuState.Negative) == 0,
-                0xB => (status & M68kCpuState.Negative) != 0,
-                0xC => ((status ^ (status << 2)) & M68kCpuState.Negative) == 0,
-                0xD => ((status ^ (status << 2)) & M68kCpuState.Negative) != 0,
-                0xE => (status & M68kCpuState.Zero) == 0 &&
-                    ((status ^ (status << 2)) & M68kCpuState.Negative) == 0,
-                0xF => (status & M68kCpuState.Zero) != 0 ||
-                    ((status ^ (status << 2)) & M68kCpuState.Negative) != 0,
-                _ => false
-            };
-        }
+            => M68kIntegerSemantics.EvaluateCondition(State.StatusRegister, condition);
     }
 }
