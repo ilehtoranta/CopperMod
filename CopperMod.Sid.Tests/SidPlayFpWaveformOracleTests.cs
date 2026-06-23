@@ -19,6 +19,9 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const double CombinedHarmonicRelativeTolerance = 0.50;
 	private const double CombinedHarmonicAbsoluteTolerance = 0.070;
 	private const double CombinedNearNullRatioLimit = 0.055;
+	private const double CombinedNearNullReferenceAc = 0.012;
+	private const double CombinedNearNullAbsoluteLimit = 0.0048;
+	private const double CombinedNearNullRelativeLimit = 3.0;
 	private const int WeakSpotAdsrFrames = 45;
 	private const int WeakSpotD418Frames = 64;
 	private const int WeakSpotCombinedFrames = 24;
@@ -42,8 +45,8 @@ public sealed class SidPlayFpWaveformOracleTests
 		new("ring", OracleSegmentKind.Correlation, 0x1300, 0.85),
 		new("triangle-saw", OracleSegmentKind.Harmonics, 0x1000, 0.0),
 		new("triangle-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
-		new("saw-pulse", OracleSegmentKind.Harmonics, 0x1000, 0.0),
-		new("triangle-saw-pulse", OracleSegmentKind.Harmonics, 0x1000, 0.0),
+		new("saw-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("triangle-saw-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
 		new("noise-saw", OracleSegmentKind.NoiseCombined, 0x4000, 0.0),
 		new("sync-ring", OracleSegmentKind.Correlation, 0x1400, 0.50),
 		new("ring-triangle-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
@@ -61,7 +64,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		new("sidtest5-combined-triangle-saw", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
 		new("sidtest5-combined-triangle-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
 		new("sidtest5-combined-saw-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
-		new("sidtest5-combined-all-three", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames)
+		new("sidtest5-combined-all-three", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-ring-saw-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-ring-all-three", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-sync-ring-saw-pulse", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames),
+		new("sidtest5-combined-sync-ring-all-three", OracleSegmentKind.Level, 0x1C31, 0.0, WeakSpotCombinedFrames)
 	};
 
 	private static readonly double WeakSpotRenderSeconds = WeakSpotSegments.Sum(segment => segment.Frames) / (double)SegmentRate;
@@ -1423,8 +1430,20 @@ public sealed class SidPlayFpWaveformOracleTests
 			case 4:
 				EmitWeakSpotCombinedMask(asm, control: 0x61);
 				break;
-			default:
+			case 5:
 				EmitWeakSpotCombinedMask(asm, control: 0x71);
+				break;
+			case 6:
+				EmitWeakSpotCombinedMask(asm, control: 0x65);
+				break;
+			case 7:
+				EmitWeakSpotCombinedMask(asm, control: 0x75);
+				break;
+			case 8:
+				EmitWeakSpotCombinedMask(asm, control: 0x67);
+				break;
+			default:
+				EmitWeakSpotCombinedMask(asm, control: 0x77);
 				break;
 		}
 	}
@@ -1935,6 +1954,15 @@ public sealed class SidPlayFpWaveformOracleTests
 		Assert.True(
 			Math.Abs(candidateMean - referenceMean) <= 0.75,
 			$"{segmentName} mean level mismatch: reference {referenceMean:0.0000}, candidate {candidateMean:0.0000}.");
+		if (referenceAc < CombinedNearNullReferenceAc && IsCombinedNearNullLevelSegment(segmentName))
+		{
+			var limit = Math.Max(CombinedNearNullAbsoluteLimit, referenceAc * CombinedNearNullRelativeLimit);
+			Assert.True(
+				candidateAc <= limit,
+				$"{segmentName} should collapse near SidPlayFP reference level: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}, limit {limit:0.0000}.");
+			return;
+		}
+
 		if (referenceAc < 0.010)
 		{
 			Assert.True(
@@ -1947,6 +1975,13 @@ public sealed class SidPlayFpWaveformOracleTests
 		Assert.True(
 			ratio is >= 0.10 and <= 5.00,
 			$"{segmentName} AC ratio {ratio:0.0000} was outside 0.10..5.00: reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
+	}
+
+	private static bool IsCombinedNearNullLevelSegment(string segmentName)
+	{
+		return segmentName.Contains("saw-pulse", StringComparison.Ordinal) ||
+			segmentName.Contains("all-three", StringComparison.Ordinal) ||
+			segmentName.Contains("triangle-saw-pulse", StringComparison.Ordinal);
 	}
 
 	private static int FindBestCandidateOffset(float[] reference, float[] candidate, int start, int length, int maxOffset)
