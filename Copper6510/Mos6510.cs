@@ -1,18 +1,44 @@
 using System;
 
-namespace CopperMod.Sid
+namespace Copper6510
 {
-    internal interface ICpuBus
+    /// <summary>
+    /// Bus interface used by the MOS 6510 CPU core to access memory, devices, and idle bus cycles.
+    /// </summary>
+    public interface IMos6510Bus
     {
-        byte Read(ushort address, int cycleOffset = 0, CpuBusAccessKind kind = CpuBusAccessKind.Read);
+        /// <summary>
+        /// Reads one byte from the emulated bus.
+        /// </summary>
+        /// <param name="address">The 16-bit CPU address.</param>
+        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
+        /// <param name="kind">The reason for the bus access.</param>
+        /// <returns>The byte read from the bus.</returns>
+        byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read);
 
-        void Write(ushort address, byte value, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Write);
+        /// <summary>
+        /// Writes one byte to the emulated bus.
+        /// </summary>
+        /// <param name="address">The 16-bit CPU address.</param>
+        /// <param name="value">The byte to write.</param>
+        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
+        /// <param name="kind">The reason for the bus access.</param>
+        void Write(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write);
 
-        void Idle(ushort address, int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Idle);
+        /// <summary>
+        /// Notifies the host that the CPU consumed a bus cycle without a data transfer.
+        /// </summary>
+        /// <param name="address">The address associated with the idle cycle.</param>
+        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
+        /// <param name="kind">The reason for the idle cycle.</param>
+        void Idle(ushort address, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle);
     }
 
+    /// <summary>
+    /// Cycle-aware MOS 6510 CPU core with official and common undocumented opcode support.
+    /// </summary>
     [HotPath]
-    internal sealed class Mos6510
+    public sealed class Mos6510
     {
         private const byte Carry = 0x01;
         private const byte Zero = 0x02;
@@ -23,33 +49,68 @@ namespace CopperMod.Sid
         private const byte Overflow = 0x40;
         private const byte Negative = 0x80;
 
-        private readonly ICpuBus _bus;
+        private readonly IMos6510Bus _bus;
         private readonly bool[] _busCycleUsed = new bool[16];
 
-        public Mos6510(ICpuBus bus)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Mos6510"/> class.
+        /// </summary>
+        /// <param name="bus">The bus used by the CPU core.</param>
+        public Mos6510(IMos6510Bus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             Reset();
         }
 
+        /// <summary>
+        /// Gets or sets the accumulator register.
+        /// </summary>
         public byte A { get; set; }
 
+        /// <summary>
+        /// Gets or sets the X index register.
+        /// </summary>
         public byte X { get; set; }
 
+        /// <summary>
+        /// Gets or sets the Y index register.
+        /// </summary>
         public byte Y { get; set; }
 
+        /// <summary>
+        /// Gets or sets the stack pointer register.
+        /// </summary>
         public byte StackPointer { get; set; }
 
+        /// <summary>
+        /// Gets or sets the program counter.
+        /// </summary>
         public ushort ProgramCounter { get; set; }
 
+        /// <summary>
+        /// Gets or sets the processor status register.
+        /// </summary>
         public byte Status { get; set; }
 
+        /// <summary>
+        /// Gets the total CPU cycles executed by this core.
+        /// </summary>
         public long Cycles { get; private set; }
 
+        /// <summary>
+        /// Gets a value indicating whether the CPU is halted by a JAM/KIL opcode.
+        /// </summary>
         public bool Halted { get; private set; }
 
+        /// <summary>
+        /// Gets the last opcode fetched by the CPU core.
+        /// </summary>
         public byte LastOpcode { get; private set; }
 
+        /// <summary>
+        /// Resets CPU registers and starts execution at the supplied program counter.
+        /// </summary>
+        /// <param name="programCounter">The reset program counter.</param>
         public void Reset(ushort programCounter = 0)
         {
             A = 0;
@@ -62,11 +123,18 @@ namespace CopperMod.Sid
             Halted = false;
         }
 
+        /// <summary>
+        /// Resets the CPU cycle counter without changing register state.
+        /// </summary>
         public void ResetCycles()
         {
             Cycles = 0;
         }
 
+        /// <summary>
+        /// Advances the CPU cycle counter without executing instructions.
+        /// </summary>
+        /// <param name="cycles">The number of cycles to add.</param>
         public void AdvanceCycles(long cycles)
         {
             if (cycles <= 0)
@@ -77,12 +145,23 @@ namespace CopperMod.Sid
             Cycles += cycles;
         }
 
-        internal void SetAccumulatorAndFlags(byte value)
+        /// <summary>
+        /// Sets the accumulator and updates the zero and negative flags from the value.
+        /// </summary>
+        /// <param name="value">The new accumulator value.</param>
+        public void SetAccumulatorAndFlags(byte value)
         {
             A = value;
             SetZn(A);
         }
 
+        /// <summary>
+        /// Starts executing a host-provided subroutine and pushes a sentinel return address on the stack.
+        /// </summary>
+        /// <param name="address">The subroutine entry address.</param>
+        /// <param name="accumulator">The accumulator value to use at entry.</param>
+        /// <param name="x">The X register value to use at entry.</param>
+        /// <param name="y">The Y register value to use at entry.</param>
         public void BeginSubroutine(ushort address, byte accumulator, byte x = 0, byte y = 0)
         {
             A = accumulator;
@@ -94,16 +173,26 @@ namespace CopperMod.Sid
             PushWord(0xFFFE, 0);
         }
 
+        /// <summary>
+        /// Requests a maskable interrupt.
+        /// </summary>
         public void RequestIrq()
         {
             _ = TryRequestIrq();
         }
 
+        /// <summary>
+        /// Requests a non-maskable interrupt.
+        /// </summary>
         public void RequestNmi()
         {
             ServiceInterrupt(0xFFFA);
         }
 
+        /// <summary>
+        /// Requests a maskable interrupt if the interrupt-disable flag is clear.
+        /// </summary>
+        /// <returns><see langword="true"/> when the interrupt was serviced.</returns>
         public bool TryRequestIrq()
         {
             if (GetFlag(InterruptDisable))
@@ -115,6 +204,10 @@ namespace CopperMod.Sid
             return true;
         }
 
+        /// <summary>
+        /// Requests a non-maskable interrupt.
+        /// </summary>
+        /// <returns><see langword="true"/> when the interrupt was serviced.</returns>
         public bool TryRequestNmi()
         {
             ServiceInterrupt(0xFFFA);
@@ -133,6 +226,10 @@ namespace CopperMod.Sid
             Cycles += 7;
         }
 
+        /// <summary>
+        /// Executes one logical CPU instruction or one idle cycle while halted.
+        /// </summary>
+        /// <returns>The number of CPU cycles advanced by the instruction.</returns>
         public int ExecuteInstruction()
         {
             if (Halted)
@@ -415,15 +512,15 @@ namespace CopperMod.Sid
 
         private byte FetchOpcode()
         {
-            return FetchByteAt(0, CpuBusAccessKind.OpcodeFetch);
+            return FetchByteAt(0, Mos6510BusAccessKind.OpcodeFetch);
         }
 
         private byte FetchByte()
         {
-            return FetchByteAt(NextFetchCycleOffset(), CpuBusAccessKind.OperandFetch);
+            return FetchByteAt(NextFetchCycleOffset(), Mos6510BusAccessKind.OperandFetch);
         }
 
-        private byte FetchByteAt(int cycleOffset, CpuBusAccessKind kind)
+        private byte FetchByteAt(int cycleOffset, Mos6510BusAccessKind kind)
         {
             var value = Read(ProgramCounter, cycleOffset, kind);
             ProgramCounter++;
@@ -450,7 +547,7 @@ namespace CopperMod.Sid
             return _busCycleUsed.Length - 1;
         }
 
-        private byte Read(ushort address, int cycleOffset = 0, CpuBusAccessKind kind = CpuBusAccessKind.Read)
+        private byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read)
         {
             FillIdleCyclesBefore(cycleOffset);
             MarkBusCycle(cycleOffset);
@@ -459,44 +556,44 @@ namespace CopperMod.Sid
 
         private byte ReadData(ushort address, int totalCycles)
         {
-            return Read(address, Math.Max(0, totalCycles - 1), CpuBusAccessKind.Read);
+            return Read(address, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Read);
         }
 
         private byte ReadForReadModifyWrite(ushort address, int totalCycles)
         {
-            return Read(address, Math.Max(0, totalCycles - 3), CpuBusAccessKind.Read);
+            return Read(address, Math.Max(0, totalCycles - 3), Mos6510BusAccessKind.Read);
         }
 
         private void Write(ushort address, byte value, int totalCycles)
         {
-            WriteBus(address, value, Math.Max(0, totalCycles - 1), CpuBusAccessKind.Write);
+            WriteBus(address, value, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Write);
             AddCycles(totalCycles);
         }
 
         private void WriteReadModifyWrite(ushort address, byte original, byte value, int totalCycles)
         {
-            WriteBus(address, original, Math.Max(0, totalCycles - 2), CpuBusAccessKind.DummyWrite);
-            WriteBus(address, value, Math.Max(0, totalCycles - 1), CpuBusAccessKind.Write);
+            WriteBus(address, original, Math.Max(0, totalCycles - 2), Mos6510BusAccessKind.DummyWrite);
+            WriteBus(address, value, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Write);
             AddCycles(totalCycles);
         }
 
         private void DummyRead(ushort address, int cycleOffset)
         {
-            _ = Read(address, cycleOffset, CpuBusAccessKind.DummyRead);
+            _ = Read(address, cycleOffset, Mos6510BusAccessKind.DummyRead);
         }
 
         private void StackDummyRead(int cycleOffset)
         {
-            _ = Read((ushort)(0x0100 | StackPointer), cycleOffset, CpuBusAccessKind.StackRead);
+            _ = Read((ushort)(0x0100 | StackPointer), cycleOffset, Mos6510BusAccessKind.StackRead);
         }
 
-        private void Idle(int cycleOffset, CpuBusAccessKind kind = CpuBusAccessKind.Idle)
+        private void Idle(int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle)
         {
             MarkBusCycle(cycleOffset);
             _bus.Idle(ProgramCounter, cycleOffset, kind);
         }
 
-        private void WriteBus(ushort address, byte value, int cycleOffset, CpuBusAccessKind kind)
+        private void WriteBus(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind)
         {
             FillIdleCyclesBefore(cycleOffset);
             MarkBusCycle(cycleOffset);
@@ -801,7 +898,7 @@ namespace CopperMod.Sid
             var low = FetchByte();
             Idle(2);
             PushWord(ProgramCounter, 3);
-            var high = FetchByteAt(5, CpuBusAccessKind.OperandFetch);
+            var high = FetchByteAt(5, Mos6510BusAccessKind.OperandFetch);
             var target = (ushort)(low | (high << 8));
             ProgramCounter = target;
         }
@@ -823,7 +920,7 @@ namespace CopperMod.Sid
 
         private void Brk()
         {
-            _ = FetchByteAt(1, CpuBusAccessKind.OperandFetch);
+            _ = FetchByteAt(1, Mos6510BusAccessKind.OperandFetch);
             PushWord(ProgramCounter, 2);
             Push((byte)(Status | Break | Unused), 4);
             SetFlag(InterruptDisable, true);
@@ -985,7 +1082,7 @@ namespace CopperMod.Sid
 
         private void Push(byte value, int cycleOffset)
         {
-            WriteBus((ushort)(0x0100 | StackPointer), value, cycleOffset, CpuBusAccessKind.StackWrite);
+            WriteBus((ushort)(0x0100 | StackPointer), value, cycleOffset, Mos6510BusAccessKind.StackWrite);
             StackPointer--;
         }
 
@@ -993,7 +1090,7 @@ namespace CopperMod.Sid
         {
             _ = cycleOffset;
             StackPointer++;
-            return Read((ushort)(0x0100 | StackPointer), cycleOffset, CpuBusAccessKind.StackRead);
+            return Read((ushort)(0x0100 | StackPointer), cycleOffset, Mos6510BusAccessKind.StackRead);
         }
 
         private void PushWord(ushort value, int cycleOffset)
@@ -1013,7 +1110,7 @@ namespace CopperMod.Sid
             ushort address,
             bool wrapPage = false,
             int cycleOffset = 0,
-            CpuBusAccessKind kind = CpuBusAccessKind.VectorRead)
+            Mos6510BusAccessKind kind = Mos6510BusAccessKind.VectorRead)
         {
             var highAddress = wrapPage
                 ? (ushort)((address & 0xFF00) | ((address + 1) & 0x00FF))
@@ -1076,13 +1173,13 @@ namespace CopperMod.Sid
             var operand = FetchByte();
             DummyRead(operand, 2);
             var pointer = (byte)(operand + X);
-            return (ushort)(Read(pointer, 3, CpuBusAccessKind.Read) | (Read((byte)(pointer + 1), 4, CpuBusAccessKind.Read) << 8));
+            return (ushort)(Read(pointer, 3, Mos6510BusAccessKind.Read) | (Read((byte)(pointer + 1), 4, Mos6510BusAccessKind.Read) << 8));
         }
 
         private ushort IndirectY(out int pagePenalty, bool forceDummyRead = false)
         {
             var pointer = FetchByte();
-            var baseAddress = (ushort)(Read(pointer, 2, CpuBusAccessKind.Read) | (Read((byte)(pointer + 1), 3, CpuBusAccessKind.Read) << 8));
+            var baseAddress = (ushort)(Read(pointer, 2, Mos6510BusAccessKind.Read) | (Read((byte)(pointer + 1), 3, Mos6510BusAccessKind.Read) << 8));
             var address = (ushort)(baseAddress + Y);
             pagePenalty = PageCrossed(baseAddress, address) ? 1 : 0;
             if (forceDummyRead || pagePenalty != 0)

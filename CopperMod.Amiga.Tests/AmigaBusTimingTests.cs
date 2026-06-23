@@ -392,6 +392,256 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void LiveDisplayWakeCandidateIncludesPendingCustomWrite()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+		var writeCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) + 20;
+		bus.AdvanceDmaTo(writeCycle - 2);
+		bus.Display.ScheduleWrite(writeCycle, 0x0100, 0x0000);
+
+		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(writeCycle - 2, writeCycle);
+
+		Assert.Equal(writeCycle, candidate);
+	}
+
+	[Fact]
+	public void LiveDisplayWakeCandidateIncludesLineStateCapture()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		ConfigureLiveOneBitplaneDma(bus);
+		bus.AdvanceDmaTo(lineStart - 2);
+
+		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(lineStart - 2, lineStart);
+
+		Assert.Equal(lineStart, candidate);
+	}
+
+	[Fact]
+	public void LiveDisplayWakeCandidateSkipsIdleLineStateWhenNoDisplayWork()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		bus.AdvanceDmaTo(lineStart - 2);
+
+		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(lineStart - 2, lineStart);
+
+		Assert.Null(candidate);
+	}
+
+	[Fact]
+	public void LiveDisplayWakeCandidateIncludesBitplaneFetch()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		ConfigureLiveOneBitplaneDma(bus);
+		bus.AdvanceDmaTo(fetchCycle - 2);
+
+		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(fetchCycle - 2, fetchCycle);
+
+		Assert.Equal(fetchCycle, candidate);
+	}
+
+	[Fact]
+	public void LiveDisplayWakeCandidateUsesRecordedRasterlineTapeForCapturedLine()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		bus.AdvanceDmaTo(fetchCycle + AgnusChipSlotScheduler.SlotCycles);
+
+		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(lineStart, fetchCycle);
+
+		Assert.Equal(fetchCycle, candidate);
+	}
+
+	[Fact]
+	public void LiveDisplayWakeCandidateIncludesSpriteFetch()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var lineStop = lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		ConfigureLiveSpriteDma(bus);
+		bus.AdvanceDmaTo(lineStart - 2);
+
+		var current = lineStart - 2;
+		for (var i = 0; i < 32; i++)
+		{
+			var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(current, lineStop);
+			Assert.NotNull(candidate);
+			bus.AdvanceDmaTo(candidate.Value);
+			if (bus.Display.CaptureSnapshot().LastSpriteDmaFetches > 0)
+			{
+				return;
+			}
+
+			current = Math.Max(current + 1, candidate.Value);
+		}
+
+		Assert.Fail("Expected a live display wake candidate to reach a sprite DMA fetch on the configured line.");
+	}
+
+	[Fact]
+	public void HardwareSchedulerSkipsLiveDisplayAdvanceWhenDisplayHasNoLiveWork()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+
+		bus.AdvanceHardwareTo(OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY));
+
+		var display = bus.Display.CaptureSnapshot();
+		Assert.Equal(0, bus.Display.LiveDisplayEventCount);
+		Assert.Equal(0, display.LastRasterlinePlanEvents);
+		Assert.True(bus.Agnus.CaptureSnapshot().RefreshSlotReservationCount > 0);
+	}
+
+	[Fact]
+	public void LiveRasterlinePlanRecordsLineStateEvent()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		bus.AdvanceDmaTo(lineStart);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastRasterlinePlanLineStateEvents > 0);
+		Assert.True(snapshot.LastRasterlinePlanValidLines > 0);
+		Assert.Equal(0, snapshot.LastRasterlinePlanInvalidLines);
+	}
+
+	[Fact]
+	public void LiveRasterlinePlanRecordsPendingWriteEvent()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+		var writeCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) + 20;
+		bus.AdvanceDmaTo(writeCycle - 2);
+		bus.Display.ScheduleWrite(writeCycle, 0x0180, 0x0123);
+
+		bus.AdvanceDmaTo(writeCycle);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastRasterlinePlanPendingWriteOrCopperEvents > 0);
+		Assert.True(snapshot.LastRasterlinePlanValidLines > 0);
+		Assert.Equal(0, snapshot.LastRasterlinePlanInvalidLines);
+	}
+
+	[Fact]
+	public void LiveRasterlinePlanRecordsBitplaneFetchBatch()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		bus.AdvanceDmaTo(fetchCycle);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastRasterlinePlanBitplaneFetchEvents > 0);
+		Assert.True(snapshot.LastRasterlinePlanValidLines > 0);
+		Assert.Equal(0, snapshot.LastRasterlinePlanInvalidLines);
+	}
+
+	[Fact]
+	public void PredictedRasterlinePlanMatchesSimpleBitplaneLine()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var validationStop = lineStart + (3 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		bus.AdvanceDmaTo(validationStop);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(
+			snapshot.LastPredictedRasterlinePlanLines > 0,
+			$"recorded={snapshot.LastRasterlinePlanEvents}, lineState={snapshot.LastRasterlinePlanLineStateEvents}, bitplane={snapshot.LastRasterlinePlanBitplaneFetchEvents}, lines={snapshot.LastPredictedRasterlinePlanLines}, matched={snapshot.LastPredictedRasterlinePlanMatchedLines}, mismatched={snapshot.LastPredictedRasterlinePlanMismatchedLines}, unsupported={snapshot.LastPredictedRasterlinePlanUnsupportedLines}, copper={snapshot.LastPredictedRasterlinePlanUnsupportedCopperLines}, pending={snapshot.LastPredictedRasterlinePlanUnsupportedPendingWriteLines}, sprite={snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines}, invalid={snapshot.LastPredictedRasterlinePlanUnsupportedInvalidStateLines}, overflow={snapshot.LastPredictedRasterlinePlanUnsupportedOverflowLines}");
+		Assert.True(
+			snapshot.LastPredictedRasterlinePlanMatchedLines > 0,
+			$"lines={snapshot.LastPredictedRasterlinePlanLines}, matched={snapshot.LastPredictedRasterlinePlanMatchedLines}, mismatched={snapshot.LastPredictedRasterlinePlanMismatchedLines}");
+		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
+	}
+
+	[Fact]
+	public void PredictedRasterlinePlanMarksSpriteLineUnsupported()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var validationStop = lineStart + (3 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		ConfigureLiveSpriteDma(bus);
+
+		bus.AdvanceDmaTo(validationStop);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines > 0);
+		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
+	}
+
+	[Fact]
+	public void PredictedRasterlinePlanMarksPendingWriteLineUnsupported()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var validationStop = lineStart + (3 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		bus.Display.ScheduleWrite(lineStart + 20, 0x0180, 0x0123);
+
+		bus.AdvanceDmaTo(validationStop);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastPredictedRasterlinePlanUnsupportedPendingWriteLines > 0);
+		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
+	}
+
+	[Fact]
+	public void LiveRasterlinePlanRecordsSpriteFetchBatch()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var lineStop = lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		ConfigureLiveSpriteDma(bus);
+
+		for (var cycle = lineStart; cycle < lineStop; cycle += AgnusChipSlotScheduler.SlotCycles)
+		{
+			bus.AdvanceDmaTo(cycle);
+			if (bus.Display.CaptureSnapshot().LastSpriteDmaFetches > 0)
+			{
+				var snapshot = bus.Display.CaptureSnapshot();
+				Assert.True(snapshot.LastRasterlinePlanSpriteFetchEvents > 0);
+				Assert.True(snapshot.LastRasterlinePlanValidLines > 0);
+				Assert.Equal(0, snapshot.LastRasterlinePlanInvalidLines);
+				return;
+			}
+		}
+
+		Assert.Fail("Expected live sprite DMA to produce a shadow rasterline plan sprite event.");
+	}
+
+	[Fact]
+	public void LiveRasterlinePlanOverflowMarksLineInvalid()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.EnableLiveAgnusDma();
+		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+		for (var i = 0; i < 80; i++)
+		{
+			bus.Display.ScheduleWrite(lineStart + 20 + i, 0x0180, (ushort)i);
+		}
+
+		bus.AdvanceDmaTo(lineStart + 120);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastRasterlinePlanPendingWriteOrCopperEvents >= 80);
+		Assert.True(snapshot.LastRasterlinePlanOverflowLines > 0);
+		Assert.True(snapshot.LastRasterlinePlanInvalidLines > 0);
+		Assert.True(snapshot.LastRasterlinePlanMaxEventsPerLine > 64);
+	}
+
+	[Fact]
 	public void BlitterSearchSkipsFutureLiveBitplaneSlot()
 	{
 		var bus = new AmigaBus(
@@ -644,6 +894,172 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void HardwareSchedulerDrainToSameCycleDoesNotDuplicateCiaTimerInterrupt()
+	{
+		var bus = new AmigaBus();
+		var setupEvents = new List<AmigaCiaInterruptEvent>();
+		bus.CiaA.WriteRegister(0x04, 0x02, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x05, 0x00, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x0D, 0x81, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x0E, 0x11, 0, setupEvents);
+		Assert.Empty(bus.DrainCiaInterrupts());
+
+		bus.AdvanceHardwareTo(20);
+		var first = bus.DrainCiaInterrupts();
+		bus.AdvanceHardwareTo(20);
+		var second = bus.DrainCiaInterrupts();
+
+		var interrupt = Assert.Single(first);
+		Assert.Equal(AmigaCiaId.A, interrupt.Cia);
+		Assert.Equal(AmigaCia.TimerAInterruptMask, interrupt.IcrBits);
+		Assert.Equal(20, interrupt.Cycle);
+		Assert.Empty(second);
+	}
+
+	[Fact]
+	public void HardwareSchedulerObservesSameCyclePaulaWriteAfterEarlierDrain()
+	{
+		var bus = new AmigaBus();
+		const long cycle = 40;
+		bus.AdvanceHardwareTo(cycle);
+		bus.Paula.ScheduleWrite(cycle, 0x09C, (ushort)(0x8000 | AmigaConstants.IntreqBlitter));
+
+		var readCycle = cycle;
+		var value = bus.ReadWord(0x00DFF01E, ref readCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, value & AmigaConstants.IntreqBlitter);
+	}
+
+	[Fact]
+	public void RasterlineScheduleCacheSkipsRepeatedIntreqPollsBeforeNextHardwareEvent()
+	{
+		var bus = new AmigaBus();
+		var cycle = 4L;
+		_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var before = bus.CaptureHardwareSchedulerSnapshot();
+
+		for (var i = 0; i < 16; i++)
+		{
+			cycle += 4;
+			_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		}
+
+		var after = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(
+			after.RasterlineCacheHits > before.RasterlineCacheHits,
+			$"Expected repeated INTREQ polling to hit the rasterline schedule cache, before={before.RasterlineCacheHits}, after={after.RasterlineCacheHits}");
+	}
+
+	[Fact]
+	public void IntreqTimedReadObservesVblankAtExactCycle()
+	{
+		var bus = new AmigaBus();
+		var frameCycle = (long)AmigaConstants.A500PalCpuCyclesPerFrame;
+
+		var initialCycle = 0L;
+		var initial = bus.ReadWord(0x00DFF01E, ref initialCycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(0, initial & AmigaConstants.IntreqVerticalBlank);
+
+		var cycle = frameCycle;
+		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, value & AmigaConstants.IntreqVerticalBlank);
+	}
+
+	[Fact]
+	public void RepeatedIntreqPollingDoesNotMissCiaTimerInterrupt()
+	{
+		var bus = new AmigaBus();
+		var setupEvents = new List<AmigaCiaInterruptEvent>();
+		bus.CiaA.WriteRegister(0x04, 0x02, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x05, 0x00, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x0D, 0x81, 0, setupEvents);
+		bus.CiaA.WriteRegister(0x0E, 0x11, 0, setupEvents);
+		Assert.Empty(bus.DrainCiaInterrupts());
+
+		for (var requestedCycle = 0L; requestedCycle <= 20; requestedCycle += 4)
+		{
+			var cycle = requestedCycle;
+			_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		}
+
+		var interrupt = Assert.Single(bus.DrainCiaInterrupts());
+		Assert.Equal(AmigaCiaId.A, interrupt.Cia);
+		Assert.Equal(AmigaCia.TimerAInterruptMask, interrupt.IcrBits);
+		Assert.Equal(20, interrupt.Cycle);
+	}
+
+	[Fact]
+	public void RepeatedIntreqPollingDoesNotMissDiskBlockInterrupt()
+	{
+		const ushort DskBlkInterrupt = 0x0002;
+		var bus = new AmigaBus();
+		const long readyCycle = 20;
+		bus.Disk.Drive0.Insert(CreateSingleWordDisk(0x1234));
+		bus.Disk.Drive0.SetSelected(true);
+		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
+		bus.Paula.ScheduleWrite(0, 0x096, 0x8210);
+		bus.Paula.AdvanceTo(0);
+		bus.Disk.WriteRegister(0x020, 0x0000, 0);
+		bus.Disk.WriteRegister(0x022, 0x1000, 0);
+		bus.Disk.WriteRegister(0x024, 0x8002, 0);
+		bus.Disk.WriteRegister(0x024, 0x8002, 0);
+
+		foreach (var requestedCycle in new[] { 0L, Math.Max(0, readyCycle - 4) })
+		{
+			var cycle = requestedCycle;
+			_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		}
+
+		var startReadCycle = readyCycle;
+		_ = bus.ReadWord(0x00DFF01E, ref startReadCycle, AmigaBusAccessKind.CpuDataRead);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		Assert.True(completionCycle > readyCycle);
+
+		var beforeCompletionCycle = Math.Max(readyCycle, completionCycle - 16);
+		_ = bus.ReadWord(0x00DFF01E, ref beforeCompletionCycle, AmigaBusAccessKind.CpuDataRead);
+
+		var completionReadCycle = completionCycle;
+		var value = bus.ReadWord(0x00DFF01E, ref completionReadCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, value & DskBlkInterrupt);
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+	}
+
+	[Fact]
+	public void RepeatedIntreqPollingDoesNotMissBlitterInterrupt()
+	{
+		var bus = new AmigaBus();
+		StartLongBlit(bus);
+		var completionCycle = bus.Blitter.GetPredictedCompletionCycle();
+		Assert.True(completionCycle > 0);
+
+		var beforeCycle = Math.Max(0, completionCycle - 16);
+		_ = bus.ReadWord(0x00DFF01E, ref beforeCycle, AmigaBusAccessKind.CpuDataRead);
+
+		var cycle = completionCycle;
+		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, value & AmigaConstants.IntreqBlitter);
+	}
+
+	[Fact]
+	public void SameCyclePaulaRegisterWritesRemainVisibleToSameCycleIntreqReads()
+	{
+		var bus = new AmigaBus();
+		bus.Paula.ScheduleWrite(40, 0x09C, (ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank));
+		bus.Paula.AdvanceRegisterObservableTo(40);
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqVerticalBlank);
+
+		bus.Paula.ScheduleWrite(40, 0x09C, AmigaConstants.IntreqVerticalBlank);
+		var cycle = 40L;
+		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(0, value & AmigaConstants.IntreqVerticalBlank);
+		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqVerticalBlank);
+	}
+
+	[Fact]
 	public void OnlyDiskDataRegistersRequirePassiveDiskInputAdvance()
 	{
 		Assert.False(AmigaDiskController.RequiresPassiveInputAdvance(0x00DFF01E));
@@ -676,6 +1092,27 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(audioBefore.NextSampleCycle, audioAfter.NextSampleCycle);
 		Assert.Equal(audioBefore.CurrentSample, audioAfter.CurrentSample);
 		Assert.Equal(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
+	}
+
+	[Fact]
+	public void DskbytrTimedReadAdvancesPassiveInputAndClearsReadyOnce()
+	{
+		var bus = new AmigaBus();
+		const long readyCycle = 20;
+		bus.Disk.Drive0.Insert(CreateSingleWordDisk(0x1234));
+		bus.Disk.Drive0.SetSelected(true);
+		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
+		var targetCycle = readyCycle + DiskByteCycleCount(trackByteLength: 2, byteCount: 1);
+
+		var firstCycle = targetCycle;
+		var first = bus.ReadWord(0x00DFF01A, ref firstCycle, AmigaBusAccessKind.CpuDataRead);
+		var secondCycle = firstCycle;
+		var second = bus.ReadWord(0x00DFF01A, ref secondCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, first & 0x8000);
+		Assert.Equal(0x12, first & 0x00FF);
+		Assert.Equal(0, second & 0x8000);
+		Assert.Equal(0x12, second & 0x00FF);
 	}
 
 	[Fact]
@@ -1399,6 +1836,71 @@ public sealed class AmigaBusTimingTests
 	private static long LowResPlane1FetchCycle(int row)
 		=> OutputRowStartCycle(row) +
 			((0x38 + HrmLowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+
+	private static void ConfigureLiveOneBitplaneDma(AmigaBus bus)
+	{
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x1000);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		bus.EnableLiveAgnusDma();
+	}
+
+	private static void ConfigureLiveSpriteDma(AmigaBus bus)
+	{
+		const uint spriteList = 0x3000;
+		WriteSpriteDmaBlock(
+			bus,
+			spriteList,
+			AmigaConstants.PalLowResOverscanBorderX,
+			AmigaConstants.PalLowResOverscanBorderY,
+			1,
+			0x8000,
+			0x0000);
+		SetSpritePointer(bus, sprite: 0, spriteList);
+		bus.WriteWord(0x00DFF096, 0x8220);
+		bus.EnableLiveAgnusDma();
+	}
+
+	private static void WriteSpriteDmaBlock(
+		AmigaBus bus,
+		uint address,
+		int x,
+		int y,
+		int height,
+		ushort dataA,
+		ushort dataB)
+	{
+		var (pos, ctl) = EncodeSpritePosition(x, y, height);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address), pos);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address + 2), ctl);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address + 4), dataA);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address + 6), dataB);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address + 8), 0);
+		BigEndian.WriteUInt16(bus.ChipRam, checked((int)address + 10), 0);
+	}
+
+	private static void SetSpritePointer(AmigaBus bus, int sprite, uint address)
+	{
+		var register = 0x00DFF120u + (uint)(sprite * 4);
+		bus.WriteWord(register, (ushort)(address >> 16));
+		bus.WriteWord(register + 2, (ushort)address);
+	}
+
+	private static (ushort Pos, ushort Ctl) EncodeSpritePosition(int x, int y, int height)
+	{
+		var hStart = x + 128 - AmigaConstants.PalLowResOverscanBorderX;
+		var vStart = y + (0x2C - AmigaConstants.PalLowResOverscanBorderY);
+		var vStop = vStart + height;
+		var pos = (ushort)(((vStart & 0xFF) << 8) | ((hStart >> 1) & 0xFF));
+		var ctl = (ushort)(((vStop & 0xFF) << 8) |
+			(hStart & 0x0001) |
+			((vStop & 0x100) != 0 ? 0x0002 : 0) |
+			((vStart & 0x100) != 0 ? 0x0004 : 0));
+		return (pos, ctl);
+	}
 
 	private static AmigaDiskImage CreateSingleWordDisk(ushort word)
 	{

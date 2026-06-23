@@ -428,13 +428,38 @@ namespace CopperMod.Amiga
         public void AdvanceRegisterWritesTo(long targetCycle)
             => ApplyRegisterWritesTo(targetCycle);
 
+        internal bool HasRegisterObservableWorkThrough(long targetCycle)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            if (targetCycle < _registerTimeline.LastCycle)
+            {
+                return false;
+            }
+
+            if (HasPendingWriteThrough(_registerTimeline, targetCycle))
+            {
+                return true;
+            }
+
+            foreach (var channel in _registerTimeline.Channels)
+            {
+                if (channel.GetNextWakeCandidateCycle() <= targetCycle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private void AdvanceAudioTo(long targetCycle)
             => AdvanceTimelineTo(_audioTimeline, targetCycle, PaulaTimelineKind.Audio);
 
         private void AdvanceTimelineTo(PaulaTimelineState timeline, long targetCycle, PaulaTimelineKind kind)
         {
             targetCycle = Math.Max(0, targetCycle);
-            if (targetCycle < timeline.LastCycle)
+            if (targetCycle < timeline.LastCycle ||
+                (targetCycle == timeline.LastCycle && !HasPendingWriteThrough(timeline, targetCycle)))
             {
                 return;
             }
@@ -461,7 +486,8 @@ namespace CopperMod.Amiga
         private void ApplyRegisterWritesTo(long targetCycle)
         {
             targetCycle = Math.Max(0, targetCycle);
-            if (targetCycle < _registerTimeline.LastCycle)
+            if (targetCycle < _registerTimeline.LastCycle ||
+                (targetCycle == _registerTimeline.LastCycle && !HasPendingWriteThrough(_registerTimeline, targetCycle)))
             {
                 return;
             }
@@ -478,6 +504,12 @@ namespace CopperMod.Amiga
             RefreshCpuInterruptVisibility(targetCycle);
             CompactPendingWrites();
             CompactDmaFetches();
+        }
+
+        private bool HasPendingWriteThrough(PaulaTimelineState timeline, long targetCycle)
+        {
+            return timeline.PendingWriteIndex < _pendingWrites.Count &&
+                _pendingWrites[timeline.PendingWriteIndex].Cycle <= targetCycle;
         }
 
         private void AdvanceChannels(PaulaTimelineState timeline, PaulaTimelineKind kind, long targetCycle)

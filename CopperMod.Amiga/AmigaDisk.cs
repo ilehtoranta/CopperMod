@@ -1003,18 +1003,55 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (!HasEventAdvanceTo(targetCycle))
+            var hasPendingDma = _pendingReadDmaWords != 0 || _pendingWriteDmaWords != 0;
+            var hasActiveDmaEvent = GetNextActiveDmaAdvanceCycle() <= targetCycle;
+            var hasSyncEvent = GetNextSelectedSyncCompletionCycleCached(targetCycle) <= targetCycle;
+            RefreshNextIndexPulseCycle();
+            var hasIndexPulse = (_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 &&
+                AnyConnectedDriveMotorOn() &&
+                _nextIndexPulseCycle <= targetCycle;
+            var hasEvent = hasPendingDma || hasActiveDmaEvent || hasSyncEvent || hasIndexPulse;
+            if (targetCycle == _currentCycle && !hasEvent)
             {
-                _currentCycle = targetCycle;
                 return;
             }
 
-            AdvanceTo(targetCycle);
+            _currentCycle = targetCycle;
+            if (!hasEvent)
+            {
+                return;
+            }
+
+            if (hasSyncEvent)
+            {
+                AdvanceDiskInputTo(targetCycle);
+            }
+
+            if (hasPendingDma)
+            {
+                TryStartPendingDma(targetCycle);
+            }
+
+            if (hasActiveDmaEvent || _activeDma)
+            {
+                AdvanceActiveDmaTo(targetCycle);
+            }
+
+            if (hasIndexPulse)
+            {
+                AdvanceIndexPulsesTo(targetCycle);
+            }
         }
 
         public void AdvanceCiaEventsTo(long targetCycle)
         {
             if (targetCycle < _currentCycle)
+            {
+                return;
+            }
+
+            RefreshNextIndexPulseCycle();
+            if (targetCycle == _currentCycle && targetCycle < _nextIndexPulseCycle)
             {
                 return;
             }
@@ -1082,8 +1119,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (_bus.Paula.IsInterruptEnabled(DskSynInterrupt) &&
-                GetNextSelectedSyncCompletionCycleCached(targetCycle) <= targetCycle)
+            if (GetNextSelectedSyncCompletionCycleCached(targetCycle) <= targetCycle)
             {
                 return true;
             }
@@ -1139,6 +1175,7 @@ namespace CopperMod.Amiga
             RefreshNextIndexPulseCycle();
             long? candidate = null;
             candidate = MinWakeCandidate(candidate, GetPendingDmaWakeCandidateCycle(currentCycle));
+            candidate = MinWakeCandidate(candidate, GetPassiveInputWakeCandidateCycle(currentCycle, targetCycle));
 
             if (_nextDiskInputAdvanceCycle > 0)
             {
@@ -1167,6 +1204,96 @@ namespace CopperMod.Amiga
             }
 
             return clamped;
+        }
+
+        internal bool HasWakeCandidateThrough(long targetCycle)
+        {
+            if (targetCycle < _currentCycle)
+            {
+                return false;
+            }
+
+            var probeCycle = targetCycle > 0 ? targetCycle - 1 : -1;
+            return GetNextWakeCandidateCycle(probeCycle, targetCycle).HasValue;
+        }
+
+        internal bool HasEventWakeCandidateThrough(long targetCycle, bool includeActiveDmaProgress = false)
+        {
+            if (targetCycle < _currentCycle)
+            {
+                return false;
+            }
+
+            var probeCycle = targetCycle > 0 ? targetCycle - 1 : -1;
+            return GetNextEventWakeCandidateCycle(probeCycle, targetCycle, includeActiveDmaProgress).HasValue;
+        }
+
+        internal bool HasCiaEventThrough(long targetCycle)
+        {
+            if (targetCycle < _currentCycle)
+            {
+                return false;
+            }
+
+            RefreshNextIndexPulseCycle();
+            return _nextIndexPulseCycle <= targetCycle;
+        }
+
+        internal long? GetNextEventWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            bool includeActiveDmaProgress = false)
+        {
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            RefreshNextIndexPulseCycle();
+            long? candidate = null;
+            candidate = MinWakeCandidate(candidate, GetPendingDmaWakeCandidateCycle(currentCycle));
+
+            if (_activeDma && IsDiskDmaControlEnabled())
+            {
+                candidate = MinWakeCandidate(
+                    candidate,
+                    includeActiveDmaProgress ? GetNextActiveDmaAdvanceCycle() : _activeDmaCompletionCycle);
+            }
+
+            var syncCycle = GetNextSelectedSyncCompletionCycleCached(targetCycle);
+            if (syncCycle <= targetCycle)
+            {
+                candidate = MinWakeCandidate(candidate, syncCycle);
+            }
+
+            if ((_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 && AnyConnectedDriveMotorOn())
+            {
+                candidate = MinWakeCandidate(candidate, _nextIndexPulseCycle);
+            }
+
+            return ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        private long? GetPassiveInputWakeCandidateCycle(long currentCycle, long targetCycle)
+        {
+            if (_nextDiskInputAdvanceCycle > 0)
+            {
+                return _nextDiskInputAdvanceCycle;
+            }
+
+            if (!HasUnknownSelectedDiskInput(targetCycle))
+            {
+                return null;
+            }
+
+            var driveIndex = GetSelectedDriveIndex();
+            if (driveIndex < 0 || !IsDriveConnected(driveIndex))
+            {
+                return null;
+            }
+
+            var readyCycle = GetDriveReadyCycle(_drives[driveIndex]);
+            return currentCycle >= readyCycle ? currentCycle : readyCycle;
         }
 
         private long? GetPendingDmaWakeCandidateCycle(long currentCycle)

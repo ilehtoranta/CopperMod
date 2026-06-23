@@ -53,6 +53,7 @@ namespace CopperMod.Amiga
         private const int MaxTimelineStateSnapshots = MaxPendingWrites;
         private const int PlanarChunkPixels = 16;
         private const int MaxTimelineSegmentsPerFrame = LowResOutputHeight + MaxPendingWrites;
+        private const int MaxLiveRasterlinePlanEvents = 64;
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
         private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
         private readonly AmigaBus _bus;
@@ -159,6 +160,14 @@ namespace CopperMod.Amiga
         private readonly ushort[] _carryLiveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
         private readonly byte[] _carryLiveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
         private readonly byte[] _carryLiveSpriteDeniedMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
+        private readonly LiveRasterlinePlanEvent[] _liveRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
+        private readonly int[] _liveRasterlinePlanEventCounts = new int[LowResOutputHeight];
+        private readonly bool[] _liveRasterlinePlanRowsTouched = new bool[LowResOutputHeight];
+        private readonly bool[] _liveRasterlinePlanRowsValid = new bool[LowResOutputHeight];
+        private readonly bool[] _liveRasterlinePlanRowsOverflowed = new bool[LowResOutputHeight];
+        private readonly LiveRasterlinePlanEvent[] _predictedRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
+        private readonly int[] _predictedRasterlinePlanEventCounts = new int[LowResOutputHeight];
+        private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[LowResOutputHeight];
         private DisplayFrameTimeline _displayTimeline = new DisplayFrameTimeline();
         private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
         private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
@@ -249,6 +258,34 @@ namespace CopperMod.Amiga
         private long _archivedTimelineFrameStartCycle = long.MinValue;
         private long _archivedTimelineFrameStopCycle = long.MinValue;
         private int _archivedPaletteSnapshotCount;
+        private int _liveRasterlinePlanRow = -1;
+        private long _liveRasterlinePlanLineStartCycle;
+        private long _liveRasterlinePlanLineStopCycle;
+        private long _liveRasterlinePlanLastCycle = long.MinValue;
+        private int _liveRasterlinePlanLineEventCount;
+        private bool _liveRasterlinePlanLineValid = true;
+        private bool _liveRasterlinePlanLineOverflowed;
+        private int _liveRasterlinePlanCompletedLines;
+        private int _liveRasterlinePlanCompletedValidLines;
+        private int _liveRasterlinePlanCompletedInvalidLines;
+        private int _liveRasterlinePlanCompletedOverflowLines;
+        private int _liveRasterlinePlanObservedEventCount;
+        private int _liveRasterlinePlanPendingWriteOrCopperEvents;
+        private int _liveRasterlinePlanLineStateEvents;
+        private int _liveRasterlinePlanBitplaneFetchEvents;
+        private int _liveRasterlinePlanSpriteFetchEvents;
+        private int _liveRasterlinePlanCopperBarrierEvents;
+        private int _liveRasterlinePlanMaxEventsPerLine;
+        private int _predictedRasterlinePlanLines;
+        private int _predictedRasterlinePlanMatchedLines;
+        private int _predictedRasterlinePlanMismatchedLines;
+        private int _predictedRasterlinePlanUnsupportedLines;
+        private int _predictedRasterlinePlanEventTotal;
+        private int _predictedRasterlinePlanUnsupportedCopperLines;
+        private int _predictedRasterlinePlanUnsupportedPendingWriteLines;
+        private int _predictedRasterlinePlanUnsupportedSpriteLines;
+        private int _predictedRasterlinePlanUnsupportedInvalidStateLines;
+        private int _predictedRasterlinePlanUnsupportedOverflowLines;
 
         public OcsDisplay(AmigaBus bus, bool liveDmaEnabled = true)
         {
@@ -602,6 +639,27 @@ namespace CopperMod.Amiga
                 _lastTimelineFastPathMissCount,
                 _lastSpriteRecoveryAttemptCount,
                 _lastSpriteDeniedFetchCount,
+                GetLiveRasterlinePlanLineCount(),
+                GetLiveRasterlinePlanValidLineCount(),
+                GetLiveRasterlinePlanInvalidLineCount(),
+                GetLiveRasterlinePlanOverflowLineCount(),
+                _liveRasterlinePlanObservedEventCount,
+                _liveRasterlinePlanPendingWriteOrCopperEvents,
+                _liveRasterlinePlanLineStateEvents,
+                _liveRasterlinePlanBitplaneFetchEvents,
+                _liveRasterlinePlanSpriteFetchEvents,
+                _liveRasterlinePlanCopperBarrierEvents,
+                _liveRasterlinePlanMaxEventsPerLine,
+                _predictedRasterlinePlanLines,
+                _predictedRasterlinePlanMatchedLines,
+                _predictedRasterlinePlanMismatchedLines,
+                _predictedRasterlinePlanUnsupportedLines,
+                _predictedRasterlinePlanEventTotal,
+                _predictedRasterlinePlanUnsupportedCopperLines,
+                _predictedRasterlinePlanUnsupportedPendingWriteLines,
+                _predictedRasterlinePlanUnsupportedSpriteLines,
+                _predictedRasterlinePlanUnsupportedInvalidStateLines,
+                _predictedRasterlinePlanUnsupportedOverflowLines,
                 _lastArchiveRejectFrameIncomplete,
                 _lastArchiveRejectTimelineInvalid,
                 _lastArchiveRejectUnsafeWrite,
@@ -693,6 +751,7 @@ namespace CopperMod.Amiga
             _liveCopperStepCount = 0;
             _livePendingWriteEventCount = 0;
             _liveFetchBatchWordCount = 0;
+            ResetLiveRasterlinePlan();
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
@@ -792,7 +851,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            return IsBitplaneDmaEnabledForRendering() ||
+            return IsLiveBitplaneDmaEnabled() ||
                 IsLiveCopperDmaEnabled() ||
                 IsSpriteDmaEnabled() ||
                 TryPeekPendingWrite(out _);
@@ -845,6 +904,7 @@ namespace CopperMod.Amiga
             ClearLiveBitplaneWordMasksFrom(invalidateRow);
             ClearLiveSpriteWordMasksFrom(invalidateRow);
             ResetLiveSpriteDmaStates(invalidateRow);
+            ResetLiveRasterlinePlan();
             _liveNextLineStateRow = Math.Min(_liveNextLineStateRow, invalidateRow);
             _liveNextFetchRow = Math.Min(_liveNextFetchRow, invalidateRow);
             _liveNextFetchWord = 0;
@@ -928,6 +988,7 @@ namespace CopperMod.Amiga
             _liveCopperStepCount = 0;
             _livePendingWriteEventCount = 0;
             _liveFetchBatchWordCount = 0;
+            ResetLiveRasterlinePlan();
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = CreateLiveCopperFrameStartState(frameStartCycle);
@@ -1619,6 +1680,514 @@ namespace CopperMod.Amiga
                 : long.MaxValue;
         }
 
+        private void ResetLiveRasterlinePlan()
+        {
+            Array.Clear(_liveRasterlinePlanEventCounts);
+            Array.Clear(_liveRasterlinePlanRowsTouched);
+            Array.Clear(_liveRasterlinePlanRowsValid);
+            Array.Clear(_liveRasterlinePlanRowsOverflowed);
+            Array.Clear(_predictedRasterlinePlanEventCounts);
+            Array.Clear(_predictedRasterlinePlanStatuses);
+            _liveRasterlinePlanRow = -1;
+            _liveRasterlinePlanLineStartCycle = 0;
+            _liveRasterlinePlanLineStopCycle = 0;
+            _liveRasterlinePlanLastCycle = long.MinValue;
+            _liveRasterlinePlanLineEventCount = 0;
+            _liveRasterlinePlanLineValid = true;
+            _liveRasterlinePlanLineOverflowed = false;
+            _liveRasterlinePlanCompletedLines = 0;
+            _liveRasterlinePlanCompletedValidLines = 0;
+            _liveRasterlinePlanCompletedInvalidLines = 0;
+            _liveRasterlinePlanCompletedOverflowLines = 0;
+            _liveRasterlinePlanObservedEventCount = 0;
+            _liveRasterlinePlanPendingWriteOrCopperEvents = 0;
+            _liveRasterlinePlanLineStateEvents = 0;
+            _liveRasterlinePlanBitplaneFetchEvents = 0;
+            _liveRasterlinePlanSpriteFetchEvents = 0;
+            _liveRasterlinePlanCopperBarrierEvents = 0;
+            _liveRasterlinePlanMaxEventsPerLine = 0;
+            _predictedRasterlinePlanLines = 0;
+            _predictedRasterlinePlanMatchedLines = 0;
+            _predictedRasterlinePlanMismatchedLines = 0;
+            _predictedRasterlinePlanUnsupportedLines = 0;
+            _predictedRasterlinePlanEventTotal = 0;
+            _predictedRasterlinePlanUnsupportedCopperLines = 0;
+            _predictedRasterlinePlanUnsupportedPendingWriteLines = 0;
+            _predictedRasterlinePlanUnsupportedSpriteLines = 0;
+            _predictedRasterlinePlanUnsupportedInvalidStateLines = 0;
+            _predictedRasterlinePlanUnsupportedOverflowLines = 0;
+        }
+
+        private bool TryBeginLiveRasterlinePlanEvent(long cycle, int expectedRow)
+        {
+            if (!TryGetLiveRasterlinePlanRow(cycle, out var row))
+            {
+                return false;
+            }
+
+            if (_liveRasterlinePlanRow != row)
+            {
+                FinalizeLiveRasterlinePlanLine();
+                _liveRasterlinePlanRow = row;
+                _liveRasterlinePlanLineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
+                _liveRasterlinePlanLineStopCycle = _liveRasterlinePlanLineStartCycle + PalLineCycles - 1;
+                _liveRasterlinePlanLastCycle = long.MinValue;
+                _liveRasterlinePlanLineEventCount = 0;
+                _liveRasterlinePlanLineValid = true;
+                _liveRasterlinePlanLineOverflowed = false;
+                _liveRasterlinePlanRowsTouched[row] = true;
+                _liveRasterlinePlanRowsValid[row] = true;
+                _liveRasterlinePlanRowsOverflowed[row] = false;
+                _liveRasterlinePlanEventCounts[row] = 0;
+                _predictedRasterlinePlanEventCounts[row] = 0;
+                _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.None;
+            }
+
+            if (expectedRow >= 0 && expectedRow != row)
+            {
+                _liveRasterlinePlanLineValid = false;
+                _liveRasterlinePlanRowsValid[row] = false;
+            }
+
+            if (cycle < _liveRasterlinePlanLineStartCycle ||
+                cycle > _liveRasterlinePlanLineStopCycle ||
+                cycle < _liveRasterlinePlanLastCycle)
+            {
+                _liveRasterlinePlanLineValid = false;
+                _liveRasterlinePlanRowsValid[row] = false;
+            }
+
+            if (cycle > _liveRasterlinePlanLastCycle)
+            {
+                _liveRasterlinePlanLastCycle = cycle;
+            }
+
+            return true;
+        }
+
+        private bool TryGetLiveRasterlinePlanRow(long cycle, out int row)
+        {
+            row = -1;
+            if (!_liveFrameValid ||
+                cycle < _liveFrameStartCycle ||
+                cycle >= _liveFrameStartCycle + PalFrameCycles)
+            {
+                return false;
+            }
+
+            row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+            return (uint)row < (uint)LowResOutputHeight;
+        }
+
+        private void RecordLiveRasterlinePlanEvent(
+            LiveRasterlinePlanEventKind kind,
+            long cycle,
+            int row,
+            long batchStopCycle,
+            int cursorA,
+            int cursorB,
+            int cursorC)
+        {
+            if (!TryBeginLiveRasterlinePlanEvent(cycle, row))
+            {
+                return;
+            }
+
+            _liveRasterlinePlanObservedEventCount++;
+            IncrementLiveRasterlinePlanEventKind(kind);
+            if (kind == LiveRasterlinePlanEventKind.PendingWriteOrCopper ||
+                kind == LiveRasterlinePlanEventKind.CopperBarrier)
+            {
+                MarkPredictedRasterlinePlanUnsupported(
+                    _liveRasterlinePlanRow,
+                    kind == LiveRasterlinePlanEventKind.CopperBarrier
+                        ? LiveRasterlinePredictionStatus.UnsupportedCopper
+                        : LiveRasterlinePredictionStatus.UnsupportedPendingWrite);
+            }
+            else if (kind == LiveRasterlinePlanEventKind.SpriteFetchBatch)
+            {
+                MarkPredictedRasterlinePlanUnsupported(
+                    _liveRasterlinePlanRow,
+                    LiveRasterlinePredictionStatus.UnsupportedSprite);
+            }
+
+            if (_liveRasterlinePlanLineEventCount >= MaxLiveRasterlinePlanEvents)
+            {
+                _liveRasterlinePlanLineEventCount++;
+                _liveRasterlinePlanLineValid = false;
+                _liveRasterlinePlanLineOverflowed = true;
+                _liveRasterlinePlanRowsValid[_liveRasterlinePlanRow] = false;
+                _liveRasterlinePlanRowsOverflowed[_liveRasterlinePlanRow] = true;
+                MarkPredictedRasterlinePlanUnsupported(
+                    _liveRasterlinePlanRow,
+                    LiveRasterlinePredictionStatus.UnsupportedOverflow);
+                _liveRasterlinePlanMaxEventsPerLine = Math.Max(
+                    _liveRasterlinePlanMaxEventsPerLine,
+                    _liveRasterlinePlanLineEventCount);
+                return;
+            }
+
+            var eventIndex = (_liveRasterlinePlanRow * MaxLiveRasterlinePlanEvents) + _liveRasterlinePlanLineEventCount;
+            _liveRasterlinePlanEvents[eventIndex] = new LiveRasterlinePlanEvent(
+                kind,
+                cycle,
+                _liveRasterlinePlanRow,
+                batchStopCycle,
+                cursorA,
+                cursorB,
+                cursorC);
+            _liveRasterlinePlanLineEventCount++;
+            _liveRasterlinePlanEventCounts[_liveRasterlinePlanRow] = _liveRasterlinePlanLineEventCount;
+            _liveRasterlinePlanMaxEventsPerLine = Math.Max(
+                _liveRasterlinePlanMaxEventsPerLine,
+                _liveRasterlinePlanLineEventCount);
+        }
+
+        private void TryBuildPredictedRasterlinePlanForCapturedLine(int row)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                _predictedRasterlinePlanStatuses[row] != LiveRasterlinePredictionStatus.None)
+            {
+                return;
+            }
+
+            if (!IsLiveLineValid(row))
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedInvalidState);
+                return;
+            }
+
+            var lineStart = GetOutputRowStartCycle(_liveFrameStartCycle, row);
+            var lineStop = lineStart + PalLineCycles - 1;
+            if (IsLiveCopperDmaEnabled())
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedCopper);
+                return;
+            }
+
+            if (HasPendingWriteInCycleRange(lineStart, lineStop))
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedPendingWrite);
+                return;
+            }
+
+            if (IsSpriteDmaEnabled())
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedSprite);
+                return;
+            }
+
+            _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.PendingValidation;
+            _predictedRasterlinePlanEventCounts[row] = 0;
+            if (!TryAppendPredictedRasterlinePlanEvent(
+                    row,
+                    new LiveRasterlinePlanEvent(
+                        LiveRasterlinePlanEventKind.LineStateCapture,
+                        lineStart,
+                        row,
+                        lineStart,
+                        row,
+                        0,
+                        0)))
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedOverflow);
+                return;
+            }
+
+            var state = _liveLineStates[row];
+            if (state.PlaneCount <= 0 ||
+                state.FetchWords <= 0 ||
+                !state.DisplayWindowVerticallyOpen ||
+                !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return;
+            }
+
+            var firstFetchCycle = GetFirstLiveBitplaneFetchCycleForRendering(row, state);
+            if (firstFetchCycle == long.MaxValue || firstFetchCycle > lineStop)
+            {
+                return;
+            }
+
+            if (!TryAppendPredictedRasterlinePlanEvent(
+                    row,
+                    new LiveRasterlinePlanEvent(
+                        LiveRasterlinePlanEventKind.BitplaneFetchBatch,
+                        firstFetchCycle,
+                        row,
+                        lineStop,
+                        0,
+                        0,
+                        0)))
+            {
+                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedOverflow);
+            }
+        }
+
+        private bool TryAppendPredictedRasterlinePlanEvent(int row, LiveRasterlinePlanEvent planEvent)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            var count = _predictedRasterlinePlanEventCounts[row];
+            if (count >= MaxLiveRasterlinePlanEvents)
+            {
+                return false;
+            }
+
+            _predictedRasterlinePlanEvents[(row * MaxLiveRasterlinePlanEvents) + count] = planEvent;
+            _predictedRasterlinePlanEventCounts[row] = count + 1;
+            _predictedRasterlinePlanEventTotal++;
+            return true;
+        }
+
+        private void MarkPredictedRasterlinePlanUnsupported(int row, LiveRasterlinePredictionStatus status)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return;
+            }
+
+            if (_predictedRasterlinePlanStatuses[row] is LiveRasterlinePredictionStatus.Matched or
+                LiveRasterlinePredictionStatus.Mismatched)
+            {
+                return;
+            }
+
+            _predictedRasterlinePlanStatuses[row] = status;
+            _predictedRasterlinePlanEventCounts[row] = 0;
+        }
+
+        private void ValidatePredictedRasterlinePlan(int row)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return;
+            }
+
+            var status = _predictedRasterlinePlanStatuses[row];
+            if (status == LiveRasterlinePredictionStatus.None)
+            {
+                return;
+            }
+
+            if (status != LiveRasterlinePredictionStatus.PendingValidation)
+            {
+                _predictedRasterlinePlanUnsupportedLines++;
+                IncrementPredictedRasterlinePlanUnsupportedReason(status);
+                return;
+            }
+
+            _predictedRasterlinePlanLines++;
+            if (DoesPredictedRasterlinePlanMatchRecorded(row))
+            {
+                _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.Matched;
+                _predictedRasterlinePlanMatchedLines++;
+            }
+            else
+            {
+                _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.Mismatched;
+                _predictedRasterlinePlanMismatchedLines++;
+            }
+        }
+
+        private bool DoesPredictedRasterlinePlanMatchRecorded(int row)
+        {
+            var expectedCount = _predictedRasterlinePlanEventCounts[row];
+            var actualCount = Math.Min(_liveRasterlinePlanEventCounts[row], MaxLiveRasterlinePlanEvents);
+            if (expectedCount != actualCount)
+            {
+                return false;
+            }
+
+            var baseIndex = row * MaxLiveRasterlinePlanEvents;
+            for (var i = 0; i < expectedCount; i++)
+            {
+                var expected = _predictedRasterlinePlanEvents[baseIndex + i];
+                var actual = _liveRasterlinePlanEvents[baseIndex + i];
+                if (expected.Kind != actual.Kind ||
+                    expected.Cycle != actual.Cycle ||
+                    expected.Row != actual.Row)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private void IncrementPredictedRasterlinePlanUnsupportedReason(LiveRasterlinePredictionStatus status)
+        {
+            switch (status)
+            {
+                case LiveRasterlinePredictionStatus.UnsupportedCopper:
+                    _predictedRasterlinePlanUnsupportedCopperLines++;
+                    break;
+                case LiveRasterlinePredictionStatus.UnsupportedPendingWrite:
+                    _predictedRasterlinePlanUnsupportedPendingWriteLines++;
+                    break;
+                case LiveRasterlinePredictionStatus.UnsupportedSprite:
+                    _predictedRasterlinePlanUnsupportedSpriteLines++;
+                    break;
+                case LiveRasterlinePredictionStatus.UnsupportedInvalidState:
+                    _predictedRasterlinePlanUnsupportedInvalidStateLines++;
+                    break;
+                case LiveRasterlinePredictionStatus.UnsupportedOverflow:
+                    _predictedRasterlinePlanUnsupportedOverflowLines++;
+                    break;
+            }
+        }
+
+        private bool HasPendingWriteInCycleRange(long startCycle, long stopCycle)
+        {
+            for (var i = _pendingIndex; i < _pendingWrites.Count; i++)
+            {
+                var cycle = _pendingWrites[i].Cycle;
+                if (cycle > stopCycle)
+                {
+                    return false;
+                }
+
+                if (cycle >= startCycle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void IncrementLiveRasterlinePlanEventKind(LiveRasterlinePlanEventKind kind)
+        {
+            switch (kind)
+            {
+                case LiveRasterlinePlanEventKind.PendingWriteOrCopper:
+                    _liveRasterlinePlanPendingWriteOrCopperEvents++;
+                    break;
+                case LiveRasterlinePlanEventKind.LineStateCapture:
+                    _liveRasterlinePlanLineStateEvents++;
+                    break;
+                case LiveRasterlinePlanEventKind.BitplaneFetchBatch:
+                    _liveRasterlinePlanBitplaneFetchEvents++;
+                    break;
+                case LiveRasterlinePlanEventKind.SpriteFetchBatch:
+                    _liveRasterlinePlanSpriteFetchEvents++;
+                    break;
+                case LiveRasterlinePlanEventKind.CopperBarrier:
+                    _liveRasterlinePlanCopperBarrierEvents++;
+                    break;
+            }
+        }
+
+        private void FinalizeLiveRasterlinePlanLine()
+        {
+            if (_liveRasterlinePlanRow < 0)
+            {
+                return;
+            }
+
+            ValidatePredictedRasterlinePlan(_liveRasterlinePlanRow);
+            _liveRasterlinePlanCompletedLines++;
+            if (_liveRasterlinePlanLineOverflowed)
+            {
+                _liveRasterlinePlanCompletedOverflowLines++;
+            }
+
+            if (_liveRasterlinePlanLineValid && !_liveRasterlinePlanLineOverflowed)
+            {
+                _liveRasterlinePlanCompletedValidLines++;
+            }
+            else
+            {
+                _liveRasterlinePlanCompletedInvalidLines++;
+            }
+
+            _liveRasterlinePlanRow = -1;
+            _liveRasterlinePlanLineStartCycle = 0;
+            _liveRasterlinePlanLineStopCycle = 0;
+            _liveRasterlinePlanLastCycle = long.MinValue;
+            _liveRasterlinePlanLineEventCount = 0;
+            _liveRasterlinePlanLineValid = true;
+            _liveRasterlinePlanLineOverflowed = false;
+        }
+
+        private int GetLiveRasterlinePlanLineCount()
+            => _liveRasterlinePlanCompletedLines + (_liveRasterlinePlanRow >= 0 ? 1 : 0);
+
+        private int GetLiveRasterlinePlanValidLineCount()
+            => _liveRasterlinePlanCompletedValidLines +
+                (_liveRasterlinePlanRow >= 0 && _liveRasterlinePlanLineValid && !_liveRasterlinePlanLineOverflowed ? 1 : 0);
+
+        private int GetLiveRasterlinePlanInvalidLineCount()
+            => _liveRasterlinePlanCompletedInvalidLines +
+                (_liveRasterlinePlanRow >= 0 && (!_liveRasterlinePlanLineValid || _liveRasterlinePlanLineOverflowed) ? 1 : 0);
+
+        private int GetLiveRasterlinePlanOverflowLineCount()
+            => _liveRasterlinePlanCompletedOverflowLines +
+                (_liveRasterlinePlanRow >= 0 && _liveRasterlinePlanLineOverflowed ? 1 : 0);
+
+        private bool TryGetRecordedLiveRasterlinePlanWakeCandidate(
+            long currentCycle,
+            long targetCycle,
+            out long candidate)
+        {
+            candidate = long.MaxValue;
+            if (targetCycle > _liveCapturedThroughCycle ||
+                targetCycle < currentCycle ||
+                !TryGetLiveRasterlinePlanRow(currentCycle, out var currentRow) ||
+                !TryGetLiveRasterlinePlanRow(targetCycle, out var targetRow) ||
+                currentRow != targetRow ||
+                !_liveRasterlinePlanRowsTouched[currentRow] ||
+                !_liveRasterlinePlanRowsValid[currentRow] ||
+                _liveRasterlinePlanRowsOverflowed[currentRow])
+            {
+                return false;
+            }
+
+            var count = Math.Min(_liveRasterlinePlanEventCounts[currentRow], MaxLiveRasterlinePlanEvents);
+            var baseIndex = currentRow * MaxLiveRasterlinePlanEvents;
+            var lineStateEventsAreWakeVisible = HasLiveLineStateWakeWork();
+            for (var i = 0; i < count; i++)
+            {
+                var planEvent = _liveRasterlinePlanEvents[baseIndex + i];
+                if (planEvent.Kind == LiveRasterlinePlanEventKind.LineStateCapture &&
+                    !lineStateEventsAreWakeVisible)
+                {
+                    continue;
+                }
+
+                var cycle = planEvent.Cycle;
+                if (cycle > currentCycle && cycle <= targetCycle)
+                {
+                    candidate = cycle;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        private bool HasLiveLineStateWakeWork()
+            => IsLiveBitplaneDmaEnabled() || IsSpriteDmaEnabled();
+
+        private long GetNextLiveCpuVisibleWorkCycle()
+        {
+            var nextLineStateCycle = HasLiveLineStateWakeWork()
+                ? GetNextLiveLineStateCycle()
+                : long.MaxValue;
+            var nextBitplaneFetchCycle = IsLiveBitplaneDmaEnabled()
+                ? GetNextLiveBitplaneFetchCycle()
+                : long.MaxValue;
+            var nextSpriteFetchCycle = IsSpriteDmaEnabled()
+                ? GetNextLiveSpriteFetchCycle()
+                : long.MaxValue;
+            return Math.Min(
+                Math.Min(GetNextLiveDisplayEventCycle(), nextLineStateCycle),
+                Math.Min(nextBitplaneFetchCycle, nextSpriteFetchCycle));
+        }
+
         private void AdvanceLiveDmaWithinFrame(long targetCycle)
             => AdvanceLiveDmaWithinFrame(targetCycle, includeCopper: true);
 
@@ -1648,6 +2217,14 @@ namespace CopperMod.Amiga
                         nextCopperBarrierCycle <= nextCycle)
                     {
                         var barrierStopCycle = Math.Max(_liveFrameStartCycle, nextCopperBarrierCycle - 1);
+                        RecordLiveRasterlinePlanEvent(
+                            LiveRasterlinePlanEventKind.CopperBarrier,
+                            barrierStopCycle,
+                            row: -1,
+                            batchStopCycle: barrierStopCycle,
+                            cursorA: 0,
+                            cursorB: 0,
+                            cursorC: 0);
                         AdvanceLiveDisplayStateTo(barrierStopCycle, includeCopper: false);
                         _liveCycle = Math.Max(_liveCycle, barrierStopCycle);
                         _liveCapturedThroughCycle = Math.Max(_liveCapturedThroughCycle, barrierStopCycle);
@@ -1664,12 +2241,29 @@ namespace CopperMod.Amiga
                 AdvanceLiveDisplayStateTo(nextCycle, includeCopper);
                 if (nextPendingWriteCycle == nextCycle)
                 {
+                    RecordLiveRasterlinePlanEvent(
+                        LiveRasterlinePlanEventKind.PendingWriteOrCopper,
+                        nextCycle,
+                        row: -1,
+                        batchStopCycle: nextCycle,
+                        cursorA: 0,
+                        cursorB: 0,
+                        cursorC: 0);
                     continue;
                 }
 
                 if (nextLineStateCycle == nextCycle)
                 {
+                    RecordLiveRasterlinePlanEvent(
+                        LiveRasterlinePlanEventKind.LineStateCapture,
+                        nextCycle,
+                        _liveNextLineStateRow,
+                        batchStopCycle: nextCycle,
+                        cursorA: _liveNextLineStateRow,
+                        cursorB: 0,
+                        cursorC: 0);
                     CaptureLiveLineState(_liveNextLineStateRow);
+                    TryBuildPredictedRasterlinePlanForCapturedLine(_liveNextLineStateRow);
                     _liveNextLineStateRow++;
                     InvalidateLiveWorkCycle();
                     continue;
@@ -1677,11 +2271,29 @@ namespace CopperMod.Amiga
 
                 if (nextSpriteFetchCycle == nextCycle)
                 {
-                    CaptureLiveSpriteFetchBatch(GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper));
+                    var batchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
+                    RecordLiveRasterlinePlanEvent(
+                        LiveRasterlinePlanEventKind.SpriteFetchBatch,
+                        nextCycle,
+                        _liveNextSpriteRow,
+                        batchStopCycle,
+                        _liveNextSpriteIndex,
+                        _liveNextSpriteWord,
+                        0);
+                    CaptureLiveSpriteFetchBatch(batchStopCycle);
                     continue;
                 }
 
-                CaptureLiveBitplaneFetchBatch(GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper));
+                var bitplaneBatchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
+                RecordLiveRasterlinePlanEvent(
+                    LiveRasterlinePlanEventKind.BitplaneFetchBatch,
+                    nextCycle,
+                    _liveNextFetchRow,
+                    bitplaneBatchStopCycle,
+                    _liveNextFetchPlane,
+                    _liveNextFetchWord,
+                    _liveNextFetchSlot);
+                CaptureLiveBitplaneFetchBatch(bitplaneBatchStopCycle);
             }
 
             AdvanceLiveDisplayStateTo(targetCycle, includeCopper);
@@ -1782,6 +2394,34 @@ namespace CopperMod.Amiga
             }
 
             return copperCycle <= currentCycle ? currentCycle + 1 : copperCycle;
+        }
+
+        internal long? GetNextLiveDisplayWakeCandidateCycle(long currentCycle, long targetCycle)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork() ||
+                targetCycle < currentCycle)
+            {
+                return null;
+            }
+
+            if (TryGetRecordedLiveRasterlinePlanWakeCandidate(currentCycle, targetCycle, out var recordedCycle))
+            {
+                return recordedCycle == long.MaxValue
+                    ? null
+                    : recordedCycle;
+            }
+
+            var nextCycle = GetNextLiveCpuVisibleWorkCycle();
+            if (nextCycle == long.MaxValue || nextCycle > targetCycle)
+            {
+                return null;
+            }
+
+            return nextCycle <= currentCycle ? currentCycle : nextCycle;
         }
 
         private long GetNextLiveDisplayEventCycle(bool includeCopper)
@@ -8703,6 +9343,11 @@ namespace CopperMod.Amiga
             return !_enforceDmaForFrame || IsBitplaneDmaEnabled(_dmacon);
         }
 
+        private bool IsLiveBitplaneDmaEnabled()
+        {
+            return GetAgnusBitplaneFetchPlaneCount() > 0 && IsBitplaneDmaEnabled(_dmacon);
+        }
+
         private bool IsCopperDmaEnabled()
         {
             return !_enforceDmaForFrame ||
@@ -10725,6 +11370,63 @@ namespace CopperMod.Amiga
                 ManualArmed = false;
             }
         }
+
+        private enum LiveRasterlinePlanEventKind
+        {
+            PendingWriteOrCopper,
+            LineStateCapture,
+            BitplaneFetchBatch,
+            SpriteFetchBatch,
+            CopperBarrier
+        }
+
+        private enum LiveRasterlinePredictionStatus
+        {
+            None,
+            PendingValidation,
+            Matched,
+            Mismatched,
+            UnsupportedCopper,
+            UnsupportedPendingWrite,
+            UnsupportedSprite,
+            UnsupportedInvalidState,
+            UnsupportedOverflow
+        }
+
+        private readonly struct LiveRasterlinePlanEvent
+        {
+            public LiveRasterlinePlanEvent(
+                LiveRasterlinePlanEventKind kind,
+                long cycle,
+                int row,
+                long batchStopCycle,
+                int cursorA,
+                int cursorB,
+                int cursorC)
+            {
+                Kind = kind;
+                Cycle = cycle;
+                Row = row;
+                BatchStopCycle = batchStopCycle;
+                CursorA = cursorA;
+                CursorB = cursorB;
+                CursorC = cursorC;
+            }
+
+            public LiveRasterlinePlanEventKind Kind { get; }
+
+            public long Cycle { get; }
+
+            public int Row { get; }
+
+            public long BatchStopCycle { get; }
+
+            public int CursorA { get; }
+
+            public int CursorB { get; }
+
+            public int CursorC { get; }
+        }
     }
 
     internal readonly struct OcsDisplaySnapshot
@@ -10787,6 +11489,27 @@ namespace CopperMod.Amiga
             int lastTimelineFastPathMissCount,
             int lastSpriteRecoveryAttemptCount,
             int lastSpriteDeniedFetchCount,
+            int lastRasterlinePlanLines,
+            int lastRasterlinePlanValidLines,
+            int lastRasterlinePlanInvalidLines,
+            int lastRasterlinePlanOverflowLines,
+            int lastRasterlinePlanEvents,
+            int lastRasterlinePlanPendingWriteOrCopperEvents,
+            int lastRasterlinePlanLineStateEvents,
+            int lastRasterlinePlanBitplaneFetchEvents,
+            int lastRasterlinePlanSpriteFetchEvents,
+            int lastRasterlinePlanCopperBarrierEvents,
+            int lastRasterlinePlanMaxEventsPerLine,
+            int lastPredictedRasterlinePlanLines,
+            int lastPredictedRasterlinePlanMatchedLines,
+            int lastPredictedRasterlinePlanMismatchedLines,
+            int lastPredictedRasterlinePlanUnsupportedLines,
+            int lastPredictedRasterlinePlanEvents,
+            int lastPredictedRasterlinePlanUnsupportedCopperLines,
+            int lastPredictedRasterlinePlanUnsupportedPendingWriteLines,
+            int lastPredictedRasterlinePlanUnsupportedSpriteLines,
+            int lastPredictedRasterlinePlanUnsupportedInvalidStateLines,
+            int lastPredictedRasterlinePlanUnsupportedOverflowLines,
             int lastArchiveRejectFrameIncomplete,
             int lastArchiveRejectTimelineInvalid,
             int lastArchiveRejectUnsafeWrite,
@@ -10869,6 +11592,27 @@ namespace CopperMod.Amiga
             LastTimelineFastPathMissCount = lastTimelineFastPathMissCount;
             LastSpriteRecoveryAttemptCount = lastSpriteRecoveryAttemptCount;
             LastSpriteDeniedFetchCount = lastSpriteDeniedFetchCount;
+            LastRasterlinePlanLines = lastRasterlinePlanLines;
+            LastRasterlinePlanValidLines = lastRasterlinePlanValidLines;
+            LastRasterlinePlanInvalidLines = lastRasterlinePlanInvalidLines;
+            LastRasterlinePlanOverflowLines = lastRasterlinePlanOverflowLines;
+            LastRasterlinePlanEvents = lastRasterlinePlanEvents;
+            LastRasterlinePlanPendingWriteOrCopperEvents = lastRasterlinePlanPendingWriteOrCopperEvents;
+            LastRasterlinePlanLineStateEvents = lastRasterlinePlanLineStateEvents;
+            LastRasterlinePlanBitplaneFetchEvents = lastRasterlinePlanBitplaneFetchEvents;
+            LastRasterlinePlanSpriteFetchEvents = lastRasterlinePlanSpriteFetchEvents;
+            LastRasterlinePlanCopperBarrierEvents = lastRasterlinePlanCopperBarrierEvents;
+            LastRasterlinePlanMaxEventsPerLine = lastRasterlinePlanMaxEventsPerLine;
+            LastPredictedRasterlinePlanLines = lastPredictedRasterlinePlanLines;
+            LastPredictedRasterlinePlanMatchedLines = lastPredictedRasterlinePlanMatchedLines;
+            LastPredictedRasterlinePlanMismatchedLines = lastPredictedRasterlinePlanMismatchedLines;
+            LastPredictedRasterlinePlanUnsupportedLines = lastPredictedRasterlinePlanUnsupportedLines;
+            LastPredictedRasterlinePlanEvents = lastPredictedRasterlinePlanEvents;
+            LastPredictedRasterlinePlanUnsupportedCopperLines = lastPredictedRasterlinePlanUnsupportedCopperLines;
+            LastPredictedRasterlinePlanUnsupportedPendingWriteLines = lastPredictedRasterlinePlanUnsupportedPendingWriteLines;
+            LastPredictedRasterlinePlanUnsupportedSpriteLines = lastPredictedRasterlinePlanUnsupportedSpriteLines;
+            LastPredictedRasterlinePlanUnsupportedInvalidStateLines = lastPredictedRasterlinePlanUnsupportedInvalidStateLines;
+            LastPredictedRasterlinePlanUnsupportedOverflowLines = lastPredictedRasterlinePlanUnsupportedOverflowLines;
             LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
             LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
             LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
@@ -11008,6 +11752,48 @@ namespace CopperMod.Amiga
         public int LastSpriteRecoveryAttemptCount { get; }
 
         public int LastSpriteDeniedFetchCount { get; }
+
+        public int LastRasterlinePlanLines { get; }
+
+        public int LastRasterlinePlanValidLines { get; }
+
+        public int LastRasterlinePlanInvalidLines { get; }
+
+        public int LastRasterlinePlanOverflowLines { get; }
+
+        public int LastRasterlinePlanEvents { get; }
+
+        public int LastRasterlinePlanPendingWriteOrCopperEvents { get; }
+
+        public int LastRasterlinePlanLineStateEvents { get; }
+
+        public int LastRasterlinePlanBitplaneFetchEvents { get; }
+
+        public int LastRasterlinePlanSpriteFetchEvents { get; }
+
+        public int LastRasterlinePlanCopperBarrierEvents { get; }
+
+        public int LastRasterlinePlanMaxEventsPerLine { get; }
+
+        public int LastPredictedRasterlinePlanLines { get; }
+
+        public int LastPredictedRasterlinePlanMatchedLines { get; }
+
+        public int LastPredictedRasterlinePlanMismatchedLines { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedLines { get; }
+
+        public int LastPredictedRasterlinePlanEvents { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedCopperLines { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedPendingWriteLines { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedSpriteLines { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedInvalidStateLines { get; }
+
+        public int LastPredictedRasterlinePlanUnsupportedOverflowLines { get; }
 
         public int LastArchiveRejectFrameIncomplete { get; }
 

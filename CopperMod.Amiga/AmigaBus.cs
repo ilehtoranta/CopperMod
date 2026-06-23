@@ -67,6 +67,8 @@ namespace CopperMod.Amiga
         private readonly ChipPresentationWriteHistory _presentationWriteHistory;
         private readonly IAgnusChipSlotTiming _diagnosticChipSlots;
         private readonly AgnusHrmSlotEngine _hrmSlotEngine;
+        private readonly AmigaRasterlineScheduleCache _rasterlineScheduleCache;
+        private readonly AmigaHardwareScheduler _hardwareScheduler;
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
@@ -173,6 +175,8 @@ namespace CopperMod.Amiga
             CiaA = new AmigaCia(AmigaCiaId.A);
             CiaB = new AmigaCia(AmigaCiaId.B);
             Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
+            _rasterlineScheduleCache = new AmigaRasterlineScheduleCache(this);
+            _hardwareScheduler = new AmigaHardwareScheduler(this);
             _palFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
             _palLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
             _nextVerticalBlankCycle = _palFrameCycles;
@@ -335,6 +339,8 @@ namespace CopperMod.Amiga
             _nextVerticalBlankCycle = _palFrameCycles;
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
+            _rasterlineScheduleCache.Reset();
+            _hardwareScheduler.Reset();
         }
 
         public void MoveGamePortMouse(int port, int deltaX, int deltaY)
@@ -434,6 +440,8 @@ namespace CopperMod.Amiga
             _nextVerticalBlankCycle = _palFrameCycles;
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
+            _rasterlineScheduleCache.Reset();
+            _hardwareScheduler.Reset();
         }
 
         public void MapReadOnlyMemory(uint baseAddress, ReadOnlySpan<byte> data)
@@ -557,6 +565,11 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             address = NormalizeAddress(address);
+            if (IsCustomRegisterByteAddress(address))
+            {
+                return ReadCpuCustomByte(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
+            }
+
             if (TryGetCiaRegister(address, out var directCia, out var directCiaRegister))
             {
                 return ReadCpuCiaByte(address, directCia, directCiaRegister, ref cycle, accessKind);
@@ -612,6 +625,58 @@ namespace CopperMod.Amiga
                 Keyboard.AcknowledgeSerialDataRead(cycle);
             }
 
+            return value;
+        }
+
+        private byte ReadCpuCustomByte(
+            uint address,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            bool sampleCustomAtGrantedCycle)
+        {
+            var requestedCycle = cycle;
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Byte, cycle, accessKind, isWrite: false)
+                : Arbitrate(AmigaBusRequester.Cpu, accessKind, AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Byte, cycle, isWrite: false);
+            AdvanceDmaAfterCpuGrantIfNeeded(AmigaBusAccessTarget.CustomRegisters, address, requestedCycle, access.GrantedCycle, isWrite: false);
+            var sampleCycle = sampleCustomAtGrantedCycle ? access.GrantedCycle : long.MinValue;
+            var value = ReadCustomByte((ushort)(address - 0x00DFF000), sampleCycle);
+            cycle = access.CompletedCycle;
+            return value;
+        }
+
+        private ushort ReadCpuCustomWord(
+            uint address,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            bool sampleCustomAtGrantedCycle)
+        {
+            var requestedCycle = cycle;
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Word, cycle, accessKind, isWrite: false)
+                : Arbitrate(AmigaBusRequester.Cpu, accessKind, AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
+            AdvanceDmaAfterCpuGrantIfNeeded(AmigaBusAccessTarget.CustomRegisters, address, requestedCycle, access.GrantedCycle, isWrite: false);
+            var sampleCycle = sampleCustomAtGrantedCycle ? access.GrantedCycle : long.MinValue;
+            var value = ReadCustomWord((ushort)(address - 0x00DFF000), sampleCycle);
+            cycle = access.CompletedCycle;
+            return value;
+        }
+
+        private uint ReadCpuCustomLong(
+            uint address,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            bool sampleCustomAtGrantedCycle)
+        {
+            var requestedCycle = cycle;
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Long, cycle, accessKind, isWrite: false)
+                : Arbitrate(AmigaBusRequester.Cpu, accessKind, AmigaBusAccessTarget.CustomRegisters, address, AmigaBusAccessSize.Long, cycle, isWrite: false);
+            AdvanceDmaAfterCpuGrantIfNeeded(AmigaBusAccessTarget.CustomRegisters, address, requestedCycle, access.GrantedCycle, isWrite: false);
+            var firstWordCycle = sampleCustomAtGrantedCycle ? access.GrantedCycle : long.MinValue;
+            var secondWordCycle = sampleCustomAtGrantedCycle ? GetSecondWordCycle(access) : long.MinValue;
+            var value = ReadCustomLong(address, firstWordCycle, secondWordCycle);
+            cycle = access.CompletedCycle;
             return value;
         }
 
@@ -682,6 +747,11 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             address = NormalizeAddress(address);
+            if (IsCustomRegisterWordAddress(address))
+            {
+                return ReadCpuCustomWord(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
+            }
+
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -721,6 +791,11 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             address = NormalizeAddress(address);
+            if (IsCustomRegisterByteAddress(address))
+            {
+                return ReadCpuCustomLong(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
+            }
+
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -1413,11 +1488,23 @@ namespace CopperMod.Amiga
         internal void RequestHardwareInterrupt(ushort intreqBit, long cycle)
         {
             Paula.RequestInterrupt(intreqBit, Math.Max(0, cycle));
+            _hardwareScheduler.NotifyWorkScheduled(cycle);
         }
 
         public void AdvanceRasterTo(long targetCycle)
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.Raster | AmigaHardwareEventMask.ForceCatchUp);
+
+        internal void AdvanceRasterCoreTo(long targetCycle)
         {
-            _lastRasterAdvanceCycle = Math.Max(_lastRasterAdvanceCycle, targetCycle);
+            targetCycle = Math.Max(0, targetCycle);
+            if (targetCycle <= _lastRasterAdvanceCycle)
+            {
+                return;
+            }
+
+            _lastRasterAdvanceCycle = targetCycle;
             while (_nextHorizontalSyncCycle <= targetCycle)
             {
                 CiaB.IncrementTod(_nextHorizontalSyncCycle, _pendingCiaInterrupts);
@@ -1457,27 +1544,25 @@ namespace CopperMod.Amiga
         }
 
         public void AdvanceCiasTo(long targetCycle)
-        {
-            targetCycle = Math.Max(0, targetCycle);
-            Disk.AdvanceEventsTo(targetCycle);
-            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-        }
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.DiskEvents |
+                    AmigaHardwareEventMask.CiaTimers |
+                    AmigaHardwareEventMask.ForceCatchUp);
 
         public void AdvanceCiaTimersTo(long targetCycle)
-        {
-            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-        }
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.CiaTimers | AmigaHardwareEventMask.ForceCatchUp);
 
         internal void AdvanceCiaRegisterObservableEventsTo(long targetCycle)
-        {
-            targetCycle = Math.Max(0, targetCycle);
-            AdvanceRasterTo(targetCycle);
-            Disk.AdvanceCiaEventsTo(targetCycle);
-            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-        }
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.Raster |
+                    AmigaHardwareEventMask.DiskCiaEvents |
+                    AmigaHardwareEventMask.CiaTimers |
+                    AmigaHardwareEventMask.CiaRegisterSample |
+                    AmigaHardwareEventMask.ForceCatchUp);
 
         public void AdvanceDmaTo(long targetCycle)
         {
@@ -1490,6 +1575,39 @@ namespace CopperMod.Amiga
         }
 
         public void AdvanceDmaTo(long targetCycle, bool advanceLiveAgnus, bool advancePassiveDiskInput)
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.PaulaRegister |
+                    AmigaHardwareEventMask.DiskEvents |
+                    (advancePassiveDiskInput ? AmigaHardwareEventMask.DiskPassiveInput : AmigaHardwareEventMask.None) |
+                    (advanceLiveAgnus ? AmigaHardwareEventMask.Agnus : AmigaHardwareEventMask.None) |
+                    AmigaHardwareEventMask.Blitter |
+                    AmigaHardwareEventMask.ForceCatchUp);
+
+        public void AdvanceHardwareTo(long targetCycle)
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.All | AmigaHardwareEventMask.ForceCatchUp);
+
+        public void AdvanceHardwareEventsTo(long targetCycle)
+            => _hardwareScheduler.DrainTo(targetCycle, AmigaHardwareEventMask.All);
+
+        public AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot()
+            => _hardwareScheduler.CaptureSnapshot();
+
+        internal bool TrySkipRasterlineScheduleDrain(
+            long currentCycle,
+            long targetCycle,
+            AmigaHardwareEventMask mask)
+            => _rasterlineScheduleCache.TrySkipDrain(currentCycle, targetCycle, mask);
+
+        internal void InvalidateRasterlineSchedule(long cycle, AmigaHardwareEventMask mask)
+            => _rasterlineScheduleCache.InvalidateFrom(cycle, mask);
+
+        internal AmigaRasterlineScheduleCacheSnapshot CaptureRasterlineScheduleCacheSnapshot()
+            => _rasterlineScheduleCache.CaptureSnapshot();
+
+        internal void AdvanceDmaCoreTo(long targetCycle, bool advanceLiveAgnus, bool advancePassiveDiskInput)
         {
             if (advanceLiveAgnus && LiveAgnusDmaEnabled)
             {
@@ -1511,46 +1629,73 @@ namespace CopperMod.Amiga
         }
 
         internal void AdvanceRegisterObservableEventsTo(long targetCycle, uint customRegisterAddress)
+            => _hardwareScheduler.DrainForCpuAccess(
+                AmigaBusAccessTarget.CustomRegisters,
+                customRegisterAddress,
+                targetCycle,
+                isWrite: false);
+
+        internal void AdvanceCiaTimersCoreTo(long targetCycle)
         {
-            targetCycle = Math.Max(0, targetCycle);
-            switch (GetCustomRegisterReadAdvanceKind(customRegisterAddress))
+            CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+            CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
+        }
+
+        internal void AdvanceAgnusCoreTo(long targetCycle)
+        {
+            if (LiveAgnusDmaEnabled)
             {
-                case CustomRegisterReadAdvanceKind.BeamPosition:
-                    UpdateBeamPosition(targetCycle);
-                    return;
-
-                case CustomRegisterReadAdvanceKind.InputOnly:
-                    return;
-
-                case CustomRegisterReadAdvanceKind.BlitterStatus:
-                    Paula.AdvanceRegisterWritesTo(targetCycle);
-                    Blitter.AdvanceTo(targetCycle);
-                    return;
-
-                case CustomRegisterReadAdvanceKind.InterruptSources:
-                    AdvanceRasterTo(targetCycle);
-                    CiaA.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-                    CiaB.AdvanceTo(targetCycle, _pendingCiaInterrupts);
-                    Paula.AdvanceRegisterObservableTo(targetCycle);
-                    Disk.AdvanceEventsTo(targetCycle);
-                    Blitter.AdvanceTo(targetCycle);
-                    Paula.AdvanceRegisterObservableTo(targetCycle);
-                    return;
-
-                case CustomRegisterReadAdvanceKind.DiskEventOnly:
-                    Paula.AdvanceRegisterWritesTo(targetCycle);
-                    Disk.AdvanceEventsTo(targetCycle);
-                    return;
-
-                case CustomRegisterReadAdvanceKind.DiskPassiveInput:
-                    Paula.AdvanceRegisterWritesTo(targetCycle);
-                    Disk.AdvanceTo(targetCycle);
-                    return;
-
-                default:
-                    Paula.AdvanceRegisterWritesTo(targetCycle);
-                    return;
+                Agnus.AdvanceTo(targetCycle, Display.HasLiveDisplayWork());
             }
+        }
+
+        internal long GetNextRasterEventCycle(long currentCycle, long targetCycle)
+        {
+            if (targetCycle < currentCycle)
+            {
+                return long.MaxValue;
+            }
+
+            var next = Math.Min(_nextHorizontalSyncCycle, _nextVerticalBlankCycle);
+            if (next > targetCycle)
+            {
+                return long.MaxValue;
+            }
+
+            return next <= currentCycle ? currentCycle : next;
+        }
+
+        internal long GetNextCiaTimerEventCycle(long currentCycle, long targetCycle)
+        {
+            var ciaA = CiaA.GetNextInterruptCycle(targetCycle);
+            var ciaB = CiaB.GetNextInterruptCycle(targetCycle);
+            var next = long.MaxValue;
+            if (ciaA.HasValue)
+            {
+                next = Math.Min(next, ciaA.Value);
+            }
+
+            if (ciaB.HasValue)
+            {
+                next = Math.Min(next, ciaB.Value);
+            }
+
+            if (next == long.MaxValue || next > targetCycle)
+            {
+                return long.MaxValue;
+            }
+
+            return next <= currentCycle ? currentCycle : next;
+        }
+
+        internal long GetNextAgnusEventCycle(long currentCycle, long targetCycle)
+        {
+            if (!LiveAgnusDmaEnabled)
+            {
+                return long.MaxValue;
+            }
+
+            return Agnus.GetNextWakeCandidateCycle(currentCycle, targetCycle, Display.HasLiveDisplayWork());
         }
 
         private static CustomRegisterReadAdvanceKind GetCustomRegisterReadAdvanceKind(uint customRegisterAddress)
@@ -1582,34 +1727,16 @@ namespace CopperMod.Amiga
             }
         }
 
+        internal static CustomRegisterReadAdvanceKind GetCustomRegisterReadAdvanceKindForScheduler(uint customRegisterAddress)
+            => GetCustomRegisterReadAdvanceKind(customRegisterAddress);
+
         private void AdvanceDmaBeforeCpuChipAccess(
             AmigaBusAccessTarget target,
             uint address,
             long grantedCycle,
             bool isWrite)
         {
-            if (target == AmigaBusAccessTarget.CustomRegisters && !isWrite)
-            {
-                AdvanceRegisterObservableEventsTo(grantedCycle, address);
-                return;
-            }
-
-            if (target == AmigaBusAccessTarget.ChipRam ||
-                target == AmigaBusAccessTarget.ExpansionRam ||
-                target == AmigaBusAccessTarget.RealTimeClock ||
-                target == AmigaBusAccessTarget.CustomRegisters)
-            {
-                AdvanceDmaTo(
-                    grantedCycle,
-                    advanceLiveAgnus: true,
-                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
-                return;
-            }
-
-            if (target == AmigaBusAccessTarget.Cia)
-            {
-                AdvanceCiaRegisterObservableEventsTo(grantedCycle);
-            }
+            _hardwareScheduler.DrainForCpuAccess(target, address, grantedCycle, isWrite);
         }
 
         private void AdvanceDmaAfterCpuGrantIfNeeded(
@@ -1652,6 +1779,14 @@ namespace CopperMod.Amiga
             return Math.Min(ciaA.Value, ciaB.Value);
         }
 
+        internal bool HasPendingCiaInterrupts => _pendingCiaInterrupts.Count != 0;
+
+        internal long NextVerticalBlankCycle => _nextVerticalBlankCycle;
+
+        internal long NextHorizontalSyncCycle => _nextHorizontalSyncCycle;
+
+        internal long PalLineCycles => _palLineCycles;
+
         public long GetNextStoppedCpuWakeCandidateCycle(long currentCycle, long targetCycle)
             => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle);
 
@@ -1675,83 +1810,11 @@ namespace CopperMod.Amiga
             long targetCycle,
             int cpuInterruptMask,
             out M68kTraceBatchWakeSource wakeSource)
-        {
-            wakeSource = M68kTraceBatchWakeSource.TargetCycle;
-            currentCycle = Math.Max(0, currentCycle);
-            targetCycle = Math.Max(currentCycle, targetCycle);
-            if (targetCycle <= currentCycle)
-            {
-                return currentCycle;
-            }
-
-            var candidate = targetCycle;
-            var pendingPaulaInterruptLevel = Paula.GetHighestCpuVisibleInterruptLevel(currentCycle);
-            var pendingPaulaInterruptCanEnter = pendingPaulaInterruptLevel > 0 &&
-                (cpuInterruptMask < 0 || pendingPaulaInterruptLevel > (cpuInterruptMask & 0x07));
-            if (_pendingCiaInterrupts.Count != 0 || pendingPaulaInterruptCanEnter)
-            {
-                candidate = currentCycle + 1;
-                wakeSource = M68kTraceBatchWakeSource.PendingInterrupt;
-            }
-
-            candidate = MinStoppedWakeCandidate(
-                candidate,
+            => _hardwareScheduler.GetNextCpuVisibleEventCycle(
                 currentCycle,
                 targetCycle,
-                Paula.GetNextCpuVisibleInterruptCycle(currentCycle, targetCycle, cpuInterruptMask),
-                M68kTraceBatchWakeSource.PendingInterrupt,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                _nextVerticalBlankCycle,
-                M68kTraceBatchWakeSource.VerticalBlank,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                CiaB.GetNextTodInterruptCycle(targetCycle, _nextHorizontalSyncCycle, _palLineCycles),
-                M68kTraceBatchWakeSource.HorizontalSyncTod,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                GetNextCiaInterruptCycle(targetCycle),
-                M68kTraceBatchWakeSource.CiaTimer,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                Disk.GetNextWakeCandidateCycle(currentCycle, targetCycle),
-                M68kTraceBatchWakeSource.Disk,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                Paula.GetNextWakeCandidateCycle(currentCycle, targetCycle),
-                M68kTraceBatchWakeSource.Paula,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                Display.GetNextLiveCopperWakeCandidateCycle(currentCycle, targetCycle),
-                M68kTraceBatchWakeSource.Copper,
-                ref wakeSource);
-            candidate = MinStoppedWakeCandidate(
-                candidate,
-                currentCycle,
-                targetCycle,
-                Blitter.GetNextWakeCandidateCycle(currentCycle, targetCycle),
-                M68kTraceBatchWakeSource.Blitter,
-                ref wakeSource);
-            return Math.Clamp(candidate, currentCycle + 1, targetCycle);
-        }
+                cpuInterruptMask,
+                out wakeSource);
 
         private static long MinStoppedWakeCandidate(
             long candidate,
@@ -1850,7 +1913,7 @@ namespace CopperMod.Amiga
                 target == AmigaBusAccessTarget.CustomRegisters &&
                 !isWrite)
             {
-                AdvanceRegisterObservableEventsTo(requestedCycle, address);
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
             else if (requester == AmigaBusRequester.Cpu &&
@@ -1859,10 +1922,7 @@ namespace CopperMod.Amiga
                     target == AmigaBusAccessTarget.RealTimeClock ||
                     target == AmigaBusAccessTarget.CustomRegisters))
             {
-                AdvanceDmaTo(
-                    requestedCycle,
-                    advanceLiveAgnus: true,
-                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
 
@@ -1942,15 +2002,12 @@ namespace CopperMod.Amiga
                 target == AmigaBusAccessTarget.RealTimeClock ||
                 (target == AmigaBusAccessTarget.CustomRegisters && isWrite))
             {
-                AdvanceDmaTo(
-                    requestedCycle,
-                    advanceLiveAgnus: true,
-                    advancePassiveDiskInput: ShouldAdvancePassiveDiskInputForCpuAccess(target, address));
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
             else if (target == AmigaBusAccessTarget.CustomRegisters)
             {
-                AdvanceRegisterObservableEventsTo(requestedCycle, address);
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
                 requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
             }
 
@@ -2439,6 +2496,25 @@ namespace CopperMod.Amiga
         private static bool IsCustomRegisterWordAddress(uint address)
             => address >= 0x00DFF000 && address < 0x00DFF1FF;
 
+        private static bool IsCustomRegisterByteAddress(uint address)
+            => address >= 0x00DFF000 && address < 0x00DFF200;
+
+        private byte ReadCustomByte(ushort offset, long sampleCycle)
+        {
+            UpdateBeamPositionForCustomRead(offset, sampleCycle);
+            if (TryReadGamePortCustomByte(offset, out var gamePortValue))
+            {
+                return gamePortValue;
+            }
+
+            if (Display.TryReadByte(offset, out var displayValue))
+            {
+                return displayValue;
+            }
+
+            return Disk.TryReadByte(offset, out var diskValue) ? diskValue : Paula.ReadByte(offset);
+        }
+
         private ushort ReadCustomWord(ushort offset, long sampleCycle)
         {
             offset = (ushort)(offset & 0x01FE);
@@ -2479,6 +2555,18 @@ namespace CopperMod.Amiga
             }
 
             return (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)));
+        }
+
+        private uint ReadCustomLong(uint address, long firstWordCycle, long secondWordCycle)
+        {
+            var high = IsCustomRegisterWordAddress(address)
+                ? ReadCustomWord((ushort)(address - 0x00DFF000), firstWordCycle)
+                : ReadRawWord(address, firstWordCycle);
+            var lowAddress = address + 2;
+            var low = IsCustomRegisterWordAddress(lowAddress)
+                ? ReadCustomWord((ushort)(lowAddress - 0x00DFF000), secondWordCycle)
+                : ReadRawWord(lowAddress, secondWordCycle);
+            return ((uint)high << 16) | low;
         }
 
         private uint ReadRawLong(uint address)
@@ -3179,6 +3267,7 @@ namespace CopperMod.Amiga
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
                 cia.WriteRegister(ciaRegister, value, grantedCycle, _pendingCiaInterrupts);
+                _hardwareScheduler.NotifyWorkScheduled(grantedCycle);
                 if (cia == CiaA && ciaRegister == 0)
                 {
                     UpdateCiaAPortAOutputSideEffects();
@@ -3233,6 +3322,7 @@ namespace CopperMod.Amiga
                 Display.ScheduleWrite(grantedCycle, (ushort)(address - 0x00DFF000), value);
                 Blitter.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
                 Disk.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
+                _hardwareScheduler.NotifyWorkScheduled(grantedCycle);
                 return;
             }
 
@@ -3336,6 +3426,7 @@ namespace CopperMod.Amiga
             Display.ScheduleWrite(cycle, wordOffset, wordValue);
             Blitter.WriteRegister(wordOffset, wordValue, cycle);
             Disk.WriteRegister(wordOffset, wordValue, cycle);
+            _hardwareScheduler.NotifyWorkScheduled(cycle);
 
             _pendingCustomByteWritten[highIndex] = false;
             _pendingCustomByteWritten[lowIndex] = false;

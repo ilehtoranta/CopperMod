@@ -15,6 +15,7 @@ var allWorkloads = new[]
     new BenchmarkWorkload("Superfrog CSL", "Superfrog (1993)(Team 17)(Disk 1 of 4)[cr CSL].zip"),
     new BenchmarkWorkload("Lemmings SR", "Lemmings (1991)(Psygnosis)(Disk 1 of 2)[cr SR].zip"),
     new BenchmarkWorkload("Full Contact FLT", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip"),
+    new BenchmarkWorkload("Full Contact original single-drive", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip", Profile: "expanded-kickstart13 - singledrive.json"),
     new BenchmarkWorkload("FC FLT intro", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip", FireFrame: 260),
     new BenchmarkWorkload("North & South CP intro", "North & South (1989)(Infogrames)(M5)[cr CP].zip", FireFrame: 260),
     new BenchmarkWorkload("Shadow of the Beast IPF", "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip"),
@@ -26,7 +27,7 @@ var workloads = options.Smoke
 
 if (options.DiskDivergenceTrace)
 {
-    Console.WriteLine($"Disk divergence trace, Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, Profile={options.Profile ?? "default"}, Kickstart={FormatKickstartOption(options)}");
+    Console.WriteLine($"Disk divergence trace, Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, Profile={options.Profile ?? "workload/default"}, Kickstart={FormatKickstartOption(options)}");
     foreach (var workload in workloads)
     {
         RunDiskDivergenceTrace(workload, options);
@@ -35,7 +36,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -49,7 +50,7 @@ foreach (var workload in workloads)
 static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOptions options)
 {
     var timingMode = "hrm";
-    var emulator = CreateEmulator(workload.FileName, options);
+    var emulator = CreateEmulator(workload, options);
     if (emulator == null)
     {
         return new BenchmarkRunResult(
@@ -60,6 +61,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
             0,
             0,
             default,
+            default,
+            default,
             0,
             0,
             0,
@@ -70,6 +73,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
             default,
             default,
             default,
+            default,
+            0,
             M68kInstructionFrequencySnapshot.Empty,
             "missing",
             default,
@@ -96,13 +101,67 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     GC.WaitForPendingFinalizers();
     GC.Collect();
 
+    var nominalFrameAudioMilliseconds = emulator.AudioFramesPerAppFrame(SampleRate) * 1000.0 / SampleRate;
+    var fakeQueuedAudioMilliseconds = nominalFrameAudioMilliseconds * 3.0;
+    var fakeQueuedAudioLimitMilliseconds = nominalFrameAudioMilliseconds * 8.0;
+    var fakeQueuedAudioMinMilliseconds = fakeQueuedAudioMilliseconds;
+    var fakeQueuedAudioMaxMilliseconds = fakeQueuedAudioMilliseconds;
+    var fakeAudioSubmitFailures = 0;
+    var activeAudioFrames = 0;
+    var maxFrameMilliseconds = 0.0;
+    var maxFrameSchedulerDrains = 0L;
+    var slowFramesOver20 = 0;
+    var slowFramesOver33 = 0;
+    var slowFramesOver40 = 0;
     var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
     var startTimestamp = Stopwatch.GetTimestamp();
     for (var frame = 0; frame < options.MeasuredFrames; frame++)
     {
+        var schedulerBeforeFrame = CaptureHardwareSchedulerSnapshot(emulator);
+        var frameStartTimestamp = Stopwatch.GetTimestamp();
         ApplyFrameActions(emulator, workload, options.WarmupFrames + frame);
         emulator.RenderNextFrame();
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+        var schedulerAfterFrame = CaptureHardwareSchedulerSnapshot(emulator);
+        maxFrameSchedulerDrains = Math.Max(
+            maxFrameSchedulerDrains,
+            schedulerAfterFrame.DrainCount - schedulerBeforeFrame.DrainCount);
+        var frameMilliseconds = Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds;
+        maxFrameMilliseconds = Math.Max(maxFrameMilliseconds, frameMilliseconds);
+        if (frameMilliseconds > 20.0)
+        {
+            slowFramesOver20++;
+        }
+
+        if (frameMilliseconds > 33.0)
+        {
+            slowFramesOver33++;
+        }
+
+        if (frameMilliseconds > 40.0)
+        {
+            slowFramesOver40++;
+        }
+
+        fakeQueuedAudioMilliseconds -= frameMilliseconds;
+        fakeQueuedAudioMinMilliseconds = Math.Min(fakeQueuedAudioMinMilliseconds, fakeQueuedAudioMilliseconds);
+        if (fakeQueuedAudioMilliseconds < 0.0)
+        {
+            fakeAudioSubmitFailures++;
+            fakeQueuedAudioMilliseconds = 0.0;
+            fakeQueuedAudioMinMilliseconds = 0.0;
+        }
+
+        var audioSpan = audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels));
+        if (HasActiveAudio(audioSpan))
+        {
+            activeAudioFrames++;
+        }
+
+        fakeQueuedAudioMilliseconds = Math.Min(
+            fakeQueuedAudioLimitMilliseconds,
+            fakeQueuedAudioMilliseconds + (audioFrames * 1000.0 / SampleRate));
+        fakeQueuedAudioMaxMilliseconds = Math.Max(fakeQueuedAudioMaxMilliseconds, fakeQueuedAudioMilliseconds);
     }
 
     var elapsed = Stopwatch.GetElapsedTime(startTimestamp);
@@ -113,6 +172,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var displaySummary = CaptureDisplaySummary(GetDisplay(emulator).CaptureSnapshot());
     var diskSummary = CaptureDiskSummary(emulator);
     var specializationSummary = CaptureSpecializationSummary(emulator);
+    var schedulerSummary = CaptureHardwareSchedulerSnapshot(emulator);
     var instructionFrequency = options.InstructionMatrix
         ? emulator.InstructionFrequency
         : M68kInstructionFrequencySnapshot.Empty;
@@ -134,6 +194,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         fps,
         elapsed.TotalMilliseconds / options.MeasuredFrames,
         allocated,
+        new FrameTimingSummary(maxFrameMilliseconds, slowFramesOver20, slowFramesOver33, slowFramesOver40),
+        new AudioQueueSummary(activeAudioFrames, fakeAudioSubmitFailures, fakeQueuedAudioMinMilliseconds, fakeQueuedAudioMaxMilliseconds),
         phase,
         display.LiveDisplayEventCount,
         display.LiveCopperStepCount,
@@ -145,6 +207,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         diskSummary,
         specializationSummary,
         agnus,
+        schedulerSummary,
+        maxFrameSchedulerDrains,
         instructionFrequency,
         emulator.CpuBackendName,
         emulator.JitCounters,
@@ -316,7 +380,7 @@ static void ApplyFrameActions(CopperScreenEmulator emulator, BenchmarkWorkload w
 
 static void WriteBenchmarkHeader()
 {
-    Console.WriteLine("name\tagnus\tbackend\tframes/sec\treal-time\tms/frame\tallocated bytes\tcpu%\tagnus%\tdisplay%\tjit traces\tjit hits\tjit exits\tjit fallback\tjit invalid\tjit unsupported opcode\tjit unsupported ea\tjit host trap\tjit system\tjit exception\tjit generation\tjit boundary\tjit selfmod\tjit direct il\tjit helper il\tjit direct cpu\tjit direct mem\tjit spec helper\tjit v2 tier0\tjit v2 tier1\tjit v2 tier2\tjit v2 tier3\tjit v2 hits\tjit v2 exits\tjit v2 exit entry\tjit v2 exit branch\tjit v2 exit before\tjit v2 exit beyond\tjit v2 exit chip\tjit v2 exit host\tjit v2 exit hole\tjit v2 exit fall\tjit v2 flags\tjit v2 branch pending\tjit v2 branch sr\tjit v2 writes\tjit v2 zw read rf\tjit v2 zw read rom\tjit v2 zw read overlay\tjit v2 zw write rf\tjit v2 zw read slow\tjit v2 zw write slow\tjit v2 promotions\tjit v2 pressure promotions\tjit v2 worker graphs\tjit v2 worker graph instr\tjit v2 worker graph bytes\tjit async queued\tjit async dedup\tjit async dropped\tjit async bumps\tjit async snap avoided\tjit async started\tjit async completed\tjit async failed\tjit async installed\tjit async stale\tjit async superseded\tjit async tier0\tjit async tier1\tjit async tier2\tjit async tier3\tjit async maxq\tjit async ms\tjit v2 rejected\tjit v2 rej chip\tjit v2 rej host\tjit v2 rej dec\tjit v2 rej op\tjit v2 rej ea\tjit v2 rej budget\tjit v2 rej empty\tjit v2 disabled holes\tjit v2 disabled branches\tjit v2 branch limited\tjit v2 disabled entry\tjit v2 hole compiles\tjit v2 handoff try\tjit v2 handoff hit\tjit v2 handoff instr\tjit v2 handoff fail\tjit v2 handoff queued wait\tjit v2 bus batch\tjit v2 bus instr\tjit v2 bus saved\tjit v2 bus hist\tjit v2 bus wake\tjit v2 rej op top\tjit v2 rej ea top\tjit v2 hole top\tjit v2 handoff block top\tjit v2 handoff fail top\tjit v2 branch limit top\tjit v2 branch target state top\tjit gen guard\tjit pure batch\tjit pure instr\tjit pure saved\tjit pure exits\tjit pure hist\tjit pure wake\tjit stopped ff\tjit stopped cycles\tlive events\tcopper\tpending\tfetches\tframebuffer\taudio\tdisplay summary\tdisk\tspecialization\tretained slots\tslot grants\tgrant mix\tdenied\tdenied mix\tblocked by\tlast denied\tstatus");
+    Console.WriteLine("name\tagnus\tbackend\tframes/sec\treal-time\tms/frame\tmax ms\tslow>20\tslow>33\tslow>40\tactive audio frames\tfake audio submit failures\tfake audio min ms\tfake audio max ms\tallocated bytes\tcpu%\tagnus%\tdisplay%\tjit traces\tjit hits\tjit exits\tjit fallback\tjit invalid\tjit unsupported opcode\tjit unsupported ea\tjit host trap\tjit system\tjit exception\tjit generation\tjit boundary\tjit selfmod\tjit direct il\tjit helper il\tjit direct cpu\tjit direct mem\tjit spec helper\tjit v2 tier0\tjit v2 tier1\tjit v2 tier2\tjit v2 tier3\tjit v2 hits\tjit v2 exits\tjit v2 exit entry\tjit v2 exit branch\tjit v2 exit before\tjit v2 exit beyond\tjit v2 exit chip\tjit v2 exit host\tjit v2 exit hole\tjit v2 exit fall\tjit v2 flags\tjit v2 branch pending\tjit v2 branch sr\tjit v2 writes\tjit v2 zw read rf\tjit v2 zw read rom\tjit v2 zw read overlay\tjit v2 zw write rf\tjit v2 zw read slow\tjit v2 zw write slow\tjit v2 promotions\tjit v2 pressure promotions\tjit v2 worker graphs\tjit v2 worker graph instr\tjit v2 worker graph bytes\tjit async queued\tjit async dedup\tjit async dropped\tjit async bumps\tjit async snap avoided\tjit async started\tjit async completed\tjit async failed\tjit async installed\tjit async stale\tjit async superseded\tjit async tier0\tjit async tier1\tjit async tier2\tjit async tier3\tjit async maxq\tjit async ms\tjit v2 rejected\tjit v2 rej chip\tjit v2 rej host\tjit v2 rej dec\tjit v2 rej op\tjit v2 rej ea\tjit v2 rej budget\tjit v2 rej empty\tjit v2 disabled holes\tjit v2 disabled branches\tjit v2 branch limited\tjit v2 disabled entry\tjit v2 hole compiles\tjit v2 handoff try\tjit v2 handoff hit\tjit v2 handoff instr\tjit v2 handoff fail\tjit v2 handoff queued wait\tjit v2 bus batch\tjit v2 bus instr\tjit v2 bus saved\tjit v2 bus hist\tjit v2 bus wake\tjit v2 rej op top\tjit v2 rej ea top\tjit v2 hole top\tjit v2 handoff block top\tjit v2 handoff fail top\tjit v2 branch limit top\tjit v2 branch target state top\tjit gen guard\tjit pure batch\tjit pure instr\tjit pure saved\tjit pure exits\tjit pure hist\tjit pure wake\tjit stopped ff\tjit stopped cycles\tlive events\tcopper\tpending\tfetches\tframebuffer\taudio\tdisplay summary\tdisk\tspecialization\tretained slots\tslot grants\tgrant mix\tdenied\tdenied mix\tblocked by\tlast denied\tstatus");
 }
 
 static void WriteBenchmarkResult(BenchmarkRunResult result, BenchmarkOptions options)
@@ -332,10 +396,13 @@ static void WriteBenchmarkResult(BenchmarkRunResult result, BenchmarkOptions opt
         return;
     }
 
+    result = result with { StatusText = FormatStatusWithScheduler(result) };
     var agnus = result.Agnus;
     var jit = result.Jit;
+    var timing = result.Timing;
+    var audioQueue = result.AudioQueue;
     Console.WriteLine(
-        $"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\t{result.FramesPerSecond:F1}\t{result.FramesPerSecond / 50.0:F2}x\t{result.MillisecondsPerFrame:F2}\t{result.AllocatedBytes}\t{result.Phase.CpuPercent:F1}\t{result.Phase.AgnusPercent:F1}\t{result.Phase.DisplayPercent:F1}\t{jit.CompiledTraces}\t{jit.TraceHits}\t{jit.SideExits}\t{jit.FallbackInstructions}\t{jit.Invalidations}\t{jit.UnsupportedOpcode}\t{jit.UnsupportedEa}\t{jit.HostTrapBailouts}\t{jit.SystemInstructionBailouts}\t{jit.ExceptionInstructionBailouts}\t{jit.GenerationMismatches}\t{jit.BoundarySideExits}\t{jit.SelfModifiedCodeExits}\t{jit.DirectIlInstructions}\t{jit.HelperIlInstructions}\t{jit.DirectCpuIlInstructions}\t{jit.DirectMemoryIlInstructions}\t{jit.SpecializedHelperIlInstructions}\t{jit.V2Tier0CompiledTraces}\t{jit.V2Tier1CompiledTraces}\t{jit.V2Tier2CompiledTraces}\t{jit.V2Tier3CompiledTraces}\t{jit.V2TraceHits}\t{jit.V2SideExits}\t{jit.V2SideExitEntryMismatch}\t{jit.V2SideExitOutOfBlockBranch}\t{jit.V2SideExitBeforeGraph}\t{jit.V2SideExitBeyondGraph}\t{jit.V2SideExitChipRam}\t{jit.V2SideExitHostTrap}\t{jit.V2SideExitGraphHole}\t{jit.V2SideExitConditionalFallthrough}\t{jit.V2FlagMaterializations}\t{jit.V2BranchPendingFlagChecks}\t{jit.V2BranchStatusFlagChecks}\t{jit.V2LazyWritebacks}\t{jit.V2ZeroWaitReadRealFast}\t{jit.V2ZeroWaitReadRom}\t{jit.V2ZeroWaitReadOverlay}\t{jit.V2ZeroWaitWriteRealFast}\t{jit.V2ZeroWaitReadSlow}\t{jit.V2ZeroWaitWriteSlow}\t{jit.V2TierPromotions}\t{jit.V2TierPressurePromotions}\t{jit.V2WorkerExpandedGraphs}\t{jit.V2WorkerExpandedGraphInstructions}\t{jit.V2WorkerExpandedGraphBytes}\t{jit.AsyncRequestsQueued}\t{jit.AsyncRequestsDeduped}\t{jit.AsyncRequestsDropped}\t{jit.AsyncPriorityBumps}\t{jit.AsyncSnapshotCapturesAvoided}\t{jit.AsyncWorkerCompilesStarted}\t{jit.AsyncWorkerCompilesCompleted}\t{jit.AsyncWorkerCompilesFailed}\t{jit.AsyncCompletedInstalled}\t{jit.AsyncCompletedDiscardedStale}\t{jit.AsyncCompletedDiscardedSuperseded}\t{jit.AsyncTier0Installs}\t{jit.AsyncTier1Installs}\t{jit.AsyncTier2Installs}\t{jit.AsyncTier3Installs}\t{jit.AsyncMaxQueueDepth}\t{jit.AsyncWorkerCompileMilliseconds}\t{jit.V2RejectedCandidates}\t{jit.V2RejectedChipRam}\t{jit.V2RejectedHostTrap}\t{jit.V2RejectedDecode}\t{jit.V2RejectedUnsupportedOperation}\t{jit.V2RejectedUnsupportedEa}\t{jit.V2RejectedBudget}\t{jit.V2RejectedEmpty}\t{jit.V2DisabledGraphHoleRoots}\t{jit.V2DisabledBranchExitRoots}\t{jit.V2BranchPressureLimitedRoots}\t{jit.V2DisabledEntryMismatchRoots}\t{jit.V2GraphHoleTargetCompiles}\t{jit.V2TraceHandoffAttempts}\t{jit.V2TraceHandoffExecutions}\t{jit.V2TraceHandoffInstructions}\t{jit.V2TraceHandoffFailures}\t{jit.V2TraceHandoffQueuedNotReady}\t{jit.V2BusAccessBatchExecutions}\t{jit.V2BusAccessBatchInstructions}\t{jit.V2BusAccessBatchBoundaryCallsSaved}\t{FormatCounterText(jit.V2BusAccessBatchLengthHistogram)}\t{FormatCounterText(jit.V2BusAccessBatchWakeSourceTop)}\t{FormatCounterText(jit.V2UnsupportedOperationTop)}\t{FormatCounterText(jit.V2UnsupportedEaTop)}\t{FormatCounterText(jit.V2GraphHoleTop)}\t{FormatCounterText(jit.V2TraceHandoffBlockTop)}\t{FormatCounterText(jit.V2TraceHandoffFailureTop)}\t{FormatCounterText(jit.V2BranchPressureLimitTop)}\t{FormatCounterText(jit.V2BranchPressureTargetStateTop)}\t{jit.GenerationGuardExits}\t{jit.PureTraceBatchExecutions}\t{jit.PureTraceBatchInstructions}\t{jit.PureTraceBatchBoundaryCallsSaved}\t{jit.PureTraceBatchSideExits}\t{FormatCounterText(jit.PureTraceBatchLengthHistogram)}\t{FormatCounterText(jit.PureTraceBatchWakeSourceTop)}\t{jit.StoppedFastForwards}\t{jit.StoppedFastForwardCycles}\t{result.LiveDisplayEventCount}\t{result.LiveCopperStepCount}\t{result.LivePendingWriteEventCount}\t{result.LiveFetchBatchWordCount}\t{FormatFramebufferSummary(result.Framebuffer)}\t{FormatAudioSummary(result.Audio)}\t{FormatDisplaySummary(result.Display)}\t{FormatDiskSummary(result.Disk)}\t{FormatSpecializationSummary(result.Specialization)}\t{agnus.SlotReservationCount}\t{agnus.SlotGrantCount}\t{FormatSlotGrantMix(agnus)}\t{agnus.DeniedFixedSlotCount}\t{FormatDeniedSlotMix(agnus)}\t{FormatDeniedBlockerMix(agnus)}\t{FormatLastDeniedFixedSlot(agnus)}\t{result.StatusText}");
+        $"{result.Workload.Name}\t{result.TimingMode}\t{result.CpuBackend}\t{result.FramesPerSecond:F1}\t{result.FramesPerSecond / 50.0:F2}x\t{result.MillisecondsPerFrame:F2}\t{timing.MaxMilliseconds:F2}\t{timing.SlowFramesOver20}\t{timing.SlowFramesOver33}\t{timing.SlowFramesOver40}\t{audioQueue.ActiveFrames}\t{audioQueue.SubmitFailures}\t{audioQueue.MinQueuedMilliseconds:F2}\t{audioQueue.MaxQueuedMilliseconds:F2}\t{result.AllocatedBytes}\t{result.Phase.CpuPercent:F1}\t{result.Phase.AgnusPercent:F1}\t{result.Phase.DisplayPercent:F1}\t{jit.CompiledTraces}\t{jit.TraceHits}\t{jit.SideExits}\t{jit.FallbackInstructions}\t{jit.Invalidations}\t{jit.UnsupportedOpcode}\t{jit.UnsupportedEa}\t{jit.HostTrapBailouts}\t{jit.SystemInstructionBailouts}\t{jit.ExceptionInstructionBailouts}\t{jit.GenerationMismatches}\t{jit.BoundarySideExits}\t{jit.SelfModifiedCodeExits}\t{jit.DirectIlInstructions}\t{jit.HelperIlInstructions}\t{jit.DirectCpuIlInstructions}\t{jit.DirectMemoryIlInstructions}\t{jit.SpecializedHelperIlInstructions}\t{jit.V2Tier0CompiledTraces}\t{jit.V2Tier1CompiledTraces}\t{jit.V2Tier2CompiledTraces}\t{jit.V2Tier3CompiledTraces}\t{jit.V2TraceHits}\t{jit.V2SideExits}\t{jit.V2SideExitEntryMismatch}\t{jit.V2SideExitOutOfBlockBranch}\t{jit.V2SideExitBeforeGraph}\t{jit.V2SideExitBeyondGraph}\t{jit.V2SideExitChipRam}\t{jit.V2SideExitHostTrap}\t{jit.V2SideExitGraphHole}\t{jit.V2SideExitConditionalFallthrough}\t{jit.V2FlagMaterializations}\t{jit.V2BranchPendingFlagChecks}\t{jit.V2BranchStatusFlagChecks}\t{jit.V2LazyWritebacks}\t{jit.V2ZeroWaitReadRealFast}\t{jit.V2ZeroWaitReadRom}\t{jit.V2ZeroWaitReadOverlay}\t{jit.V2ZeroWaitWriteRealFast}\t{jit.V2ZeroWaitReadSlow}\t{jit.V2ZeroWaitWriteSlow}\t{jit.V2TierPromotions}\t{jit.V2TierPressurePromotions}\t{jit.V2WorkerExpandedGraphs}\t{jit.V2WorkerExpandedGraphInstructions}\t{jit.V2WorkerExpandedGraphBytes}\t{jit.AsyncRequestsQueued}\t{jit.AsyncRequestsDeduped}\t{jit.AsyncRequestsDropped}\t{jit.AsyncPriorityBumps}\t{jit.AsyncSnapshotCapturesAvoided}\t{jit.AsyncWorkerCompilesStarted}\t{jit.AsyncWorkerCompilesCompleted}\t{jit.AsyncWorkerCompilesFailed}\t{jit.AsyncCompletedInstalled}\t{jit.AsyncCompletedDiscardedStale}\t{jit.AsyncCompletedDiscardedSuperseded}\t{jit.AsyncTier0Installs}\t{jit.AsyncTier1Installs}\t{jit.AsyncTier2Installs}\t{jit.AsyncTier3Installs}\t{jit.AsyncMaxQueueDepth}\t{jit.AsyncWorkerCompileMilliseconds}\t{jit.V2RejectedCandidates}\t{jit.V2RejectedChipRam}\t{jit.V2RejectedHostTrap}\t{jit.V2RejectedDecode}\t{jit.V2RejectedUnsupportedOperation}\t{jit.V2RejectedUnsupportedEa}\t{jit.V2RejectedBudget}\t{jit.V2RejectedEmpty}\t{jit.V2DisabledGraphHoleRoots}\t{jit.V2DisabledBranchExitRoots}\t{jit.V2BranchPressureLimitedRoots}\t{jit.V2DisabledEntryMismatchRoots}\t{jit.V2GraphHoleTargetCompiles}\t{jit.V2TraceHandoffAttempts}\t{jit.V2TraceHandoffExecutions}\t{jit.V2TraceHandoffInstructions}\t{jit.V2TraceHandoffFailures}\t{jit.V2TraceHandoffQueuedNotReady}\t{jit.V2BusAccessBatchExecutions}\t{jit.V2BusAccessBatchInstructions}\t{jit.V2BusAccessBatchBoundaryCallsSaved}\t{FormatCounterText(jit.V2BusAccessBatchLengthHistogram)}\t{FormatCounterText(jit.V2BusAccessBatchWakeSourceTop)}\t{FormatCounterText(jit.V2UnsupportedOperationTop)}\t{FormatCounterText(jit.V2UnsupportedEaTop)}\t{FormatCounterText(jit.V2GraphHoleTop)}\t{FormatCounterText(jit.V2TraceHandoffBlockTop)}\t{FormatCounterText(jit.V2TraceHandoffFailureTop)}\t{FormatCounterText(jit.V2BranchPressureLimitTop)}\t{FormatCounterText(jit.V2BranchPressureTargetStateTop)}\t{jit.GenerationGuardExits}\t{jit.PureTraceBatchExecutions}\t{jit.PureTraceBatchInstructions}\t{jit.PureTraceBatchBoundaryCallsSaved}\t{jit.PureTraceBatchSideExits}\t{FormatCounterText(jit.PureTraceBatchLengthHistogram)}\t{FormatCounterText(jit.PureTraceBatchWakeSourceTop)}\t{jit.StoppedFastForwards}\t{jit.StoppedFastForwardCycles}\t{result.LiveDisplayEventCount}\t{result.LiveCopperStepCount}\t{result.LivePendingWriteEventCount}\t{result.LiveFetchBatchWordCount}\t{FormatFramebufferSummary(result.Framebuffer)}\t{FormatAudioSummary(result.Audio)}\t{FormatDisplaySummary(result.Display)}\t{FormatDiskSummary(result.Disk)}\t{FormatSpecializationSummary(result.Specialization)}\t{agnus.SlotReservationCount}\t{agnus.SlotGrantCount}\t{FormatSlotGrantMix(agnus)}\t{agnus.DeniedFixedSlotCount}\t{FormatDeniedSlotMix(agnus)}\t{FormatDeniedBlockerMix(agnus)}\t{FormatLastDeniedFixedSlot(agnus)}\t{result.StatusText}");
     if (options.InstructionMatrix)
     {
         WriteInstructionMatrix(result, options.TopInstructionOpcodes);
@@ -446,9 +513,10 @@ static string FormatCounterText(string? value)
         ? string.Empty
         : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
-static CopperScreenEmulator? CreateEmulator(string? fileName, BenchmarkOptions options)
+static CopperScreenEmulator? CreateEmulator(BenchmarkWorkload workload, BenchmarkOptions options)
 {
-    var args = CreateEmulatorArgs(fileName, options);
+    var fileName = workload.FileName;
+    var args = CreateEmulatorArgs(fileName, options, workload.Profile);
     if (fileName == null)
     {
         return args.Length == 0
@@ -459,13 +527,14 @@ static CopperScreenEmulator? CreateEmulator(string? fileName, BenchmarkOptions o
     var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
     return diskPath == null
         ? null
-        : CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options), AppContext.BaseDirectory);
+        : CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options, workload.Profile), AppContext.BaseDirectory);
 }
 
-static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options)
+static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, string? workloadProfile)
 {
+    var profile = options.Profile ?? workloadProfile;
     var count = (diskPath == null ? 0 : 1) +
-        (string.IsNullOrWhiteSpace(options.Profile) ? 0 : 2) +
+        (string.IsNullOrWhiteSpace(profile) ? 0 : 2) +
         (options.RealKickstart ? 1 : 0) +
         (string.IsNullOrWhiteSpace(options.KickstartRomPath) ? 0 : 2) +
         (string.IsNullOrWhiteSpace(options.CpuBackend) ? 0 : 2);
@@ -481,10 +550,10 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options)
         args[index++] = diskPath;
     }
 
-    if (!string.IsNullOrWhiteSpace(options.Profile))
+    if (!string.IsNullOrWhiteSpace(profile))
     {
         args[index++] = "--profile";
-        args[index++] = options.Profile;
+        args[index++] = profile;
     }
 
     if (options.RealKickstart)
@@ -701,6 +770,11 @@ static AgnusBeamDmaSnapshot GetAgnusSnapshot(CopperScreenEmulator emulator)
     return GetMachine(emulator).Bus.Agnus.CaptureSnapshot();
 }
 
+static AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot(CopperScreenEmulator emulator)
+{
+    return GetMachine(emulator).Bus.CaptureHardwareSchedulerSnapshot();
+}
+
 static DiskSummary CaptureDiskSummary(CopperScreenEmulator emulator)
 {
     var machine = GetMachine(emulator);
@@ -789,6 +863,19 @@ static AudioSummary CaptureAudioSummary(ReadOnlySpan<float> samples, int frames)
     return new AudioSummary(frames, nonZero, peak, checksum);
 }
 
+static bool HasActiveAudio(ReadOnlySpan<float> samples)
+{
+    foreach (var sample in samples)
+    {
+        if (sample != 0.0f)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static DisplaySummary CaptureDisplaySummary(OcsDisplaySnapshot display)
 {
     return new DisplaySummary(
@@ -815,6 +902,12 @@ static string FormatFramebufferSummary(FramebufferSummary summary)
 
 static string FormatAudioSummary(AudioSummary summary)
     => $"{summary.Frames}/{summary.NonZeroSamples}/{summary.Peak:F4}/0x{summary.Checksum:X8}";
+
+static string FormatStatusWithScheduler(BenchmarkRunResult result)
+{
+    var scheduler = result.Scheduler;
+    return $"{FormatCounterText(result.StatusText)} | scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+}
 
 static string FormatDisplaySummary(DisplaySummary summary)
 {
@@ -884,7 +977,7 @@ static bool IsRelease()
 #endif
 }
 
-internal readonly record struct BenchmarkWorkload(string Name, string? FileName, int FireFrame = -1);
+internal readonly record struct BenchmarkWorkload(string Name, string? FileName, int FireFrame = -1, string? Profile = null);
 
 internal readonly record struct FrameProfile(
     double CpuPercent,
@@ -894,6 +987,18 @@ internal readonly record struct FrameProfile(
     double AgnusMillisecondsPerFrame,
     double DisplayMillisecondsPerFrame,
     double TotalMillisecondsPerFrame);
+
+internal readonly record struct FrameTimingSummary(
+    double MaxMilliseconds,
+    int SlowFramesOver20,
+    int SlowFramesOver33,
+    int SlowFramesOver40);
+
+internal readonly record struct AudioQueueSummary(
+    int ActiveFrames,
+    int SubmitFailures,
+    double MinQueuedMilliseconds,
+    double MaxQueuedMilliseconds);
 
 internal readonly record struct FramebufferSummary(int NonBlackPixels, int DistinctColors, uint Checksum);
 
@@ -948,6 +1053,8 @@ internal readonly record struct BenchmarkRunResult(
     double FramesPerSecond,
     double MillisecondsPerFrame,
     long AllocatedBytes,
+    FrameTimingSummary Timing,
+    AudioQueueSummary AudioQueue,
     FrameProfile Phase,
     int LiveDisplayEventCount,
     int LiveCopperStepCount,
@@ -959,6 +1066,8 @@ internal readonly record struct BenchmarkRunResult(
     DiskSummary Disk,
     HardwareSpecializationSummary Specialization,
     AgnusBeamDmaSnapshot Agnus,
+    AmigaHardwareSchedulerSnapshot Scheduler,
+    long MaxFrameSchedulerDrains,
     M68kInstructionFrequencySnapshot InstructionFrequency,
     string CpuBackend,
     M68kJitCounters Jit,

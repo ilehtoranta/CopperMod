@@ -242,6 +242,8 @@ namespace CopperMod.Amiga
 
         long GetSlotGrantCount(AgnusChipSlotOwner owner);
 
+        long NextMandatoryRefreshCycle { get; }
+
         long CurrentCycle { get; }
 
         long FrameStartCycle { get; }
@@ -735,6 +737,8 @@ namespace CopperMod.Amiga
         }
 
         public long CurrentCycle => _currentCycle;
+
+        public long NextMandatoryRefreshCycle => _nextRefreshCommitCycle;
 
         public long FrameStartCycle => CurrentBeam.FrameStartCycle;
 
@@ -1438,6 +1442,9 @@ namespace CopperMod.Amiga
         }
 
         public void AdvanceTo(long targetCycle)
+            => AdvanceTo(targetCycle, advanceLiveDisplay: true);
+
+        public void AdvanceTo(long targetCycle, bool advanceLiveDisplay)
         {
             System.Diagnostics.Debug.Assert(targetCycle >= 0, "Agnus beam advance cycles must be non-negative.");
             if (targetCycle < _currentCycle)
@@ -1445,9 +1452,39 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _bus.Display.AdvanceLiveDmaTo(targetCycle);
+            if (advanceLiveDisplay)
+            {
+                _bus.Display.AdvanceLiveDmaTo(targetCycle);
+            }
+
             _chipSlots.AdvanceTo(targetCycle);
             _currentCycle = targetCycle;
+        }
+
+        public long GetNextWakeCandidateCycle(long currentCycle, long targetCycle, bool includeLiveDisplay)
+        {
+            if (targetCycle < currentCycle)
+            {
+                return long.MaxValue;
+            }
+
+            var candidate = long.MaxValue;
+            var refreshCycle = _chipSlots.NextMandatoryRefreshCycle;
+            if (refreshCycle <= targetCycle)
+            {
+                candidate = refreshCycle <= currentCycle ? currentCycle : refreshCycle;
+            }
+
+            if (includeLiveDisplay)
+            {
+                var displayCycle = _bus.Display.GetNextLiveDisplayWakeCandidateCycle(currentCycle, targetCycle);
+                if (displayCycle.HasValue)
+                {
+                    candidate = Math.Min(candidate, displayCycle.Value);
+                }
+            }
+
+            return candidate;
         }
 
         public void RecordCpuChipAccess(AmigaBusAccessResult access)
