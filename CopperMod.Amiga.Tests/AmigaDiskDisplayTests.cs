@@ -247,6 +247,32 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void DisplayHighResolutionNarrowDdfUsesFetchWidthForLineStride()
+    {
+        var bus = new AmigaBus();
+        const int ddfStart = 0x70;
+        const int ddfStop = 0xA0;
+        const int expectedFetchWords = ((ddfStop - ddfStart) / 4) + 2;
+        var rowStride = expectedFetchWords * 2;
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF092, ddfStart);
+        bus.WriteWord(0x00DFF094, ddfStop);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF100, 0x9000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000 + rowStride, 0x8000);
+        var frame = new uint[bus.Display.Width * bus.Display.Height];
+
+        bus.Display.RenderFrame(frame);
+
+        var x = (StandardX + ((ddfStart - 0x3C) * 2)) * 2;
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, x, StandardY * 2));
+        Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, x, (StandardY + 1) * 2));
+    }
+
+    [Fact]
     public void DisplayHighResolutionLowResolutionOutputUsesRealSubpixelColors()
     {
         var bus = new AmigaBus();

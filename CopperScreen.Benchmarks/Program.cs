@@ -145,6 +145,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         ApplyFrameActions(emulator, workload, warmupFramesRun + frame);
         emulator.RenderNextFrame();
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+        WriteMeasuredFrameDumpIfNeeded(options, emulator, warmupFramesRun + frame + 1);
         WriteProgressIfNeeded(emulator, workload, options, "measure", frame + 1, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
         var displayFrame = GetDisplay(emulator).CaptureSnapshot();
         measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
@@ -205,6 +206,16 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
 
     var elapsed = Stopwatch.GetElapsedTime(startTimestamp);
     var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+    if (!string.IsNullOrWhiteSpace(options.DumpFramePath))
+    {
+        WriteFramebufferBmp(FormatDumpFramePath(options.DumpFramePath, warmupFramesRun + options.MeasuredFrames), emulator.Framebuffer, emulator.Width, emulator.Height);
+    }
+
+    if (!string.IsNullOrWhiteSpace(options.DumpChipRamPath))
+    {
+        WriteChipRamDump(FormatDumpFramePath(options.DumpChipRamPath, warmupFramesRun + options.MeasuredFrames), emulator);
+    }
+
     var fps = options.MeasuredFrames / elapsed.TotalSeconds;
     var framebufferSummary = CaptureFramebufferSummary(emulator.Framebuffer);
     var audioSummary = CaptureAudioSummary(audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels)), audioFrames);
@@ -462,9 +473,38 @@ static void WriteProgressIfNeeded(
         $"dmacon=0x{machine.Bus.Paula.Dmacon:X4} intena=0x{machine.Bus.Paula.Intena:X4} intreq=0x{machine.Bus.Paula.Intreq:X4} " +
         $"bplcon=0x{display.Bplcon0:X4}/0x{display.Bplcon1:X4}/0x{display.Bplcon2:X4} " +
         $"ddf=0x{display.DdfStart:X4}/0x{display.DdfStop:X4} diw=0x{display.DiwStart:X4}/0x{display.DiwStop:X4} " +
+        $"mod={display.Bpl1Mod}/{display.Bpl2Mod} ptr={FormatHexArray(display.BitplanePointers)} base={FormatIntArray(display.BitplaneBaseRows)} " +
         $"bplPix={display.LastBitplaneNonZeroPixels} sprPix={display.LastSpriteNonZeroPixels} spans={GetDisplay(emulator).BitplaneDataSpanCount} " +
         $"copper={GetDisplay(emulator).LiveCopperStepCount} pending={GetDisplay(emulator).LivePendingWriteEventCount} " +
         $"status=\"{emulator.StatusText}\"");
+}
+
+static string FormatHexArray(IReadOnlyList<uint> values)
+{
+    return string.Join(
+        '/',
+        values.Select(value => value.ToString("X6", System.Globalization.CultureInfo.InvariantCulture)));
+}
+
+static string FormatIntArray(IReadOnlyList<int> values)
+{
+    return string.Join('/', values);
+}
+
+static void WriteMeasuredFrameDumpIfNeeded(BenchmarkOptions options, CopperScreenEmulator emulator, int frame)
+{
+    if (string.IsNullOrWhiteSpace(options.DumpFramePath) ||
+        options.DumpFramePath.IndexOf("{frame}", StringComparison.OrdinalIgnoreCase) < 0)
+    {
+        return;
+    }
+
+    WriteFramebufferBmp(FormatDumpFramePath(options.DumpFramePath, frame), emulator.Framebuffer, emulator.Width, emulator.Height);
+}
+
+static string FormatDumpFramePath(string path, int frame)
+{
+    return path.Replace("{frame}", frame.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
 }
 
 static void WriteBenchmarkHeader()
@@ -905,6 +945,83 @@ static FramebufferSummary CaptureFramebufferSummary(IReadOnlyList<int> framebuff
     return new FramebufferSummary(nonBlack, colors.Count, checksum);
 }
 
+static void WriteFramebufferBmp(string path, IReadOnlyList<int> framebuffer, int width, int height)
+{
+    if (framebuffer.Count < width * height)
+    {
+        throw new ArgumentException("Framebuffer is smaller than the requested BMP dimensions.", nameof(framebuffer));
+    }
+
+    var fullPath = Path.GetFullPath(path);
+    var directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    const int fileHeaderSize = 14;
+    const int dibHeaderSize = 40;
+    var strideBytes = width * sizeof(uint);
+    var imageBytes = strideBytes * height;
+    using var stream = File.Create(fullPath);
+    using var writer = new BinaryWriter(stream);
+    writer.Write((byte)'B');
+    writer.Write((byte)'M');
+    writer.Write(fileHeaderSize + dibHeaderSize + imageBytes);
+    writer.Write((ushort)0);
+    writer.Write((ushort)0);
+    writer.Write(fileHeaderSize + dibHeaderSize);
+    writer.Write(dibHeaderSize);
+    writer.Write(width);
+    writer.Write(-height);
+    writer.Write((ushort)1);
+    writer.Write((ushort)32);
+    writer.Write(0);
+    writer.Write(imageBytes);
+    writer.Write(2835);
+    writer.Write(2835);
+    writer.Write(0);
+    writer.Write(0);
+
+    for (var i = 0; i < width * height; i++)
+    {
+        writer.Write(unchecked((uint)framebuffer[i]));
+    }
+}
+
+static void WriteChipRamDump(string path, CopperScreenEmulator emulator)
+{
+    var fullPath = Path.GetFullPath(path);
+    var directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var machine = GetMachine(emulator);
+    File.WriteAllBytes(fullPath, machine.Bus.ChipRam);
+
+    var display = emulator.DisplaySnapshot;
+    File.WriteAllLines(
+        Path.ChangeExtension(fullPath, ".txt"),
+        [
+            $"bplcon={display.Bplcon0:X4}/{display.Bplcon1:X4}/{display.Bplcon2:X4}",
+            $"ddf={display.DdfStart:X4}/{display.DdfStop:X4}",
+            $"diw={display.DiwStart:X4}/{display.DiwStop:X4}",
+            $"mod={display.Bpl1Mod}/{display.Bpl2Mod}",
+            $"ptr={FormatHexArray(display.BitplanePointers)}",
+            $"base={FormatIntArray(display.BitplaneBaseRows)}",
+            $"colors={FormatColorArray(display.Colors)}"
+        ]);
+}
+
+static string FormatColorArray(IReadOnlyList<ushort> values)
+{
+    return string.Join(
+        '/',
+        values.Select(value => ((int)value).ToString("X4", System.Globalization.CultureInfo.InvariantCulture)));
+}
+
 static AudioSummary CaptureAudioSummary(ReadOnlySpan<float> samples, int frames)
 {
     var checksum = 2166136261u;
@@ -1189,7 +1306,9 @@ internal readonly record struct BenchmarkOptions(
     bool DiskDivergenceTrace,
     int TopInstructionOpcodes,
     int ProgressIntervalFrames,
-    int? StopCylinder)
+    int? StopCylinder,
+    string? DumpFramePath,
+    string? DumpChipRamPath)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -1202,6 +1321,8 @@ internal readonly record struct BenchmarkOptions(
         var topInstructionOpcodes = 16;
         var progressIntervalFrames = 0;
         int? stopCylinder = null;
+        string? dumpFramePath = null;
+        string? dumpChipRamPath = null;
         string? only = null;
         string? profile = null;
         string? cpuBackend = null;
@@ -1289,6 +1410,14 @@ internal readonly record struct BenchmarkOptions(
                     stopCylinder = parsedCylinder;
                 }
             }
+            else if (string.Equals(args[i], "--dump-frame", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                dumpFramePath = args[++i];
+            }
+            else if (string.Equals(args[i], "--dump-chipram", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                dumpChipRamPath = args[++i];
+            }
         }
 
         return new BenchmarkOptions(
@@ -1305,6 +1434,8 @@ internal readonly record struct BenchmarkOptions(
             diskDivergenceTrace,
             Math.Clamp(topInstructionOpcodes, 0, 256),
             Math.Max(0, progressIntervalFrames),
-            stopCylinder);
+            stopCylinder,
+            dumpFramePath,
+            dumpChipRamPath);
     }
 }

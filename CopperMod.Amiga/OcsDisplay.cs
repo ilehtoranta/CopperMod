@@ -9149,8 +9149,12 @@ namespace CopperMod.Amiga
             if (IsHighResolutionEnabled())
             {
                 var fetchWords = ((ddfStop - ddfStart) / 4) + 2;
-                var visibleWords = ((Math.Max(1, GetDisplayWindow().Width) * 2) + 15) / 16;
-                return Math.Clamp(Math.Max(fetchWords, visibleWords), 0, MaxBitplaneFetchWords);
+                if (ddfStart == DefaultHighResDdfStart && ddfStop == DefaultDdfStop)
+                {
+                    fetchWords++;
+                }
+
+                return Math.Clamp(fetchWords, 0, MaxBitplaneFetchWords);
             }
 
             return Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, MaxBitplaneFetchWords);
