@@ -57,17 +57,41 @@ namespace Copper68k
         string JitTargetName,
         long Count);
 
+    internal readonly record struct M68kPcFrequency(
+        uint ProgramCounter,
+        ushort Opcode,
+        string Mnemonic,
+        M68kInstructionFamily Family,
+        string FamilyName,
+        M68kJitTarget JitTarget,
+        string JitTargetName,
+        long Count);
+
+    internal readonly record struct M68kHotLoopFrequency(
+        uint StartProgramCounter,
+        uint EndProgramCounter,
+        uint BranchProgramCounter,
+        uint TargetProgramCounter,
+        ushort BranchOpcode,
+        string BranchMnemonic,
+        int ByteLength,
+        long Count);
+
     internal readonly record struct M68kInstructionFrequencySnapshot(
         long TotalInstructions,
         IReadOnlyList<M68kInstructionFamilyFrequency> Families,
         IReadOnlyList<M68kJitTargetFrequency> JitTargets,
-        IReadOnlyList<M68kOpcodeFrequency> Opcodes)
+        IReadOnlyList<M68kOpcodeFrequency> Opcodes,
+        IReadOnlyList<M68kPcFrequency> HotPcs,
+        IReadOnlyList<M68kHotLoopFrequency> HotLoops)
     {
         public static M68kInstructionFrequencySnapshot Empty { get; } = new(
             0,
             Array.Empty<M68kInstructionFamilyFrequency>(),
             Array.Empty<M68kJitTargetFrequency>(),
-            Array.Empty<M68kOpcodeFrequency>());
+            Array.Empty<M68kOpcodeFrequency>(),
+            Array.Empty<M68kPcFrequency>(),
+            Array.Empty<M68kHotLoopFrequency>());
     }
 
     internal interface IM68kInstructionFrequencyProvider
@@ -81,14 +105,20 @@ namespace Copper68k
 
     internal sealed class M68kInstructionFrequencyMatrix
     {
+        private const int MaxHotLoopByteLength = 4096;
         private readonly long[] _familyCounts = new long[Enum.GetValues<M68kInstructionFamily>().Length];
         private readonly long[] _jitTargetCounts = new long[Enum.GetValues<M68kJitTarget>().Length];
         private readonly Dictionary<ushort, long> _opcodeCounts = new Dictionary<ushort, long>();
+        private readonly Dictionary<ulong, long> _pcCounts = new Dictionary<ulong, long>();
+        private readonly Dictionary<HotLoopKey, long> _hotLoopCounts = new Dictionary<HotLoopKey, long>();
         private long _totalInstructions;
 
         public bool Enabled { get; set; }
 
         public void Record(ushort opcode)
+            => Record(0, opcode);
+
+        public void Record(uint programCounter, ushort opcode)
         {
             if (!Enabled)
             {
@@ -101,7 +131,48 @@ namespace Copper68k
             _jitTargetCounts[(int)jitTarget]++;
             _opcodeCounts.TryGetValue(opcode, out var count);
             _opcodeCounts[opcode] = count + 1;
+            var pcKey = CreatePcKey(programCounter, opcode);
+            _pcCounts.TryGetValue(pcKey, out var pcCount);
+            _pcCounts[pcKey] = pcCount + 1;
             _totalInstructions++;
+        }
+
+        public void RecordTakenBranch(
+            uint branchProgramCounter,
+            ushort branchOpcode,
+            uint targetProgramCounter,
+            int instructionByteLength)
+        {
+            if (!Enabled ||
+                instructionByteLength <= 0 ||
+                targetProgramCounter > branchProgramCounter)
+            {
+                return;
+            }
+
+            var endProgramCounter = unchecked(branchProgramCounter + (uint)instructionByteLength);
+            if (endProgramCounter < branchProgramCounter ||
+                targetProgramCounter >= endProgramCounter)
+            {
+                return;
+            }
+
+            var byteLength = endProgramCounter - targetProgramCounter;
+            if (byteLength == 0 ||
+                byteLength > MaxHotLoopByteLength)
+            {
+                return;
+            }
+
+            var key = new HotLoopKey(
+                targetProgramCounter,
+                endProgramCounter,
+                branchProgramCounter,
+                targetProgramCounter,
+                branchOpcode,
+                (int)byteLength);
+            _hotLoopCounts.TryGetValue(key, out var count);
+            _hotLoopCounts[key] = count + 1;
         }
 
         public M68kInstructionFrequencySnapshot CaptureSnapshot()
@@ -150,7 +221,45 @@ namespace Copper68k
                 .ThenBy(entry => entry.Opcode)
                 .ToArray();
 
-            return new M68kInstructionFrequencySnapshot(_totalInstructions, families, jitTargets, opcodes);
+            var hotPcs = _pcCounts
+                .Select(entry =>
+                {
+                    var programCounter = GetPcFromKey(entry.Key);
+                    var opcode = GetOpcodeFromKey(entry.Key);
+                    var family = M68kInstructionClassifier.GetFamily(opcode);
+                    var jitTarget = M68kInstructionClassifier.GetJitTarget(opcode);
+                    return new M68kPcFrequency(
+                        programCounter,
+                        opcode,
+                        M68kInstructionClassifier.GetMnemonic(opcode),
+                        family,
+                        M68kInstructionClassifier.GetFamilyName(family),
+                        jitTarget,
+                        M68kInstructionClassifier.GetJitTargetName(jitTarget),
+                        entry.Value);
+                })
+                .OrderByDescending(entry => entry.Count)
+                .ThenBy(entry => entry.ProgramCounter)
+                .ThenBy(entry => entry.Opcode)
+                .ToArray();
+
+            var hotLoops = _hotLoopCounts
+                .Select(entry => new M68kHotLoopFrequency(
+                    entry.Key.StartProgramCounter,
+                    entry.Key.EndProgramCounter,
+                    entry.Key.BranchProgramCounter,
+                    entry.Key.TargetProgramCounter,
+                    entry.Key.BranchOpcode,
+                    M68kInstructionClassifier.GetMnemonic(entry.Key.BranchOpcode),
+                    entry.Key.ByteLength,
+                    entry.Value))
+                .OrderByDescending(entry => entry.Count)
+                .ThenBy(entry => entry.StartProgramCounter)
+                .ThenBy(entry => entry.BranchProgramCounter)
+                .ThenBy(entry => entry.BranchOpcode)
+                .ToArray();
+
+            return new M68kInstructionFrequencySnapshot(_totalInstructions, families, jitTargets, opcodes, hotPcs, hotLoops);
         }
 
         public void Reset()
@@ -158,8 +267,27 @@ namespace Copper68k
             Array.Clear(_familyCounts);
             Array.Clear(_jitTargetCounts);
             _opcodeCounts.Clear();
+            _pcCounts.Clear();
+            _hotLoopCounts.Clear();
             _totalInstructions = 0;
         }
+
+        private static ulong CreatePcKey(uint programCounter, ushort opcode)
+            => ((ulong)programCounter << 16) | opcode;
+
+        private static uint GetPcFromKey(ulong key)
+            => (uint)(key >> 16);
+
+        private static ushort GetOpcodeFromKey(ulong key)
+            => (ushort)key;
+
+        private readonly record struct HotLoopKey(
+            uint StartProgramCounter,
+            uint EndProgramCounter,
+            uint BranchProgramCounter,
+            uint TargetProgramCounter,
+            ushort BranchOpcode,
+            int ByteLength);
     }
 
     internal static class M68kInstructionClassifier

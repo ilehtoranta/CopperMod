@@ -933,10 +933,8 @@ namespace CopperMod.Amiga
             Drive1 = new AmigaFloppyDrive();
             Drive2 = new AmigaFloppyDrive();
             Drive3 = new AmigaFloppyDrive();
-            _drives = new[] { Drive0, Drive1, Drive2, Drive3 };
-            _streams = Enumerable.Range(0, MaxFloppyDriveCount)
-                .Select(_ => new DiskStreamState())
-                .ToArray();
+            _drives = [Drive0, Drive1, Drive2, Drive3];
+            _streams = [.. Enumerable.Range(0, MaxFloppyDriveCount).Select(_ => new DiskStreamState())];
             _traceRecorder = AmigaDiskTraceRecorder.IsEnvironmentEnabled()
                 ? new AmigaDiskTraceRecorder()
                 : null;

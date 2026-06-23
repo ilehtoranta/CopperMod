@@ -1082,10 +1082,7 @@ namespace Copper68k
                 var opcode = FetchWord();
                 State.LastOpcode = opcode;
                 State.LastInstructionProgramCounter = instructionPc;
-                if (_instructionFrequency.Enabled)
-                {
-                    _instructionFrequency.Record(opcode);
-                }
+                _instructionFrequency.Record(instructionPc, opcode);
 
                 var decoded = DecodeByOpcodeLine(opcode, instructionPc);
                 if (decoded)
@@ -1283,7 +1280,9 @@ namespace Copper68k
                 var carryOrZero = (State.StatusRegister & (M68kCpuState.Carry | M68kCpuState.Zero)) != 0;
                 if (condition == 2 ? !carryOrZero : carryOrZero)
                 {
-                    State.ProgramCounter = (uint)(branchBase + offset);
+                    var target = (uint)(branchBase + offset);
+                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -1299,7 +1298,9 @@ namespace Copper68k
             {
                 if ((State.StatusRegister & M68kCpuState.Zero) == 0)
                 {
-                    State.ProgramCounter = (uint)(branchBase + offset);
+                    var target = (uint)(branchBase + offset);
+                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -1315,7 +1316,9 @@ namespace Copper68k
             {
                 if ((State.StatusRegister & M68kCpuState.Zero) != 0)
                 {
-                    State.ProgramCounter = (uint)(branchBase + offset);
+                    var target = (uint)(branchBase + offset);
+                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -1329,7 +1332,9 @@ namespace Copper68k
 
             if (CheckCondition(condition))
             {
-                State.ProgramCounter = (uint)(branchBase + offset);
+                var target = (uint)(branchBase + offset);
+                _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                State.ProgramCounter = target;
                 AddCycles(displacement == 0 ? 10 : 10);
             }
             else
@@ -1847,7 +1852,9 @@ namespace Copper68k
                     State.D[reg] = (State.D[reg] & 0xFFFF_0000) | counter;
                     if (counter != 0xFFFF)
                     {
-                        State.ProgramCounter = (uint)(branchBase + displacement);
+                        var target = (uint)(branchBase + displacement);
+                        _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                        State.ProgramCounter = target;
                         AddCycles(10);
                     }
                     else
