@@ -27,6 +27,14 @@
       "sha256": "3048208fa7d7d0972c0a320e75e661e563b56becea80286292a28e3dadbddfaf"
     },
     {
+      "id": "sid-adsr-gate-trace",
+      "category": 301,
+      "name": "ADSR GATE TRACE",
+      "spec": "specs/sid-adsr-gate-trace.json",
+      "binary": "binaries/sid-adsr-gate-trace.sid",
+      "sha256": "22ebd49c1db76c3ebc1a683eda71897f3712fa6fa8b12401416d1e080ea23fbc"
+    },
+    {
       "id": "sidtest5-04-ring-modulation",
       "category": 4,
       "name": "RING MODULATION",
@@ -67,6 +75,14 @@
       "sha256": "d824999cdc72bca360ad26ebe0f344c1bd6d53d433a1544ba83d5411d561c376"
     },
     {
+      "id": "sid-filter-mode-resonance-sweep",
+      "category": 601,
+      "name": "FILTER MODE RESONANCE SWEEP",
+      "spec": "specs/sid-filter-mode-resonance-sweep.json",
+      "binary": "binaries/sid-filter-mode-resonance-sweep.sid",
+      "sha256": "765a076a20af09d87271184af31ca762677ed9893da6a258ee34af5998bfb9df"
+    },
+    {
       "id": "sidtest5-09-frequency-modulation",
       "category": 9,
       "name": "FREQUENCY MODULATION",
@@ -97,6 +113,22 @@
       "spec": "specs/sid-pulse-width-edge-cases.json",
       "binary": "binaries/sid-pulse-width-edge-cases.sid",
       "sha256": "b3c56d2e8d3e6f66d762659789ef22ef1e285d009e0c1bd7a60c06cfabb2e084"
+    },
+    {
+      "id": "sid-noise-edge-cases",
+      "category": 901,
+      "name": "NOISE EDGE CASES",
+      "spec": "specs/sid-noise-edge-cases.json",
+      "binary": "binaries/sid-noise-edge-cases.sid",
+      "sha256": "f6ac7d1f64e36050cc8d05b4817791ae85bc0b4c963adbad0d94d021a96da7cf"
+    },
+    {
+      "id": "sid-combined-wave-edge-cases",
+      "category": 902,
+      "name": "COMBINED WAVE EDGE CASES",
+      "spec": "specs/sid-combined-wave-edge-cases.json",
+      "binary": "binaries/sid-combined-wave-edge-cases.sid",
+      "sha256": "fdcf01dd60d9b1b8bf3ec33282e33393ac685b13b1066420f8802653de6cc4b9"
     },
     {
       "id": "sidtest5-12-master-volume-modulation",

@@ -40,6 +40,10 @@ public sealed class SidConformanceCommandTests
 		Assert.Contains("id,category,name,output,ref_ac,cand_ac,ac_ratio,diff,corr", stdout.ToString());
 		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-comparison.csv")));
 		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-segments.csv")));
+		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-adsr-trace.csv")));
+		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-adsr-pulses.csv")));
+		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-filter-bands.csv")));
+		Assert.True(File.Exists(Path.Combine(outputDirectory, "conformance-waveform-edges.csv")));
 		Assert.True(File.Exists(Path.Combine(outputDirectory, "index.html")));
 		Assert.True(Directory.GetFiles(Path.Combine(outputDirectory, "waveforms"), "*-candidate.png").Length >= suite.Fixtures.Count);
 		Assert.True(Directory.GetFiles(Path.Combine(outputDirectory, "waveforms"), "*-raw.png").Length >= suite.Fixtures.Count);
@@ -48,6 +52,19 @@ public sealed class SidConformanceCommandTests
 		Assert.Contains(
 			"id,category,name,segment_index,segment,start_ms,end_ms,ref_mean,ref_ac,ref_peak,cand_player_mean,cand_player_ac,cand_player_peak,player_ratio,player_diff,player_corr,cand_raw_mean,cand_raw_ac,cand_raw_peak",
 			File.ReadAllText(Path.Combine(outputDirectory, "conformance-segments.csv")));
+		Assert.Contains(
+			"id,category,name,time_ms,frame,gate,alignment_offset_samples,ref_ac,cand_player_ac",
+			File.ReadAllText(Path.Combine(outputDirectory, "conformance-adsr-trace.csv")));
+		Assert.Contains(
+			"id,category,name,segment_index,segment,start_ms,end_ms,ref_low,ref_mid,ref_high",
+			File.ReadAllText(Path.Combine(outputDirectory, "conformance-filter-bands.csv")));
+		Assert.Contains(
+			"id,category,name,segment_index,segment,start_ms,end_ms,ref_ac,cand_player_ac",
+			File.ReadAllText(Path.Combine(outputDirectory, "conformance-waveform-edges.csv")));
+		var index = File.ReadAllText(Path.Combine(outputDirectory, "index.html"));
+		Assert.Contains("conformance-adsr-trace.csv", index);
+		Assert.Contains("conformance-filter-bands.csv", index);
+		Assert.Contains("conformance-waveform-edges.csv", index);
 	}
 
 	[Fact]

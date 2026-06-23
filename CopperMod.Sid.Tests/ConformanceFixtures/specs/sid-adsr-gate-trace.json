@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "sid-adsr-gate-trace",
+  "sidtestCategory": 301,
+  "name": "ADSR GATE TRACE",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 0.9,
+  "binary": "binaries/sid-adsr-gate-trace.sid",
+  "tags": [ "stress", "adsr", "piano", "trace" ],
+  "targetLayer": "digital",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$31" },
+    { "address": "$d401", "value": "$1c" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$0d" },
+    { "address": "$d406", "value": "$08" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "gate-pulse-1-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "gate-pulse-1-release", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "gate-pulse-2-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "gate-pulse-2-release", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "gate-pulse-3-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "gate-pulse-3-release", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "gate-pulse-4-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "gate-pulse-4-release", "frames": 6, "writes": [ { "address": "$d404", "value": "$20" } ] },
+    { "name": "gate-pulse-5-on", "frames": 2, "writes": [ { "address": "$d404", "value": "$21" } ] },
+    { "name": "gate-final-tail", "frames": 11, "writes": [ { "address": "$d404", "value": "$20" } ] }
+  ]
+}
