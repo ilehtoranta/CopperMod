@@ -11,7 +11,7 @@ using CopperMod.Sid;
 
 namespace CopperMod.Tools;
 
-internal static class SidConformance
+internal static partial class SidConformance
 {
 	public const string CommandName = "compare-sid-conformance";
 	public const int DefaultSampleRate = 48000;
@@ -53,6 +53,7 @@ internal static class SidConformance
 		output.WriteLine("id,category,name,output,ref_ac,cand_ac,ac_ratio,diff,corr");
 		var results = new List<SidConformanceComparisonResult>();
 		var segmentResults = new List<SidConformanceSegmentComparisonResult>();
+		var diagnostics = new SidConformanceDiagnostics();
 		foreach (var fixture in suite.Fixtures)
 		{
 			var seconds = fixture.Spec.Seconds;
@@ -116,7 +117,16 @@ internal static class SidConformance
 				Diff(referenceSamples, playerSamples, 0, 0, length),
 				Correlation(referenceSamples, playerSamples, 0, 0, length));
 			results.Add(result);
-			segmentResults.AddRange(CompareSegments(fixture, sampleRate, referenceSamples, playerSamples, rawSamples));
+			var fixtureSegments = CompareSegments(fixture, sampleRate, referenceSamples, playerSamples, rawSamples);
+			segmentResults.AddRange(fixtureSegments);
+			CollectFixtureDiagnostics(
+				fixture,
+				sampleRate,
+				referenceSamples,
+				playerSamples,
+				rawSamples,
+				fixtureSegments,
+				diagnostics);
 			output.WriteLine(result.ToCsvLine());
 			WriteWaveformPng(Path.Combine(bitmapDirectory, fixture.Id + "-reference.png"), referenceSamples, sampleRate);
 		}
@@ -125,7 +135,8 @@ internal static class SidConformance
 		var segmentCsvPath = Path.Combine(outputDirectory, "conformance-segments.csv");
 		WriteComparisonCsv(csvPath, results);
 		WriteSegmentComparisonCsv(segmentCsvPath, segmentResults);
-		WriteIndexHtml(Path.Combine(outputDirectory, "index.html"), suite.Fixtures, results, segmentResults);
+		WriteDiagnosticCsvs(outputDirectory, diagnostics);
+		WriteIndexHtml(Path.Combine(outputDirectory, "index.html"), suite.Fixtures, results, segmentResults, diagnostics);
 		output.WriteLine("Wrote " + csvPath);
 		output.WriteLine("Wrote " + segmentCsvPath);
 	}
@@ -667,7 +678,8 @@ internal static class SidConformance
 		string path,
 		IReadOnlyList<SidConformanceFixture> fixtures,
 		IReadOnlyList<SidConformanceComparisonResult> results,
-		IReadOnlyList<SidConformanceSegmentComparisonResult> segmentResults)
+		IReadOnlyList<SidConformanceSegmentComparisonResult> segmentResults,
+		SidConformanceDiagnostics diagnostics)
 	{
 		var byId = results.ToDictionary(result => result.Id, StringComparer.Ordinal);
 		var segmentsById = segmentResults
@@ -675,8 +687,10 @@ internal static class SidConformance
 			.ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
 		var builder = new StringBuilder();
 		builder.AppendLine("<!doctype html><meta charset=\"utf-8\"><title>SID Conformance</title>");
-		builder.AppendLine("<style>body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee}table{border-collapse:collapse;width:100%}td,th{padding:4px 8px;border-bottom:1px solid #333;vertical-align:top}th{text-align:left;color:#bbb}.num{text-align:right;font-variant-numeric:tabular-nums}.meta{color:#bbb;font-size:12px}.thumb img{width:220px;image-rendering:auto}.heat{display:flex;flex-wrap:wrap;gap:2px;max-width:360px}.seg{width:9px;height:18px;border-radius:2px;background:#2d7d46}.seg.warn{background:#b8860b}.seg.bad{background:#b13d3d}.rowwarn{background:#1c1b10}.rowbad{background:#241515}.missing{color:#777}</style>");
-		builder.AppendLine("<h1>SID Conformance</h1><table><tr><th>Category</th><th>Fixture</th><th>Tags</th><th>Layer</th><th>Authority</th><th>Ratio</th><th>Corr</th><th>Worst segment</th><th>Segments</th><th>Player</th><th>Raw</th><th>Reference</th></tr>");
+		builder.AppendLine("<style>body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee}a{color:#8ab4f8}table{border-collapse:collapse;width:100%}td,th{padding:4px 8px;border-bottom:1px solid #333;vertical-align:top}th{text-align:left;color:#bbb}.num{text-align:right;font-variant-numeric:tabular-nums}.meta{color:#bbb;font-size:12px}.thumb img{width:220px;image-rendering:auto}.heat{display:flex;flex-wrap:wrap;gap:2px;max-width:360px}.seg{width:9px;height:18px;border-radius:2px;background:#2d7d46}.seg.warn{background:#b8860b}.seg.bad{background:#b13d3d}.rowwarn{background:#1c1b10}.rowbad{background:#241515}.missing{color:#777}.summary{margin:8px 0 16px;color:#ccc}.summary span{margin-right:16px}</style>");
+		builder.AppendLine("<h1>SID Conformance</h1>");
+		AppendDiagnosticIndexSummary(builder, diagnostics);
+		builder.AppendLine("<table><tr><th>Category</th><th>Fixture</th><th>Tags</th><th>Layer</th><th>Authority</th><th>Ratio</th><th>Corr</th><th>Worst segment</th><th>Segments</th><th>Player</th><th>Raw</th><th>Reference</th></tr>");
 		foreach (var fixture in fixtures)
 		{
 			byId.TryGetValue(fixture.Id, out var result);

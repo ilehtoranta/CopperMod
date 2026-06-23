@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "id": "sid-combined-wave-edge-cases",
+  "sidtestCategory": 902,
+  "name": "COMBINED WAVE EDGE CASES",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 1.92,
+  "binary": "binaries/sid-combined-wave-edge-cases.sid",
+  "tags": [ "stress", "combined-wave", "ring", "sync", "edge" ],
+  "targetLayer": "mixed",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$00" },
+    { "address": "$d401", "value": "$24" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d40e", "value": "$00" },
+    { "address": "$d40f", "value": "$16" },
+    { "address": "$d412", "value": "$20" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "plain-triangle-saw", "frames": 8, "writes": [ { "address": "$d404", "value": "$31" } ] },
+    { "name": "plain-triangle-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$51" } ] },
+    { "name": "plain-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$61" } ] },
+    { "name": "plain-triangle-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$71" } ] },
+    { "name": "ring-triangle-saw", "frames": 8, "writes": [ { "address": "$d404", "value": "$35" } ] },
+    { "name": "ring-triangle-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$55" } ] },
+    { "name": "ring-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$65" } ] },
+    { "name": "ring-triangle-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$75" } ] },
+    { "name": "sync-ring-triangle-saw", "frames": 8, "writes": [ { "address": "$d404", "value": "$37" } ] },
+    { "name": "sync-ring-triangle-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$57" } ] },
+    { "name": "sync-ring-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$67" } ] },
+    { "name": "sync-ring-triangle-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$77" } ] }
+  ]
+}

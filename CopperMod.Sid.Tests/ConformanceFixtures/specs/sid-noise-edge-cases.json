@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "sid-noise-edge-cases",
+  "sidtestCategory": 901,
+  "name": "NOISE EDGE CASES",
+  "format": "psid",
+  "clock": "pal",
+  "chipModel": "mos6581",
+  "sampleRate": 48000,
+  "segmentRate": 50,
+  "seconds": 1.52,
+  "binary": "binaries/sid-noise-edge-cases.sid",
+  "tags": [ "stress", "noise", "edge", "combined-wave" ],
+  "targetLayer": "mixed",
+  "referenceAuthority": "sidplayfp",
+  "commonWrites": [
+    { "address": "$d400", "value": "$00" },
+    { "address": "$d401", "value": "$40" },
+    { "address": "$d402", "value": "$00" },
+    { "address": "$d403", "value": "$08" },
+    { "address": "$d405", "value": "$00" },
+    { "address": "$d406", "value": "$f0" },
+    { "address": "$d418", "value": "$0f" }
+  ],
+  "segments": [
+    { "name": "noise-reference", "frames": 8, "writes": [ { "address": "$d404", "value": "$81" } ] },
+    { "name": "noise-test-reset", "frames": 4, "writes": [ { "address": "$d404", "value": "$89" } ] },
+    { "name": "noise-test-release", "frames": 8, "writes": [ { "address": "$d404", "value": "$81" } ] },
+    { "name": "noise-triangle", "frames": 8, "writes": [ { "address": "$d404", "value": "$91" } ] },
+    { "name": "noise-saw", "frames": 8, "writes": [ { "address": "$d404", "value": "$a1" } ] },
+    { "name": "noise-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$c1" } ] },
+    { "name": "noise-triangle-saw", "frames": 8, "writes": [ { "address": "$d404", "value": "$b1" } ] },
+    { "name": "noise-triangle-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$d1" } ] },
+    { "name": "noise-saw-pulse", "frames": 8, "writes": [ { "address": "$d404", "value": "$e1" } ] },
+    { "name": "noise-all-waveforms", "frames": 8, "writes": [ { "address": "$d404", "value": "$f1" } ] }
+  ]
+}
