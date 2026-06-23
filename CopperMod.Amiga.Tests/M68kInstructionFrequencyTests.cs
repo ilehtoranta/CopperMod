@@ -32,6 +32,8 @@ public sealed class M68kInstructionFrequencyTests
 		Assert.Contains(snapshot.Families, family => family.Family == M68kInstructionFamily.Move && family.Count == 1);
 		Assert.Contains(snapshot.Families, family => family.Family == M68kInstructionFamily.CompareMemory && family.Count == 1);
 		Assert.Contains(snapshot.Opcodes, opcode => opcode.Opcode == 0xB308 && opcode.Mnemonic == "CMPM" && opcode.Count == 1);
+		Assert.Contains(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1000 && pc.Opcode == 0x7001 && pc.Count == 1);
+		Assert.Contains(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1002 && pc.Opcode == 0xB308 && pc.Count == 1);
 	}
 
 	[Fact]
@@ -89,6 +91,76 @@ public sealed class M68kInstructionFrequencyTests
 		Assert.Equal(1, snapshot.TotalInstructions);
 		Assert.Contains(snapshot.Opcodes, opcode => opcode.Opcode == 0x7202 && opcode.Count == 1);
 		Assert.DoesNotContain(snapshot.Opcodes, opcode => opcode.Opcode == 0x7001);
+		Assert.Contains(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1002 && pc.Opcode == 0x7202 && pc.Count == 1);
+		Assert.DoesNotContain(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1000 && pc.Opcode == 0x7001);
+	}
+
+	[Fact]
+	public void InterpreterFrequencyCapturesBackwardBranchHotLoopBlocks()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			0x1000,
+			0x7002, // MOVEQ #2,D0
+			0x51C8, // DBRA D0,loop
+			0xFFFE, // loop target is the DBRA opcode
+			0x4E71); // NOP after expiry
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.InstructionFrequencyEnabled = true;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		var snapshot = cpu.CaptureInstructionFrequency();
+		Assert.Equal(4, snapshot.TotalInstructions);
+		Assert.Contains(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1002 && pc.Opcode == 0x51C8 && pc.Count == 3);
+		var loop = Assert.Single(snapshot.HotLoops);
+		Assert.Equal(0x1002u, loop.StartProgramCounter);
+		Assert.Equal(0x1006u, loop.EndProgramCounter);
+		Assert.Equal(0x1002u, loop.BranchProgramCounter);
+		Assert.Equal(0x1002u, loop.TargetProgramCounter);
+		Assert.Equal(0x51C8, loop.BranchOpcode);
+		Assert.Equal("DBcc", loop.BranchMnemonic);
+		Assert.Equal(4, loop.ByteLength);
+		Assert.Equal(2, loop.Count);
+	}
+
+	[Fact]
+	public void TimedInterpreterFrequencyCapturesBackwardBranchHotLoopBlocks()
+	{
+		var bus = new AmigaBus();
+		WriteWords(
+			bus,
+			0x1000,
+			0x7002, // MOVEQ #2,D0
+			0x51C8, // DBRA D0,loop
+			0xFFFE, // loop target is the DBRA opcode
+			0x4E71); // NOP after expiry
+		var cpu = new M68020Interpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.InstructionFrequencyEnabled = true;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		var snapshot = cpu.CaptureInstructionFrequency();
+		Assert.Equal(4, snapshot.TotalInstructions);
+		Assert.Contains(snapshot.HotPcs, pc => pc.ProgramCounter == 0x1002 && pc.Opcode == 0x51C8 && pc.Count == 3);
+		var loop = Assert.Single(snapshot.HotLoops);
+		Assert.Equal(0x1002u, loop.StartProgramCounter);
+		Assert.Equal(0x1006u, loop.EndProgramCounter);
+		Assert.Equal(0x1002u, loop.BranchProgramCounter);
+		Assert.Equal(0x1002u, loop.TargetProgramCounter);
+		Assert.Equal(0x51C8, loop.BranchOpcode);
+		Assert.Equal("DBcc", loop.BranchMnemonic);
+		Assert.Equal(4, loop.ByteLength);
+		Assert.Equal(2, loop.Count);
 	}
 
 	[Fact]

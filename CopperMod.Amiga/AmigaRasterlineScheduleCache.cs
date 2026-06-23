@@ -61,8 +61,12 @@ internal sealed class AmigaRasterlineScheduleCache
 
         if (cycle <= _lineEndCycle)
         {
-            _valid = false;
-            _computedMask = AmigaHardwareEventMask.None;
+            var affectedMask = mask & InterruptPollReadMask;
+            if (affectedMask == AmigaHardwareEventMask.None)
+                return;
+
+            _computedMask &= ~affectedMask;
+            _interruptPollCycleComputed = false;
             _invalidationCount++;
         }
     }

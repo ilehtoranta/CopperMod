@@ -56,6 +56,8 @@ namespace CopperMod.Amiga
         private const int MaxLiveRasterlinePlanEvents = 64;
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
         private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
+        private static readonly sbyte[] LowResBitplanePlanesByFetchSlot = [-1, 3, 5, 1, -1, 2, 4, 0];
+        private static readonly sbyte[] HighResBitplanePlanesByFetchSlot = [3, 1, 2, 0];
         private readonly AmigaBus _bus;
         private readonly bool _liveDmaEnabled;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
@@ -165,6 +167,9 @@ namespace CopperMod.Amiga
         private readonly bool[] _liveRasterlinePlanRowsTouched = new bool[LowResOutputHeight];
         private readonly bool[] _liveRasterlinePlanRowsValid = new bool[LowResOutputHeight];
         private readonly bool[] _liveRasterlinePlanRowsOverflowed = new bool[LowResOutputHeight];
+        private readonly int[] _liveRasterlinePlanWakeSearchIndices = new int[LowResOutputHeight];
+        private readonly bool[] _liveRasterlinePlanWakeSearchLineStateVisibility = new bool[LowResOutputHeight];
+        private readonly long[] _liveRasterlinePlanWakeSearchCycles = new long[LowResOutputHeight];
         private readonly LiveRasterlinePlanEvent[] _predictedRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
         private readonly int[] _predictedRasterlinePlanEventCounts = new int[LowResOutputHeight];
         private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[LowResOutputHeight];
@@ -186,6 +191,17 @@ namespace CopperMod.Amiga
         private long _liveNextDisplayEventCycle;
         private bool _liveNextWorkCycleValid;
         private long _liveNextWorkCycle;
+        private bool _liveDisplayWakeCandidateCacheValid;
+        private long _liveDisplayWakeCandidateCacheCurrentCycle;
+        private long _liveDisplayWakeCandidateCacheTargetCycle;
+        private long _liveDisplayWakeCandidateCacheCapturedThroughCycle;
+        private bool _liveDisplayWakeCandidateCacheHasValue;
+        private long _liveDisplayWakeCandidateCacheValue;
+        private bool _liveCopperWaitCycleValid;
+        private ushort _liveCopperWaitFirst;
+        private ushort _liveCopperWaitSecond;
+        private long _liveCopperWaitStartCycle;
+        private long _liveCopperWaitCycle;
         private long _liveCycle;
         private long _liveFrameStartCycle;
         private long _liveCapturedThroughCycle;
@@ -496,6 +512,7 @@ namespace CopperMod.Amiga
         {
             _liveNextWorkCycleValid = false;
             _liveNextWorkCycle = long.MaxValue;
+            _liveDisplayWakeCandidateCacheValid = false;
         }
 
         private void CaptureLiveBitplaneDmaBeforeHrmGrant(long requestedCycle)
@@ -1671,7 +1688,14 @@ namespace CopperMod.Amiga
         {
             _liveNextDisplayEventValid = false;
             _liveNextDisplayEventCycle = long.MaxValue;
+            InvalidateLiveCopperWaitCycle();
             InvalidateLiveWorkCycle();
+        }
+
+        private void InvalidateLiveCopperWaitCycle()
+        {
+            _liveCopperWaitCycleValid = false;
+            _liveCopperWaitCycle = long.MaxValue;
         }
 
         private long GetNextLiveDisplayEventCycle()
@@ -1701,6 +1725,9 @@ namespace CopperMod.Amiga
             Array.Clear(_liveRasterlinePlanRowsTouched);
             Array.Clear(_liveRasterlinePlanRowsValid);
             Array.Clear(_liveRasterlinePlanRowsOverflowed);
+            Array.Clear(_liveRasterlinePlanWakeSearchIndices);
+            Array.Clear(_liveRasterlinePlanWakeSearchLineStateVisibility);
+            Array.Clear(_liveRasterlinePlanWakeSearchCycles);
             Array.Clear(_predictedRasterlinePlanEventCounts);
             Array.Clear(_predictedRasterlinePlanStatuses);
             Array.Clear(_liveRasterlineDmaDescriptors);
@@ -1765,6 +1792,9 @@ namespace CopperMod.Amiga
                 _liveRasterlinePlanRowsValid[row] = true;
                 _liveRasterlinePlanRowsOverflowed[row] = false;
                 _liveRasterlinePlanEventCounts[row] = 0;
+                _liveRasterlinePlanWakeSearchIndices[row] = 0;
+                _liveRasterlinePlanWakeSearchLineStateVisibility[row] = false;
+                _liveRasterlinePlanWakeSearchCycles[row] = 0;
                 _predictedRasterlinePlanEventCounts[row] = 0;
                 _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.None;
             }
@@ -1801,7 +1831,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+            row = (int)((cycle - _liveFrameStartCycle) / PalLineCycles) - StandardVStart;
             return (uint)row < (uint)LowResOutputHeight;
         }
 
@@ -2283,21 +2313,50 @@ namespace CopperMod.Amiga
             var count = Math.Min(_liveRasterlinePlanEventCounts[currentRow], MaxLiveRasterlinePlanEvents);
             var baseIndex = currentRow * MaxLiveRasterlinePlanEvents;
             var lineStateEventsAreWakeVisible = HasLiveLineStateWakeWork();
-            for (var i = 0; i < count; i++)
+            var searchIndex = _liveRasterlinePlanWakeSearchIndices[currentRow];
+            if (searchIndex > count ||
+                currentCycle < _liveRasterlinePlanWakeSearchCycles[currentRow] ||
+                lineStateEventsAreWakeVisible != _liveRasterlinePlanWakeSearchLineStateVisibility[currentRow])
             {
-                var planEvent = _liveRasterlinePlanEvents[baseIndex + i];
+                searchIndex = 0;
+            }
+
+            while (searchIndex < count)
+            {
+                var planEvent = _liveRasterlinePlanEvents[baseIndex + searchIndex];
                 if (planEvent.Kind == LiveRasterlinePlanEventKind.LineStateCapture &&
                     !lineStateEventsAreWakeVisible)
                 {
+                    searchIndex++;
                     continue;
                 }
 
                 var cycle = planEvent.Cycle;
-                if (cycle > currentCycle && cycle <= targetCycle)
+                if (cycle <= currentCycle)
+                {
+                    searchIndex++;
+                    continue;
+                }
+
+                _liveRasterlinePlanWakeSearchIndices[currentRow] = searchIndex;
+                _liveRasterlinePlanWakeSearchLineStateVisibility[currentRow] = lineStateEventsAreWakeVisible;
+                _liveRasterlinePlanWakeSearchCycles[currentRow] = currentCycle;
+                if (cycle <= targetCycle)
                 {
                     candidate = cycle;
                     return true;
                 }
+
+                return true;
+            }
+
+            if (_liveRasterlinePlanWakeSearchIndices[currentRow] != count ||
+                _liveRasterlinePlanWakeSearchLineStateVisibility[currentRow] != lineStateEventsAreWakeVisible ||
+                _liveRasterlinePlanWakeSearchCycles[currentRow] != currentCycle)
+            {
+                _liveRasterlinePlanWakeSearchIndices[currentRow] = count;
+                _liveRasterlinePlanWakeSearchLineStateVisibility[currentRow] = lineStateEventsAreWakeVisible;
+                _liveRasterlinePlanWakeSearchCycles[currentRow] = currentCycle;
             }
 
             return true;
@@ -2795,28 +2854,53 @@ namespace CopperMod.Amiga
         {
             currentCycle = Math.Max(0, currentCycle);
             targetCycle = Math.Max(currentCycle, targetCycle);
+            if (_liveDisplayWakeCandidateCacheValid &&
+                _liveDisplayWakeCandidateCacheCurrentCycle == currentCycle &&
+                _liveDisplayWakeCandidateCacheTargetCycle == targetCycle &&
+                _liveDisplayWakeCandidateCacheCapturedThroughCycle == _liveCapturedThroughCycle)
+            {
+                return _liveDisplayWakeCandidateCacheHasValue
+                    ? _liveDisplayWakeCandidateCacheValue
+                    : null;
+            }
+
             if (!_liveDmaEnabled ||
                 !_liveFrameValid ||
                 !HasLiveDisplayWork() ||
                 targetCycle < currentCycle)
             {
-                return null;
+                return CacheLiveDisplayWakeCandidate(currentCycle, targetCycle, null);
             }
 
             if (TryGetRecordedLiveRasterlinePlanWakeCandidate(currentCycle, targetCycle, out var recordedCycle))
             {
-                return recordedCycle == long.MaxValue
-                    ? null
+                var candidate = recordedCycle == long.MaxValue
+                    ? (long?)null
                     : recordedCycle;
+                return CacheLiveDisplayWakeCandidate(currentCycle, targetCycle, candidate);
             }
 
             var nextCycle = GetNextLiveCpuVisibleWorkCycle();
             if (nextCycle == long.MaxValue || nextCycle > targetCycle)
             {
-                return null;
+                return CacheLiveDisplayWakeCandidate(currentCycle, targetCycle, null);
             }
 
-            return nextCycle <= currentCycle ? currentCycle : nextCycle;
+            return CacheLiveDisplayWakeCandidate(
+                currentCycle,
+                targetCycle,
+                nextCycle <= currentCycle ? currentCycle : nextCycle);
+        }
+
+        private long? CacheLiveDisplayWakeCandidate(long currentCycle, long targetCycle, long? candidate)
+        {
+            _liveDisplayWakeCandidateCacheCurrentCycle = currentCycle;
+            _liveDisplayWakeCandidateCacheTargetCycle = targetCycle;
+            _liveDisplayWakeCandidateCacheCapturedThroughCycle = _liveCapturedThroughCycle;
+            _liveDisplayWakeCandidateCacheHasValue = candidate.HasValue;
+            _liveDisplayWakeCandidateCacheValue = candidate.GetValueOrDefault();
+            _liveDisplayWakeCandidateCacheValid = true;
+            return candidate;
         }
 
         private long GetNextLiveDisplayEventCycle(bool includeCopper)
@@ -2938,6 +3022,12 @@ namespace CopperMod.Amiga
             if (_liveCopper.Waiting)
             {
                 var blitterReadyCycle = GetCopperBlitterReadyCycle(_liveCopper.WaitSecond, _liveCopper.Cycle);
+                if (blitterReadyCycle <= _liveCopper.Cycle)
+                {
+                    var cachedWaitCycle = GetCachedLiveCopperWaitCycle();
+                    return cachedWaitCycle <= targetCycle ? cachedWaitCycle : long.MaxValue;
+                }
+
                 if (!TryGetCopperWaitCycle(
                     _liveCopper.WaitFirst,
                     _liveCopper.WaitSecond,
@@ -2954,6 +3044,34 @@ namespace CopperMod.Amiga
             }
 
             return Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
+        }
+
+        private long GetCachedLiveCopperWaitCycle()
+        {
+            if (_liveCopperWaitCycleValid &&
+                _liveCopperWaitFirst == _liveCopper.WaitFirst &&
+                _liveCopperWaitSecond == _liveCopper.WaitSecond &&
+                _liveCopperWaitStartCycle == _liveCopper.Cycle)
+            {
+                return _liveCopperWaitCycle;
+            }
+
+            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            _liveCopperWaitFirst = _liveCopper.WaitFirst;
+            _liveCopperWaitSecond = _liveCopper.WaitSecond;
+            _liveCopperWaitStartCycle = _liveCopper.Cycle;
+            _liveCopperWaitCycle = TryGetCopperWaitCycle(
+                _liveCopper.WaitFirst,
+                _liveCopper.WaitSecond,
+                _liveFrameStartCycle,
+                _liveCopper.Cycle,
+                frameStopCycle,
+                blitterFinished: true,
+                out var waitCycle)
+                    ? waitCycle
+                    : long.MaxValue;
+            _liveCopperWaitCycleValid = true;
+            return _liveCopperWaitCycle;
         }
 
         private void StepLiveCopper(long targetCycle)
@@ -2998,14 +3116,24 @@ namespace CopperMod.Amiga
                     }
                 }
 
-                if (!TryGetCopperWaitCycle(
-                    _liveCopper.WaitFirst,
-                    _liveCopper.WaitSecond,
-                    _liveFrameStartCycle,
-                    _liveCopper.Cycle,
-                    targetCycle + 1,
-                    blitterFinished: true,
-                    out var waitCycle))
+                long waitCycle;
+                if (blitterReadyCycle <= _liveCopper.Cycle)
+                {
+                    waitCycle = GetCachedLiveCopperWaitCycle();
+                    if (waitCycle > targetCycle)
+                    {
+                        _liveCopper.Cycle = targetCycle + 1;
+                        return;
+                    }
+                }
+                else if (!TryGetCopperWaitCycle(
+                             _liveCopper.WaitFirst,
+                             _liveCopper.WaitSecond,
+                             _liveFrameStartCycle,
+                             _liveCopper.Cycle,
+                             targetCycle + 1,
+                             blitterFinished: true,
+                             out waitCycle))
                 {
                     _liveCopper.Cycle = targetCycle + 1;
                     return;
@@ -3016,11 +3144,13 @@ namespace CopperMod.Amiga
                 {
                     _liveCopper.Cycle = resumeCycle;
                     _liveCopper.Waiting = false;
+                    InvalidateLiveCopperWaitCycle();
                     return;
                 }
 
                 _liveCopper.Cycle = resumeCycle;
                 _liveCopper.Waiting = false;
+                InvalidateLiveCopperWaitCycle();
                 return;
             }
 
@@ -3562,16 +3692,57 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                var state = _liveLineStates[_liveNextFetchRow];
-                var fetchHorizontal = state.DataFetchStart + (_liveNextFetchWord * state.FetchSlotStride) + _liveNextFetchSlot;
-                var fetchCycle = state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
-                if (fetchCycle > stopCycle)
+                var row = _liveNextFetchRow;
+                var state = _liveLineStates[row];
+                var planeCount = Math.Max(0, state.PlaneCount);
+                var fetchWords = state.FetchWords;
+                var fetchSlotStride = state.FetchSlotStride;
+                var dataFetchStart = state.DataFetchStart;
+                var lineStartCycle = state.LineStartCycle;
+                var word = _liveNextFetchWord;
+                var slot = _liveNextFetchSlot;
+                var advanced = false;
+
+                while (word < fetchWords)
                 {
-                    return;
+                    while (slot < fetchSlotStride)
+                    {
+                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, fetchSlotStride, out var plane))
+                        {
+                            slot++;
+                            continue;
+                        }
+
+                        var fetchHorizontal = dataFetchStart + (word * fetchSlotStride) + slot;
+                        var fetchCycle = lineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
+                        if (fetchCycle > stopCycle)
+                        {
+                            _liveNextFetchRow = row;
+                            _liveNextFetchWord = word;
+                            _liveNextFetchPlane = plane;
+                            _liveNextFetchSlot = slot;
+                            if (advanced)
+                            {
+                                InvalidateLiveWorkCycle();
+                            }
+
+                            return;
+                        }
+
+                        CaptureLiveBitplaneFetch(row, plane, word, fetchCycle, state);
+                        slot++;
+                        advanced = true;
+                    }
+
+                    slot = 0;
+                    word++;
                 }
 
-                CaptureLiveBitplaneFetch(_liveNextFetchRow, _liveNextFetchPlane, _liveNextFetchWord, fetchCycle, state);
-                AdvanceLiveFetchCursor();
+                _liveNextFetchRow = row;
+                _liveNextFetchWord = word;
+                _liveNextFetchPlane = 0;
+                _liveNextFetchSlot = slot;
+                AdvanceLiveFetchToNextRow(advanceBitplanePointers: true);
             }
         }
 
@@ -4199,10 +4370,11 @@ namespace CopperMod.Amiga
             }
 
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
             for (var row = 0; row < rowStop; row++)
             {
-                var lineStart = GetOutputRowStartCycle(frameStartCycle, row);
-                if (lineStart >= frameStopCycle)
+                if (checkFrameStop &&
+                    GetOutputRowStartCycle(frameStartCycle, row) >= frameStopCycle)
                 {
                     break;
                 }
@@ -4239,6 +4411,7 @@ namespace CopperMod.Amiga
         private bool IsTimelineSpriteCompleteForRendering(DisplayFrameTimeline timeline, long frameStartCycle, long frameStopCycle)
         {
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
             for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
             {
                 var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
@@ -4255,8 +4428,8 @@ namespace CopperMod.Amiga
                     var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
                     for (var y = yStart; y < yStop; y++)
                     {
-                        var lineStart = GetOutputRowStartCycle(frameStartCycle, y);
-                        if (lineStart >= frameStopCycle)
+                        if (checkFrameStop &&
+                            GetOutputRowStartCycle(frameStartCycle, y) >= frameStopCycle)
                         {
                             break;
                         }
@@ -4321,6 +4494,7 @@ namespace CopperMod.Amiga
             bool allowExactCompletionReads)
         {
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
+            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
             for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
             {
                 var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
@@ -4337,8 +4511,8 @@ namespace CopperMod.Amiga
                     var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
                     for (var y = yStart; y < yStop; y++)
                     {
-                        var lineStart = GetOutputRowStartCycle(frameStartCycle, y);
-                        if (lineStart >= frameStopCycle)
+                        if (checkFrameStop &&
+                            GetOutputRowStartCycle(frameStartCycle, y) >= frameStopCycle)
                         {
                             break;
                         }
@@ -6660,26 +6834,14 @@ namespace CopperMod.Amiga
 
         private static bool TryGetBitplanePlaneForFetchSlot(int slot, int planeCount, int fetchSlotStride, out int plane)
         {
-            if (fetchSlotStride <= 4)
+            var planesByFetchSlot = fetchSlotStride <= 4
+                ? HighResBitplanePlanesByFetchSlot
+                : LowResBitplanePlanesByFetchSlot;
+            if ((uint)slot < (uint)planesByFetchSlot.Length)
             {
-                for (var candidate = 0; candidate < planeCount && candidate < HighResBitplaneFetchSlotsByPlane.Length; candidate++)
+                plane = planesByFetchSlot[slot];
+                if ((uint)plane < (uint)planeCount)
                 {
-                    if (HighResBitplaneFetchSlotsByPlane[candidate] == slot)
-                    {
-                        plane = candidate;
-                        return true;
-                    }
-                }
-
-                plane = -1;
-                return false;
-            }
-
-            for (var candidate = 0; candidate < planeCount && candidate < LowResBitplaneFetchSlotsByPlane.Length; candidate++)
-            {
-                if (LowResBitplaneFetchSlotsByPlane[candidate] == slot)
-                {
-                    plane = candidate;
                     return true;
                 }
             }

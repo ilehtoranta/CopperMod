@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Buffers.Binary;
 using CopperMod.Amiga;
 using CopperScreen;
 
@@ -217,7 +216,6 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         : M68kInstructionFrequencySnapshot.Empty;
     if (options.InstructionMatrix)
     {
-        WriteHotLoopDiagnostics(workload, emulator);
         emulator.SetInstructionFrequencyEnabled(false);
     }
 
@@ -483,66 +481,24 @@ static void WriteInstructionMatrix(BenchmarkRunResult result, int topOpcodeCount
         Console.WriteLine(
             $"instruction-opcode\t{result.Workload.Name}\t{result.CpuBackend}\t0x{opcode.Opcode:X4}\t{opcode.Mnemonic}\t{opcode.FamilyName}\t{opcode.Count}\t{PercentText(opcode.Count, snapshot.TotalInstructions)}");
     }
-}
 
-static void WriteHotLoopDiagnostics(BenchmarkWorkload workload, CopperScreenEmulator emulator)
-{
-    var machine = GetMachine(emulator);
-    var bus = machine.Bus;
-    var a5 = machine.Cpu.State.A[5];
-    var emitted = 0;
-    ScanHotLoopRegion(workload, "chip", bus.ChipRam, 0, bus, a5, ref emitted);
-    ScanHotLoopRegion(workload, "exp", bus.ExpansionRam, bus.ExpansionRamBase, bus, a5, ref emitted);
-    ScanHotLoopRegion(workload, "real", bus.RealFastRam, bus.RealFastRamBase, bus, a5, ref emitted);
-    if (emitted == 0)
+    foreach (var pc in snapshot.HotPcs.Take(Math.Max(0, topOpcodeCount)))
     {
-        Console.WriteLine($"hot-loop\t{workload.Name}\tnone");
-    }
-}
-
-static void ScanHotLoopRegion(
-    BenchmarkWorkload workload,
-    string regionName,
-    byte[] region,
-    uint baseAddress,
-    AmigaBus bus,
-    uint a5,
-    ref int emitted)
-{
-    const int MaxHotLoopDiagnostics = 8;
-    if (region.Length < 18 || emitted >= MaxHotLoopDiagnostics)
-    {
-        return;
-    }
-
-    for (var offset = 0; offset <= region.Length - 18 && emitted < MaxHotLoopDiagnostics; offset += 2)
-    {
-        var span = region.AsSpan(offset);
-        if (ReadWord(span, 0) != 0x202D ||
-            ReadWord(span, 4) != 0x0280 ||
-            ReadWord(span, 10) != 0xB0BC ||
-            ReadWord(span, 16) != 0x66EE)
-        {
-            continue;
-        }
-
-        var displacement = unchecked((short)ReadWord(span, 2));
-        var andMask = ReadLong(span, 6);
-        var compareValue = ReadLong(span, 12);
-        var pc = baseAddress + (uint)offset;
-        var polledAddress = (uint)(a5 + displacement);
-        var polledValue = bus.ReadHostLong(polledAddress);
         Console.WriteLine(
-            $"hot-loop\t{workload.Name}\tpc=0x{pc:X6}\tregion={regionName}\ta5=0x{a5:X6}\td16={displacement}\taddr=0x{polledAddress:X6}\tvalue=0x{polledValue:X8}\tand=0x{andMask:X8}\tcmp=0x{compareValue:X8}");
-        emitted++;
+            $"instruction-pc\t{result.Workload.Name}\t{result.CpuBackend}\t{FormatProgramCounter(pc.ProgramCounter)}\t0x{pc.Opcode:X4}\t{pc.Mnemonic}\t{pc.FamilyName}\t{pc.Count}\t{PercentText(pc.Count, snapshot.TotalInstructions)}");
+    }
+
+    foreach (var loop in snapshot.HotLoops.Take(Math.Max(0, topOpcodeCount)))
+    {
+        Console.WriteLine(
+            $"hot-loop-block\t{result.Workload.Name}\t{result.CpuBackend}\tstart={FormatProgramCounter(loop.StartProgramCounter)}\tend={FormatProgramCounter(loop.EndProgramCounter)}\tbranch={FormatProgramCounter(loop.BranchProgramCounter)}\ttarget={FormatProgramCounter(loop.TargetProgramCounter)}\top=0x{loop.BranchOpcode:X4}\t{loop.BranchMnemonic}\tbytes={loop.ByteLength}\tcount={loop.Count}\t{PercentText(loop.Count, snapshot.TotalInstructions)}");
     }
 }
 
-static ushort ReadWord(ReadOnlySpan<byte> span, int offset)
-    => BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, 2));
-
-static uint ReadLong(ReadOnlySpan<byte> span, int offset)
-    => BinaryPrimitives.ReadUInt32BigEndian(span.Slice(offset, 4));
+static string FormatProgramCounter(uint programCounter)
+    => programCounter <= 0x00FF_FFFFu
+        ? $"0x{programCounter:X6}"
+        : $"0x{programCounter:X8}";
 
 static string PercentText(long value, long total)
     => total == 0 ? "0.00" : $"{(value * 100.0) / total:F2}";

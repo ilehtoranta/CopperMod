@@ -3710,7 +3710,9 @@ namespace Copper68k
 
             if (CheckCondition(condition))
             {
-                State.ProgramCounter = unchecked((uint)(branchBase + displacement));
+                var target = unchecked((uint)(branchBase + displacement));
+                _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 2);
+                State.ProgramCounter = target;
                 CompleteTiming(M68kInstructionTimingKey.BranchByteTaken);
                 return;
             }
@@ -3995,7 +3997,9 @@ namespace Copper68k
 
             if (CheckCondition(condition))
             {
-                State.ProgramCounter = unchecked((uint)(branchBase + displacement));
+                var target = unchecked((uint)(branchBase + displacement));
+                _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                State.ProgramCounter = target;
                 CompleteTiming(M68kInstructionTimingKey.BranchWordTaken);
                 return;
             }
@@ -4022,7 +4026,9 @@ namespace Copper68k
 
             if (CheckCondition(condition))
             {
-                State.ProgramCounter = unchecked((uint)(branchBase + displacement));
+                var target = unchecked((uint)(branchBase + displacement));
+                _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 6);
+                State.ProgramCounter = target;
                 CompleteTiming(M68kInstructionTimingKey.BranchLongTaken);
                 return;
             }
@@ -4058,7 +4064,9 @@ namespace Copper68k
             State.D[register] = (State.D[register] & 0xFFFF_0000u) | counter;
             if (counter != 0xFFFF)
             {
-                State.ProgramCounter = unchecked((uint)(branchBase + displacement));
+                var target = unchecked((uint)(branchBase + displacement));
+                _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                State.ProgramCounter = target;
                 CompleteTiming(M68kInstructionTimingKey.DbccBranchTaken);
                 return;
             }
@@ -4070,7 +4078,7 @@ namespace Copper68k
         {
             State.LastInstructionProgramCounter = State.ProgramCounter;
             State.LastOpcode = opcode;
-            _instructionFrequency.Record(opcode);
+            _instructionFrequency.Record(State.LastInstructionProgramCounter, opcode);
         }
 
         internal virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)

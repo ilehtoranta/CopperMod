@@ -7788,7 +7788,7 @@ namespace Copper68k
             State.LastOpcode = expectedOpcode;
             State.LastInstructionProgramCounter = programCounter;
             State.ProgramCounter = Normalize(nextProgramCounter);
-            _instructionFrequency.Record(expectedOpcode);
+            _instructionFrequency.Record(programCounter, expectedOpcode);
             _compiledInstructionCycleFloorActive = true;
             return true;
         }
