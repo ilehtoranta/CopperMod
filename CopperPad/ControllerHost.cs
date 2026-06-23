@@ -25,6 +25,7 @@ public sealed class ControllerHost : IDisposable
 	}
 
 	public event EventHandler<ControllersChangedEventArgs>? ControllersChanged;
+	public event EventHandler<ControllerStateChangedEventArgs>? ControllerStateChanged;
 
 	public void Start()
 	{
@@ -129,7 +130,10 @@ public sealed class ControllerHost : IDisposable
 	}
 
 	private void UpdateState(VirtualXboxControllerState state)
-		=> _states[state.ControllerId] = state;
+	{
+		_states[state.ControllerId] = state;
+		ControllerStateChanged?.Invoke(this, new ControllerStateChangedEventArgs(state));
+	}
 
 	private void RaiseChangedLocked()
 	{
