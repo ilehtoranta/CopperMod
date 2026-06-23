@@ -92,6 +92,13 @@ CopperDisk package automation lives under `scripts\nuget`:
 .\scripts\nuget\publish-copperdisk.ps1 -PackagePath .\artifacts\packages\CopperDisk.1.0.0.nupkg -WhatIf
 ```
 
+CopperPad is staged for future NuGet publishing with the same script layout:
+
+```powershell
+.\scripts\nuget\pack-copperpad.ps1
+.\scripts\nuget\publish-copperpad.ps1 -PackagePath .\artifacts\packages\CopperPad.1.0.0.nupkg -WhatIf
+```
+
 ## Run
 
 ```powershell

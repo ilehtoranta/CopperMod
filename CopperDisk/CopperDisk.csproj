@@ -7,7 +7,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperDisk</PackageId>
     <Title>CopperDisk</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Managed Amiga ADF, extended ADF, ADZ, DMS, IPF, and SCP disk image library.</Description>
     <PackageVersion>2.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

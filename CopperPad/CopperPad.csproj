@@ -7,7 +7,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperPad</PackageId>
     <Title>CopperPad</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Portable .NET game controller normalization library.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

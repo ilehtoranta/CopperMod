@@ -6,7 +6,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperMod.Amiga.Emulator</PackageId>
     <Title>CopperMod.Amiga.Emulator</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Full Amiga emulator host services, boot helpers, and disk media adapters layered on CopperMod.Amiga.</Description>
     <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

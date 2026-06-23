@@ -6,7 +6,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperMod.ProTracker</PackageId>
     <Title>CopperMod.ProTracker</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>ProTracker MOD parser and tick renderer for Amiga tracker modules.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
