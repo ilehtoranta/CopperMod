@@ -4254,17 +4254,13 @@ namespace Copper68k
             int registerCount,
             bool registerToMemory)
         {
-            const int registerListImmediateAddressCycles = 4;
-            var nativeCycles = _profile.FixedInstructionNativeCycles ?? (_profile.Model == M68kAcceleratorModel.M68030
-                ? registerToMemory
-                    ? 4 + (2 * registerCount) + registerListImmediateAddressCycles
-                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles
-                : registerToMemory
-                    ? 4 + (3 * registerCount) + registerListImmediateAddressCycles
-                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles);
-            var plan = _profile.Model == M68kAcceleratorModel.M68030
-                ? M68kInstructionPlan.CreateHeadTail(key, name, nativeCycles, 2, 0)
-                : M68kInstructionPlan.CreateFlat(key, name, nativeCycles);
+            var plan = M68kTimingFormula.CreateMovemLongPlan(
+                key,
+                name,
+                registerCount,
+                registerToMemory,
+                _profile.Model,
+                _profile.FixedInstructionNativeCycles);
             _timing.CompleteInstruction(plan);
         }
 
