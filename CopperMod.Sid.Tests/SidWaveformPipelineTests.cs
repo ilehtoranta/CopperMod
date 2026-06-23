@@ -349,6 +349,49 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
+	public void Mos6581SawPulseSelectionKeepsOnlyWeakSourceAwareResidue()
+	{
+		var mapped = SidAnalog.MapCombinedWaveformDac12(
+			triangleDac: 0,
+			sawDac: 0x800,
+			pulseDac: 0xFFF,
+			noiseDac: 0,
+			waveformMask: 0x60,
+			model: SidChipModel.Mos6581,
+			out var activeWaveforms);
+		var mos8580 = SidAnalog.MapCombinedWaveformDac12(
+			triangleDac: 0,
+			sawDac: 0x800,
+			pulseDac: 0xFFF,
+			noiseDac: 0,
+			waveformMask: 0x60,
+			model: SidChipModel.Mos8580,
+			out _);
+
+		Assert.Equal(2, activeWaveforms);
+		Assert.InRange(mapped, 0u, 0x01FFu);
+		Assert.True(mapped < mos8580, $"Expected 6581 selector contention to suppress saw+pulse below 8580 bitwise value, 6581 ${mapped:X3}, 8580 ${mos8580:X3}.");
+	}
+
+	[Fact]
+	public void Mos6581TriangleSawPulseSelectionCollapsesMaskedResidue()
+	{
+		var collapsedOnly = SidAnalog.MapCombinedWaveformDac12(0x800u, 0x70, SidChipModel.Mos6581);
+		var sourceAware = SidAnalog.MapCombinedWaveformDac12(
+			triangleDac: 0xFFE,
+			sawDac: 0x800,
+			pulseDac: 0xFFF,
+			noiseDac: 0,
+			waveformMask: 0x70,
+			model: SidChipModel.Mos6581,
+			out var activeWaveforms);
+
+		Assert.Equal(3, activeWaveforms);
+		Assert.InRange(sourceAware, 0u, 0x00FFu);
+		Assert.True(sourceAware < collapsedOnly, $"Expected 6581 triangle+saw+pulse selector residue to collapse below the already-mapped value, source-aware ${sourceAware:X3}, collapsed ${collapsedOnly:X3}.");
+	}
+
+	[Fact]
 	public void Mos8580CombinedWaveformsKeepBitwiseDacCombination()
 	{
 		var chip = CreateTracedChip(SidChipModel.Mos8580, out var trace);

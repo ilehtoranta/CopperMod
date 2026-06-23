@@ -209,30 +209,16 @@ namespace CopperMod.Sid
 
             if (waveformMask == 0x60)
             {
-                var fifthHarmonicPhase = (sawDac * 5u) & 0x0FFFu;
-                var fifthContentionDac = fifthHarmonicPhase < 0x0180u ? 0x0FFFu : 0u;
-                var fifthMapped = MapCombinedWaveformDac12(fifthContentionDac, waveformMask, model);
-                var halfCyclePhase = sawDac & 0x07FFu;
-                var octaveSquareDac = halfCyclePhase < 0x0400u ? 0x0FFFu : 0u;
-                var octaveShoulderDac = halfCyclePhase < 0x0180u ? 0x0FFFu : 0u;
-                var octaveSquareMapped = MapCombinedWaveformDac12(octaveSquareDac, waveformMask, model);
-                var octaveShoulderMapped = MapCombinedWaveformDac12(octaveShoulderDac, waveformMask, model);
-                var directResidueMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
-                return Math.Min(
-                    0x0FFFu,
-                    fifthMapped + (octaveSquareMapped >> 6) + (octaveShoulderMapped >> 5) + (directResidueMapped >> 6));
+                var sawPulseMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+                var sawPulseDisagreement = (sourceBleedUnion & ~combinedDac) & 0x0FFFu;
+                var weakPull = (sawPulseDisagreement >> 7) & (uint)GetMos6581CombinedWeakMask(waveformMask);
+                return ((sawPulseMapped >> 5) | weakPull) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
             }
 
             if (waveformMask == 0x70)
             {
-                var fifthHarmonicPhase = (sawDac * 5u) & 0x0FFFu;
-                var fifthContentionDac = fifthHarmonicPhase < 0x00C0u ? 0x0FFFu : 0u;
-                var fifthMapped = MapCombinedWaveformDac12(fifthContentionDac, waveformMask, model);
-                var halfCyclePhase = sawDac & 0x07FFu;
-                var octaveShoulderDac = halfCyclePhase < 0x0180u ? 0x0FFFu : 0u;
-                var octaveShoulderMapped = MapCombinedWaveformDac12(octaveShoulderDac, waveformMask, model);
-                var directResidueMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
-                return Math.Min(0x0FFFu, fifthMapped + (octaveShoulderMapped >> 8) + (directResidueMapped >> 7));
+                var collapsedMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+                return (collapsedMapped >> 2) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
             }
 
             var mapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
@@ -616,6 +602,11 @@ namespace CopperMod.Sid
                     gain[mask] = 0.58;
                 }
 
+                if (mask == 0x60)
+                {
+                    gain[mask] = 0.08;
+                }
+
                 if ((mask & 0x80) != 0 && active > 1)
                 {
                     gain[mask] *= 0.88;
@@ -637,6 +628,11 @@ namespace CopperMod.Sid
                 }
 
                 bias[mask] = -0.018 * (active - 1);
+                if (mask == 0x60)
+                {
+                    bias[mask] = -0.22;
+                }
+
                 if ((mask & 0x80) != 0)
                 {
                     bias[mask] -= 0.010;

@@ -509,6 +509,13 @@ namespace CopperMod.Sid
             bool applyNoiseWriteback,
             out SidWaveformTrace trace)
         {
+            var selection = SelectWaveform(syncSource, model, applyNoiseWriteback);
+            trace = captureTrace ? selection.ToTrace() : default;
+            return selection.Output;
+        }
+
+        private WaveformSelection SelectWaveform(SidVoice? syncSource, SidChipModel model, bool applyNoiseWriteback)
+        {
             var waveformMask = _control & 0xF0;
             var pulseDac = GetPulseDac();
             var pulseHigh = pulseDac != 0;
@@ -517,32 +524,28 @@ namespace CopperMod.Sid
                 out var syncSourceMsb,
                 out var ringModInverted,
                 out var triangleInverted);
+
             if (waveformMask == 0)
             {
-                UpdateOscillatorReadLatch(0);
-                trace = captureTrace
-                    ? new SidWaveformTrace(
-                        0,
-                        pulseHigh,
-                        syncSourceMsb,
-                        ringModInverted,
-                        triangleInverted,
-                        noiseUsesPostShiftRegister: false)
-                    : default;
-                return 0;
+                return CompleteWaveformSelection(
+                    0,
+                    0.0,
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false);
             }
 
             if (model == SidChipModel.Mos6581 && waveformMask == 0x50)
             {
-                return RenderMos6581TrianglePulse(
+                return SelectMos6581TrianglePulse(
                     triangleDac,
                     pulseDac,
                     pulseHigh,
                     syncSourceMsb,
                     ringModInverted,
-                    triangleInverted,
-                    captureTrace,
-                    out trace);
+                    triangleInverted);
             }
 
             var noiseSelected = (waveformMask & 0x80) != 0;
@@ -556,18 +559,15 @@ namespace CopperMod.Sid
 
                 if (_noise == 0)
                 {
-                    UpdateOscillatorReadLatch(0);
-                    trace = captureTrace
-                        ? new SidWaveformTrace(
-                            0,
-                            pulseHigh,
-                            syncSourceMsb,
-                            ringModInverted,
-                            triangleInverted,
-                            noiseUsesPostShiftRegister: false)
-                    : default;
-                return 0;
-            }
+                    return CompleteWaveformSelection(
+                        0,
+                        0.0,
+                        pulseHigh,
+                        syncSourceMsb,
+                        ringModInverted,
+                        triangleInverted,
+                        noiseUsesPostShiftRegister: false);
+                }
 
                 noiseDac = GetNoiseDac();
             }
@@ -580,35 +580,90 @@ namespace CopperMod.Sid
                 waveformMask,
                 model,
                 out var outputs);
+            if (model == SidChipModel.Mos6581 &&
+                waveformMask == 0x60 &&
+                (_control & 0x04) != 0)
+            {
+                selectorDac = 0;
+            }
+
             RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback);
             if (outputs == 0)
             {
-                UpdateOscillatorReadLatch(0);
-                trace = captureTrace
-                    ? new SidWaveformTrace(
-                        0,
-                        pulseHigh,
-                        syncSourceMsb,
-                        ringModInverted,
-                        triangleInverted,
-                        noiseUsesPostShiftRegister: false)
-                    : default;
-                return 0;
-            }
-
-            UpdateOscillatorReadLatch(selectorDac);
-            trace = captureTrace
-                ? new SidWaveformTrace(
-                    selectorDac,
+                return CompleteWaveformSelection(
+                    0,
+                    0.0,
                     pulseHigh,
                     syncSourceMsb,
                     ringModInverted,
                     triangleInverted,
-                    noiseSelected)
-                : default;
-            return SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
+                    noiseUsesPostShiftRegister: false);
+            }
+
+            var output = SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
                 ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model)
                 : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
+            return CompleteWaveformSelection(
+                selectorDac,
+                output,
+                pulseHigh,
+                syncSourceMsb,
+                ringModInverted,
+                triangleInverted,
+                noiseSelected);
+        }
+
+        private WaveformSelection SelectMos6581TrianglePulse(
+            uint triangleDac,
+            uint pulseDac,
+            bool pulseHigh,
+            bool syncSourceMsb,
+            bool ringModInverted,
+            bool triangleInverted)
+        {
+            if (pulseDac == 0)
+            {
+                return CompleteWaveformSelection(
+                    0,
+                    (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
+                        SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias(),
+                    pulseHigh,
+                    syncSourceMsb,
+                    ringModInverted,
+                    triangleInverted,
+                    noiseUsesPostShiftRegister: false);
+            }
+
+            var output = (SidAnalog.ConvertWaveformDac12(triangleDac, SidChipModel.Mos6581) *
+                GetMos6581TrianglePulseContentionScale()) + GetMos6581TrianglePulseBias();
+            return CompleteWaveformSelection(
+                triangleDac,
+                output,
+                pulseHigh,
+                syncSourceMsb,
+                ringModInverted,
+                triangleInverted,
+                noiseUsesPostShiftRegister: false);
+        }
+
+        private WaveformSelection CompleteWaveformSelection(
+            uint dac,
+            double output,
+            bool pulseHigh,
+            bool syncSourceMsb,
+            bool ringModInverted,
+            bool triangleInverted,
+            bool noiseUsesPostShiftRegister)
+        {
+            UpdateOscillatorReadLatch(dac);
+            return new WaveformSelection(
+                dac,
+                output,
+                pulseHigh,
+                syncSourceMsb,
+                ringModInverted,
+                triangleInverted,
+                noiseUsesPostShiftRegister);
         }
 
         private double ScaleModulatedTriangleOutput(double waveform, SidChipModel model)
@@ -623,222 +678,14 @@ namespace CopperMod.Sid
             return waveform * (((_control & 0x02) != 0) ? 1.29 : 0.86);
         }
 
-        private double RenderMos6581TrianglePulse(
-            uint triangleDac,
-            uint pulseDac,
-            bool pulseHigh,
-            bool syncSourceMsb,
-            bool ringModInverted,
-            bool triangleInverted,
-            bool captureTrace,
-            out SidWaveformTrace trace)
-        {
-            if (pulseDac == 0)
-            {
-                UpdateOscillatorReadLatch(0);
-                trace = captureTrace
-                    ? new SidWaveformTrace(
-                        0,
-                        pulseHigh,
-                        syncSourceMsb,
-                        ringModInverted,
-                        triangleInverted,
-                        noiseUsesPostShiftRegister: false)
-                    : default;
-                return (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
-                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
-            }
-
-            var contentionDac = triangleDac;
-            var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
-            var contentionScale = GetMos6581TrianglePulseContentionScale();
-            UpdateOscillatorReadLatch(contentionDac);
-            trace = captureTrace
-                ? new SidWaveformTrace(
-                    contentionDac,
-                    pulseHigh,
-                    syncSourceMsb,
-                    ringModInverted,
-                    triangleInverted,
-                    noiseUsesPostShiftRegister: false)
-                : default;
-            return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                contentionScale) + mos6581TrianglePulseBias;
-        }
-
         private double RenderWaveformFast(SidVoice? syncSource, SidChipModel model)
         {
-            var waveformMask = _control & 0xF0;
-            switch (waveformMask)
-            {
-                case 0:
-                    UpdateOscillatorReadLatch(0);
-                    return 0;
-                case 0x10:
-                    var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
-                    UpdateOscillatorReadLatch(triangleDac);
-                    return SidAnalog.ConvertWaveformDac12(triangleDac, model);
-                case 0x20:
-                    var sawDac = GetSawDac();
-                    UpdateOscillatorReadLatch(sawDac);
-                    return SidAnalog.ConvertWaveformDac12(sawDac, model);
-                case 0x40:
-                    var pulseDac = GetPulseDac();
-                    UpdateOscillatorReadLatch(pulseDac);
-                    return SidAnalog.ConvertWaveformDac12(pulseDac, model);
-                case 0x50 when model == SidChipModel.Mos6581:
-                    return RenderMos6581TrianglePulseFast(syncSource);
-                case 0x80:
-                    if (_noise == 0)
-                    {
-                        UpdateOscillatorReadLatch(0);
-                        return 0;
-                    }
-
-                    var noiseDac = GetNoiseDac();
-                    UpdateOscillatorReadLatch(noiseDac);
-                    return SidAnalog.ConvertWaveformDac12(noiseDac, model);
-            }
-
-            var triangleDacForCombined = GetTriangleDac(syncSource, out _, out _, out _);
-            var sawDacForCombined = GetSawDac();
-            var pulseDacForCombined = GetPulseDac();
-            var noiseDacForCombined = 0u;
-            if ((waveformMask & 0x80) != 0)
-            {
-                if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
-                {
-                    _noise = 0;
-                }
-
-                if (_noise == 0)
-                {
-                    UpdateOscillatorReadLatch(0);
-                    return 0;
-                }
-
-                noiseDacForCombined = GetNoiseDac();
-            }
-
-            var selectorDac = SidAnalog.MapCombinedWaveformDac12(
-                triangleDacForCombined,
-                sawDacForCombined,
-                pulseDacForCombined,
-                noiseDacForCombined,
-                waveformMask,
-                model,
-                out var outputs);
-            RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback: true);
-            if (outputs == 0)
-            {
-                UpdateOscillatorReadLatch(0);
-                return 0;
-            }
-
-            UpdateOscillatorReadLatch(selectorDac);
-            return SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
-                ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model)
-                : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
+            return SelectWaveform(syncSource, model, applyNoiseWriteback: true).Output;
         }
 
         private void RefreshRegisterObservableWaveform(SidVoice? syncSource, SidChipModel model)
         {
-            var waveformMask = _control & 0xF0;
-            switch (waveformMask)
-            {
-                case 0:
-                    UpdateOscillatorReadLatch(0);
-                    return;
-                case 0x10:
-                    UpdateOscillatorReadLatch(GetTriangleDac(syncSource, out _, out _, out _));
-                    return;
-                case 0x20:
-                    UpdateOscillatorReadLatch(GetSawDac());
-                    return;
-                case 0x40:
-                    UpdateOscillatorReadLatch(GetPulseDac());
-                    return;
-                case 0x50 when model == SidChipModel.Mos6581:
-                    RefreshMos6581TrianglePulseReadback(syncSource);
-                    return;
-                case 0x80:
-                    if (_noise == 0)
-                    {
-                        UpdateOscillatorReadLatch(0);
-                        return;
-                    }
-
-                    UpdateOscillatorReadLatch(GetNoiseDac());
-                    return;
-            }
-
-            var triangleDac = GetTriangleDac(syncSource, out _, out _, out _);
-            var sawDac = GetSawDac();
-            var pulseDac = GetPulseDac();
-            var noiseDac = 0u;
-            if ((waveformMask & 0x80) != 0)
-            {
-                if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
-                {
-                    _noise = 0;
-                }
-
-                if (_noise == 0)
-                {
-                    UpdateOscillatorReadLatch(0);
-                    return;
-                }
-
-                noiseDac = GetNoiseDac();
-            }
-
-            var selectorDac = SidAnalog.MapCombinedWaveformDac12(
-                triangleDac,
-                sawDac,
-                pulseDac,
-                noiseDac,
-                waveformMask,
-                model,
-                out var outputs);
-            RecordMos6581NoiseWritebackPhase(model, waveformMask, selectorDac, applyNoiseWriteback: true);
-            if (outputs == 0)
-            {
-                UpdateOscillatorReadLatch(0);
-                return;
-            }
-
-            UpdateOscillatorReadLatch(selectorDac);
-        }
-
-        private double RenderMos6581TrianglePulseFast(SidVoice? syncSource)
-        {
-            var pulseDac = GetPulseDac();
-            if (pulseDac == 0)
-            {
-                UpdateOscillatorReadLatch(0);
-                return (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
-                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
-            }
-
-            var contentionDac = GetTriangleDac(syncSource, out _, out _, out _);
-            var mos6581TrianglePulseBias = GetMos6581TrianglePulseBias();
-            var contentionScale = GetMos6581TrianglePulseContentionScale();
-            UpdateOscillatorReadLatch(contentionDac);
-            return (SidAnalog.ConvertWaveformDac12(contentionDac, SidChipModel.Mos6581) *
-                contentionScale) + mos6581TrianglePulseBias;
-        }
-
-        private void RefreshMos6581TrianglePulseReadback(SidVoice? syncSource)
-        {
-            var pulseDac = GetPulseDac();
-            if (pulseDac == 0)
-            {
-                UpdateOscillatorReadLatch(0);
-                return;
-            }
-
-            var contentionDac = GetTriangleDac(syncSource, out _, out _, out _);
-            UpdateOscillatorReadLatch(contentionDac);
+            SelectWaveform(syncSource, model, applyNoiseWriteback: true);
         }
 
         private double GetMos6581TrianglePulseBias()
@@ -851,6 +698,25 @@ namespace CopperMod.Sid
             return (_control & 0x04) == 0
                 ? Mos6581TrianglePulseContentionScale
                 : Mos6581TrianglePulseRingContentionScale;
+        }
+
+        private readonly record struct WaveformSelection(
+            uint Dac,
+            double Output,
+            bool PulseHigh,
+            bool SyncSourceMsb,
+            bool RingModInverted,
+            bool TriangleInverted,
+            bool NoiseUsesPostShiftRegister)
+        {
+            public SidWaveformTrace ToTrace()
+                => new SidWaveformTrace(
+                    Dac,
+                    PulseHigh,
+                    SyncSourceMsb,
+                    RingModInverted,
+                    TriangleInverted,
+                    NoiseUsesPostShiftRegister);
         }
 
         private void ResetForTestBit()
