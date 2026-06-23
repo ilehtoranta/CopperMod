@@ -4248,18 +4248,20 @@ namespace Copper68k
             _timing.CompleteInstruction(_timing.GetPlan(key));
         }
 
-        internal void CompleteTiming(M68kTimingDescriptor descriptor)
-        {
-            _timing.CompleteInstruction(descriptor);
-        }
-
         private void CompleteMovemLongTiming(
             M68kInstructionTimingKey key,
             string name,
             int registerCount,
             bool registerToMemory)
         {
-            CompleteTiming(M68kTimingDescriptor.MovemLong(key, name, registerCount, registerToMemory));
+            var plan = M68kTimingFormula.CreateMovemLongPlan(
+                key,
+                name,
+                registerCount,
+                registerToMemory,
+                _profile.Model,
+                _profile.FixedInstructionNativeCycles);
+            _timing.CompleteInstruction(plan);
         }
 
         private static int CountSetBits(ushort value)
