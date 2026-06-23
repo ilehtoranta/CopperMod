@@ -6,7 +6,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperMod.Abstractions</PackageId>
     <Title>CopperMod.Abstractions</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable contracts for tracker and chip music format detection, loading, seeking, and PCM rendering.</Description>
     <PackageVersion>1.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

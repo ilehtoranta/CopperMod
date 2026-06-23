@@ -6,7 +6,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>CopperMod.Cust</PackageId>
     <Title>CopperMod.Cust</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Native Amiga CUST Hunk loader with an A500 PAL MC68000/Paula playback sandbox.</Description>
     <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
