@@ -12,9 +12,10 @@ public sealed record HidDeviceInfo(
 	bool ReportsUseId,
 	string? Diagnostic);
 
-public sealed class HidDevicesChangedEventArgs(IReadOnlyList<HidDeviceInfo> devices) : EventArgs
+public sealed class HidDevicesChangedEventArgs(IReadOnlyList<HidDeviceInfo> devices, string? diagnostic = null) : EventArgs
 {
 	public IReadOnlyList<HidDeviceInfo> Devices { get; } = devices;
+	public string? Diagnostic { get; } = diagnostic;
 }
 
 public sealed class ControllerRawReportReceivedEventArgs(HidDeviceInfo device, byte[] report, int length, DateTimeOffset timestamp) : EventArgs
@@ -38,6 +39,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 	private IReadOnlyList<HidDeviceDescriptor> _descriptors = Array.Empty<HidDeviceDescriptor>();
 	private IReadOnlyList<HidDeviceInfo> _devices = Array.Empty<HidDeviceInfo>();
 	private ControllerProfileSet _profiles;
+	private string? _diagnostic;
 	private string? _selectedDeviceId;
 	private CancellationTokenSource? _readerCancellation;
 	private Task? _readerTask;
@@ -168,12 +170,27 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 
 	private void RescanLocked(bool restartReader)
 	{
-		_descriptors = _provider.GetDevices()
-			.GroupBy(device => device.Id, StringComparer.Ordinal)
-			.Select(group => group.First())
-			.OrderBy(device => device.ProductName, StringComparer.OrdinalIgnoreCase)
-			.ThenBy(device => device.Id, StringComparer.Ordinal)
-			.ToArray();
+		try
+		{
+			_descriptors = _provider.GetDevices()
+				.GroupBy(device => device.Id, StringComparer.Ordinal)
+				.Select(group => group.First())
+				.OrderBy(device => device.ProductName, StringComparer.OrdinalIgnoreCase)
+				.ThenBy(device => device.Id, StringComparer.Ordinal)
+				.ToArray();
+			_diagnostic = null;
+		}
+		catch (Exception ex) when (IsRecoverableHidException(ex))
+		{
+			StopReaderLocked();
+			_descriptors = Array.Empty<HidDeviceDescriptor>();
+			_devices = Array.Empty<HidDeviceInfo>();
+			_selectedDeviceId = null;
+			_diagnostic = "HID scan failed: " + ex.Message;
+			RaiseDevicesChangedLocked();
+			return;
+		}
+
 		_devices = _descriptors.Select(ToInfo).ToArray();
 		if (_selectedDeviceId != null && !_descriptors.Any(device => string.Equals(device.Id, _selectedDeviceId, StringComparison.Ordinal)))
 		{
@@ -260,7 +277,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		catch (OperationCanceledException)
 		{
 		}
-		catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException)
+		catch (Exception ex) when (IsRecoverableHidException(ex))
 		{
 			var failed = info with { Diagnostic = "HID read failed: " + ex.Message };
 			var controller = new ControllerInfo(
@@ -276,7 +293,10 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 	}
 
 	private void RaiseDevicesChangedLocked()
-		=> DevicesChanged?.Invoke(this, new HidDevicesChangedEventArgs(_devices));
+		=> DevicesChanged?.Invoke(this, new HidDevicesChangedEventArgs(_devices, _diagnostic));
+
+	private static bool IsRecoverableHidException(Exception ex)
+		=> ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException;
 
 	private void ThrowIfDisposed()
 	{

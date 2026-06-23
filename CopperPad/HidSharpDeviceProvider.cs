@@ -55,7 +55,7 @@ internal sealed class HidSharpDeviceProvider : IHidDeviceProvider
 				.SelectMany(report => report.GetAllUsages())
 				.Any(IsGameControllerUsage);
 		}
-		catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or NotSupportedException)
 		{
 			diagnostic = "Unable to parse HID report descriptor: " + ex.Message;
 		}
@@ -99,7 +99,7 @@ internal sealed class HidSharpDeviceProvider : IHidDeviceProvider
 			var value = getter();
 			return string.IsNullOrWhiteSpace(value) ? fallback ?? defaultValue : value;
 		}
-		catch (Exception ex) when (ex is IOException or InvalidOperationException)
+		catch (Exception ex) when (ex is IOException or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
 		{
 			return string.IsNullOrWhiteSpace(fallback) ? defaultValue : fallback;
 		}

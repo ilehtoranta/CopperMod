@@ -75,7 +75,7 @@ internal sealed class MainWindow : Window, IDisposable
 		MinHeight = 640;
 		Content = BuildContent();
 
-		_host.DevicesChanged += (_, args) => Dispatcher.UIThread.Post(() => OnDevicesChanged(args.Devices));
+		_host.DevicesChanged += (_, args) => Dispatcher.UIThread.Post(() => OnDevicesChanged(args));
 		_host.RawReportReceived += (_, args) => Dispatcher.UIThread.Post(() => OnRawReport(args));
 		_host.StateChanged += (_, args) => Dispatcher.UIThread.Post(() => OnStateChanged(args.State));
 		Opened += async (_, _) => await InitializeAsync().ConfigureAwait(true);
@@ -365,17 +365,30 @@ internal sealed class MainWindow : Window, IDisposable
 			SetStatus("Profile load failed: " + ex.Message);
 		}
 
-		_host.Start();
+		StartHost();
 	}
 
 	private void RefreshDevices()
 	{
-		_host.Stop();
-		_host.Start();
+		try
+		{
+			_host.Stop();
+			_host.Start();
+		}
+		catch (Exception ex) when (IsRecoverableHidException(ex))
+		{
+			SetStatus("Controller refresh failed: " + ex.Message);
+		}
 	}
 
-	private void OnDevicesChanged(IReadOnlyList<HidDeviceInfo> devices)
+	private void OnDevicesChanged(HidDevicesChangedEventArgs args)
 	{
+		var devices = args.Devices;
+		if (!string.IsNullOrWhiteSpace(args.Diagnostic))
+		{
+			SetStatus(args.Diagnostic);
+		}
+
 		var selectedId = _selectedDevice?.Id;
 		var items = devices.Select(device => new DeviceListItem(device)).ToArray();
 		_deviceList.ItemsSource = items;
@@ -389,6 +402,18 @@ internal sealed class MainWindow : Window, IDisposable
 		else
 		{
 			SelectDevice(null);
+		}
+	}
+
+	private void StartHost()
+	{
+		try
+		{
+			_host.Start();
+		}
+		catch (Exception ex) when (IsRecoverableHidException(ex))
+		{
+			SetStatus("Controller scan failed: " + ex.Message);
 		}
 	}
 
@@ -931,6 +956,9 @@ internal sealed class MainWindow : Window, IDisposable
 
 	private static int DecimalToInt(decimal? value)
 		=> (int)(value ?? 0);
+
+	private static bool IsRecoverableHidException(Exception ex)
+		=> ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException;
 
 	private static string ToHexRows(byte[] bytes)
 	{

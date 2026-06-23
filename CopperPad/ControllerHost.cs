@@ -226,7 +226,7 @@ public sealed class ControllerHost : IDisposable
 			catch (OperationCanceledException)
 			{
 			}
-			catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException)
+			catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException)
 			{
 				var diagnostic = "HID read failed: " + ex.Message;
 				Info = Info with { IsConnected = false, Diagnostic = diagnostic };

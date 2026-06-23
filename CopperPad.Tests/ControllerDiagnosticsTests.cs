@@ -21,6 +21,21 @@ public sealed class ControllerDiagnosticsTests
 	}
 
 	[Fact]
+	public void DiagnosticsHost_PublishesScanDiagnosticWhenEnumerationFails()
+	{
+		var provider = new FakeHidDeviceProvider { GetDevicesException = new NotSupportedException("descriptor unavailable") };
+		using var host = new ControllerDiagnosticsHost(provider, new ControllerHostOptions());
+		HidDevicesChangedEventArgs? observed = null;
+		host.DevicesChanged += (_, args) => observed = args;
+
+		host.Start();
+
+		Assert.Empty(host.GetDevices());
+		Assert.NotNull(observed);
+		Assert.Equal("HID scan failed: descriptor unavailable", observed.Diagnostic);
+	}
+
+	[Fact]
 	public async Task DiagnosticsHost_PublishesRawReportsAndProfileMappedState()
 	{
 		var device = ControllerMapperTests.Device(0x1111, 0x2222, "Profiled Gamepad", isGameControllerUsage: true);
@@ -89,10 +104,19 @@ public sealed class ControllerDiagnosticsTests
 		private readonly Dictionary<string, FakeHidInputStream> _streams = new(StringComparer.Ordinal);
 		private IReadOnlyList<HidDeviceDescriptor> _devices = Array.Empty<HidDeviceDescriptor>();
 
+		public Exception? GetDevicesException { get; init; }
+
 		public event EventHandler? Changed;
 
 		public IReadOnlyList<HidDeviceDescriptor> GetDevices()
-			=> _devices;
+		{
+			if (GetDevicesException != null)
+			{
+				throw GetDevicesException;
+			}
+
+			return _devices;
+		}
 
 		public IHidInputStream Open(HidDeviceDescriptor device, TimeSpan readTimeout)
 			=> _streams.TryGetValue(device.Id, out var stream)
