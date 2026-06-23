@@ -220,6 +220,77 @@ public sealed class C64MachineTests
 		Assert.Equal(0x08, write.Value);
 	}
 
+	[Fact]
+	public void PsidResetInitializesDocumentedPalVbiEnvironment()
+	{
+		var module = SidParser.Parse(SidFixtureBuilder.CreatePsid(
+			new byte[] { 0x60 },
+			playAddress: 0,
+			songs: 1,
+			startSong: 1,
+			speed: 0,
+			flags: (1 << 2) | (1 << 4)));
+		var machine = new C64Machine(module);
+
+		machine.Reset(0);
+
+		var debug = machine.DebugState;
+		Assert.Equal(0x01, machine.Ram[0x02A6]);
+		Assert.Equal(0x4025, debug.Cia1.TimerALatch);
+		Assert.Equal(0x11, debug.Cia1.ControlA);
+		Assert.Equal(0x00, debug.Cia1.InterruptMask);
+		Assert.Equal(0x01, debug.Vic.IrqMask);
+	}
+
+	[Fact]
+	public void PsidResetInitializesDocumentedNtscCiaEnvironment()
+	{
+		var module = SidParser.Parse(SidFixtureBuilder.CreatePsid(
+			new byte[] { 0x60 },
+			playAddress: 0,
+			songs: 1,
+			startSong: 1,
+			speed: 1,
+			flags: (2 << 2) | (1 << 4)));
+		var machine = new C64Machine(module);
+
+		machine.Reset(0);
+
+		var debug = machine.DebugState;
+		Assert.Equal(0x00, machine.Ram[0x02A6]);
+		Assert.Equal(0x4295, debug.Cia1.TimerALatch);
+		Assert.Equal(0x11, debug.Cia1.ControlA);
+		Assert.Equal(0x01, debug.Cia1.InterruptMask);
+		Assert.Equal(0x00, debug.Vic.IrqMask);
+	}
+
+	[Fact]
+	public void PsidWritesDocumentedBankRegisterBeforeInitAndPlayCalls()
+	{
+		var module = SidParser.Parse(SidFixtureBuilder.CreatePsid(
+			new byte[]
+			{
+				0x60, // init at $9FFC
+				0xEA,
+				0xEA,
+				0xEA,
+				0x60  // play at $A000
+			},
+			loadAddress: 0x9FFC,
+			initAddress: 0x9FFC,
+			playAddress: 0xA000,
+			songs: 1,
+			startSong: 1,
+			flags: (1 << 2) | (1 << 4)));
+		var machine = new C64Machine(module);
+
+		machine.Reset(0);
+		Assert.Equal(0x37, machine.DebugState.MemoryBank.Value);
+
+		machine.BeginFrame();
+		Assert.Equal(0x36, machine.DebugState.MemoryBank.Value);
+	}
+
 	[Theory]
 	[MemberData(nameof(CpuSidWriteCases))]
 	public void CpuWritesReachSidOnExpectedBusCycleAndForwardOnNextSidCycle(CpuSidWriteCase testCase)

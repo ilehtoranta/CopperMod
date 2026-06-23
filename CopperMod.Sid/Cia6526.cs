@@ -85,7 +85,8 @@ namespace CopperMod.Sid
         public void Reset(
             bool defaultTimerA60Hz,
             int cpuCyclesPerSecond = SidConstants.PalCpuCyclesPerSecond,
-            int todInputFrequencyHz = 0)
+            int todInputFrequencyHz = 0,
+            bool defaultTimerAIrq = true)
         {
             _cpuCyclesPerSecond = Math.Max(1, cpuCyclesPerSecond);
             _todInputFrequencyHz = todInputFrequencyHz > 0
@@ -95,7 +96,7 @@ namespace CopperMod.Sid
             _portB = 0xFF;
             _ddrA = 0;
             _ddrB = 0;
-            _timerALatch = defaultTimerA60Hz ? (ushort)0x4025 : (ushort)0xFFFF;
+            _timerALatch = defaultTimerA60Hz ? GetDefaultTimerA60HzLatch(_cpuCyclesPerSecond) : (ushort)0xFFFF;
             _timerA = _timerALatch;
             _timerBLatch = 0xFFFF;
             _timerB = 0xFFFF;
@@ -118,12 +119,17 @@ namespace CopperMod.Sid
             _serialData = 0;
             _controlA = defaultTimerA60Hz ? (byte)0x11 : (byte)0x00;
             _controlB = 0;
-            _interruptMask = defaultTimerA60Hz ? (byte)0x01 : (byte)0x00;
+            _interruptMask = defaultTimerA60Hz && defaultTimerAIrq ? (byte)0x01 : (byte)0x00;
             _interruptData = 0;
             _timerAPortOutput = false;
             _timerBPortOutput = false;
             _timerAPulseActive = false;
             _timerBPulseActive = false;
+        }
+
+        private static ushort GetDefaultTimerA60HzLatch(int cpuCyclesPerSecond)
+        {
+            return (ushort)Math.Clamp((cpuCyclesPerSecond + 30) / 60, 1, ushort.MaxValue);
         }
 
         public byte Read(byte register, byte portAInputMask = 0xFF, byte portBInputMask = 0xFF)

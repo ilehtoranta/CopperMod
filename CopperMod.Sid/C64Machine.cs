@@ -43,6 +43,7 @@ namespace CopperMod.Sid
         private const ushort KernalStopAddress = 0xFFE1;
         private const ushort KernalGetInAddress = 0xFFE4;
         private const ushort BasicExecuteProgramAddress = 0xA7AE;
+        private const ushort PalNtscFlagAddress = 0x02A6;
         private const ushort TextScreenStart = 0x0400;
         private const int TextScreenColumns = 40;
         private const int TextScreenRows = 25;
@@ -159,10 +160,16 @@ namespace CopperMod.Sid
             _psidCiaTimerATouched = false;
             _pendingCpuStallCycles = 0;
             _cpuInstructionActive = false;
-            _cia1.Reset(defaultTimerA60Hz: _module.IsRsid, _clock.CpuCyclesPerSecond);
+            var psidUsesCiaTiming = UsesPsidCiaTiming(subSongIndex);
+            var psidOrRsid = _module.Kind == SidFileKind.Psid || _module.IsRsid;
+            _cia1.Reset(
+                defaultTimerA60Hz: psidOrRsid,
+                cpuCyclesPerSecond: _clock.CpuCyclesPerSecond,
+                defaultTimerAIrq: _module.IsRsid || psidUsesCiaTiming);
             _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuCyclesPerSecond);
             UpdateVicBankBase();
             _vic.Reset();
+            InstallPsidEnvironment(psidUsesCiaTiming);
             Sid.Reset();
             _digimax.Reset();
             _easyFlash?.Reset();
@@ -206,6 +213,7 @@ namespace CopperMod.Sid
             }
 
             Cpu.Reset(_module.InitAddress);
+            PreparePsidRoutineCall(_module.InitAddress);
             Cpu.BeginSubroutine(_module.InitAddress, (byte)subSongIndex);
             RunUntilSubroutineReturn(250_000);
             Sid.AdvanceTo(Cpu.Cycles);
@@ -239,6 +247,7 @@ namespace CopperMod.Sid
             {
                 if (!_psidPlayActive)
                 {
+                    PreparePsidRoutineCall(_module.PlayAddress);
                     Cpu.BeginSubroutine(_module.PlayAddress, 0);
                     _psidPlayActive = true;
                 }
@@ -415,6 +424,7 @@ namespace CopperMod.Sid
             }
 
             _psidCiaTimerATouched = false;
+            PreparePsidRoutineCall(_module.PlayAddress);
             Cpu.BeginSubroutine(_module.PlayAddress, 0);
             return true;
         }
@@ -705,6 +715,49 @@ namespace CopperMod.Sid
             {
                 _ram[address + i] = _module.Payload[i];
             }
+        }
+
+        private void InstallPsidEnvironment(bool usesCiaTiming)
+        {
+            if (_module.Kind != SidFileKind.Psid)
+            {
+                return;
+            }
+
+            _ram[PalNtscFlagAddress] = GetVideoStandardFlag();
+            _vic.Write(0x1A, usesCiaTiming ? (byte)0x00 : (byte)0x01);
+        }
+
+        private byte GetVideoStandardFlag()
+        {
+            return _clock.RasterLines == 263 ? (byte)0x00 : (byte)0x01;
+        }
+
+        private void PreparePsidRoutineCall(ushort address)
+        {
+            if (_module.Kind != SidFileKind.Psid)
+            {
+                return;
+            }
+
+            var bankRegister = GetPsidRoutineBankRegister(address);
+            _processorPortValue = bankRegister;
+            _ram[0x0001] = bankRegister;
+        }
+
+        private static byte GetPsidRoutineBankRegister(ushort address)
+        {
+            if (address < 0xA000)
+            {
+                return 0x37;
+            }
+
+            if (address < 0xD000)
+            {
+                return 0x36;
+            }
+
+            return address >= 0xE000 ? (byte)0x35 : (byte)0x34;
         }
 
         private void StartRomBasicProgram()
@@ -1477,6 +1530,17 @@ namespace CopperMod.Sid
         private long GetDefaultPsidCiaTimerAIntervalCycles()
         {
             return Math.Max(1, SidIntegerMath.DivRoundNearest(_clock.CpuCyclesPerSecond, SidConstants.CiaTimerRefreshHz));
+        }
+
+        private bool UsesPsidCiaTiming(int subSongIndex)
+        {
+            if (_module.Kind != SidFileKind.Psid)
+            {
+                return false;
+            }
+
+            var bitIndex = Math.Min(Math.Max(subSongIndex, 0), 31);
+            return ((_module.Speed >> bitIndex) & 1U) != 0;
         }
 
         internal void ScheduleAutostartKey(string key, TimeSpan delay, TimeSpan hold)
