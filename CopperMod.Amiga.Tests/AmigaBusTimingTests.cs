@@ -500,6 +500,19 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void CpuBoundaryHardwareDrainDoesNotReservePureRefreshSlots()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var targetCycle = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
+
+		bus.AdvanceHardwareEventsTo(targetCycle);
+		Assert.Equal(0, bus.Agnus.CaptureSnapshot().RefreshSlotReservationCount);
+
+		bus.AdvanceHardwareTo(targetCycle);
+		Assert.True(bus.Agnus.CaptureSnapshot().RefreshSlotReservationCount > 0);
+	}
+
+	[Fact]
 	public void LiveRasterlinePlanRecordsLineStateEvent()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
@@ -559,15 +572,40 @@ public sealed class AmigaBusTimingTests
 		var snapshot = bus.Display.CaptureSnapshot();
 		Assert.True(
 			snapshot.LastPredictedRasterlinePlanLines > 0,
-			$"recorded={snapshot.LastRasterlinePlanEvents}, lineState={snapshot.LastRasterlinePlanLineStateEvents}, bitplane={snapshot.LastRasterlinePlanBitplaneFetchEvents}, lines={snapshot.LastPredictedRasterlinePlanLines}, matched={snapshot.LastPredictedRasterlinePlanMatchedLines}, mismatched={snapshot.LastPredictedRasterlinePlanMismatchedLines}, unsupported={snapshot.LastPredictedRasterlinePlanUnsupportedLines}, copper={snapshot.LastPredictedRasterlinePlanUnsupportedCopperLines}, pending={snapshot.LastPredictedRasterlinePlanUnsupportedPendingWriteLines}, sprite={snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines}, invalid={snapshot.LastPredictedRasterlinePlanUnsupportedInvalidStateLines}, overflow={snapshot.LastPredictedRasterlinePlanUnsupportedOverflowLines}");
+			$"recorded={snapshot.LastRasterlinePlanEvents}, lineState={snapshot.LastRasterlinePlanLineStateEvents}, bitplane={snapshot.LastRasterlinePlanBitplaneFetchEvents}, lines={snapshot.LastPredictedRasterlinePlanLines}, matched={snapshot.LastPredictedRasterlinePlanMatchedLines}, mismatched={snapshot.LastPredictedRasterlinePlanMismatchedLines}, unsupported={snapshot.LastPredictedRasterlinePlanUnsupportedLines}, copper={snapshot.LastPredictedRasterlinePlanUnsupportedCopperLines}, pending={snapshot.LastPredictedRasterlinePlanUnsupportedPendingWriteLines}, sprite={snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines}, invalid={snapshot.LastPredictedRasterlinePlanUnsupportedInvalidStateLines}, overflow={snapshot.LastPredictedRasterlinePlanUnsupportedOverflowLines}, descriptorBuilds={snapshot.LastRasterlineDescriptorBuilds}, descriptorReplayed={snapshot.LastRasterlineDescriptorReplayedRows}, descriptorMismatches={snapshot.LastRasterlineDescriptorMismatches}");
 		Assert.True(
 			snapshot.LastPredictedRasterlinePlanMatchedLines > 0,
 			$"lines={snapshot.LastPredictedRasterlinePlanLines}, matched={snapshot.LastPredictedRasterlinePlanMatchedLines}, mismatched={snapshot.LastPredictedRasterlinePlanMismatchedLines}");
 		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
+		Assert.True(snapshot.LastRasterlineDescriptorBuilds > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorBitplaneRows > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorReplayAttempts > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorReplayedRows > 0);
+		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
 	}
 
 	[Fact]
-	public void PredictedRasterlinePlanMarksSpriteLineUnsupported()
+	public void RasterlineDescriptorReplayReadsChipRamAtFetchTime()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var fetchCycle = LowResPlane1FetchCycle(row);
+		ConfigureLiveOneBitplaneDma(bus);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+
+		bus.AdvanceDmaTo(lineStart);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xA55A);
+		bus.AdvanceDmaTo(fetchCycle);
+
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.True(snapshot.LastRasterlineDescriptorReplayedRows > 0);
+		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
+		Assert.Equal(0xA55A, ReadLiveBitplaneWord(bus, row, plane: 0, word: 0));
+	}
+
+	[Fact]
+	public void RasterlineDescriptorReplaysSpriteRows()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
 		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
@@ -577,8 +615,12 @@ public sealed class AmigaBusTimingTests
 		bus.AdvanceDmaTo(validationStop);
 
 		var snapshot = bus.Display.CaptureSnapshot();
-		Assert.True(snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorSpriteRows > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorReplayAttempts > 0);
+		Assert.True(snapshot.LastRasterlineDescriptorReplayedRows > 0);
+		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines);
 		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
+		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
 	}
 
 	[Fact]
@@ -962,6 +1004,24 @@ public sealed class AmigaBusTimingTests
 
 		var cycle = frameCycle;
 		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, value & AmigaConstants.IntreqVerticalBlank);
+	}
+
+	[Fact]
+	public void IntreqReadObservesVblankAfterSameCyclePseudoFastAccess()
+	{
+		var bus = new AmigaBus(expansionRamSize: 0x10000);
+		var frameCycle = (long)AmigaConstants.A500PalCpuCyclesPerFrame;
+
+		var memoryCycle = frameCycle;
+		_ = bus.ReadWord(
+			AmigaConstants.A500BootPseudoFastRamBase,
+			ref memoryCycle,
+			AmigaBusAccessKind.CpuDataRead);
+
+		var intreqCycle = frameCycle;
+		var value = bus.ReadWord(0x00DFF01E, ref intreqCycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.NotEqual(0, value & AmigaConstants.IntreqVerticalBlank);
 	}
@@ -1836,6 +1896,16 @@ public sealed class AmigaBusTimingTests
 	private static long LowResPlane1FetchCycle(int row)
 		=> OutputRowStartCycle(row) +
 			((0x38 + HrmLowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+
+	private static ushort ReadLiveBitplaneWord(AmigaBus bus, int row, int plane, int word)
+	{
+		var field = typeof(OcsDisplay).GetField(
+			"_liveBitplaneWords",
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		var words = Assert.IsType<ushort[]>(field.GetValue(bus.Display));
+		return words[(row * 6 * 64) + (plane * 64) + word];
+	}
 
 	private static void ConfigureLiveOneBitplaneDma(AmigaBus bus)
 	{

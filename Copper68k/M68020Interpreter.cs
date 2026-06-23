@@ -4248,24 +4248,18 @@ namespace Copper68k
             _timing.CompleteInstruction(_timing.GetPlan(key));
         }
 
+        internal void CompleteTiming(M68kTimingDescriptor descriptor)
+        {
+            _timing.CompleteInstruction(descriptor);
+        }
+
         private void CompleteMovemLongTiming(
             M68kInstructionTimingKey key,
             string name,
             int registerCount,
             bool registerToMemory)
         {
-            const int registerListImmediateAddressCycles = 4;
-            var nativeCycles = _profile.FixedInstructionNativeCycles ?? (_profile.Model == M68kAcceleratorModel.M68030
-                ? registerToMemory
-                    ? 4 + (2 * registerCount) + registerListImmediateAddressCycles
-                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles
-                : registerToMemory
-                    ? 4 + (3 * registerCount) + registerListImmediateAddressCycles
-                    : 8 + (4 * registerCount) + registerListImmediateAddressCycles);
-            var plan = _profile.Model == M68kAcceleratorModel.M68030
-                ? M68kInstructionPlan.CreateHeadTail(key, name, nativeCycles, 2, 0)
-                : M68kInstructionPlan.CreateFlat(key, name, nativeCycles);
-            _timing.CompleteInstruction(plan);
+            CompleteTiming(M68kTimingDescriptor.MovemLong(key, name, registerCount, registerToMemory));
         }
 
         private static int CountSetBits(ushort value)

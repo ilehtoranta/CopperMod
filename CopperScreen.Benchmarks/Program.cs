@@ -102,7 +102,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     GC.Collect();
 
     var nominalFrameAudioMilliseconds = emulator.AudioFramesPerAppFrame(SampleRate) * 1000.0 / SampleRate;
-    var fakeQueuedAudioMilliseconds = nominalFrameAudioMilliseconds * 3.0;
+    var fakeQueuedAudioMilliseconds = nominalFrameAudioMilliseconds * 8.0;
     var fakeQueuedAudioLimitMilliseconds = nominalFrameAudioMilliseconds * 8.0;
     var fakeQueuedAudioMinMilliseconds = fakeQueuedAudioMilliseconds;
     var fakeQueuedAudioMaxMilliseconds = fakeQueuedAudioMilliseconds;
@@ -110,6 +110,21 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var activeAudioFrames = 0;
     var maxFrameMilliseconds = 0.0;
     var maxFrameSchedulerDrains = 0L;
+    var measuredDescriptorBuilds = 0;
+    var measuredDescriptorReplayAttempts = 0;
+    var measuredDescriptorReplayedRows = 0;
+    var measuredDescriptorFallbackRows = 0;
+    var measuredDescriptorBitplaneRows = 0;
+    var measuredDescriptorSpriteRows = 0;
+    var measuredDescriptorMismatches = 0;
+    var descriptorBeforeMeasured = GetDisplay(emulator).CaptureSnapshot();
+    var previousDescriptorBuilds = descriptorBeforeMeasured.LastRasterlineDescriptorBuilds;
+    var previousDescriptorReplayAttempts = descriptorBeforeMeasured.LastRasterlineDescriptorReplayAttempts;
+    var previousDescriptorReplayedRows = descriptorBeforeMeasured.LastRasterlineDescriptorReplayedRows;
+    var previousDescriptorFallbackRows = descriptorBeforeMeasured.LastRasterlineDescriptorFallbackRows;
+    var previousDescriptorBitplaneRows = descriptorBeforeMeasured.LastRasterlineDescriptorBitplaneRows;
+    var previousDescriptorSpriteRows = descriptorBeforeMeasured.LastRasterlineDescriptorSpriteRows;
+    var previousDescriptorMismatches = descriptorBeforeMeasured.LastRasterlineDescriptorMismatches;
     var slowFramesOver20 = 0;
     var slowFramesOver33 = 0;
     var slowFramesOver40 = 0;
@@ -122,6 +137,21 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         ApplyFrameActions(emulator, workload, options.WarmupFrames + frame);
         emulator.RenderNextFrame();
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+        var displayFrame = GetDisplay(emulator).CaptureSnapshot();
+        measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
+        measuredDescriptorReplayAttempts += displayFrame.LastRasterlineDescriptorReplayAttempts - previousDescriptorReplayAttempts;
+        measuredDescriptorReplayedRows += displayFrame.LastRasterlineDescriptorReplayedRows - previousDescriptorReplayedRows;
+        measuredDescriptorFallbackRows += displayFrame.LastRasterlineDescriptorFallbackRows - previousDescriptorFallbackRows;
+        measuredDescriptorBitplaneRows += displayFrame.LastRasterlineDescriptorBitplaneRows - previousDescriptorBitplaneRows;
+        measuredDescriptorSpriteRows += displayFrame.LastRasterlineDescriptorSpriteRows - previousDescriptorSpriteRows;
+        measuredDescriptorMismatches += displayFrame.LastRasterlineDescriptorMismatches - previousDescriptorMismatches;
+        previousDescriptorBuilds = displayFrame.LastRasterlineDescriptorBuilds;
+        previousDescriptorReplayAttempts = displayFrame.LastRasterlineDescriptorReplayAttempts;
+        previousDescriptorReplayedRows = displayFrame.LastRasterlineDescriptorReplayedRows;
+        previousDescriptorFallbackRows = displayFrame.LastRasterlineDescriptorFallbackRows;
+        previousDescriptorBitplaneRows = displayFrame.LastRasterlineDescriptorBitplaneRows;
+        previousDescriptorSpriteRows = displayFrame.LastRasterlineDescriptorSpriteRows;
+        previousDescriptorMismatches = displayFrame.LastRasterlineDescriptorMismatches;
         var schedulerAfterFrame = CaptureHardwareSchedulerSnapshot(emulator);
         maxFrameSchedulerDrains = Math.Max(
             maxFrameSchedulerDrains,
@@ -169,7 +199,16 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var fps = options.MeasuredFrames / elapsed.TotalSeconds;
     var framebufferSummary = CaptureFramebufferSummary(emulator.Framebuffer);
     var audioSummary = CaptureAudioSummary(audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels)), audioFrames);
-    var displaySummary = CaptureDisplaySummary(GetDisplay(emulator).CaptureSnapshot());
+    var displaySummary = CaptureDisplaySummary(GetDisplay(emulator).CaptureSnapshot()) with
+    {
+        DescriptorBuilds = measuredDescriptorBuilds,
+        DescriptorReplayAttempts = measuredDescriptorReplayAttempts,
+        DescriptorReplayedRows = measuredDescriptorReplayedRows,
+        DescriptorFallbackRows = measuredDescriptorFallbackRows,
+        DescriptorBitplaneRows = measuredDescriptorBitplaneRows,
+        DescriptorSpriteRows = measuredDescriptorSpriteRows,
+        DescriptorMismatches = measuredDescriptorMismatches
+    };
     var diskSummary = CaptureDiskSummary(emulator);
     var specializationSummary = CaptureSpecializationSummary(emulator);
     var schedulerSummary = CaptureHardwareSchedulerSnapshot(emulator);
@@ -789,7 +828,21 @@ static DiskSummary CaptureDiskSummary(CopperScreenEmulator emulator)
         disk.SelectedDrive,
         disk.ActiveDma,
         disk.Dsklen,
-        disk.Dskbytr);
+        disk.Dskbytr,
+        disk.SchedulerCounters.NextWakeCandidateQueries,
+        disk.SchedulerCounters.NextEventWakeCandidateQueries,
+        disk.SchedulerCounters.HasWakeCandidateThroughQueries,
+        disk.SchedulerCounters.HasEventWakeCandidateThroughQueries,
+        disk.SchedulerCounters.RefreshNextIndexPulseQueries,
+        disk.SchedulerCounters.InputAdvanceCalls,
+        disk.SchedulerCounters.SchedulerGateTrue,
+        disk.SchedulerCounters.SchedulerGateFalse,
+        disk.SchedulerCounters.PendingDmaWakeSources,
+        disk.SchedulerCounters.ActiveDmaProgressWakeSources,
+        disk.SchedulerCounters.ActiveDmaCompletionWakeSources,
+        disk.SchedulerCounters.SyncCandidateWakeSources,
+        disk.SchedulerCounters.IndexPulseWakeSources,
+        disk.SchedulerCounters.PassiveByteReadyWakeSources);
 }
 
 static AmigaDiskTraceEvent[] CaptureDiskTrace(CopperScreenEmulator emulator)
@@ -894,7 +947,14 @@ static DisplaySummary CaptureDisplaySummary(OcsDisplaySnapshot display)
         display.LastSpriteMaxY,
         display.LastBitplaneDmaFetches,
         display.LastSpriteDmaFetches,
-        display.LastMissedSpriteDmaSlots);
+        display.LastMissedSpriteDmaSlots,
+        display.LastRasterlineDescriptorBuilds,
+        display.LastRasterlineDescriptorReplayAttempts,
+        display.LastRasterlineDescriptorReplayedRows,
+        display.LastRasterlineDescriptorFallbackRows,
+        display.LastRasterlineDescriptorBitplaneRows,
+        display.LastRasterlineDescriptorSpriteRows,
+        display.LastRasterlineDescriptorMismatches);
 }
 
 static string FormatFramebufferSummary(FramebufferSummary summary)
@@ -914,6 +974,8 @@ static string FormatDisplaySummary(DisplaySummary summary)
     return $"bpl={summary.BitplanePixels}:{summary.BitplaneMinX},{summary.BitplaneMinY}-{summary.BitplaneMaxX},{summary.BitplaneMaxY}," +
         $"spr={summary.SpritePixels}:{summary.SpriteMinX},{summary.SpriteMinY}-{summary.SpriteMaxX},{summary.SpriteMaxY}," +
         $"dma={summary.BitplaneDmaFetches}/{summary.SpriteDmaFetches},missedSpr={summary.MissedSpriteSlots}," +
+        $"desc={summary.DescriptorBuilds}/{summary.DescriptorReplayAttempts}/{summary.DescriptorReplayedRows}/{summary.DescriptorFallbackRows}," +
+        $"descRows={summary.DescriptorBitplaneRows}/{summary.DescriptorSpriteRows},descMis={summary.DescriptorMismatches}," +
         $"bplcon={summary.Bplcon0:X4}/{summary.Bplcon1:X4}/{summary.Bplcon2:X4}";
 }
 
@@ -921,7 +983,14 @@ static string FormatDiskSummary(DiskSummary summary)
 {
     return $"xfer={summary.TransferCount},words={summary.LastTransferWords},last=d{summary.LastTransferDrive} " +
         $"{summary.LastTransferCylinder}.{summary.LastTransferHead}@0x{summary.LastTransferAddress:X6}," +
-        $"selected={summary.SelectedDrive},active={summary.ActiveDma},dsklen=0x{summary.Dsklen:X4},bytr=0x{summary.Dskbytr:X4}";
+        $"selected={summary.SelectedDrive},active={summary.ActiveDma},dsklen=0x{summary.Dsklen:X4},bytr=0x{summary.Dskbytr:X4}," +
+        $"sched=nw:{summary.DiskNextWakeCandidateQueries},ne:{summary.DiskNextEventWakeCandidateQueries}," +
+        $"hw:{summary.DiskHasWakeCandidateThroughQueries},he:{summary.DiskHasEventWakeCandidateThroughQueries}," +
+        $"idx:{summary.DiskRefreshNextIndexPulseQueries},in:{summary.DiskInputAdvanceCalls}," +
+        $"gate={summary.DiskSchedulerGateTrue}/{summary.DiskSchedulerGateFalse}," +
+        $"why=pd:{summary.DiskPendingDmaWakeSources},ap:{summary.DiskActiveDmaProgressWakeSources}," +
+        $"ac:{summary.DiskActiveDmaCompletionWakeSources},sy:{summary.DiskSyncCandidateWakeSources}," +
+        $"ix:{summary.DiskIndexPulseWakeSources},pb:{summary.DiskPassiveByteReadyWakeSources}";
 }
 
 static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
@@ -1020,7 +1089,14 @@ internal readonly record struct DisplaySummary(
     int SpriteMaxY,
     int BitplaneDmaFetches,
     int SpriteDmaFetches,
-    int MissedSpriteSlots);
+    int MissedSpriteSlots,
+    int DescriptorBuilds,
+    int DescriptorReplayAttempts,
+    int DescriptorReplayedRows,
+    int DescriptorFallbackRows,
+    int DescriptorBitplaneRows,
+    int DescriptorSpriteRows,
+    int DescriptorMismatches);
 
 internal readonly record struct DiskSummary(
     int TransferCount,
@@ -1032,7 +1108,21 @@ internal readonly record struct DiskSummary(
     int SelectedDrive,
     bool ActiveDma,
     ushort Dsklen,
-    ushort Dskbytr);
+    ushort Dskbytr,
+    long DiskNextWakeCandidateQueries,
+    long DiskNextEventWakeCandidateQueries,
+    long DiskHasWakeCandidateThroughQueries,
+    long DiskHasEventWakeCandidateThroughQueries,
+    long DiskRefreshNextIndexPulseQueries,
+    long DiskInputAdvanceCalls,
+    long DiskSchedulerGateTrue,
+    long DiskSchedulerGateFalse,
+    long DiskPendingDmaWakeSources,
+    long DiskActiveDmaProgressWakeSources,
+    long DiskActiveDmaCompletionWakeSources,
+    long DiskSyncCandidateWakeSources,
+    long DiskIndexPulseWakeSources,
+    long DiskPassiveByteReadyWakeSources);
 
 internal readonly record struct HardwareSpecializationSummary(
     long BlitterKernelHits,

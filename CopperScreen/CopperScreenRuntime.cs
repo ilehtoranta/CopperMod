@@ -88,7 +88,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private const int AudioSampleRate = 44_100;
 	private const int AudioChannels = 2;
 	private const int AudioOutputBufferCount = 8;
-	private const int TargetQueuedAudioBuffers = 3;
+	private const int TargetQueuedAudioBuffers = 8;
 	private const int CriticalQueuedAudioBuffers = 2;
 	private const int MaxFramesPerTick = 5;
 	private const int TargetQueuedPresentationFrames = 1;

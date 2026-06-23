@@ -1587,10 +1587,14 @@ namespace CopperMod.Amiga
         public void AdvanceHardwareTo(long targetCycle)
             => _hardwareScheduler.DrainTo(
                 targetCycle,
-                AmigaHardwareEventMask.All | AmigaHardwareEventMask.ForceCatchUp);
+                AmigaHardwareEventMask.All |
+                    AmigaHardwareEventMask.DiskPassiveInput |
+                    AmigaHardwareEventMask.ForceCatchUp);
 
         public void AdvanceHardwareEventsTo(long targetCycle)
-            => _hardwareScheduler.DrainTo(targetCycle, AmigaHardwareEventMask.All);
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.All | AmigaHardwareEventMask.CpuBoundary);
 
         public AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot()
             => _hardwareScheduler.CaptureSnapshot();
@@ -1696,6 +1700,16 @@ namespace CopperMod.Amiga
             }
 
             return Agnus.GetNextWakeCandidateCycle(currentCycle, targetCycle, Display.HasLiveDisplayWork());
+        }
+
+        internal long GetNextCpuVisibleAgnusEventCycle(long currentCycle, long targetCycle)
+        {
+            if (!LiveAgnusDmaEnabled)
+            {
+                return long.MaxValue;
+            }
+
+            return Display.GetNextLiveCopperWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
         }
 
         private static CustomRegisterReadAdvanceKind GetCustomRegisterReadAdvanceKind(uint customRegisterAddress)

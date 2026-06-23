@@ -407,11 +407,12 @@ namespace Copper68k
         }
 
         public M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
+            => GetPlan(M68kTimingDescriptor.FromLegacyKey(key));
+
+        public M68kInstructionPlan GetPlan(M68kTimingDescriptor descriptor)
             => _profile.FixedInstructionNativeCycles is int fixedCycles
-                ? M68kInstructionPlan.CreateFlat(key, "fixed JIT fallback", fixedCycles)
-                : _profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
-                ? M68030TimingModel.GetPlan(key)
-                : M68020TimingModel.GetPlan(key);
+                ? M68kInstructionPlan.CreateFlat(descriptor.Key, "fixed JIT fallback", fixedCycles)
+                : M68kTimingFormula.GetPlan(descriptor, _profile.Model);
 
         public bool ProbeInstructionCache(uint address)
             => InstructionCache.Probe(address);
@@ -530,6 +531,9 @@ namespace Copper68k
             return LastInstructionTiming;
         }
 
+        public M68kExecutedInstructionTiming CompleteInstruction(M68kTimingDescriptor descriptor)
+            => CompleteInstruction(GetPlan(descriptor));
+
         private void SynchronizeMachineToNative()
         {
             var machineCycles = _profile.NativeToMachineCycles(_state.NativeCycles);
@@ -543,6 +547,9 @@ namespace Copper68k
     internal static class M68020TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
+            => M68kTimingFormula.GetPlan(M68kTimingDescriptor.FromLegacyKey(key), M68kAcceleratorModel.M68020);
+
+        internal static M68kInstructionPlan GetLegacyFlatPlan(M68kInstructionTimingKey key)
         {
             return key switch
             {
@@ -758,216 +765,7 @@ namespace Copper68k
     internal static class M68030TimingModel
     {
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
-        {
-            return key switch
-            {
-                M68kInstructionTimingKey.Idle => M68kInstructionPlan.CreateHeadTail(key, "IDLE", 2, 0, 0, M68kTimingBarrier.SynchronizeBus),
-                M68kInstructionTimingKey.Nop => M68kInstructionPlan.CreateHeadTail(key, "NOP", 4, 0, 0, M68kTimingBarrier.SynchronizeBus),
-                M68kInstructionTimingKey.LineAException => M68kInstructionPlan.CreateHeadTail(key, "LINEA", 34, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.LineFException => M68kInstructionPlan.CreateHeadTail(key, "LINEF", 34, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.IllegalInstruction => M68kInstructionPlan.CreateHeadTail(key, "ILLEGAL", 20, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.PrivilegeViolation => M68kInstructionPlan.CreateHeadTail(key, "PRIVILEGE", 20, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.FormatError => M68kInstructionPlan.CreateHeadTail(key, "FORMAT", 20, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.InterruptAcknowledge => M68kInstructionPlan.CreateHeadTail(key, "INTERRUPT", 44, 0, 0, ExceptionBarrier()),
-                M68kInstructionTimingKey.Movec => M68kInstructionPlan.CreateHeadTail(key, "MOVEC", 12, 0, 0, M68kTimingBarrier.CacheControl | M68kTimingBarrier.SynchronizeBus),
-                M68kInstructionTimingKey.ImmediateWordToConditionCodeRegister => M68kInstructionPlan.CreateHeadTail(key, "ORI/ANDI/EORI.W #<data>,CCR", 8, 1, 1),
-                M68kInstructionTimingKey.ImmediateWordToStatusRegister => M68kInstructionPlan.CreateHeadTail(key, "ORI/ANDI/EORI.W #<data>,SR", 20, 0, 0, M68kTimingBarrier.SynchronizeBus),
-                M68kInstructionTimingKey.Rte => M68kInstructionPlan.CreateHeadTail(key, "RTE", 20, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus),
-                M68kInstructionTimingKey.Rtd => M68kInstructionPlan.CreateHeadTail(key, "RTD", 16, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.Rts => M68kInstructionPlan.CreateHeadTail(key, "RTS", 7, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.LinkLong => M68kInstructionPlan.CreateHeadTail(key, "LINK.L", 16, 2, 2),
-                M68kInstructionTimingKey.ExtbLong => M68kInstructionPlan.CreateHeadTail(key, "EXTB.L", 4, 2, 2),
-                M68kInstructionTimingKey.ExtWordData => M68kInstructionPlan.CreateHeadTail(key, "EXT.W Dn", 2, 1, 1),
-                M68kInstructionTimingKey.TstWordData => M68kInstructionPlan.CreateHeadTail(key, "TST.W Dn", 2, 1, 1),
-                M68kInstructionTimingKey.Moveq => M68kInstructionPlan.CreateHeadTail(key, "MOVEQ #<data>,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.NegLongData => M68kInstructionPlan.CreateHeadTail(key, "NEG.L Dn", 2, 1, 1),
-                M68kInstructionTimingKey.NotByteData => M68kInstructionPlan.CreateHeadTail(key, "NOT.B Dn", 2, 1, 1),
-                M68kInstructionTimingKey.ClrDataLong => M68kInstructionPlan.CreateHeadTail(key, "CLR.L Dn", 2, 1, 1),
-                M68kInstructionTimingKey.ClrDataWord => M68kInstructionPlan.CreateHeadTail(key, "CLR.W Dn", 2, 1, 1),
-                M68kInstructionTimingKey.ClrLongAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "CLR.L (An)", 6, 1, 1),
-                M68kInstructionTimingKey.ClrLongAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CLR.L (d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.ClrLongAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "CLR.L (xxx).L", 8, 1, 1),
-                M68kInstructionTimingKey.ClrByteAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "CLR.B (An)", 4, 1, 1),
-                M68kInstructionTimingKey.ClrByteAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CLR.B (d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.ClrWordAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CLR.W (d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.ClrLongPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "CLR.L (An)+", 6, 1, 1),
-                M68kInstructionTimingKey.LeaAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "LEA (xxx).L,An", 6, 1, 1),
-                M68kInstructionTimingKey.LeaAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "LEA (d16,An),An", 4, 1, 1),
-                M68kInstructionTimingKey.MoveByteImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B #<data>,(xxx).L", 8, 1, 1),
-                M68kInstructionTimingKey.MoveWordImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W #<data>,(xxx).L", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L #<data>,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L #<data>,(An)", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L #<data>,(d16,An)", 10, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L #<data>,(An)+", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongImmediateToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L #<data>,An", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.MoveLongDataToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L Dn,An", 2, 1, 1),
-                M68kInstructionTimingKey.MoveLongDataToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L Dn,(An)", 4, 1, 1),
-                M68kInstructionTimingKey.MoveLongDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L Dn,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L An,An", 2, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,(An)", 4, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,(An)+", 4, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressIndirectToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressIndirectToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L (An),An", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongPostIncrementToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (An)+,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongPostIncrementToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L (An)+,An", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (d16,An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressDisplacementToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L (d16,An),An", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressDisplacementToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (d16,An),(An)+", 10, 1, 1),
-                M68kInstructionTimingKey.MoveLongBriefIndexedToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (d8,An,Xn),Dn", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongBriefIndexedToAddress => M68kInstructionPlan.CreateHeadTail(key, "MOVEA.L (d8,An,Xn),An", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (An),(An)", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongAbsoluteLongToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).L,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongAbsoluteWordToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).W,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.MoveLongAbsoluteLongToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L (xxx).L,(d16,An)", 10, 1, 1),
-                M68kInstructionTimingKey.MoveLongDataToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L Dn,(xxx).L", 6, 1, 1),
-                M68kInstructionTimingKey.MoveLongAddressToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.L An,(xxx).L", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.MoveByteImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.MoveByteImmediateToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B #<data>,(An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B #<data>,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteImmediateToBriefIndexed => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B #<data>,(d8,An,Xn)", 8, 1, 1),
-                M68kInstructionTimingKey.MoveByteAddressIndirectToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveBytePostIncrementToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (An)+,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (d16,An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteAbsoluteLongToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (xxx).L,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteBriefIndexedToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (d8,An,Xn),Dn", 8, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,(xxx).L", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,(An)", 4, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToBriefIndexed => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,(d8,An,Xn)", 8, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,(An)+", 4, 1, 1),
-                M68kInstructionTimingKey.MoveByteDataToPredecrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B Dn,-(An)", 4, 1, 1),
-                M68kInstructionTimingKey.MoveByteBriefIndexedToPredecrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (d8,An,Xn),-(An)", 10, 1, 1),
-                M68kInstructionTimingKey.MoveBytePostIncrementToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (An)+,(An)+", 8, 1, 1),
-                M68kInstructionTimingKey.MoveByteAddressIndirectToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (An),(xxx).L", 8, 1, 1),
-                M68kInstructionTimingKey.MoveByteAbsoluteLongToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.B (xxx).L,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.MoveWordAbsoluteLongToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W (xxx).L,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveWordAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W (d16,An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MoveWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.MoveWordImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W #<data>,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveWordDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W Dn,(d16,An)", 6, 1, 1),
-                M68kInstructionTimingKey.MoveWordDataToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W Dn,(xxx).L", 6, 1, 1),
-                M68kInstructionTimingKey.MoveWordAbsoluteLongToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W (xxx).L,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.MoveWordAbsoluteLongToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "MOVE.W (xxx).L,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.ImmediateLogicalByteToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "ORI/ANDI.B #<data>,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.AddiByteImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "ADDI.B #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.AddiByteImmediateToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "ADDI.B #<data>,(An)", 6, 1, 1),
-                M68kInstructionTimingKey.AddiByteImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "ADDI.B #<data>,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.AddiWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "ADDI.W #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.AddiLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "ADDI.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.AddiLongImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "ADDI.L #<data>,(xxx).L", 12, 1, 1),
-                M68kInstructionTimingKey.SubiByteImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "SUBI.B #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.SubiByteImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "SUBI.B #<data>,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.SubiLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "SUBI.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.SubByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "SUB.B Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.SubLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "SUB.L Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.SubLongAddressToData => M68kInstructionPlan.CreateHeadTail(key, "SUB.L An,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.SubLongAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "SUB.L (d16,An),Dn", 7, 1, 1),
-                M68kInstructionTimingKey.AddWordDataToData => M68kInstructionPlan.CreateHeadTail(key, "ADD.W Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.AddLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "ADD.L Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.AddxLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "ADDX.L Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.AddLongPostIncrementToData => M68kInstructionPlan.CreateHeadTail(key, "ADD.L (An)+,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.AddWordDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "ADD.W Dn,(d16,An)", 9, 1, 1),
-                M68kInstructionTimingKey.AddLongDataToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "ADD.L Dn,(d16,An)", 13, 1, 1),
-                M68kInstructionTimingKey.AddaLongImmediateToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L #<data>,An", 6, 1, 1),
-                M68kInstructionTimingKey.AddaLongDataToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L Dn,An", 2, 1, 1),
-                M68kInstructionTimingKey.AddaLongAddressDisplacementToAddress => M68kInstructionPlan.CreateHeadTail(key, "ADDA.L (d16,An),An", 7, 1, 1),
-                M68kInstructionTimingKey.SubaLongImmediateToAddress => M68kInstructionPlan.CreateHeadTail(key, "SUBA.L #<data>,An", 6, 1, 1),
-                M68kInstructionTimingKey.DivuWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "DIVU.W #<data>,Dn", 46, 1, 1),
-                M68kInstructionTimingKey.DivsWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "DIVS.W #<data>,Dn", 58, 1, 1),
-                M68kInstructionTimingKey.MuluLong => M68kInstructionPlan.CreateHeadTail(key, "MULU.L <ea>,Dn", 44, 1, 1),
-                M68kInstructionTimingKey.MulsLong => M68kInstructionPlan.CreateHeadTail(key, "MULS.L <ea>,Dn", 44, 1, 1),
-                M68kInstructionTimingKey.DivuLong => M68kInstructionPlan.CreateHeadTail(key, "DIVU.L <ea>,Dr:Dq", 76, 1, 1),
-                M68kInstructionTimingKey.DivsLong => M68kInstructionPlan.CreateHeadTail(key, "DIVS.L <ea>,Dr:Dq", 82, 1, 1),
-                M68kInstructionTimingKey.AbcdByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "ABCD.B Dn,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.AbcdBytePredecrementMemory => M68kInstructionPlan.CreateHeadTail(key, "ABCD.B -(An),-(An)", 18, 1, 1),
-                M68kInstructionTimingKey.SbcdByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "SBCD.B Dn,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.SbcdBytePredecrementMemory => M68kInstructionPlan.CreateHeadTail(key, "SBCD.B -(An),-(An)", 18, 1, 1),
-                M68kInstructionTimingKey.NbcdByteData => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B Dn", 6, 1, 1),
-                M68kInstructionTimingKey.NbcdByteAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (An)", 8, 1, 1),
-                M68kInstructionTimingKey.NbcdBytePostIncrement => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (An)+", 8, 1, 1),
-                M68kInstructionTimingKey.NbcdBytePredecrement => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B -(An)", 8, 1, 1),
-                M68kInstructionTimingKey.NbcdByteAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (d16,An)", 10, 1, 1),
-                M68kInstructionTimingKey.NbcdByteBriefIndexed => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (d8,An,Xn)", 12, 1, 1),
-                M68kInstructionTimingKey.NbcdByteAbsoluteWord => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (xxx).W", 10, 1, 1),
-                M68kInstructionTimingKey.NbcdByteAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "NBCD.B (xxx).L", 12, 1, 1),
-                M68kInstructionTimingKey.AndByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "AND.B Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.AndWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "AND.W #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.AndLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "AND.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.MuluWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "MULU.W #<data>,Dn", 46, 1, 1),
-                M68kInstructionTimingKey.EoriWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "EORI.W #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.EoriLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "EORI.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpiLongImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "CMPI.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpiLongImmediateToPostIncrement => M68kInstructionPlan.CreateHeadTail(key, "CMPI.L #<data>,(An)+", 10, 1, 1),
-                M68kInstructionTimingKey.CmpiLongImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CMPI.L #<data>,(d16,An)", 9, 1, 1),
-                M68kInstructionTimingKey.CmpiLongImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "CMPI.L #<data>,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.CmpiByteImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "CMPI.B #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.CmpiByteImmediateToAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "CMPI.B #<data>,(An)", 6, 1, 1),
-                M68kInstructionTimingKey.CmpiByteImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CMPI.B #<data>,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.CmpiWordImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "CMPI.W #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.CmpiWordImmediateToAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "CMPI.W #<data>,(d16,An)", 8, 1, 1),
-                M68kInstructionTimingKey.CmpiWordImmediateToAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "CMPI.W #<data>,(xxx).L", 8, 1, 1),
-                M68kInstructionTimingKey.CmpaLongImmediateToAddress => M68kInstructionPlan.CreateHeadTail(key, "CMPA.L #<data>,An", 6, 1, 1),
-                M68kInstructionTimingKey.CmpaLongDataToAddress => M68kInstructionPlan.CreateHeadTail(key, "CMPA.L Dn,An", 2, 1, 1),
-                M68kInstructionTimingKey.CmpaLongAddressToAddress => M68kInstructionPlan.CreateHeadTail(key, "CMPA.L An,An", 2, 1, 1),
-                M68kInstructionTimingKey.CmpaLongAddressIndirectToAddress => M68kInstructionPlan.CreateHeadTail(key, "CMPA.L (An),An", 6, 1, 1),
-                M68kInstructionTimingKey.CmpLongDataToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.L Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.CmpLongAddressToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.L An,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.CmpLongAddressIndirectToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.L (An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpLongPostIncrementToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.L (An)+,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpByteDataToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.B Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.CmpByteAddressIndirectToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.B (An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpByteAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.B (d16,An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpByteAbsoluteLongToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.B (xxx).L,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.CmpWordDataToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.W Dn,Dn", 2, 1, 1),
-                M68kInstructionTimingKey.CmpWordAddressDisplacementToData => M68kInstructionPlan.CreateHeadTail(key, "CMP.W (d16,An),Dn", 6, 1, 1),
-                M68kInstructionTimingKey.LeaAbsoluteWord => M68kInstructionPlan.CreateHeadTail(key, "LEA (xxx).W,An", 4, 1, 1),
-                M68kInstructionTimingKey.SwapData => M68kInstructionPlan.CreateHeadTail(key, "SWAP Dn", 4, 1, 1),
-                M68kInstructionTimingKey.AsrLongImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ASR.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.AsrWordImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ASR.W #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.LsrLongImmediateData => M68kInstructionPlan.CreateHeadTail(key, "LSR.L #<data>,Dn", 6, 1, 1),
-                M68kInstructionTimingKey.AslLongImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ASL.L #<data>,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.AslWordImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ASL.W #<data>,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.RorByteImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ROR.B #<data>,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.RorWordImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ROR.W #<data>,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.RolWordImmediateData => M68kInstructionPlan.CreateHeadTail(key, "ROL.W #<data>,Dn", 8, 1, 1),
-                M68kInstructionTimingKey.JsrAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "JSR (xxx).L", 7, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.JmpAddressIndirect => M68kInstructionPlan.CreateHeadTail(key, "JMP (An)", 4, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.JmpAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "JMP (xxx).L", 6, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.OriByteImmediateToData => M68kInstructionPlan.CreateHeadTail(key, "ORI.B #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.BtstByteImmediateAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "BTST #<data>,(xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.BchgByteImmediateAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "BCHG #<data>,(xxx).L", 12, 1, 1),
-                M68kInstructionTimingKey.BclrByteImmediateAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "BCLR #<data>,(xxx).L", 12, 1, 1),
-                M68kInstructionTimingKey.BsetByteImmediateAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "BSET #<data>,(xxx).L", 12, 1, 1),
-                M68kInstructionTimingKey.BsetByteImmediateAddressDisplacement => M68kInstructionPlan.CreateHeadTail(key, "BSET #<data>,(d16,An)", 10, 1, 1),
-                M68kInstructionTimingKey.BtstImmediateData => M68kInstructionPlan.CreateHeadTail(key, "BTST #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.BclrImmediateData => M68kInstructionPlan.CreateHeadTail(key, "BCLR #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.BsetImmediateData => M68kInstructionPlan.CreateHeadTail(key, "BSET #<data>,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.BtstDynamicData => M68kInstructionPlan.CreateHeadTail(key, "BTST Dn,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.BclrDynamicData => M68kInstructionPlan.CreateHeadTail(key, "BCLR Dn,Dn", 4, 1, 1),
-                M68kInstructionTimingKey.SccAbsoluteLong => M68kInstructionPlan.CreateHeadTail(key, "Scc (xxx).L", 10, 1, 1),
-                M68kInstructionTimingKey.BranchByteTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.B taken", 6, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.BranchByteNotTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.B not taken", 4, 1, 1),
-                M68kInstructionTimingKey.BsrByte => M68kInstructionPlan.CreateHeadTail(key, "BSR.B", 7, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.BranchWordTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.W taken", 6, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.BranchWordNotTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.W not taken", 6, 1, 1),
-                M68kInstructionTimingKey.BsrWord => M68kInstructionPlan.CreateHeadTail(key, "BSR.W", 7, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.DbccConditionTrue => M68kInstructionPlan.CreateHeadTail(key, "DBcc condition true", 6, 1, 1),
-                M68kInstructionTimingKey.DbccBranchTaken => M68kInstructionPlan.CreateHeadTail(key, "DBcc branch taken", 10, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.DbccExpired => M68kInstructionPlan.CreateHeadTail(key, "DBcc expired", 12, 1, 1),
-                M68kInstructionTimingKey.BranchLongTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.L taken", 10, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                M68kInstructionTimingKey.BranchLongNotTaken => M68kInstructionPlan.CreateHeadTail(key, "Bcc.L not taken", 8, 1, 1),
-                M68kInstructionTimingKey.BsrLong => M68kInstructionPlan.CreateHeadTail(key, "BSR.L", 18, 0, 0, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
-                _ => throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68030)
-            };
-        }
-
-        private static M68kTimingBarrier ExceptionBarrier()
-            => M68kTimingBarrier.Exception | M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus;
+            => M68kTimingFormula.GetPlan(M68kTimingDescriptor.FromLegacyKey(key), M68kAcceleratorModel.M68030);
     }
 
     internal sealed class M68kAcceleratorBusBridge
