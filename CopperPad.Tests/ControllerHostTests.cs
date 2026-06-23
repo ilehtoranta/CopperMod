@@ -12,7 +12,9 @@ public sealed class ControllerHostTests
 		provider.SetStream(device.Id, stream);
 		using var host = new ControllerHost(provider, new ControllerHostOptions());
 		var changedCount = 0;
+		VirtualXboxControllerState? observedState = null;
 		host.ControllersChanged += (_, _) => changedCount++;
+		host.ControllerStateChanged += (_, args) => observedState = args.State;
 
 		host.Start();
 		stream.Enqueue([255, 128, 128, 128, 0, 255, 0x01, 0]);
@@ -23,6 +25,7 @@ public sealed class ControllerHostTests
 		Assert.InRange(state.LeftX, 0.99, 1.0);
 		Assert.True(state.DPadUp);
 		Assert.Equal(1, changedCount);
+		Assert.Equal(state, observedState);
 	}
 
 	[Fact]
