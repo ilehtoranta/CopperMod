@@ -29,6 +29,9 @@ namespace CopperMod.Amiga
         private ushort _vhposr;
         private ushort _lastCpuActiveInterruptBits;
         private long _copperInterruptRecognitionCycle = long.MinValue;
+        private ulong _registerWakeVersion;
+        private ulong _registerWakeCandidateVersion = ulong.MaxValue;
+        private long _registerWakeCandidateCycle = long.MaxValue;
         private float[][]? _captureSamples;
         private int _captureFrameIndex;
         private int _captureSampleRate;
@@ -75,6 +78,7 @@ namespace CopperMod.Amiga
             _vhposr = 0;
             _lastCpuActiveInterruptBits = 0;
             _copperInterruptRecognitionCycle = long.MinValue;
+            InvalidateRegisterWakeCandidateCache();
             _captureSamples = null;
             _captureFrameIndex = 0;
             _captureSampleRate = 0;
@@ -178,6 +182,7 @@ namespace CopperMod.Amiga
             _pendingWrites.Insert(insertIndex, pending);
             PreserveTimelinePendingWriteIndex(_audioTimeline, insertIndex, cycle, PaulaTimelineKind.Audio, offset, value);
             PreserveTimelinePendingWriteIndex(_registerTimeline, insertIndex, cycle, PaulaTimelineKind.Register, offset, value);
+            InvalidateRegisterWakeCandidateCache();
         }
 
         private void PreserveTimelinePendingWriteIndex(
@@ -294,18 +299,10 @@ namespace CopperMod.Amiga
                 return null;
             }
 
-            long? candidate = null;
-            if (_registerTimeline.PendingWriteIndex < _pendingWrites.Count)
-            {
-                candidate = MinWakeCandidate(candidate, _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle);
-            }
-
-            for (var i = 0; i < _registerTimeline.Channels.Length; i++)
-            {
-                candidate = MinWakeCandidate(candidate, _registerTimeline.Channels[i].GetNextWakeCandidateCycle());
-            }
-
-            return ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            var candidate = GetRegisterWakeCandidateCycle();
+            return candidate == long.MaxValue
+                ? null
+                : ClampWakeCandidate(candidate, currentCycle, targetCycle);
         }
 
         public PaulaChannelSnapshot GetChannelSnapshot(int channel)
@@ -436,20 +433,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (HasPendingWriteThrough(_registerTimeline, targetCycle))
-            {
-                return true;
-            }
-
-            foreach (var channel in _registerTimeline.Channels)
-            {
-                if (channel.GetNextWakeCandidateCycle() <= targetCycle)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return GetRegisterWakeCandidateCycle() <= targetCycle;
         }
 
         private void AdvanceAudioTo(long targetCycle)
@@ -477,6 +461,7 @@ namespace CopperMod.Amiga
             if (kind == PaulaTimelineKind.Register)
             {
                 RefreshCpuInterruptVisibility(targetCycle);
+                InvalidateRegisterWakeCandidateCache();
             }
 
             CompactPendingWrites();
@@ -502,6 +487,7 @@ namespace CopperMod.Amiga
             }
 
             RefreshCpuInterruptVisibility(targetCycle);
+            InvalidateRegisterWakeCandidateCache();
             CompactPendingWrites();
             CompactDmaFetches();
         }
@@ -910,6 +896,43 @@ namespace CopperMod.Amiga
 
         private static bool UsesAudioDmaRefillMinimum(AmigaBus bus)
             => bus.LiveAgnusDmaEnabled;
+
+        private void InvalidateRegisterWakeCandidateCache()
+        {
+            unchecked
+            {
+                _registerWakeVersion++;
+            }
+
+            _registerWakeCandidateVersion = ulong.MaxValue;
+        }
+
+        private long GetRegisterWakeCandidateCycle()
+        {
+            if (_registerWakeCandidateVersion == _registerWakeVersion)
+            {
+                return _registerWakeCandidateCycle;
+            }
+
+            var candidate = long.MaxValue;
+            if (_registerTimeline.PendingWriteIndex < _pendingWrites.Count)
+            {
+                candidate = Math.Min(candidate, _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle);
+            }
+
+            for (var i = 0; i < _registerTimeline.Channels.Length; i++)
+            {
+                var channelCandidate = _registerTimeline.Channels[i].GetNextWakeCandidateCycle();
+                if (channelCandidate.HasValue)
+                {
+                    candidate = Math.Min(candidate, channelCandidate.Value);
+                }
+            }
+
+            _registerWakeCandidateCycle = candidate;
+            _registerWakeCandidateVersion = _registerWakeVersion;
+            return candidate;
+        }
 
         private static long? MinWakeCandidate(long? candidate, long? eventCycle)
         {

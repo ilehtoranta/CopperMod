@@ -18,11 +18,11 @@ namespace CopperMod.Amiga
         ForceCatchUp = 1 << 8,
         CiaRegisterSample = 1 << 9,
         DiskRegisterSample = 1 << 10,
+        CpuBoundary = 1 << 11,
         All = Raster |
             CiaTimers |
             PaulaRegister |
             DiskEvents |
-            DiskPassiveInput |
             Agnus |
             Blitter |
             DiskCiaEvents
@@ -53,6 +53,11 @@ namespace CopperMod.Amiga
             AmigaHardwareEventMask.CiaTimers |
             AmigaHardwareEventMask.PaulaRegister |
             AmigaHardwareEventMask.DiskEvents |
+            AmigaHardwareEventMask.Blitter;
+        private const AmigaHardwareEventMask SlotContendedMemoryAccessMask =
+            AmigaHardwareEventMask.PaulaRegister |
+            AmigaHardwareEventMask.DiskEvents |
+            AmigaHardwareEventMask.Agnus |
             AmigaHardwareEventMask.Blitter;
 
         private readonly AmigaBus _bus;
@@ -170,7 +175,9 @@ namespace CopperMod.Amiga
             {
                 var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
                 var forceCatchUp = (mask & AmigaHardwareEventMask.ForceCatchUp) != 0;
+                var cpuBoundary = (mask & AmigaHardwareEventMask.CpuBoundary) != 0;
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
+                    !cpuBoundary &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
                     _bus.AdvanceAgnusCoreTo(targetCycle);
@@ -406,7 +413,13 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var cursor = Math.Min(_lastDrainCycle, targetCycle);
+            var cursor = Math.Min(GetMaskDrainedThroughCycle(mask), targetCycle);
+            var targetLineStartCycle = targetCycle - (targetCycle % _bus.PalLineCycles);
+            if (cursor < targetLineStartCycle - 1)
+            {
+                return false;
+            }
+
             return _bus.TrySkipRasterlineScheduleDrain(cursor, targetCycle, mask);
         }
 
@@ -420,6 +433,52 @@ namespace CopperMod.Amiga
                 ((mask & AmigaHardwareEventMask.DiskPassiveInput) == 0 || _diskPassiveDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.Agnus) == 0 || _agnusDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.Blitter) == 0 || _blitterDrainCycle >= targetCycle);
+        }
+
+        private long GetMaskDrainedThroughCycle(AmigaHardwareEventMask mask)
+        {
+            var cycle = long.MaxValue;
+            if ((mask & AmigaHardwareEventMask.Raster) != 0)
+            {
+                cycle = Math.Min(cycle, _rasterDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.CiaTimers) != 0)
+            {
+                cycle = Math.Min(cycle, _ciaDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0)
+            {
+                cycle = Math.Min(cycle, _paulaDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.DiskEvents) != 0)
+            {
+                cycle = Math.Min(cycle, _diskEventDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.DiskCiaEvents) != 0)
+            {
+                cycle = Math.Min(cycle, _diskCiaDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
+            {
+                cycle = Math.Min(cycle, _diskPassiveDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.Agnus) != 0)
+            {
+                cycle = Math.Min(cycle, _agnusDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.Blitter) != 0)
+            {
+                cycle = Math.Min(cycle, _blitterDrainCycle);
+            }
+
+            return cycle == long.MaxValue ? _lastDrainCycle : cycle;
         }
 
         private long GetNextEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)
@@ -440,14 +499,15 @@ namespace CopperMod.Amiga
                 candidate = Min(candidate, GetNextPaulaEventCycle(currentCycle, targetCycle));
             }
 
-            if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
+            if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
+                HasDiskWakeSourceThrough(targetCycle, mask))
             {
                 candidate = Min(candidate, GetNextDiskEventCycle(currentCycle, targetCycle, mask));
             }
 
             if ((mask & AmigaHardwareEventMask.Agnus) != 0)
             {
-                candidate = Min(candidate, _bus.GetNextAgnusEventCycle(currentCycle, targetCycle));
+                candidate = Min(candidate, GetNextAgnusEventCycle(currentCycle, targetCycle, mask));
             }
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0)
@@ -483,6 +543,7 @@ namespace CopperMod.Amiga
             }
 
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
+                HasDiskWakeSourceThrough(cycle, mask) &&
                 HasDiskWorkThrough(cycle, mask))
             {
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
@@ -498,7 +559,7 @@ namespace CopperMod.Amiga
             }
 
             if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
-                _bus.GetNextAgnusEventCycle(cycle, cycle) <= cycle)
+                GetNextAgnusEventCycle(cycle, cycle, mask) <= cycle)
             {
                 _bus.AdvanceAgnusCoreTo(cycle);
                 _agnusEvents++;
@@ -536,7 +597,8 @@ namespace CopperMod.Amiga
             }
 
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
-                (forceCatchUp || HasDiskWorkThrough(targetCycle, mask)))
+                (forceCatchUp ||
+                    (HasDiskWakeSourceThrough(targetCycle, mask) && HasDiskWorkThrough(targetCycle, mask))))
             {
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
@@ -549,7 +611,7 @@ namespace CopperMod.Amiga
             }
 
             if ((mask & AmigaHardwareEventMask.DiskCiaEvents) != 0 &&
-                (forceCatchUp || _bus.Disk.HasCiaEventThrough(targetCycle)))
+                (forceCatchUp || (_bus.Disk.HasCiaWakeSource() && _bus.Disk.HasCiaEventThrough(targetCycle))))
             {
                 _bus.Disk.AdvanceCiaEventsTo(targetCycle);
             }
@@ -571,6 +633,7 @@ namespace CopperMod.Amiga
             }
 
             return (mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
+                HasDiskWakeSourceThrough(cycle, mask) &&
                 HasDiskWorkThrough(cycle, mask);
         }
 
@@ -586,6 +649,11 @@ namespace CopperMod.Amiga
 
         private long GetNextDiskEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)
         {
+            if (!HasDiskWakeSourceThrough(targetCycle, mask))
+            {
+                return long.MaxValue;
+            }
+
             if (HasDiskWorkThrough(currentCycle, mask))
             {
                 return currentCycle;
@@ -611,6 +679,13 @@ namespace CopperMod.Amiga
             return _bus.Disk.GetNextEventWakeCandidateCycle(currentCycle, targetCycle, includeActiveDmaProgress) ?? long.MaxValue;
         }
 
+        private long GetNextAgnusEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)
+        {
+            return (mask & AmigaHardwareEventMask.CpuBoundary) != 0
+                ? _bus.GetNextCpuVisibleAgnusEventCycle(currentCycle, targetCycle)
+                : _bus.GetNextAgnusEventCycle(currentCycle, targetCycle);
+        }
+
         private bool HasDiskWorkThrough(long cycle, AmigaHardwareEventMask mask)
         {
             return (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0
@@ -619,6 +694,18 @@ namespace CopperMod.Amiga
                         _bus.Disk.HasEventWakeCandidateThrough(cycle, includeActiveDmaProgress: true))
                 : _bus.Disk.HasEventWakeCandidateThrough(
                     cycle,
+                    includeActiveDmaProgress: (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0);
+        }
+
+        private bool HasDiskWakeSourceThrough(long targetCycle, AmigaHardwareEventMask mask)
+        {
+            var includePassiveInput = (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0;
+            var includeEvents = (mask & AmigaHardwareEventMask.DiskEvents) != 0;
+            return (includePassiveInput || includeEvents) &&
+                _bus.Disk.HasSchedulerWakeSourceThrough(
+                    targetCycle,
+                    includePassiveInput,
+                    includeEvents,
                     includeActiveDmaProgress: (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0);
         }
 
@@ -642,8 +729,12 @@ namespace CopperMod.Amiga
 
             if (target == AmigaBusAccessTarget.ChipRam ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
-                target == AmigaBusAccessTarget.RealTimeClock ||
-                target == AmigaBusAccessTarget.CustomRegisters)
+                target == AmigaBusAccessTarget.RealTimeClock)
+            {
+                return SlotContendedMemoryAccessMask;
+            }
+
+            if (target == AmigaBusAccessTarget.CustomRegisters)
             {
                 return AmigaHardwareEventMask.All;
             }

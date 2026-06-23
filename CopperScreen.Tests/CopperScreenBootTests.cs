@@ -1454,11 +1454,11 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void AudioCatchUpQueuesSeveralBuffersOnlyWhenAudioQueueIsCritical()
 	{
-		Assert.Equal(3, MainWindow.CalculateFramesToRender(0, catchUpAudio: true));
-		Assert.Equal(2, MainWindow.CalculateFramesToRender(1, catchUpAudio: true));
+		Assert.Equal(5, MainWindow.CalculateFramesToRender(0, catchUpAudio: true));
+		Assert.Equal(5, MainWindow.CalculateFramesToRender(1, catchUpAudio: true));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(2, catchUpAudio: true));
-		Assert.Equal(0, MainWindow.CalculateFramesToRender(4, catchUpAudio: true));
-		Assert.Equal(0, MainWindow.CalculateFramesToRender(5, catchUpAudio: true));
+		Assert.Equal(1, MainWindow.CalculateFramesToRender(4, catchUpAudio: true));
+		Assert.Equal(1, MainWindow.CalculateFramesToRender(5, catchUpAudio: true));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(8, catchUpAudio: true));
 		Assert.Equal(1, MainWindow.CalculateFramesToRender(0, catchUpAudio: false));
 		Assert.Equal(0, MainWindow.CalculateFramesToRender(8, catchUpAudio: false));

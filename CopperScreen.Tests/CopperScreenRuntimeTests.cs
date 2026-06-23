@@ -83,9 +83,9 @@ public sealed class CopperScreenRuntimeTests
 		Assert.True(SpinWait.SpinUntil(() =>
 		{
 			DrainPresentationFrames(runtime, ref lastSeen);
-			return audio.QueuedBufferCount >= 3;
+			return audio.QueuedBufferCount >= 8;
 		}, TimeSpan.FromSeconds(1)));
-		Assert.InRange(audio.SubmitCount, 3, 8);
+		Assert.InRange(audio.SubmitCount, 8, 16);
 	}
 
 	[Fact]
@@ -398,7 +398,7 @@ public sealed class CopperScreenRuntimeTests
 
 		runtime.Start();
 
-		Assert.True(SpinWait.SpinUntil(() => audio.SubmitCount > 0 && audio.QueuedBufferCount >= 3, TimeSpan.FromSeconds(1)));
+		Assert.True(SpinWait.SpinUntil(() => audio.SubmitCount > 0 && audio.QueuedBufferCount >= 8, TimeSpan.FromSeconds(1)));
 		Assert.InRange(runtime.CurrentState.PresentationQueueDepth, 0, 2);
 	}
 
@@ -410,8 +410,8 @@ public sealed class CopperScreenRuntimeTests
 
 		runtime.Start();
 
-		Assert.True(SpinWait.SpinUntil(() => audio.QueuedBufferCount >= 3, TimeSpan.FromSeconds(1)));
-		Assert.True(audio.SubmitCount >= 3);
+		Assert.True(SpinWait.SpinUntil(() => audio.QueuedBufferCount >= 8, TimeSpan.FromSeconds(1)));
+		Assert.True(audio.SubmitCount >= 8);
 		Assert.InRange(runtime.CurrentState.PresentationQueueDepth, 0, 2);
 		Assert.True(runtime.CurrentState.PresentationQueueFullThrottleCount > 0);
 	}
