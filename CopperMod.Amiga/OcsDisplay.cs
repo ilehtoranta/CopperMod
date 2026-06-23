@@ -168,6 +168,7 @@ namespace CopperMod.Amiga
         private readonly LiveRasterlinePlanEvent[] _predictedRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
         private readonly int[] _predictedRasterlinePlanEventCounts = new int[LowResOutputHeight];
         private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[LowResOutputHeight];
+        private readonly LiveRasterlineDmaDescriptor[] _liveRasterlineDmaDescriptors = new LiveRasterlineDmaDescriptor[LowResOutputHeight];
         private DisplayFrameTimeline _displayTimeline = new DisplayFrameTimeline();
         private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
         private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
@@ -286,6 +287,13 @@ namespace CopperMod.Amiga
         private int _predictedRasterlinePlanUnsupportedSpriteLines;
         private int _predictedRasterlinePlanUnsupportedInvalidStateLines;
         private int _predictedRasterlinePlanUnsupportedOverflowLines;
+        private int _liveRasterlineDescriptorBuilds;
+        private int _liveRasterlineDescriptorReplayAttempts;
+        private int _liveRasterlineDescriptorReplayedRows;
+        private int _liveRasterlineDescriptorFallbackRows;
+        private int _liveRasterlineDescriptorBitplaneRows;
+        private int _liveRasterlineDescriptorSpriteRows;
+        private int _liveRasterlineDescriptorMismatches;
 
         public OcsDisplay(AmigaBus bus, bool liveDmaEnabled = true)
         {
@@ -660,6 +668,13 @@ namespace CopperMod.Amiga
                 _predictedRasterlinePlanUnsupportedSpriteLines,
                 _predictedRasterlinePlanUnsupportedInvalidStateLines,
                 _predictedRasterlinePlanUnsupportedOverflowLines,
+                _liveRasterlineDescriptorBuilds,
+                _liveRasterlineDescriptorReplayAttempts,
+                _liveRasterlineDescriptorReplayedRows,
+                _liveRasterlineDescriptorFallbackRows,
+                _liveRasterlineDescriptorBitplaneRows,
+                _liveRasterlineDescriptorSpriteRows,
+                _liveRasterlineDescriptorMismatches,
                 _lastArchiveRejectFrameIncomplete,
                 _lastArchiveRejectTimelineInvalid,
                 _lastArchiveRejectUnsafeWrite,
@@ -751,7 +766,7 @@ namespace CopperMod.Amiga
             _liveCopperStepCount = 0;
             _livePendingWriteEventCount = 0;
             _liveFetchBatchWordCount = 0;
-            ResetLiveRasterlinePlan();
+            ResetLiveRasterlinePlan(resetDescriptorCounters: true);
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
@@ -1680,7 +1695,7 @@ namespace CopperMod.Amiga
                 : long.MaxValue;
         }
 
-        private void ResetLiveRasterlinePlan()
+        private void ResetLiveRasterlinePlan(bool resetDescriptorCounters = false)
         {
             Array.Clear(_liveRasterlinePlanEventCounts);
             Array.Clear(_liveRasterlinePlanRowsTouched);
@@ -1688,6 +1703,7 @@ namespace CopperMod.Amiga
             Array.Clear(_liveRasterlinePlanRowsOverflowed);
             Array.Clear(_predictedRasterlinePlanEventCounts);
             Array.Clear(_predictedRasterlinePlanStatuses);
+            Array.Clear(_liveRasterlineDmaDescriptors);
             _liveRasterlinePlanRow = -1;
             _liveRasterlinePlanLineStartCycle = 0;
             _liveRasterlinePlanLineStopCycle = 0;
@@ -1716,6 +1732,16 @@ namespace CopperMod.Amiga
             _predictedRasterlinePlanUnsupportedSpriteLines = 0;
             _predictedRasterlinePlanUnsupportedInvalidStateLines = 0;
             _predictedRasterlinePlanUnsupportedOverflowLines = 0;
+            if (resetDescriptorCounters)
+            {
+                _liveRasterlineDescriptorBuilds = 0;
+                _liveRasterlineDescriptorReplayAttempts = 0;
+                _liveRasterlineDescriptorReplayedRows = 0;
+                _liveRasterlineDescriptorFallbackRows = 0;
+                _liveRasterlineDescriptorBitplaneRows = 0;
+                _liveRasterlineDescriptorSpriteRows = 0;
+                _liveRasterlineDescriptorMismatches = 0;
+            }
         }
 
         private bool TryBeginLiveRasterlinePlanEvent(long cycle, int expectedRow)
@@ -1806,9 +1832,7 @@ namespace CopperMod.Amiga
             }
             else if (kind == LiveRasterlinePlanEventKind.SpriteFetchBatch)
             {
-                MarkPredictedRasterlinePlanUnsupported(
-                    _liveRasterlinePlanRow,
-                    LiveRasterlinePredictionStatus.UnsupportedSprite);
+                TryAppendRecordedSpriteEventToPendingDescriptor(_liveRasterlinePlanRow, kind, cycle, batchStopCycle, cursorA, cursorB, cursorC);
             }
 
             if (_liveRasterlinePlanLineEventCount >= MaxLiveRasterlinePlanEvents)
@@ -1871,12 +1895,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (IsSpriteDmaEnabled())
-            {
-                MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedSprite);
-                return;
-            }
-
             _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.PendingValidation;
             _predictedRasterlinePlanEventCounts[row] = 0;
             if (!TryAppendPredictedRasterlinePlanEvent(
@@ -1895,16 +1913,57 @@ namespace CopperMod.Amiga
             }
 
             var state = _liveLineStates[row];
-            if (state.PlaneCount <= 0 ||
-                state.FetchWords <= 0 ||
-                !state.DisplayWindowVerticallyOpen ||
-                !IsBitplaneDmaEnabled(state.Dmacon))
+            var hasBitplaneFetches =
+                state.PlaneCount > 0 &&
+                state.FetchWords > 0 &&
+                state.DisplayWindowVerticallyOpen &&
+                IsBitplaneDmaEnabled(state.Dmacon);
+            var hasSpriteSlots = IsSpriteDmaEnabled();
+            _liveRasterlineDmaDescriptors[row] = new LiveRasterlineDmaDescriptor(
+                _liveGeneration,
+                row,
+                lineStart,
+                lineStop,
+                state.DisplayWindowVerticallyOpen,
+                state.Bplcon0,
+                state.Bplcon1,
+                state.Bplcon2,
+                state.Dmacon,
+                state.Bpl1Mod,
+                state.Bpl2Mod,
+                state.PlaneCount,
+                state.FetchWords,
+                state.DataFetchStart,
+                state.FetchSlotStride,
+                state.PlaneHasRowMask,
+                state.BitplaneRowAddresses[0],
+                state.BitplaneRowAddresses[1],
+                state.BitplaneRowAddresses[2],
+                state.BitplaneRowAddresses[3],
+                state.BitplaneRowAddresses[4],
+                state.BitplaneRowAddresses[5],
+                hasBitplaneFetches,
+                hasSpriteSlots);
+            _liveRasterlineDescriptorBuilds++;
+            if (hasBitplaneFetches)
+            {
+                _liveRasterlineDescriptorBitplaneRows++;
+            }
+
+            if (hasSpriteSlots)
+            {
+                _liveRasterlineDescriptorSpriteRows++;
+            }
+
+            if (!hasBitplaneFetches)
             {
                 return;
             }
 
             var firstFetchCycle = GetFirstLiveBitplaneFetchCycleForRendering(row, state);
-            if (firstFetchCycle == long.MaxValue || firstFetchCycle > lineStop)
+            if (firstFetchCycle == long.MaxValue ||
+                firstFetchCycle > lineStop ||
+                !TryGetFirstLiveBitplaneFetchCursor(state, out var firstPlane, out var firstSlot))
             {
                 return;
             }
@@ -1916,12 +1975,49 @@ namespace CopperMod.Amiga
                         firstFetchCycle,
                         row,
                         lineStop,
+                        firstPlane,
                         0,
-                        0,
-                        0)))
+                        firstSlot)))
             {
                 MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedOverflow);
             }
+        }
+
+        private static bool TryGetFirstLiveBitplaneFetchCursor(LiveLineState state, out int plane, out int slot)
+        {
+            plane = 0;
+            slot = 0;
+            var planeCount = Math.Max(0, state.PlaneCount);
+            for (; slot < state.FetchSlotStride; slot++)
+            {
+                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchSlotStride, out plane))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void TryAppendRecordedSpriteEventToPendingDescriptor(
+            int row,
+            LiveRasterlinePlanEventKind kind,
+            long cycle,
+            long batchStopCycle,
+            int cursorA,
+            int cursorB,
+            int cursorC)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                _predictedRasterlinePlanStatuses[row] != LiveRasterlinePredictionStatus.PendingValidation ||
+                !_liveRasterlineDmaDescriptors[row].IsValid(_liveGeneration, row))
+            {
+                return;
+            }
+
+            _ = TryAppendPredictedRasterlinePlanEvent(
+                row,
+                new LiveRasterlinePlanEvent(kind, cycle, row, batchStopCycle, cursorA, cursorB, cursorC));
         }
 
         private bool TryAppendPredictedRasterlinePlanEvent(int row, LiveRasterlinePlanEvent planEvent)
@@ -1937,10 +2033,42 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            _predictedRasterlinePlanEvents[(row * MaxLiveRasterlinePlanEvents) + count] = planEvent;
+            var baseIndex = row * MaxLiveRasterlinePlanEvents;
+            var insertIndex = count;
+            while (insertIndex > 0 &&
+                IsRasterlinePlanEventAfter(_predictedRasterlinePlanEvents[baseIndex + insertIndex - 1], planEvent))
+            {
+                _predictedRasterlinePlanEvents[baseIndex + insertIndex] = _predictedRasterlinePlanEvents[baseIndex + insertIndex - 1];
+                insertIndex--;
+            }
+
+            _predictedRasterlinePlanEvents[baseIndex + insertIndex] = planEvent;
             _predictedRasterlinePlanEventCounts[row] = count + 1;
             _predictedRasterlinePlanEventTotal++;
             return true;
+        }
+
+        private static bool IsRasterlinePlanEventAfter(LiveRasterlinePlanEvent left, LiveRasterlinePlanEvent right)
+        {
+            if (left.Cycle != right.Cycle)
+            {
+                return left.Cycle > right.Cycle;
+            }
+
+            return GetRasterlinePlanEventOrder(left.Kind) > GetRasterlinePlanEventOrder(right.Kind);
+        }
+
+        private static int GetRasterlinePlanEventOrder(LiveRasterlinePlanEventKind kind)
+        {
+            return kind switch
+            {
+                LiveRasterlinePlanEventKind.PendingWriteOrCopper => 0,
+                LiveRasterlinePlanEventKind.CopperBarrier => 1,
+                LiveRasterlinePlanEventKind.LineStateCapture => 2,
+                LiveRasterlinePlanEventKind.SpriteFetchBatch => 3,
+                LiveRasterlinePlanEventKind.BitplaneFetchBatch => 4,
+                _ => 5
+            };
         }
 
         private void MarkPredictedRasterlinePlanUnsupported(int row, LiveRasterlinePredictionStatus status)
@@ -1958,6 +2086,7 @@ namespace CopperMod.Amiga
 
             _predictedRasterlinePlanStatuses[row] = status;
             _predictedRasterlinePlanEventCounts[row] = 0;
+            _liveRasterlineDmaDescriptors[row] = default;
         }
 
         private void ValidatePredictedRasterlinePlan(int row)
@@ -1990,6 +2119,7 @@ namespace CopperMod.Amiga
             {
                 _predictedRasterlinePlanStatuses[row] = LiveRasterlinePredictionStatus.Mismatched;
                 _predictedRasterlinePlanMismatchedLines++;
+                _liveRasterlineDescriptorMismatches++;
             }
         }
 
@@ -2009,7 +2139,11 @@ namespace CopperMod.Amiga
                 var actual = _liveRasterlinePlanEvents[baseIndex + i];
                 if (expected.Kind != actual.Kind ||
                     expected.Cycle != actual.Cycle ||
-                    expected.Row != actual.Row)
+                    expected.Row != actual.Row ||
+                    expected.BatchStopCycle != actual.BatchStopCycle ||
+                    expected.CursorA != actual.CursorA ||
+                    expected.CursorB != actual.CursorB ||
+                    expected.CursorC != actual.CursorC)
                 {
                     return false;
                 }
@@ -2233,6 +2367,17 @@ namespace CopperMod.Amiga
                     }
                 }
 
+                if (TryReplayLiveRasterlineDescriptorTo(
+                        targetCycle,
+                        includeCopper,
+                        nextLineStateCycle,
+                        nextBitplaneFetchCycle,
+                        nextSpriteFetchCycle,
+                        nextPendingWriteCycle))
+                {
+                    continue;
+                }
+
                 if (nextCycle > targetCycle)
                 {
                     break;
@@ -2369,6 +2514,256 @@ namespace CopperMod.Amiga
             }
 
             return stopCycle;
+        }
+
+        private bool TryReplayLiveRasterlineDescriptorTo(
+            long targetCycle,
+            bool includeCopper,
+            long nextLineStateCycle,
+            long nextBitplaneFetchCycle,
+            long nextSpriteFetchCycle,
+            long nextPendingWriteCycle)
+        {
+            var nextReplayCycle = Math.Min(nextBitplaneFetchCycle, nextSpriteFetchCycle);
+            if (nextReplayCycle == long.MaxValue ||
+                nextReplayCycle > targetCycle ||
+                nextLineStateCycle <= nextReplayCycle ||
+                nextPendingWriteCycle <= nextReplayCycle)
+            {
+                return false;
+            }
+
+            if (IsLiveCopperDmaEnabled())
+            {
+                return false;
+            }
+
+            if (!includeCopper && GetNextLiveCopperBarrierCycle() <= nextReplayCycle)
+            {
+                return false;
+            }
+
+            var row = nextBitplaneFetchCycle <= nextSpriteFetchCycle
+                ? _liveNextFetchRow
+                : _liveNextSpriteRow;
+            if (!TryGetLiveRasterlineDmaDescriptor(row, out var descriptor))
+            {
+                return false;
+            }
+
+            var replayStopCycle = Math.Min(
+                descriptor.LineStopCycle,
+                GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper));
+            if (nextReplayCycle > replayStopCycle ||
+                HasPendingWriteInCycleRange(Math.Max(_liveCycle, descriptor.LineStartCycle), replayStopCycle))
+            {
+                _liveRasterlineDescriptorFallbackRows++;
+                return false;
+            }
+
+            if (nextSpriteFetchCycle <= nextBitplaneFetchCycle)
+            {
+                if (!descriptor.HasSpriteSlots)
+                {
+                    _liveRasterlineDescriptorFallbackRows++;
+                    return false;
+                }
+            }
+            else if (!descriptor.HasBitplaneFetches)
+            {
+                _liveRasterlineDescriptorFallbackRows++;
+                return false;
+            }
+
+            _liveRasterlineDescriptorReplayAttempts++;
+            AdvanceLiveDisplayStateTo(nextReplayCycle, includeCopper);
+            var replayed = false;
+            if (nextSpriteFetchCycle <= nextBitplaneFetchCycle)
+            {
+                RecordLiveRasterlinePlanEvent(
+                    LiveRasterlinePlanEventKind.SpriteFetchBatch,
+                    nextSpriteFetchCycle,
+                    _liveNextSpriteRow,
+                    replayStopCycle,
+                    _liveNextSpriteIndex,
+                    _liveNextSpriteWord,
+                    0);
+                replayed = ReplayLiveRasterlineDescriptorSpriteBatch(descriptor, replayStopCycle);
+            }
+            else
+            {
+                RecordLiveRasterlinePlanEvent(
+                    LiveRasterlinePlanEventKind.BitplaneFetchBatch,
+                    nextBitplaneFetchCycle,
+                    _liveNextFetchRow,
+                    replayStopCycle,
+                    _liveNextFetchPlane,
+                    _liveNextFetchWord,
+                    _liveNextFetchSlot);
+                replayed = ReplayLiveRasterlineDescriptorBitplaneBatch(descriptor, replayStopCycle);
+            }
+
+            if (replayed)
+            {
+                _liveRasterlineDescriptorReplayedRows++;
+                return true;
+            }
+
+            _liveRasterlineDescriptorFallbackRows++;
+            return false;
+        }
+
+        private bool TryGetLiveRasterlineDmaDescriptor(int row, out LiveRasterlineDmaDescriptor descriptor)
+        {
+            descriptor = default;
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            descriptor = _liveRasterlineDmaDescriptors[row];
+            return descriptor.IsValid(_liveGeneration, row) &&
+                IsLiveLineValid(row) &&
+                DoesLiveLineStateMatchDescriptor(row, descriptor);
+        }
+
+        private bool DoesLiveLineStateMatchDescriptor(int row, LiveRasterlineDmaDescriptor descriptor)
+        {
+            var state = _liveLineStates[row];
+            if (state.LineStartCycle != descriptor.LineStartCycle ||
+                state.DisplayWindowVerticallyOpen != descriptor.DisplayWindowVerticallyOpen ||
+                state.Bplcon0 != descriptor.Bplcon0 ||
+                state.Bplcon1 != descriptor.Bplcon1 ||
+                state.Bplcon2 != descriptor.Bplcon2 ||
+                state.Dmacon != descriptor.Dmacon ||
+                state.Bpl1Mod != descriptor.Bpl1Mod ||
+                state.Bpl2Mod != descriptor.Bpl2Mod ||
+                state.PlaneCount != descriptor.PlaneCount ||
+                state.FetchWords != descriptor.FetchWords ||
+                state.DataFetchStart != descriptor.DataFetchStart ||
+                state.FetchSlotStride != descriptor.FetchSlotStride ||
+                state.PlaneHasRowMask != descriptor.PlaneHasRowMask)
+            {
+                return false;
+            }
+
+            for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
+            {
+                if (state.BitplaneRowAddresses[plane] != descriptor.GetBitplaneRowAddress(plane))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool ReplayLiveRasterlineDescriptorBitplaneBatch(
+            LiveRasterlineDmaDescriptor descriptor,
+            long stopCycle)
+        {
+            var captured = false;
+            while (_liveNextFetchRow == descriptor.Row)
+            {
+                if (!TryGetNextDescriptorBitplaneFetch(
+                        descriptor,
+                        out var fetchCycle,
+                        out var plane,
+                        out var word,
+                        out var slot) ||
+                    fetchCycle > stopCycle)
+                {
+                    return captured;
+                }
+
+                _liveNextFetchPlane = plane;
+                _liveNextFetchWord = word;
+                _liveNextFetchSlot = slot;
+                CaptureLiveBitplaneFetch(descriptor.Row, plane, word, fetchCycle, _liveLineStates[descriptor.Row]);
+                AdvanceLiveFetchCursor();
+                captured = true;
+            }
+
+            return captured;
+        }
+
+        private bool TryGetNextDescriptorBitplaneFetch(
+            LiveRasterlineDmaDescriptor descriptor,
+            out long fetchCycle,
+            out int plane,
+            out int word,
+            out int slot)
+        {
+            fetchCycle = long.MaxValue;
+            plane = 0;
+            word = _liveNextFetchWord;
+            slot = _liveNextFetchSlot;
+            if (!descriptor.HasBitplaneFetches ||
+                _liveNextFetchRow != descriptor.Row ||
+                word >= descriptor.FetchWords)
+            {
+                return false;
+            }
+
+            var planeCount = Math.Max(0, descriptor.PlaneCount);
+            while (word < descriptor.FetchWords)
+            {
+                while (slot < descriptor.FetchSlotStride)
+                {
+                    if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, descriptor.FetchSlotStride, out plane))
+                    {
+                        var fetchHorizontal = descriptor.DataFetchStart + (word * descriptor.FetchSlotStride) + slot;
+                        fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
+                            descriptor.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
+                        return true;
+                    }
+
+                    slot++;
+                }
+
+                slot = 0;
+                word++;
+            }
+
+            return false;
+        }
+
+        private bool ReplayLiveRasterlineDescriptorSpriteBatch(
+            LiveRasterlineDmaDescriptor descriptor,
+            long stopCycle)
+        {
+            if (!descriptor.HasSpriteSlots)
+            {
+                return false;
+            }
+
+            var captured = false;
+            while (_liveNextSpriteRow == descriptor.Row)
+            {
+                SkipLiveSpriteSlotsWithoutFetches();
+                if (_liveNextSpriteRow != descriptor.Row ||
+                    !IsLiveLineValid(_liveNextSpriteRow) ||
+                    !IsSpriteDmaEnabled())
+                {
+                    return captured;
+                }
+
+                var fetchCycle = GetNextLiveSpriteFetchCycle();
+                if (fetchCycle > stopCycle)
+                {
+                    return captured;
+                }
+
+                _ = TryCaptureKnownLiveSpriteDmaSlot(
+                    _liveNextSpriteRow,
+                    _liveNextSpriteIndex,
+                    _liveNextSpriteWord,
+                    fetchCycle);
+                AdvanceLiveSpriteFetchCursor();
+                captured = true;
+            }
+
+            return captured;
         }
 
         private long GetNextLiveCopperBarrierCycle()
@@ -11427,6 +11822,126 @@ namespace CopperMod.Amiga
 
             public int CursorC { get; }
         }
+
+        private readonly struct LiveRasterlineDmaDescriptor
+        {
+            public LiveRasterlineDmaDescriptor(
+                int generation,
+                int row,
+                long lineStartCycle,
+                long lineStopCycle,
+                bool displayWindowVerticallyOpen,
+                ushort bplcon0,
+                ushort bplcon1,
+                ushort bplcon2,
+                ushort dmacon,
+                short bpl1Mod,
+                short bpl2Mod,
+                int planeCount,
+                int fetchWords,
+                int dataFetchStart,
+                int fetchSlotStride,
+                byte planeHasRowMask,
+                uint bitplaneRowAddress0,
+                uint bitplaneRowAddress1,
+                uint bitplaneRowAddress2,
+                uint bitplaneRowAddress3,
+                uint bitplaneRowAddress4,
+                uint bitplaneRowAddress5,
+                bool hasBitplaneFetches,
+                bool hasSpriteSlots)
+            {
+                Generation = generation;
+                Row = row;
+                LineStartCycle = lineStartCycle;
+                LineStopCycle = lineStopCycle;
+                DisplayWindowVerticallyOpen = displayWindowVerticallyOpen;
+                Bplcon0 = bplcon0;
+                Bplcon1 = bplcon1;
+                Bplcon2 = bplcon2;
+                Dmacon = dmacon;
+                Bpl1Mod = bpl1Mod;
+                Bpl2Mod = bpl2Mod;
+                PlaneCount = planeCount;
+                FetchWords = fetchWords;
+                DataFetchStart = dataFetchStart;
+                FetchSlotStride = fetchSlotStride;
+                PlaneHasRowMask = planeHasRowMask;
+                BitplaneRowAddress0 = bitplaneRowAddress0;
+                BitplaneRowAddress1 = bitplaneRowAddress1;
+                BitplaneRowAddress2 = bitplaneRowAddress2;
+                BitplaneRowAddress3 = bitplaneRowAddress3;
+                BitplaneRowAddress4 = bitplaneRowAddress4;
+                BitplaneRowAddress5 = bitplaneRowAddress5;
+                HasBitplaneFetches = hasBitplaneFetches;
+                HasSpriteSlots = hasSpriteSlots;
+            }
+
+            public int Generation { get; }
+
+            public int Row { get; }
+
+            public long LineStartCycle { get; }
+
+            public long LineStopCycle { get; }
+
+            public bool DisplayWindowVerticallyOpen { get; }
+
+            public ushort Bplcon0 { get; }
+
+            public ushort Bplcon1 { get; }
+
+            public ushort Bplcon2 { get; }
+
+            public ushort Dmacon { get; }
+
+            public short Bpl1Mod { get; }
+
+            public short Bpl2Mod { get; }
+
+            public int PlaneCount { get; }
+
+            public int FetchWords { get; }
+
+            public int DataFetchStart { get; }
+
+            public int FetchSlotStride { get; }
+
+            public byte PlaneHasRowMask { get; }
+
+            public uint BitplaneRowAddress0 { get; }
+
+            public uint BitplaneRowAddress1 { get; }
+
+            public uint BitplaneRowAddress2 { get; }
+
+            public uint BitplaneRowAddress3 { get; }
+
+            public uint BitplaneRowAddress4 { get; }
+
+            public uint BitplaneRowAddress5 { get; }
+
+            public bool HasBitplaneFetches { get; }
+
+            public bool HasSpriteSlots { get; }
+
+            public bool IsValid(int generation, int row)
+                => Generation == generation && Row == row;
+
+            public uint GetBitplaneRowAddress(int plane)
+            {
+                return plane switch
+                {
+                    0 => BitplaneRowAddress0,
+                    1 => BitplaneRowAddress1,
+                    2 => BitplaneRowAddress2,
+                    3 => BitplaneRowAddress3,
+                    4 => BitplaneRowAddress4,
+                    5 => BitplaneRowAddress5,
+                    _ => 0
+                };
+            }
+        }
     }
 
     internal readonly struct OcsDisplaySnapshot
@@ -11510,6 +12025,13 @@ namespace CopperMod.Amiga
             int lastPredictedRasterlinePlanUnsupportedSpriteLines,
             int lastPredictedRasterlinePlanUnsupportedInvalidStateLines,
             int lastPredictedRasterlinePlanUnsupportedOverflowLines,
+            int lastRasterlineDescriptorBuilds,
+            int lastRasterlineDescriptorReplayAttempts,
+            int lastRasterlineDescriptorReplayedRows,
+            int lastRasterlineDescriptorFallbackRows,
+            int lastRasterlineDescriptorBitplaneRows,
+            int lastRasterlineDescriptorSpriteRows,
+            int lastRasterlineDescriptorMismatches,
             int lastArchiveRejectFrameIncomplete,
             int lastArchiveRejectTimelineInvalid,
             int lastArchiveRejectUnsafeWrite,
@@ -11613,6 +12135,13 @@ namespace CopperMod.Amiga
             LastPredictedRasterlinePlanUnsupportedSpriteLines = lastPredictedRasterlinePlanUnsupportedSpriteLines;
             LastPredictedRasterlinePlanUnsupportedInvalidStateLines = lastPredictedRasterlinePlanUnsupportedInvalidStateLines;
             LastPredictedRasterlinePlanUnsupportedOverflowLines = lastPredictedRasterlinePlanUnsupportedOverflowLines;
+            LastRasterlineDescriptorBuilds = lastRasterlineDescriptorBuilds;
+            LastRasterlineDescriptorReplayAttempts = lastRasterlineDescriptorReplayAttempts;
+            LastRasterlineDescriptorReplayedRows = lastRasterlineDescriptorReplayedRows;
+            LastRasterlineDescriptorFallbackRows = lastRasterlineDescriptorFallbackRows;
+            LastRasterlineDescriptorBitplaneRows = lastRasterlineDescriptorBitplaneRows;
+            LastRasterlineDescriptorSpriteRows = lastRasterlineDescriptorSpriteRows;
+            LastRasterlineDescriptorMismatches = lastRasterlineDescriptorMismatches;
             LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
             LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
             LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
@@ -11794,6 +12323,20 @@ namespace CopperMod.Amiga
         public int LastPredictedRasterlinePlanUnsupportedInvalidStateLines { get; }
 
         public int LastPredictedRasterlinePlanUnsupportedOverflowLines { get; }
+
+        public int LastRasterlineDescriptorBuilds { get; }
+
+        public int LastRasterlineDescriptorReplayAttempts { get; }
+
+        public int LastRasterlineDescriptorReplayedRows { get; }
+
+        public int LastRasterlineDescriptorFallbackRows { get; }
+
+        public int LastRasterlineDescriptorBitplaneRows { get; }
+
+        public int LastRasterlineDescriptorSpriteRows { get; }
+
+        public int LastRasterlineDescriptorMismatches { get; }
 
         public int LastArchiveRejectFrameIncomplete { get; }
 

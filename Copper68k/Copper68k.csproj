@@ -7,7 +7,7 @@
     <NoWarn>1701;1702;NU1900</NoWarn>
     <PackageId>Copper68k</PackageId>
     <Title>Copper68k</Title>
-    <Authors>CopperMod contributors</Authors>
+    <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
     <PackageVersion>1.1.0</PackageVersion>
     <PackageReleaseNotes>Adds an opt-in internal MC68040 JIT backend through M68kCoreOptions, public JIT bus capability interfaces for host integration, and keeps the default MC68040 factory path on the interpreter for source-compatible package consumers.</PackageReleaseNotes>
