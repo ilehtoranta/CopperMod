@@ -344,6 +344,8 @@ namespace CopperMod.Amiga
 
         internal int LiveFetchBatchWordCount => _liveFetchBatchWordCount;
 
+        internal int BitplaneDataSpanCount => _bitplaneDataSpans.Count;
+
         internal bool LiveDmaEnabled => _liveDmaEnabled;
 
         internal bool HasLiveDmaCapturedThrough(long cycle)
@@ -423,7 +425,10 @@ namespace CopperMod.Amiga
 
                 CaptureLiveBitplaneDmaBeforeHrmGrant(requestedCycle);
                 CaptureLiveSpriteDmaBeforeHrmGrant(requestedCycle);
-                if (_bus.FindHrmDmaCandidate(requestedCycle) == before)
+                var after = _bus.IsHrmChipSlotReserved(before)
+                    ? _bus.FindHrmDmaCandidate(before + AgnusChipSlotScheduler.SlotCycles)
+                    : _bus.FindHrmDmaCandidate(requestedCycle);
+                if (after == before)
                 {
                     return;
                 }
@@ -449,7 +454,10 @@ namespace CopperMod.Amiga
                     PrepareKnownLiveBitplaneSlotsThrough(before);
                 }
 
-                if (_bus.FindHrmDmaCandidate(requestedCycle) == before)
+                var after = _bus.IsHrmChipSlotReserved(before)
+                    ? _bus.FindHrmDmaCandidate(before + AgnusChipSlotScheduler.SlotCycles)
+                    : _bus.FindHrmDmaCandidate(requestedCycle);
+                if (after == before)
                 {
                     return;
                 }
@@ -549,7 +557,9 @@ namespace CopperMod.Amiga
                 }
 
                 nextFetchCycle = GetNextKnownLiveBitplaneFetchCycle();
-                var adjustedCandidate = _bus.FindHrmDmaCandidate(requestedCycle);
+                var adjustedCandidate = _bus.IsHrmChipSlotReserved(candidate)
+                    ? _bus.FindHrmDmaCandidate(candidate + AgnusChipSlotScheduler.SlotCycles)
+                    : _bus.FindHrmDmaCandidate(requestedCycle);
                 if (adjustedCandidate == candidate)
                 {
                     return;
@@ -581,7 +591,10 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                if (_bus.FindHrmDmaCandidate(requestedCycle) == candidate)
+                var adjustedCandidate = _bus.IsHrmChipSlotReserved(candidate)
+                    ? _bus.FindHrmDmaCandidate(candidate + AgnusChipSlotScheduler.SlotCycles)
+                    : _bus.FindHrmDmaCandidate(requestedCycle);
+                if (adjustedCandidate == candidate)
                 {
                     return;
                 }

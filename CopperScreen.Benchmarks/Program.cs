@@ -15,6 +15,7 @@ var allWorkloads = new[]
     new BenchmarkWorkload("Lemmings SR", "Lemmings (1991)(Psygnosis)(Disk 1 of 2)[cr SR].zip"),
     new BenchmarkWorkload("Full Contact FLT", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip"),
     new BenchmarkWorkload("Full Contact original single-drive", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip", Profile: "expanded-kickstart13 - singledrive.json"),
+    new BenchmarkWorkload("Arte sanity single-drive", "Arte (Sanity).zip", Profile: "expanded-kickstart13 - singledrive.json"),
     new BenchmarkWorkload("FC FLT intro", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip", FireFrame: 260),
     new BenchmarkWorkload("North & South CP intro", "North & South (1989)(Infogrames)(M5)[cr CP].zip", FireFrame: 260),
     new BenchmarkWorkload("Shadow of the Beast IPF", "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip"),
@@ -83,11 +84,19 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
 
     var audio = new float[emulator.AudioFramesPerAppFrame(SampleRate) * Channels];
     var audioFrames = 0;
+    var warmupFramesRun = 0;
     for (var frame = 0; frame < options.WarmupFrames; frame++)
     {
+        var frameStartTimestamp = Stopwatch.GetTimestamp();
         ApplyFrameActions(emulator, workload, frame);
         emulator.RenderNextFrame();
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+        warmupFramesRun = frame + 1;
+        WriteProgressIfNeeded(emulator, workload, options, "warmup", warmupFramesRun, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
+        if (ShouldStopAtCylinder(emulator, options.StopCylinder))
+        {
+            break;
+        }
     }
 
     if (options.InstructionMatrix)
@@ -133,9 +142,10 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     {
         var schedulerBeforeFrame = CaptureHardwareSchedulerSnapshot(emulator);
         var frameStartTimestamp = Stopwatch.GetTimestamp();
-        ApplyFrameActions(emulator, workload, options.WarmupFrames + frame);
+        ApplyFrameActions(emulator, workload, warmupFramesRun + frame);
         emulator.RenderNextFrame();
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+        WriteProgressIfNeeded(emulator, workload, options, "measure", frame + 1, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
         var displayFrame = GetDisplay(emulator).CaptureSnapshot();
         measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
         measuredDescriptorReplayAttempts += displayFrame.LastRasterlineDescriptorReplayAttempts - previousDescriptorReplayAttempts;
@@ -198,7 +208,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var fps = options.MeasuredFrames / elapsed.TotalSeconds;
     var framebufferSummary = CaptureFramebufferSummary(emulator.Framebuffer);
     var audioSummary = CaptureAudioSummary(audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels)), audioFrames);
-    var displaySummary = CaptureDisplaySummary(GetDisplay(emulator).CaptureSnapshot()) with
+    var displaySummary = CaptureDisplaySummary(GetDisplay(emulator)) with
     {
         DescriptorBuilds = measuredDescriptorBuilds,
         DescriptorReplayAttempts = measuredDescriptorReplayAttempts,
@@ -413,6 +423,48 @@ static void ApplyFrameActions(CopperScreenEmulator emulator, BenchmarkWorkload w
     {
         emulator.PulsePrimaryFire(frames: 30);
     }
+}
+
+static bool ShouldStopAtCylinder(CopperScreenEmulator emulator, int? stopCylinder)
+{
+    if (!stopCylinder.HasValue)
+    {
+        return false;
+    }
+
+    var disk = GetMachine(emulator).Bus.Disk.CaptureSnapshot();
+    return disk.LastTransferCylinder >= stopCylinder.Value;
+}
+
+static void WriteProgressIfNeeded(
+    CopperScreenEmulator emulator,
+    BenchmarkWorkload workload,
+    BenchmarkOptions options,
+    string phase,
+    int frame,
+    double milliseconds)
+{
+    if (options.ProgressIntervalFrames <= 0 ||
+        (!string.Equals(phase, "measure", StringComparison.OrdinalIgnoreCase) &&
+            frame % options.ProgressIntervalFrames != 0))
+    {
+        return;
+    }
+
+    var machine = GetMachine(emulator);
+    var disk = machine.Bus.Disk.CaptureSnapshot();
+    var display = emulator.DisplaySnapshot;
+    Console.Error.WriteLine(
+        $"progress {workload.Name} {phase} frame={frame} ms={milliseconds:F2} " +
+        $"cyl={disk.LastTransferCylinder}.{disk.LastTransferHead} driveCyl={disk.Cylinder}.{disk.Head} " +
+        $"xfer={disk.TransferCount} active={disk.ActiveDma} dsklen=0x{disk.Dsklen:X4} " +
+        $"pc=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6} sr=0x{machine.Cpu.State.StatusRegister:X4} " +
+        $"dmacon=0x{machine.Bus.Paula.Dmacon:X4} intena=0x{machine.Bus.Paula.Intena:X4} intreq=0x{machine.Bus.Paula.Intreq:X4} " +
+        $"bplcon=0x{display.Bplcon0:X4}/0x{display.Bplcon1:X4}/0x{display.Bplcon2:X4} " +
+        $"ddf=0x{display.DdfStart:X4}/0x{display.DdfStop:X4} diw=0x{display.DiwStart:X4}/0x{display.DiwStop:X4} " +
+        $"bplPix={display.LastBitplaneNonZeroPixels} sprPix={display.LastSpriteNonZeroPixels} spans={GetDisplay(emulator).BitplaneDataSpanCount} " +
+        $"copper={GetDisplay(emulator).LiveCopperStepCount} pending={GetDisplay(emulator).LivePendingWriteEventCount} " +
+        $"status=\"{emulator.StatusText}\"");
 }
 
 static void WriteBenchmarkHeader()
@@ -885,32 +937,34 @@ static bool HasActiveAudio(ReadOnlySpan<float> samples)
     return false;
 }
 
-static DisplaySummary CaptureDisplaySummary(OcsDisplaySnapshot display)
+static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
 {
+    var snapshot = display.CaptureSnapshot();
     return new DisplaySummary(
-        display.Bplcon0,
-        display.Bplcon1,
-        display.Bplcon2,
-        display.LastBitplaneNonZeroPixels,
-        display.LastBitplaneMinX,
-        display.LastBitplaneMinY,
-        display.LastBitplaneMaxX,
-        display.LastBitplaneMaxY,
-        display.LastSpriteNonZeroPixels,
-        display.LastSpriteMinX,
-        display.LastSpriteMinY,
-        display.LastSpriteMaxX,
-        display.LastSpriteMaxY,
-        display.LastBitplaneDmaFetches,
-        display.LastSpriteDmaFetches,
-        display.LastMissedSpriteDmaSlots,
-        display.LastRasterlineDescriptorBuilds,
-        display.LastRasterlineDescriptorReplayAttempts,
-        display.LastRasterlineDescriptorReplayedRows,
-        display.LastRasterlineDescriptorFallbackRows,
-        display.LastRasterlineDescriptorBitplaneRows,
-        display.LastRasterlineDescriptorSpriteRows,
-        display.LastRasterlineDescriptorMismatches);
+        snapshot.Bplcon0,
+        snapshot.Bplcon1,
+        snapshot.Bplcon2,
+        snapshot.LastBitplaneNonZeroPixels,
+        snapshot.LastBitplaneMinX,
+        snapshot.LastBitplaneMinY,
+        snapshot.LastBitplaneMaxX,
+        snapshot.LastBitplaneMaxY,
+        snapshot.LastSpriteNonZeroPixels,
+        snapshot.LastSpriteMinX,
+        snapshot.LastSpriteMinY,
+        snapshot.LastSpriteMaxX,
+        snapshot.LastSpriteMaxY,
+        snapshot.LastBitplaneDmaFetches,
+        snapshot.LastSpriteDmaFetches,
+        snapshot.LastMissedSpriteDmaSlots,
+        snapshot.LastRasterlineDescriptorBuilds,
+        snapshot.LastRasterlineDescriptorReplayAttempts,
+        snapshot.LastRasterlineDescriptorReplayedRows,
+        snapshot.LastRasterlineDescriptorFallbackRows,
+        snapshot.LastRasterlineDescriptorBitplaneRows,
+        snapshot.LastRasterlineDescriptorSpriteRows,
+        snapshot.LastRasterlineDescriptorMismatches,
+        display.BitplaneDataSpanCount);
 }
 
 static string FormatFramebufferSummary(FramebufferSummary summary)
@@ -929,7 +983,7 @@ static string FormatDisplaySummary(DisplaySummary summary)
 {
     return $"bpl={summary.BitplanePixels}:{summary.BitplaneMinX},{summary.BitplaneMinY}-{summary.BitplaneMaxX},{summary.BitplaneMaxY}," +
         $"spr={summary.SpritePixels}:{summary.SpriteMinX},{summary.SpriteMinY}-{summary.SpriteMaxX},{summary.SpriteMaxY}," +
-        $"dma={summary.BitplaneDmaFetches}/{summary.SpriteDmaFetches},missedSpr={summary.MissedSpriteSlots}," +
+        $"dma={summary.BitplaneDmaFetches}/{summary.SpriteDmaFetches},missedSpr={summary.MissedSpriteSlots},spans={summary.BitplaneDataSpans}," +
         $"desc={summary.DescriptorBuilds}/{summary.DescriptorReplayAttempts}/{summary.DescriptorReplayedRows}/{summary.DescriptorFallbackRows}," +
         $"descRows={summary.DescriptorBitplaneRows}/{summary.DescriptorSpriteRows},descMis={summary.DescriptorMismatches}," +
         $"bplcon={summary.Bplcon0:X4}/{summary.Bplcon1:X4}/{summary.Bplcon2:X4}";
@@ -1052,7 +1106,8 @@ internal readonly record struct DisplaySummary(
     int DescriptorFallbackRows,
     int DescriptorBitplaneRows,
     int DescriptorSpriteRows,
-    int DescriptorMismatches);
+    int DescriptorMismatches,
+    int BitplaneDataSpans);
 
 internal readonly record struct DiskSummary(
     int TransferCount,
@@ -1132,7 +1187,9 @@ internal readonly record struct BenchmarkOptions(
     string? KickstartRomPath,
     bool InstructionMatrix,
     bool DiskDivergenceTrace,
-    int TopInstructionOpcodes)
+    int TopInstructionOpcodes,
+    int ProgressIntervalFrames,
+    int? StopCylinder)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -1143,6 +1200,8 @@ internal readonly record struct BenchmarkOptions(
         var instructionMatrix = false;
         var diskDivergenceTrace = false;
         var topInstructionOpcodes = 16;
+        var progressIntervalFrames = 0;
+        int? stopCylinder = null;
         string? only = null;
         string? profile = null;
         string? cpuBackend = null;
@@ -1211,6 +1270,25 @@ internal readonly record struct BenchmarkOptions(
                 instructionMatrix = true;
                 _ = int.TryParse(args[++i], out topInstructionOpcodes);
             }
+            else if (string.Equals(args[i], "--progress", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Length && int.TryParse(args[i + 1], out var parsedProgress))
+                {
+                    progressIntervalFrames = parsedProgress;
+                    i++;
+                }
+                else
+                {
+                    progressIntervalFrames = 100;
+                }
+            }
+            else if (string.Equals(args[i], "--stop-cylinder", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[++i], out var parsedCylinder))
+                {
+                    stopCylinder = parsedCylinder;
+                }
+            }
         }
 
         return new BenchmarkOptions(
@@ -1225,6 +1303,8 @@ internal readonly record struct BenchmarkOptions(
             kickstartRomPath,
             instructionMatrix,
             diskDivergenceTrace,
-            Math.Clamp(topInstructionOpcodes, 0, 256));
+            Math.Clamp(topInstructionOpcodes, 0, 256),
+            Math.Max(0, progressIntervalFrames),
+            stopCylinder);
     }
 }

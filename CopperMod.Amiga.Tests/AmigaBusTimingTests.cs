@@ -936,6 +936,58 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void PreparedBitplaneSlotAllowsLaterReadFromResolvedAddress()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1111);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2000, 0xA55A);
+
+		Assert.True(bus.TryReserveDisplayDmaSlot(
+			AmigaBusRequester.Bitplane,
+			AmigaBusAccessKind.Bitplane,
+			0x1000,
+			fetchCycle,
+			out var prepared));
+		Assert.Equal(fetchCycle, prepared.GrantedCycle);
+
+		Assert.True(bus.TryReadLiveBitplaneDmaWord(0x2000, fetchCycle, out var value, out var grantedCycle));
+		Assert.Equal(fetchCycle, grantedCycle);
+		Assert.Equal(0xA55A, value);
+		Assert.Equal(0, bus.Agnus.CaptureSnapshot().BitplaneDeniedFixedSlotCount);
+	}
+
+	[Fact]
+	public void PreparedBitplaneSlotAllowsLaterFixedReservationFromResolvedAddress()
+	{
+		var engine = new AgnusHrmSlotEngine();
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var preparedRequest = new AmigaBusAccessRequest(
+			AmigaBusRequester.Bitplane,
+			AmigaBusAccessKind.Bitplane,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			fetchCycle,
+			isWrite: false);
+		var resolvedRequest = new AmigaBusAccessRequest(
+			AmigaBusRequester.Bitplane,
+			AmigaBusAccessKind.Bitplane,
+			AmigaBusAccessTarget.ChipRam,
+			0x2000,
+			AmigaBusAccessSize.Word,
+			fetchCycle,
+			isWrite: false);
+
+		Assert.True(engine.TryReserveExactFixedDmaSlot(preparedRequest, out var prepared));
+		Assert.Equal(fetchCycle, prepared.GrantedCycle);
+
+		Assert.True(engine.TryReserveFixedDmaSlot(resolvedRequest, out var resolved));
+		Assert.Equal(fetchCycle, resolved.GrantedCycle);
+		Assert.Equal(0, engine.DeniedFixedSlotCount);
+	}
+
+	[Fact]
 	public void HardwareSchedulerDrainToSameCycleDoesNotDuplicateCiaTimerInterrupt()
 	{
 		var bus = new AmigaBus();
