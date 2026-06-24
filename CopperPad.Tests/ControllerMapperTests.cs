@@ -6,7 +6,7 @@ public sealed class ControllerMapperTests
 	public void PlayStationMapper_UsesPositionalFaceButtons()
 	{
 		var device = Device(0x054C, 0x05C4, "DualShock 4", maxInputLength: 16);
-		var mapper = ControllerMapperFactory.Create(device, ControllerProfileSet.Empty);
+		var mapper = new PlayStationControllerMapper();
 		var report = new byte[] { 0x01, 128, 0, 255, 128, 0x22, 0x31, 0x01, 128, 255 };
 
 		var state = mapper.Map(new RawControllerInput(device, report, report.Length, DateTimeOffset.UtcNow));
@@ -27,7 +27,7 @@ public sealed class ControllerMapperTests
 	public void XboxMapper_DecodesButtonsHatTriggersAndSignedAxes()
 	{
 		var device = Device(0x045E, 0x02EA, "Xbox Wireless Controller", maxInputLength: 16);
-		var mapper = ControllerMapperFactory.Create(device, ControllerProfileSet.Empty);
+		var mapper = new XboxControllerMapper();
 		var report = new byte[14];
 		report[0] = 0x01;
 		report[1] = 0x21;

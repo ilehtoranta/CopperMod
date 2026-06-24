@@ -114,6 +114,15 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	public ControllerMappingInfo? GetMappingInfo(string deviceId)
+	{
+		lock (_gate)
+		{
+			var descriptor = _descriptors.FirstOrDefault(device => string.Equals(device.Id, deviceId, StringComparison.Ordinal));
+			return descriptor == null ? null : ControllerMapperFactory.Describe(descriptor, _profiles);
+		}
+	}
+
 	public void SelectDevice(string? deviceId)
 	{
 		ThrowIfDisposed();

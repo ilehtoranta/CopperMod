@@ -27,6 +27,15 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly ListBox _deviceList = new();
 	private readonly TextBlock _deviceDetails = TextBlock();
 	private readonly TextBlock _statusText = TextBlock();
+	private readonly TextBlock _deviceFilterText = TextBlock();
+	private readonly CheckBox _showAllDevicesCheck = new() { Content = "Show all HID" };
+	private readonly StackPanel _controllerSummary = new() { Spacing = 12, Margin = new Thickness(8) };
+	private readonly TextBlock _controllerSummaryText = TextBlock();
+	private readonly StackPanel _controllerActions = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
+	private readonly Button _testProfileButton = new() { Content = "View / Test Controls", IsEnabled = false };
+	private readonly Button _createProfileButton = new() { Content = "Create Profile", IsEnabled = false };
+	private readonly Button _editProfileButton = new() { Content = "Edit Profile", IsEnabled = false };
+	private readonly TabControl _tabs = new();
 	private readonly TextBlock _stateText = TextBlock();
 	private readonly TextBlock _rawHexText = MonospaceTextBlock();
 	private readonly TextBlock _changedBytesText = TextBlock();
@@ -49,11 +58,13 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly ListBox _bindingsList = new() { MinHeight = 180 };
 	private readonly Button _useSuggestionButton = new() { Content = "Use Change", IsEnabled = false };
 	private readonly Button _saveProfileButton = new() { Content = "Save Profile" };
+	private readonly Button _newOverrideButton = new() { Content = "New Override", IsEnabled = false };
 	private readonly ComboBox _calibrationTargetBox = new() { MinWidth = 170 };
 	private readonly CheckBox _invertCheck = new() { Content = "Invert" };
 	private readonly Slider _deadzoneSlider = new() { Minimum = 0, Maximum = 0.95, Value = 0.1, Width = 180 };
 	private readonly Slider _saturationSlider = new() { Minimum = 0.1, Maximum = 1, Value = 1, Width = 180 };
 	private ControllerProfileSet _profiles = ControllerProfileSet.Empty;
+	private IReadOnlyList<HidDeviceInfo> _allDevices = Array.Empty<HidDeviceInfo>();
 	private ControllerProfile? _draftProfile;
 	private HidDeviceInfo? _selectedDevice;
 	private byte[]? _lastReport;
@@ -75,10 +86,10 @@ internal sealed class MainWindow : Window, IDisposable
 		MinHeight = 640;
 		Content = BuildContent();
 
-		_host.DevicesChanged += (_, args) => Dispatcher.UIThread.Post(() => OnDevicesChanged(args));
-		_host.RawReportReceived += (_, args) => Dispatcher.UIThread.Post(() => OnRawReport(args));
-		_host.StateChanged += (_, args) => Dispatcher.UIThread.Post(() => OnStateChanged(args.State));
-		Opened += async (_, _) => await InitializeAsync().ConfigureAwait(true);
+		_host.DevicesChanged += (_, args) => PostUi("Device refresh failed", () => OnDevicesChanged(args));
+		_host.RawReportReceived += (_, args) => PostUi("Raw report update failed", () => OnRawReport(args));
+		_host.StateChanged += (_, args) => PostUi("Controller state update failed", () => OnStateChanged(args.State));
+		Opened += async (_, _) => await TryRunUiActionAsync("Startup failed", InitializeAsync).ConfigureAwait(true);
 		Closed += (_, _) => Dispose();
 	}
 
@@ -105,10 +116,22 @@ internal sealed class MainWindow : Window, IDisposable
 			Margin = new Thickness(0, 0, 16, 0)
 		});
 		toolbar.Children.Add(Button("Refresh", (_, _) => RefreshDevices()));
+		toolbar.Children.Add(_showAllDevicesCheck);
 		toolbar.Children.Add(_saveProfileButton);
+		toolbar.Children.Add(_newOverrideButton);
 		toolbar.Children.Add(Button("Import", async (_, _) => await ImportProfilesAsync().ConfigureAwait(true)));
 		toolbar.Children.Add(Button("Export", async (_, _) => await ExportProfilesAsync().ConfigureAwait(true)));
+		_saveProfileButton.IsVisible = false;
+		_newOverrideButton.IsVisible = false;
 		_saveProfileButton.Click += async (_, _) => await SaveDraftProfileAsync().ConfigureAwait(true);
+		_newOverrideButton.Click += (_, _) => TryRunUiAction("New override failed", CreateNewOverrideDraft);
+		_showAllDevicesCheck.PropertyChanged += (_, args) =>
+		{
+			if (args.Property == ToggleButton.IsCheckedProperty)
+			{
+				ApplyDeviceFilter();
+			}
+		};
 		root.Children.Add(toolbar);
 
 		var layout = new Grid
@@ -118,9 +141,9 @@ internal sealed class MainWindow : Window, IDisposable
 			Margin = new Thickness(12, 0, 12, 8)
 		};
 		layout.Children.Add(BuildDevicePane());
-		var tabs = BuildTabs();
-		Grid.SetColumn(tabs, 1);
-		layout.Children.Add(tabs);
+		var workspace = BuildWorkspace();
+		Grid.SetColumn(workspace, 1);
+		layout.Children.Add(workspace);
 		root.Children.Add(layout);
 		return root;
 	}
@@ -129,7 +152,7 @@ internal sealed class MainWindow : Window, IDisposable
 	{
 		var panel = new Grid
 		{
-			RowDefinitions = new RowDefinitions("Auto,*,Auto"),
+			RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
 			ColumnDefinitions = new ColumnDefinitions("*"),
 			Margin = new Thickness(0, 0, 12, 0)
 		};
@@ -140,6 +163,9 @@ internal sealed class MainWindow : Window, IDisposable
 			FontWeight = FontWeight.SemiBold,
 			Margin = new Thickness(0, 0, 0, 8)
 		});
+		_deviceFilterText.Margin = new Thickness(0, 0, 0, 8);
+		Grid.SetRow(_deviceFilterText, 1);
+		panel.Children.Add(_deviceFilterText);
 		_deviceList.SelectionChanged += (_, _) =>
 		{
 			if (_deviceList.SelectedItem is DeviceListItem item)
@@ -147,12 +173,42 @@ internal sealed class MainWindow : Window, IDisposable
 				SelectDevice(item.Device);
 			}
 		};
-		Grid.SetRow(_deviceList, 1);
+		Grid.SetRow(_deviceList, 2);
 		panel.Children.Add(_deviceList);
 		_deviceDetails.Margin = new Thickness(0, 10, 0, 0);
-		Grid.SetRow(_deviceDetails, 2);
+		Grid.SetRow(_deviceDetails, 3);
 		panel.Children.Add(_deviceDetails);
 		return panel;
+	}
+
+	private Control BuildWorkspace()
+	{
+		_controllerActions.Children.Add(_testProfileButton);
+		_controllerActions.Children.Add(_createProfileButton);
+		_controllerActions.Children.Add(_editProfileButton);
+		_testProfileButton.Click += (_, _) => TryRunUiAction("Open test failed", OpenTestWorkspace);
+		_createProfileButton.Click += (_, _) => TryRunUiAction("Create profile failed", OpenCreateProfileWorkspace);
+		_editProfileButton.Click += (_, _) => TryRunUiAction("Edit profile failed", OpenEditProfileWorkspace);
+		_controllerSummary.Children.Add(_controllerSummaryText);
+		_controllerSummary.Children.Add(_controllerActions);
+
+		_tabs.ItemsSource = new object[]
+		{
+			new TabItem { Header = "Test", Content = BuildTestTab() },
+			new TabItem { Header = "Map", Content = BuildMapTab() },
+			new TabItem { Header = "Calibrate", Content = BuildCalibrationTab() },
+			new TabItem { Header = "Reports", Content = BuildReportsTab() }
+		};
+		_tabs.IsVisible = false;
+
+		var root = new Grid
+		{
+			RowDefinitions = new RowDefinitions("*"),
+			ColumnDefinitions = new ColumnDefinitions("*")
+		};
+		root.Children.Add(_controllerSummary);
+		root.Children.Add(_tabs);
+		return root;
 	}
 
 	private Control BuildTabs()
@@ -359,7 +415,7 @@ internal sealed class MainWindow : Window, IDisposable
 			_host.UpdateProfiles(_profiles);
 			SetStatus($"Profiles: {_profileStore.Path}");
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
 		{
 			_profiles = ControllerProfileSet.Empty;
 			SetStatus("Profile load failed: " + ex.Message);
@@ -383,15 +439,28 @@ internal sealed class MainWindow : Window, IDisposable
 
 	private void OnDevicesChanged(HidDevicesChangedEventArgs args)
 	{
-		var devices = args.Devices;
+		_allDevices = args.Devices;
 		if (!string.IsNullOrWhiteSpace(args.Diagnostic))
 		{
 			SetStatus(args.Diagnostic);
 		}
 
+		ApplyDeviceFilter();
+	}
+
+	private void ApplyDeviceFilter()
+	{
 		var selectedId = _selectedDevice?.Id;
+		var showAll = _showAllDevicesCheck.IsChecked == true;
+		var devices = showAll ? _allDevices : _allDevices.Where(DeviceDisplay.IsLikelyGameController).ToArray();
 		var items = devices.Select(device => new DeviceListItem(device)).ToArray();
 		_deviceList.ItemsSource = items;
+		var hiddenCount = _allDevices.Count - items.Length;
+		_deviceFilterText.Text = showAll
+			? $"Showing all HID devices: {items.Length}"
+			: hiddenCount == 0
+				? $"Showing controllers: {items.Length}"
+				: $"Showing controllers: {items.Length}   Hidden HID: {hiddenCount}";
 		var selected = items.FirstOrDefault(item => string.Equals(item.Device.Id, selectedId, StringComparison.Ordinal)) ??
 			items.FirstOrDefault();
 		if (selected != null)
@@ -430,16 +499,24 @@ internal sealed class MainWindow : Window, IDisposable
 		{
 			_deviceDetails.Text = "No controllers found.";
 			_descriptorText.Text = "";
+			_controllerSummaryText.Text = "Select a controller.";
 			_draftProfile = null;
+			_saveProfileButton.Content = "Save Profile";
+			_saveProfileButton.IsVisible = false;
+			_newOverrideButton.IsEnabled = false;
+			_newOverrideButton.IsVisible = false;
+			_testProfileButton.IsEnabled = false;
+			_createProfileButton.IsEnabled = false;
+			_editProfileButton.IsEnabled = false;
+			ShowSummaryWorkspace();
 			SetStatus("No controller selected.");
 		}
 		else
 		{
-			_deviceDetails.Text =
-				$"{device.ProductName}\nVID/PID: 0x{device.VendorId:X4}/0x{device.ProductId:X4}\nTransport: {device.Transport}\nInput report: {device.MaxInputReportLength} bytes\nReport IDs: {(device.ReportsUseId ? "yes" : "no")}\nUsage: {(device.IsGameControllerUsage ? "game controller" : "generic HID")}\n{device.Diagnostic}";
-			_descriptorText.Text = "Descriptor\n" + ToHexRows(device.ReportDescriptor);
-			var info = new ControllerInfo(device.Id, device.ProductName, device.VendorId, device.ProductId, device.Transport, true, device.Diagnostic);
-			_draftProfile = _profiles.FindMatch(info) ?? ProfileEditor.CreateDefaultProfile(device, DateTimeOffset.UtcNow);
+			_draftProfile = FindSavedProfile(device) ?? ProfileEditor.CreateDefaultProfile(device, DateTimeOffset.UtcNow);
+			_newOverrideButton.IsEnabled = true;
+			UpdateSelectedDeviceDetails();
+			ShowSummaryWorkspace();
 			SetStatus("Selected " + device.ProductName);
 		}
 
@@ -552,6 +629,74 @@ internal sealed class MainWindow : Window, IDisposable
 		LoadCalibrationFromTarget();
 	}
 
+	private void CreateNewOverrideDraft()
+	{
+		if (_selectedDevice == null)
+		{
+			SetStatus("No controller selected.");
+			return;
+		}
+
+		_draftProfile = ProfileEditor.CreateDefaultProfile(_selectedDevice, DateTimeOffset.UtcNow);
+		UpdateBindingList();
+		UpdateValidation();
+		LoadCalibrationFromTarget();
+		UpdateSelectedDeviceDetails();
+		SetStatus("New override draft for " + _selectedDevice.ProductName);
+	}
+
+	private void OpenTestWorkspace()
+	{
+		if (_selectedDevice == null)
+		{
+			SetStatus("No controller selected.");
+			return;
+		}
+
+		if (FindSavedProfile(_selectedDevice) == null)
+		{
+			SetStatus("Create a profile before testing controls.");
+			return;
+		}
+
+		ShowTabbedWorkspace(WorkspaceMode.Test, tabIndex: 0);
+		SetStatus("Testing " + _selectedDevice.ProductName);
+	}
+
+	private void OpenCreateProfileWorkspace()
+	{
+		if (_selectedDevice == null)
+		{
+			SetStatus("No controller selected.");
+			return;
+		}
+
+		_draftProfile = ProfileEditor.CreateDefaultProfile(_selectedDevice, DateTimeOffset.UtcNow);
+		UpdateBindingList();
+		UpdateValidation();
+		LoadCalibrationFromTarget();
+		UpdateSelectedDeviceDetails();
+		ShowTabbedWorkspace(WorkspaceMode.EditProfile, tabIndex: 1);
+		SetStatus("Creating profile for " + _selectedDevice.ProductName);
+	}
+
+	private void OpenEditProfileWorkspace()
+	{
+		if (_selectedDevice == null)
+		{
+			SetStatus("No controller selected.");
+			return;
+		}
+
+		_draftProfile = FindSavedProfile(_selectedDevice) ?? ProfileEditor.CreateDefaultProfile(_selectedDevice, DateTimeOffset.UtcNow);
+		UpdateBindingList();
+		UpdateValidation();
+		LoadCalibrationFromTarget();
+		UpdateSelectedDeviceDetails();
+		ShowTabbedWorkspace(WorkspaceMode.EditProfile, tabIndex: 1);
+		SetStatus("Editing profile for " + _selectedDevice.ProductName);
+	}
+
 	private async Task SaveDraftProfileAsync()
 	{
 		if (_draftProfile == null || _selectedDevice == null)
@@ -580,6 +725,7 @@ internal sealed class MainWindow : Window, IDisposable
 		{
 			await _profileStore.SaveAsync(_profiles).ConfigureAwait(true);
 			_host.UpdateProfiles(_profiles);
+			UpdateSelectedDeviceDetails();
 			SetStatus("Saved " + profile.Name);
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -843,6 +989,92 @@ internal sealed class MainWindow : Window, IDisposable
 		_saveProfileButton.IsEnabled = issues.Count == 0;
 	}
 
+	private void UpdateSelectedDeviceDetails()
+	{
+		if (_selectedDevice == null)
+		{
+			return;
+		}
+
+		var mapping = GetMappingInfo(_selectedDevice);
+		var mappingText = MappingDisplay.Format(mapping);
+		var savedProfile = FindSavedProfile(_selectedDevice);
+		var profileText = ProfileDocumentDisplay.Format(_profileStore.Path, savedProfile != null, _draftProfile);
+		_controllerSummaryText.Text =
+			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
+		_deviceDetails.Text =
+			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
+		_descriptorText.Text = mappingText + "\n" + profileText + "\n\nDescriptor\n" + ToHexRows(_selectedDevice.ReportDescriptor);
+		_saveProfileButton.Content = savedProfile == null ? "Create Override" : "Save Override";
+		_testProfileButton.IsEnabled = savedProfile != null;
+		_createProfileButton.IsEnabled = true;
+		_editProfileButton.IsEnabled = savedProfile != null;
+		_createProfileButton.Content = savedProfile == null ? "Create Profile" : "Create New Profile";
+	}
+
+	private void ShowSummaryWorkspace()
+	{
+		_controllerSummary.IsVisible = true;
+		_tabs.IsVisible = false;
+		_saveProfileButton.IsVisible = false;
+		_newOverrideButton.IsVisible = false;
+	}
+
+	private void ShowTabbedWorkspace(WorkspaceMode mode, int tabIndex)
+	{
+		_controllerSummary.IsVisible = false;
+		_tabs.IsVisible = true;
+		_tabs.SelectedIndex = tabIndex;
+		_saveProfileButton.IsVisible = mode == WorkspaceMode.EditProfile;
+		_newOverrideButton.IsVisible = mode == WorkspaceMode.EditProfile;
+		_newOverrideButton.IsEnabled = _selectedDevice != null;
+	}
+
+	private ControllerProfile? FindSavedProfile(HidDeviceInfo device)
+		=> _profiles.FindMatch(new ControllerInfo(device.Id, device.ProductName, device.VendorId, device.ProductId, device.Transport, true, device.Diagnostic));
+
+	private ControllerMappingInfo? GetMappingInfo(HidDeviceInfo device)
+	{
+		try
+		{
+			return _host.GetMappingInfo(device.Id);
+		}
+		catch (Exception ex)
+		{
+			SetStatus("Mapping lookup failed: " + ex.Message);
+			return null;
+		}
+	}
+
+	private void PostUi(string context, Action action)
+		=> Dispatcher.UIThread.Post(() => TryRunUiAction(context, action));
+
+	private void TryRunUiAction(string context, Action action)
+	{
+		try
+		{
+			action();
+		}
+		catch (Exception ex)
+		{
+			CrashLog.Write(context, ex);
+			SetStatus(context + ": " + ex.Message);
+		}
+	}
+
+	private async Task TryRunUiActionAsync(string context, Func<Task> action)
+	{
+		try
+		{
+			await action().ConfigureAwait(true);
+		}
+		catch (Exception ex)
+		{
+			CrashLog.Write(context, ex);
+			SetStatus(context + ": " + ex.Message);
+		}
+	}
+
 	private void UpdateCaptureStatus()
 	{
 		if (_baselineReport == null)
@@ -1003,6 +1235,12 @@ internal sealed class MainWindow : Window, IDisposable
 
 		public override string ToString()
 			=> $"{Binding.Target}: {ReportAnalyzer.FormatSource(Binding.Source)}";
+	}
+
+	private enum WorkspaceMode
+	{
+		Test,
+		EditProfile
 	}
 }
 

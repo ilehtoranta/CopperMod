@@ -3,6 +3,7 @@ namespace CopperPad;
 internal interface IControllerMapper
 {
 	string Name { get; }
+	ControllerMappingInfo MappingInfo { get; }
 
 	VirtualXboxControllerState Map(RawControllerInput input);
 }
@@ -18,6 +19,11 @@ internal static class ControllerMapperFactory
 			return new ProfileControllerMapper(profile);
 		}
 
+		if (SdlGameControllerDatabase.TryFindMapping(device, out var sdlMapping))
+		{
+			return new SdlControllerMapper(sdlMapping, device);
+		}
+
 		if (KnownControllerMapper.TryCreate(device, out var known))
 		{
 			return known;
@@ -31,6 +37,9 @@ internal static class ControllerMapperFactory
 		return new DiagnosticControllerMapper("No HID gamepad usage or matching profile was found.");
 	}
 
+	public static ControllerMappingInfo Describe(HidDeviceDescriptor device, ControllerProfileSet profiles)
+		=> Create(device, profiles).MappingInfo;
+
 	public static bool IsCandidate(HidDeviceDescriptor device, ControllerProfileSet profiles)
 	{
 		if (profiles.FindMatch(ToInfo(device, true, device.Diagnostic)) != null)
@@ -39,6 +48,7 @@ internal static class ControllerMapperFactory
 		}
 
 		return device.IsGameControllerUsage ||
+			SdlGameControllerDatabase.TryFindMapping(device, out _) ||
 			KnownControllerMapper.IsKnownController(device) ||
 			device.ProductName.Contains("gamepad", StringComparison.OrdinalIgnoreCase) ||
 			device.ProductName.Contains("controller", StringComparison.OrdinalIgnoreCase) ||
@@ -52,6 +62,7 @@ internal static class ControllerMapperFactory
 internal sealed class DiagnosticControllerMapper(string diagnostic) : IControllerMapper
 {
 	public string Name => "diagnostic";
+	public ControllerMappingInfo MappingInfo { get; } = new("Diagnostic", diagnostic);
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{
@@ -63,6 +74,7 @@ internal sealed class DiagnosticControllerMapper(string diagnostic) : IControlle
 internal sealed class GenericConventionControllerMapper : IControllerMapper
 {
 	public string Name => "generic-convention";
+	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Generic HID convention");
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{
@@ -111,6 +123,7 @@ internal sealed class GenericConventionControllerMapper : IControllerMapper
 internal sealed class ProfileControllerMapper(ControllerProfile profile) : IControllerMapper
 {
 	public string Name => "profile:" + profile.Name;
+	public ControllerMappingInfo MappingInfo { get; } = new("User profile", profile.Name);
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{

@@ -40,6 +40,33 @@ internal sealed class FileControllerProfileStore(string path) : IControllerProfi
 	}
 }
 
+internal static class MappingDisplay
+{
+	public static string Format(ControllerMappingInfo? mapping)
+		=> mapping == null ? "Mapping: unknown" : "Mapping: " + mapping;
+}
+
+internal static class ProfileDocumentDisplay
+{
+	public static string Format(string path, bool hasSavedProfile, ControllerProfile? draftProfile)
+	{
+		var profileState = hasSavedProfile ? "saved override" : "not found; new override draft";
+		var profileName = string.IsNullOrWhiteSpace(draftProfile?.Name) ? "unsaved profile" : draftProfile.Name;
+		return $"Profile: {profileState} ({profileName})\nDocument: {path}";
+	}
+}
+
+internal static class DeviceDisplay
+{
+	public static bool IsLikelyGameController(HidDeviceInfo device)
+		=> device.IsGameControllerUsage ||
+			ContainsAny(device.ProductName, "gamepad", "controller", "joystick", "arcade", "fightstick", "pad") ||
+			(device.VendorId == 0x0079 && device.ProductId == 0x0006);
+
+	private static bool ContainsAny(string text, params string[] values)
+		=> values.Any(value => text.Contains(value, StringComparison.OrdinalIgnoreCase));
+}
+
 internal sealed record ReportChange(
 	int Offset,
 	byte Baseline,

@@ -47,6 +47,7 @@ internal static class KnownControllerMapper
 internal sealed class PlayStationControllerMapper : IControllerMapper
 {
 	public string Name => "known-playstation";
+	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known PlayStation HID");
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{
@@ -98,6 +99,7 @@ internal sealed class PlayStationControllerMapper : IControllerMapper
 internal sealed class SwitchProControllerMapper : IControllerMapper
 {
 	public string Name => "known-switch-pro";
+	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known Switch Pro HID");
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{
@@ -151,6 +153,7 @@ internal sealed class SwitchProControllerMapper : IControllerMapper
 internal sealed class XboxControllerMapper : IControllerMapper
 {
 	public string Name => "known-xbox-hid";
+	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known Xbox HID");
 
 	public VirtualXboxControllerState Map(RawControllerInput input)
 	{

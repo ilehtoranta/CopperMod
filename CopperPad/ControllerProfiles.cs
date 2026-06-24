@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace CopperPad;
 
@@ -102,6 +103,7 @@ public static class JsonControllerProfileSerializer
 	private static readonly JsonSerializerOptions Options = new()
 	{
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+		TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
 		WriteIndented = true,
 		Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
 	};

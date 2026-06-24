@@ -36,6 +36,10 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+    <None Include="ThirdParty\SDL_GameControllerDB\LICENSE" Pack="true" PackagePath="third-party\SDL_GameControllerDB\" />
+    <None Include="ThirdParty\SDL_GameControllerDB\gamecontrollerdb.txt" Pack="true" PackagePath="third-party\SDL_GameControllerDB\" />
+    <EmbeddedResource Include="ThirdParty\SDL_GameControllerDB\gamecontrollerdb.txt" LogicalName="CopperPad.ThirdParty.SDL_GameControllerDB.gamecontrollerdb.txt" />
   </ItemGroup>
 
 </Project>
