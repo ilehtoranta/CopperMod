@@ -155,6 +155,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("dma-list", "multiple control blocks reuse a channel");
 			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPTL bit 0 ignored");
 			yield return SpriteConformanceRow.Executable("dma-timing", "extra-wide playfield fetches can consume late sprite DMA slots");
+			yield return SpriteConformanceRow.Executable("dma-timing", "sprite DMA latch is consumed after granted data fetch");
 			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive carries stationary command across missed capture frame");
 			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry across captured terminator");
 			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry stale command after control block rewrite");
@@ -1016,6 +1017,26 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void SpriteDmaLatchIsConsumedAfterGrantedDataFetch()
+	{
+		var bus = CreateDisplayComponentBus();
+		EnableSpriteDma(bus, 0x8220);
+		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+		var latch = GetPrivateField<object>(bus.Display, "_spriteDmaReadLatch");
+		var hasValue = (bool)latch.GetType().GetProperty("HasValue")!.GetValue(latch)!;
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.False(hasValue);
+		Assert.True(snapshot.LastSpriteDmaFetches > 0);
+		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
+	}
+
+	[Fact]
 	public void TimedRenderKeepsLiveSpriteDmaCommandsAfterFrameBoundaryOvershoot()
 	{
 		var bus = new AmigaBus();
@@ -1463,6 +1484,15 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.NotNull(field);
 		var value = Assert.IsAssignableFrom<System.Collections.ICollection>(field.GetValue(instance));
 		return value.Count;
+	}
+
+	private static T GetPrivateField<T>(object instance, string fieldName)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(field);
+		return Assert.IsAssignableFrom<T>(field.GetValue(instance));
 	}
 
 	private static void InvokePrivateMethod(object instance, string methodName, params object[] arguments)

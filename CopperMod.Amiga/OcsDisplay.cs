@@ -153,6 +153,7 @@ namespace CopperMod.Amiga
         private readonly byte[] _liveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
+        private SpriteDmaReadLatch _spriteDmaReadLatch;
         private readonly ushort[] _livePaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _livePaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
         private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
@@ -6846,8 +6847,18 @@ namespace CopperMod.Amiga
 
             if (!_useTimedPresentationReads && !recordLiveCapture)
             {
-                value = _bus.ReadChipWordForPresentation(address);
-                return true;
+                _spriteDmaReadLatch = new SpriteDmaReadLatch(
+                    row,
+                    spriteIndex,
+                    word,
+                    _bus.ReadChipWordForPresentation(address),
+                    granted: true,
+                    grantedCycle: 0);
+                return ConsumeSpriteDmaReadLatch(
+                    ref _spriteDmaReadLatch,
+                    recordDmaFetch: false,
+                    recordLiveCapture: false,
+                    out value);
             }
 
             if (!recordLiveCapture &&
@@ -6860,37 +6871,77 @@ namespace CopperMod.Amiga
 
             if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
-                value = 0;
-                RecordMissedSpriteDmaSlot(recordLiveCapture);
-                return false;
+                _spriteDmaReadLatch = SpriteDmaReadLatch.Denied(row, spriteIndex, word, GetSpriteDmaFetchCycle(row, spriteIndex, word));
+                return ConsumeSpriteDmaReadLatch(
+                    ref _spriteDmaReadLatch,
+                    recordDmaFetch: false,
+                    recordLiveCapture,
+                    out value);
             }
 
             var fetchCycle = GetSpriteDmaFetchCycle(row, spriteIndex, word);
             var alreadyCaptured = recordLiveCapture && _bus.IsHrmChipSlotReserved(fetchCycle);
-            if (!_bus.TryReadDisplayDmaWordForPresentation(
+            _spriteDmaReadLatch = LoadSpriteDmaReadLatch(row, spriteIndex, word, address, fetchCycle);
+            if (!_spriteDmaReadLatch.Granted)
+            {
+                return ConsumeSpriteDmaReadLatch(
+                    ref _spriteDmaReadLatch,
+                    recordDmaFetch: false,
+                    recordLiveCapture,
+                    out value);
+            }
+
+            return ConsumeSpriteDmaReadLatch(
+                ref _spriteDmaReadLatch,
+                recordDmaFetch: !alreadyCaptured,
+                recordLiveCapture,
+                out value);
+        }
+
+        private SpriteDmaReadLatch LoadSpriteDmaReadLatch(int row, int spriteIndex, int word, uint address, long fetchCycle)
+        {
+            return _bus.TryReadDisplayDmaWordForPresentation(
                     AmigaBusRequester.Sprite,
                     AmigaBusAccessKind.Sprite,
                     address,
                     fetchCycle,
-                    out value,
-                    out var access))
+                    out var value,
+                    out var access)
+                ? new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, access.GrantedCycle)
+                : SpriteDmaReadLatch.Denied(row, spriteIndex, word, access.GrantedCycle);
+        }
+
+        private bool ConsumeSpriteDmaReadLatch(
+            ref SpriteDmaReadLatch latch,
+            bool recordDmaFetch,
+            bool recordLiveCapture,
+            out ushort value)
+        {
+            if (!latch.HasValue || !latch.Granted)
             {
                 value = 0;
-                RecordMissedSpriteDmaSlot(recordLiveCapture);
+                if (latch.HasValue)
+                {
+                    RecordMissedSpriteDmaSlot(recordLiveCapture);
+                }
+
+                latch = default;
                 return false;
             }
 
-            if (!alreadyCaptured)
+            value = latch.Value;
+            if (recordDmaFetch)
             {
-                RecordSpriteDmaFetch(access.GrantedCycle, recordLiveCapture);
+                RecordSpriteDmaFetch(latch.GrantedCycle, recordLiveCapture);
             }
 
-            LoadSpriteDataRegister(spriteIndex, word, value);
+            LoadSpriteDataRegister(latch.SpriteIndex, latch.Word, value);
             if (recordLiveCapture)
             {
-                StoreLiveCapturedSpriteWord(row, spriteIndex, word, value);
+                StoreLiveCapturedSpriteWord(latch.Row, latch.SpriteIndex, latch.Word, value);
             }
 
+            latch = default;
             return true;
         }
 
@@ -11303,6 +11354,37 @@ namespace CopperMod.Amiga
             public int Row { get; }
 
             public int Plane { get; }
+
+            public int Word { get; }
+
+            public ushort Value { get; }
+
+            public bool Granted { get; }
+
+            public long GrantedCycle { get; }
+
+            public bool HasValue { get; }
+        }
+
+        private readonly struct SpriteDmaReadLatch
+        {
+            public SpriteDmaReadLatch(int row, int spriteIndex, int word, ushort value, bool granted, long grantedCycle)
+            {
+                Row = row;
+                SpriteIndex = spriteIndex;
+                Word = word;
+                Value = value;
+                Granted = granted;
+                GrantedCycle = grantedCycle;
+                HasValue = true;
+            }
+
+            public static SpriteDmaReadLatch Denied(int row, int spriteIndex, int word, long grantedCycle)
+                => new SpriteDmaReadLatch(row, spriteIndex, word, 0, granted: false, grantedCycle);
+
+            public int Row { get; }
+
+            public int SpriteIndex { get; }
 
             public int Word { get; }
 
