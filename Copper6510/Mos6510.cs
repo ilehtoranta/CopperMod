@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 
 namespace Copper6510
@@ -217,13 +222,13 @@ namespace Copper6510
         private void ServiceInterrupt(ushort vectorAddress)
         {
             BeginInstructionBus();
-            Idle(0);
             Idle(1);
-            PushWord(ProgramCounter, 2);
-            Push((byte)(Status & ~Break), 4);
+            Idle(2);
+            PushWord(ProgramCounter, 3);
+            Push((byte)(Status & ~Break), 5);
             SetFlag(InterruptDisable, true);
-            ProgramCounter = ReadWord(vectorAddress, cycleOffset: 5);
-            Cycles += 7;
+            ProgramCounter = ReadWord(vectorAddress, cycleOffset: 6);
+            Cycles += 8;
         }
 
         /// <summary>
@@ -912,7 +917,7 @@ namespace Copper6510
 
         private void Rti()
         {
-            Idle(1);
+            DummyRead(ProgramCounter, 1);
             StackDummyRead(2);
             Status = (byte)((Pull(3) & ~Break) | Unused);
             ProgramCounter = PullWord(4);
