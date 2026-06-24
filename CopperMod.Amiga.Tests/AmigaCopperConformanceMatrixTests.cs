@@ -525,6 +525,32 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastDeniedFixedSlot?.Owner);
     }
 
+    [Fact]
+    public void LiveCopperFetchesInstructionWordsIntoInstructionLatchOrder()
+    {
+        var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+        WriteCopperList(bus, CopperList, (0x0180, 0x0F00), (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, 1, CopperList);
+        bus.WriteWord(0x00DFF096, 0x8280);
+
+        bus.AdvanceDmaTo(FrameCycles());
+
+        var copperDma = bus.BusAccesses
+            .Where(access => access.Request.Requester == AmigaBusRequester.Copper &&
+                access.Request.Kind == AmigaBusAccessKind.Copper)
+            .ToArray();
+        Assert.True(copperDma.Length >= 2);
+        Assert.False(copperDma[0].Request.IsWrite);
+        Assert.Equal(CopperList, copperDma[0].Request.Address);
+        Assert.False(copperDma[1].Request.IsWrite);
+        Assert.Equal(CopperList + 2, copperDma[1].Request.Address);
+        Assert.True(copperDma[0].CompletedCycle <= copperDma[1].RequestedCycle);
+
+        Assert.True(copperDma.Length >= 4);
+        Assert.Equal(CopperList + 4, copperDma[2].Request.Address);
+        Assert.Equal(CopperList + 6, copperDma[3].Request.Address);
+    }
+
     private static void StartLongBlit(AmigaBus bus)
     {
         bus.WriteWord(0x00DFF040, 0x09F0, 0);

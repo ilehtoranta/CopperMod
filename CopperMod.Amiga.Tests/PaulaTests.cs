@@ -24,6 +24,28 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void AudioOnlyRenderLeavesInterruptsForRegisterTimeline()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.WriteWord(0x00DFF09A, 0xC080, 0);
+		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+		var buffer = new float[4];
+
+		bus.Paula.RenderSample(0, buffer, 0, 2, advanceRegisterObservable: false);
+		bus.Paula.RenderSample(856, buffer, 1, 2, advanceRegisterObservable: false);
+		Assert.Empty(bus.Paula.DrainInterrupts());
+
+		bus.Paula.AdvanceRegisterObservableTo(856);
+		var interruptEvent = Assert.Single(bus.Paula.DrainInterrupts());
+
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.Equal(0, interruptEvent.Channel);
+		Assert.Equal(0x0080, interruptEvent.IntreqBit);
+		Assert.True((bus.Paula.Intreq & 0x0080) != 0);
+	}
+
+	[Fact]
 	public void ManualAudioDataTransitionsOnExactIntegerPeriodCycles()
 	{
 		var bus = CreatePaulaComponentBus();
@@ -69,6 +91,80 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void RegisterWakeCandidateIgnoresManualAudioSampleBoundary()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x0A6, 0x0003, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+		bus.Paula.AdvanceRegisterObservableTo(0);
+		var buffer = new float[4];
+
+		var candidate = bus.Paula.GetNextWakeCandidateCycle(0, 6);
+		bus.Paula.RenderSample(5, buffer, 0, 2);
+		bus.Paula.RenderSample(6, buffer, 1, 2);
+
+		Assert.Null(candidate);
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+	}
+
+	[Fact]
+	public void RegisterWakeCandidateSkipsDmaLowByteSampleBoundary()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		bus.ChipRam[0x1002] = 0x40;
+		bus.ChipRam[0x1003] = 0xC0;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x000A, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+
+		bus.Paula.AdvanceRegisterObservableTo(42);
+		var lowByteCandidate = bus.Paula.GetNextWakeCandidateCycle(42, 58);
+		var nextWordCandidate = bus.Paula.GetNextWakeCandidateCycle(42, 78);
+
+		Assert.Null(lowByteCandidate);
+		Assert.Equal(78, nextWordCandidate);
+	}
+
+	[Fact]
+	public void RegisterWakeCandidateKeepsAttachedSourceSampleBoundary()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x09E, 0x8010, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x0005, 0);
+		bus.Paula.AdvanceRegisterObservableTo(0);
+
+		var candidate = bus.Paula.GetNextWakeCandidateCycle(0, 4);
+
+		Assert.Equal(4, candidate);
+	}
+
+	[Fact]
+	public void RegisterDmaWordOutputKeepsLowByteBoundaryWhenAttachWriteIsPending()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x00;
+		bus.ChipRam[0x1001] = 0x05;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x000A, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x09E, 0x8010, 50);
+
+		bus.Paula.AdvanceRegisterObservableTo(42);
+		var attachCandidate = bus.Paula.GetNextWakeCandidateCycle(42, 58);
+		bus.Paula.AdvanceRegisterObservableTo(50);
+		var lowByteCandidate = bus.Paula.GetNextWakeCandidateCycle(50, 58);
+
+		Assert.Equal(50, attachCandidate);
+		Assert.Equal(58, lowByteCandidate);
+	}
+
+	[Fact]
 	public void SerialDataReadReportsIdleTransmitEmptyWithoutReceiveBufferData()
 	{
 		var bus = CreatePaulaComponentBus();
@@ -110,6 +206,30 @@ public sealed class PaulaTests
 
 		Assert.Equal(3, dmaReadsAfterPoll);
 		Assert.Equal(dmaReadsAfterPoll, CountPaulaDmaReads(bus));
+		Assert.True(buffer[0] > 0.20f);
+	}
+
+	[Fact]
+	public void RegisterTimelineDmaLatchIsConsumedByAudioTimelineWithoutSecondGrant()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0064, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+
+		var pollCycle = 40L;
+		_ = bus.ReadWord(0x00DFF01E, ref pollCycle, AmigaBusAccessKind.CpuDataRead);
+		var grantsAfterPoll = CapturePaulaDmaGrants(bus);
+		var buffer = new float[2];
+
+		bus.Paula.RenderSample(38, buffer, 0, 2);
+		var grantsAfterAudio = CapturePaulaDmaGrants(bus);
+
+		Assert.Equal(grantsAfterPoll, grantsAfterAudio);
+		Assert.Equal(grantsAfterPoll.Length, grantsAfterPoll.Distinct().Count());
 		Assert.True(buffer[0] > 0.20f);
 	}
 
@@ -334,7 +454,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void PartialPlaybackLiveDmaUsesConfiguredMinimumForAudioDmaRefillSlots()
+	public void PartialPlaybackLiveDmaUsesRawPeriodRequestsAndChannelSlotGrants()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -352,11 +472,40 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
+		Assert.Equal(new long[] { 0, 34, 488, 942 }, requestedCycles);
 	}
 
 	[Fact]
-	public void FullLiveDmaUsesConfiguredMinimumForAudioDmaRefillSlots()
+	public void DmaAudioBelowMinimumPeriodRepeatsLowByteUntilNextDmaWordArrives()
+	{
+		var probe = CreateMinimumPeriodDmaUnderrunBus();
+		probe.Paula.AdvanceTo(1_000);
+		var dma = probe.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.ToArray();
+		var firstWordCycle = dma[1].CompletedCycle;
+		var secondWordCycle = dma[2].CompletedCycle;
+		var bus = CreateMinimumPeriodDmaUnderrunBus();
+		var buffer = new float[8];
+
+		bus.Paula.RenderSample(firstWordCycle, buffer, 0, 2);
+		bus.Paula.RenderSample(firstWordCycle + 2, buffer, 1, 2);
+		bus.Paula.RenderSample(secondWordCycle - 2, buffer, 2, 2);
+		bus.Paula.RenderSample(secondWordCycle, buffer, 3, 2);
+		var lateBus = CreateMinimumPeriodDmaUnderrunBus();
+		var lateBuffer = new float[2];
+		lateBus.Paula.RenderSample(secondWordCycle - 2, lateBuffer, 0, 2);
+		var details = $"dma={string.Join(",", dma.Select(access => $"{access.RequestedCycle}->{access.CompletedCycle}"))}; samples={string.Join(",", buffer)}";
+
+		Assert.True(buffer[0] > 0.20f, details);
+		Assert.True(buffer[2] < -0.20f, details);
+		Assert.True(buffer[4] < -0.20f, details);
+		Assert.True(buffer[6] > 0.10f, details);
+		Assert.True(lateBuffer[0] < -0.20f, $"{details}; late={string.Join(",", lateBuffer)}");
+	}
+
+	[Fact]
+	public void FullLiveDmaUsesRawPeriodRequestsAndChannelSlotGrants()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -374,7 +523,7 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
+		Assert.Equal(new long[] { 0, 34, 488, 942 }, requestedCycles);
 	}
 
 	[Fact]
@@ -470,6 +619,12 @@ public sealed class PaulaTests
 	private static int CountPaulaDmaReads(AmigaBus bus)
 		=> bus.BusAccesses.Count(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma);
 
+	private static (uint Address, long RequestedCycle, long GrantedCycle)[] CapturePaulaDmaGrants(AmigaBus bus)
+		=> bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.Select(access => (access.Request.Address, access.RequestedCycle, access.GrantedCycle))
+			.ToArray();
+
 	private static void ScheduleManualRewriteSequence(AmigaBus bus)
 	{
 		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
@@ -500,5 +655,23 @@ public sealed class PaulaTests
 	{
 		return new AmigaBus(
 			enableLiveAgnusDma: false);
+	}
+
+	private static AmigaBus CreateMinimumPeriodDmaUnderrunBus()
+	{
+		var bus = new AmigaBus(
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false);
+		bus.ChipRam[0x1000] = 0x00;
+		bus.ChipRam[0x1001] = 0x00;
+		bus.ChipRam[0x1002] = 0x7F;
+		bus.ChipRam[0x1003] = 0x81;
+		bus.ChipRam[0x1004] = 0x40;
+		bus.ChipRam[0x1005] = 0xC0;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0003, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		return bus;
 	}
 }

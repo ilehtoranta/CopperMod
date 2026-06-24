@@ -532,6 +532,10 @@ namespace CopperMod.Amiga
         private ushort _deferredRestartBltsize;
         private BlitterCompiledKernel _activeKernel;
         private BlitterAreaKernelState _areaKernelState;
+        private BlitterDmaReadLatch _sourceALatch;
+        private BlitterDmaReadLatch _sourceBLatch;
+        private BlitterDmaReadLatch _sourceCLatch;
+        private BlitterDmaWriteLatch _destinationDLatch;
 
         public AmigaBlitter(AmigaBus bus, bool enableSpecialization = false)
         {
@@ -632,6 +636,10 @@ namespace CopperMod.Amiga
             _deferredRestartBltsize = 0;
             _activeKernel = default;
             _areaKernelState = default;
+            _sourceALatch = default;
+            _sourceBLatch = default;
+            _sourceCLatch = default;
+            _destinationDLatch = default;
         }
 
         public AmigaBlitterSnapshot CaptureSnapshot()
@@ -1051,51 +1059,35 @@ namespace CopperMod.Amiga
             var rawA = _activeDataA;
             if (_useA)
             {
-                var read = ReadAndStep(ref _workSourceA, _step, nextReadCycle);
-                rawA = read.Value;
-                RecordBlitterDma(read.BusAccess);
-                nextReadCycle = read.BusAccess.CompletedCycle;
-                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
+                _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
+                var access = _sourceALatch.BusAccess;
+                rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+                nextReadCycle = access.CompletedCycle;
+                nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
 
             var rawB = _activeDataB;
             if (_useB)
             {
-                var read = ReadAndStep(ref _workSourceB, _step, nextReadCycle);
-                rawB = read.Value;
-                RecordBlitterDma(read.BusAccess);
-                nextReadCycle = read.BusAccess.CompletedCycle;
-                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
+                _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
+                var access = _sourceBLatch.BusAccess;
+                rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                nextReadCycle = access.CompletedCycle;
+                nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
 
             var rawC = _activeDataC;
             if (_useC)
             {
-                var read = ReadAndStep(ref _workSourceC, _step, nextReadCycle);
-                rawC = read.Value;
+                _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
+                var access = _sourceCLatch.BusAccess;
+                rawC = ConsumeSourceDmaLatch(ref _sourceCLatch);
                 _activeDataC = rawC;
-                RecordBlitterDma(read.BusAccess);
-                nextReadCycle = read.BusAccess.CompletedCycle;
-                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
+                nextReadCycle = access.CompletedCycle;
+                nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
 
-            ushort output;
-            if (_specializationEnabled && _activeKernel.SupportsArea)
-            {
-                output = _activeKernel.ExecuteArea(ref _areaKernelState, rawA, rawB, rawC, (ushort)mask);
-                _previousA = _areaKernelState.PreviousA;
-                _previousB = _areaKernelState.PreviousB;
-                _fillCarry = _areaKernelState.FillCarry;
-            }
-            else
-            {
-                if (_specializationEnabled)
-                {
-                    _kernelCache.RecordFallback();
-                }
-
-                output = ExecuteAreaScalar(rawA, rawB, rawC, (ushort)mask);
-            }
+            var output = ExecuteAreaFromSourceLatches(rawA, rawB, rawC, (ushort)mask);
 
             if (output != 0)
             {
@@ -1106,8 +1098,8 @@ namespace CopperMod.Amiga
             if (_useD)
             {
                 var writeCycle = Math.Max(nextReadCycle, stepEnd - ChipSlotCycles);
-                var write = WriteAndStep(ref _workDestinationD, _step, output, writeCycle);
-                RecordBlitterDma(write);
+                _destinationDLatch = CreateDestinationDmaLatch(output);
+                var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle);
                 nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             }
 
@@ -1167,33 +1159,27 @@ namespace CopperMod.Amiga
                 var nextReadCycle = _useB ? stepStart : stepStart + ChipSlotCycles;
                 if (_useB)
                 {
-                    var firstB = ReadLineBPattern(nextReadCycle);
-                    nextReadCycle = firstB.BusAccess.CompletedCycle;
-                    nextCycle = Math.Max(nextCycle, firstB.BusAccess.CompletedCycle);
-                    var secondB = ReadLineBPattern(nextReadCycle);
-                    _dataB = secondB.Value;
-                    nextReadCycle = secondB.BusAccess.CompletedCycle;
-                    nextCycle = Math.Max(nextCycle, secondB.BusAccess.CompletedCycle);
+                    _sourceBLatch = LoadLineBPatternLatch(nextReadCycle);
+                    var firstBAccess = _sourceBLatch.BusAccess;
+                    _ = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                    nextReadCycle = firstBAccess.CompletedCycle;
+                    nextCycle = Math.Max(nextCycle, firstBAccess.CompletedCycle);
+                    _sourceBLatch = LoadLineBPatternLatch(nextReadCycle);
+                    var secondBAccess = _sourceBLatch.BusAccess;
+                    _dataB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                    nextReadCycle = secondBAccess.CompletedCycle;
+                    nextCycle = Math.Max(nextCycle, secondBAccess.CompletedCycle);
                     _workSourceB = _bus.AddChipDmaPointerOffset(_workSourceB, _lineBPatternStride);
                 }
 
-                var read = _bus.ReadChipWordForDeviceWithResult(
-                    AmigaBusRequester.Blitter,
-                    AmigaBusAccessKind.Blitter,
-                    _workSourceC,
-                    nextReadCycle);
-                RecordBlitterDma(read.BusAccess);
-                nextCycle = Math.Max(nextCycle, read.BusAccess.CompletedCycle);
+                _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, _workSourceC, nextReadCycle);
+                var sourceCAccess = _sourceCLatch.BusAccess;
+                var sourceC = ConsumeSourceDmaLatch(ref _sourceCLatch);
+                nextCycle = Math.Max(nextCycle, sourceCAccess.CompletedCycle);
                 var lineMask = RotateRight(_dataA, _lineBit);
                 var textureBit = (_dataB & (0x8000 >> ((_shiftB + _lineIndex) & 0x0F))) != 0;
                 var texture = textureBit ? (ushort)0xFFFF : (ushort)0;
-                var output = _specializationEnabled && _activeKernel.SupportsLine
-                    ? _activeKernel.ExecuteLine(lineMask, texture, read.Value)
-                    : ApplyMinterm(_minterm, lineMask, texture, read.Value);
-                if (_specializationEnabled && !_activeKernel.SupportsLine)
-                {
-                    _kernelCache.RecordFallback();
-                }
+                var output = ExecuteLineFromSourceLatches(lineMask, texture, sourceC);
 
                 if (output != 0)
                 {
@@ -1201,13 +1187,11 @@ namespace CopperMod.Amiga
                 }
 
                 var destination = _lineIndex == 0 ? _workDestinationD : _workSourceC;
-                var write = _bus.WriteChipWordForDeviceWithResult(
-                    AmigaBusRequester.Blitter,
-                    AmigaBusAccessKind.Blitter,
+                _destinationDLatch = CreateDestinationDmaLatch(output);
+                var write = CommitDestinationDmaLatch(
                     destination,
-                    output,
-                    Math.Max(read.BusAccess.CompletedCycle, stepEnd - ChipSlotCycles));
-                RecordBlitterDma(write);
+                    ref _destinationDLatch,
+                    Math.Max(sourceCAccess.CompletedCycle, stepEnd - ChipSlotCycles));
                 nextCycle = Math.Max(nextCycle, write.CompletedCycle);
                 _lineLastDrawnY = _lineY;
             }
@@ -1222,17 +1206,6 @@ namespace CopperMod.Amiga
             }
 
             StepLineAddress();
-        }
-
-        private AmigaDeviceWordReadResult ReadLineBPattern(long cycle)
-        {
-            var read = _bus.ReadChipWordForDeviceWithResult(
-                AmigaBusRequester.Blitter,
-                AmigaBusAccessKind.Blitter,
-                _workSourceB,
-                cycle);
-            RecordBlitterDma(read.BusAccess);
-            return read;
         }
 
         private void StepLineAddress()
@@ -1472,6 +1445,40 @@ namespace CopperMod.Amiga
             _completedMicroOps++;
         }
 
+        private ushort ExecuteAreaFromSourceLatches(ushort rawA, ushort rawB, ushort rawC, ushort mask)
+        {
+            if (_specializationEnabled && _activeKernel.SupportsArea)
+            {
+                var output = _activeKernel.ExecuteArea(ref _areaKernelState, rawA, rawB, rawC, mask);
+                _previousA = _areaKernelState.PreviousA;
+                _previousB = _areaKernelState.PreviousB;
+                _fillCarry = _areaKernelState.FillCarry;
+                return output;
+            }
+
+            if (_specializationEnabled)
+            {
+                _kernelCache.RecordFallback();
+            }
+
+            return ExecuteAreaScalar(rawA, rawB, rawC, mask);
+        }
+
+        private ushort ExecuteLineFromSourceLatches(ushort lineMask, ushort texture, ushort sourceC)
+        {
+            if (_specializationEnabled && _activeKernel.SupportsLine)
+            {
+                return _activeKernel.ExecuteLine(lineMask, texture, sourceC);
+            }
+
+            if (_specializationEnabled)
+            {
+                _kernelCache.RecordFallback();
+            }
+
+            return ApplyMinterm(_minterm, lineMask, texture, sourceC);
+        }
+
         private ushort ExecuteAreaScalar(ushort rawA, ushort rawB, ushort rawC, ushort mask)
         {
             rawA = (ushort)(rawA & mask);
@@ -1504,26 +1511,54 @@ namespace CopperMod.Amiga
             return output;
         }
 
-        private AmigaDeviceWordReadResult ReadAndStep(ref uint pointer, int step, long cycle)
+        private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, ref uint pointer, int step, long cycle)
+        {
+            var latch = LoadSourceDmaLatch(source, GetEffectiveBlitterAddress(pointer), cycle);
+            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            return latch;
+        }
+
+        private BlitterDmaReadLatch LoadLineBPatternLatch(long cycle)
+            => LoadSourceDmaLatch(BlitterDmaSource.B, _workSourceB, cycle);
+
+        private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, uint address, long cycle)
         {
             var value = _bus.ReadChipWordForDeviceWithResult(
                 AmigaBusRequester.Blitter,
                 AmigaBusAccessKind.Blitter,
-                GetEffectiveBlitterAddress(pointer),
+                GetEffectiveBlitterAddress(address),
                 cycle);
-            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            RecordBlitterDma(value.BusAccess);
+            return new BlitterDmaReadLatch(source, value.Value, value.BusAccess);
+        }
+
+        private static ushort ConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch)
+        {
+            var value = latch.Value;
+            latch = default;
             return value;
         }
 
-        private AmigaBusAccessResult WriteAndStep(ref uint pointer, int step, ushort value, long cycle)
+        private static BlitterDmaWriteLatch CreateDestinationDmaLatch(ushort value)
+            => new BlitterDmaWriteLatch(value);
+
+        private AmigaBusAccessResult CommitDestinationDmaLatch(ref uint pointer, int step, ref BlitterDmaWriteLatch latch, long cycle)
+        {
+            var access = CommitDestinationDmaLatch(GetEffectiveBlitterAddress(pointer), ref latch, cycle);
+            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            return access;
+        }
+
+        private AmigaBusAccessResult CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
             var access = _bus.WriteChipWordForDeviceWithResult(
                 AmigaBusRequester.Blitter,
                 AmigaBusAccessKind.Blitter,
-                GetEffectiveBlitterAddress(pointer),
-                value,
+                GetEffectiveBlitterAddress(address),
+                latch.Value,
                 cycle);
-            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            RecordBlitterDma(access);
+            latch = default;
             return access;
         }
 
@@ -1551,6 +1586,39 @@ namespace CopperMod.Amiga
 
         private static ushort ApplyMinterm(byte minterm, ushort sourceA, ushort sourceB, ushort sourceC)
             => BlitterKernelMath.ApplyMinterm(minterm, sourceA, sourceB, sourceC);
+
+        private enum BlitterDmaSource
+        {
+            A,
+            B,
+            C
+        }
+
+        private readonly struct BlitterDmaReadLatch
+        {
+            public BlitterDmaReadLatch(BlitterDmaSource source, ushort value, AmigaBusAccessResult busAccess)
+            {
+                Source = source;
+                Value = value;
+                BusAccess = busAccess;
+            }
+
+            public BlitterDmaSource Source { get; }
+
+            public ushort Value { get; }
+
+            public AmigaBusAccessResult BusAccess { get; }
+        }
+
+        private readonly struct BlitterDmaWriteLatch
+        {
+            public BlitterDmaWriteLatch(ushort value)
+            {
+                Value = value;
+            }
+
+            public ushort Value { get; }
+        }
 
         private readonly struct DeferredRegisterWrite
         {
