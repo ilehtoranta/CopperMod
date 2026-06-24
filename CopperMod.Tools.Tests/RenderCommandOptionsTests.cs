@@ -189,6 +189,34 @@ public sealed class RenderCommandOptionsTests
 			RenderCommandOptions.Parse(new[] { "render", "input.mod", "--out", "output.wav", "--amiga-profile", "led" }));
 	}
 
+	[Theory]
+	[InlineData("measured")]
+	[InlineData("c64-measured")]
+	public void ParsesC64MeasuredOutputProfile(string value)
+	{
+		var options = RenderCommandOptions.Parse(new[]
+		{
+			"render",
+			"input.sid",
+			"--out",
+			"output.wav",
+			"--output",
+			"player",
+			"--c64-profile",
+			value
+		});
+
+		Assert.Equal(C64OutputProfile.C64Measured, options.C64Profile);
+		Assert.Equal(C64OutputProfile.C64Measured, options.ToRenderSettings().C64OutputProfile);
+	}
+
+	[Fact]
+	public void RejectsUnknownC64OutputProfile()
+	{
+		Assert.Throws<CommandLineException>(() =>
+			RenderCommandOptions.Parse(new[] { "render", "input.sid", "--out", "output.wav", "--output", "player", "--c64-profile", "board" }));
+	}
+
 	[Fact]
 	public void ParsesSidEmulationProfile()
 	{

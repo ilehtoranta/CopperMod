@@ -49,6 +49,10 @@ namespace CopperMod.Sid
         private const int TextScreenRows = 25;
         private const byte DefaultTextColor = 0x0E;
         private const long RomBasicBootCycles = 2_500_000;
+        // SidPlayFP psiddrv reaches the first VBI play call 3236 instruction
+        // cycles after init entry; CopperMod accounts through the completed
+        // init RTS, so the equivalent post-init phase is seven cycles later.
+        internal const int SidPlayFpPsidVbiFirstPlayCycleAfterInitEntry = 3_243;
         private byte _processorPortDirection;
         private byte _processorPortValue;
         private long _hardwareCycle;
@@ -58,6 +62,7 @@ namespace CopperMod.Sid
         private C64InterruptSource _lastInterruptSource;
         private BasicRsidRunner? _basicRunner;
         private bool _psidPlayActive;
+        private long _psidPlayOffsetCycles;
         private long _psidCiaTimerAIntervalCycles;
         private bool _psidCiaTimerATouched;
         private long _pendingCpuStallCycles;
@@ -116,6 +121,8 @@ namespace CopperMod.Sid
 
         public long PsidCiaTimerAIntervalCycles => _psidCiaTimerAIntervalCycles;
 
+        public long PsidPlayOffsetCycles => _psidPlayOffsetCycles;
+
         public C64MachineDebugState DebugState => new C64MachineDebugState(
             _hardwareCycle,
             _cia1.DebugState,
@@ -156,6 +163,7 @@ namespace CopperMod.Sid
             _lastInterruptSource = C64InterruptSource.None;
             _basicRunner = null;
             _psidPlayActive = false;
+            _psidPlayOffsetCycles = 0;
             _psidCiaTimerAIntervalCycles = GetDefaultPsidCiaTimerAIntervalCycles();
             _psidCiaTimerATouched = false;
             _pendingCpuStallCycles = 0;
@@ -169,8 +177,8 @@ namespace CopperMod.Sid
             _cia2.Reset(defaultTimerA60Hz: false, _clock.CpuCyclesPerSecond);
             UpdateVicBankBase();
             _vic.Reset();
-            InstallPsidEnvironment(psidUsesCiaTiming);
             Sid.Reset();
+            InstallPsidEnvironment(psidUsesCiaTiming);
             _digimax.Reset();
             _easyFlash?.Reset();
             _pressedKeys.Clear();
@@ -216,7 +224,10 @@ namespace CopperMod.Sid
             PreparePsidRoutineCall(_module.InitAddress);
             Cpu.BeginSubroutine(_module.InitAddress, (byte)subSongIndex);
             RunUntilSubroutineReturn(250_000);
+            var initRoutineCycles = Cpu.Cycles;
             Sid.AdvanceTo(Cpu.Cycles);
+            CapturePsidInitCiaTimerInterval(subSongIndex);
+            _psidPlayOffsetCycles = ComputePsidPlayOffsetCycles(psidUsesCiaTiming, initRoutineCycles);
             if (_module.IsRsid && Cpu.ProgramCounter == 0xFFFF)
             {
                 Cpu.ProgramCounter = IdleLoopAddress;
@@ -231,8 +242,25 @@ namespace CopperMod.Sid
         [HotPath]
         public void RunFrame()
         {
+            if (_module.RunsContinuously ||
+                _module.PlayAddress == 0 ||
+                _psidPlayActive ||
+                _psidPlayOffsetCycles <= 0)
+            {
+                BeginFrame();
+                RunCycles(_clock.CyclesPerFrame);
+                return;
+            }
+
+            var frameStartCycle = Cpu.Cycles;
+            var frameEndCycle = frameStartCycle + _clock.CyclesPerFrame;
+            var offset = Math.Min(_psidPlayOffsetCycles, _clock.CyclesPerFrame);
+            AdvanceSidOnly(offset);
             BeginFrame();
-            RunCycles(_clock.CyclesPerFrame);
+            if (Cpu.Cycles < frameEndCycle)
+            {
+                RunCycles(frameEndCycle - Cpu.Cycles);
+            }
         }
 
         [HotPath]
@@ -326,8 +354,7 @@ namespace CopperMod.Sid
             Span<float> destination,
             AudioRenderOptionsAdapter options,
             ReadOnlySpan<long> sampleTargetCycles,
-            long cycleCount,
-            bool phasePsidPlayAtTickMidpoint = false)
+            long cycleCount)
         {
             var frames = destination.Length / options.ChannelCount;
             if (frames != sampleTargetCycles.Length)
@@ -344,9 +371,7 @@ namespace CopperMod.Sid
 
             var frameStartCycle = Cpu.Cycles;
             var frameEndCycle = frameStartCycle + tickCycles;
-            var psidPlayCycle = phasePsidPlayAtTickMidpoint
-                ? frameStartCycle + (tickCycles / 2)
-                : frameStartCycle;
+            var psidPlayCycle = frameStartCycle + GetPsidPlayOffsetForTick(tickCycles);
             var psidPlayPending = !_psidPlayActive && !_module.RunsContinuously && _module.PlayAddress != 0;
             for (var outputFrame = 0; outputFrame < sampleTargetCycles.Length; outputFrame++)
             {
@@ -439,6 +464,44 @@ namespace CopperMod.Sid
 
             _psidCiaTimerAIntervalCycles = Math.Max(1L, _cia1.TimerALatch);
             _psidCiaTimerATouched = false;
+        }
+
+        private void CapturePsidInitCiaTimerInterval(int subSongIndex)
+        {
+            if (_module.Kind == SidFileKind.Psid &&
+                UsesPsidCiaTiming(subSongIndex) &&
+                _psidCiaTimerATouched)
+            {
+                _psidCiaTimerAIntervalCycles = Math.Max(1L, _cia1.TimerALatch);
+            }
+
+            _psidCiaTimerATouched = false;
+        }
+
+        private long ComputePsidPlayOffsetCycles(bool usesCiaTiming, long initRoutineCycles)
+        {
+            if (_module.Kind != SidFileKind.Psid || _module.PlayAddress == 0 || usesCiaTiming)
+            {
+                return 0;
+            }
+
+            var playCycle = (long)SidPlayFpPsidVbiFirstPlayCycleAfterInitEntry;
+            while (playCycle < initRoutineCycles)
+            {
+                playCycle += _clock.CyclesPerFrame;
+            }
+
+            return Math.Max(0, playCycle - initRoutineCycles);
+        }
+
+        private long GetPsidPlayOffsetForTick(long tickCycles)
+        {
+            if (_module.RunsContinuously || _module.PlayAddress == 0)
+            {
+                return 0;
+            }
+
+            return Math.Clamp(_psidPlayOffsetCycles, 0, Math.Max(0, tickCycles));
         }
 
         [HotPath]
@@ -725,7 +788,44 @@ namespace CopperMod.Sid
             }
 
             _ram[PalNtscFlagAddress] = GetVideoStandardFlag();
-            _vic.Write(0x1A, usesCiaTiming ? (byte)0x00 : (byte)0x01);
+            ApplyPsidCompatibilityRegisterDefaults(usesCiaTiming);
+        }
+
+        private void ApplyPsidCompatibilityRegisterDefaults(bool usesCiaTiming)
+        {
+            _vic.Write(0x1A, 0x00);
+            _vic.Write(0x19, 0x71);
+            _cia1.Write(0x0D, 0x7F);
+            _cia2.Write(0x0D, 0x7F);
+
+            Sid.TryWrite((ushort)(SidConstants.DefaultSidBaseAddress + 0x18), 0x0F, 0);
+            Sid.ClearCapturedWrites();
+
+            var (timerLow, timerHigh) = GetDefaultPsidCiaTimerALatchBytes();
+            _cia1.Write(0x04, timerLow);
+            _cia1.Write(0x05, timerHigh);
+
+            _vic.Write(0x11, 0x1B);
+            _vic.Write(0x12, 0x00);
+
+            if (usesCiaTiming)
+            {
+                _cia1.Write(0x0D, 0x81);
+                _cia1.Write(0x0E, 0x01);
+            }
+            else
+            {
+                _vic.Write(0x1A, 0x81);
+            }
+
+            RefreshInterruptLines();
+        }
+
+        private (byte Low, byte High) GetDefaultPsidCiaTimerALatchBytes()
+        {
+            return _clock.RasterLines == 263
+                ? ((byte)0x95, (byte)0x42)
+                : ((byte)0x25, (byte)0x40);
         }
 
         private byte GetVideoStandardFlag()

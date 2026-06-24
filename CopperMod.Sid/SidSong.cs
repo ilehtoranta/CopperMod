@@ -371,14 +371,7 @@ namespace CopperMod.Sid
             ReadOnlySpan<long> sampleTargetCycles,
             long tickCycles)
         {
-            _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles, ShouldPhasePsidPlayAtTickMidpoint());
-        }
-
-        private bool ShouldPhasePsidPlayAtTickMidpoint()
-        {
-            return !_module.RunsContinuously &&
-                _module.PlayAddress != 0 &&
-                !UsesCiaTiming(_module, _currentSubSongIndex);
+            _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles);
         }
 
         internal static bool UsesCiaTiming(SidModule module, int subSongIndex)

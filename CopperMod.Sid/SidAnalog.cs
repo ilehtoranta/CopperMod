@@ -385,7 +385,7 @@ namespace CopperMod.Sid
             var routedOut = CountBits(previousRouting & changed);
             var polarity = routedIn == routedOut ? 1.0 : Math.Sign(routedIn - routedOut);
             var modeWeight = (currentMode & 0x70) == 0 ? 0.62 : 1.0;
-            var impulse = polarity * CountBits(changed) * profile.FilterRoutingTransientGain * modeWeight;
+            var impulse = -polarity * CountBits(changed) * profile.FilterRoutingTransientGain * modeWeight;
             return Math.Clamp(impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
         }
 
@@ -494,7 +494,7 @@ namespace CopperMod.Sid
         {
             return model == SidChipModel.Mos8580
                 ? amplitudeDelta * Mos8580D418DcScale()
-                : amplitudeDelta * Mos6581D418DcRange;
+                : -amplitudeDelta * Mos6581D418DcRange;
         }
 
         private static double Mos8580D418DcScale()
@@ -727,8 +727,8 @@ namespace CopperMod.Sid
                 d418TransitionAmplitudeGain: is6581 ? (referenceMeasured ? 0.030 : 0.0) : (referenceMeasured ? 0.0045 : 0.0),
                 d418HighNibbleTransitionGain: is6581 ? (referenceMeasured ? 0.018 : 0.0) : (referenceMeasured ? 0.0025 : 0.0),
                 filterRoutingTransientGain: is6581 ? (referenceMeasured ? 0.012 : 0.0) : (referenceMeasured ? 0.0020 : 0.0),
-                filterModeTransientGain: is6581 ? (referenceMeasured ? 0.015 : 0.0) : (referenceMeasured ? 0.0025 : 0.0),
-                voice3MuteTransientGain: is6581 ? (referenceMeasured ? 0.008 : 0.0) : (referenceMeasured ? 0.0015 : 0.0));
+                filterModeTransientGain: 0.0,
+                voice3MuteTransientGain: 0.0);
         }
 
         private static double[] BuildVolumeGain(SidChipModel model)

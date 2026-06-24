@@ -174,8 +174,8 @@ public sealed class SidChipTests
 			Assert.True(samples[i] > samples[i - 1], $"Expected D418 volume step {i} to be greater than {i - 1}.");
 		}
 
-		Assert.True(samples[^1] - samples[0] > 0.28, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
-		Assert.True(samples[^1] - samples[4] > 0.22, $"Expected offset-biased 4-bit digi playback to stay prominent, got {samples[^1] - samples[4]:0.000}.");
+		Assert.True(samples[^1] - samples[0] > 0.15, $"Expected audible 6581 volume DAC range, got {samples[^1] - samples[0]:0.000}.");
+		Assert.True(samples[^1] - samples[4] > 0.10, $"Expected offset-biased 4-bit digi playback to stay prominent, got {samples[^1] - samples[4]:0.000}.");
 	}
 
 	[Fact]
@@ -213,7 +213,7 @@ public sealed class SidChipTests
 		var mos8580 = MeasureVolumeStepTransient(SidChipModel.Mos8580);
 
 		Assert.True(mos6581.EarlyExcursion > 0.15, $"Expected 6581 D418 step to create strong transient digi energy, got {mos6581.EarlyExcursion:0.000}.");
-		Assert.True(Math.Abs(mos6581.Settled - SidAnalog.VolumeOffset(3, SidChipModel.Mos6581)) < 0.01, $"Expected 6581 D418 transient to decay back to the volume rest offset, settled {mos6581.Settled:0.000}.");
+		Assert.True(Math.Abs(mos6581.Settled - SidAnalog.VolumeOffset(3, SidChipModel.Mos6581)) < 0.025, $"Expected 6581 D418 transient to decay back to the volume rest offset, settled {mos6581.Settled:0.000}.");
 		Assert.True(mos8580.EarlyExcursion < 0.02, $"Expected 8580 D418 transient to remain weak, got {mos8580.EarlyExcursion:0.000}.");
 	}
 

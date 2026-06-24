@@ -6,7 +6,15 @@ public sealed class C64OutputStage
 		DcBlockCutoffHz: 1.30,
 		OutputLowPassCutoffHz: 24000.0,
 		OutputHeadroom: 1.04f,
-		Drive: 0.0f);
+		PreCouplingDrive: 0.0f,
+		PostCouplingDrive: 0.0f);
+
+	private static readonly C64OutputStageProfile C64MeasuredProfile = new C64OutputStageProfile(
+		DcBlockCutoffHz: 1.30,
+		OutputLowPassCutoffHz: 24000.0,
+		OutputHeadroom: 1.04f,
+		PreCouplingDrive: 0.08f,
+		PostCouplingDrive: 0.0f);
 
 	private float[] _lowPassState = Array.Empty<float>();
 	private float[] _dcPreviousInput = Array.Empty<float>();
@@ -44,18 +52,28 @@ public sealed class C64OutputStage
 		}
 
 		EnsureState(channels);
-		var profile = C64Profile;
+		var profile = GetProfile(Profile);
 		var lowPassAlpha = GetLowPassAlpha(profile.OutputLowPassCutoffHz, sampleRate);
 		var highPassAlpha = GetHighPassAlpha(profile.DcBlockCutoffHz, sampleRate);
 		for (var i = 0; i < samples.Length; i++)
 		{
 			var channel = i % channels;
 			var sample = samples[i];
+			sample = ApplyPreCouplingSaturation(sample, profile.PreCouplingDrive);
 			sample = OnePoleLowPass(sample, channel, lowPassAlpha);
 			sample = DcBlock(sample, channel, highPassAlpha);
-			sample = SoftClip(sample, profile.Drive);
+			sample = SoftClip(sample, profile.PostCouplingDrive);
 			samples[i] = Math.Clamp(sample * profile.OutputHeadroom, -1.0f, 1.0f);
 		}
+	}
+
+	private static C64OutputStageProfile GetProfile(C64OutputProfile profile)
+	{
+		return profile switch
+		{
+			C64OutputProfile.C64Measured => C64MeasuredProfile,
+			_ => C64Profile
+		};
 	}
 
 	private void EnsureState(int channels)
@@ -96,6 +114,16 @@ public sealed class C64OutputStage
 		return driven / (1.0f + (Math.Abs(driven) * drive));
 	}
 
+	private static float ApplyPreCouplingSaturation(float sample, float drive)
+	{
+		if (drive <= 0.0f)
+		{
+			return sample;
+		}
+
+		return sample / (1.0f + (Math.Abs(sample) * drive));
+	}
+
 	private static double GetLowPassAlpha(double cutoffHz, int sampleRate)
 	{
 		return 1.0 - Math.Exp(-2.0 * Math.PI * cutoffHz / sampleRate);
@@ -112,5 +140,6 @@ public sealed class C64OutputStage
 		double DcBlockCutoffHz,
 		double OutputLowPassCutoffHz,
 		float OutputHeadroom,
-		float Drive);
+		float PreCouplingDrive,
+		float PostCouplingDrive);
 }

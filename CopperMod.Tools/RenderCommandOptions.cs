@@ -406,6 +406,8 @@ internal sealed class RenderCommandOptions
 		{
 			"clean" => C64OutputProfile.Clean,
 			"c64" => C64OutputProfile.C64,
+			"measured" => C64OutputProfile.C64Measured,
+			"c64-measured" => C64OutputProfile.C64Measured,
 			_ => throw new CommandLineException("Unsupported C64 output profile: " + value)
 		};
 	}

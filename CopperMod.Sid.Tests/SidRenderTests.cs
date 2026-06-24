@@ -119,7 +119,7 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
-	public void VbiPsidPlayRoutineIsPhasedAtMidFrame()
+	public void VbiPsidPlayRoutineUsesSidPlayFpDriverPhase()
 	{
 		var song = (SidSong)new SidFormat().Load(CreateOneWritePsid(speed: 0));
 		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
@@ -128,7 +128,7 @@ public sealed class SidRenderTests
 		song.RenderTick(buffer, options);
 
 		var write = Assert.Single(song.SidWrites.Where(write => write.Register == 0x18 && write.Value == 0x0F));
-		Assert.Equal((SidConstants.PalCyclesPerFrame / 2) + 5, write.Cycle);
+		Assert.Equal(C64Machine.SidPlayFpPsidVbiFirstPlayCycleAfterInitEntry - 1, write.Cycle);
 	}
 
 	[Fact]
@@ -317,6 +317,44 @@ public sealed class SidRenderTests
 		const int expectedFrames = 135;
 		Assert.Equal(735, firstFrames);
 		Assert.Equal(expectedFrames, song.GetCurrentTickFrameCount(options));
+	}
+
+	[Fact]
+	public void PsidCiaTimedInitRoutineCanSetInitialTickCadence()
+	{
+		var payload = new byte[]
+		{
+			0xA9, 0x31,       // LDA #$31
+			0x8D, 0x04, 0xDC, // STA $DC04
+			0xA9, 0x13,       // LDA #$13
+			0x8D, 0x05, 0xDC, // STA $DC05
+			0x60,             // init RTS
+			0x60              // play RTS
+		};
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			payload,
+			playAddress: 0x100B,
+			songs: 1,
+			startSong: 1,
+			speed: 1));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+
+		Assert.Equal(239, song.GetCurrentTickFrameCount(options));
+	}
+
+	[Fact]
+	public void RealYieArKungFuIIFixtureUsesInitProgrammedCiaCadenceWhenPresent()
+	{
+		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Yie_Ar_Kung_Fu_II.sid");
+		if (!File.Exists(path))
+		{
+			return;
+		}
+
+		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+
+		Assert.Equal(239, song.GetCurrentTickFrameCount(options));
 	}
 
 	[Fact]
@@ -519,7 +557,7 @@ public sealed class SidRenderTests
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
 
-		Assert.Equal(735, song.GetCurrentTickFrameCount(options));
+		Assert.Equal(687, song.GetCurrentTickFrameCount(options));
 	}
 
 	[Fact]

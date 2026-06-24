@@ -99,7 +99,7 @@ The output format is inferred from the output extension when it is `.wav`,
 | `--sid-detect-max-seconds` | positive number | `600` | Maximum emulated SID playback time to scan for SID loop or duration detection. |
 | `--output` | `raw`, `player` | `raw` | `raw` writes direct renderer output. `player` applies the same Amiga or C64 output stage used by the player. |
 | `--amiga-profile` | `clean`, `a500`, `led` | `a500` | Selects the Amiga player output profile. Requires `--output player`. |
-| `--c64-profile` | `clean`, `c64` | `c64` | Selects the C64 player output profile. Requires `--output player`. |
+| `--c64-profile` | `clean`, `c64`, `measured`, `c64-measured` | `c64` | Selects the C64 player output profile. Requires `--output player`. |
 | `--mp3-bitrate` | positive integer | `192` | Sets MP3 bitrate in kbps. |
 | `--bitmap-width` | `128` to `8192` | `1024` | Sets BMP waveform width in pixels. Requires BMP output. |
 | `--bitmap-height` | `72` to `4096` | `256` | Sets BMP waveform height in pixels. Requires BMP output. |
@@ -145,6 +145,10 @@ the CopperMod player:
 Output-stage profile options (`--amiga-profile` and `--c64-profile`) are
 rejected unless `--output player` is selected. `--sid-profile` is independent:
 it changes core SID emulation before raw or player output shaping.
+
+The `measured` / `c64-measured` C64 profile is an opt-in board-output model with
+a mild non-inverting pre-coupling saturation stage. The default `c64` profile
+keeps the historical player output path.
 
 ## Duration Handling
 

@@ -240,6 +240,8 @@ public sealed class C64MachineTests
 		Assert.Equal(0x11, debug.Cia1.ControlA);
 		Assert.Equal(0x00, debug.Cia1.InterruptMask);
 		Assert.Equal(0x01, debug.Vic.IrqMask);
+		Assert.Equal(0x1B, machine.Read(0xD011));
+		Assert.Equal(0x0F, machine.Sid.GetRegisterChipDebugState(0).ForwardedRegisters[0x18]);
 	}
 
 	[Fact]
@@ -259,9 +261,11 @@ public sealed class C64MachineTests
 		var debug = machine.DebugState;
 		Assert.Equal(0x00, machine.Ram[0x02A6]);
 		Assert.Equal(0x4295, debug.Cia1.TimerALatch);
-		Assert.Equal(0x11, debug.Cia1.ControlA);
+		Assert.Equal(0x01, debug.Cia1.ControlA);
 		Assert.Equal(0x01, debug.Cia1.InterruptMask);
 		Assert.Equal(0x00, debug.Vic.IrqMask);
+		Assert.Equal(0x1B, machine.Read(0xD011));
+		Assert.Equal(0x0F, machine.Sid.GetRegisterChipDebugState(0).ForwardedRegisters[0x18]);
 	}
 
 	[Fact]

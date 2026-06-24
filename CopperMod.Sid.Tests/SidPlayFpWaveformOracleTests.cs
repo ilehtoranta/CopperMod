@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Tools;
 
 namespace CopperMod.Sid.Tests;
 
@@ -32,8 +33,26 @@ public sealed class SidPlayFpWaveformOracleTests
 	private const double ResetTransientTailStartSeconds = 0.050;
 	private const double ResetTransientTailEndSeconds = 0.700;
 	private const double LegacyResetTransientDcBlockCutoffHz = 1.59;
+	private const byte D418SinePhaseAddress = FrameCounterHighAddress + 1;
+	private const byte D418SineWriteCountAddress = D418SinePhaseAddress + 1;
+	private const int D418SineWritesPerFrame = 138;
+	private const int D418SineDelayLoopCount = 23;
+	private const double D418SineRenderSeconds = 1.0;
+	private const double PolarityProbeRenderSeconds = 0.80;
+	private const int PolarityProbeVoiceStartFrame = 5;
+	private const int PolarityProbeVoiceEndFrame = 15;
+	private const int PolarityProbeD418StartFrame = 25;
+	private const int PolarityProbeD418EndFrame = 35;
+	private const double PolarityProbeWindowSeconds = 0.16;
 
 	private static readonly int[] AdsrPianoGateFrames = { 2, 8, 10, 16, 18, 24, 26, 32, 34 };
+	private static readonly byte[] D418SineTable =
+	{
+		0x08, 0x0B, 0x0D, 0x0E,
+		0x0F, 0x0E, 0x0D, 0x0B,
+		0x08, 0x05, 0x02, 0x01,
+		0x00, 0x01, 0x02, 0x05
+	};
 
 	private static readonly OracleSegment[] Segments =
 	{
@@ -273,6 +292,123 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
+	[Fact]
+	public void OptionalGeneratedD418SineFixtureReportsSidPlayFpComparison()
+	{
+		if (Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_ORACLE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var sidPlayFp = Environment.GetEnvironmentVariable("SIDPLAYFP_EXE");
+		if (string.IsNullOrWhiteSpace(sidPlayFp))
+		{
+			sidPlayFp = @"D:\Models\sidplayfp-3.0.2-ucrt64\sidplayfp.exe";
+		}
+
+		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+
+		var root = Path.Combine(Path.GetTempPath(), "coppermod-sidplayfp-d418-sine-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(root);
+		try
+		{
+			var sidPath = Path.Combine(root, "input.sid");
+			var wavPath = Path.Combine(root, "input.wav");
+			File.WriteAllBytes(sidPath, CreateD418SineOracleSid());
+
+			RunSidPlayFp(sidPlayFp, root, D418SineRenderSeconds);
+			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected D418 sine oracle WAV: " + wavPath);
+
+			var reference = MeasurementWav.Read(wavPath);
+			var balancedRaw = RenderCopperMod(sidPath, D418SineRenderSeconds, SidEmulationProfile.Balanced);
+			var balancedPlayer = RenderCopperModPlayer(balancedRaw);
+			var balancedMeasuredPlayer = RenderCopperModPlayer(balancedRaw, C64OutputProfile.C64Measured);
+			var referenceMeasuredRaw = RenderCopperMod(sidPath, D418SineRenderSeconds, SidEmulationProfile.ReferenceMeasured);
+			var referenceMeasuredPlayer = RenderCopperModPlayer(referenceMeasuredRaw);
+			var referenceMeasuredMeasuredPlayer = RenderCopperModPlayer(referenceMeasuredRaw, C64OutputProfile.C64Measured);
+			Assert.Equal(SampleRate, reference.SampleRate);
+			Assert.True(reference.Samples.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(balancedRaw.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(balancedPlayer.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(balancedMeasuredPlayer.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(referenceMeasuredRaw.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(referenceMeasuredPlayer.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+			Assert.True(referenceMeasuredMeasuredPlayer.Length >= SecondsToSamples(D418SineRenderSeconds) - SampleRate / 20);
+
+			var steadyStart = SecondsToSamples(0.10);
+			var steadyLength = SecondsToSamples(0.70);
+			Assert.True(
+				AcRms(reference.Samples, steadyStart, steadyLength) > 0.001,
+				"D418 sine SidPlayFP reference was unexpectedly quiet.");
+
+			WriteOptionalD418SineReport(
+				sidPath,
+				reference.Samples,
+				balancedRaw,
+				balancedPlayer,
+				balancedMeasuredPlayer,
+				referenceMeasuredRaw,
+				referenceMeasuredPlayer,
+				referenceMeasuredMeasuredPlayer);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void OptionalGeneratedPolarityProbeReportsSidPlayFpConvention()
+	{
+		if (Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		{
+			return;
+		}
+
+		var sidPlayFp = Environment.GetEnvironmentVariable("SIDPLAYFP_EXE");
+		if (string.IsNullOrWhiteSpace(sidPlayFp))
+		{
+			sidPlayFp = @"D:\Models\sidplayfp-3.0.2-ucrt64\sidplayfp.exe";
+		}
+
+		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+
+		var root = Path.Combine(Path.GetTempPath(), "coppermod-sidplayfp-polarity-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(root);
+		try
+		{
+			var sidPath = Path.Combine(root, "input.sid");
+			var wavPath = Path.Combine(root, "input.wav");
+			File.WriteAllBytes(sidPath, CreatePolarityProbeSid());
+
+			RunSidPlayFp(sidPlayFp, root, PolarityProbeRenderSeconds);
+			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected polarity probe WAV: " + wavPath);
+
+			var reference = MeasurementWav.Read(wavPath);
+			var candidateRaw = RenderCopperMod(sidPath, PolarityProbeRenderSeconds);
+			var candidatePlayer = RenderCopperModPlayer(candidateRaw);
+			Assert.Equal(SampleRate, reference.SampleRate);
+			Assert.True(reference.Samples.Length >= SecondsToSamples(PolarityProbeRenderSeconds) - SampleRate / 20);
+			Assert.True(candidateRaw.Length >= SecondsToSamples(PolarityProbeRenderSeconds) - SampleRate / 20);
+			Assert.True(candidatePlayer.Length >= SecondsToSamples(PolarityProbeRenderSeconds) - SampleRate / 20);
+
+			var rows = BuildPolarityProbeRows(reference.Samples, candidateRaw, candidatePlayer);
+			Assert.All(rows, row =>
+			{
+				Assert.True(row.ReferenceAc > 0.001, row.Probe + " SidPlayFP reference was unexpectedly quiet.");
+				Assert.True(row.CandidateAc > 0.001, row.Probe + " CopperMod " + row.Stream + " candidate was unexpectedly quiet.");
+			});
+
+			WriteOptionalPolarityProbeReport(sidPath, reference.Samples, candidateRaw, candidatePlayer, rows);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
 	private static void WriteOptionalReport(float[] reference, float[] candidate)
 	{
 		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_REPORT");
@@ -425,6 +561,594 @@ public sealed class SidPlayFpWaveformOracleTests
 		WriteResetTransientEnvelopeReport(path, reference, candidateRaw, candidatePlayer);
 		var legacyPlayer = RenderCopperModPlayerForReport(candidateRaw, LegacyResetTransientDcBlockCutoffHz);
 		WriteResetTransientTailFitReport(path, reference, candidatePlayer, legacyPlayer);
+	}
+
+	private static void WriteOptionalD418SineReport(
+		string sidPath,
+		float[] reference,
+		float[] balancedRaw,
+		float[] balancedPlayer,
+		float[] balancedMeasuredPlayer,
+		float[] referenceMeasuredRaw,
+		float[] referenceMeasuredPlayer,
+		float[] referenceMeasuredMeasuredPlayer)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			var artifactDirectoryOnly = Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_ARTIFACT_DIR");
+			if (string.IsNullOrWhiteSpace(artifactDirectoryOnly))
+			{
+				return;
+			}
+
+			path = Path.Combine(Path.GetFullPath(artifactDirectoryOnly), "d418-sine-summary.csv");
+		}
+
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var builder = new StringBuilder();
+		builder.AppendLine("profile,c64_output,window,start_ms,end_ms,raw_offset,player_offset,ref_mean,raw_mean,player_mean,ref_ac,raw_ac,player_ac,raw_to_ref,player_to_ref,raw_diff_rms,player_diff_rms,raw_corr,player_corr,ref_peak,raw_peak,player_peak");
+		AppendD418SineReportRows(builder, "balanced", "c64", reference, balancedRaw, balancedPlayer);
+		AppendD418SineReportRows(builder, "balanced", "c64-measured", reference, balancedRaw, balancedMeasuredPlayer);
+		AppendD418SineReportRows(builder, "reference-measured", "c64", reference, referenceMeasuredRaw, referenceMeasuredPlayer);
+		AppendD418SineReportRows(builder, "reference-measured", "c64-measured", reference, referenceMeasuredRaw, referenceMeasuredMeasuredPlayer);
+		File.WriteAllText(path, builder.ToString());
+
+		var steadyStart = SecondsToSamples(0.100);
+		var steadyLength = SecondsToSamples(0.700);
+		var balancedRawOffset = FindBestCandidateOffset(reference, balancedRaw, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		var balancedPlayerOffset = FindBestCandidateOffset(reference, balancedPlayer, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		var balancedMeasuredPlayerOffset = FindBestCandidateOffset(reference, balancedMeasuredPlayer, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		var referenceMeasuredRawOffset = FindBestCandidateOffset(reference, referenceMeasuredRaw, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		var referenceMeasuredPlayerOffset = FindBestCandidateOffset(reference, referenceMeasuredPlayer, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		var referenceMeasuredMeasuredPlayerOffset = FindBestCandidateOffset(reference, referenceMeasuredMeasuredPlayer, steadyStart, steadyLength, maxOffset: SampleRate / 20);
+		WriteOptionalD418SineArtifacts(
+			path,
+			sidPath,
+			reference,
+			balancedRaw,
+			balancedPlayer,
+			balancedMeasuredPlayer,
+			referenceMeasuredRaw,
+			referenceMeasuredPlayer,
+			referenceMeasuredMeasuredPlayer,
+			balancedRawOffset,
+			balancedPlayerOffset,
+			balancedMeasuredPlayerOffset,
+			referenceMeasuredRawOffset,
+			referenceMeasuredPlayerOffset,
+			referenceMeasuredMeasuredPlayerOffset);
+	}
+
+	private static void AppendD418SineReportRows(
+		StringBuilder builder,
+		string profile,
+		string c64OutputProfile,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		AppendD418SineReportRow(builder, profile, c64OutputProfile, "startup", 0.000, 0.100, reference, candidateRaw, candidatePlayer);
+		AppendD418SineReportRow(builder, profile, c64OutputProfile, "steady-a", 0.100, 0.350, reference, candidateRaw, candidatePlayer);
+		AppendD418SineReportRow(builder, profile, c64OutputProfile, "steady-b", 0.350, 0.700, reference, candidateRaw, candidatePlayer);
+		AppendD418SineReportRow(builder, profile, c64OutputProfile, "steady-all", 0.100, 0.800, reference, candidateRaw, candidatePlayer);
+	}
+
+	private static void AppendD418SineReportRow(
+		StringBuilder builder,
+		string profile,
+		string c64OutputProfile,
+		string window,
+		double startSeconds,
+		double endSeconds,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		var start = SecondsToSamples(startSeconds);
+		var length = SecondsToSamples(endSeconds - startSeconds);
+		var maxLength = Math.Min(reference.Length, Math.Min(candidateRaw.Length, candidatePlayer.Length));
+		if (start + length > maxLength)
+		{
+			return;
+		}
+
+		var rawOffset = FindBestCandidateOffset(reference, candidateRaw, start, length, maxOffset: SampleRate / 20);
+		var playerOffset = FindBestCandidateOffset(reference, candidatePlayer, start, length, maxOffset: SampleRate / 20);
+		var rawStart = start + rawOffset;
+		var playerStart = start + playerOffset;
+		var referenceMean = Mean(reference, start, length);
+		var rawMean = Mean(candidateRaw, rawStart, length);
+		var playerMean = Mean(candidatePlayer, playerStart, length);
+		var referenceAc = AcRms(reference, start, length);
+		var rawAc = AcRms(candidateRaw, rawStart, length);
+		var playerAc = AcRms(candidatePlayer, playerStart, length);
+		var rawCorrelation = Correlation(reference, candidateRaw, start, rawStart, length);
+		var playerCorrelation = Correlation(reference, candidatePlayer, start, playerStart, length);
+
+		builder
+			.Append(EscapeCsv(profile)).Append(',')
+			.Append(EscapeCsv(c64OutputProfile)).Append(',')
+			.Append(EscapeCsv(window)).Append(',')
+			.Append((startSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+			.Append((endSeconds * 1000.0).ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+			.Append(rawOffset.ToString(CultureInfo.InvariantCulture)).Append(',')
+			.Append(playerOffset.ToString(CultureInfo.InvariantCulture)).Append(',')
+			.Append(FormatReportDouble(referenceMean)).Append(',')
+			.Append(FormatReportDouble(rawMean)).Append(',')
+			.Append(FormatReportDouble(playerMean)).Append(',')
+			.Append(FormatReportDouble(referenceAc)).Append(',')
+			.Append(FormatReportDouble(rawAc)).Append(',')
+			.Append(FormatReportDouble(playerAc)).Append(',')
+			.Append(FormatReportDouble(rawAc / Math.Max(1.0e-12, referenceAc))).Append(',')
+			.Append(FormatReportDouble(playerAc / Math.Max(1.0e-12, referenceAc))).Append(',')
+			.Append(FormatReportDouble(DiffRms(reference, candidateRaw, start, rawStart, length))).Append(',')
+			.Append(FormatReportDouble(DiffRms(reference, candidatePlayer, start, playerStart, length))).Append(',')
+			.Append(FormatReportDouble(rawCorrelation)).Append(',')
+			.Append(FormatReportDouble(playerCorrelation)).Append(',')
+			.Append(FormatReportDouble(PeakAbs(reference, start, length))).Append(',')
+			.Append(FormatReportDouble(PeakAbs(candidateRaw, rawStart, length))).Append(',')
+			.Append(FormatReportDouble(PeakAbs(candidatePlayer, playerStart, length)))
+			.AppendLine();
+	}
+
+	private static void WriteOptionalD418SineArtifacts(
+		string reportPath,
+		string sidPath,
+		float[] reference,
+		float[] balancedRaw,
+		float[] balancedPlayer,
+		float[] balancedMeasuredPlayer,
+		float[] referenceMeasuredRaw,
+		float[] referenceMeasuredPlayer,
+		float[] referenceMeasuredMeasuredPlayer,
+		int balancedRawOffset,
+		int balancedPlayerOffset,
+		int balancedMeasuredPlayerOffset,
+		int referenceMeasuredRawOffset,
+		int referenceMeasuredPlayerOffset,
+		int referenceMeasuredMeasuredPlayerOffset)
+	{
+		var artifactDirectory = Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_ARTIFACT_DIR");
+		if (string.IsNullOrWhiteSpace(artifactDirectory))
+		{
+			return;
+		}
+
+		artifactDirectory = Path.GetFullPath(artifactDirectory);
+		Directory.CreateDirectory(artifactDirectory);
+		File.Copy(sidPath, Path.Combine(artifactDirectory, "d418-sine.sid"), overwrite: true);
+		WriteFloatWav(Path.Combine(artifactDirectory, "sidplayfp-reference.wav"), reference);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-raw.wav"), balancedRaw);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-player.wav"), balancedPlayer);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-player-c64-measured.wav"), balancedMeasuredPlayer);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-raw.wav"), referenceMeasuredRaw);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-player.wav"), referenceMeasuredPlayer);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-player-c64-measured.wav"), referenceMeasuredMeasuredPlayer);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-raw-aligned-diff.wav"), CreateAlignedDifference(reference, balancedRaw, balancedRawOffset));
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-player-aligned-diff.wav"), CreateAlignedDifference(reference, balancedPlayer, balancedPlayerOffset));
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-balanced-player-c64-measured-aligned-diff.wav"), CreateAlignedDifference(reference, balancedMeasuredPlayer, balancedMeasuredPlayerOffset));
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-raw-aligned-diff.wav"), CreateAlignedDifference(reference, referenceMeasuredRaw, referenceMeasuredRawOffset));
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-player-aligned-diff.wav"), CreateAlignedDifference(reference, referenceMeasuredPlayer, referenceMeasuredPlayerOffset));
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-reference-measured-player-c64-measured-aligned-diff.wav"), CreateAlignedDifference(reference, referenceMeasuredMeasuredPlayer, referenceMeasuredMeasuredPlayerOffset));
+		WriteD418SineWaveformArtifacts(
+			artifactDirectory,
+			reference,
+			balancedPlayer,
+			referenceMeasuredPlayer);
+		WriteD418SineMeasuredOutputArtifacts(
+			artifactDirectory,
+			reference,
+			referenceMeasuredPlayer,
+			referenceMeasuredMeasuredPlayer);
+
+		var markerPath = Path.Combine(artifactDirectory, "README.txt");
+		File.WriteAllText(
+			markerPath,
+			"Summary: " + reportPath + Environment.NewLine +
+			"Player comparison lanes are SidPlayFP, CopperMod Balanced, CopperMod ReferenceMeasured." + Environment.NewLine +
+			"C64 output comparison lanes are SidPlayFP, ReferenceMeasured through c64, ReferenceMeasured through c64-measured." + Environment.NewLine +
+			"Diff lanes are SidPlayFP minus Balanced, then SidPlayFP minus ReferenceMeasured." + Environment.NewLine +
+			"C64 output diff lanes are SidPlayFP minus c64, then SidPlayFP minus c64-measured." + Environment.NewLine +
+			"All WAVs are mono 32-bit float at " + SampleRate.ToString(CultureInfo.InvariantCulture) + " Hz." + Environment.NewLine);
+	}
+
+	private static void WriteD418SineWaveformArtifacts(
+		string artifactDirectory,
+		float[] reference,
+		float[] balancedPlayer,
+		float[] referenceMeasuredPlayer)
+	{
+		WriteD418SineWaveformArtifacts(
+			artifactDirectory,
+			"d418-sine-100ms-105ms",
+			0.100,
+			0.005,
+			reference,
+			balancedPlayer,
+			referenceMeasuredPlayer);
+		WriteD418SineWaveformArtifacts(
+			artifactDirectory,
+			"d418-sine-100ms-120ms",
+			0.100,
+			0.020,
+			reference,
+			balancedPlayer,
+			referenceMeasuredPlayer);
+	}
+
+	private static void WriteD418SineMeasuredOutputArtifacts(
+		string artifactDirectory,
+		float[] reference,
+		float[] referenceMeasuredPlayer,
+		float[] referenceMeasuredMeasuredPlayer)
+	{
+		WriteD418SineMeasuredOutputArtifacts(
+			artifactDirectory,
+			"d418-sine-100ms-105ms-reference-measured-c64-output",
+			0.100,
+			0.005,
+			reference,
+			referenceMeasuredPlayer,
+			referenceMeasuredMeasuredPlayer);
+		WriteD418SineMeasuredOutputArtifacts(
+			artifactDirectory,
+			"d418-sine-100ms-120ms-reference-measured-c64-output",
+			0.100,
+			0.020,
+			reference,
+			referenceMeasuredPlayer,
+			referenceMeasuredMeasuredPlayer);
+	}
+
+	private static void WriteD418SineMeasuredOutputArtifacts(
+		string artifactDirectory,
+		string name,
+		double startSeconds,
+		double lengthSeconds,
+		float[] reference,
+		float[] referenceMeasuredPlayer,
+		float[] referenceMeasuredMeasuredPlayer)
+	{
+		var start = SecondsToSamples(startSeconds);
+		var length = SecondsToSamples(lengthSeconds);
+		var maxOffset = Math.Max(1, SecondsToSamples(Math.Max(0.010, lengthSeconds * 2.0)));
+		var c64Offset = FindBestCandidateOffset(reference, referenceMeasuredPlayer, start, length, maxOffset);
+		var measuredOffset = FindBestCandidateOffset(reference, referenceMeasuredMeasuredPlayer, start, length, maxOffset);
+		var referenceWindow = CreateAcNormalizedWindow(reference, start, length);
+		var c64Window = CreateAcNormalizedWindow(referenceMeasuredPlayer, start + c64Offset, length);
+		var measuredWindow = CreateAcNormalizedWindow(referenceMeasuredMeasuredPlayer, start + measuredOffset, length);
+		WriteMultichannelWaveformImages(
+			Path.Combine(artifactDirectory, name + "-ac-normalized"),
+			width: 1600,
+			height: 420,
+			referenceWindow,
+			c64Window,
+			measuredWindow);
+		WriteMultichannelWaveformImages(
+			Path.Combine(artifactDirectory, name + "-ac-normalized-diff"),
+			width: 1600,
+			height: 280,
+			CreateDifference(referenceWindow, c64Window),
+			CreateDifference(referenceWindow, measuredWindow));
+	}
+
+	private static void WriteD418SineWaveformArtifacts(
+		string artifactDirectory,
+		string name,
+		double startSeconds,
+		double lengthSeconds,
+		float[] reference,
+		float[] balancedPlayer,
+		float[] referenceMeasuredPlayer)
+	{
+		var start = SecondsToSamples(startSeconds);
+		var length = SecondsToSamples(lengthSeconds);
+		var maxOffset = Math.Max(1, SecondsToSamples(Math.Max(0.010, lengthSeconds * 2.0)));
+		var balancedOffset = FindBestCandidateOffset(reference, balancedPlayer, start, length, maxOffset);
+		var referenceMeasuredOffset = FindBestCandidateOffset(reference, referenceMeasuredPlayer, start, length, maxOffset);
+		var referenceWindow = CreateAcNormalizedWindow(reference, start, length);
+		var balancedWindow = CreateAcNormalizedWindow(balancedPlayer, start + balancedOffset, length);
+		var referenceMeasuredWindow = CreateAcNormalizedWindow(referenceMeasuredPlayer, start + referenceMeasuredOffset, length);
+		WriteMultichannelWaveformImages(
+			Path.Combine(artifactDirectory, name + "-player-ac-normalized"),
+			width: 1600,
+			height: 420,
+			referenceWindow,
+			balancedWindow,
+			referenceMeasuredWindow);
+		WriteMultichannelWaveformImages(
+			Path.Combine(artifactDirectory, name + "-player-ac-normalized-diff"),
+			width: 1600,
+			height: 280,
+			CreateDifference(referenceWindow, balancedWindow),
+			CreateDifference(referenceWindow, referenceMeasuredWindow));
+	}
+
+	private static float[] CreateAcNormalizedWindow(float[] samples, int start, int length)
+	{
+		var window = new float[length];
+		var sum = 0.0;
+		for (var i = 0; i < window.Length; i++)
+		{
+			var index = start + i;
+			var value = (uint)index < (uint)samples.Length ? samples[index] : 0.0f;
+			window[i] = value;
+			sum += value;
+		}
+
+		var mean = sum / Math.Max(1, window.Length);
+		var peak = 0.0f;
+		for (var i = 0; i < window.Length; i++)
+		{
+			window[i] = (float)(window[i] - mean);
+			peak = Math.Max(peak, Math.Abs(window[i]));
+		}
+
+		if (peak <= 1.0e-9f)
+		{
+			return window;
+		}
+
+		for (var i = 0; i < window.Length; i++)
+		{
+			window[i] /= peak;
+		}
+
+		return window;
+	}
+
+	private static float[] CreateDifference(float[] reference, float[] candidate)
+	{
+		var length = Math.Min(reference.Length, candidate.Length);
+		var difference = new float[length];
+		for (var i = 0; i < difference.Length; i++)
+		{
+			difference[i] = reference[i] - candidate[i];
+		}
+
+		return difference;
+	}
+
+	private static void WriteMultichannelWaveformImages(
+		string basePath,
+		int width,
+		int height,
+		params float[][] channels)
+	{
+		if (channels.Length == 0)
+		{
+			return;
+		}
+
+		var frameCount = channels.Min(channel => channel.Length);
+		if (frameCount <= 0)
+		{
+			return;
+		}
+
+		var interleaved = new float[frameCount * channels.Length];
+		for (var frame = 0; frame < frameCount; frame++)
+		{
+			for (var channel = 0; channel < channels.Length; channel++)
+			{
+				interleaved[(frame * channels.Length) + channel] = channels[channel][frame];
+			}
+		}
+
+		var sampler = new WaveformBitmapSampler(
+			channels.Length,
+			SampleRate,
+			maximumBins: width,
+			targetFrameCount: frameCount);
+		sampler.AddSamples(interleaved, interleaved.Length);
+		var image = WaveformBitmapRenderer.Render(sampler.CreateSnapshot(), width, height);
+		using (var stream = File.Create(basePath + ".png"))
+		{
+			WaveformPngWriter.Write(stream, image);
+		}
+
+		using (var stream = File.Create(basePath + ".bmp"))
+		{
+			WaveformBitmapWriter.Write(stream, image);
+		}
+	}
+
+	private static PolarityProbeRow[] BuildPolarityProbeRows(
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		return new[]
+		{
+			MeasurePolarityProbe(
+				"voice-gate",
+				"raw",
+				PolarityProbeVoiceStartFrame / (double)SegmentRate,
+				PolarityProbeWindowSeconds,
+				reference,
+				candidateRaw),
+			MeasurePolarityProbe(
+				"voice-gate",
+				"player",
+				PolarityProbeVoiceStartFrame / (double)SegmentRate,
+				PolarityProbeWindowSeconds,
+				reference,
+				candidatePlayer),
+			MeasurePolarityProbe(
+				"d418-step",
+				"raw",
+				PolarityProbeD418StartFrame / (double)SegmentRate,
+				PolarityProbeWindowSeconds,
+				reference,
+				candidateRaw),
+			MeasurePolarityProbe(
+				"d418-step",
+				"player",
+				PolarityProbeD418StartFrame / (double)SegmentRate,
+				PolarityProbeWindowSeconds,
+				reference,
+				candidatePlayer)
+		};
+	}
+
+	private static PolarityProbeRow MeasurePolarityProbe(
+		string probe,
+		string stream,
+		double startSeconds,
+		double lengthSeconds,
+		float[] reference,
+		float[] candidate)
+	{
+		var start = SecondsToSamples(startSeconds);
+		var length = SecondsToSamples(lengthSeconds);
+		var maxOffset = SampleRate / 40;
+		Assert.True(reference.Length > start + length, probe + " reference window is outside the SidPlayFP capture.");
+		Assert.True(candidate.Length > start + length, probe + " candidate window is outside the CopperMod render.");
+
+		var offset = FindBestCandidateOffsetByAbsoluteCorrelation(reference, candidate, start, length, maxOffset);
+		var candidateStart = start + offset;
+		var referenceMean = Mean(reference, start, length);
+		var candidateMean = Mean(candidate, candidateStart, length);
+		var referenceAc = AcRms(reference, start, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		var normalCorrelation = Correlation(reference, candidate, start, candidateStart, length);
+		var normalAcDiffRms = SignedAcDiffRms(reference, candidate, start, candidateStart, length, 1.0);
+		var invertedAcDiffRms = SignedAcDiffRms(reference, candidate, start, candidateStart, length, -1.0);
+		return new PolarityProbeRow(
+			probe,
+			stream,
+			startSeconds * 1000.0,
+			(startSeconds + lengthSeconds) * 1000.0,
+			offset,
+			referenceMean,
+			candidateMean,
+			referenceAc,
+			candidateAc,
+			normalCorrelation,
+			-normalCorrelation,
+			normalAcDiffRms,
+			invertedAcDiffRms,
+			normalCorrelation >= 0.0 ? "normal" : "inverted",
+			normalAcDiffRms <= invertedAcDiffRms ? "normal" : "inverted");
+	}
+
+	private static void WriteOptionalPolarityProbeReport(
+		string sidPath,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer,
+		IReadOnlyList<PolarityProbeRow> rows)
+	{
+		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_REPORT");
+		if (string.IsNullOrWhiteSpace(path))
+		{
+			var artifactDirectoryOnly = Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_ARTIFACT_DIR");
+			if (string.IsNullOrWhiteSpace(artifactDirectoryOnly))
+			{
+				return;
+			}
+
+			path = Path.Combine(Path.GetFullPath(artifactDirectoryOnly), "polarity-probe.csv");
+		}
+
+		path = Path.GetFullPath(path);
+		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+		var builder = new StringBuilder();
+		builder.AppendLine("probe,stream,start_ms,end_ms,offset,ref_mean,candidate_mean,ref_ac,candidate_ac,normal_corr,inverted_corr,normal_ac_diff_rms,inverted_ac_diff_rms,best_corr_polarity,best_diff_polarity");
+		for (var i = 0; i < rows.Count; i++)
+		{
+			var row = rows[i];
+			builder
+				.Append(EscapeCsv(row.Probe)).Append(',')
+				.Append(EscapeCsv(row.Stream)).Append(',')
+				.Append(row.StartMilliseconds.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.EndMilliseconds.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+				.Append(row.Offset.ToString(CultureInfo.InvariantCulture)).Append(',')
+				.Append(FormatReportDouble(row.ReferenceMean)).Append(',')
+				.Append(FormatReportDouble(row.CandidateMean)).Append(',')
+				.Append(FormatReportDouble(row.ReferenceAc)).Append(',')
+				.Append(FormatReportDouble(row.CandidateAc)).Append(',')
+				.Append(FormatReportDouble(row.NormalCorrelation)).Append(',')
+				.Append(FormatReportDouble(row.InvertedCorrelation)).Append(',')
+				.Append(FormatReportDouble(row.NormalAcDiffRms)).Append(',')
+				.Append(FormatReportDouble(row.InvertedAcDiffRms)).Append(',')
+				.Append(EscapeCsv(row.BestCorrelationPolarity)).Append(',')
+				.Append(EscapeCsv(row.BestDiffPolarity))
+				.AppendLine();
+		}
+
+		File.WriteAllText(path, builder.ToString());
+		WriteOptionalPolarityProbeArtifacts(path, sidPath, reference, candidateRaw, candidatePlayer);
+	}
+
+	private static void WriteOptionalPolarityProbeArtifacts(
+		string reportPath,
+		string sidPath,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		var artifactDirectory = Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_ARTIFACT_DIR");
+		if (string.IsNullOrWhiteSpace(artifactDirectory))
+		{
+			return;
+		}
+
+		artifactDirectory = Path.GetFullPath(artifactDirectory);
+		Directory.CreateDirectory(artifactDirectory);
+		File.Copy(sidPath, Path.Combine(artifactDirectory, "polarity-probe.sid"), overwrite: true);
+		WriteFloatWav(Path.Combine(artifactDirectory, "sidplayfp-polarity-probe.wav"), reference);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-polarity-probe-raw.wav"), candidateRaw);
+		WriteFloatWav(Path.Combine(artifactDirectory, "coppermod-polarity-probe-player.wav"), candidatePlayer);
+
+		var markerPath = Path.Combine(artifactDirectory, "README.txt");
+		File.WriteAllText(
+			markerPath,
+			"Summary: " + reportPath + Environment.NewLine +
+			"Polarity rows compare CopperMod to SidPlayFP using mean-subtracted event windows." + Environment.NewLine +
+			"All WAVs are mono 32-bit float at " + SampleRate.ToString(CultureInfo.InvariantCulture) + " Hz." + Environment.NewLine);
+	}
+
+	private static float[] CreateAlignedDifference(float[] reference, float[] candidate, int candidateOffset)
+	{
+		var referenceStart = Math.Max(0, -candidateOffset);
+		var candidateStart = Math.Max(0, candidateOffset);
+		var length = Math.Min(reference.Length - referenceStart, candidate.Length - candidateStart);
+		var difference = new float[Math.Max(0, length)];
+		for (var i = 0; i < difference.Length; i++)
+		{
+			difference[i] = reference[referenceStart + i] - candidate[candidateStart + i];
+		}
+
+		return difference;
+	}
+
+	private static void WriteFloatWav(string path, float[] samples)
+	{
+		using var stream = File.Create(path);
+		using var writer = new BinaryWriter(stream);
+		var dataBytes = samples.Length * sizeof(float);
+		writer.Write("RIFF"u8);
+		writer.Write(36 + dataBytes);
+		writer.Write("WAVE"u8);
+		writer.Write("fmt "u8);
+		writer.Write(16);
+		writer.Write((short)3);
+		writer.Write((short)1);
+		writer.Write(SampleRate);
+		writer.Write(SampleRate * sizeof(float));
+		writer.Write((short)sizeof(float));
+		writer.Write((short)32);
+		writer.Write("data"u8);
+		writer.Write(dataBytes);
+		var sampleBytes = new byte[sizeof(float)];
+		for (var i = 0; i < samples.Length; i++)
+		{
+			BinaryPrimitives.WriteSingleLittleEndian(sampleBytes, samples[i]);
+			writer.Write(sampleBytes);
+		}
 	}
 
 	private static void WriteResetTransientEnvelopeReport(
@@ -1350,6 +2074,133 @@ public sealed class SidPlayFpWaveformOracleTests
 			released: "2026");
 	}
 
+	private static byte[] CreateD418SineOracleSid()
+	{
+		var asm = new Mos6510Emitter(ProgramBase);
+		asm.Label("d418-sine-table");
+		asm.Data(D418SineTable);
+
+		asm.Label("init");
+		EmitClearSid(asm);
+		asm.LdaImm(0);
+		asm.StaZp(D418SinePhaseAddress);
+		asm.StaAbs(SidBase + 0x18);
+		asm.Rts();
+
+		asm.Label("play");
+		// Keep sidplayfp and CopperMod on a PAL-frame CIA cadence instead of
+		// the default 60 Hz PSID timer.
+		asm.LdaImm((byte)(SidConstants.PalCyclesPerFrame & 0xFF));
+		asm.StaAbs(0xDC04);
+		asm.LdaImm((byte)((SidConstants.PalCyclesPerFrame >> 8) & 0xFF));
+		asm.StaAbs(0xDC05);
+
+		asm.LdaImm(D418SineWritesPerFrame);
+		asm.StaZp(D418SineWriteCountAddress);
+		asm.LdxZp(D418SinePhaseAddress);
+		asm.Label("d418-sine-loop");
+		asm.LdaAbsX(asm.AddressOf("d418-sine-table"));
+		asm.StaAbs(SidBase + 0x18);
+		asm.Txa();
+		asm.Clc();
+		asm.AdcImm(1);
+		asm.AndImm(0x0F);
+		asm.Tax();
+		asm.LdyImm(D418SineDelayLoopCount);
+		asm.Label("d418-sine-delay");
+		asm.Dey();
+		asm.Bne("d418-sine-delay");
+		asm.DecZp(D418SineWriteCountAddress);
+		asm.Bne("d418-sine-loop");
+		asm.StxZp(D418SinePhaseAddress);
+		asm.Rts();
+
+		return SidFixtureBuilder.CreatePsid(
+			asm.ToArray(),
+			loadAddress: ProgramBase,
+			initAddress: asm.AddressOf("init"),
+			playAddress: asm.AddressOf("play"),
+			songs: 1,
+			startSong: 1,
+			speed: 1,
+			flags: (1 << 2) | (1 << 4),
+			title: "CopperMod D418 Sine Oracle",
+			author: "CopperMod",
+			released: "2026");
+	}
+
+	private static byte[] CreatePolarityProbeSid()
+	{
+		var asm = new Mos6510Emitter(ProgramBase);
+		asm.Label("init");
+		EmitClearSid(asm);
+		asm.LdaImm(0);
+		asm.StaZp(FrameCounterAddress);
+		asm.StaZp(FrameCounterHighAddress);
+		asm.StaAbs(SidBase + 0x15);
+		asm.StaAbs(SidBase + 0x16);
+		asm.StaAbs(SidBase + 0x17);
+		asm.LdaImm(0x00);
+		asm.StaAbs(SidBase + 0x05);
+		asm.LdaImm(0xF0);
+		asm.StaAbs(SidBase + 0x06);
+		EmitVoiceRegisters(asm, voice: 0, frequency: 0x1000, pulseWidth: 0x0800, control: 0x20);
+		asm.LdaImm(0x0F);
+		asm.StaAbs(SidBase + 0x18);
+		asm.Rts();
+
+		asm.Label("play");
+		EmitBranchIfFrameCounterLessThan(asm, PolarityProbeVoiceStartFrame, "polarity-idle");
+		EmitBranchIfFrameCounterLessThan(asm, PolarityProbeVoiceEndFrame, "polarity-voice");
+		EmitBranchIfFrameCounterLessThan(asm, PolarityProbeD418StartFrame, "polarity-settle");
+		EmitBranchIfFrameCounterLessThan(asm, PolarityProbeD418EndFrame, "polarity-d418");
+		asm.Jmp("polarity-after");
+
+		asm.Label("polarity-idle");
+		EmitPolarityProbeState(asm, control: 0x20, volume: 0x0F);
+		asm.Jmp("polarity-done");
+
+		asm.Label("polarity-voice");
+		EmitPolarityProbeState(asm, control: 0x21, volume: 0x0F);
+		asm.Jmp("polarity-done");
+
+		asm.Label("polarity-settle");
+		EmitPolarityProbeState(asm, control: 0x20, volume: 0x00);
+		asm.Jmp("polarity-done");
+
+		asm.Label("polarity-d418");
+		EmitPolarityProbeState(asm, control: 0x20, volume: 0x0F);
+		asm.Jmp("polarity-done");
+
+		asm.Label("polarity-after");
+		EmitPolarityProbeState(asm, control: 0x20, volume: 0x00);
+
+		asm.Label("polarity-done");
+		EmitIncrementFrameCounter(asm);
+		asm.Rts();
+
+		return SidFixtureBuilder.CreatePsid(
+			asm.ToArray(),
+			loadAddress: ProgramBase,
+			initAddress: asm.AddressOf("init"),
+			playAddress: asm.AddressOf("play"),
+			songs: 1,
+			startSong: 1,
+			speed: 0,
+			flags: (1 << 2) | (1 << 4),
+			title: "CopperMod SID Polarity Probe",
+			author: "CopperMod",
+			released: "2026");
+	}
+
+	private static void EmitPolarityProbeState(Mos6510Emitter asm, byte control, byte volume)
+	{
+		asm.LdaImm(control);
+		asm.StaAbs(SidBase + 0x04);
+		asm.LdaImm(volume);
+		asm.StaAbs(SidBase + 0x18);
+	}
+
 	private static void EmitSegment(Mos6510Emitter asm, int segmentIndex)
 	{
 		EmitSegmentResetIfFirstFrame(asm, segmentIndex);
@@ -1741,10 +2592,16 @@ public sealed class SidPlayFpWaveformOracleTests
 	private static float[] RenderCopperMod(string sidPath, double seconds)
 		=> RenderCopperModDiagnostic(sidPath, seconds, captureChannels: false).Samples;
 
+	private static float[] RenderCopperMod(string sidPath, double seconds, SidEmulationProfile sidEmulationProfile)
+		=> RenderCopperModDiagnostic(sidPath, seconds, captureChannels: false, sidEmulationProfile).Samples;
+
 	private static float[] RenderCopperModPlayer(float[] rawSamples)
+		=> RenderCopperModPlayer(rawSamples, C64OutputProfile.C64);
+
+	private static float[] RenderCopperModPlayer(float[] rawSamples, C64OutputProfile c64OutputProfile)
 	{
 		var player = rawSamples.ToArray();
-		new C64OutputStage(C64OutputProfile.C64).Process(player, channels: 1, SampleRate);
+		new C64OutputStage(c64OutputProfile).Process(player, channels: 1, SampleRate);
 		return player;
 	}
 
@@ -1779,9 +2636,16 @@ public sealed class SidPlayFpWaveformOracleTests
 	}
 
 	private static CopperModDiagnosticRender RenderCopperModDiagnostic(string sidPath, double seconds, bool captureChannels)
+		=> RenderCopperModDiagnostic(sidPath, seconds, captureChannels, SidEmulationProfile.Balanced);
+
+	private static CopperModDiagnosticRender RenderCopperModDiagnostic(
+		string sidPath,
+		double seconds,
+		bool captureChannels,
+		SidEmulationProfile sidEmulationProfile)
 	{
 		using var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(sidPath));
-		((ISidEmulationProfileController)song).SidEmulationProfile = SidEmulationProfile.Balanced;
+		((ISidEmulationProfileController)song).SidEmulationProfile = sidEmulationProfile;
 		var channelProvider = (IModuleChannelWaveformProvider)song;
 		channelProvider.ChannelWaveformCaptureEnabled = captureChannels;
 		var options = new AudioRenderOptions(SampleRate, channelCount: 1);
@@ -2023,6 +2887,45 @@ public sealed class SidPlayFpWaveformOracleTests
 		return bestOffset;
 	}
 
+	private static int FindBestCandidateOffsetByAbsoluteCorrelation(float[] reference, float[] candidate, int start, int length, int maxOffset)
+	{
+		var bestOffset = 0;
+		var bestCorrelation = double.NegativeInfinity;
+		for (var offset = -maxOffset; offset <= maxOffset; offset += 8)
+		{
+			if (start + offset < 0 || start + offset + length >= candidate.Length)
+			{
+				continue;
+			}
+
+			var correlation = Math.Abs(Correlation(reference, candidate, start, start + offset, length));
+			if (correlation > bestCorrelation)
+			{
+				bestCorrelation = correlation;
+				bestOffset = offset;
+			}
+		}
+
+		var refineStart = Math.Max(-maxOffset, bestOffset - 24);
+		var refineEnd = Math.Min(maxOffset, bestOffset + 24);
+		for (var offset = refineStart; offset <= refineEnd; offset++)
+		{
+			if (start + offset < 0 || start + offset + length >= candidate.Length)
+			{
+				continue;
+			}
+
+			var correlation = Math.Abs(Correlation(reference, candidate, start, start + offset, length));
+			if (correlation > bestCorrelation)
+			{
+				bestCorrelation = correlation;
+				bestOffset = offset;
+			}
+		}
+
+		return bestOffset;
+	}
+
 	private static double Correlation(float[] reference, float[] candidate, int referenceStart, int candidateStart, int length)
 	{
 		var referenceMean = Mean(reference, referenceStart, length);
@@ -2073,6 +2976,40 @@ public sealed class SidPlayFpWaveformOracleTests
 		{
 			var value = samples[start + i];
 			energy += value * value;
+		}
+
+		return Math.Sqrt(energy / length);
+	}
+
+	private static double DiffRms(float[] reference, float[] candidate, int referenceStart, int candidateStart, int length)
+	{
+		var energy = 0.0;
+		for (var i = 0; i < length; i++)
+		{
+			var diff = reference[referenceStart + i] - candidate[candidateStart + i];
+			energy += diff * diff;
+		}
+
+		return Math.Sqrt(energy / length);
+	}
+
+	private static double SignedAcDiffRms(
+		float[] reference,
+		float[] candidate,
+		int referenceStart,
+		int candidateStart,
+		int length,
+		double candidateSign)
+	{
+		var referenceMean = Mean(reference, referenceStart, length);
+		var candidateMean = Mean(candidate, candidateStart, length);
+		var energy = 0.0;
+		for (var i = 0; i < length; i++)
+		{
+			var referenceAc = reference[referenceStart + i] - referenceMean;
+			var candidateAc = (candidate[candidateStart + i] - candidateMean) * candidateSign;
+			var diff = referenceAc - candidateAc;
+			energy += diff * diff;
 		}
 
 		return Math.Sqrt(energy / length);
@@ -2160,6 +3097,23 @@ public sealed class SidPlayFpWaveformOracleTests
 		float[] Samples,
 		float[][]? ChannelSamples,
 		SidRegisterWrite[]? SidWrites);
+
+	private readonly record struct PolarityProbeRow(
+		string Probe,
+		string Stream,
+		double StartMilliseconds,
+		double EndMilliseconds,
+		int Offset,
+		double ReferenceMean,
+		double CandidateMean,
+		double ReferenceAc,
+		double CandidateAc,
+		double NormalCorrelation,
+		double InvertedCorrelation,
+		double NormalAcDiffRms,
+		double InvertedAcDiffRms,
+		string BestCorrelationPolarity,
+		string BestDiffPolarity);
 
 	private readonly record struct TailEnvelopePoint(
 		double TimeSeconds,
@@ -2262,9 +3216,21 @@ public sealed class SidPlayFpWaveformOracleTests
 			Emit(value);
 		}
 
+		public void LdyImm(byte value)
+		{
+			Emit(0xA0);
+			Emit(value);
+		}
+
 		public void LdaZp(byte address)
 		{
 			Emit(0xA5);
+			Emit(address);
+		}
+
+		public void LdxZp(byte address)
+		{
+			Emit(0xA6);
 			Emit(address);
 		}
 
@@ -2274,9 +3240,21 @@ public sealed class SidPlayFpWaveformOracleTests
 			Emit(address);
 		}
 
+		public void StxZp(byte address)
+		{
+			Emit(0x86);
+			Emit(address);
+		}
+
 		public void IncZp(byte address)
 		{
 			Emit(0xE6);
+			Emit(address);
+		}
+
+		public void DecZp(byte address)
+		{
+			Emit(0xC6);
 			Emit(address);
 		}
 
@@ -2286,11 +3264,35 @@ public sealed class SidPlayFpWaveformOracleTests
 			Emit(value);
 		}
 
+		public void AdcImm(byte value)
+		{
+			Emit(0x69);
+			Emit(value);
+		}
+
+		public void AndImm(byte value)
+		{
+			Emit(0x29);
+			Emit(value);
+		}
+
 		public void AslA()
 			=> Emit(0x0A);
 
+		public void Clc()
+			=> Emit(0x18);
+
+		public void Tax()
+			=> Emit(0xAA);
+
+		public void Txa()
+			=> Emit(0x8A);
+
 		public void Dex()
 			=> Emit(0xCA);
+
+		public void Dey()
+			=> Emit(0x88);
 
 		public void Rts()
 			=> Emit(0x60);
@@ -2304,6 +3306,12 @@ public sealed class SidPlayFpWaveformOracleTests
 		public void StaAbsX(ushort address)
 		{
 			Emit(0x9D);
+			EmitWord(address);
+		}
+
+		public void LdaAbsX(ushort address)
+		{
+			Emit(0xBD);
 			EmitWord(address);
 		}
 
@@ -2330,6 +3338,14 @@ public sealed class SidPlayFpWaveformOracleTests
 			Emit(0x4C);
 			_patches.Add(new Patch(_bytes.Count, label, false, CurrentAddress));
 			EmitWord(0);
+		}
+
+		public void Data(ReadOnlySpan<byte> values)
+		{
+			for (var i = 0; i < values.Length; i++)
+			{
+				Emit(values[i]);
+			}
 		}
 
 		public byte[] ToArray()

@@ -587,7 +587,13 @@ namespace CopperMod.Sid
                     {
                         var volume = value & 0x0F;
                         var nextVolumeOffset = SidAnalog.VolumeOffset(value, Model, SidEmulationProfile);
-                        var genericStepImpulse = (nextVolumeOffset - _volumeOffset) * _volumeRegisterTransientGain;
+                        var genericStepDelta = nextVolumeOffset - _volumeOffset;
+                        if (Model == SidChipModel.Mos6581)
+                        {
+                            genericStepDelta = -genericStepDelta;
+                        }
+
+                        var genericStepImpulse = genericStepDelta * _volumeRegisterTransientGain;
                         var matrixImpulse = SidAnalog.D418TransitionTransient(
                             previousValue,
                             value,

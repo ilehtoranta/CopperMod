@@ -149,9 +149,12 @@ public sealed class SidAnalogTests
 
 		var routingImpulse = SidAnalog.FilterRoutingTransient(0x00, 0x03, 0x10, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
 		var modeImpulse = SidAnalog.FilterModeTransient(0x0F, 0x1F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var measuredD418ModeImpulse = SidAnalog.D418TransitionTransient(0x0F, 0x1F, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
 
-		Assert.True(Math.Abs(routingImpulse) > 0.010, $"Expected measured filter routing impulse, got {routingImpulse:0.000000}.");
-		Assert.True(Math.Abs(modeImpulse) > 0.010, $"Expected measured filter mode impulse, got {modeImpulse:0.000000}.");
+		Assert.InRange(Math.Abs(routingImpulse), 0.020, 0.030);
+		Assert.True(routingImpulse < 0.0, $"Expected routing-in transient to use the SID output polarity, got {routingImpulse:0.000000}.");
+		Assert.Equal(0.0, modeImpulse, precision: 12);
+		Assert.True(Math.Abs(measuredD418ModeImpulse) > 0.001, $"Expected D418 mode-bit transition to come from the measured matrix, got {measuredD418ModeImpulse:0.000000}.");
 	}
 
 	[Fact]
@@ -285,6 +288,11 @@ public sealed class SidAnalogTests
 				SidAnalog.VolumeOffset(0x00, model, SidEmulationProfile.ReferenceMeasured)) /
 			((model == SidChipModel.Mos8580 ? SidAnalog.Mos8580D418MeasuredAmplitude(0x0F) : SidAnalog.Mos6581D418MeasuredAmplitude(0x0F)) -
 				(model == SidChipModel.Mos8580 ? SidAnalog.Mos8580D418MeasuredAmplitude(0x00) : SidAnalog.Mos6581D418MeasuredAmplitude(0x00)));
+		if (model == SidChipModel.Mos6581)
+		{
+			scale = -scale;
+		}
+
 		var limit = SidAnalog.VolumeRegisterTransientLimit(model, SidEmulationProfile.ReferenceMeasured);
 		var expected = Math.Clamp((postWriteAmplitude - settledAmplitude) * scale, -limit, limit);
 
