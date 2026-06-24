@@ -33,6 +33,23 @@ public sealed class SdlGameControllerDbTests
 	}
 
 	[Fact]
+	public void IndexByVidPid_GroupsMappingsByHardwareIdentity()
+	{
+		var mappings = SdlGameControllerDatabase.Parse(
+			"""
+			03000000010000000200000000000000,First Pad,a:b0,platform:Windows,
+			03000000010000000200000001000000,Second Pad,a:b1,platform:Linux,
+			03000000030000000400000000000000,Other Pad,a:b2,platform:Windows,
+			""");
+
+		var index = SdlGameControllerDatabase.IndexByVidPid(mappings);
+
+		Assert.Equal(2, index.Count);
+		Assert.Equal(2, index[(0x0001, 0x0002)].Count);
+		Assert.Single(index[(0x0003, 0x0004)]);
+	}
+
+	[Fact]
 	public void Mapping_UsesSdlButtonAxisHatAndTriggerSources()
 	{
 		var mapping = SdlControllerMapping.TryParse(

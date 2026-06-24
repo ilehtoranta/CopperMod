@@ -116,6 +116,40 @@ public sealed class ProfileEditingTests
 	}
 
 	[Fact]
+	public void MappingDisplay_SeparatesPhysicalDeviceNameFromMappingName()
+	{
+		var text = MappingDisplay.Format(new ControllerMappingInfo("SDL DB", "PC Controller"));
+
+		Assert.Equal("Mapping: SDL DB: PC Controller", text);
+		Assert.DoesNotContain("Dragon", text, StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
+	public void ProfileDocumentDisplay_ShowsSeparateOverrideDocumentAndState()
+	{
+		var profile = new ControllerProfile { Name = "Esperanza override" };
+		var newText = ProfileDocumentDisplay.Format(@"C:\Users\me\AppData\Roaming\CopperMod\CopperPad\profiles.json", false, profile);
+		var savedText = ProfileDocumentDisplay.Format(@"C:\Users\me\AppData\Roaming\CopperMod\CopperPad\profiles.json", true, profile);
+
+		Assert.Contains("not found", newText, StringComparison.Ordinal);
+		Assert.Contains("new override draft", newText, StringComparison.Ordinal);
+		Assert.Contains("saved override", savedText, StringComparison.Ordinal);
+		Assert.Contains("profiles.json", savedText, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void DeviceDisplay_KeepsLikelyGameControllersAndHidesGenericHid()
+	{
+		var controller = Device("Generic USB Joystick", 0x0079, 0x0006, isGameControllerUsage: false);
+		var usageController = Device("HID input", 0x1234, 0x5678, isGameControllerUsage: true);
+		var mouse = Device("Trust Wireless Mouse", 0x145F, 0x02D0, isGameControllerUsage: false);
+
+		Assert.True(DeviceDisplay.IsLikelyGameController(controller));
+		Assert.True(DeviceDisplay.IsLikelyGameController(usageController));
+		Assert.False(DeviceDisplay.IsLikelyGameController(mouse));
+	}
+
+	[Fact]
 	public async Task FileProfileStore_RoundTripsProfiles()
 	{
 		var directory = Path.Combine(Path.GetTempPath(), "CopperPad.Gui.Tests", Guid.NewGuid().ToString("N"));
@@ -162,4 +196,17 @@ public sealed class ProfileEditingTests
 			}
 		}
 	}
+
+	private static HidDeviceInfo Device(string name, int vendorId, int productId, bool isGameControllerUsage)
+		=> new(
+			$"hid://{vendorId:X4}/{productId:X4}/{name}",
+			name,
+			vendorId,
+			productId,
+			ControllerTransport.Usb,
+			8,
+			[],
+			isGameControllerUsage,
+			false,
+			null);
 }

@@ -15,13 +15,19 @@ public sealed record ControllerMappingInfo(string Source, string Name)
 internal static class SdlGameControllerDatabase
 {
 	private const string ResourceName = "CopperPad.ThirdParty.SDL_GameControllerDB.gamecontrollerdb.txt";
-	private static readonly Lazy<IReadOnlyList<SdlControllerMapping>> BuiltInMappings = new(LoadBuiltInMappings);
+	private static readonly Lazy<IReadOnlyDictionary<(int VendorId, int ProductId), IReadOnlyList<SdlControllerMapping>>> BuiltInMappingsByVidPid =
+		new(LoadBuiltInMappingIndex);
 
 	public static bool TryFindMapping(HidDeviceDescriptor device, out SdlControllerMapping mapping)
 	{
+		if (!BuiltInMappingsByVidPid.Value.TryGetValue((device.VendorId, device.ProductId), out var mappings))
+		{
+			mapping = null!;
+			return false;
+		}
+
 		var currentPlatform = GetCurrentPlatform();
-		var candidate = BuiltInMappings.Value
-			.Where(item => item.VendorId == device.VendorId && item.ProductId == device.ProductId)
+		var candidate = mappings
 			.Select(item => new { Mapping = item, Score = Score(item, device, currentPlatform) })
 			.OrderByDescending(item => item.Score)
 			.FirstOrDefault(item => item.Score > int.MinValue);
@@ -51,18 +57,26 @@ internal static class SdlGameControllerDatabase
 		return mappings;
 	}
 
-	private static IReadOnlyList<SdlControllerMapping> LoadBuiltInMappings()
+	private static IReadOnlyDictionary<(int VendorId, int ProductId), IReadOnlyList<SdlControllerMapping>> LoadBuiltInMappingIndex()
 	{
 		var assembly = typeof(SdlGameControllerDatabase).Assembly;
 		using var stream = assembly.GetManifestResourceStream(ResourceName);
 		if (stream == null)
 		{
-			return Array.Empty<SdlControllerMapping>();
+			return new Dictionary<(int VendorId, int ProductId), IReadOnlyList<SdlControllerMapping>>();
 		}
 
 		using var reader = new StreamReader(stream);
-		return Parse(reader.ReadToEnd());
+		return IndexByVidPid(Parse(reader.ReadToEnd()));
 	}
+
+	internal static IReadOnlyDictionary<(int VendorId, int ProductId), IReadOnlyList<SdlControllerMapping>> IndexByVidPid(
+		IEnumerable<SdlControllerMapping> mappings)
+		=> mappings
+			.GroupBy(mapping => (mapping.VendorId, mapping.ProductId))
+			.ToDictionary(
+				group => group.Key,
+				group => (IReadOnlyList<SdlControllerMapping>)group.ToArray());
 
 	private static int Score(SdlControllerMapping mapping, HidDeviceDescriptor device, string currentPlatform)
 	{
