@@ -896,6 +896,7 @@ namespace CopperMod.Amiga
         private long _activeDmaStartCycle;
         private long _activeDmaCompletionCycle;
         private double _activeDmaCyclesPerBit;
+        private DiskDmaWordLatch _diskDmaWordLatch;
         private byte[]? _activeWriteTrackData;
         private bool _activeWriteTrackMutated;
         private long _preparedTrackHits;
@@ -2426,24 +2427,12 @@ namespace CopperMod.Amiga
                     }
 
                     _activeDmaCompletionCycle = Math.Max(_activeDmaCompletionCycle, diskAccess.CompletedCycle);
-                    ushort value;
-                    if (_activeDmaWriteMode)
-                    {
-                        value = _bus.ReadChipDmaWordAtGrantedSlot(targetAddress, diskAccess.GrantedCycle);
-                        _diskDataRegister = value;
-                        if (_activeWriteTrackData != null)
-                        {
-                            WriteTrackUInt16(_activeWriteTrackData, _activeDmaTrackBitLength, plan.SourceBit, value);
-                            _activeWriteTrackMutated = true;
-                        }
-                    }
-                    else
-                    {
-                        value = ReadPreparedUInt16(preparedTrack, plan.SourceBit);
-                        _diskDataRegister = value;
-                        _bus.WriteChipDmaWordAtGrantedSlot(targetAddress, value, diskAccess.GrantedCycle);
-                    }
-
+                    _diskDmaWordLatch = LoadDiskDmaWordLatch(
+                        preparedTrack,
+                        targetAddress,
+                        plan.SourceBit,
+                        diskAccess);
+                    var value = ConsumeDiskDmaWordLatch(ref _diskDmaWordLatch);
                     if (_traceRecorder != null)
                     {
                         AppendDivergenceTrace(
@@ -2476,6 +2465,49 @@ namespace CopperMod.Amiga
             }
 
             CompleteActiveDma();
+        }
+
+        private DiskDmaWordLatch LoadDiskDmaWordLatch(
+            AmigaPreparedTrack preparedTrack,
+            uint targetAddress,
+            int sourceBit,
+            AmigaBusAccessResult diskAccess)
+        {
+            var value = _activeDmaWriteMode
+                ? _bus.ReadChipDmaWordAtGrantedSlot(targetAddress, diskAccess.GrantedCycle)
+                : ReadPreparedUInt16(preparedTrack, sourceBit);
+            return new DiskDmaWordLatch(
+                _activeDmaWriteMode,
+                targetAddress,
+                sourceBit,
+                value,
+                diskAccess.GrantedCycle);
+        }
+
+        private ushort ConsumeDiskDmaWordLatch(ref DiskDmaWordLatch latch)
+        {
+            if (!latch.HasValue)
+            {
+                return 0;
+            }
+
+            var value = latch.Value;
+            _diskDataRegister = value;
+            if (latch.WriteMode)
+            {
+                if (_activeWriteTrackData != null)
+                {
+                    WriteTrackUInt16(_activeWriteTrackData, _activeDmaTrackBitLength, latch.SourceBit, value);
+                    _activeWriteTrackMutated = true;
+                }
+            }
+            else
+            {
+                _bus.WriteChipDmaWordAtGrantedSlot(latch.TargetAddress, value, latch.GrantedCycle);
+            }
+
+            latch = default;
+            return value;
         }
 
         private void CompleteActiveDma()
@@ -2789,6 +2821,7 @@ namespace CopperMod.Amiga
             _activeDmaStartCycle = 0;
             _activeDmaCompletionCycle = 0;
             _activeDmaCyclesPerBit = 0;
+            _diskDmaWordLatch = default;
             _activeWriteTrackData = null;
             _activeWriteTrackMutated = false;
         }
@@ -3599,6 +3632,31 @@ namespace CopperMod.Amiga
         {
             var result = value % modulus;
             return result < 0 ? result + modulus : result;
+        }
+
+        private readonly struct DiskDmaWordLatch
+        {
+            public DiskDmaWordLatch(bool writeMode, uint targetAddress, int sourceBit, ushort value, long grantedCycle)
+            {
+                WriteMode = writeMode;
+                TargetAddress = targetAddress;
+                SourceBit = sourceBit;
+                Value = value;
+                GrantedCycle = grantedCycle;
+                HasValue = true;
+            }
+
+            public bool WriteMode { get; }
+
+            public uint TargetAddress { get; }
+
+            public int SourceBit { get; }
+
+            public ushort Value { get; }
+
+            public long GrantedCycle { get; }
+
+            public bool HasValue { get; }
         }
 
         private sealed class DiskStreamState
