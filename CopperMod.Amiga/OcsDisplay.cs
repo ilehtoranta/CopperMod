@@ -70,6 +70,7 @@ namespace CopperMod.Amiga
         private readonly bool[] _renderPlaneHasRow = new bool[6];
         private readonly ushort[] _bitplaneDataRegisters = new ushort[6];
         private readonly bool[] _bitplaneDataRegisterWritten = new bool[6];
+        private BitplaneDmaReadLatch _bitplaneDmaReadLatch;
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
         private readonly List<SpriteFrameCommand>[] _spriteCommandScratch = new List<SpriteFrameCommand>[8];
@@ -3948,26 +3949,19 @@ namespace CopperMod.Amiga
 
         private void CaptureLiveBitplaneFetch(int row, int plane, int word, long fetchCycle, LiveLineState state)
         {
-            ushort value = 0;
-            var granted = false;
+            BitplaneDmaReadLatch latch;
             if ((state.PlaneHasRowMask & (1 << plane)) != 0)
             {
                 var address = unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2));
-                if (_bus.TryReadLiveBitplaneDmaWord(address, fetchCycle, out value, out var grantedCycle))
-                {
-                    _liveBitplaneDmaFetches++;
-                    RecordLiveDisplayDmaCycle(grantedCycle);
-                    granted = true;
-                }
+                latch = LoadLiveBitplaneDmaLatch(row, plane, word, address, fetchCycle);
+            }
+            else
+            {
+                latch = BitplaneDmaReadLatch.Denied(row, plane, word, fetchCycle);
             }
 
-            _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = value;
-            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
-            if (!_liveTimelineUnsafeForFrame)
-            {
-                _displayTimeline.RecordBitplaneFetch(row, plane, word, value, granted);
-            }
-            _liveFetchBatchWordCount++;
+            _bitplaneDmaReadLatch = latch;
+            ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
         private void CaptureLiveBitplaneFetch(long fetchCycle)
@@ -6748,9 +6742,57 @@ namespace CopperMod.Amiga
                 return 0;
             }
 
+            _bitplaneDmaReadLatch = new BitplaneDmaReadLatch(row, plane, word, value, granted: true, access.GrantedCycle);
+            return ConsumePresentationBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
+        }
+
+        private BitplaneDmaReadLatch LoadLiveBitplaneDmaLatch(int row, int plane, int word, uint address, long fetchCycle)
+        {
+            return _bus.TryReadLiveBitplaneDmaWord(address, fetchCycle, out var value, out var grantedCycle)
+                ? new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle)
+                : BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
+        }
+
+        private void ConsumeLiveBitplaneDmaLatch(ref BitplaneDmaReadLatch latch)
+        {
+            if (!latch.HasValue)
+            {
+                return;
+            }
+
+            var row = latch.Row;
+            var plane = latch.Plane;
+            var word = latch.Word;
+            _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = latch.Value;
+            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
+            if (latch.Granted)
+            {
+                _liveBitplaneDmaFetches++;
+                RecordLiveDisplayDmaCycle(latch.GrantedCycle);
+            }
+
+            if (!_liveTimelineUnsafeForFrame)
+            {
+                _displayTimeline.RecordBitplaneFetch(row, plane, word, latch.Value, latch.Granted);
+            }
+
+            _liveFetchBatchWordCount++;
+            latch = default;
+        }
+
+        private ushort ConsumePresentationBitplaneDmaLatch(ref BitplaneDmaReadLatch latch)
+        {
+            if (!latch.HasValue || !latch.Granted)
+            {
+                latch = default;
+                return 0;
+            }
+
             _lastBitplaneDmaFetches++;
-            RecordDisplayDmaCycle(access.GrantedCycle);
-            LoadBitplaneDataRegister(plane, value);
+            RecordDisplayDmaCycle(latch.GrantedCycle);
+            LoadBitplaneDataRegister(latch.Plane, latch.Value);
+            var value = latch.Value;
+            latch = default;
             return value;
         }
 
@@ -11240,6 +11282,37 @@ namespace CopperMod.Amiga
                     Row == other.Row &&
                     Descriptor.HasSameRenderingAs(other.Descriptor);
             }
+        }
+
+        private readonly struct BitplaneDmaReadLatch
+        {
+            public BitplaneDmaReadLatch(int row, int plane, int word, ushort value, bool granted, long grantedCycle)
+            {
+                Row = row;
+                Plane = plane;
+                Word = word;
+                Value = value;
+                Granted = granted;
+                GrantedCycle = grantedCycle;
+                HasValue = true;
+            }
+
+            public static BitplaneDmaReadLatch Denied(int row, int plane, int word, long grantedCycle)
+                => new BitplaneDmaReadLatch(row, plane, word, 0, granted: false, grantedCycle);
+
+            public int Row { get; }
+
+            public int Plane { get; }
+
+            public int Word { get; }
+
+            public ushort Value { get; }
+
+            public bool Granted { get; }
+
+            public long GrantedCycle { get; }
+
+            public bool HasValue { get; }
         }
 
         private sealed class LiveLineState
