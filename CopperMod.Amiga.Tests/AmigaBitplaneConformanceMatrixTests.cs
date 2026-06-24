@@ -113,6 +113,9 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "cycle-exact fetch slot contention at DDF edges":
                 BitplaneFetchesUseDisplayDmaSlots();
                 break;
+            case "bitplane DMA latch is consumed after granted fetch":
+                BitplaneDmaLatchIsConsumedAfterGrantedFetch();
+                break;
             case "HRM lowres bitplane slot order":
                 BitplaneFetchesUseHrmLowResSlotOrder();
                 break;
@@ -186,6 +189,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("palette", "live DMA capture preserves same-line Copper palette spans"),
         Executable("dma-control", "DMAEN and BPLEN gate timed bitplane fetches"),
         Executable("fetch-window", "cycle-exact fetch slot contention at DDF edges"),
+        Executable("fetch-window", "bitplane DMA latch is consumed after granted fetch"),
         Executable("fetch-window", "HRM lowres bitplane slot order"),
         Executable("fetch-window", "HRM hires bitplane slot order"),
         Executable("dma-control", "bitplane DMA starvation of late sprite slots"),
@@ -1056,6 +1060,31 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
     }
 
+    private static void BitplaneDmaLatchIsConsumedAfterGrantedFetch()
+    {
+        var bus = CreateDisplayBus();
+        SetBitplanePointer(bus, 0, 0x1000);
+        for (var offset = 0; offset < 0x400; offset += 2)
+        {
+            BigEndian.WriteUInt16(bus.ChipRam, 0x1000 + offset, 0x8000);
+        }
+
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x0038);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.WriteWord(0x00DFF100, 0x1000);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+
+        var latch = GetPrivateField<object>(bus.Display, "_bitplaneDmaReadLatch");
+        var hasValue = (bool)latch.GetType().GetProperty("HasValue")!.GetValue(latch)!;
+        var snapshot = bus.Display.CaptureSnapshot();
+        Assert.False(hasValue);
+        Assert.True(snapshot.LastBitplaneDmaFetches > 0);
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+    }
+
     private static void LowResDdfStopSecondHalfIncludesContainingFetchBlock()
     {
         var bus = CreateDisplayBus();
@@ -1561,6 +1590,17 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(field);
         field.SetValue(target, value);
+    }
+
+    private static T GetPrivateField<T>(object target, string name)
+    {
+        var field = target.GetType().GetField(
+            name,
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<T>(field.GetValue(target));
     }
 
     private static int OutputXForHorizontal(int horizontal)

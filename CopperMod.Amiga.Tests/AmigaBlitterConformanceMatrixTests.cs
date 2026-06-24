@@ -434,6 +434,55 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
+	public void BlitterAreaDmaLoadsSourceLatchesBeforeDestinationCommit()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		WriteWord(bus, SourceA, 0xFF00);
+		WriteWord(bus, SourceB, 0x0F0F);
+		WriteWord(bus, SourceC, 0x3333);
+		ConfigureAreaBlit(bus, 0x0FCA);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		RunBlitterUntilIdle(bus);
+
+		var blitterDma = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter)
+			.ToArray();
+
+		Assert.Collection(
+			blitterDma,
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(SourceA, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(SourceB, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(SourceC, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.True(access.Request.IsWrite);
+				Assert.Equal(DestinationD, access.Request.Address);
+			});
+		Assert.True(blitterDma[0].CompletedCycle <= blitterDma[1].RequestedCycle);
+		Assert.True(blitterDma[1].CompletedCycle <= blitterDma[2].RequestedCycle);
+		Assert.True(blitterDma[2].CompletedCycle <= blitterDma[3].RequestedCycle);
+		Assert.Equal(SourceA + 2, bus.Blitter.CaptureSnapshot().SourceA);
+		Assert.Equal(SourceB + 2, bus.Blitter.CaptureSnapshot().SourceB);
+		Assert.Equal(SourceC + 2, bus.Blitter.CaptureSnapshot().SourceC);
+		Assert.Equal(DestinationD + 2, bus.Blitter.CaptureSnapshot().DestinationD);
+	}
+
+	[Fact]
 	public void BlitterBusyClearsWhenBitplaneDmaDelaysFinalWriteSlot()
 	{
 		var bus = new AmigaBus(
@@ -607,6 +656,57 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			Assert.Equal(pixelStart + slotCycles, cRead.GrantedCycle);
 			Assert.Equal(pixelStart + (3 * slotCycles), dWrite.GrantedCycle);
 		}
+	}
+
+	[Fact]
+	public void BlitterLineDmaLoadsPatternAndSourceBeforeDestinationCommit()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var baseAddress = DestinationD + 0x1B00;
+		WriteWord(bus, SourceB, 0x8000);
+		WriteWord(bus, baseAddress, 0x0000);
+		ConfigureLineBlit(
+			bus,
+			baseAddress,
+			LineRowStride,
+			bltcon1: 0x0001,
+			bModulo: 2,
+			channelMask: 0x0F00);
+
+		bus.WriteWord(0x00DFF058, 0x0041);
+		RunBlitterUntilIdle(bus);
+
+		var blitterDma = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter)
+			.ToArray();
+
+		Assert.Collection(
+			blitterDma,
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(SourceB, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(SourceB, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.False(access.Request.IsWrite);
+				Assert.Equal(baseAddress, access.Request.Address);
+			},
+			access =>
+			{
+				Assert.True(access.Request.IsWrite);
+				Assert.Equal(baseAddress, access.Request.Address);
+			});
+		Assert.True(blitterDma[0].CompletedCycle <= blitterDma[1].RequestedCycle);
+		Assert.True(blitterDma[1].CompletedCycle <= blitterDma[2].RequestedCycle);
+		Assert.True(blitterDma[2].CompletedCycle <= blitterDma[3].RequestedCycle);
+		Assert.True(IsLinePixelSet(bus, baseAddress, LineRowStride, 0, 0));
 	}
 
 	[Fact]

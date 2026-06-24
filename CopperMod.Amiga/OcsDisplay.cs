@@ -70,6 +70,7 @@ namespace CopperMod.Amiga
         private readonly bool[] _renderPlaneHasRow = new bool[6];
         private readonly ushort[] _bitplaneDataRegisters = new ushort[6];
         private readonly bool[] _bitplaneDataRegisterWritten = new bool[6];
+        private BitplaneDmaReadLatch _bitplaneDmaReadLatch;
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
         private readonly List<SpriteFrameCommand>[] _spriteCommandScratch = new List<SpriteFrameCommand>[8];
@@ -1701,6 +1702,7 @@ namespace CopperMod.Amiga
         {
             _liveNextDisplayEventValid = false;
             _liveNextDisplayEventCycle = long.MaxValue;
+            _bus.InvalidateLiveDisplayHrmGrantCache();
             InvalidateLiveCopperWaitCycle();
             InvalidateLiveWorkCycle();
         }
@@ -3167,87 +3169,86 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var fetchCycle = Math.Min(_liveCopper.Cycle, targetCycle);
-            var first = _bus.ReadLiveCopperDmaWord(_liveCopper.Pc, fetchCycle, out var firstAccess);
-            fetchCycle = firstAccess.CompletedCycle;
-            var dataRequestCycle = Math.Max(
-                fetchCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperInstructionDataHpUnits));
-            var secondAddress = AddDmaPointerOffset(_liveCopper.Pc, 2);
-            var second = _bus.ReadLiveCopperDmaWord(secondAddress, dataRequestCycle, out var secondAccess);
-            var dataCycle = secondAccess.GrantedCycle;
-            var instructionStopCycle = Math.Max(
-                secondAccess.CompletedCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperMoveHpUnits));
-            var controlInstructionStopCycle = Math.Max(
-                secondAccess.CompletedCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperSkipHpUnits));
+            var instruction = LoadLiveCopperInstruction(_liveCopper.Pc, Math.Min(_liveCopper.Cycle, targetCycle));
             _liveCopper.Pc = AddDmaPointerOffset(_liveCopper.Pc, 4);
 
-            if (first == 0xFFFF && second == 0xFFFE)
+            if (instruction.IsEnd)
             {
                 _liveCopper.Stopped = true;
-                _liveCopper.Cycle = instructionStopCycle;
+                _liveCopper.Cycle = instruction.MoveStopCycle;
                 return;
             }
 
-            if ((first & 1) == 0)
+            if (instruction.IsMove)
             {
-                var register = (ushort)(first & 0x01FE);
+                var register = instruction.MoveRegister;
                 var suppressMove = _liveCopper.SuppressNextMove;
                 _liveCopper.SuppressNextMove = false;
-                if (dataCycle > targetCycle)
+                if (instruction.DataCycle > targetCycle)
                 {
                     _liveCopper.PendingMove = true;
                     _liveCopper.PendingMoveRegister = register;
-                    _liveCopper.PendingMoveValue = second;
-                    _liveCopper.PendingMoveCycle = dataCycle;
-                    _liveCopper.PendingMoveStopCycle = instructionStopCycle;
+                    _liveCopper.PendingMoveValue = instruction.Second;
+                    _liveCopper.PendingMoveCycle = instruction.DataCycle;
+                    _liveCopper.PendingMoveStopCycle = instruction.MoveStopCycle;
                     _liveCopper.PendingMoveSuppress = suppressMove;
-                    _liveCopper.Cycle = dataCycle;
+                    _liveCopper.Cycle = instruction.DataCycle;
                     InvalidateLiveDisplayEventCycle();
                     return;
                 }
 
-                if (dataCycle <= targetCycle)
+                if (instruction.DataCycle <= targetCycle)
                 {
-                    ApplyLiveCopperMove(register, second, dataCycle, instructionStopCycle, suppressMove);
+                    ApplyLiveCopperMove(register, instruction.Second, instruction.DataCycle, instruction.MoveStopCycle, suppressMove);
                 }
 
-                _liveCopper.Cycle = instructionStopCycle;
+                _liveCopper.Cycle = instruction.MoveStopCycle;
                 return;
             }
 
-            if ((second & 1) == 0)
+            if (instruction.IsWait)
             {
-                _liveCopper.Cycle = controlInstructionStopCycle;
-                _liveCopper.Wait(first, second);
+                _liveCopper.Cycle = instruction.ControlStopCycle;
+                _liveCopper.Wait(instruction.First, instruction.Second);
                 return;
             }
 
-            if (controlInstructionStopCycle > targetCycle)
+            if (instruction.ControlStopCycle > targetCycle)
             {
                 _liveCopper.PendingSkip = true;
-                _liveCopper.PendingSkipFirst = first;
-                _liveCopper.PendingSkipSecond = second;
-                _liveCopper.PendingSkipCycle = controlInstructionStopCycle;
-                _liveCopper.Cycle = controlInstructionStopCycle;
+                _liveCopper.PendingSkipFirst = instruction.First;
+                _liveCopper.PendingSkipSecond = instruction.Second;
+                _liveCopper.PendingSkipCycle = instruction.ControlStopCycle;
+                _liveCopper.Cycle = instruction.ControlStopCycle;
                 InvalidateLiveDisplayEventCycle();
                 return;
             }
 
             if (IsCopperComparisonSatisfied(
-                first,
-                second,
+                instruction.First,
+                instruction.Second,
                 _liveFrameStartCycle,
-                controlInstructionStopCycle,
-                IsCopperBlitterFinishedForWait(second)))
+                instruction.ControlStopCycle,
+                IsCopperBlitterFinishedForWait(instruction.Second)))
             {
                 _liveCopper.SuppressNextMove = true;
             }
 
-            _liveCopper.Cycle = controlInstructionStopCycle;
+            _liveCopper.Cycle = instruction.ControlStopCycle;
         }
+
+        private CopperInstructionLatch LoadLiveCopperInstruction(uint pc, long fetchCycle)
+        {
+            var first = _bus.ReadLiveCopperDmaWord(pc, fetchCycle, out var firstAccess);
+            var secondRequestCycle = GetCopperSecondWordRequestCycle(firstAccess);
+            var second = _bus.ReadLiveCopperDmaWord(AddDmaPointerOffset(pc, 2), secondRequestCycle, out var secondAccess);
+            return new CopperInstructionLatch(first, firstAccess, second, secondAccess);
+        }
+
+        private static long GetCopperSecondWordRequestCycle(AmigaBusAccessResult firstAccess)
+            => Math.Max(
+                firstAccess.CompletedCycle,
+                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperInstructionDataHpUnits));
 
         private void CompletePendingLiveCopperSkip(long targetCycle)
         {
@@ -3948,26 +3949,19 @@ namespace CopperMod.Amiga
 
         private void CaptureLiveBitplaneFetch(int row, int plane, int word, long fetchCycle, LiveLineState state)
         {
-            ushort value = 0;
-            var granted = false;
+            BitplaneDmaReadLatch latch;
             if ((state.PlaneHasRowMask & (1 << plane)) != 0)
             {
                 var address = unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2));
-                if (_bus.TryReadLiveBitplaneDmaWord(address, fetchCycle, out value, out var grantedCycle))
-                {
-                    _liveBitplaneDmaFetches++;
-                    RecordLiveDisplayDmaCycle(grantedCycle);
-                    granted = true;
-                }
+                latch = LoadLiveBitplaneDmaLatch(row, plane, word, address, fetchCycle);
+            }
+            else
+            {
+                latch = BitplaneDmaReadLatch.Denied(row, plane, word, fetchCycle);
             }
 
-            _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = value;
-            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
-            if (!_liveTimelineUnsafeForFrame)
-            {
-                _displayTimeline.RecordBitplaneFetch(row, plane, word, value, granted);
-            }
-            _liveFetchBatchWordCount++;
+            _bitplaneDmaReadLatch = latch;
+            ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
         private void CaptureLiveBitplaneFetch(long fetchCycle)
@@ -4884,6 +4878,8 @@ namespace CopperMod.Amiga
             }
 
             DisplayTimelineState? firstState = null;
+            var lineXStart = AmigaConstants.PalLowResWidth;
+            var lineXStop = 0;
             for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
             {
                 var segment = line.Segments[segmentIndex];
@@ -4900,6 +4896,30 @@ namespace CopperMod.Amiga
                 }
 
                 firstState ??= state;
+                lineXStart = Math.Min(lineXStart, segment.XStart);
+                lineXStop = Math.Max(lineXStop, segment.XStop);
+            }
+
+            if (firstState is null)
+            {
+                return true;
+            }
+
+            var indexState = firstState;
+            ApplyTimelineStateForRendering(indexState);
+            _displayWindowVerticallyOpen = indexState.DisplayWindowVerticallyOpen;
+            _displayWindowStateLine = StandardVStart + row + 1;
+            _currentRenderRow = row;
+            if (!TryPrepareTimelineLowResFastBitplanes(
+                    row,
+                    lineXStart,
+                    lineXStop,
+                    indexState,
+                    timeline,
+                    out var dataFirstX,
+                    out var dataLastX))
+            {
+                return false;
             }
 
             for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
@@ -4917,10 +4937,7 @@ namespace CopperMod.Amiga
                 _currentRenderRow = row;
                 CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
                 FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
-                if (!TryRenderTimelineLowResFastBitplanes(bgra, row, segment, state, timeline))
-                {
-                    return false;
-                }
+                WritePreparedTimelineLowResFastBitplanes(bgra, row, segment.XStart, segment.XStop, dataFirstX, dataLastX);
             }
 
             return true;
@@ -4964,8 +4981,15 @@ namespace CopperMod.Amiga
         private bool IsTimelineLowResLineFastPathSupported(int row, DisplayLineSegment segment, DisplayTimelineState state)
         {
             if ((state.Bplcon0 & 0x8804) != 0 ||
-                (state.Bplcon1 & 0x00FF) != 0 ||
                 HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop))
+            {
+                return false;
+            }
+
+            var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
+            var planeCount = Math.Clamp(state.DecodePlaneCount, 0, LiveBitplanePlaneCount);
+            if ((state.Bplcon1 & 0x00FF) != 0 &&
+                (dualPlayfield || !TryGetUniformNormalPlayfieldScroll(state, planeCount, out _)))
             {
                 return false;
             }
@@ -4973,13 +4997,17 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private bool TryRenderTimelineLowResFastBitplanes(
-            Span<uint> bgra,
+        private bool TryPrepareTimelineLowResFastBitplanes(
             int row,
-            DisplayLineSegment segment,
+            int xStart,
+            int xStop,
             DisplayTimelineState state,
-            DisplayFrameTimeline timeline)
+            DisplayFrameTimeline timeline,
+            out int dataFirstX,
+            out int dataLastX)
         {
+            dataFirstX = 0;
+            dataLastX = 0;
             if (state.PlaneCount <= 0 || !IsBitplaneDmaEnabled(state.Dmacon))
             {
                 return true;
@@ -5011,8 +5039,8 @@ namespace CopperMod.Amiga
             }
 
             var originX = GetDataFetchStartX(window);
-            var clipLeft = Math.Max(Math.Max(0, window.X), segment.XStart);
-            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), segment.XStop);
+            var clipLeft = Math.Max(Math.Max(0, window.X), xStart);
+            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), xStop);
             if (clipRight <= clipLeft)
             {
                 return true;
@@ -5022,16 +5050,25 @@ namespace CopperMod.Amiga
             Array.Clear(_timelineFastPathPriorityMasks, clipLeft, clipRight - clipLeft);
 
             var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
+            var normalPlayfieldScroll = 0;
+            if (!dualPlayfield)
+            {
+                _ = TryGetUniformNormalPlayfieldScroll(state, planeCount, out normalPlayfieldScroll);
+            }
+
             var fetchPixels = fetchWords * PlanarChunkPixels;
-            var firstX = Math.Max(clipLeft, originX);
-            var lastX = Math.Min(clipRight, originX + fetchPixels);
+            var dataOriginX = originX + normalPlayfieldScroll;
+            var firstX = Math.Max(clipLeft, dataOriginX);
+            var lastX = Math.Min(clipRight, dataOriginX + fetchPixels);
             if (lastX <= firstX)
             {
                 return true;
             }
 
-            var firstWord = Math.Clamp((firstX - originX) >> 4, 0, fetchWords - 1);
-            var lastWord = Math.Clamp((lastX - 1 - originX) >> 4, 0, fetchWords - 1);
+            dataFirstX = firstX;
+            dataLastX = lastX;
+            var firstWord = Math.Clamp((firstX - dataOriginX) >> 4, 0, fetchWords - 1);
+            var lastWord = Math.Clamp((lastX - 1 - dataOriginX) >> 4, 0, fetchWords - 1);
             for (var word = firstWord; word <= lastWord; word++)
             {
                 if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield, timeline, out var chunk))
@@ -5039,10 +5076,10 @@ namespace CopperMod.Amiga
                     return false;
                 }
 
-                var wordStart = originX + (word * PlanarChunkPixels);
-                var xStart = Math.Max(firstX, wordStart);
-                var xStop = Math.Min(lastX, wordStart + PlanarChunkPixels);
-                for (var x = xStart; x < xStop; x++)
+                var wordStart = dataOriginX + (word * PlanarChunkPixels);
+                var chunkXStart = Math.Max(firstX, wordStart);
+                var chunkXStop = Math.Min(lastX, wordStart + PlanarChunkPixels);
+                for (var x = chunkXStart; x < chunkXStop; x++)
                 {
                     var offset = x - wordStart;
                     _timelineFastPathColorIndexes[x] = chunk.GetColorIndex(offset);
@@ -5059,11 +5096,25 @@ namespace CopperMod.Amiga
                 {
                     RecordBitplanePixel(colorIndex, priorityMask, x, row);
                 }
-
-                WriteLowResolutionOutputPixel(bgra, x, row, _convertedColors[colorIndex]);
             }
 
             return true;
+        }
+
+        private void WritePreparedTimelineLowResFastBitplanes(
+            Span<uint> bgra,
+            int row,
+            int segmentXStart,
+            int segmentXStop,
+            int dataFirstX,
+            int dataLastX)
+        {
+            var xStart = Math.Max(segmentXStart, dataFirstX);
+            var xStop = Math.Min(segmentXStop, dataLastX);
+            for (var x = xStart; x < xStop; x++)
+            {
+                WriteLowResolutionOutputPixel(bgra, x, row, _convertedColors[_timelineFastPathColorIndexes[x]]);
+            }
         }
 
         private bool TryRenderTimelineCachedBitplanes(
@@ -5109,49 +5160,37 @@ namespace CopperMod.Amiga
             }
 
             var zeroScroll = (state.Bplcon1 & 0x00FF) == 0;
+            var normalPlayfieldScroll = 0;
+            var uniformNormalScroll = !dualPlayfield && TryGetUniformNormalPlayfieldScroll(state, planeCount, out normalPlayfieldScroll);
+            var useChunkedScroll = zeroScroll || uniformNormalScroll;
             var renderHighWidth = IsRenderingHighResolutionWidth();
             var renderHighHeight = IsRenderingHighResolutionHeight();
             var renderInterlace = (state.Bplcon0 & 0x0004) != 0;
             var lastX = Math.Min(clipRight, originX + drawPixels + (highResolution ? 8 : 16));
-            for (var x = Math.Max(clipLeft, originX); x < lastX; x++)
+            if (highResolution)
             {
-                var relativeX = x - originX;
-                if (relativeX < -15 || relativeX >= drawPixels + (highResolution ? 8 : 16))
+                for (var x = Math.Max(clipLeft, originX); x < lastX; x++)
                 {
-                    continue;
-                }
-
-                int colorIndex;
-                byte priorityMask;
-                if (highResolution)
-                {
-                    if (!TryGetTimelineBitplaneColorIndex(
-                            row,
-                            x,
-                            originX,
-                            fetchPixels,
-                            fetchWords,
-                            state,
-                            planeCount,
-                            timeline,
-                            out var leftColorIndex,
-                            hiresSubPixel: 0) ||
-                        !TryGetTimelineBitplaneColorIndex(
-                            row,
-                            x,
-                            originX,
-                            fetchPixels,
-                            fetchWords,
-                            state,
-                            planeCount,
-                            timeline,
-                            out var rightColorIndex,
-                            hiresSubPixel: 1))
+                    var relativeSubPixel = (x - originX) * 2;
+                    var leftColorIndex = 0;
+                    var rightColorIndex = 0;
+                    if ((uint)relativeSubPixel < (uint)fetchPixels)
                     {
-                        return false;
+                        var word = relativeSubPixel >> 4;
+                        if ((uint)word < (uint)fetchWords)
+                        {
+                            if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield: false, timeline, out var chunk))
+                            {
+                                return false;
+                            }
+
+                            var offset = relativeSubPixel & 0x0F;
+                            leftColorIndex = chunk.GetColorIndex(offset);
+                            rightColorIndex = chunk.GetColorIndex(offset + 1);
+                        }
                     }
 
-                    priorityMask = (leftColorIndex | rightColorIndex) == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
+                    var priorityMask = (leftColorIndex | rightColorIndex) == 0 ? (byte)0 : NormalPlayfieldPriorityMask;
                     SetPlayfieldPriorityMask(x, row, priorityMask);
                     if ((leftColorIndex | rightColorIndex) != 0)
                     {
@@ -5187,18 +5226,30 @@ namespace CopperMod.Amiga
                             renderInterlace,
                             _renderInterlaceField);
                     }
+                }
 
+                return true;
+            }
+
+            for (var x = Math.Max(clipLeft, originX); x < lastX; x++)
+            {
+                var relativeX = x - originX;
+                if (relativeX < -15 || relativeX >= drawPixels + 16)
+                {
                     continue;
                 }
 
-                if (zeroScroll)
+                int colorIndex;
+                byte priorityMask;
+                if (useChunkedScroll)
                 {
-                    if ((uint)relativeX >= (uint)fetchPixels)
+                    var scrolledRelativeX = uniformNormalScroll ? relativeX - normalPlayfieldScroll : relativeX;
+                    if ((uint)scrolledRelativeX >= (uint)fetchPixels)
                     {
                         continue;
                     }
 
-                    var word = relativeX >> 4;
+                    var word = scrolledRelativeX >> 4;
                     if ((uint)word >= (uint)fetchWords)
                     {
                         continue;
@@ -5209,7 +5260,7 @@ namespace CopperMod.Amiga
                         return false;
                     }
 
-                    var offset = relativeX & 0x0F;
+                    var offset = scrolledRelativeX & 0x0F;
                     colorIndex = chunk.GetColorIndex(offset);
                     priorityMask = chunk.GetPriorityMask(offset);
                 }
@@ -5244,6 +5295,33 @@ namespace CopperMod.Amiga
             }
 
             return true;
+        }
+
+        private static bool TryGetUniformNormalPlayfieldScroll(DisplayTimelineState state, int planeCount, out int scroll)
+        {
+            var evenScroll = state.Bplcon1 & 0x0F;
+            var oddScroll = (state.Bplcon1 >> 4) & 0x0F;
+            var hasEvenPlane = false;
+            var hasOddPlane = false;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((state.PlaneHasRowMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
+                if ((plane & 1) == 0)
+                {
+                    hasEvenPlane = true;
+                }
+                else
+                {
+                    hasOddPlane = true;
+                }
+            }
+
+            scroll = hasEvenPlane ? evenScroll : oddScroll;
+            return !hasEvenPlane || !hasOddPlane || evenScroll == oddScroll;
         }
 
         private bool TryGetTimelineBitplaneColorIndex(
@@ -5995,92 +6073,87 @@ namespace CopperMod.Amiga
             ref int renderCursorPixelDelay,
             ref CopperPresentationState copper)
         {
-            var fetchCycle = Math.Min(copper.Cycle, frameStopCycle);
-            var first = ReadCopperWordForPresentation(copper.Pc, fetchCycle, out var firstAccess);
-            fetchCycle = firstAccess.CompletedCycle;
-            var dataRequestCycle = Math.Max(
-                fetchCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperInstructionDataHpUnits));
-            var second = ReadCopperWordForPresentation(AddDmaPointerOffset(copper.Pc, 2), dataRequestCycle, out var secondAccess);
-            var dataCycle = secondAccess.GrantedCycle;
-            var instructionStopCycle = Math.Max(
-                secondAccess.CompletedCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperMoveHpUnits));
-            var controlInstructionStopCycle = Math.Max(
-                secondAccess.CompletedCycle,
-                firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperSkipHpUnits));
+            var instruction = LoadPresentationCopperInstruction(copper.Pc, Math.Min(copper.Cycle, frameStopCycle));
             copper.Pc = AddDmaPointerOffset(copper.Pc, 4);
 
-            if (first == 0xFFFF && second == 0xFFFE)
+            if (instruction.IsEnd)
             {
                 copper.Stopped = true;
                 return;
             }
 
-            if ((first & 1) == 0)
+            if (instruction.IsMove)
             {
-                var register = (ushort)(first & 0x01FE);
+                var register = instruction.MoveRegister;
                 var writePixelDelay = GetCopperWritePixelDelay(register);
-                var clippedWritePixelDelay = dataCycle <= frameStopCycle ? writePixelDelay : 0;
+                var clippedWritePixelDelay = instruction.DataCycle <= frameStopCycle ? writePixelDelay : 0;
                 RenderPresentationSpan(
                     bgra,
                     frameStartCycle,
                     renderCursorCycle,
-                    Math.Min(dataCycle, frameStopCycle),
+                    Math.Min(instruction.DataCycle, frameStopCycle),
                     useTimedWrites,
                     renderCursorPixelDelay,
                     clippedWritePixelDelay);
-                renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(dataCycle, frameStopCycle));
+                renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(instruction.DataCycle, frameStopCycle));
                 renderCursorPixelDelay = clippedWritePixelDelay;
-                if (dataCycle <= frameStopCycle)
+                if (instruction.DataCycle <= frameStopCycle)
                 {
                     var suppressMove = copper.SuppressNextMove;
                     copper.SuppressNextMove = false;
                     if (IsCopperDangerStopRegister(register))
                     {
                         copper.Stopped = true;
-                        copper.Cycle = instructionStopCycle;
+                        copper.Cycle = instruction.MoveStopCycle;
                         return;
                     }
 
                     if (!suppressMove && CanCopperWriteRegister(register))
                     {
-                        _currentCopperRow = GetOutputRowForCycle(frameStartCycle, dataCycle);
-                        ApplyCopperMove(register, second, dataCycle, applyHardwareSideEffects: false);
+                        _currentCopperRow = GetOutputRowForCycle(frameStartCycle, instruction.DataCycle);
+                        ApplyCopperMove(register, instruction.Second, instruction.DataCycle, applyHardwareSideEffects: false);
                         if (register == 0x088)
                         {
-                            copper.JumpTo(_copperListPointer, dataCycle);
+                            copper.JumpTo(_copperListPointer, instruction.DataCycle);
                         }
                         else if (register == 0x08A)
                         {
-                            copper.JumpTo(_copperListPointer2, dataCycle);
+                            copper.JumpTo(_copperListPointer2, instruction.DataCycle);
                         }
                     }
                 }
 
-                copper.Cycle = instructionStopCycle;
+                copper.Cycle = instruction.MoveStopCycle;
                 return;
             }
 
-            if ((second & 1) == 0)
+            if (instruction.IsWait)
             {
-                copper.Cycle = controlInstructionStopCycle;
-                copper.Wait(first, second);
+                copper.Cycle = instruction.ControlStopCycle;
+                copper.Wait(instruction.First, instruction.Second);
                 return;
             }
 
-            if (controlInstructionStopCycle <= frameStopCycle &&
+            if (instruction.ControlStopCycle <= frameStopCycle &&
                 IsCopperComparisonSatisfied(
-                first,
-                second,
+                instruction.First,
+                instruction.Second,
                 frameStartCycle,
-                controlInstructionStopCycle,
-                IsCopperBlitterFinishedForWait(second)))
+                instruction.ControlStopCycle,
+                IsCopperBlitterFinishedForWait(instruction.Second)))
             {
                 copper.SuppressNextMove = true;
             }
 
-            copper.Cycle = controlInstructionStopCycle;
+            copper.Cycle = instruction.ControlStopCycle;
+        }
+
+        private CopperInstructionLatch LoadPresentationCopperInstruction(uint pc, long fetchCycle)
+        {
+            var first = ReadCopperWordForPresentation(pc, fetchCycle, out var firstAccess);
+            var secondRequestCycle = GetCopperSecondWordRequestCycle(firstAccess);
+            var second = ReadCopperWordForPresentation(AddDmaPointerOffset(pc, 2), secondRequestCycle, out var secondAccess);
+            return new CopperInstructionLatch(first, firstAccess, second, secondAccess);
         }
 
         private bool TryPeekPendingWrite(out PendingCustomWrite write)
@@ -6669,9 +6742,57 @@ namespace CopperMod.Amiga
                 return 0;
             }
 
+            _bitplaneDmaReadLatch = new BitplaneDmaReadLatch(row, plane, word, value, granted: true, access.GrantedCycle);
+            return ConsumePresentationBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
+        }
+
+        private BitplaneDmaReadLatch LoadLiveBitplaneDmaLatch(int row, int plane, int word, uint address, long fetchCycle)
+        {
+            return _bus.TryReadLiveBitplaneDmaWord(address, fetchCycle, out var value, out var grantedCycle)
+                ? new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle)
+                : BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
+        }
+
+        private void ConsumeLiveBitplaneDmaLatch(ref BitplaneDmaReadLatch latch)
+        {
+            if (!latch.HasValue)
+            {
+                return;
+            }
+
+            var row = latch.Row;
+            var plane = latch.Plane;
+            var word = latch.Word;
+            _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = latch.Value;
+            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
+            if (latch.Granted)
+            {
+                _liveBitplaneDmaFetches++;
+                RecordLiveDisplayDmaCycle(latch.GrantedCycle);
+            }
+
+            if (!_liveTimelineUnsafeForFrame)
+            {
+                _displayTimeline.RecordBitplaneFetch(row, plane, word, latch.Value, latch.Granted);
+            }
+
+            _liveFetchBatchWordCount++;
+            latch = default;
+        }
+
+        private ushort ConsumePresentationBitplaneDmaLatch(ref BitplaneDmaReadLatch latch)
+        {
+            if (!latch.HasValue || !latch.Granted)
+            {
+                latch = default;
+                return 0;
+            }
+
             _lastBitplaneDmaFetches++;
-            RecordDisplayDmaCycle(access.GrantedCycle);
-            LoadBitplaneDataRegister(plane, value);
+            RecordDisplayDmaCycle(latch.GrantedCycle);
+            LoadBitplaneDataRegister(latch.Plane, latch.Value);
+            var value = latch.Value;
+            latch = default;
             return value;
         }
 
@@ -7609,7 +7730,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (IsTimelineBitplanePointerWrite(offset))
+            if (IsTimelineCopperJumpWrite(offset))
             {
                 return;
             }
@@ -7698,6 +7819,11 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (IsTimelineCopperJumpWrite(offset))
+            {
+                return false;
+            }
+
             if (IsTimelineBitplanePointerWrite(offset))
             {
                 return false;
@@ -7727,6 +7853,12 @@ namespace CopperMod.Amiga
         {
             offset = (ushort)(offset & 0x01FE);
             return offset is 0x080 or 0x082 or 0x084 or 0x086;
+        }
+
+        private static bool IsTimelineCopperJumpWrite(ushort offset)
+        {
+            offset = (ushort)(offset & 0x01FE);
+            return offset is 0x088 or 0x08A;
         }
 
         private static bool IsTimelineBitplanePointerWrite(ushort offset)
@@ -11010,6 +11142,44 @@ namespace CopperMod.Amiga
             }
         }
 
+        private readonly struct CopperInstructionLatch
+        {
+            public CopperInstructionLatch(
+                ushort first,
+                AmigaBusAccessResult firstAccess,
+                ushort second,
+                AmigaBusAccessResult secondAccess)
+            {
+                First = first;
+                Second = second;
+                DataCycle = secondAccess.GrantedCycle;
+                MoveStopCycle = Math.Max(
+                    secondAccess.CompletedCycle,
+                    firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperMoveHpUnits));
+                ControlStopCycle = Math.Max(
+                    secondAccess.CompletedCycle,
+                    firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperSkipHpUnits));
+            }
+
+            public ushort First { get; }
+
+            public ushort Second { get; }
+
+            public long DataCycle { get; }
+
+            public long MoveStopCycle { get; }
+
+            public long ControlStopCycle { get; }
+
+            public bool IsEnd => First == 0xFFFF && Second == 0xFFFE;
+
+            public bool IsMove => (First & 1) == 0;
+
+            public bool IsWait => (Second & 1) == 0;
+
+            public ushort MoveRegister => (ushort)(First & 0x01FE);
+        }
+
         private readonly struct PendingCustomWrite
         {
             public PendingCustomWrite(long cycle, ushort offset, ushort value, bool isCopper = false)
@@ -11112,6 +11282,37 @@ namespace CopperMod.Amiga
                     Row == other.Row &&
                     Descriptor.HasSameRenderingAs(other.Descriptor);
             }
+        }
+
+        private readonly struct BitplaneDmaReadLatch
+        {
+            public BitplaneDmaReadLatch(int row, int plane, int word, ushort value, bool granted, long grantedCycle)
+            {
+                Row = row;
+                Plane = plane;
+                Word = word;
+                Value = value;
+                Granted = granted;
+                GrantedCycle = grantedCycle;
+                HasValue = true;
+            }
+
+            public static BitplaneDmaReadLatch Denied(int row, int plane, int word, long grantedCycle)
+                => new BitplaneDmaReadLatch(row, plane, word, 0, granted: false, grantedCycle);
+
+            public int Row { get; }
+
+            public int Plane { get; }
+
+            public int Word { get; }
+
+            public ushort Value { get; }
+
+            public bool Granted { get; }
+
+            public long GrantedCycle { get; }
+
+            public bool HasValue { get; }
         }
 
         private sealed class LiveLineState
