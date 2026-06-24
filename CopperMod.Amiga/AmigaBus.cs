@@ -1089,7 +1089,13 @@ namespace CopperMod.Amiga
 
         public PaulaDmaReadResult ReadPaulaDmaWord(uint address, long requestedCycle)
         {
+            return ReadPaulaDmaWord(-1, address, requestedCycle);
+        }
+
+        public PaulaDmaReadResult ReadPaulaDmaWord(int channel, uint address, long requestedCycle)
+        {
             address = MaskChipDmaAddress(address);
+            var slotChannel = LiveAgnusDmaEnabled ? channel : -1;
             var access = Arbitrate(
                 AmigaBusRequester.Paula,
                 AmigaBusAccessKind.PaulaDma,
@@ -1097,7 +1103,8 @@ namespace CopperMod.Amiga
                 address,
                 AmigaBusAccessSize.Word,
                 requestedCycle,
-                isWrite: false);
+                isWrite: false,
+                slotChannel);
             var value = ReadChipWordForPresentation(address, access.GrantedCycle);
 
             return new PaulaDmaReadResult(value, access);
@@ -1921,7 +1928,8 @@ namespace CopperMod.Amiga
             uint address,
             AmigaBusAccessSize size,
             long requestedCycle,
-            bool isWrite)
+            bool isWrite,
+            int channel = -1)
         {
             if (requester == AmigaBusRequester.Cpu &&
                 target == AmigaBusAccessTarget.CustomRegisters &&
@@ -1986,7 +1994,8 @@ namespace CopperMod.Amiga
                 address,
                 size,
                 requestedCycle,
-                isWrite);
+                isWrite,
+                channel);
             var result = Arbiter.Arbitrate(request);
             if (ShouldUseChipSlotScheduler(target))
             {
@@ -2058,6 +2067,10 @@ namespace CopperMod.Amiga
         internal void ClearLiveDisplayDmaSlotsFrom(long cycle)
         {
             _hrmSlotEngine.ClearLiveDisplaySlotsFrom(cycle);
+        }
+
+        internal void InvalidateLiveDisplayHrmGrantCache()
+        {
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

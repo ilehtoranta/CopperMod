@@ -139,7 +139,8 @@ namespace CopperMod.Amiga
             uint address,
             AmigaBusAccessSize size,
             long requestedCycle,
-            bool isWrite)
+            bool isWrite,
+            int channel = -1)
         {
             Requester = requester;
             Kind = kind;
@@ -148,6 +149,7 @@ namespace CopperMod.Amiga
             Size = size;
             RequestedCycle = requestedCycle;
             IsWrite = isWrite;
+            Channel = channel;
         }
 
         public AmigaBusRequester Requester { get; }
@@ -163,6 +165,8 @@ namespace CopperMod.Amiga
         public long RequestedCycle { get; }
 
         public bool IsWrite { get; }
+
+        public int Channel { get; }
     }
 
     internal readonly struct AmigaBusAccessResult
@@ -340,6 +344,8 @@ namespace CopperMod.Amiga
         public const int AudioSlotsPerLine = 4;
         public const int SpriteSlotsPerLine = 16;
         public const int NormalBitplaneSlotsPerLine = 80;
+        public const int FirstPaulaHorizontal = 0x10;
+        public const int LastPaulaHorizontal = 0x16;
         public const int FirstSpriteHorizontal = 0x18;
         public const int LastSpriteHorizontal = 0x36;
 
@@ -371,7 +377,9 @@ namespace CopperMod.Amiga
                 return AgnusChipSlotOwner.Disk;
             }
 
-            if (horizontal is 0x10 or 0x12 or 0x14 or 0x16)
+            if (horizontal >= FirstPaulaHorizontal &&
+                horizontal <= LastPaulaHorizontal &&
+                ((horizontal - FirstPaulaHorizontal) & 1) == 0)
             {
                 return AgnusChipSlotOwner.Paula;
             }
@@ -391,17 +399,24 @@ namespace CopperMod.Amiga
             return GetFixedOwner(GetHorizontal(slotCycle)) == AgnusChipSlotOwner.Refresh;
         }
 
-        public static bool IsFixedDmaSlotForOwner(AgnusChipSlotOwner owner, long slotCycle)
+        public static bool IsFixedDmaSlotForOwner(AgnusChipSlotOwner owner, long slotCycle, int channel = -1)
         {
             if (owner == AgnusChipSlotOwner.Bitplane)
             {
                 return true;
             }
 
-            return GetFixedOwner(GetHorizontal(slotCycle)) == owner;
+            var horizontal = GetHorizontal(slotCycle);
+            if (owner == AgnusChipSlotOwner.Paula &&
+                TryGetPaulaHorizontal(channel, out var paulaHorizontal))
+            {
+                return horizontal == paulaHorizontal;
+            }
+
+            return GetFixedOwner(horizontal) == owner;
         }
 
-        public static long FindNextFixedDmaSlot(long requestedCycle, AgnusChipSlotOwner owner)
+        public static long FindNextFixedDmaSlot(long requestedCycle, AgnusChipSlotOwner owner, int channel = -1)
         {
             System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Agnus DMA request cycles must be non-negative.");
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
@@ -413,14 +428,25 @@ namespace CopperMod.Amiga
                 return candidate;
             }
 
-            while (!IsFixedDmaSlotForOwner(owner, candidate))
+            while (!IsFixedDmaSlotForOwner(owner, candidate, channel))
             {
                 candidate += AgnusChipSlotScheduler.SlotCycles;
             }
 
             return candidate;
         }
-    }
+
+        private static bool TryGetPaulaHorizontal(int channel, out int horizontal)
+        {
+            if ((uint)channel < AudioSlotsPerLine)
+            {
+                horizontal = FirstPaulaHorizontal + (channel * 2);
+                return true;
+            }
+
+            horizontal = 0;
+            return false;
+        }    }
 
     internal sealed class AgnusHrmSlotEngine : IAgnusChipSlotTiming
     {
@@ -557,7 +583,7 @@ namespace CopperMod.Amiga
             }
 
             var owner = GetOwner(request.Requester);
-            var granted = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner);
+            var granted = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner, request.Channel);
             return TryCommitFixedSlot(request, owner, granted, out result);
         }
 
@@ -572,7 +598,7 @@ namespace CopperMod.Amiga
 
             var owner = GetOwner(request.Requester);
             var granted = AgnusChipSlotScheduler.AlignToSlot(request.RequestedCycle);
-            if (!AgnusHrmOcsSlotTable.IsFixedDmaSlotForOwner(owner, granted))
+            if (!AgnusHrmOcsSlotTable.IsFixedDmaSlotForOwner(owner, granted, request.Channel))
             {
                 var fixedOwner = AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(granted));
                 result = new AmigaBusAccessResult(request, granted, granted);
@@ -592,7 +618,7 @@ namespace CopperMod.Amiga
             long latestGrantCycle,
             out AmigaBusAccessResult result)
         {
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner);
+            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner, request.Channel);
             while (candidate <= latestGrantCycle)
             {
                 if (TryCommitFixedSlot(request, owner, candidate, out result))
@@ -600,7 +626,7 @@ namespace CopperMod.Amiga
                     return true;
                 }
 
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner);
+                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner, request.Channel);
             }
 
             result = new AmigaBusAccessResult(request, candidate, candidate);
@@ -773,11 +799,11 @@ namespace CopperMod.Amiga
             AmigaBusAccessResult baseResult,
             AgnusChipSlotOwner owner)
         {
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle), owner);
+            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle), owner, request.Channel);
             AmigaBusAccessResult result;
             while (!TryCommitFixedSlot(request, owner, candidate, out result))
             {
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner);
+                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner, request.Channel);
             }
 
             var completed = Math.Max(baseResult.CompletedCycle, result.CompletedCycle);
