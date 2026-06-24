@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>CopperPad</PackageId>
+    <Title>CopperPad</Title>
+    <Authors>Ilkka Lehtoranta</Authors>
+    <Description>Portable .NET game controller normalization library.</Description>
+    <PackageVersion>1.0.0</PackageVersion>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>gamepad;controller;hid;xbox;playstation;switch;input</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="ControllerDiagnostics.cs" />
+    <Compile Remove="ControllerHost.cs" />
+    <Compile Remove="ControllerMappers.cs" />
+    <Compile Remove="ControllerTypes.cs" />
+    <Compile Remove="HidAbstractions.cs" />
+    <Compile Remove="HidSharpDeviceProvider.cs" />
+    <Compile Remove="InputNormalization.cs" />
+    <Compile Remove="KnownControllerMappers.cs" />
+    <Compile Remove="SdlGameControllerDb.cs" />
+  </ItemGroup>
+
+</Project>

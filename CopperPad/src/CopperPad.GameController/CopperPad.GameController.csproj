@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks Condition="'$(EnableIOSProviderBuild)' == 'true'">net10.0;net10.0-ios</TargetFrameworks>
+    <TargetFrameworks Condition="'$(EnableIOSProviderBuild)' != 'true'">net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>CopperPad.GameController</PackageId>
+    <Title>CopperPad Apple GameController Provider</Title>
+    <Authors>Ilkka Lehtoranta</Authors>
+    <Description>Apple GameController provider for CopperPad. The iOS target is enabled with EnableIOSProviderBuild=true on a Mac with the iOS workload installed.</Description>
+    <PackageVersion>1.0.0</PackageVersion>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>gamepad;controller;ios;gamecontroller;input</PackageTags>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CopperPad\CopperPad.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-ios'">
+    <Compile Remove="GameControllerControllerProvider.stub.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-ios'">
+    <Compile Remove="GameControllerControllerProvider.ios.cs" />
+  </ItemGroup>
+
+</Project>

@@ -49,9 +49,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperDisk", "CopperDisk\Co
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperDisk.Tests", "CopperDisk.Tests\CopperDisk.Tests.csproj", "{1AB40067-E53B-4ADD-AC92-8A7C5FA4CD94}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad", "CopperPad\CopperPad.csproj", "{63A437CA-85D4-4184-994E-47E0FD937908}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad", "CopperPad\src\CopperPad\CopperPad.csproj", "{63A437CA-85D4-4184-994E-47E0FD937908}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Tests", "CopperPad.Tests\CopperPad.Tests.csproj", "{2FE497D6-8DFA-413C-980A-76A6837D50E4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Tests", "CopperPad\tests\CopperPad.Tests\CopperPad.Tests.csproj", "{2FE497D6-8DFA-413C-980A-76A6837D50E4}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Amiga.Emulator", "CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj", "{A0158E22-7A4C-4BBC-AEE5-FF29DA7609C0}"
 EndProject
@@ -61,9 +61,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Copper6510", "Copper6510\Co
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Copper6510.Tests", "Copper6510.Tests\Copper6510.Tests.csproj", "{87A1F243-0B36-4AF4-88D3-47E711E05F7B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Gui", "CopperPad.Gui\CopperPad.Gui.csproj", "{4AA424DC-61F3-49DE-B598-63127DE99347}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Gui", "CopperPad\src\CopperPad.Gui\CopperPad.Gui.csproj", "{4AA424DC-61F3-49DE-B598-63127DE99347}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Gui.Tests", "CopperPad.Gui.Tests\CopperPad.Gui.Tests.csproj", "{5F4C3DF4-FAFA-4AF5-9589-EFDB1D1A5B2E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.Gui.Tests", "CopperPad\tests\CopperPad.Gui.Tests\CopperPad.Gui.Tests.csproj", "{5F4C3DF4-FAFA-4AF5-9589-EFDB1D1A5B2E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.HidSharp", "CopperPad\src\CopperPad.HidSharp\CopperPad.HidSharp.csproj", "{64E300F3-44DB-4EBC-9499-83DD99A81B04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperPad.GameController", "CopperPad\src\CopperPad.GameController\CopperPad.GameController.csproj", "{13212C43-04FA-43EB-96BB-5C7C1D13AB39}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -447,6 +451,30 @@ Global
 		{5F4C3DF4-FAFA-4AF5-9589-EFDB1D1A5B2E}.Release|x64.Build.0 = Release|Any CPU
 		{5F4C3DF4-FAFA-4AF5-9589-EFDB1D1A5B2E}.Release|x86.ActiveCfg = Release|Any CPU
 		{5F4C3DF4-FAFA-4AF5-9589-EFDB1D1A5B2E}.Release|x86.Build.0 = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|x64.Build.0 = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Debug|x86.Build.0 = Debug|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|Any CPU.Build.0 = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|x64.ActiveCfg = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|x64.Build.0 = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|x86.ActiveCfg = Release|Any CPU
+		{64E300F3-44DB-4EBC-9499-83DD99A81B04}.Release|x86.Build.0 = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|x64.Build.0 = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Debug|x86.Build.0 = Debug|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|Any CPU.Build.0 = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|x64.ActiveCfg = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|x64.Build.0 = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|x86.ActiveCfg = Release|Any CPU
+		{13212C43-04FA-43EB-96BB-5C7C1D13AB39}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
