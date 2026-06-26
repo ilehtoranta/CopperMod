@@ -1,67 +1,68 @@
 using CopperPad;
 
-public sealed class ControllerHostTests
+public sealed class HidSharpControllerProviderTests
 {
 	[Fact]
-	public async Task Host_StartsStreamsAndPublishesLatestState()
+	public async Task Provider_StartsStreamsAndPublishesLatestSnapshot()
 	{
 		var device = ControllerMapperTests.Device(0x1111, 0x2222, "Generic Gamepad", isGameControllerUsage: true);
 		var stream = new FakeHidInputStream(device.MaxInputReportLength);
 		var provider = new FakeHidDeviceProvider();
 		provider.SetDevices(device);
 		provider.SetStream(device.Id, stream);
-		using var host = new ControllerHost(provider, new ControllerHostOptions());
+		using var controllerProvider = new HidSharpControllerProvider(provider, new HidSharpControllerProviderOptions());
 		var changedCount = 0;
-		VirtualXboxControllerState? observedState = null;
-		host.ControllersChanged += (_, _) => changedCount++;
-		host.ControllerStateChanged += (_, args) => observedState = args.State;
+		CopperControllerSnapshot? observedSnapshot = null;
+		controllerProvider.ControllersChanged += (_, _) => changedCount++;
+		controllerProvider.SnapshotChanged += (_, args) => observedSnapshot = args.Snapshot;
 
-		host.Start();
+		controllerProvider.Start();
 		stream.Enqueue([255, 128, 128, 128, 0, 255, 0x01, 0]);
 
-		var state = await WaitForStateAsync(host, device.Id);
+		var snapshot = await WaitForSnapshotAsync(controllerProvider, device.Id);
 
-		Assert.True(state.A);
-		Assert.InRange(state.LeftX, 0.99, 1.0);
-		Assert.True(state.DPadUp);
+		Assert.True(snapshot.IsPressed(ControllerElement.A));
+		Assert.InRange(snapshot.GetAxis(ControllerElement.LeftStickX), 0.99, 1.0);
+		Assert.True(snapshot.IsPressed(ControllerElement.DPadUp));
+		Assert.Equal(ControllerMappingSource.Fallback, snapshot.MappingSource);
 		Assert.Equal(1, changedCount);
-		Assert.Equal(state, observedState);
+		Assert.Equal(snapshot, observedSnapshot);
 	}
 
 	[Fact]
-	public void Host_RescansAttachAndDetachEvents()
+	public void Provider_RescansAttachAndDetachEvents()
 	{
 		var device = ControllerMapperTests.Device(0x1111, 0x2222, "Generic Gamepad", isGameControllerUsage: true);
 		var provider = new FakeHidDeviceProvider();
-		using var host = new ControllerHost(provider, new ControllerHostOptions());
-		host.Start();
+		using var controllerProvider = new HidSharpControllerProvider(provider, new HidSharpControllerProviderOptions());
+		controllerProvider.Start();
 
 		provider.SetDevices(device);
 		provider.SetStream(device.Id, new FakeHidInputStream(device.MaxInputReportLength));
 		provider.RaiseChanged();
 
-		Assert.Single(host.GetControllers());
+		Assert.Single(controllerProvider.GetControllers());
 
 		provider.SetDevices();
 		provider.RaiseChanged();
 
-		Assert.Empty(host.GetControllers());
-		Assert.False(host.TryGetState(device.Id, out _));
+		Assert.Empty(controllerProvider.GetControllers());
+		Assert.False(controllerProvider.TryGetSnapshot(device.Id, out _));
 	}
 
-	private static async Task<VirtualXboxControllerState> WaitForStateAsync(ControllerHost host, string id)
+	private static async Task<CopperControllerSnapshot> WaitForSnapshotAsync(HidSharpControllerProvider provider, string id)
 	{
 		for (var i = 0; i < 50; i++)
 		{
-			if (host.TryGetState(id, out var state) && state.IsConnected)
+			if (provider.TryGetSnapshot(id, out var snapshot) && snapshot.IsConnected)
 			{
-				return state;
+				return snapshot;
 			}
 
 			await Task.Delay(20).ConfigureAwait(false);
 		}
 
-		throw new TimeoutException("The fake controller state was not published.");
+		throw new TimeoutException("The fake controller snapshot was not published.");
 	}
 
 	private sealed class FakeHidDeviceProvider : IHidDeviceProvider

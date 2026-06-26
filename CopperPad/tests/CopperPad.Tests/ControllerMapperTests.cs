@@ -11,16 +11,16 @@ public sealed class ControllerMapperTests
 
 		var state = mapper.Map(new RawControllerInput(device, report, report.Length, DateTimeOffset.UtcNow));
 
-		Assert.True(state.A);
-		Assert.False(state.B);
-		Assert.False(state.X);
-		Assert.False(state.Y);
-		Assert.True(state.DPadRight);
-		Assert.True(state.LeftShoulder);
-		Assert.True(state.Back);
-		Assert.InRange(state.LeftY, 0.99, 1.0);
-		Assert.InRange(state.RightX, 0.99, 1.0);
-		Assert.InRange(state.RightTrigger, 0.99, 1.0);
+		Assert.True(state.IsPressed(ControllerElement.A));
+		Assert.False(state.IsPressed(ControllerElement.B));
+		Assert.False(state.IsPressed(ControllerElement.X));
+		Assert.False(state.IsPressed(ControllerElement.Y));
+		Assert.True(state.IsPressed(ControllerElement.DPadRight));
+		Assert.True(state.IsPressed(ControllerElement.LeftShoulder));
+		Assert.True(state.IsPressed(ControllerElement.Select));
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickY), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightTrigger), 0.99, 1.0);
 	}
 
 	[Fact]
@@ -42,16 +42,16 @@ public sealed class ControllerMapperTests
 
 		var state = mapper.Map(new RawControllerInput(device, report, report.Length, DateTimeOffset.UtcNow));
 
-		Assert.True(state.A);
-		Assert.True(state.RightShoulder);
-		Assert.True(state.Guide);
-		Assert.True(state.DPadLeft);
-		Assert.InRange(state.LeftTrigger, 0.49, 0.51);
-		Assert.InRange(state.RightTrigger, 0.99, 1.0);
-		Assert.InRange(state.LeftX, 0.99, 1.0);
-		Assert.InRange(state.LeftY, 0.99, 1.0);
-		Assert.Equal(0, state.RightX, precision: 3);
-		Assert.InRange(state.RightY, -1.0, -0.99);
+		Assert.True(state.IsPressed(ControllerElement.A));
+		Assert.True(state.IsPressed(ControllerElement.RightShoulder));
+		Assert.True(state.IsPressed(ControllerElement.Menu));
+		Assert.True(state.IsPressed(ControllerElement.DPadLeft));
+		Assert.InRange(state.GetAxis(ControllerElement.LeftTrigger), 0.49, 0.51);
+		Assert.InRange(state.GetAxis(ControllerElement.RightTrigger), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickY), 0.99, 1.0);
+		Assert.Equal(0, state.GetAxis(ControllerElement.RightStickX), precision: 3);
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickY), -1.0, -0.99);
 	}
 
 	[Fact]
@@ -63,14 +63,14 @@ public sealed class ControllerMapperTests
 
 		var state = mapper.Map(new RawControllerInput(device, report, report.Length, DateTimeOffset.UtcNow));
 
-		Assert.True(state.A);
-		Assert.True(state.X);
-		Assert.True(state.Start);
-		Assert.True(state.DPadUp);
-		Assert.True(state.DPadRight);
-		Assert.InRange(state.LeftX, 0.99, 1.0);
-		Assert.InRange(state.LeftY, 0.99, 1.0);
-		Assert.InRange(state.RightTrigger, 0.99, 1.0);
+		Assert.True(state.IsPressed(ControllerElement.A));
+		Assert.True(state.IsPressed(ControllerElement.X));
+		Assert.True(state.IsPressed(ControllerElement.Start));
+		Assert.True(state.IsPressed(ControllerElement.DPadUp));
+		Assert.True(state.IsPressed(ControllerElement.DPadRight));
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickY), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightTrigger), 0.99, 1.0);
 	}
 
 	[Fact]
@@ -107,9 +107,9 @@ public sealed class ControllerMapperTests
 		var mapper = ControllerMapperFactory.Create(device, profiles);
 		var state = mapper.Map(new RawControllerInput(device, [0x01, 255], 2, DateTimeOffset.UtcNow));
 
-		Assert.True(state.B);
-		Assert.False(state.A);
-		Assert.InRange(state.LeftX, 0.99, 1.0);
+		Assert.True(state.IsPressed(ControllerElement.B));
+		Assert.False(state.IsPressed(ControllerElement.A));
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickX), 0.99, 1.0);
 	}
 
 	[Fact]

@@ -5,8 +5,10 @@ namespace CopperPad.Gui;
 internal static class Program
 {
 	[STAThread]
-	public static void Main(string[] args)
+	public static int Main(string[] args)
 	{
+		var options = GuiStartupOptions.Parse(args);
+		App.StartupOptions = options;
 		AppDomain.CurrentDomain.UnhandledException += (_, args) =>
 		{
 			if (args.ExceptionObject is Exception exception)
@@ -22,12 +24,12 @@ internal static class Program
 
 		try
 		{
-			BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+			return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 		}
 		catch (Exception ex)
 		{
 			CrashLog.Write("Fatal startup exception", ex);
-			throw;
+			return 1;
 		}
 	}
 
@@ -35,4 +37,10 @@ internal static class Program
 		=> AppBuilder.Configure<App>()
 			.UsePlatformDetect()
 			.LogToTrace();
+}
+
+internal sealed record GuiStartupOptions(bool SmokeTest)
+{
+	public static GuiStartupOptions Parse(string[] args)
+		=> new(args.Any(arg => string.Equals(arg, "--smoke-test", StringComparison.OrdinalIgnoreCase)));
 }

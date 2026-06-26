@@ -23,11 +23,11 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,18 +36,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperPad\CopperPad.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Include="..\CopperPad\ControllerDiagnostics.cs" Link="ControllerDiagnostics.cs" />
-    <Compile Include="..\CopperPad\ControllerHost.cs" Link="ControllerHost.cs" />
-    <Compile Include="..\CopperPad\ControllerMappers.cs" Link="ControllerMappers.cs" />
-    <Compile Include="..\CopperPad\ControllerTypes.cs" Link="ControllerTypes.cs" />
-    <Compile Include="..\CopperPad\HidAbstractions.cs" Link="HidAbstractions.cs" />
-    <Compile Include="..\CopperPad\HidSharpDeviceProvider.cs" Link="HidSharpDeviceProvider.cs" />
-    <Compile Include="..\CopperPad\InputNormalization.cs" Link="InputNormalization.cs" />
-    <Compile Include="..\CopperPad\KnownControllerMappers.cs" Link="KnownControllerMappers.cs" />
-    <Compile Include="..\CopperPad\SdlGameControllerDb.cs" Link="SdlGameControllerDb.cs" />
   </ItemGroup>
 
   <ItemGroup>

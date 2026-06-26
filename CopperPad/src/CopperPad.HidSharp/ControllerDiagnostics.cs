@@ -5,6 +5,19 @@
 
 namespace CopperPad;
 
+/// <summary>
+/// Describes one HID device discovered by diagnostics enumeration.
+/// </summary>
+/// <param name="Id">Stable provider-specific HID device identifier.</param>
+/// <param name="ProductName">Human-readable HID product name.</param>
+/// <param name="VendorId">USB/HID vendor identifier.</param>
+/// <param name="ProductId">USB/HID product identifier.</param>
+/// <param name="Transport">Best-known device transport.</param>
+/// <param name="MaxInputReportLength">Maximum input report length reported by the device.</param>
+/// <param name="ReportDescriptor">Raw HID report descriptor bytes.</param>
+/// <param name="IsGameControllerUsage">Whether the descriptor advertises a game-controller usage.</param>
+/// <param name="ReportsUseId">Whether input reports include report IDs.</param>
+/// <param name="Diagnostic">Descriptor or enumeration diagnostic message, when available.</param>
 public sealed record HidDeviceInfo(
 	string Id,
 	string ProductName,
@@ -17,25 +30,41 @@ public sealed record HidDeviceInfo(
 	bool ReportsUseId,
 	string? Diagnostic);
 
+/// <summary>
+/// Event data for HID diagnostics device-list changes.
+/// </summary>
+/// <param name="devices">Current HID device list.</param>
+/// <param name="diagnostic">Enumeration diagnostic message, when available.</param>
 public sealed class HidDevicesChangedEventArgs(IReadOnlyList<HidDeviceInfo> devices, string? diagnostic = null) : EventArgs
 {
+	/// <summary>Gets the current HID device list.</summary>
 	public IReadOnlyList<HidDeviceInfo> Devices { get; } = devices;
+	/// <summary>Gets an enumeration diagnostic message, when available.</summary>
 	public string? Diagnostic { get; } = diagnostic;
 }
 
+/// <summary>
+/// Event data for a raw HID input report.
+/// </summary>
+/// <param name="device">The selected HID device.</param>
+/// <param name="report">A copy of the raw report bytes.</param>
+/// <param name="length">The number of valid bytes in <paramref name="report"/>.</param>
+/// <param name="timestamp">The time the report was read.</param>
 public sealed class ControllerRawReportReceivedEventArgs(HidDeviceInfo device, byte[] report, int length, DateTimeOffset timestamp) : EventArgs
 {
+	/// <summary>Gets the selected HID device.</summary>
 	public HidDeviceInfo Device { get; } = device;
+	/// <summary>Gets a copy of the raw report bytes.</summary>
 	public byte[] Report { get; } = report;
+	/// <summary>Gets the number of valid bytes in <see cref="Report"/>.</summary>
 	public int Length { get; } = length;
+	/// <summary>Gets the time the report was read.</summary>
 	public DateTimeOffset Timestamp { get; } = timestamp;
 }
 
-public sealed class ControllerStateChangedEventArgs(VirtualXboxControllerState state) : EventArgs
-{
-	public VirtualXboxControllerState State { get; } = state;
-}
-
+/// <summary>
+/// Hosts HID diagnostics enumeration, selected-device raw reports, and mapped snapshots.
+/// </summary>
 public sealed class ControllerDiagnosticsHost : IDisposable
 {
 	private readonly IHidDeviceProvider _provider;
@@ -51,11 +80,15 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 	private bool _started;
 	private bool _disposed;
 
-	public ControllerDiagnosticsHost(ControllerHostOptions? options = null) : this(new HidSharpDeviceProvider(), options ?? new ControllerHostOptions())
+	/// <summary>
+	/// Creates a diagnostics host using the local HidSharp device list.
+	/// </summary>
+	/// <param name="options">Provider options, or <see langword="null"/> for defaults.</param>
+	public ControllerDiagnosticsHost(HidSharpControllerProviderOptions? options = null) : this(new HidSharpDeviceProvider(), options ?? new HidSharpControllerProviderOptions())
 	{
 	}
 
-	internal ControllerDiagnosticsHost(IHidDeviceProvider provider, ControllerHostOptions options)
+	internal ControllerDiagnosticsHost(IHidDeviceProvider provider, HidSharpControllerProviderOptions options)
 	{
 		_provider = provider;
 		_profiles = options.Profiles;
@@ -63,10 +96,14 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		_provider.Changed += OnProviderChanged;
 	}
 
+	/// <summary>Raised when the HID device list changes.</summary>
 	public event EventHandler<HidDevicesChangedEventArgs>? DevicesChanged;
+	/// <summary>Raised when a raw input report is read from the selected device.</summary>
 	public event EventHandler<ControllerRawReportReceivedEventArgs>? RawReportReceived;
-	public event EventHandler<ControllerStateChangedEventArgs>? StateChanged;
+	/// <summary>Raised when a selected-device report is mapped to a CopperPad snapshot.</summary>
+	public event EventHandler<CopperControllerSnapshotChangedEventArgs>? SnapshotChanged;
 
+	/// <summary>Gets the selected HID device identifier, or <see langword="null"/> when none is selected.</summary>
 	public string? SelectedDeviceId
 	{
 		get
@@ -78,6 +115,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>Starts HID enumeration and selected-device reading.</summary>
 	public void Start()
 	{
 		ThrowIfDisposed();
@@ -93,6 +131,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>Stops HID enumeration and selected-device reading.</summary>
 	public void Stop()
 	{
 		lock (_gate)
@@ -110,6 +149,10 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Gets the most recently enumerated HID devices.
+	/// </summary>
+	/// <returns>The current HID device list.</returns>
 	public IReadOnlyList<HidDeviceInfo> GetDevices()
 	{
 		lock (_gate)
@@ -118,6 +161,11 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Gets mapping information for a HID device.
+	/// </summary>
+	/// <param name="deviceId">The HID device identifier.</param>
+	/// <returns>The selected mapping, or <see langword="null"/> when the device is unknown.</returns>
 	public ControllerMappingInfo? GetMappingInfo(string deviceId)
 	{
 		lock (_gate)
@@ -127,6 +175,10 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Selects the HID device whose raw reports and mapped snapshots should be read.
+	/// </summary>
+	/// <param name="deviceId">The HID device identifier, or <see langword="null"/> to clear the selection.</param>
 	public void SelectDevice(string? deviceId)
 	{
 		ThrowIfDisposed();
@@ -145,6 +197,10 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Updates the user profiles used by mapping diagnostics.
+	/// </summary>
+	/// <param name="profiles">Profiles to use for subsequent selected-device reads.</param>
 	public void UpdateProfiles(ControllerProfileSet profiles)
 	{
 		ThrowIfDisposed();
@@ -158,6 +214,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 	}
 
+	/// <summary>Stops readers and releases provider subscriptions.</summary>
 	public void Dispose()
 	{
 		if (_disposed)
@@ -284,7 +341,7 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 				var timestamp = DateTimeOffset.UtcNow;
 				RawReportReceived?.Invoke(this, new ControllerRawReportReceivedEventArgs(info, snapshot, read, timestamp));
 				var input = new RawControllerInput(device, snapshot, read, timestamp);
-				StateChanged?.Invoke(this, new ControllerStateChangedEventArgs(mapper.Map(input)));
+				SnapshotChanged?.Invoke(this, new CopperControllerSnapshotChangedEventArgs(mapper.Map(input)));
 			}
 		}
 		catch (OperationCanceledException)
@@ -292,16 +349,11 @@ public sealed class ControllerDiagnosticsHost : IDisposable
 		}
 		catch (Exception ex) when (IsRecoverableHidException(ex))
 		{
-			var failed = info with { Diagnostic = "HID read failed: " + ex.Message };
-			var controller = new ControllerInfo(
-				failed.Id,
-				failed.ProductName,
-				failed.VendorId,
-				failed.ProductId,
-				failed.Transport,
-				false,
-				failed.Diagnostic);
-			StateChanged?.Invoke(this, new ControllerStateChangedEventArgs(VirtualXboxControllerState.Disconnected(controller, DateTimeOffset.UtcNow)));
+			var diagnostic = "HID read failed: " + ex.Message;
+			SnapshotChanged?.Invoke(
+				this,
+				new CopperControllerSnapshotChangedEventArgs(
+					CopperControllerSnapshotBuilder.Disconnected(device, DateTimeOffset.UtcNow, mapper.MappingInfo, diagnostic)));
 		}
 	}
 

@@ -4,6 +4,14 @@ using CopperPad.Gui;
 public sealed class ProfileEditingTests
 {
 	[Fact]
+	public void StartupOptions_DetectsSmokeTestArgument()
+	{
+		var options = GuiStartupOptions.Parse(["--smoke-test"]);
+
+		Assert.True(options.SmokeTest);
+	}
+
+	[Fact]
 	public void ReportAnalyzer_SuggestsBitSourceForSingleBitChange()
 	{
 		var changes = ReportAnalyzer.DetectChanges([0x00], [0x04]);
@@ -143,10 +151,12 @@ public sealed class ProfileEditingTests
 		var controller = Device("Generic USB Joystick", 0x0079, 0x0006, isGameControllerUsage: false);
 		var usageController = Device("HID input", 0x1234, 0x5678, isGameControllerUsage: true);
 		var mouse = Device("Trust Wireless Mouse", 0x145F, 0x02D0, isGameControllerUsage: false);
+		var unknownHid = Device("Unknown HID controller", 0xFFFF, 0xBACE, isGameControllerUsage: false);
 
 		Assert.True(DeviceDisplay.IsLikelyGameController(controller));
 		Assert.True(DeviceDisplay.IsLikelyGameController(usageController));
 		Assert.False(DeviceDisplay.IsLikelyGameController(mouse));
+		Assert.False(DeviceDisplay.IsLikelyGameController(unknownHid));
 	}
 
 	[Fact]

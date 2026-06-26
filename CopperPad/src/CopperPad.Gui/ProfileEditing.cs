@@ -59,12 +59,26 @@ internal static class ProfileDocumentDisplay
 internal static class DeviceDisplay
 {
 	public static bool IsLikelyGameController(HidDeviceInfo device)
-		=> device.IsGameControllerUsage ||
-			ContainsAny(device.ProductName, "gamepad", "controller", "joystick", "arcade", "fightstick", "pad") ||
-			(device.VendorId == 0x0079 && device.ProductId == 0x0006);
+	{
+		if (device.IsGameControllerUsage ||
+			(device.VendorId == 0x0079 && device.ProductId == 0x0006))
+		{
+			return true;
+		}
+
+		if (IsUnknownHidPlaceholder(device.ProductName))
+		{
+			return false;
+		}
+
+		return ContainsAny(device.ProductName, "gamepad", "controller", "joystick", "arcade", "fightstick", "pad");
+	}
 
 	private static bool ContainsAny(string text, params string[] values)
 		=> values.Any(value => text.Contains(value, StringComparison.OrdinalIgnoreCase));
+
+	private static bool IsUnknownHidPlaceholder(string productName)
+		=> productName.StartsWith("Unknown HID", StringComparison.OrdinalIgnoreCase);
 }
 
 internal sealed record ReportChange(

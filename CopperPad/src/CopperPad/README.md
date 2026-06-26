@@ -11,7 +11,37 @@ Desktop HID support lives in `CopperPad.HidSharp`. Apple GameController support 
 - Linux HID support uses hidraw through HidSharp; users may need udev rules or group permissions for non-root access.
 - iOS support uses Apple's GameController APIs through `CopperPad.GameController`; validation requires Mac/iOS hardware.
 
-Version 2 focuses on profile-first snapshots, device attach/detach, normalization, and app-supplied JSON profile overrides. Rumble/force feedback is intentionally out of scope.
+Version 1 focuses on profile-first snapshots, device attach/detach, normalization, and app-supplied JSON profile overrides. Rumble/force feedback is intentionally out of scope.
+
+## Quick example
+
+`CopperPad` contains the provider-neutral host and snapshot API. Add a platform provider such as `CopperPad.HidSharp` or `CopperPad.GameController` to discover real devices.
+
+```csharp
+using CopperPad;
+
+IControllerProvider provider = GetPlatformProvider();
+using var host = new CopperControllerHost(provider);
+host.Start();
+
+foreach (var controller in host.GetControllers())
+{
+	var snapshot = controller.GetSnapshot();
+	Console.WriteLine($"{snapshot.DisplayName}: A={snapshot.A}, LX={snapshot.GetAxis(ControllerElement.LeftStickX):0.00}");
+}
+```
+
+Subscribe to element changes when an app wants input updates without polling:
+
+```csharp
+controller.ElementChanged += (_, args) =>
+{
+	if (args.Element == ControllerElement.South && args.CurrentValue.IsPressed)
+	{
+		Console.WriteLine("South/A pressed");
+	}
+};
+```
 
 ## Controller mappings
 

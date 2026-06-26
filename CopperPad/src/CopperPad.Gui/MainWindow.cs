@@ -25,7 +25,6 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly FileControllerProfileStore _profileStore = new(CopperPadProfilePaths.GetDefaultProfilePath());
 	private readonly ControllerDiagnosticsHost _host;
 	private readonly ListBox _deviceList = new();
-	private readonly TextBlock _deviceDetails = TextBlock();
 	private readonly TextBlock _statusText = TextBlock();
 	private readonly TextBlock _deviceFilterText = TextBlock();
 	private readonly CheckBox _showAllDevicesCheck = new() { Content = "Show all HID" };
@@ -78,7 +77,7 @@ internal sealed class MainWindow : Window, IDisposable
 
 	public MainWindow()
 	{
-		_host = new ControllerDiagnosticsHost(new ControllerHostOptions());
+		_host = new ControllerDiagnosticsHost(new HidSharpControllerProviderOptions());
 		Title = "CopperPad";
 		Width = 1180;
 		Height = 760;
@@ -88,7 +87,7 @@ internal sealed class MainWindow : Window, IDisposable
 
 		_host.DevicesChanged += (_, args) => PostUi("Device refresh failed", () => OnDevicesChanged(args));
 		_host.RawReportReceived += (_, args) => PostUi("Raw report update failed", () => OnRawReport(args));
-		_host.StateChanged += (_, args) => PostUi("Controller state update failed", () => OnStateChanged(args.State));
+		_host.SnapshotChanged += (_, args) => PostUi("Controller snapshot update failed", () => OnSnapshotChanged(args.Snapshot));
 		Opened += async (_, _) => await TryRunUiActionAsync("Startup failed", InitializeAsync).ConfigureAwait(true);
 		Closed += (_, _) => Dispose();
 	}
@@ -152,7 +151,7 @@ internal sealed class MainWindow : Window, IDisposable
 	{
 		var panel = new Grid
 		{
-			RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+			RowDefinitions = new RowDefinitions("Auto,Auto,*"),
 			ColumnDefinitions = new ColumnDefinitions("*"),
 			Margin = new Thickness(0, 0, 12, 0)
 		};
@@ -175,9 +174,6 @@ internal sealed class MainWindow : Window, IDisposable
 		};
 		Grid.SetRow(_deviceList, 2);
 		panel.Children.Add(_deviceList);
-		_deviceDetails.Margin = new Thickness(0, 10, 0, 0);
-		Grid.SetRow(_deviceDetails, 3);
-		panel.Children.Add(_deviceDetails);
 		return panel;
 	}
 
@@ -497,7 +493,6 @@ internal sealed class MainWindow : Window, IDisposable
 		_host.SelectDevice(device?.Id);
 		if (device == null)
 		{
-			_deviceDetails.Text = "No controllers found.";
 			_descriptorText.Text = "";
 			_controllerSummaryText.Text = "Select a controller.";
 			_draftProfile = null;
@@ -558,34 +553,40 @@ internal sealed class MainWindow : Window, IDisposable
 		ObserveCalibration(_lastReport);
 	}
 
-	private void OnStateChanged(VirtualXboxControllerState state)
+	private void OnSnapshotChanged(CopperControllerSnapshot state)
 	{
 		if (_selectedDevice == null || !string.Equals(state.ControllerId, _selectedDevice.Id, StringComparison.Ordinal))
 		{
 			return;
 		}
 
-		_leftStick.SetPosition(state.LeftX, state.LeftY);
-		_rightStick.SetPosition(state.RightX, state.RightY);
-		_leftTrigger.Value = state.LeftTrigger;
-		_rightTrigger.Value = state.RightTrigger;
-		SetIndicator(ControllerElement.A, state.A);
-		SetIndicator(ControllerElement.B, state.B);
-		SetIndicator(ControllerElement.X, state.X);
-		SetIndicator(ControllerElement.Y, state.Y);
-		SetIndicator(ControllerElement.LeftShoulder, state.LeftShoulder);
-		SetIndicator(ControllerElement.RightShoulder, state.RightShoulder);
-		SetIndicator(ControllerElement.Select, state.Back);
-		SetIndicator(ControllerElement.Start, state.Start);
-		SetIndicator(ControllerElement.Menu, state.Guide);
-		SetIndicator(ControllerElement.LeftStickButton, state.LeftStick);
-		SetIndicator(ControllerElement.RightStickButton, state.RightStick);
-		SetIndicator(ControllerElement.DPadUp, state.DPadUp);
-		SetIndicator(ControllerElement.DPadDown, state.DPadDown);
-		SetIndicator(ControllerElement.DPadLeft, state.DPadLeft);
-		SetIndicator(ControllerElement.DPadRight, state.DPadRight);
+		var leftX = state.GetAxis(ControllerElement.LeftStickX);
+		var leftY = state.GetAxis(ControllerElement.LeftStickY);
+		var rightX = state.GetAxis(ControllerElement.RightStickX);
+		var rightY = state.GetAxis(ControllerElement.RightStickY);
+		var leftTrigger = state.GetAxis(ControllerElement.LeftTrigger);
+		var rightTrigger = state.GetAxis(ControllerElement.RightTrigger);
+		_leftStick.SetPosition(leftX, leftY);
+		_rightStick.SetPosition(rightX, rightY);
+		_leftTrigger.Value = leftTrigger;
+		_rightTrigger.Value = rightTrigger;
+		SetIndicator(ControllerElement.A, state.IsPressed(ControllerElement.A));
+		SetIndicator(ControllerElement.B, state.IsPressed(ControllerElement.B));
+		SetIndicator(ControllerElement.X, state.IsPressed(ControllerElement.X));
+		SetIndicator(ControllerElement.Y, state.IsPressed(ControllerElement.Y));
+		SetIndicator(ControllerElement.LeftShoulder, state.IsPressed(ControllerElement.LeftShoulder));
+		SetIndicator(ControllerElement.RightShoulder, state.IsPressed(ControllerElement.RightShoulder));
+		SetIndicator(ControllerElement.Select, state.IsPressed(ControllerElement.Select));
+		SetIndicator(ControllerElement.Start, state.IsPressed(ControllerElement.Start));
+		SetIndicator(ControllerElement.Menu, state.IsPressed(ControllerElement.Menu));
+		SetIndicator(ControllerElement.LeftStickButton, state.IsPressed(ControllerElement.LeftStickButton));
+		SetIndicator(ControllerElement.RightStickButton, state.IsPressed(ControllerElement.RightStickButton));
+		SetIndicator(ControllerElement.DPadUp, state.IsPressed(ControllerElement.DPadUp));
+		SetIndicator(ControllerElement.DPadDown, state.IsPressed(ControllerElement.DPadDown));
+		SetIndicator(ControllerElement.DPadLeft, state.IsPressed(ControllerElement.DPadLeft));
+		SetIndicator(ControllerElement.DPadRight, state.IsPressed(ControllerElement.DPadRight));
 		_stateText.Text =
-			$"LX {state.LeftX:0.00}  LY {state.LeftY:0.00}  RX {state.RightX:0.00}  RY {state.RightY:0.00}  LT {state.LeftTrigger:0.00}  RT {state.RightTrigger:0.00}";
+			$"LX {leftX:0.00}  LY {leftY:0.00}  RX {rightX:0.00}  RY {rightY:0.00}  LT {leftTrigger:0.00}  RT {rightTrigger:0.00}";
 		if (!string.IsNullOrWhiteSpace(state.Diagnostic))
 		{
 			SetStatus(state.Diagnostic);
@@ -1001,8 +1002,6 @@ internal sealed class MainWindow : Window, IDisposable
 		var savedProfile = FindSavedProfile(_selectedDevice);
 		var profileText = ProfileDocumentDisplay.Format(_profileStore.Path, savedProfile != null, _draftProfile);
 		_controllerSummaryText.Text =
-			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
-		_deviceDetails.Text =
 			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
 		_descriptorText.Text = mappingText + "\n" + profileText + "\n\nDescriptor\n" + ToHexRows(_selectedDevice.ReportDescriptor);
 		_saveProfileButton.Content = savedProfile == null ? "Create Override" : "Save Override";
