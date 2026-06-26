@@ -126,6 +126,29 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
+	public void WaveformZeroHoldsPreviousDacOutputBeforeFloatingDecay()
+	{
+		var chip = CreateTracedChip(SidChipModel.Mos8580, out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x20);
+		chip.Render(1);
+
+		chip.Write(0x04, 0x00);
+		chip.Render(106);
+
+		var active = Frame(trace, cycle: 1, voice: 0);
+		var firstFloating = Frame(trace, cycle: 2, voice: 0);
+		var laterFloating = Frame(trace, cycle: 107, voice: 0);
+		Assert.True(firstFloating.Events.HasFlag(SidCycleTraceEvents.ForwardedWrite));
+		Assert.Equal(0x20, active.Waveform);
+		Assert.Equal(0x800u, active.WaveformDac);
+		Assert.Equal(0x00, firstFloating.Waveform);
+		Assert.Equal(active.WaveformDac, firstFloating.WaveformDac);
+		Assert.Equal(active.WaveformOutput, firstFloating.WaveformOutput);
+		Assert.Equal(active.WaveformDac, laterFloating.WaveformDac);
+		Assert.Equal(active.WaveformOutput, laterFloating.WaveformOutput);
+	}
+
+	[Fact]
 	public void SawAndTriangleDacsUseAdvancedAccumulatorBitsAroundHalfCycle()
 	{
 		var saw = CreateTracedChip(out var sawTrace);

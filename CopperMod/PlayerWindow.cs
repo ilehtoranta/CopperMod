@@ -14,7 +14,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 {
 	private static readonly bool WaveformUiEnabled = true;
 	private static readonly TimeSpan ViewRefreshInterval = TimeSpan.FromMilliseconds(200);
-	private static readonly TimeSpan WaveformRefreshInterval = TimeSpan.FromMilliseconds(16);
+	private static readonly TimeSpan WaveformRefreshInterval = TimeSpan.FromMilliseconds(50);
 	private static readonly TimeSpan WaveformDisplayDelay = TimeSpan.FromMilliseconds(250);
 	private const int MaximumPendingWaveforms = 64;
 	private const float WaveformSmoothingAmount = 1.0f;
@@ -202,16 +202,16 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 		_previousSubSongButton = new Button
 		{
-			X = Pos.AnchorEnd(30),
-			Y = 7,
+			X = Pos.Right(nextFileButton) + 1,
+			Y = 2,
 			Text = "-Sub"
 		};
 		_previousSubSongButton.Accepted += (_, _) => SelectRelativeSubSong(-1);
 
 		_nextSubSongButton = new Button
 		{
-			X = Pos.AnchorEnd(20),
-			Y = 7,
+			X = Pos.Right(_previousSubSongButton),
+			Y = 2,
 			Text = "+Sub"
 		};
 		_nextSubSongButton.Accepted += (_, _) => SelectRelativeSubSong(1);
@@ -239,8 +239,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 			Width = Dim.Fill(2)
 		};
 
-		Add(_pathField, loadButton, previousFileButton, nextFileButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _waveformModeButton, _c64FocusButton, _infoButton, quitButton,
-			_titleLabel, _formatLabel, _subSongLabel, _previousSubSongButton, _nextSubSongButton, _stateLabel, _timeLabel, _progressBar);
+		Add(_pathField, loadButton, previousFileButton, nextFileButton, _previousSubSongButton, _nextSubSongButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _waveformModeButton, _c64FocusButton, _infoButton, quitButton,
+			_titleLabel, _formatLabel, _subSongLabel, _stateLabel, _timeLabel, _progressBar);
 
 		if (WaveformUiEnabled)
 		{
@@ -514,7 +514,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 		{
 			_lastErrorText = ex.ToString();
 			_stateLabel.Text = "Error: " + ex.Message;
-			MessageBox.ErrorQuery(_application, "Error", ex.Message, "OK");
+			ShowModalDialog(() => MessageBox.ErrorQuery(_application, "Error", ex.Message, "OK"));
 		}
 	}
 
@@ -835,6 +835,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void RefreshView()
 	{
+		if (!CanRefreshWindow())
+		{
+			return;
+		}
+
 		if (!_player.HasC64Video && _c64KeyboardFocusActive)
 		{
 			SetC64KeyboardFocus(false, refresh: false);
@@ -911,6 +916,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void RefreshDisplayImage()
 	{
+		if (!CanRefreshWindow())
+		{
+			return;
+		}
+
 		if (ResolveDisplayMode() == PlayerDisplayMode.C64Video)
 		{
 			RefreshC64Video();
@@ -918,6 +928,13 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 
 		RefreshWaveform();
+	}
+
+	private bool CanRefreshWindow()
+	{
+		// Avoid redrawing this window while a modal is on top; ImageView can
+		// re-emit sixel content outside normal dialog clipping.
+		return _application.TopRunnableView == null || ReferenceEquals(_application.TopRunnableView, this);
 	}
 
 	private void RefreshC64Video()
@@ -988,8 +1005,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 			target,
 			WaveformSmoothingAmount,
 			out var settled);
-		_waveformNeedsRender = !settled || HasPendingWaveforms();
-		if (settled && !HasPendingWaveforms())
+		_waveformNeedsRender = ShouldContinueWaveformRendering(settled);
+		if (settled)
 		{
 			_displayWaveform = target;
 			_waveformNeedsRender = false;
@@ -999,6 +1016,11 @@ internal sealed class PlayerWindow : Window, IDisposable
 		_waveformImageWidth = imageWidth;
 		_waveformImageHeight = imageHeight;
 		_waveformView.SetNeedsDraw();
+	}
+
+	internal static bool ShouldContinueWaveformRendering(bool settled)
+	{
+		return !settled;
 	}
 
 	private (int Width, int Height) ComputeWaveformImageSize()
@@ -1057,14 +1079,6 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 	}
 
-	private bool HasPendingWaveforms()
-	{
-		lock (_waveformSync)
-		{
-			return _pendingWaveforms.Count > 0;
-		}
-	}
-
 	private void ClearWaveforms()
 	{
 		lock (_waveformSync)
@@ -1077,7 +1091,49 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void ShowInfoDialog()
 	{
-		MessageBox.Query(_application, ComputeInfoDialogWidth(), ComputeInfoDialogHeight(), "Info", FormatInfo(), "OK");
+		ShowModalDialog(() => MessageBox.Query(_application, ComputeInfoDialogWidth(), ComputeInfoDialogHeight(), "Info", FormatInfo(), "OK"));
+	}
+
+	private void ShowModalDialog(Action showDialog)
+	{
+		var waveformView = _waveformView;
+		var waveformLabel = _waveformLabel;
+		var waveformViewWasVisible = waveformView?.Visible ?? false;
+		var waveformLabelWasVisible = waveformLabel?.Visible ?? false;
+
+		if (waveformView != null)
+		{
+			waveformView.Visible = false;
+			if (waveformLabel != null)
+			{
+				waveformLabel.Visible = false;
+			}
+
+			_application.ClearScreenNextIteration = true;
+			SetNeedsDraw();
+			_application.LayoutAndDraw(forceRedraw: true);
+		}
+
+		try
+		{
+			showDialog();
+		}
+		finally
+		{
+			if (waveformView != null)
+			{
+				waveformView.Visible = waveformViewWasVisible;
+				if (waveformLabel != null)
+				{
+					waveformLabel.Visible = waveformLabelWasVisible;
+				}
+
+				_waveformImageWidth = 0;
+				_waveformImageHeight = 0;
+				_application.ClearScreenNextIteration = true;
+				RefreshView();
+			}
+		}
 	}
 
 	private int ComputeInfoDialogWidth()
