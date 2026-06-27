@@ -965,6 +965,167 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void RowBitplaneDmaBatchMatchesScalarRead()
+	{
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var scalarBus = new AmigaBus();
+		var batchBus = new AmigaBus();
+		BigEndian.WriteUInt16(scalarBus.ChipRam, 0x2000, 0xA55A);
+		BigEndian.WriteUInt16(batchBus.ChipRam, 0x2000, 0xA55A);
+		var entries = new[]
+		{
+			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true)
+		};
+		var values = new ushort[entries.Length];
+		var granted = new bool[entries.Length];
+
+		Assert.True(scalarBus.TryReadLiveBitplaneDmaWord(0x2000, fetchCycle, out var scalarValue, out var scalarGrantedCycle));
+		batchBus.ReadRowBitplaneDmaFetchesForPresentation(
+			entries,
+			values,
+			granted,
+			out var grantedCount,
+			out var firstGrantedCycle,
+			out var lastGrantedCycle);
+
+		Assert.True(granted[0]);
+		Assert.Equal(1, grantedCount);
+		Assert.Equal(scalarValue, values[0]);
+		Assert.Equal(scalarGrantedCycle, firstGrantedCycle);
+		Assert.Equal(scalarGrantedCycle, lastGrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Bitplane, batchBus.Agnus.CaptureSnapshot().LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void RowBitplaneDmaBatchDeniedByRefreshMatchesScalarRead()
+	{
+		var scalarBus = new AmigaBus();
+		var batchBus = new AmigaBus();
+		var entries = new[]
+		{
+			new RowDmaBitplaneEntry(0, plane: 0, word: 0, slot: 0, address: 0x1000, rowPresent: true)
+		};
+		var values = new ushort[entries.Length];
+		var granted = new bool[entries.Length];
+
+		Assert.False(scalarBus.TryReadLiveBitplaneDmaWord(0x1000, 0, out var scalarValue, out var scalarGrantedCycle));
+		batchBus.ReadRowBitplaneDmaFetchesForPresentation(
+			entries,
+			values,
+			granted,
+			out var grantedCount,
+			out var firstGrantedCycle,
+			out var lastGrantedCycle);
+
+		Assert.False(granted[0]);
+		Assert.Equal(scalarValue, values[0]);
+		Assert.Equal(0, scalarGrantedCycle);
+		Assert.Equal(0, grantedCount);
+		Assert.Equal(-1, firstGrantedCycle);
+		Assert.Equal(-1, lastGrantedCycle);
+		var snapshot = batchBus.Agnus.CaptureSnapshot();
+		Assert.Equal(AgnusChipSlotOwner.Bitplane, snapshot.LastDeniedFixedSlot?.Owner);
+		Assert.Equal(AgnusChipSlotOwner.Refresh, snapshot.LastDeniedFixedSlotBlocker?.Owner);
+		Assert.Equal(1, snapshot.RefreshDeniedFixedSlotBlockerCount);
+	}
+
+	[Fact]
+	public void RowBitplaneDmaBatchSkipsMissingRowsWithoutBusAccess()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var entries = new[]
+		{
+			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: false)
+		};
+		var values = new ushort[entries.Length];
+		var granted = new bool[entries.Length];
+
+		bus.ReadRowBitplaneDmaFetchesForPresentation(
+			entries,
+			values,
+			granted,
+			out var grantedCount,
+			out var firstGrantedCycle,
+			out var lastGrantedCycle);
+
+		Assert.False(granted[0]);
+		Assert.Equal(0, values[0]);
+		Assert.Equal(0, grantedCount);
+		Assert.Equal(-1, firstGrantedCycle);
+		Assert.Equal(-1, lastGrantedCycle);
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void RowBitplaneDmaBatchCapturesPresentBusAccessesOnly()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2000, 0x1111);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2002, 0x2222);
+		var entries = new[]
+		{
+			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true),
+			new RowDmaBitplaneEntry(fetchCycle + 2, plane: 1, word: 0, slot: 3, address: 0, rowPresent: false),
+			new RowDmaBitplaneEntry(fetchCycle + 4, plane: 2, word: 0, slot: 5, address: 0x2002, rowPresent: true)
+		};
+		var values = new ushort[entries.Length];
+		var granted = new bool[entries.Length];
+
+		bus.ReadRowBitplaneDmaFetchesForPresentation(
+			entries,
+			values,
+			granted,
+			out var grantedCount,
+			out var firstGrantedCycle,
+			out var lastGrantedCycle);
+
+		Assert.Equal(2, grantedCount);
+		Assert.Equal(fetchCycle, firstGrantedCycle);
+		Assert.Equal(fetchCycle + 4, lastGrantedCycle);
+		Assert.True(granted[0]);
+		Assert.False(granted[1]);
+		Assert.True(granted[2]);
+		Assert.Equal(0x1111, values[0]);
+		Assert.Equal(0, values[1]);
+		Assert.Equal(0x2222, values[2]);
+		Assert.Equal(2, bus.BusAccesses.Count);
+	}
+
+	[Fact]
+	public void RowBitplaneDmaBatchSamplesPresentationHistoryAtGrantedCycle()
+	{
+		var bus = new AmigaBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x1234);
+		var cpuCycle = 32L;
+		bus.WriteWord(0x00002400, 0x5678, ref cpuCycle, AmigaBusAccessKind.CpuDataWrite);
+		var entries = new[]
+		{
+			new RowDmaBitplaneEntry(20, plane: 0, word: 0, slot: 0, address: 0x2400, rowPresent: true),
+			new RowDmaBitplaneEntry(56, plane: 0, word: 1, slot: 0, address: 0x2400, rowPresent: true)
+		};
+		var values = new ushort[entries.Length];
+		var granted = new bool[entries.Length];
+
+		bus.ReadRowBitplaneDmaFetchesForPresentation(
+			entries,
+			values,
+			granted,
+			out var grantedCount,
+			out var firstGrantedCycle,
+			out var lastGrantedCycle);
+
+		Assert.Equal(2, grantedCount);
+		Assert.Equal(20, firstGrantedCycle);
+		Assert.Equal(56, lastGrantedCycle);
+		Assert.True(granted[0]);
+		Assert.True(granted[1]);
+		Assert.Equal(0x1234, values[0]);
+		Assert.Equal(0x5678, values[1]);
+	}
+
+	[Fact]
 	public void PreparedBitplaneSlotAllowsLaterFixedReservationFromResolvedAddress()
 	{
 		var engine = new AgnusHrmSlotEngine();

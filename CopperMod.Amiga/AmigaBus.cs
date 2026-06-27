@@ -1289,6 +1289,82 @@ namespace CopperMod.Amiga
         internal bool TryReadRowBitplaneDmaWord(uint address, long requestedCycle, out ushort value, out long grantedCycle)
             => TryReadLiveBitplaneDmaWord(address, requestedCycle, out value, out grantedCycle);
 
+        internal void ReadRowBitplaneDmaFetchesForPresentation(
+            ReadOnlySpan<RowDmaBitplaneEntry> entries,
+            Span<ushort> values,
+            Span<bool> granted,
+            out int grantedCount,
+            out long firstGrantedCycle,
+            out long lastGrantedCycle)
+        {
+            Debug.Assert(values.Length >= entries.Length, "Row bitplane DMA value buffer is shorter than the fetch list.");
+            Debug.Assert(granted.Length >= entries.Length, "Row bitplane DMA grant buffer is shorter than the fetch list.");
+            grantedCount = 0;
+            firstGrantedCycle = -1;
+            lastGrantedCycle = -1;
+            var usePresentationHistory = _presentationWriteHistory.HasWrites;
+            for (var index = 0; index < entries.Length; index++)
+            {
+                var entry = entries[index];
+                if (!entry.RowPresent)
+                {
+                    values[index] = 0;
+                    granted[index] = false;
+                    continue;
+                }
+
+                var address = MaskChipDmaAddress(entry.Address);
+                Debug.Assert(entry.Cycle >= 0, "Row bitplane DMA request cycles must be non-negative.");
+                AmigaBusAccessResult access;
+                bool grantedSlot;
+                if (!_useChipSlotScheduler)
+                {
+                    var request = new AmigaBusAccessRequest(
+                        AmigaBusRequester.Bitplane,
+                        AmigaBusAccessKind.Bitplane,
+                        AmigaBusAccessTarget.ChipRam,
+                        address,
+                        AmigaBusAccessSize.Word,
+                        entry.Cycle,
+                        isWrite: false);
+                    access = new AmigaBusAccessResult(request, entry.Cycle, entry.Cycle);
+                    grantedSlot = true;
+                }
+                else
+                {
+                    access = ReserveBitplaneDmaSlot(address, entry.Cycle);
+                    grantedSlot = access.CompletedCycle > access.GrantedCycle;
+                }
+
+                if (_captureBusAccesses)
+                {
+                    _busAccesses.Add(access);
+                }
+
+                if (!grantedSlot)
+                {
+                    values[index] = 0;
+                    granted[index] = false;
+                    continue;
+                }
+
+                values[index] = usePresentationHistory
+                    ? ReadChipWordForPresentation(address, access.GrantedCycle)
+                    : ReadChipDmaWord(address);
+                granted[index] = true;
+                grantedCount++;
+                if (firstGrantedCycle < 0 || access.GrantedCycle < firstGrantedCycle)
+                {
+                    firstGrantedCycle = access.GrantedCycle;
+                }
+
+                if (lastGrantedCycle < 0 || access.GrantedCycle > lastGrantedCycle)
+                {
+                    lastGrantedCycle = access.GrantedCycle;
+                }
+            }
+        }
+
         internal bool TryReadRowSpriteDmaWordForPresentation(
             uint address,
             long requestedCycle,

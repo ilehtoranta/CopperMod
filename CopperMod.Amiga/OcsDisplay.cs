@@ -157,6 +157,8 @@ namespace CopperMod.Amiga
         private readonly byte[] _liveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
         private readonly RowDmaPlan[] _rowDmaPlans = new RowDmaPlan[LowResOutputHeight];
         private readonly RowDmaBitplaneEntry[] _rowDmaBitplaneEntries = new RowDmaBitplaneEntry[LowResOutputHeight * MaxRowDmaBitplaneEntriesPerRow];
+        private readonly ushort[] _rowDmaBitplaneBatchValues = new ushort[MaxRowDmaBitplaneEntriesPerRow];
+        private readonly bool[] _rowDmaBitplaneBatchGranted = new bool[MaxRowDmaBitplaneEntriesPerRow];
         private readonly RowDmaSpriteEntry[] _rowDmaSpriteEntries = new RowDmaSpriteEntry[LowResOutputHeight * MaxRowDmaSpriteEntriesPerRow];
         private readonly byte[] _rowDmaExecutedMasks = new byte[LowResOutputHeight];
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
@@ -4015,6 +4017,35 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            ExecuteRowDmaBitplaneBatch(
+                row,
+                state,
+                plan,
+                entryIndex,
+                stopCycle,
+                out stoppedBeforeStop,
+                out capturedAny);
+            if (stoppedBeforeStop)
+            {
+                return true;
+            }
+
+            return true;
+        }
+
+        private void ExecuteRowDmaBitplaneBatch(
+            int row,
+            LiveLineState state,
+            RowDmaPlan plan,
+            int entryIndex,
+            long stopCycle,
+            out bool stoppedBeforeStop,
+            out bool capturedAny)
+        {
+            stoppedBeforeStop = false;
+            capturedAny = false;
+            var batchStart = entryIndex;
+            var batchCount = 0;
             var end = plan.BitplaneStart + plan.BitplaneCount;
             for (var index = entryIndex; index < end; index++)
             {
@@ -4025,22 +4056,35 @@ namespace CopperMod.Amiga
                     _liveNextFetchWord = entry.Word;
                     _liveNextFetchPlane = entry.Plane;
                     _liveNextFetchSlot = entry.Slot;
-                    if (capturedAny)
-                    {
-                        InvalidateLiveWorkCycle();
-                    }
-
                     stoppedBeforeStop = true;
-                    return true;
+                    break;
                 }
 
-                _liveNextFetchRow = row;
-                _liveNextFetchWord = entry.Word;
-                _liveNextFetchPlane = entry.Plane;
-                _liveNextFetchSlot = entry.Slot;
-                CaptureLiveBitplaneFetch(row, entry);
-                _lastRowDmaBitplaneEntriesExecuted++;
+                batchCount++;
+            }
+
+            if (batchCount > 0)
+            {
+                _bus.ReadRowBitplaneDmaFetchesForPresentation(
+                    _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
+                    _rowDmaBitplaneBatchValues.AsSpan(0, batchCount),
+                    _rowDmaBitplaneBatchGranted.AsSpan(0, batchCount),
+                    out var grantedCount,
+                    out var firstGrantedCycle,
+                    out var lastGrantedCycle);
+                ConsumeRowDmaBitplaneBatch(row, batchStart, batchCount, grantedCount, firstGrantedCycle, lastGrantedCycle);
+                _lastRowDmaBitplaneEntriesExecuted += batchCount;
                 capturedAny = true;
+            }
+
+            if (stoppedBeforeStop)
+            {
+                if (capturedAny)
+                {
+                    InvalidateLiveWorkCycle();
+                }
+
+                return;
             }
 
             _liveNextFetchRow = row;
@@ -4049,7 +4093,53 @@ namespace CopperMod.Amiga
             _liveNextFetchSlot = 0;
             AdvanceLiveFetchToNextRow(advanceBitplanePointers: true);
             RecordRowDmaPlanExecuted(row, RowDmaExecutedBitplaneMask);
-            return true;
+        }
+
+        private void ConsumeRowDmaBitplaneBatch(
+            int row,
+            int entryStart,
+            int count,
+            int grantedCount,
+            long firstGrantedCycle,
+            long lastGrantedCycle)
+        {
+            var liveWordBase = row * LiveBitplaneWordsPerRow;
+            var liveMaskBase = row * LiveBitplanePlaneCount;
+            var timelineLine = _displayTimeline.GetLine(row);
+            var recordTimeline = !_liveTimelineUnsafeForFrame &&
+                _displayTimeline.TryGetBitplaneFetchLine(row, out timelineLine);
+            var allGranted = grantedCount == count;
+            for (var offset = 0; offset < count; offset++)
+            {
+                var entry = _rowDmaBitplaneEntries[entryStart + offset];
+                var value = _rowDmaBitplaneBatchValues[offset];
+                _liveBitplaneWords[liveWordBase + (entry.Plane * MaxBitplaneFetchWords) + entry.Word] = value;
+                _liveBitplaneWordMasks[liveMaskBase + entry.Plane] |= 1UL << entry.Word;
+                if (recordTimeline)
+                {
+                    var bit = 1UL << entry.Word;
+                    var index = (entry.Plane * MaxBitplaneFetchWords) + entry.Word;
+                    timelineLine.BitplaneWords[index] = value;
+                    timelineLine.BitplaneFetchMasks[entry.Plane] |= bit;
+                    if (allGranted || _rowDmaBitplaneBatchGranted[offset])
+                    {
+                        timelineLine.BitplaneDeniedMasks[entry.Plane] &= ~bit;
+                    }
+                    else
+                    {
+                        timelineLine.BitplaneDeniedMasks[entry.Plane] |= bit;
+                    }
+                }
+            }
+
+            if (grantedCount > 0)
+            {
+                _liveBitplaneDmaFetches += grantedCount;
+                RecordLiveDisplayDmaCycleRange(firstGrantedCycle, lastGrantedCycle);
+            }
+
+            _liveFetchBatchWordCount += count;
+            _bitplaneDmaReadLatch = default;
         }
 
         private bool TryFindNextRowDmaBitplaneEntry(
@@ -4460,6 +4550,24 @@ namespace CopperMod.Amiga
             if (_liveLastDisplayDmaCycle < 0 || cycle > _liveLastDisplayDmaCycle)
             {
                 _liveLastDisplayDmaCycle = cycle;
+            }
+        }
+
+        private void RecordLiveDisplayDmaCycleRange(long firstCycle, long lastCycle)
+        {
+            if (firstCycle < 0)
+            {
+                return;
+            }
+
+            if (_liveFirstDisplayDmaCycle < 0 || firstCycle < _liveFirstDisplayDmaCycle)
+            {
+                _liveFirstDisplayDmaCycle = firstCycle;
+            }
+
+            if (_liveLastDisplayDmaCycle < 0 || lastCycle > _liveLastDisplayDmaCycle)
+            {
+                _liveLastDisplayDmaCycle = lastCycle;
             }
         }
 
@@ -12100,6 +12208,18 @@ namespace CopperMod.Amiga
                     _lines[row].Valid;
             }
 
+            public bool TryGetBitplaneFetchLine(int row, out DisplayLineTimeline line)
+            {
+                if ((uint)row >= (uint)_lines.Length)
+                {
+                    line = _lines[0];
+                    return false;
+                }
+
+                line = _lines[row];
+                return line.Generation == _generation && line.Valid;
+            }
+
             public void StartLine(int row, int stateIndex)
             {
                 if ((uint)row >= (uint)_lines.Length)
@@ -12726,37 +12846,6 @@ namespace CopperMod.Amiga
             public int SpriteCount { get; }
 
             public bool Valid { get; }
-        }
-
-        private readonly struct RowDmaBitplaneEntry
-        {
-            public RowDmaBitplaneEntry(
-                long cycle,
-                int plane,
-                int word,
-                int slot,
-                uint address,
-                bool rowPresent)
-            {
-                Cycle = cycle;
-                Plane = plane;
-                Word = word;
-                Slot = slot;
-                Address = address;
-                RowPresent = rowPresent;
-            }
-
-            public long Cycle { get; }
-
-            public int Plane { get; }
-
-            public int Word { get; }
-
-            public int Slot { get; }
-
-            public uint Address { get; }
-
-            public bool RowPresent { get; }
         }
 
         private readonly struct RowDmaSpriteEntry

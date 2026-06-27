@@ -3,19 +3,19 @@ using Xunit.Abstractions;
 
 namespace CopperMod.Amiga.Tests;
 
-public sealed class CopperLineTimingAdfTests
+public sealed class RasterlineTimingAdfTests
 {
 	private const int ResultRowCount = 28;
 	private const int ResultsAddress = 0x0004_8000;
 	private readonly ITestOutputHelper _output;
 
-	public CopperLineTimingAdfTests(ITestOutputHelper output)
+	public RasterlineTimingAdfTests(ITestOutputHelper output)
 	{
 		_output = output;
 	}
 
 	[Fact]
-	public void CopperLineTimingTestAdfProducesResultRowsWhenAvailable()
+	public void RasterlineTimingTestAdfProducesResultRowsWhenAvailable()
 	{
 		var path = TryFindWorkspaceFile("CopperScreen", "TestImages", "timing-test.adf");
 		if (path == null)
@@ -50,7 +50,7 @@ public sealed class CopperLineTimingAdfTests
 
 		WriteResultReport(path, rows, maxFrames, machine.Cpu.State.Cycles);
 		Assert.Fail(
-			$"CopperLine timing-test did not complete {ResultRowCount} rows in {maxFrames} frames. " +
+			$"Rasterline timing-test did not complete {ResultRowCount} rows in {maxFrames} frames. " +
 			$"PC=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6}, " +
 			$"cycles={machine.Cpu.State.Cycles}, completedBootBlock={result.CompletedBootBlock}.");
 	}
@@ -70,7 +70,7 @@ public sealed class CopperLineTimingAdfTests
 	{
 		var lines = new List<string>
 		{
-			"# CopperLine timing-test results from CopperMod.Amiga",
+			"# Rasterline timing-test results from CopperMod.Amiga",
 			"adf=" + adfPath,
 			"frames=" + frames.ToString(System.Globalization.CultureInfo.InvariantCulture),
 			"cycles=" + cycles.ToString(System.Globalization.CultureInfo.InvariantCulture)
