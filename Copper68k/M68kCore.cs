@@ -156,6 +156,76 @@ namespace Copper68k
         bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
+    internal readonly struct M68kInstructionFetchWindow
+    {
+        public M68kInstructionFetchWindow(
+            byte[] memory,
+            int memoryOffset,
+            uint startAddress,
+            uint endAddressExclusive,
+            uint addressMask,
+            int busTag,
+            uint[] generationSource,
+            uint generation)
+        {
+            Memory = memory ?? throw new ArgumentNullException(nameof(memory));
+            MemoryOffset = memoryOffset;
+            StartAddress = startAddress;
+            EndAddressExclusive = endAddressExclusive;
+            AddressMask = addressMask;
+            BusTag = busTag;
+            GenerationSource = generationSource ?? throw new ArgumentNullException(nameof(generationSource));
+            Generation = generation;
+        }
+
+        public byte[] Memory { get; }
+
+        public int MemoryOffset { get; }
+
+        public uint StartAddress { get; }
+
+        public uint EndAddressExclusive { get; }
+
+        public uint AddressMask { get; }
+
+        public int BusTag { get; }
+
+        public uint[] GenerationSource { get; }
+
+        public uint Generation { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool ContainsWord(uint address)
+        {
+            var generationSource = GenerationSource;
+            if (generationSource == null ||
+                generationSource.Length == 0 ||
+                generationSource[0] != Generation)
+            {
+                return false;
+            }
+
+            var normalized = address & AddressMask;
+            return normalized >= StartAddress &&
+                normalized < EndAddressExclusive &&
+                (ulong)normalized + 1u < EndAddressExclusive;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ushort ReadWord(uint address)
+        {
+            var offset = MemoryOffset + checked((int)((address & AddressMask) - StartAddress));
+            return (ushort)((Memory[offset] << 8) | Memory[offset + 1]);
+        }
+    }
+
+    internal interface IM68kInstructionFetchWindowBus
+    {
+        bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window);
+
+        void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle);
+    }
+
     internal enum M68kTraceBatchWakeSource
     {
         Unknown = 0,
@@ -981,7 +1051,9 @@ namespace Copper68k
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
+        private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
+        private M68kInstructionFetchWindow _instructionFetchWindow;
         private bool _instructionCycleFloorActive;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
@@ -991,9 +1063,16 @@ namespace Copper68k
         {
         }
 
-        internal M68kInterpreter(IM68kBus bus, M68kCpuState state, M68kInstructionFrequencyMatrix? instructionFrequency = null)
+        internal M68kInterpreter(
+            IM68kBus bus,
+            M68kCpuState state,
+            M68kInstructionFrequencyMatrix? instructionFrequency = null,
+            bool enableInstructionFetchWindow = true)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _instructionFetchWindowBus = enableInstructionFetchWindow
+                ? bus as IM68kInstructionFetchWindowBus
+                : null;
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
         }
@@ -2821,7 +2900,10 @@ namespace Copper68k
 
         private ushort FetchWord()
         {
-            var value = ReadWord(State.ProgramCounter, M68kBusAccessKind.CpuInstructionFetch);
+            var address = State.ProgramCounter;
+            var value = _instructionFetchWindowBus != null
+                ? FetchWordFromInstructionWindow(address)
+                : ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
             State.ProgramCounter += 2;
             return value;
         }
@@ -2831,6 +2913,29 @@ namespace Copper68k
             var high = FetchWord();
             var low = FetchWord();
             return ((uint)high << 16) | low;
+        }
+
+        private ushort FetchWordFromInstructionWindow(uint address)
+        {
+            if ((address & 1) != 0)
+            {
+                return ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
+            }
+
+            var bus = _instructionFetchWindowBus!;
+            if (!_instructionFetchWindow.ContainsWord(address))
+            {
+                if (!bus.TryGetInstructionFetchWindow(address, out _instructionFetchWindow) ||
+                    !_instructionFetchWindow.ContainsWord(address))
+                {
+                    return ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
+                }
+            }
+
+            var cycle = State.Cycles;
+            bus.CommitInstructionFetchWindowWord(in _instructionFetchWindow, address, ref cycle);
+            State.Cycles = cycle;
+            return _instructionFetchWindow.ReadWord(address);
         }
 
         private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)

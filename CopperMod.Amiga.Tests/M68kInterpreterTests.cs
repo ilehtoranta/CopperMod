@@ -1168,6 +1168,24 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void InterpreterUsesInstructionFetchWindowForSequentialOpcodeWords()
+	{
+		var bus = new InstructionFetchWindowBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x71); // NOP
+		Write(bus.Memory, 0x1002, 0x4E, 0x71); // NOP
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(1, bus.WindowRequests);
+		Assert.Equal(2, bus.WindowCommits);
+		Assert.Equal(0, bus.GenericInstructionFetchWordReads);
+		Assert.Equal(8, cpu.State.Cycles);
+	}
+
+	[Fact]
 	public void ClrMemoryReadsDestinationBeforeWritingZero()
 	{
 		var bus = new TestBus();
@@ -1403,6 +1421,114 @@ public sealed class M68kInterpreterTests
 			Memory[address + 1] = (byte)(value >> 16);
 			Memory[address + 2] = (byte)(value >> 8);
 			Memory[address + 3] = (byte)value;
+		}
+	}
+
+	private sealed class InstructionFetchWindowBus : IM68kBus, IM68kInstructionFetchWindowBus
+	{
+		private readonly uint[] _generation = { 1u };
+
+		public byte[] Memory { get; } = new byte[0x0100_0000];
+
+		public int WindowRequests { get; private set; }
+
+		public int WindowCommits { get; private set; }
+
+		public int GenericInstructionFetchWordReads { get; private set; }
+
+		public bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
+		{
+			WindowRequests++;
+			window = new M68kInstructionFetchWindow(
+				Memory,
+				(int)address,
+				address,
+				address + 0x100,
+				0xFFFF_FFFF,
+				0,
+				_generation,
+				_generation[0]);
+			return true;
+		}
+
+		public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+		{
+			_ = window;
+			_ = address;
+			WindowCommits++;
+			cycle += 2;
+		}
+
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			cycle += 2;
+			return Memory[address];
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
+			{
+				GenericInstructionFetchWordReads++;
+			}
+
+			cycle += 2;
+			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
+		}
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			cycle += 4;
+			return ((uint)Memory[address] << 24) |
+				((uint)Memory[address + 1] << 16) |
+				((uint)Memory[address + 2] << 8) |
+				Memory[address + 3];
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = value;
+			cycle += 2;
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
+			cycle += 2;
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = (byte)(value >> 24);
+			Memory[address + 1] = (byte)(value >> 16);
+			Memory[address + 2] = (byte)(value >> 8);
+			Memory[address + 3] = (byte)value;
+			cycle += 4;
+		}
+
+		public bool HasHostTrapStub(uint address)
+		{
+			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
+			_ = state;
+			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
 		}
 	}
 

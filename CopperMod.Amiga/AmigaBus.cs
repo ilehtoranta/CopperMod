@@ -37,6 +37,7 @@ namespace CopperMod.Amiga
         IM68kCodeReader,
         IM68kPhysicalAddressMap,
         IM68kFastMemoryBus,
+        IM68kInstructionFetchWindowBus,
         IM68kJitBus,
         IM68kJitFastMemoryBus,
         IM68kJitTimedMemoryBus
@@ -44,6 +45,8 @@ namespace CopperMod.Amiga
         private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
         private const int MaxPendingInterruptEvents = 65536;
+        private const int InstructionFetchWindowMaxBytes = 256;
+        private const uint CpuAddressMask = 0x00FF_FFFFu;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
@@ -63,6 +66,7 @@ namespace CopperMod.Amiga
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>(16);
         private readonly AmigaCiaInterruptEvent[] _drainedCiaInterruptBuffer = new AmigaCiaInterruptEvent[MaxPendingInterruptEvents];
         private readonly ReusableReadOnlyList<AmigaCiaInterruptEvent> _drainedCiaInterrupts = new ReusableReadOnlyList<AmigaCiaInterruptEvent>();
+        private readonly uint[] _instructionFetchWindowGeneration = { 1u };
         private readonly BoundedBusAccessLog _busAccesses = new BoundedBusAccessLog(MaxCapturedBusAccesses);
         private readonly ChipPresentationWriteHistory _presentationWriteHistory;
         private readonly IAgnusChipSlotTiming _diagnosticChipSlots;
@@ -316,6 +320,7 @@ namespace CopperMod.Amiga
             _mappedMemoryRegions.Clear();
             _romOverlayRegion = null;
             _romOverlayEnabled = true;
+            InvalidateInstructionFetchWindows();
             StrictCpuPhysicalDataMapping = false;
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
@@ -364,6 +369,7 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var trapId = AllocateHostTrapId();
             _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
+            InvalidateInstructionFetchWindows();
             TouchCodePages(address, 4);
             NotifyJitEligibleMemoryWritten(address, 4);
             return trapId;
@@ -428,6 +434,7 @@ namespace CopperMod.Amiga
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             ResetCiaAForHardwareReset();
+            InvalidateInstructionFetchWindows();
             CiaB.Reset();
             Keyboard.Reset();
             UpdateCiaAPortAOutputSideEffects();
@@ -468,6 +475,8 @@ namespace CopperMod.Amiga
             {
                 _romOverlayRegion = region;
             }
+
+            InvalidateInstructionFetchWindows();
         }
 
         public byte ReadByte(uint address)
@@ -545,6 +554,17 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        bool IM68kInstructionFetchWindowBus.TryGetInstructionFetchWindow(
+            uint address,
+            out M68kInstructionFetchWindow window)
+            => TryGetInstructionFetchWindow(address, out window);
+
+        void IM68kInstructionFetchWindowBus.CommitInstructionFetchWindowWord(
+            in M68kInstructionFetchWindow window,
+            uint address,
+            ref long cycle)
+            => CommitInstructionFetchWindowWord(in window, address, ref cycle);
+
         private static AmigaBusAccessKind ToAmigaBusAccessKind(M68kBusAccessKind accessKind)
             => accessKind switch
             {
@@ -552,6 +572,233 @@ namespace CopperMod.Amiga
                 M68kBusAccessKind.CpuDataWrite => AmigaBusAccessKind.CpuDataWrite,
                 _ => AmigaBusAccessKind.CpuDataRead
             };
+
+        internal bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            address = NormalizeAddress(address);
+            if ((address & 1) != 0)
+            {
+                return false;
+            }
+
+            var endAddress = GetInstructionFetchPageEnd(address);
+            if (!TrimInstructionFetchWindowForHostTrap(address, ref endAddress))
+            {
+                return false;
+            }
+
+            return TryGetRomOverlayInstructionFetchWindow(address, endAddress, out window) ||
+                TryGetChipRamInstructionFetchWindow(address, endAddress, out window) ||
+                TryGetLinearInstructionFetchWindow(
+                    address,
+                    endAddress,
+                    _expansionRam,
+                    ExpansionRamBase,
+                    AmigaBusAccessTarget.ExpansionRam,
+                    out window) ||
+                TryGetLinearInstructionFetchWindow(
+                    address,
+                    endAddress,
+                    _realFastRam,
+                    RealFastRamBase,
+                    AmigaBusAccessTarget.RealFastRam,
+                    out window) ||
+                TryGetMappedRomInstructionFetchWindow(address, endAddress, out window);
+        }
+
+        internal void CommitInstructionFetchWindowWord(
+            in M68kInstructionFetchWindow window,
+            uint address,
+            ref long cycle)
+        {
+            address = NormalizeAddress(address);
+            var target = (AmigaBusAccessTarget)window.BusTag;
+            var requestedCycle = cycle;
+            if (_useFastZeroWaitAccesses)
+            {
+                var fastAccess = GrantFastCpuAccess(
+                    target,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    cycle,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    isWrite: false);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: false);
+                cycle = fastAccess.CompletedCycle;
+                return;
+            }
+
+            var access = Arbitrate(
+                AmigaBusRequester.Cpu,
+                AmigaBusAccessKind.CpuInstructionFetch,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                cycle,
+                isWrite: false);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
+            cycle = access.CompletedCycle;
+        }
+
+        private static uint GetInstructionFetchPageEnd(uint address)
+        {
+            var end = (address & ~(uint)(InstructionFetchWindowMaxBytes - 1)) + InstructionFetchWindowMaxBytes;
+            return end == 0 || end > 0x0100_0000u ? 0x0100_0000u : end;
+        }
+
+        private bool TryGetRomOverlayInstructionFetchWindow(
+            uint address,
+            uint endAddress,
+            out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            if (!_romOverlayEnabled ||
+                _romOverlayRegion == null ||
+                address >= 0x0008_0000u)
+            {
+                return false;
+            }
+
+            endAddress = Math.Min(endAddress, 0x0008_0000u);
+            var memory = _romOverlayRegion.Data;
+            var offset = checked((int)(address % (uint)memory.Length));
+            var contiguousEnd = address + (uint)(memory.Length - offset);
+            return TryCreateInstructionFetchWindow(
+                memory,
+                offset,
+                address,
+                Math.Min(endAddress, contiguousEnd),
+                AmigaBusAccessTarget.Rom,
+                out window);
+        }
+
+        private bool TryGetChipRamInstructionFetchWindow(
+            uint address,
+            uint endAddress,
+            out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            if (IsRomOverlayAddress(address) ||
+                !TryGetChipRamOffset(address, out var offset))
+            {
+                return false;
+            }
+
+            var contiguousEnd = address + (uint)(_chipRam.Length - offset);
+            var decodeEnd = Math.Min(endAddress, _chipRamDecodeSize);
+            return TryCreateInstructionFetchWindow(
+                _chipRam,
+                offset,
+                address,
+                Math.Min(decodeEnd, contiguousEnd),
+                AmigaBusAccessTarget.ChipRam,
+                out window);
+        }
+
+        private bool TryGetLinearInstructionFetchWindow(
+            uint address,
+            uint endAddress,
+            byte[] memory,
+            uint baseAddress,
+            AmigaBusAccessTarget target,
+            out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            if (memory.Length == 0 || address < baseAddress)
+            {
+                return false;
+            }
+
+            var relative = address - baseAddress;
+            if (relative >= memory.Length)
+            {
+                return false;
+            }
+
+            var memoryOffset = checked((int)relative);
+            var contiguousEnd = address + (uint)(memory.Length - memoryOffset);
+            return TryCreateInstructionFetchWindow(
+                memory,
+                memoryOffset,
+                address,
+                Math.Min(endAddress, contiguousEnd),
+                target,
+                out window);
+        }
+
+        private bool TryGetMappedRomInstructionFetchWindow(
+            uint address,
+            uint endAddress,
+            out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            for (var i = _mappedMemoryRegions.Count - 1; i >= 0; i--)
+            {
+                var region = _mappedMemoryRegions[i];
+                if (!region.ReadOnly ||
+                    !region.TryGetContiguousReadMemory(address, 2, out var memory, out var offset))
+                {
+                    continue;
+                }
+
+                var contiguousEnd = address + (uint)(region.Length - offset);
+                return TryCreateInstructionFetchWindow(
+                    memory,
+                    offset,
+                    address,
+                    Math.Min(endAddress, contiguousEnd),
+                    AmigaBusAccessTarget.Rom,
+                    out window);
+            }
+
+            return false;
+        }
+
+        private bool TryCreateInstructionFetchWindow(
+            byte[] memory,
+            int memoryOffset,
+            uint address,
+            uint endAddress,
+            AmigaBusAccessTarget target,
+            out M68kInstructionFetchWindow window)
+        {
+            window = default;
+            if ((ulong)address + 1u >= endAddress)
+            {
+                return false;
+            }
+
+            window = new M68kInstructionFetchWindow(
+                memory,
+                memoryOffset,
+                address,
+                endAddress,
+                CpuAddressMask,
+                (int)target,
+                _instructionFetchWindowGeneration,
+                _instructionFetchWindowGeneration[0]);
+            return true;
+        }
+
+        private bool TrimInstructionFetchWindowForHostTrap(uint startAddress, ref uint endAddress)
+        {
+            foreach (var entry in _hostTrapStubs.Values)
+            {
+                var trapAddress = NormalizeAddress(entry.Address);
+                if (startAddress >= trapAddress && startAddress < trapAddress + 4u)
+                {
+                    return false;
+                }
+
+                if (trapAddress > startAddress && trapAddress < endAddress)
+                {
+                    endAddress = trapAddress;
+                }
+            }
+
+            return true;
+        }
 
         public byte ReadByte(uint address, ref long cycle, AmigaBusAccessKind accessKind)
         {
@@ -3849,7 +4096,22 @@ namespace CopperMod.Amiga
         {
             var portA = CiaA.ReadPortRegister(0, 0xFF);
             AudioFilterEnabled = (portA & CiaAPortAAudioFilterBit) == 0;
-            _romOverlayEnabled = (portA & CiaAPortAOverlayBit) != 0;
+            var overlayEnabled = (portA & CiaAPortAOverlayBit) != 0;
+            if (_romOverlayEnabled != overlayEnabled)
+            {
+                _romOverlayEnabled = overlayEnabled;
+                InvalidateInstructionFetchWindows();
+            }
+            else
+            {
+                _romOverlayEnabled = overlayEnabled;
+            }
+        }
+
+        private void InvalidateInstructionFetchWindows()
+        {
+            var generation = _instructionFetchWindowGeneration[0] + 1u;
+            _instructionFetchWindowGeneration[0] = generation == 0 ? 1u : generation;
         }
 
         private bool IsRomOverlayAddress(uint address)

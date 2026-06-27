@@ -1588,6 +1588,83 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void InstructionFetchWindowMatchesGenericChipFetchTimingAndValue()
+	{
+		var genericBus = new AmigaBus(arbiter: new FixedDelayArbiter(waitCycles: 5, accessCycles: 3));
+		var windowBus = new AmigaBus(arbiter: new FixedDelayArbiter(waitCycles: 5, accessCycles: 3));
+		Write(genericBus.ChipRam, 0x1000, 0x12, 0x34);
+		Write(windowBus.ChipRam, 0x1000, 0x12, 0x34);
+		var genericCycle = 11L;
+		var windowCycle = 11L;
+
+		var genericValue = genericBus.ReadWord(0x00001000, ref genericCycle, AmigaBusAccessKind.CpuInstructionFetch);
+		Assert.True(windowBus.TryGetInstructionFetchWindow(0x00001000, out var window));
+		windowBus.CommitInstructionFetchWindowWord(in window, 0x00001000, ref windowCycle);
+		var windowValue = window.ReadWord(0x00001000);
+
+		Assert.Equal(genericValue, windowValue);
+		Assert.Equal(genericCycle, windowCycle);
+		var genericAccess = Assert.Single(genericBus.BusAccesses);
+		var windowAccess = Assert.Single(windowBus.BusAccesses);
+		Assert.Equal(genericAccess.Request.Requester, windowAccess.Request.Requester);
+		Assert.Equal(genericAccess.Request.Kind, windowAccess.Request.Kind);
+		Assert.Equal(genericAccess.Request.Target, windowAccess.Request.Target);
+		Assert.Equal(genericAccess.Request.Address, windowAccess.Request.Address);
+		Assert.Equal(genericAccess.Request.Size, windowAccess.Request.Size);
+		Assert.Equal(genericAccess.Request.RequestedCycle, windowAccess.Request.RequestedCycle);
+		Assert.Equal(genericAccess.Request.IsWrite, windowAccess.Request.IsWrite);
+		Assert.Equal(genericAccess.GrantedCycle, windowAccess.GrantedCycle);
+		Assert.Equal(genericAccess.CompletedCycle, windowAccess.CompletedCycle);
+	}
+
+	[Fact]
+	public void InstructionFetchWindowInvalidatesWhenKickstartOverlayChanges()
+	{
+		var bus = new AmigaBus();
+		var rom = new byte[0x40000];
+		Write(rom, 0x0000, 0x12, 0x34);
+		bus.MapReadOnlyMemory(0x00FC0000, rom);
+
+		Assert.True(bus.TryGetInstructionFetchWindow(0x00000000, out var window));
+		Assert.True(window.ContainsWord(0x00000000));
+
+		var cycle = 0L;
+		bus.WriteByte(0x00BFE001, 0x00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		Assert.False(window.ContainsWord(0x00000000));
+	}
+
+	[Fact]
+	public void InstructionFetchWindowStopsBeforeHostTrapStub()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		bus.RegisterHostTrapStub(0x00001004, _ => { });
+
+		Assert.True(bus.TryGetInstructionFetchWindow(0x00001000, out var window));
+		Assert.True(window.ContainsWord(0x00001000));
+		Assert.True(window.ContainsWord(0x00001002));
+		Assert.False(window.ContainsWord(0x00001004));
+		Assert.False(bus.TryGetInstructionFetchWindow(0x00001004, out _));
+	}
+
+	[Fact]
+	public void InstructionFetchWindowStopsAtChipRamBackingBoundary()
+	{
+		var bus = new AmigaBus(chipRamSize: 0x80000);
+		Write(bus.ChipRam, 0x7FFC, 0x12, 0x34, 0x56, 0x78);
+
+		Assert.True(bus.TryGetInstructionFetchWindow(0x0007FFFC, out var window));
+		Assert.True(window.ContainsWord(0x0007FFFC));
+		Assert.True(window.ContainsWord(0x0007FFFE));
+		Assert.False(window.ContainsWord(0x00080000));
+
+		Assert.True(bus.TryGetInstructionFetchWindow(0x00080000, out var mirrorWindow));
+		Assert.True(mirrorWindow.ContainsWord(0x00080000));
+		Assert.Equal(0, mirrorWindow.MemoryOffset);
+	}
+
+	[Fact]
 	public void DelayedCustomRegisterWritesAreStampedAtGrantedCycle()
 	{
 		var arbiter = new FixedDelayArbiter(waitCycles: 7, accessCycles: 2);

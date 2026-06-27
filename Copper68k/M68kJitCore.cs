@@ -408,7 +408,7 @@ namespace Copper68k
             M68kJitCpuModel cpuModel)
             => cpuModel == M68kJitCpuModel.M68040
                 ? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed, state, instructionFrequency)
-                : new M68kInterpreter(bus, state, instructionFrequency);
+                : new M68kInterpreter(bus, state, instructionFrequency, enableInstructionFetchWindow: false);
 
         public M68kCpuState State { get; }
 
