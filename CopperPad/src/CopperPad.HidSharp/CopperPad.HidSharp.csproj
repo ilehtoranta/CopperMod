@@ -40,6 +40,7 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\LICENSE" Link="LICENSE" Pack="true" PackagePath="\" />
     <None Include="..\CopperPad\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
     <None Include="..\CopperPad\ThirdParty\SDL_GameControllerDB\LICENSE" Link="ThirdParty\SDL_GameControllerDB\LICENSE" Pack="true" PackagePath="third-party\SDL_GameControllerDB\" />
     <None Include="..\CopperPad\ThirdParty\SDL_GameControllerDB\gamecontrollerdb.txt" Link="ThirdParty\SDL_GameControllerDB\gamecontrollerdb.txt" Pack="true" PackagePath="third-party\SDL_GameControllerDB\" />

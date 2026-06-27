@@ -72,6 +72,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $OutputPath "README.md"))) {
 	throw "Published README.md was not found."
 }
 
+if (-not (Test-Path -LiteralPath (Join-Path $OutputPath "LICENSE"))) {
+	throw "Published LICENSE was not found."
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $OutputPath "THIRD-PARTY-NOTICES.md"))) {
 	throw "Published THIRD-PARTY-NOTICES.md was not found."
 }
@@ -82,6 +86,7 @@ try {
 	$zipEntries = @(
 		$executableName,
 		"README.md",
+		"LICENSE",
 		"THIRD-PARTY-NOTICES.md",
 		"third-party"
 	)

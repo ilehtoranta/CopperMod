@@ -17,11 +17,15 @@ dotnet pack CopperPad\src\CopperPad.HidSharp\CopperPad.HidSharp.csproj -c Releas
 dotnet pack CopperPad\src\CopperPad.GameController\CopperPad.GameController.csproj -c Release -o CopperPad\artifacts\packages
 ```
 
+- Confirm every `.nupkg` contains `README.md` and `LICENSE`. `CopperPad.HidSharp` must also contain `THIRD-PARTY-NOTICES.md`, SDL_GameControllerDB `LICENSE`, and `gamecontrollerdb.txt`.
+
 - Publish and smoke-test the end-user GUI:
 
 ```powershell
 CopperPad\scripts\SmokeTest-Gui.ps1 -Configuration Release -Runtime win-x64
 ```
+
+- Confirm the GUI zip contains `CopperPad.Gui.exe`, `README.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, and the SDL_GameControllerDB license/data files.
 
 - Build CopperScreen against the release candidate:
 
