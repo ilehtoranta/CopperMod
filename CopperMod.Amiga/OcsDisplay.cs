@@ -49,6 +49,10 @@ namespace CopperMod.Amiga
         private const int LiveSpriteChannelCount = 8;
         private const int LiveSpriteWordsPerChannel = 2;
         private const int LiveSpriteWordsPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
+        private const int MaxRowDmaBitplaneEntriesPerRow = LiveBitplanePlaneCount * MaxBitplaneFetchWords;
+        private const int MaxRowDmaSpriteEntriesPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
+        private const byte RowDmaExecutedBitplaneMask = 0x01;
+        private const byte RowDmaExecutedSpriteMask = 0x02;
         private const int MaxLivePaletteSnapshots = MaxPendingWrites;
         private const int MaxTimelineStateSnapshots = MaxPendingWrites;
         private const int PlanarChunkPixels = 16;
@@ -151,6 +155,10 @@ namespace CopperMod.Amiga
         private readonly ulong[] _liveBitplaneWordMasks = new ulong[LowResOutputHeight * LiveBitplanePlaneCount];
         private readonly ushort[] _liveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
         private readonly byte[] _liveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
+        private readonly RowDmaPlan[] _rowDmaPlans = new RowDmaPlan[LowResOutputHeight];
+        private readonly RowDmaBitplaneEntry[] _rowDmaBitplaneEntries = new RowDmaBitplaneEntry[LowResOutputHeight * MaxRowDmaBitplaneEntriesPerRow];
+        private readonly RowDmaSpriteEntry[] _rowDmaSpriteEntries = new RowDmaSpriteEntry[LowResOutputHeight * MaxRowDmaSpriteEntriesPerRow];
+        private readonly byte[] _rowDmaExecutedMasks = new byte[LowResOutputHeight];
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
         private SpriteDmaReadLatch _spriteDmaReadLatch;
@@ -312,6 +320,13 @@ namespace CopperMod.Amiga
         private int _liveRasterlineDescriptorBitplaneRows;
         private int _liveRasterlineDescriptorSpriteRows;
         private int _liveRasterlineDescriptorMismatches;
+        private int _lastRowDmaPlansBuilt;
+        private int _lastRowDmaPlannedRowsExecuted;
+        private int _lastRowDmaBitplaneEntriesExecuted;
+        private int _lastRowDmaSpriteEntriesExecuted;
+        private int _lastRowDmaScalarFallbackRows;
+        private int _lastRowDmaPlanInvalidationRows;
+        private int _lastRowDmaPlanMismatchRows;
 
         public OcsDisplay(AmigaBus bus, bool liveDmaEnabled = true)
         {
@@ -707,6 +722,13 @@ namespace CopperMod.Amiga
                 _liveRasterlineDescriptorBitplaneRows,
                 _liveRasterlineDescriptorSpriteRows,
                 _liveRasterlineDescriptorMismatches,
+                _lastRowDmaPlansBuilt,
+                _lastRowDmaPlannedRowsExecuted,
+                _lastRowDmaBitplaneEntriesExecuted,
+                _lastRowDmaSpriteEntriesExecuted,
+                _lastRowDmaScalarFallbackRows,
+                _lastRowDmaPlanInvalidationRows,
+                _lastRowDmaPlanMismatchRows,
                 _lastArchiveRejectFrameIncomplete,
                 _lastArchiveRejectTimelineInvalid,
                 _lastArchiveRejectUnsafeWrite,
@@ -1747,6 +1769,8 @@ namespace CopperMod.Amiga
             Array.Clear(_predictedRasterlinePlanEventCounts);
             Array.Clear(_predictedRasterlinePlanStatuses);
             Array.Clear(_liveRasterlineDmaDescriptors);
+            Array.Clear(_rowDmaPlans);
+            Array.Clear(_rowDmaExecutedMasks);
             _liveRasterlinePlanRow = -1;
             _liveRasterlinePlanLineStartCycle = 0;
             _liveRasterlinePlanLineStopCycle = 0;
@@ -1784,6 +1808,13 @@ namespace CopperMod.Amiga
                 _liveRasterlineDescriptorBitplaneRows = 0;
                 _liveRasterlineDescriptorSpriteRows = 0;
                 _liveRasterlineDescriptorMismatches = 0;
+                _lastRowDmaPlansBuilt = 0;
+                _lastRowDmaPlannedRowsExecuted = 0;
+                _lastRowDmaBitplaneEntriesExecuted = 0;
+                _lastRowDmaSpriteEntriesExecuted = 0;
+                _lastRowDmaScalarFallbackRows = 0;
+                _lastRowDmaPlanInvalidationRows = 0;
+                _lastRowDmaPlanMismatchRows = 0;
             }
         }
 
@@ -2737,6 +2768,11 @@ namespace CopperMod.Amiga
             LiveRasterlineDmaDescriptor descriptor,
             long stopCycle)
         {
+            if (TryCaptureLiveBitplaneFetchBatchWithRowPlan(stopCycle, out _, out var capturedByPlan))
+            {
+                return capturedByPlan;
+            }
+
             var captured = false;
             while (_liveNextFetchRow == descriptor.Row)
             {
@@ -2810,6 +2846,11 @@ namespace CopperMod.Amiga
             if (!descriptor.HasSpriteSlots)
             {
                 return false;
+            }
+
+            if (TryCaptureLiveSpriteFetchBatchWithRowPlan(stopCycle, out _, out var capturedByPlan))
+            {
+                return capturedByPlan;
             }
 
             var captured = false;
@@ -3595,6 +3636,7 @@ namespace CopperMod.Amiga
             }
 
             ClearLiveBitplaneWordMasks(row);
+            BuildRowDmaPlan(row, state);
             if (recordTimeline)
             {
                 RecordTimelineLineStart(row, state);
@@ -3610,10 +3652,15 @@ namespace CopperMod.Amiga
 
             var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
             if ((uint)row >= (uint)LowResOutputHeight ||
-                !IsLiveLineValid(row) ||
-                HasCapturedLiveBitplaneWords(row) ||
+                !IsLiveLineValid(row))
+            {
+                return;
+            }
+
+            if (HasCapturedLiveBitplaneWords(row) ||
                 HasStartedLiveBitplaneFetches(row, cycle))
             {
+                InvalidateRowDmaPlan(row);
                 return;
             }
 
@@ -3644,6 +3691,173 @@ namespace CopperMod.Amiga
                 InvalidateLiveWorkCycle();
             }
         }
+
+        private void BuildRowDmaPlan(int row, LiveLineState state)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                state.Generation != _liveGeneration)
+            {
+                return;
+            }
+
+            var bitplaneStart = row * MaxRowDmaBitplaneEntriesPerRow;
+            var bitplaneCount = 0;
+            if (state.PlaneCount > 0 &&
+                state.FetchWords > 0 &&
+                state.DisplayWindowVerticallyOpen &&
+                IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                var planeCount = Math.Max(0, state.PlaneCount);
+                for (var word = 0; word < state.FetchWords; word++)
+                {
+                    for (var slot = 0; slot < state.FetchSlotStride; slot++)
+                    {
+                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchSlotStride, out var plane))
+                        {
+                            continue;
+                        }
+
+                        var fetchHorizontal = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
+                        var cycle = state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
+                        var rowPresent = (state.PlaneHasRowMask & (1 << plane)) != 0;
+                        var address = rowPresent
+                            ? unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2))
+                            : 0u;
+                        _rowDmaBitplaneEntries[bitplaneStart + bitplaneCount++] =
+                            new RowDmaBitplaneEntry(cycle, plane, word, slot, address, rowPresent);
+                    }
+                }
+            }
+
+            var spriteStart = row * MaxRowDmaSpriteEntriesPerRow;
+            var spriteCount = 0;
+            if (IsSpriteDmaEnabled(state.Dmacon))
+            {
+                for (var spriteIndex = 0; spriteIndex < LiveSpriteChannelCount; spriteIndex++)
+                {
+                    for (var word = 0; word < LiveSpriteWordsPerChannel; word++)
+                    {
+                        var cycle = GetSpriteDmaFetchCycle(_liveFrameStartCycle, row, spriteIndex, word);
+                        _rowDmaSpriteEntries[spriteStart + spriteCount++] =
+                            new RowDmaSpriteEntry(cycle, spriteIndex, word);
+                    }
+                }
+            }
+
+            _rowDmaPlans[row] = new RowDmaPlan(
+                _liveGeneration,
+                row,
+                ComputeRowDmaPlanSignature(state),
+                bitplaneStart,
+                bitplaneCount,
+                spriteStart,
+                spriteCount,
+                valid: true);
+            _rowDmaExecutedMasks[row] = 0;
+            _lastRowDmaPlansBuilt++;
+        }
+
+        private void InvalidateRowDmaPlan(int row)
+        {
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                !_rowDmaPlans[row].Valid)
+            {
+                return;
+            }
+
+            _rowDmaPlans[row] = default;
+            _rowDmaExecutedMasks[row] = 0;
+            _lastRowDmaPlanInvalidationRows++;
+        }
+
+        private bool TryGetValidRowDmaPlan(
+            int row,
+            LiveLineState state,
+            out RowDmaPlan plan,
+            bool recordFallback = true)
+        {
+            plan = default;
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            plan = _rowDmaPlans[row];
+            if (!plan.Valid)
+            {
+                if (recordFallback)
+                {
+                    _lastRowDmaScalarFallbackRows++;
+                }
+
+                return false;
+            }
+
+            if (plan.Generation != _liveGeneration ||
+                plan.Row != row ||
+                plan.Signature != ComputeRowDmaPlanSignature(state))
+            {
+                _rowDmaPlans[row] = default;
+                _lastRowDmaPlanMismatchRows++;
+                if (recordFallback)
+                {
+                    _lastRowDmaScalarFallbackRows++;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        private void RecordRowDmaPlanExecuted(int row, byte mask)
+        {
+            if ((uint)row >= (uint)_rowDmaExecutedMasks.Length)
+            {
+                return;
+            }
+
+            var previous = _rowDmaExecutedMasks[row];
+            if (previous == 0)
+            {
+                _lastRowDmaPlannedRowsExecuted++;
+            }
+
+            _rowDmaExecutedMasks[row] = (byte)(previous | mask);
+        }
+
+        private static int ComputeRowDmaPlanSignature(LiveLineState state)
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = AddRowDmaPlanSignature(hash, state.Generation);
+                hash = AddRowDmaPlanSignature(hash, (int)state.LineStartCycle);
+                hash = AddRowDmaPlanSignature(hash, (int)(state.LineStartCycle >> 32));
+                hash = AddRowDmaPlanSignature(hash, state.Bplcon0);
+                hash = AddRowDmaPlanSignature(hash, state.Bplcon1);
+                hash = AddRowDmaPlanSignature(hash, state.Bplcon2);
+                hash = AddRowDmaPlanSignature(hash, state.DdfStart);
+                hash = AddRowDmaPlanSignature(hash, state.DdfStop);
+                hash = AddRowDmaPlanSignature(hash, state.Dmacon);
+                hash = AddRowDmaPlanSignature(hash, state.Bpl1Mod);
+                hash = AddRowDmaPlanSignature(hash, state.Bpl2Mod);
+                hash = AddRowDmaPlanSignature(hash, state.PlaneCount);
+                hash = AddRowDmaPlanSignature(hash, state.FetchWords);
+                hash = AddRowDmaPlanSignature(hash, state.DataFetchStart);
+                hash = AddRowDmaPlanSignature(hash, state.FetchSlotStride);
+                hash = AddRowDmaPlanSignature(hash, state.PlaneHasRowMask);
+                for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
+                {
+                    hash = AddRowDmaPlanSignature(hash, (int)state.BitplaneRowAddresses[plane]);
+                }
+
+                return hash;
+            }
+        }
+
+        private static int AddRowDmaPlanSignature(int hash, int value)
+            => unchecked((hash * 397) ^ value);
 
         private bool HasStartedLiveBitplaneFetches(int row, long cycle)
         {
@@ -3707,6 +3921,16 @@ namespace CopperMod.Amiga
                     return;
                 }
 
+                if (TryCaptureLiveBitplaneFetchBatchWithRowPlan(stopCycle, out var stoppedBeforeStop))
+                {
+                    if (stoppedBeforeStop)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
                 var row = _liveNextFetchRow;
                 var state = _liveLineStates[row];
                 var planeCount = Math.Max(0, state.PlaneCount);
@@ -3761,10 +3985,109 @@ namespace CopperMod.Amiga
             }
         }
 
+        private bool TryCaptureLiveBitplaneFetchBatchWithRowPlan(long stopCycle, out bool stoppedBeforeStop)
+            => TryCaptureLiveBitplaneFetchBatchWithRowPlan(stopCycle, out stoppedBeforeStop, out _);
+
+        private bool TryCaptureLiveBitplaneFetchBatchWithRowPlan(
+            long stopCycle,
+            out bool stoppedBeforeStop,
+            out bool capturedAny)
+        {
+            stoppedBeforeStop = false;
+            capturedAny = false;
+            var row = _liveNextFetchRow;
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                !IsLiveLineValid(row))
+            {
+                return false;
+            }
+
+            var state = _liveLineStates[row];
+            if (!TryGetValidRowDmaPlan(row, state, out var plan) ||
+                plan.BitplaneCount <= 0)
+            {
+                return false;
+            }
+
+            if (!TryFindNextRowDmaBitplaneEntry(plan, _liveNextFetchWord, _liveNextFetchSlot, out var entryIndex))
+            {
+                _lastRowDmaScalarFallbackRows++;
+                return false;
+            }
+
+            var end = plan.BitplaneStart + plan.BitplaneCount;
+            for (var index = entryIndex; index < end; index++)
+            {
+                var entry = _rowDmaBitplaneEntries[index];
+                if (entry.Cycle > stopCycle)
+                {
+                    _liveNextFetchRow = row;
+                    _liveNextFetchWord = entry.Word;
+                    _liveNextFetchPlane = entry.Plane;
+                    _liveNextFetchSlot = entry.Slot;
+                    if (capturedAny)
+                    {
+                        InvalidateLiveWorkCycle();
+                    }
+
+                    stoppedBeforeStop = true;
+                    return true;
+                }
+
+                _liveNextFetchRow = row;
+                _liveNextFetchWord = entry.Word;
+                _liveNextFetchPlane = entry.Plane;
+                _liveNextFetchSlot = entry.Slot;
+                CaptureLiveBitplaneFetch(row, entry);
+                _lastRowDmaBitplaneEntriesExecuted++;
+                capturedAny = true;
+            }
+
+            _liveNextFetchRow = row;
+            _liveNextFetchWord = state.FetchWords;
+            _liveNextFetchPlane = 0;
+            _liveNextFetchSlot = 0;
+            AdvanceLiveFetchToNextRow(advanceBitplanePointers: true);
+            RecordRowDmaPlanExecuted(row, RowDmaExecutedBitplaneMask);
+            return true;
+        }
+
+        private bool TryFindNextRowDmaBitplaneEntry(
+            RowDmaPlan plan,
+            int word,
+            int slot,
+            out int entryIndex)
+        {
+            var end = plan.BitplaneStart + plan.BitplaneCount;
+            for (var index = plan.BitplaneStart; index < end; index++)
+            {
+                var entry = _rowDmaBitplaneEntries[index];
+                if (entry.Word > word ||
+                    entry.Word == word && entry.Slot >= slot)
+                {
+                    entryIndex = index;
+                    return true;
+                }
+            }
+
+            entryIndex = -1;
+            return false;
+        }
+
         private void CaptureLiveSpriteFetchBatch(long stopCycle)
         {
             while (_liveNextSpriteRow < LowResOutputHeight)
             {
+                if (TryCaptureLiveSpriteFetchBatchWithRowPlan(stopCycle, out var stoppedBeforeStop))
+                {
+                    if (stoppedBeforeStop)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
                 SkipLiveSpriteSlotsWithoutFetches();
                 if (_liveNextSpriteRow >= LowResOutputHeight ||
                     !IsLiveLineValid(_liveNextSpriteRow) ||
@@ -3786,6 +4109,109 @@ namespace CopperMod.Amiga
                     fetchCycle);
                 AdvanceLiveSpriteFetchCursor();
             }
+        }
+
+        private bool TryCaptureLiveSpriteFetchBatchWithRowPlan(long stopCycle, out bool stoppedBeforeStop)
+            => TryCaptureLiveSpriteFetchBatchWithRowPlan(stopCycle, out stoppedBeforeStop, out _);
+
+        private bool TryCaptureLiveSpriteFetchBatchWithRowPlan(
+            long stopCycle,
+            out bool stoppedBeforeStop,
+            out bool capturedAny)
+        {
+            stoppedBeforeStop = false;
+            capturedAny = false;
+            SkipLiveSpriteSlotsWithoutFetches();
+            var row = _liveNextSpriteRow;
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                !IsLiveLineValid(row) ||
+                !IsSpriteDmaEnabled())
+            {
+                return false;
+            }
+
+            var state = _liveLineStates[row];
+            if (!TryGetValidRowDmaPlan(row, state, out var plan) ||
+                plan.SpriteCount <= 0)
+            {
+                return false;
+            }
+
+            while (_liveNextSpriteRow == row)
+            {
+                if (!TryFindNextRowDmaSpriteEntry(plan, _liveNextSpriteIndex, _liveNextSpriteWord, out var entryIndex))
+                {
+                    _lastRowDmaScalarFallbackRows++;
+                    return false;
+                }
+
+                var entry = _rowDmaSpriteEntries[entryIndex];
+                if (entry.Cycle > stopCycle)
+                {
+                    _liveNextSpriteRow = row;
+                    _liveNextSpriteIndex = entry.SpriteIndex;
+                    _liveNextSpriteWord = entry.Word;
+                    if (capturedAny)
+                    {
+                        InvalidateLiveWorkCycle();
+                    }
+
+                    stoppedBeforeStop = true;
+                    return true;
+                }
+
+                _liveNextSpriteRow = row;
+                _liveNextSpriteIndex = entry.SpriteIndex;
+                _liveNextSpriteWord = entry.Word;
+                _ = TryCaptureKnownLiveSpriteDmaSlot(row, entry.SpriteIndex, entry.Word, entry.Cycle);
+                _lastRowDmaSpriteEntriesExecuted++;
+                capturedAny = true;
+                AdvanceLiveSpriteFetchCursor();
+                SkipLiveSpriteSlotsWithoutFetches();
+
+                if (_liveNextSpriteRow > row)
+                {
+                    RecordRowDmaPlanExecuted(row, RowDmaExecutedSpriteMask);
+                    return true;
+                }
+
+                if (_liveNextSpriteRow < row ||
+                    !IsLiveLineValid(_liveNextSpriteRow) ||
+                    !IsSpriteDmaEnabled())
+                {
+                    return true;
+                }
+            }
+
+            if (capturedAny)
+            {
+                RecordRowDmaPlanExecuted(row, RowDmaExecutedSpriteMask);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryFindNextRowDmaSpriteEntry(
+            RowDmaPlan plan,
+            int spriteIndex,
+            int word,
+            out int entryIndex)
+        {
+            var end = plan.SpriteStart + plan.SpriteCount;
+            for (var index = plan.SpriteStart; index < end; index++)
+            {
+                var entry = _rowDmaSpriteEntries[index];
+                if (entry.SpriteIndex > spriteIndex ||
+                    entry.SpriteIndex == spriteIndex && entry.Word >= word)
+                {
+                    entryIndex = index;
+                    return true;
+                }
+            }
+
+            entryIndex = -1;
+            return false;
         }
 
         private long GetNextKnownLiveBitplaneFetchCycle()
@@ -3874,16 +4300,49 @@ namespace CopperMod.Amiga
                 if ((state.PlaneHasRowMask & (1 << _livePreparedFetchPlane)) != 0)
                 {
                     var address = unchecked(state.BitplaneRowAddresses[_livePreparedFetchPlane] + (uint)(_livePreparedFetchWord * 2));
-                    _ = _bus.TryReserveDisplayDmaSlot(
-                        AmigaBusRequester.Bitplane,
-                        AmigaBusAccessKind.Bitplane,
-                        address,
-                        fetchCycle,
-                        out _);
+                    if (TryGetValidRowDmaPlan(
+                            _livePreparedFetchRow,
+                            state,
+                            out var plan,
+                            recordFallback: false) &&
+                        TryFindExactRowDmaBitplaneEntry(
+                            plan,
+                            _livePreparedFetchWord,
+                            _livePreparedFetchSlot,
+                            out var entry) &&
+                        entry.RowPresent)
+                    {
+                        _ = _bus.TryReserveRowBitplaneDmaSlot(entry.Address, entry.Cycle, out _);
+                    }
+                    else
+                    {
+                        _ = _bus.TryReserveRowBitplaneDmaSlot(address, fetchCycle, out _);
+                    }
                 }
 
                 AdvancePreparedLiveFetchCursor();
             }
+        }
+
+        private bool TryFindExactRowDmaBitplaneEntry(
+            RowDmaPlan plan,
+            int word,
+            int slot,
+            out RowDmaBitplaneEntry entry)
+        {
+            var end = plan.BitplaneStart + plan.BitplaneCount;
+            for (var index = plan.BitplaneStart; index < end; index++)
+            {
+                var candidate = _rowDmaBitplaneEntries[index];
+                if (candidate.Word == word && candidate.Slot == slot)
+                {
+                    entry = candidate;
+                    return true;
+                }
+            }
+
+            entry = default;
+            return false;
         }
 
         private void AdvancePreparedLiveFetchCursor()
@@ -3962,6 +4421,14 @@ namespace CopperMod.Amiga
             }
 
             _bitplaneDmaReadLatch = latch;
+            ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
+        }
+
+        private void CaptureLiveBitplaneFetch(int row, RowDmaBitplaneEntry entry)
+        {
+            _bitplaneDmaReadLatch = entry.RowPresent
+                ? LoadLiveBitplaneDmaLatch(row, entry.Plane, entry.Word, entry.Address, entry.Cycle)
+                : BitplaneDmaReadLatch.Denied(row, entry.Plane, entry.Word, entry.Cycle);
             ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
@@ -6749,7 +7216,7 @@ namespace CopperMod.Amiga
 
         private BitplaneDmaReadLatch LoadLiveBitplaneDmaLatch(int row, int plane, int word, uint address, long fetchCycle)
         {
-            return _bus.TryReadLiveBitplaneDmaWord(address, fetchCycle, out var value, out var grantedCycle)
+            return _bus.TryReadRowBitplaneDmaWord(address, fetchCycle, out var value, out var grantedCycle)
                 ? new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle)
                 : BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
         }
@@ -6900,15 +7367,9 @@ namespace CopperMod.Amiga
 
         private SpriteDmaReadLatch LoadSpriteDmaReadLatch(int row, int spriteIndex, int word, uint address, long fetchCycle)
         {
-            return _bus.TryReadDisplayDmaWordForPresentation(
-                    AmigaBusRequester.Sprite,
-                    AmigaBusAccessKind.Sprite,
-                    address,
-                    fetchCycle,
-                    out var value,
-                    out var access)
-                ? new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, access.GrantedCycle)
-                : SpriteDmaReadLatch.Denied(row, spriteIndex, word, access.GrantedCycle);
+            return _bus.TryReadRowSpriteDmaWordForPresentation(address, fetchCycle, out var value, out var grantedCycle)
+                ? new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, grantedCycle)
+                : SpriteDmaReadLatch.Denied(row, spriteIndex, word, grantedCycle);
         }
 
         private bool ConsumeSpriteDmaReadLatch(
@@ -12228,6 +12689,92 @@ namespace CopperMod.Amiga
             }
         }
 
+        private readonly struct RowDmaPlan
+        {
+            public RowDmaPlan(
+                int generation,
+                int row,
+                int signature,
+                int bitplaneStart,
+                int bitplaneCount,
+                int spriteStart,
+                int spriteCount,
+                bool valid)
+            {
+                Generation = generation;
+                Row = row;
+                Signature = signature;
+                BitplaneStart = bitplaneStart;
+                BitplaneCount = bitplaneCount;
+                SpriteStart = spriteStart;
+                SpriteCount = spriteCount;
+                Valid = valid;
+            }
+
+            public int Generation { get; }
+
+            public int Row { get; }
+
+            public int Signature { get; }
+
+            public int BitplaneStart { get; }
+
+            public int BitplaneCount { get; }
+
+            public int SpriteStart { get; }
+
+            public int SpriteCount { get; }
+
+            public bool Valid { get; }
+        }
+
+        private readonly struct RowDmaBitplaneEntry
+        {
+            public RowDmaBitplaneEntry(
+                long cycle,
+                int plane,
+                int word,
+                int slot,
+                uint address,
+                bool rowPresent)
+            {
+                Cycle = cycle;
+                Plane = plane;
+                Word = word;
+                Slot = slot;
+                Address = address;
+                RowPresent = rowPresent;
+            }
+
+            public long Cycle { get; }
+
+            public int Plane { get; }
+
+            public int Word { get; }
+
+            public int Slot { get; }
+
+            public uint Address { get; }
+
+            public bool RowPresent { get; }
+        }
+
+        private readonly struct RowDmaSpriteEntry
+        {
+            public RowDmaSpriteEntry(long cycle, int spriteIndex, int word)
+            {
+                Cycle = cycle;
+                SpriteIndex = spriteIndex;
+                Word = word;
+            }
+
+            public long Cycle { get; }
+
+            public int SpriteIndex { get; }
+
+            public int Word { get; }
+        }
+
         private enum LiveRasterlinePlanEventKind
         {
             PendingWriteOrCopper,
@@ -12494,6 +13041,13 @@ namespace CopperMod.Amiga
             int lastRasterlineDescriptorBitplaneRows,
             int lastRasterlineDescriptorSpriteRows,
             int lastRasterlineDescriptorMismatches,
+            int lastRowDmaPlansBuilt,
+            int lastRowDmaPlannedRowsExecuted,
+            int lastRowDmaBitplaneEntriesExecuted,
+            int lastRowDmaSpriteEntriesExecuted,
+            int lastRowDmaScalarFallbackRows,
+            int lastRowDmaPlanInvalidationRows,
+            int lastRowDmaPlanMismatchRows,
             int lastArchiveRejectFrameIncomplete,
             int lastArchiveRejectTimelineInvalid,
             int lastArchiveRejectUnsafeWrite,
@@ -12604,6 +13158,13 @@ namespace CopperMod.Amiga
             LastRasterlineDescriptorBitplaneRows = lastRasterlineDescriptorBitplaneRows;
             LastRasterlineDescriptorSpriteRows = lastRasterlineDescriptorSpriteRows;
             LastRasterlineDescriptorMismatches = lastRasterlineDescriptorMismatches;
+            LastRowDmaPlansBuilt = lastRowDmaPlansBuilt;
+            LastRowDmaPlannedRowsExecuted = lastRowDmaPlannedRowsExecuted;
+            LastRowDmaBitplaneEntriesExecuted = lastRowDmaBitplaneEntriesExecuted;
+            LastRowDmaSpriteEntriesExecuted = lastRowDmaSpriteEntriesExecuted;
+            LastRowDmaScalarFallbackRows = lastRowDmaScalarFallbackRows;
+            LastRowDmaPlanInvalidationRows = lastRowDmaPlanInvalidationRows;
+            LastRowDmaPlanMismatchRows = lastRowDmaPlanMismatchRows;
             LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
             LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
             LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
@@ -12799,6 +13360,20 @@ namespace CopperMod.Amiga
         public int LastRasterlineDescriptorSpriteRows { get; }
 
         public int LastRasterlineDescriptorMismatches { get; }
+
+        public int LastRowDmaPlansBuilt { get; }
+
+        public int LastRowDmaPlannedRowsExecuted { get; }
+
+        public int LastRowDmaBitplaneEntriesExecuted { get; }
+
+        public int LastRowDmaSpriteEntriesExecuted { get; }
+
+        public int LastRowDmaScalarFallbackRows { get; }
+
+        public int LastRowDmaPlanInvalidationRows { get; }
+
+        public int LastRowDmaPlanMismatchRows { get; }
 
         public int LastArchiveRejectFrameIncomplete { get; }
 

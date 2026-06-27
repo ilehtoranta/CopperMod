@@ -1286,6 +1286,26 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        internal bool TryReadRowBitplaneDmaWord(uint address, long requestedCycle, out ushort value, out long grantedCycle)
+            => TryReadLiveBitplaneDmaWord(address, requestedCycle, out value, out grantedCycle);
+
+        internal bool TryReadRowSpriteDmaWordForPresentation(
+            uint address,
+            long requestedCycle,
+            out ushort value,
+            out long grantedCycle)
+        {
+            var granted = TryReadDisplayDmaWordForPresentation(
+                AmigaBusRequester.Sprite,
+                AmigaBusAccessKind.Sprite,
+                address,
+                requestedCycle,
+                out value,
+                out var access);
+            grantedCycle = access.GrantedCycle;
+            return granted;
+        }
+
         public ushort ReadLiveCopperDmaWord(uint address, long requestedCycle, out AmigaBusAccessResult access)
         {
             address = MaskChipDmaAddress(address);
@@ -1359,6 +1379,18 @@ namespace CopperMod.Amiga
             }
 
             return TryReserveExactFixedDmaSlot(request, out access);
+        }
+
+        internal bool TryReserveRowBitplaneDmaSlot(uint address, long requestedCycle, out long grantedCycle)
+        {
+            var granted = TryReserveDisplayDmaSlot(
+                AmigaBusRequester.Bitplane,
+                AmigaBusAccessKind.Bitplane,
+                address,
+                requestedCycle,
+                out var access);
+            grantedCycle = access.GrantedCycle;
+            return granted;
         }
 
         public void ClearPresentationWriteHistory()

@@ -557,6 +557,8 @@ public sealed class AmigaBusTimingTests
 		Assert.True(snapshot.LastRasterlinePlanBitplaneFetchEvents > 0);
 		Assert.True(snapshot.LastRasterlinePlanValidLines > 0);
 		Assert.Equal(0, snapshot.LastRasterlinePlanInvalidLines);
+		Assert.True(snapshot.LastRowDmaPlansBuilt > 0);
+		Assert.True(snapshot.LastRowDmaBitplaneEntriesExecuted > 0);
 	}
 
 	[Fact]
@@ -582,6 +584,8 @@ public sealed class AmigaBusTimingTests
 		Assert.True(snapshot.LastRasterlineDescriptorReplayAttempts > 0);
 		Assert.True(snapshot.LastRasterlineDescriptorReplayedRows > 0);
 		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
+		Assert.True(snapshot.LastRowDmaPlansBuilt > 0);
+		Assert.True(snapshot.LastRowDmaBitplaneEntriesExecuted > 0);
 	}
 
 	[Fact]
@@ -601,6 +605,7 @@ public sealed class AmigaBusTimingTests
 		var snapshot = bus.Display.CaptureSnapshot();
 		Assert.True(snapshot.LastRasterlineDescriptorReplayedRows > 0);
 		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
+		Assert.True(snapshot.LastRowDmaBitplaneEntriesExecuted > 0);
 		Assert.Equal(0xA55A, ReadLiveBitplaneWord(bus, row, plane: 0, word: 0));
 	}
 
@@ -621,6 +626,8 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanUnsupportedSpriteLines);
 		Assert.Equal(0, snapshot.LastPredictedRasterlinePlanMismatchedLines);
 		Assert.Equal(0, snapshot.LastRasterlineDescriptorMismatches);
+		Assert.True(snapshot.LastRowDmaPlansBuilt > 0);
+		Assert.True(snapshot.LastRowDmaSpriteEntriesExecuted > 0);
 	}
 
 	[Fact]
