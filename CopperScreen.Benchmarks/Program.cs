@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using CopperMod.Amiga;
@@ -83,13 +84,14 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     }
 
     var audio = new float[emulator.AudioFramesPerAppFrame(SampleRate) * Channels];
+    using var audioAudit = CreateAudioAuditWriter(options, workload);
     var audioFrames = 0;
     var warmupFramesRun = 0;
     for (var frame = 0; frame < options.WarmupFrames; frame++)
     {
         var frameStartTimestamp = Stopwatch.GetTimestamp();
         ApplyFrameActions(emulator, workload, frame);
-        emulator.RenderNextFrame();
+        emulator.RenderNextFrame(renderPresentation: !options.SkipPresentation);
         audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
         warmupFramesRun = frame + 1;
         WriteProgressIfNeeded(emulator, workload, options, "warmup", warmupFramesRun, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
@@ -108,6 +110,12 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     GC.Collect();
     GC.WaitForPendingFinalizers();
     GC.Collect();
+    if (options.PauseBeforeMeasureMilliseconds > 0)
+    {
+        Console.WriteLine($"profile-ready pid={Environment.ProcessId} warmup={warmupFramesRun} pause-ms={options.PauseBeforeMeasureMilliseconds}");
+        Console.Out.Flush();
+        Thread.Sleep(options.PauseBeforeMeasureMilliseconds);
+    }
 
     var nominalFrameAudioMilliseconds = emulator.AudioFramesPerAppFrame(SampleRate) * 1000.0 / SampleRate;
     var fakeQueuedAudioMilliseconds = nominalFrameAudioMilliseconds * 8.0;
@@ -138,70 +146,122 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var slowFramesOver40 = 0;
     var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
     var startTimestamp = Stopwatch.GetTimestamp();
-    for (var frame = 0; frame < options.MeasuredFrames; frame++)
+    var currentMeasuredFrame = 0;
+    var currentAbsoluteFrame = warmupFramesRun;
+    var crashReportWritten = false;
+    try
     {
-        var schedulerBeforeFrame = CaptureHardwareSchedulerSnapshot(emulator);
-        var frameStartTimestamp = Stopwatch.GetTimestamp();
-        ApplyFrameActions(emulator, workload, warmupFramesRun + frame);
-        emulator.RenderNextFrame();
-        audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
-        WriteMeasuredFrameDumpIfNeeded(options, emulator, warmupFramesRun + frame + 1);
-        WriteProgressIfNeeded(emulator, workload, options, "measure", frame + 1, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
-        var displayFrame = GetDisplay(emulator).CaptureSnapshot();
-        measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
-        measuredDescriptorReplayAttempts += displayFrame.LastRasterlineDescriptorReplayAttempts - previousDescriptorReplayAttempts;
-        measuredDescriptorReplayedRows += displayFrame.LastRasterlineDescriptorReplayedRows - previousDescriptorReplayedRows;
-        measuredDescriptorFallbackRows += displayFrame.LastRasterlineDescriptorFallbackRows - previousDescriptorFallbackRows;
-        measuredDescriptorBitplaneRows += displayFrame.LastRasterlineDescriptorBitplaneRows - previousDescriptorBitplaneRows;
-        measuredDescriptorSpriteRows += displayFrame.LastRasterlineDescriptorSpriteRows - previousDescriptorSpriteRows;
-        measuredDescriptorMismatches += displayFrame.LastRasterlineDescriptorMismatches - previousDescriptorMismatches;
-        previousDescriptorBuilds = displayFrame.LastRasterlineDescriptorBuilds;
-        previousDescriptorReplayAttempts = displayFrame.LastRasterlineDescriptorReplayAttempts;
-        previousDescriptorReplayedRows = displayFrame.LastRasterlineDescriptorReplayedRows;
-        previousDescriptorFallbackRows = displayFrame.LastRasterlineDescriptorFallbackRows;
-        previousDescriptorBitplaneRows = displayFrame.LastRasterlineDescriptorBitplaneRows;
-        previousDescriptorSpriteRows = displayFrame.LastRasterlineDescriptorSpriteRows;
-        previousDescriptorMismatches = displayFrame.LastRasterlineDescriptorMismatches;
-        var schedulerAfterFrame = CaptureHardwareSchedulerSnapshot(emulator);
-        maxFrameSchedulerDrains = Math.Max(
-            maxFrameSchedulerDrains,
-            schedulerAfterFrame.DrainCount - schedulerBeforeFrame.DrainCount);
-        var frameMilliseconds = Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds;
-        maxFrameMilliseconds = Math.Max(maxFrameMilliseconds, frameMilliseconds);
-        if (frameMilliseconds > 20.0)
+        for (var frame = 0; frame < options.MeasuredFrames; frame++)
         {
-            slowFramesOver20++;
+            currentMeasuredFrame = frame + 1;
+            currentAbsoluteFrame = warmupFramesRun + currentMeasuredFrame;
+            var schedulerBeforeFrame = CaptureHardwareSchedulerSnapshot(emulator);
+            var diskBeforeFrame = audioAudit == null ? default : CaptureDiskSummary(emulator);
+            var frameStartTimestamp = Stopwatch.GetTimestamp();
+            ApplyFrameActions(emulator, workload, warmupFramesRun + frame);
+            emulator.RenderNextFrame(renderPresentation: !options.SkipPresentation);
+            audioFrames = emulator.RenderAudio(audio, SampleRate, Channels);
+            WriteMeasuredFrameDumpIfNeeded(options, emulator, currentAbsoluteFrame);
+            WriteProgressIfNeeded(emulator, workload, options, "measure", currentMeasuredFrame, Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds);
+            if (options.StopOnDebugSnapshot && emulator.DebugSnapshot != null)
+            {
+                WriteAudioAuditDebugSnapshot(audioAudit, options, emulator, currentAbsoluteFrame, currentMeasuredFrame);
+                crashReportWritten = true;
+                throw new InvalidOperationException($"Emulator debug snapshot captured at frame {currentAbsoluteFrame}.");
+            }
+
+            var displayFrame = GetDisplay(emulator).CaptureSnapshot();
+            measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
+            measuredDescriptorReplayAttempts += displayFrame.LastRasterlineDescriptorReplayAttempts - previousDescriptorReplayAttempts;
+            measuredDescriptorReplayedRows += displayFrame.LastRasterlineDescriptorReplayedRows - previousDescriptorReplayedRows;
+            measuredDescriptorFallbackRows += displayFrame.LastRasterlineDescriptorFallbackRows - previousDescriptorFallbackRows;
+            measuredDescriptorBitplaneRows += displayFrame.LastRasterlineDescriptorBitplaneRows - previousDescriptorBitplaneRows;
+            measuredDescriptorSpriteRows += displayFrame.LastRasterlineDescriptorSpriteRows - previousDescriptorSpriteRows;
+            measuredDescriptorMismatches += displayFrame.LastRasterlineDescriptorMismatches - previousDescriptorMismatches;
+            previousDescriptorBuilds = displayFrame.LastRasterlineDescriptorBuilds;
+            previousDescriptorReplayAttempts = displayFrame.LastRasterlineDescriptorReplayAttempts;
+            previousDescriptorReplayedRows = displayFrame.LastRasterlineDescriptorReplayedRows;
+            previousDescriptorFallbackRows = displayFrame.LastRasterlineDescriptorFallbackRows;
+            previousDescriptorBitplaneRows = displayFrame.LastRasterlineDescriptorBitplaneRows;
+            previousDescriptorSpriteRows = displayFrame.LastRasterlineDescriptorSpriteRows;
+            previousDescriptorMismatches = displayFrame.LastRasterlineDescriptorMismatches;
+            var schedulerAfterFrame = CaptureHardwareSchedulerSnapshot(emulator);
+            var frameSchedulerDrains = schedulerAfterFrame.DrainCount - schedulerBeforeFrame.DrainCount;
+            maxFrameSchedulerDrains = Math.Max(maxFrameSchedulerDrains, frameSchedulerDrains);
+            var frameMilliseconds = Stopwatch.GetElapsedTime(frameStartTimestamp).TotalMilliseconds;
+            maxFrameMilliseconds = Math.Max(maxFrameMilliseconds, frameMilliseconds);
+            if (frameMilliseconds > 20.0)
+            {
+                slowFramesOver20++;
+            }
+
+            if (frameMilliseconds > 33.0)
+            {
+                slowFramesOver33++;
+            }
+
+            if (frameMilliseconds > 40.0)
+            {
+                slowFramesOver40++;
+            }
+
+            var queueBeforeDrain = fakeQueuedAudioMilliseconds;
+            fakeQueuedAudioMilliseconds -= frameMilliseconds;
+            var queueAfterDrain = fakeQueuedAudioMilliseconds;
+            var audioUnderrun = false;
+            fakeQueuedAudioMinMilliseconds = Math.Min(fakeQueuedAudioMinMilliseconds, fakeQueuedAudioMilliseconds);
+            if (fakeQueuedAudioMilliseconds < 0.0)
+            {
+                fakeAudioSubmitFailures++;
+                fakeQueuedAudioMilliseconds = 0.0;
+                fakeQueuedAudioMinMilliseconds = 0.0;
+                audioUnderrun = true;
+            }
+
+            var audioSpan = audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels));
+            var activeAudio = HasActiveAudio(audioSpan);
+            if (activeAudio)
+            {
+                activeAudioFrames++;
+            }
+
+            fakeQueuedAudioMilliseconds = Math.Min(
+                fakeQueuedAudioLimitMilliseconds,
+                fakeQueuedAudioMilliseconds + (audioFrames * 1000.0 / SampleRate));
+            fakeQueuedAudioMaxMilliseconds = Math.Max(fakeQueuedAudioMaxMilliseconds, fakeQueuedAudioMilliseconds);
+            if (audioAudit != null &&
+                (audioUnderrun ||
+                    currentMeasuredFrame == 1 ||
+                    currentMeasuredFrame % options.AudioAuditIntervalFrames == 0))
+            {
+                var diskAfterFrame = CaptureDiskSummary(emulator);
+                WriteAudioAuditFrame(
+                    audioAudit,
+                    emulator,
+                    currentAbsoluteFrame,
+                    currentMeasuredFrame,
+                    frameMilliseconds,
+                    frameSchedulerDrains,
+                    queueBeforeDrain,
+                    queueAfterDrain,
+                    fakeQueuedAudioMilliseconds,
+                    audioUnderrun,
+                    audioFrames,
+                    activeAudio,
+                    diskAfterFrame,
+                    FormatDiskSchedulerDelta(diskBeforeFrame, diskAfterFrame),
+                    diagnostics: string.Empty);
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        if (!crashReportWritten)
+        {
+            WriteAudioAuditCrash(audioAudit, options, emulator, currentAbsoluteFrame, currentMeasuredFrame, ex);
         }
 
-        if (frameMilliseconds > 33.0)
-        {
-            slowFramesOver33++;
-        }
-
-        if (frameMilliseconds > 40.0)
-        {
-            slowFramesOver40++;
-        }
-
-        fakeQueuedAudioMilliseconds -= frameMilliseconds;
-        fakeQueuedAudioMinMilliseconds = Math.Min(fakeQueuedAudioMinMilliseconds, fakeQueuedAudioMilliseconds);
-        if (fakeQueuedAudioMilliseconds < 0.0)
-        {
-            fakeAudioSubmitFailures++;
-            fakeQueuedAudioMilliseconds = 0.0;
-            fakeQueuedAudioMinMilliseconds = 0.0;
-        }
-
-        var audioSpan = audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels));
-        if (HasActiveAudio(audioSpan))
-        {
-            activeAudioFrames++;
-        }
-
-        fakeQueuedAudioMilliseconds = Math.Min(
-            fakeQueuedAudioLimitMilliseconds,
-            fakeQueuedAudioMilliseconds + (audioFrames * 1000.0 / SampleRate));
-        fakeQueuedAudioMaxMilliseconds = Math.Max(fakeQueuedAudioMaxMilliseconds, fakeQueuedAudioMilliseconds);
+        throw;
     }
 
     var elapsed = Stopwatch.GetElapsedTime(startTimestamp);
@@ -214,6 +274,16 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     if (!string.IsNullOrWhiteSpace(options.DumpChipRamPath))
     {
         WriteChipRamDump(FormatDumpFramePath(options.DumpChipRamPath, warmupFramesRun + options.MeasuredFrames), emulator);
+    }
+
+    if (!string.IsNullOrWhiteSpace(options.DumpDebugSnapshotPath))
+    {
+        WriteDebugSnapshotDump(
+            FormatDumpFramePath(options.DumpDebugSnapshotPath, warmupFramesRun + options.MeasuredFrames),
+            emulator,
+            warmupFramesRun + options.MeasuredFrames,
+            "BENCHMARK_DUMP",
+            "Benchmark debug snapshot dump.");
     }
 
     var fps = options.MeasuredFrames / elapsed.TotalSeconds;
@@ -240,7 +310,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         emulator.SetInstructionFrequencyEnabled(false);
     }
 
-    var phase = options.Smoke || workload.FileName == null
+    var phase = options.Smoke || workload.FileName == null || options.SkipPhaseProfile
         ? default
         : ProfileFrames(emulator, Math.Min(120, options.MeasuredFrames));
     var display = GetDisplay(emulator);
@@ -456,8 +526,7 @@ static void WriteProgressIfNeeded(
     double milliseconds)
 {
     if (options.ProgressIntervalFrames <= 0 ||
-        (!string.Equals(phase, "measure", StringComparison.OrdinalIgnoreCase) &&
-            frame % options.ProgressIntervalFrames != 0))
+        frame % options.ProgressIntervalFrames != 0)
     {
         return;
     }
@@ -1002,6 +1071,7 @@ static void WriteChipRamDump(string path, CopperScreenEmulator emulator)
     File.WriteAllBytes(fullPath, machine.Bus.ChipRam);
 
     var display = emulator.DisplaySnapshot;
+    var displayCounters = GetDisplay(emulator).CaptureSnapshot();
     File.WriteAllLines(
         Path.ChangeExtension(fullPath, ".txt"),
         [
@@ -1011,7 +1081,9 @@ static void WriteChipRamDump(string path, CopperScreenEmulator emulator)
             $"mod={display.Bpl1Mod}/{display.Bpl2Mod}",
             $"ptr={FormatHexArray(display.BitplanePointers)}",
             $"base={FormatIntArray(display.BitplaneBaseRows)}",
-            $"colors={FormatColorArray(display.Colors)}"
+            $"colors={FormatColorArray(display.Colors)}",
+            $"timeline=segments:{displayCounters.LastTimelineSegmentCount},fallback:{displayCounters.LastTimelineFallbackCount},active:{displayCounters.LastActiveTimelineFrameCount},archived:{displayCounters.LastArchivedTimelineFrameCount},sprites:{displayCounters.LastTimelineSpriteCommandCount},fast:{displayCounters.LastTimelineFastPathRowCount}/{displayCounters.LastTimelineFastPathMissCount}",
+            $"timelineReject=frameIncomplete:{displayCounters.LastArchiveRejectFrameIncomplete},timelineInvalid:{displayCounters.LastArchiveRejectTimelineInvalid},unsafe:{displayCounters.LastArchiveRejectUnsafeWrite}@{displayCounters.LastArchiveRejectUnsafeOffset:X4}/copper:{displayCounters.LastArchiveRejectUnsafeIsCopper},segments:{displayCounters.LastArchiveRejectSegmentCapacity},missingLine:{displayCounters.LastArchiveRejectMissingLine},unsafeLine:{displayCounters.LastArchiveRejectUnsafeLine},missingBpl:{displayCounters.LastArchiveRejectMissingBitplaneFetch},missingSpr:{displayCounters.LastArchiveRejectMissingSpriteFetch}"
         ]);
 }
 
@@ -1053,6 +1125,182 @@ static bool HasActiveAudio(ReadOnlySpan<float> samples)
 
     return false;
 }
+
+static StreamWriter? CreateAudioAuditWriter(BenchmarkOptions options, BenchmarkWorkload workload)
+{
+    if (string.IsNullOrWhiteSpace(options.AudioAuditPath))
+    {
+        return null;
+    }
+
+    var fullPath = Path.GetFullPath(options.AudioAuditPath);
+    var directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var writer = File.CreateText(fullPath);
+    writer.AutoFlush = true;
+    writer.WriteLine("# workload\t" + SanitizeTsv(workload.Name));
+    writer.WriteLine("# created\t" + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
+    writer.WriteLine("# path\t" + fullPath);
+    writer.WriteLine(string.Join(
+        '\t',
+        "absolute_frame",
+        "measured_frame",
+        "frame_ms",
+        "scheduler_drains",
+        "queue_before_ms",
+        "queue_after_drain_ms",
+        "queue_after_submit_ms",
+        "underrun",
+        "audio_frames",
+        "active_audio",
+        "pc",
+        "last_pc",
+        "sr",
+        "drive0",
+        "display",
+        "disk",
+        "disk_delta",
+        "diagnostics",
+        "status"));
+    return writer;
+}
+
+static void WriteAudioAuditFrame(
+    StreamWriter? writer,
+    CopperScreenEmulator emulator,
+    int absoluteFrame,
+    int measuredFrame,
+    double frameMilliseconds,
+    long schedulerDrains,
+    double queueBeforeDrainMilliseconds,
+    double queueAfterDrainMilliseconds,
+    double queueAfterSubmitMilliseconds,
+    bool underrun,
+    int audioFrames,
+    bool activeAudio,
+    DiskSummary diskSummary,
+    string diskSchedulerDelta,
+    string diagnostics)
+{
+    if (writer == null)
+    {
+        return;
+    }
+
+    var cpu = emulator.CpuState;
+    var drives = emulator.CaptureDriveStates();
+    writer.WriteLine(string.Join(
+        '\t',
+        absoluteFrame.ToString(CultureInfo.InvariantCulture),
+        measuredFrame.ToString(CultureInfo.InvariantCulture),
+        frameMilliseconds.ToString("F3", CultureInfo.InvariantCulture),
+        schedulerDrains.ToString(CultureInfo.InvariantCulture),
+        queueBeforeDrainMilliseconds.ToString("F3", CultureInfo.InvariantCulture),
+        queueAfterDrainMilliseconds.ToString("F3", CultureInfo.InvariantCulture),
+        queueAfterSubmitMilliseconds.ToString("F3", CultureInfo.InvariantCulture),
+        underrun ? "1" : "0",
+        audioFrames.ToString(CultureInfo.InvariantCulture),
+        activeAudio ? "1" : "0",
+        $"0x{cpu.ProgramCounter:X6}",
+        $"0x{cpu.LastInstructionProgramCounter:X6}",
+        $"0x{cpu.StatusRegister:X4}",
+        drives.Length > 0 ? SanitizeTsv(CopperScreenDebugSnapshot.FormatDrive(drives[0])) : string.Empty,
+        SanitizeTsv(FormatDisplaySummary(CaptureDisplaySummary(GetDisplay(emulator)))),
+        SanitizeTsv(FormatDiskSummary(diskSummary)),
+        SanitizeTsv(diskSchedulerDelta),
+        SanitizeTsv(diagnostics),
+        SanitizeTsv(CaptureStatusText(emulator))));
+}
+
+static void WriteAudioAuditDebugSnapshot(
+    StreamWriter? writer,
+    BenchmarkOptions options,
+    CopperScreenEmulator emulator,
+    int absoluteFrame,
+    int measuredFrame)
+{
+    if (emulator.DebugSnapshot == null)
+    {
+        return;
+    }
+
+    var reportPath = WriteAudioAuditSnapshotReport(
+        options,
+        emulator.DebugSnapshot,
+        "debug-snapshot",
+        absoluteFrame,
+        measuredFrame);
+    writer?.WriteLine("# debug-snapshot\t" + absoluteFrame.ToString(CultureInfo.InvariantCulture) + "\t" + SanitizeTsv(reportPath));
+}
+
+static void WriteAudioAuditCrash(
+    StreamWriter? writer,
+    BenchmarkOptions options,
+    CopperScreenEmulator emulator,
+    int absoluteFrame,
+    int measuredFrame,
+    Exception exception)
+{
+    var snapshot = emulator.CaptureDebugSnapshot(
+        "BENCHMARK_EXCEPTION",
+        exception.GetType().FullName + ": " + exception.Message,
+        exception.ToString());
+    var reportPath = WriteAudioAuditSnapshotReport(options, snapshot, "exception", absoluteFrame, measuredFrame);
+    writer?.WriteLine("# exception\t" + absoluteFrame.ToString(CultureInfo.InvariantCulture) + "\t" + SanitizeTsv(reportPath));
+}
+
+static string WriteAudioAuditSnapshotReport(
+    BenchmarkOptions options,
+    CopperScreenDebugSnapshot snapshot,
+    string suffix,
+    int absoluteFrame,
+    int measuredFrame)
+{
+    var basePath = string.IsNullOrWhiteSpace(options.AudioAuditPath)
+        ? Path.Combine("artifacts", "benchmark-audit.tsv")
+        : options.AudioAuditPath;
+    var fullAuditPath = Path.GetFullPath(basePath);
+    var directory = Path.GetDirectoryName(fullAuditPath) ?? Directory.GetCurrentDirectory();
+    Directory.CreateDirectory(directory);
+    var stem = Path.GetFileNameWithoutExtension(fullAuditPath);
+    var reportPath = Path.Combine(directory, $"{stem}.frame-{absoluteFrame}.{suffix}.txt");
+    File.WriteAllText(
+        reportPath,
+        $"absolute_frame={absoluteFrame.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}" +
+        $"measured_frame={measuredFrame.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}" +
+        snapshot.ToReport());
+    return reportPath;
+}
+
+static void WriteDebugSnapshotDump(
+    string path,
+    CopperScreenEmulator emulator,
+    int absoluteFrame,
+    string reasonCode,
+    string message)
+{
+    var fullPath = Path.GetFullPath(path);
+    var directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var snapshot = emulator.CaptureDebugSnapshot(reasonCode, message);
+    File.WriteAllText(
+        fullPath,
+        $"absolute_frame={absoluteFrame.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}" +
+        snapshot.ToReport());
+}
+
+static string SanitizeTsv(string? value)
+    => string.IsNullOrEmpty(value)
+        ? string.Empty
+        : value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
 static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
 {
@@ -1118,6 +1366,24 @@ static string FormatDiskSummary(DiskSummary summary)
         $"why=pd:{summary.DiskPendingDmaWakeSources},ap:{summary.DiskActiveDmaProgressWakeSources}," +
         $"ac:{summary.DiskActiveDmaCompletionWakeSources},sy:{summary.DiskSyncCandidateWakeSources}," +
         $"ix:{summary.DiskIndexPulseWakeSources},pb:{summary.DiskPassiveByteReadyWakeSources}";
+}
+
+static string FormatDiskSchedulerDelta(DiskSummary before, DiskSummary after)
+{
+    return $"nw:{after.DiskNextWakeCandidateQueries - before.DiskNextWakeCandidateQueries}," +
+        $"ne:{after.DiskNextEventWakeCandidateQueries - before.DiskNextEventWakeCandidateQueries}," +
+        $"hw:{after.DiskHasWakeCandidateThroughQueries - before.DiskHasWakeCandidateThroughQueries}," +
+        $"he:{after.DiskHasEventWakeCandidateThroughQueries - before.DiskHasEventWakeCandidateThroughQueries}," +
+        $"idx:{after.DiskRefreshNextIndexPulseQueries - before.DiskRefreshNextIndexPulseQueries}," +
+        $"in:{after.DiskInputAdvanceCalls - before.DiskInputAdvanceCalls}," +
+        $"gate:{after.DiskSchedulerGateTrue - before.DiskSchedulerGateTrue}/" +
+        $"{after.DiskSchedulerGateFalse - before.DiskSchedulerGateFalse}," +
+        $"why=pd:{after.DiskPendingDmaWakeSources - before.DiskPendingDmaWakeSources}," +
+        $"ap:{after.DiskActiveDmaProgressWakeSources - before.DiskActiveDmaProgressWakeSources}," +
+        $"ac:{after.DiskActiveDmaCompletionWakeSources - before.DiskActiveDmaCompletionWakeSources}," +
+        $"sy:{after.DiskSyncCandidateWakeSources - before.DiskSyncCandidateWakeSources}," +
+        $"ix:{after.DiskIndexPulseWakeSources - before.DiskIndexPulseWakeSources}," +
+        $"pb:{after.DiskPassiveByteReadyWakeSources - before.DiskPassiveByteReadyWakeSources}";
 }
 
 static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
@@ -1304,9 +1570,16 @@ internal readonly record struct BenchmarkOptions(
     string? KickstartRomPath,
     bool InstructionMatrix,
     bool DiskDivergenceTrace,
+    bool SkipPresentation,
+    bool SkipPhaseProfile,
     int TopInstructionOpcodes,
     int ProgressIntervalFrames,
     int? StopCylinder,
+    string? AudioAuditPath,
+    int AudioAuditIntervalFrames,
+    bool StopOnDebugSnapshot,
+    int PauseBeforeMeasureMilliseconds,
+    string? DumpDebugSnapshotPath,
     string? DumpFramePath,
     string? DumpChipRamPath)
 {
@@ -1318,9 +1591,16 @@ internal readonly record struct BenchmarkOptions(
         var repeatCount = 1;
         var instructionMatrix = false;
         var diskDivergenceTrace = false;
+        var skipPresentation = false;
+        var skipPhaseProfile = false;
         var topInstructionOpcodes = 16;
         var progressIntervalFrames = 0;
         int? stopCylinder = null;
+        string? audioAuditPath = null;
+        var audioAuditIntervalFrames = 500;
+        var stopOnDebugSnapshot = false;
+        var pauseBeforeMeasureMilliseconds = 0;
+        string? dumpDebugSnapshotPath = null;
         string? dumpFramePath = null;
         string? dumpChipRamPath = null;
         string? only = null;
@@ -1386,6 +1666,16 @@ internal readonly record struct BenchmarkOptions(
             {
                 diskDivergenceTrace = true;
             }
+            else if (string.Equals(args[i], "--skip-presentation", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[i], "--no-present", StringComparison.OrdinalIgnoreCase))
+            {
+                skipPresentation = true;
+            }
+            else if (string.Equals(args[i], "--skip-phase-profile", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[i], "--no-phase-profile", StringComparison.OrdinalIgnoreCase))
+            {
+                skipPhaseProfile = true;
+            }
             else if (string.Equals(args[i], "--top-opcodes", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
                 instructionMatrix = true;
@@ -1410,6 +1700,26 @@ internal readonly record struct BenchmarkOptions(
                     stopCylinder = parsedCylinder;
                 }
             }
+            else if (string.Equals(args[i], "--audio-audit", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                audioAuditPath = args[++i];
+            }
+            else if (string.Equals(args[i], "--audio-audit-interval", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                _ = int.TryParse(args[++i], out audioAuditIntervalFrames);
+            }
+            else if (string.Equals(args[i], "--stop-on-debug-snapshot", StringComparison.OrdinalIgnoreCase))
+            {
+                stopOnDebugSnapshot = true;
+            }
+            else if (string.Equals(args[i], "--pause-before-measure-ms", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                _ = int.TryParse(args[++i], out pauseBeforeMeasureMilliseconds);
+            }
+            else if (string.Equals(args[i], "--dump-debug-snapshot", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                dumpDebugSnapshotPath = args[++i];
+            }
             else if (string.Equals(args[i], "--dump-frame", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
                 dumpFramePath = args[++i];
@@ -1432,9 +1742,16 @@ internal readonly record struct BenchmarkOptions(
             kickstartRomPath,
             instructionMatrix,
             diskDivergenceTrace,
+            skipPresentation,
+            skipPhaseProfile,
             Math.Clamp(topInstructionOpcodes, 0, 256),
             Math.Max(0, progressIntervalFrames),
             stopCylinder,
+            audioAuditPath,
+            Math.Max(1, audioAuditIntervalFrames),
+            stopOnDebugSnapshot,
+            Math.Max(0, pauseBeforeMeasureMilliseconds),
+            dumpDebugSnapshotPath,
             dumpFramePath,
             dumpChipRamPath);
     }

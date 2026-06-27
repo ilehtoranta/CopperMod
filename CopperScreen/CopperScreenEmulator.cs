@@ -83,7 +83,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_interlacePresentationFrame = new int[Framebuffer.Length];
 		_renderFrameAudioUntil = RenderFrameAudioUntil;
 		DiskPath = startupOptions.DriveDiskPaths.Length > 0 ? startupOptions.DriveDiskPaths[0] : startupOptions.DiskPath;
-		_diskName = DiskPath == null ? "No disk" : Path.GetFileName(DiskPath);
+		_diskName = CopperScreenDiskImageArchive.GetDisplayName(DiskPath);
 		for (var driveIndex = 0; driveIndex < _driveDiskPaths.Length; driveIndex++)
 		{
 			var path = driveIndex < startupOptions.DriveDiskPaths.Length ? startupOptions.DriveDiskPaths[driveIndex] : null;
@@ -106,6 +106,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public bool IsPaused { get; private set; }
 
 	public CopperScreenDebugSnapshot? DebugSnapshot => _debugSnapshot;
+
+	internal CopperScreenDebugSnapshot CaptureDebugSnapshot(string reasonCode, string message, params string[] diagnostics)
+		=> CreateDebugSnapshot(reasonCode, message, diagnostics);
 
 	public bool IsWorkbenchHandoffPending => _workbenchHandoffPending;
 
@@ -430,19 +433,19 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public bool InsertDisk(string diskPath, bool markChanged = true)
 	{
-		if (!File.Exists(diskPath))
+		if (!CopperScreenDiskImageArchive.DiskPathExists(diskPath))
 		{
 			StatusText = "disk image not found";
 			return false;
 		}
 
-		var fullPath = Path.GetFullPath(diskPath);
+		var fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
 		AmigaDiskImage disk;
 		try
 		{
-			disk = AmigaDiskImage.Load(fullPath);
+			disk = CopperScreenDiskImageArchive.LoadDiskImage(fullPath);
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 		{
 			StatusText = ex.Message;
 			return false;
@@ -453,11 +456,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	internal bool InsertLoadedDisk(string fullPath, AmigaDiskImage disk, bool markChanged = true)
 	{
-		fullPath = Path.GetFullPath(fullPath);
+		fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(fullPath);
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
 		DiskPath = fullPath;
-		_diskName = Path.GetFileName(fullPath);
+		_diskName = CopperScreenDiskImageArchive.GetDisplayName(fullPath);
 		if (_bootAttempted && markChanged)
 		{
 			_pendingDiskImage = disk;
@@ -498,10 +501,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return false;
 		}
 
-		fullPath = Path.GetFullPath(fullPath);
+		fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(fullPath);
 		GetDrive(driveIndex).Insert(disk, markChanged);
 		SetDriveDiskMetadata(driveIndex, fullPath);
-		StatusText = $"inserted DF{driveIndex}: {Path.GetFileName(fullPath)}";
+		StatusText = $"inserted DF{driveIndex}: {CopperScreenDiskImageArchive.GetDisplayName(fullPath)}";
 		return true;
 	}
 
@@ -549,6 +552,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (string.IsNullOrWhiteSpace(currentDiskPath))
 		{
 			return null;
+		}
+
+		var archiveAdjacentPath = CopperScreenDiskImageArchive.ResolveAdjacentEntryPath(currentDiskPath, delta);
+		if (archiveAdjacentPath != null)
+		{
+			return archiveAdjacentPath;
 		}
 
 		var directory = Path.GetDirectoryName(currentDiskPath);
@@ -646,7 +655,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		if (DiskPath != null)
 		{
-			return AmigaDiskImage.Load(DiskPath);
+			return CopperScreenDiskImageArchive.LoadDiskImage(DiskPath);
 		}
 
 		if (_profile.BootsWithoutDisk)
@@ -687,10 +696,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 			try
 			{
 				var writeProtected = driveIndex < _initialDriveWriteProtected.Length ? _initialDriveWriteProtected[driveIndex] : null;
-				GetDrive(driveIndex).Insert(AmigaDiskImage.Load(diskToInsert), markChanged, writeProtected);
+				GetDrive(driveIndex).Insert(CopperScreenDiskImageArchive.LoadDiskImage(diskToInsert), markChanged, writeProtected);
 				SetDriveDiskMetadata(driveIndex, diskToInsert);
 			}
-			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 			{
 				StatusText = string.IsNullOrWhiteSpace(configuredPath)
 					? $"Could not auto-insert DF{driveIndex}: {ex.Message}"
@@ -714,10 +723,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 			try
 			{
-				drive.Insert(AmigaDiskImage.Load(adjacentPath), markChanged);
+				drive.Insert(CopperScreenDiskImageArchive.LoadDiskImage(adjacentPath), markChanged);
 				SetDriveDiskMetadata(driveIndex, adjacentPath);
 			}
-			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 			{
 				EjectDrive(driveIndex);
 			}
@@ -740,8 +749,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	private void SetDriveDiskMetadata(int driveIndex, string? diskPath)
 	{
-		_driveDiskPaths[driveIndex] = diskPath == null ? null : Path.GetFullPath(diskPath);
-		_driveDiskNames[driveIndex] = diskPath == null ? "No disk" : Path.GetFileName(diskPath);
+		_driveDiskPaths[driveIndex] = diskPath == null ? null : CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
+		_driveDiskNames[driveIndex] = CopperScreenDiskImageArchive.GetDisplayName(diskPath);
 	}
 
 	private AmigaFloppyDrive GetDrive(int driveIndex)
@@ -860,7 +869,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		try
 		{
-			var disk = AmigaDiskImage.Load(DiskPath);
+			var disk = CopperScreenDiskImageArchive.LoadDiskImage(DiskPath);
 			var fileSystem = new AmigaDosFileSystem(disk);
 			if (!fileSystem.TryCreateLaunchRequest(amigaPath, out var request, out message))
 			{
@@ -887,7 +896,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			message = StatusText;
 			return true;
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 		{
 			message = ex.Message;
 			StatusText = message;
@@ -1031,6 +1040,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	[HotPath]
 	public void RenderNextFrame()
+		=> RenderNextFrame(renderPresentation: true);
+
+	[HotPath]
+	internal void RenderNextFrame(bool renderPresentation)
 	{
 		ApplyInputState();
 		if (_startupError != null)
@@ -1038,7 +1051,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_frameAudio.AsSpan().Clear();
 			InvalidateInterlacePresentationHistory();
 			StatusText = _startupError;
-			RenderStatusFrame(StatusText);
+			if (renderPresentation)
+			{
+				RenderStatusFrame(StatusText);
+			}
+
 			AdvanceInputPulse();
 			return;
 		}
@@ -1048,7 +1065,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_frameAudio.AsSpan().Clear();
 			InvalidateInterlacePresentationHistory();
 			StatusText = "insert disk image";
-			RenderNoDiskFrame();
+			if (renderPresentation)
+			{
+				RenderNoDiskFrame();
+			}
+
 			AdvanceInputPulse();
 			return;
 		}
@@ -1095,7 +1116,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 				_frameAudio.AsSpan().Clear();
 				InvalidateInterlacePresentationHistory();
 				StatusText = ex.Message;
-				RenderStatusFrame(StatusText);
+				if (renderPresentation)
+				{
+					RenderStatusFrame(StatusText);
+				}
+
 				AdvanceInputPulse();
 				return;
 			}
@@ -1118,7 +1143,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_machine.Bus.AdvanceHardwareTo(_targetCycle);
-		RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle);
+		if (renderPresentation)
+		{
+			RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle);
+		}
 
 		AdvanceInputPulse();
 	}
@@ -1237,7 +1265,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		while (_frameAudioSampleIndex < _frameAudioSampleCount &&
 			_frameAudioNextSampleCycle <= currentCycle)
 		{
-			_machine.Bus.Paula.RenderSample(_frameAudioNextSampleCycle, _frameAudio, _frameAudioSampleIndex, DefaultAudioChannels);
+			_machine.Bus.Paula.RenderSample(
+				_frameAudioNextSampleCycle,
+				_frameAudio,
+				_frameAudioSampleIndex,
+				DefaultAudioChannels,
+				advanceRegisterObservable: false);
 			_frameAudioSampleIndex++;
 			_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(_frameAudioSampleIndex);
 		}
@@ -1322,7 +1355,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		InsertDiskSet(_pendingDiskImage, insertedPath, markChanged: true);
 		_pendingDiskImage = null;
 		_pendingDiskPath = null;
-		_diskName = insertedPath == null ? "No disk" : Path.GetFileName(insertedPath);
+		_diskName = CopperScreenDiskImageArchive.GetDisplayName(insertedPath);
 		StatusText = insertedPath == null
 			? "inserted disk"
 			: "inserted " + _diskName;

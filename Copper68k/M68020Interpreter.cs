@@ -877,15 +877,15 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xF1FF) == 0x80FC)
+            if ((opcode & 0xF1C0) == 0x80C0)
             {
-                ExecuteDivuWordImmediateToData(opcode);
+                ExecuteDivideWord(opcode, signed: false);
                 return true;
             }
 
-            if ((opcode & 0xF1FF) == 0x81FC)
+            if ((opcode & 0xF1C0) == 0x81C0)
             {
-                ExecuteDivsWordImmediateToData(opcode);
+                ExecuteDivideWord(opcode, signed: true);
                 return true;
             }
 
@@ -913,9 +913,15 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xF1FF) == 0xC0FC)
+            if ((opcode & 0xF1C0) == 0xC0C0)
             {
-                ExecuteMuluWordImmediateToData(opcode);
+                ExecuteMultiplyWord(opcode, signed: false);
+                return true;
+            }
+
+            if ((opcode & 0xF1C0) == 0xC1C0)
+            {
+                ExecuteMultiplyWord(opcode, signed: true);
                 return true;
             }
 
@@ -3061,67 +3067,99 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Carry, false);
         }
 
-        private void ExecuteDivuWordImmediateToData(ushort opcode)
+        private void ExecuteMultiplyWord(ushort opcode, bool signed)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var register = (opcode >> 9) & 7;
-            var divisor = FetchWord();
-            if (divisor == 0)
+            if (!TryReadWordDataSource((opcode >> 3) & 7, opcode & 7, opcode, out var source))
             {
-                RaiseFormat0Exception(5, State.ProgramCounter, M68kInstructionTimingKey.DivuWordImmediateToData);
                 return;
             }
 
-            var dividend = State.D[register];
-            var quotient = dividend / divisor;
-            var remainder = dividend % divisor;
-            if (quotient > 0xFFFF)
+            uint result;
+            if (signed)
             {
-                State.SetFlag(M68kCpuState.Overflow, true);
+                var destination = unchecked((short)State.D[register]);
+                var signedSource = unchecked((short)source);
+                result = unchecked((uint)(destination * signedSource));
             }
             else
             {
-                State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
-                State.SetNegativeZero(quotient, M68kOperandSize.Word);
-                State.SetFlag(M68kCpuState.Overflow, false);
-                State.SetFlag(M68kCpuState.Carry, false);
+                result = (uint)((ushort)State.D[register] * source);
             }
 
-            CompleteTiming(M68kInstructionTimingKey.DivuWordImmediateToData);
+            State.D[register] = result;
+            State.SetNegativeZero(result, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            CompleteOperandShapeTiming(
+                signed
+                    ? M68kInstructionTimingKey.MulsWordEffectiveAddressToData
+                    : M68kInstructionTimingKey.MuluWordEffectiveAddressToData,
+                signed ? "MULS.W <ea>,Dn" : "MULU.W <ea>,Dn");
         }
 
-        private void ExecuteDivsWordImmediateToData(ushort opcode)
+        private void ExecuteDivideWord(ushort opcode, bool signed)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var register = (opcode >> 9) & 7;
-            var divisor = FetchWord();
-            if (divisor == 0)
+            if (!TryReadWordDataSource((opcode >> 3) & 7, opcode & 7, opcode, out var divisor))
             {
-                RaiseFormat0Exception(5, State.ProgramCounter, M68kInstructionTimingKey.DivsWordImmediateToData);
                 return;
             }
 
-            var signedDivisor = unchecked((short)divisor);
-            var signedDividend = unchecked((int)State.D[register]);
-            var signedQuotient = signedDividend / signedDivisor;
-            var signedRemainder = signedDividend % signedDivisor;
-            if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
+            var timingKey = signed
+                ? M68kInstructionTimingKey.DivsWordEffectiveAddressToData
+                : M68kInstructionTimingKey.DivuWordEffectiveAddressToData;
+            if (divisor == 0)
             {
-                State.SetFlag(M68kCpuState.Overflow, true);
+                RaiseFormat0Exception(5, State.ProgramCounter, timingKey);
+                return;
+            }
+
+            if (signed)
+            {
+                var signedDivisor = unchecked((short)divisor);
+                var signedDividend = unchecked((int)State.D[register]);
+                var signedQuotient = signedDividend / signedDivisor;
+                var signedRemainder = signedDividend % signedDivisor;
+                if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, true);
+                }
+                else
+                {
+                    var quotient = unchecked((uint)signedQuotient);
+                    var remainder = unchecked((uint)signedRemainder);
+                    State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                    State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                    State.SetFlag(M68kCpuState.Carry, false);
+                }
             }
             else
             {
-                var quotient = unchecked((uint)signedQuotient);
-                var remainder = unchecked((uint)signedRemainder);
-                State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
-                State.SetNegativeZero(quotient, M68kOperandSize.Word);
-                State.SetFlag(M68kCpuState.Overflow, false);
-                State.SetFlag(M68kCpuState.Carry, false);
+                var dividend = State.D[register];
+                var quotient = dividend / divisor;
+                var remainder = dividend % divisor;
+                if (quotient > 0xFFFF)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, true);
+                }
+                else
+                {
+                    State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                    State.SetNegativeZero(quotient, M68kOperandSize.Word);
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                    State.SetFlag(M68kCpuState.Carry, false);
+                }
             }
 
-            CompleteTiming(M68kInstructionTimingKey.DivsWordImmediateToData);
+            CompleteOperandShapeTiming(
+                timingKey,
+                signed ? "DIVS.W <ea>,Dn" : "DIVU.W <ea>,Dn");
         }
 
         private void ExecuteAndLongImmediateToData(ushort opcode)
@@ -3178,20 +3216,6 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             CompleteTiming(M68kInstructionTimingKey.EoriWordImmediateToData);
-        }
-
-        private void ExecuteMuluWordImmediateToData(ushort opcode)
-        {
-            BeginInstruction(opcode);
-            _ = FetchWord();
-            var register = (opcode >> 9) & 7;
-            var source = FetchWord();
-            var result = (uint)((ushort)State.D[register] * source);
-            State.D[register] = result;
-            State.SetNegativeZero(result, M68kOperandSize.Long);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
-            CompleteTiming(M68kInstructionTimingKey.MuluWordImmediateToData);
         }
 
         private void ExecuteAndByteDataToData(ushort opcode)
@@ -4256,6 +4280,16 @@ namespace Copper68k
             _timing.CompleteInstruction(_timing.GetPlan(key));
         }
 
+        private void CompleteOperandShapeTiming(M68kInstructionTimingKey key, string name)
+        {
+            var plan = M68kTimingFormula.CreateOperandShapePlan(
+                key,
+                name,
+                _profile.Model,
+                _profile.FixedInstructionNativeCycles);
+            _timing.CompleteInstruction(plan);
+        }
+
         private void CompleteMovemLongTiming(
             M68kInstructionTimingKey key,
             string name,
@@ -4359,6 +4393,85 @@ namespace Copper68k
                 7 => ReadLongExtendedSource(register, opcode),
                 _ => throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile)
             };
+        }
+
+        private bool TryReadWordDataSource(int mode, int register, ushort opcode, out ushort value)
+        {
+            switch (mode)
+            {
+                case 0:
+                    value = (ushort)State.D[register];
+                    return true;
+                case 2:
+                    value = ReadWord(State.A[register]);
+                    return true;
+                case 3:
+                {
+                    var address = State.A[register];
+                    value = ReadWord(address);
+                    WriteGeneralRegister(true, register, address + M68kIntegerSemantics.AddressIncrement(register, M68kOperandSize.Word));
+                    return true;
+                }
+                case 4:
+                {
+                    var address = State.A[register] - M68kIntegerSemantics.AddressIncrement(register, M68kOperandSize.Word);
+                    WriteGeneralRegister(true, register, address);
+                    value = ReadWord(address);
+                    return true;
+                }
+                case 5:
+                {
+                    var displacement = unchecked((int)(short)FetchWord());
+                    value = ReadWord(unchecked((uint)(State.A[register] + displacement)));
+                    return true;
+                }
+                case 6:
+                {
+                    var extension = FetchWord();
+                    value = ReadWord(CalculateBriefIndexedAddress(register, extension, opcode));
+                    return true;
+                }
+                case 7:
+                    return TryReadWordExtendedSource(register, opcode, out value);
+                default:
+                    value = 0;
+                    RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                    return false;
+            }
+        }
+
+        private bool TryReadWordExtendedSource(int register, ushort opcode, out ushort value)
+        {
+            switch (register)
+            {
+                case 0:
+                    value = ReadWord(unchecked((uint)(int)(short)FetchWord()));
+                    return true;
+                case 1:
+                    value = ReadWord(FetchLong());
+                    return true;
+                case 2:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var displacement = unchecked((int)(short)FetchWord());
+                    value = ReadWord(unchecked((uint)(extensionAddress + displacement)));
+                    return true;
+                }
+                case 3:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var extension = FetchWord();
+                    value = ReadWord(CalculateBriefIndexedAddress(extensionAddress, extension, opcode));
+                    return true;
+                }
+                case 4:
+                    value = FetchWord();
+                    return true;
+                default:
+                    value = 0;
+                    RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                    return false;
+            }
         }
 
         private uint ReadLongPostIncrement(int register)

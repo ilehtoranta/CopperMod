@@ -431,18 +431,18 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	public async Task<CopperScreenCommandResult> InsertDiskAsync(string diskPath, bool markChanged = true)
 	{
-		if (!File.Exists(diskPath))
+		if (!CopperScreenDiskImageArchive.DiskPathExists(diskPath))
 		{
 			return await SetStatusAsync("disk image not found").ConfigureAwait(false);
 		}
 
-		var fullPath = Path.GetFullPath(diskPath);
+		var fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
 		AmigaDiskImage disk;
 		try
 		{
-			disk = await Task.Run(() => AmigaDiskImage.Load(fullPath)).ConfigureAwait(false);
+			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 		{
 			return await SetStatusAsync(ex.Message).ConfigureAwait(false);
 		}
@@ -462,18 +462,18 @@ internal sealed class CopperScreenRuntime : IDisposable
 			return await InsertDiskAsync(diskPath, markChanged).ConfigureAwait(false);
 		}
 
-		if (!File.Exists(diskPath))
+		if (!CopperScreenDiskImageArchive.DiskPathExists(diskPath))
 		{
 			return await SetStatusAsync("disk image not found").ConfigureAwait(false);
 		}
 
-		var fullPath = Path.GetFullPath(diskPath);
+		var fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
 		AmigaDiskImage disk;
 		try
 		{
-			disk = await Task.Run(() => AmigaDiskImage.Load(fullPath)).ConfigureAwait(false);
+			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 		{
 			return await SetStatusAsync(ex.Message).ConfigureAwait(false);
 		}
@@ -481,7 +481,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		return await EnqueueAsync(emulator =>
 		{
 			var inserted = emulator.InsertLoadedDisk(driveIndex, fullPath, disk, markChanged);
-			var message = inserted ? $"Inserted DF{driveIndex}: {Path.GetFileName(fullPath)}" : emulator.StatusText;
+			var message = inserted ? $"Inserted DF{driveIndex}: {CopperScreenDiskImageArchive.GetDisplayName(fullPath)}" : emulator.StatusText;
 			return new CopperScreenCommandResult(inserted, message, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		}).ConfigureAwait(false);
 	}

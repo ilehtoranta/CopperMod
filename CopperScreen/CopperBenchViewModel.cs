@@ -404,7 +404,7 @@ internal sealed class CopperBenchViewModel
 
 		try
 		{
-			var disk = AmigaDiskImage.Load(diskPath);
+			var disk = CopperScreenDiskImageArchive.LoadDiskImage(diskPath);
 			if (!AmigaDosFileSystem.IsSupported(disk))
 			{
 				status = "DF0: is not a supported OFS DOS\\0 disk";
@@ -425,7 +425,7 @@ internal sealed class CopperBenchViewModel
 
 			status = entries.Count == 0 ? "Empty drawer" : $"{entries.Count} item(s)";
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
 		{
 			status = ex.Message;
 		}

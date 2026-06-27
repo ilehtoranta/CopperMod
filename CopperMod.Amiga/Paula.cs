@@ -898,6 +898,15 @@ namespace CopperMod.Amiga
             return GetEffectivePeriod(period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
+        private static long GetDmaPeriodCycles(int period, AmigaBus bus)
+        {
+            var effectivePeriod = GetEffectivePeriod(period);
+            var dmaPeriod = UsesLiveAgnusAudioDma(bus)
+                ? Math.Max(effectivePeriod, bus.AudioDmaMinimumPeriod)
+                : effectivePeriod;
+            return dmaPeriod * AmigaConstants.A500PalCpuCyclesPerColorClock;
+        }
+
         private static long GetEffectivePeriod(int period)
         {
             if (period == 0)
@@ -1392,7 +1401,8 @@ namespace CopperMod.Amiga
                 _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
                 _nextDmaFetchCycle = cycle;
-                RequestDmaWord(bus, cycle, paula, timeline, kind, DmaLoadTarget.StartupDiscard, forceInterrupt: true);
+                var context = new DmaContext(bus, paula, timeline, kind);
+                RequestStartupDiscardWord(cycle, in context);
             }
 
             public void WriteData(ushort value, long cycle, Paula paula, PaulaTimelineState timeline, PaulaTimelineKind kind)
@@ -1415,6 +1425,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
+                var context = new DmaContext(bus, paula, timeline, kind);
                 while (true)
                 {
                     if (_hasPendingDmaWord)
@@ -1423,7 +1434,7 @@ namespace CopperMod.Amiga
                         if (_pendingDmaLoadCycle <= targetCycle &&
                             (!sampleDue || _pendingDmaLoadCycle <= _nextSampleCycle))
                         {
-                            CompletePendingDmaWord(bus, paula, timeline, kind, targetCycle);
+                            CompletePendingDmaWord(in context, targetCycle);
                             continue;
                         }
 
@@ -1447,10 +1458,10 @@ namespace CopperMod.Amiga
                     {
                         CurrentSample = unchecked((sbyte)_dataWord);
                         _nextByteIsLow = false;
-                        paula.ApplyModulationFrom(timeline, Index, _dataWord);
+                        context.Paula.ApplyModulationFrom(context.Timeline, Index, _dataWord);
                         _nextSampleCycle += GetPeriodCycles(Period);
                         if (DmaEnabled &&
-                            UsesLiveAgnusAudioDma(bus) &&
+                            UsesLiveAgnusAudioDma(context.Bus) &&
                             !_hasPrefetchedDmaWord &&
                             _hasPendingDmaWord)
                         {
@@ -1469,24 +1480,14 @@ namespace CopperMod.Amiga
                             StartDmaWordOutput(
                                 latch,
                                 _nextSampleCycle,
-                                bus,
-                                paula,
-                                timeline,
-                                kind,
+                                in context,
                                 targetCycle);
                             continue;
                         }
 
                         if (!_hasPendingDmaWord)
                         {
-                            RequestDmaWord(
-                                bus,
-                                _nextSampleCycle,
-                                paula,
-                                timeline,
-                                kind,
-                                DmaLoadTarget.Prefetch,
-                                forceInterrupt: false);
+                            RequestPrefetchWord(_nextSampleCycle, in context);
                         }
 
                         if (_hasPrefetchedDmaWord)
@@ -1495,7 +1496,7 @@ namespace CopperMod.Amiga
                         }
 
                         _nextSampleCycle += GetPeriodCycles(Period);
-                        if (UsesLiveAgnusAudioDma(bus) && _hasPendingDmaWord)
+                        if (UsesLiveAgnusAudioDma(context.Bus) && _hasPendingDmaWord)
                         {
                             _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                         }
@@ -1584,12 +1585,15 @@ namespace CopperMod.Amiga
                     _nextSampleCycle);
             }
 
+            private void RequestStartupDiscardWord(long cycle, in DmaContext context)
+                => RequestDmaWord(cycle, in context, DmaLoadTarget.StartupDiscard, forceInterrupt: true);
+
+            private void RequestPrefetchWord(long cycle, in DmaContext context)
+                => RequestDmaWord(cycle, in context, DmaLoadTarget.Prefetch, forceInterrupt: false);
+
             private void RequestDmaWord(
-                AmigaBus bus,
                 long cycle,
-                Paula paula,
-                PaulaTimelineState timeline,
-                PaulaTimelineKind kind,
+                in DmaContext context,
                 DmaLoadTarget loadTarget,
                 bool forceInterrupt)
             {
@@ -1598,24 +1602,24 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                var requestCycle = UsesLiveAgnusAudioDma(bus)
+                var requestCycle = UsesLiveAgnusAudioDma(context.Bus)
                     ? Math.Max(cycle, _nextDmaFetchCycle)
                     : cycle;
                 var interruptCount = 0;
                 if (_remainingWords <= 0)
                 {
-                    _currentAddress = bus.MaskChipDmaAddress(Location);
+                    _currentAddress = context.Bus.MaskChipDmaAddress(Location);
                     _remainingWords = Math.Max(1, LengthWords);
                     interruptCount++;
                 }
 
-                var dmaLatch = paula.GetOrCreateDmaReadLatch(Index, _currentAddress, requestCycle, kind);
-                _currentAddress = bus.AddChipDmaPointerOffset(_currentAddress, 2);
+                var dmaLatch = context.Paula.GetOrCreateDmaReadLatch(Index, _currentAddress, requestCycle, context.Kind);
+                _currentAddress = context.Bus.AddChipDmaPointerOffset(_currentAddress, 2);
                 _remainingWords--;
                 _pendingDmaLatch = dmaLatch;
                 _hasPendingDmaWord = true;
                 _pendingDmaLoadCycle = dmaLatch.LoadCycle;
-                _pendingDmaNextFetchCycle = requestCycle + (GetPeriodCycles(Period) * 2);
+                _pendingDmaNextFetchCycle = requestCycle + (GetDmaPeriodCycles(Period, context.Bus) * 2);
                 _pendingDmaLoadTarget = loadTarget;
                 _nextDmaFetchCycle = _pendingDmaNextFetchCycle;
                 if (!_hasDataWord)
@@ -1631,15 +1635,12 @@ namespace CopperMod.Amiga
                 _pendingDmaInterruptCount = interruptCount;
                 if (_pendingDmaLoadCycle <= cycle)
                 {
-                    CompletePendingDmaWord(bus, paula, timeline, kind, cycle);
+                    CompletePendingDmaWord(in context, cycle);
                 }
             }
 
             private void CompletePendingDmaWord(
-                AmigaBus bus,
-                Paula paula,
-                PaulaTimelineState timeline,
-                PaulaTimelineKind kind,
+                in DmaContext context,
                 long targetCycle)
             {
                 var loadCycle = _pendingDmaLoadCycle;
@@ -1649,14 +1650,14 @@ namespace CopperMod.Amiga
                 ClearPendingDmaWord();
                 for (var i = 0; i < interruptCount; i++)
                 {
-                    paula.RequestAudioInterrupt(kind, Index, loadCycle);
+                    context.Paula.RequestAudioInterrupt(context.Kind, Index, loadCycle);
                 }
 
                 if (loadTarget == DmaLoadTarget.StartupDiscard)
                 {
                     if (DmaEnabled)
                     {
-                        RequestDmaWord(bus, loadCycle, paula, timeline, kind, DmaLoadTarget.Prefetch, forceInterrupt: false);
+                        RequestPrefetchWord(loadCycle, in context);
                     }
 
                     return;
@@ -1664,7 +1665,7 @@ namespace CopperMod.Amiga
 
                 if (!_hasDataWord)
                 {
-                    StartDmaWordOutput(latch, loadCycle, bus, paula, timeline, kind, targetCycle);
+                    StartDmaWordOutput(latch, loadCycle, in context, targetCycle);
                     return;
                 }
 
@@ -1675,29 +1676,23 @@ namespace CopperMod.Amiga
             private void StartDmaWordOutput(
                 PaulaDmaReadLatch latch,
                 long cycle,
-                AmigaBus bus,
-                Paula paula,
-                PaulaTimelineState timeline,
-                PaulaTimelineKind kind,
+                in DmaContext context,
                 long targetCycle)
-                => StartDmaWordOutput(latch.Value, cycle, bus, paula, timeline, kind, targetCycle);
+                => StartDmaWordOutput(latch.Value, cycle, in context, targetCycle);
 
             private void StartDmaWordOutput(
                 ushort word,
                 long cycle,
-                AmigaBus bus,
-                Paula paula,
-                PaulaTimelineState timeline,
-                PaulaTimelineKind kind,
+                in DmaContext context,
                 long targetCycle)
             {
-                paula.RecordStartDmaWordOutput();
+                context.Paula.RecordStartDmaWordOutput();
                 _dataWord = word;
                 _hasDataWord = true;
                 CurrentSample = unchecked((sbyte)(word >> 8));
                 var periodCycles = GetPeriodCycles(Period);
-                if (kind == PaulaTimelineKind.Register &&
-                    TrySkipRegisterLowByteDmaOutput(cycle, bus, paula, timeline, periodCycles))
+                if (context.Kind == PaulaTimelineKind.Register &&
+                    TrySkipRegisterLowByteDmaOutput(cycle, in context, periodCycles))
                 {
                     return;
                 }
@@ -1706,18 +1701,18 @@ namespace CopperMod.Amiga
                 _nextSampleCycle = cycle + periodCycles;
                 if (DmaEnabled)
                 {
-                    RequestDmaWord(bus, cycle, paula, timeline, kind, DmaLoadTarget.Prefetch, forceInterrupt: false);
+                    RequestPrefetchWord(cycle, in context);
                 }
 
-                if (kind == PaulaTimelineKind.Audio &&
+                if (context.Kind == PaulaTimelineKind.Audio &&
                     _nextSampleCycle <= targetCycle &&
-                    !paula.IsAttachedSource(timeline, Index))
+                    !context.Paula.IsAttachedSource(context.Timeline, Index))
                 {
                     CurrentSample = unchecked((sbyte)word);
                     _nextByteIsLow = false;
                     _nextSampleCycle += periodCycles;
                     if (DmaEnabled &&
-                        UsesLiveAgnusAudioDma(bus) &&
+                        UsesLiveAgnusAudioDma(context.Bus) &&
                         !_hasPrefetchedDmaWord &&
                         _hasPendingDmaWord)
                     {
@@ -1728,26 +1723,24 @@ namespace CopperMod.Amiga
 
             private bool TrySkipRegisterLowByteDmaOutput(
                 long cycle,
-                AmigaBus bus,
-                Paula paula,
-                PaulaTimelineState timeline,
+                in DmaContext context,
                 long periodCycles)
             {
-                if (!DmaEnabled || paula.IsAttachedSource(timeline, Index))
+                if (!DmaEnabled || context.Paula.IsAttachedSource(context.Timeline, Index))
                 {
                     return false;
                 }
 
                 var nextWordCycle = cycle + (periodCycles * 2);
-                if (paula.HasPendingWriteThrough(timeline, nextWordCycle))
+                if (context.Paula.HasPendingWriteThrough(context.Timeline, nextWordCycle))
                 {
                     return false;
                 }
 
                 _nextByteIsLow = false;
                 _nextSampleCycle = nextWordCycle;
-                RequestDmaWord(bus, cycle, paula, timeline, PaulaTimelineKind.Register, DmaLoadTarget.Prefetch, forceInterrupt: false);
-                if (UsesLiveAgnusAudioDma(bus) && !_hasPrefetchedDmaWord && _hasPendingDmaWord)
+                RequestPrefetchWord(cycle, in context);
+                if (UsesLiveAgnusAudioDma(context.Bus) && !_hasPrefetchedDmaWord && _hasPendingDmaWord)
                 {
                     _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                 }
@@ -1769,6 +1762,22 @@ namespace CopperMod.Amiga
                 _pendingDmaNextFetchCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
                 _pendingDmaLoadTarget = DmaLoadTarget.Prefetch;
+            }
+
+            private readonly struct DmaContext
+            {
+                public DmaContext(AmigaBus bus, Paula paula, PaulaTimelineState timeline, PaulaTimelineKind kind)
+                {
+                    Bus = bus;
+                    Paula = paula;
+                    Timeline = timeline;
+                    Kind = kind;
+                }
+
+                public readonly AmigaBus Bus;
+                public readonly Paula Paula;
+                public readonly PaulaTimelineState Timeline;
+                public readonly PaulaTimelineKind Kind;
             }
 
             private enum DmaLoadTarget

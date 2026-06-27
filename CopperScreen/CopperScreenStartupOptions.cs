@@ -384,9 +384,36 @@ internal sealed class CopperScreenStartupOptions
 		if (diskPath != null)
 		{
 			paths[0] = diskPath;
+			PopulateArchiveDiskSetPaths(paths, diskPath);
 		}
 
 		return paths;
+	}
+
+	private static void PopulateArchiveDiskSetPaths(string?[] paths, string diskPath)
+	{
+		if (!CopperScreenDiskImageArchive.TryReadDiskSet(diskPath, out var diskSet, out _) ||
+			diskSet == null ||
+			diskSet.Entries.Count < 2)
+		{
+			return;
+		}
+
+		foreach (var assignment in diskSet.CreateDefaultAssignments())
+		{
+			if ((uint)assignment.DriveIndex >= (uint)paths.Length ||
+				string.IsNullOrWhiteSpace(assignment.DiskPath))
+			{
+				continue;
+			}
+
+			if (assignment.DriveIndex != 0 && !string.IsNullOrWhiteSpace(paths[assignment.DriveIndex]))
+			{
+				continue;
+			}
+
+			paths[assignment.DriveIndex] = assignment.DiskPath;
+		}
 	}
 
 	private static bool?[] CreateDriveWriteProtectedArray(CopperScreenProfile profile)
@@ -409,6 +436,11 @@ internal sealed class CopperScreenStartupOptions
 		for (var i = 0; i < Math.Min(paths.Length, driveDiskPaths.Length); i++)
 		{
 			paths[i] = ResolveOptionalPath(driveDiskPaths[i], baseDirectory);
+		}
+
+		if (!string.IsNullOrWhiteSpace(paths[0]))
+		{
+			PopulateArchiveDiskSetPaths(paths, paths[0]!);
 		}
 
 		return paths;
@@ -511,7 +543,7 @@ internal sealed class CopperScreenStartupOptions
 	private static string? ResolveExistingFile(string path, string baseDirectory)
 	{
 		var resolved = ResolveOptionalPath(path, baseDirectory);
-		return resolved != null && File.Exists(resolved) ? resolved : null;
+		return resolved != null && CopperScreenDiskImageArchive.DiskPathExists(resolved) ? resolved : null;
 	}
 
 	private static string? ResolveOptionalPath(string? path, string baseDirectory)
@@ -521,6 +553,17 @@ internal sealed class CopperScreenStartupOptions
 			return null;
 		}
 
+		if (CopperScreenDiskImageArchive.TrySplitEntryPathRaw(path, out var archivePath, out var entryName))
+		{
+			var resolvedArchivePath = ResolvePlainOptionalPath(archivePath, baseDirectory);
+			return resolvedArchivePath == null ? null : CopperScreenDiskImageArchive.CreateEntryPath(resolvedArchivePath, entryName);
+		}
+
+		return ResolvePlainOptionalPath(path, baseDirectory);
+	}
+
+	private static string? ResolvePlainOptionalPath(string path, string baseDirectory)
+	{
 		if (Path.IsPathFullyQualified(path))
 		{
 			return Path.GetFullPath(path);

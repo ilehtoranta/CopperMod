@@ -59,6 +59,10 @@ namespace CopperMod.Amiga
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Agnus |
             AmigaHardwareEventMask.Blitter;
+        private const AmigaHardwareEventMask DiskWakeCacheKeyMask =
+            AmigaHardwareEventMask.DiskEvents |
+            AmigaHardwareEventMask.DiskPassiveInput |
+            AmigaHardwareEventMask.DiskRegisterSample;
 
         private readonly AmigaBus _bus;
         private long _lastDrainCycle;
@@ -84,6 +88,9 @@ namespace CopperMod.Amiga
         private long _diskEvents;
         private long _agnusEvents;
         private long _blitterEvents;
+        private bool _diskWakeFalseCacheValid;
+        private AmigaHardwareEventMask _diskWakeFalseCacheKey;
+        private long _diskWakeFalseThroughCycle;
 
         public AmigaHardwareScheduler(AmigaBus bus)
         {
@@ -115,11 +122,13 @@ namespace CopperMod.Amiga
             _diskEvents = 0;
             _agnusEvents = 0;
             _blitterEvents = 0;
+            InvalidateDiskWakeFalseCache();
         }
 
         public void NotifyWorkScheduled(long cycle)
         {
             cycle = Math.Max(0, cycle);
+            InvalidateDiskWakeFalseCache();
             _bus.InvalidateRasterlineSchedule(cycle, AmigaHardwareEventMask.All);
             if (_hasDrained && cycle <= _lastDrainCycle)
             {
@@ -555,6 +564,7 @@ namespace CopperMod.Amiga
                     _bus.Disk.AdvanceEventsTo(cycle);
                 }
 
+                InvalidateDiskWakeFalseCache();
                 _diskEvents++;
             }
 
@@ -608,6 +618,8 @@ namespace CopperMod.Amiga
                 {
                     _bus.Disk.AdvanceEventsTo(targetCycle);
                 }
+
+                InvalidateDiskWakeFalseCache();
             }
 
             if ((mask & AmigaHardwareEventMask.DiskCiaEvents) != 0 &&
@@ -701,12 +713,78 @@ namespace CopperMod.Amiga
         {
             var includePassiveInput = (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0;
             var includeEvents = (mask & AmigaHardwareEventMask.DiskEvents) != 0;
-            return (includePassiveInput || includeEvents) &&
-                _bus.Disk.HasSchedulerWakeSourceThrough(
-                    targetCycle,
+            if (!includePassiveInput && !includeEvents)
+            {
+                return false;
+            }
+
+            var cacheKey = mask & DiskWakeCacheKeyMask;
+            if (_diskWakeFalseCacheValid &&
+                _diskWakeFalseCacheKey == cacheKey &&
+                targetCycle <= _diskWakeFalseThroughCycle)
+            {
+                return false;
+            }
+
+            var includeActiveDmaProgress = (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0;
+            var horizonCycle = GetDiskWakeFalseCacheHorizon(targetCycle);
+            if (horizonCycle > targetCycle &&
+                !_bus.Disk.HasSchedulerWakeSourceThrough(
+                    horizonCycle,
                     includePassiveInput,
                     includeEvents,
-                    includeActiveDmaProgress: (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0);
+                    includeActiveDmaProgress))
+            {
+                CacheDiskWakeFalseThrough(cacheKey, horizonCycle);
+                return false;
+            }
+
+            var hasSource = _bus.Disk.HasSchedulerWakeSourceThrough(
+                targetCycle,
+                includePassiveInput,
+                includeEvents,
+                includeActiveDmaProgress);
+            if (!hasSource)
+            {
+                CacheDiskWakeFalseThrough(cacheKey, targetCycle);
+            }
+
+            return hasSource;
+        }
+
+        private long GetDiskWakeFalseCacheHorizon(long targetCycle)
+        {
+            var lineCycles = _bus.PalLineCycles;
+            if (lineCycles <= 1)
+            {
+                return targetCycle;
+            }
+
+            var lineCycle = targetCycle % lineCycles;
+            var cyclesUntilLineEnd = lineCycles - lineCycle - 1;
+            return cyclesUntilLineEnd <= 0
+                ? targetCycle
+                : targetCycle + cyclesUntilLineEnd;
+        }
+
+        private void CacheDiskWakeFalseThrough(AmigaHardwareEventMask cacheKey, long throughCycle)
+        {
+            var canExtendExisting =
+                _diskWakeFalseCacheValid &&
+                _diskWakeFalseCacheKey == cacheKey;
+
+            _diskWakeFalseCacheValid = true;
+            _diskWakeFalseCacheKey = cacheKey;
+            _diskWakeFalseThroughCycle = canExtendExisting
+                ? Math.Max(_diskWakeFalseThroughCycle, throughCycle)
+                : throughCycle;
+        }
+
+        private void InvalidateDiskWakeFalseCache()
+        {
+            _diskWakeFalseCacheValid = false;
+            _diskWakeFalseCacheKey = AmigaHardwareEventMask.None;
+            _diskWakeFalseThroughCycle = long.MinValue;
         }
 
         private static AmigaHardwareEventMask GetCpuAccessMask(
