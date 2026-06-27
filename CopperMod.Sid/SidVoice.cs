@@ -941,12 +941,7 @@ namespace CopperMod.Sid
         private uint GetPulseComparatorDac()
         {
             var pulseWidth = PulseWidth & 0x0FFF;
-            if (pulseWidth == 0)
-            {
-                return 0x0FFFu;
-            }
-
-            return ((_phase >> 12) & 0x0FFF) < pulseWidth ? 0x0FFFu : 0u;
+            return ((_phase >> 12) & 0x0FFF) >= pulseWidth ? 0x0FFFu : 0u;
         }
 
         private uint GetNoiseDac()
