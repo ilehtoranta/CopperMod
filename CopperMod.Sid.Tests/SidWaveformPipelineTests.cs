@@ -299,7 +299,7 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void Mos6581NoiseCombinedWithOtherWaveformsZeroOutputDoesNotImmediatelyLock()
+	public void Mos6581NoiseCombinedWithOtherWaveformsPullsNoiseOutputBitsLow()
 	{
 		var chip = CreateTracedChip(out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
@@ -308,12 +308,12 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0xA0, frame.Waveform);
-		Assert.False(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.Equal(0x7FFFF8u, frame.NoiseShiftRegister);
-		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), frame.NoiseDac);
+		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
+		Assert.Equal(0x2ED768u, frame.NoiseShiftRegister);
+		Assert.Equal(0u, frame.NoiseDac);
 		Assert.Equal(0u, frame.WaveformDac);
 		Assert.True(frame.NoiseUsesPostShiftRegister);
-		Assert.InRange(frame.WaveformOutput, -0.29, -0.27);
+		Assert.InRange(frame.WaveformOutput, -0.01, 0.01);
 	}
 
 	[Fact]
@@ -415,6 +415,23 @@ public sealed class SidWaveformPipelineTests
 		Assert.Equal(3, activeWaveforms);
 		Assert.InRange(sourceAware, 0u, 0x00FFu);
 		Assert.True(sourceAware < collapsedOnly, $"Expected 6581 triangle+saw+pulse selector residue to collapse below the already-mapped value, source-aware ${sourceAware:X3}, collapsed ${collapsedOnly:X3}.");
+	}
+
+	[Fact]
+	public void Mos6581NoiseCombinedSelectionDoesNotBleedPulledDownSourceResidue()
+	{
+		var mapped = SidAnalog.MapCombinedWaveformDac12(
+			triangleDac: 0,
+			sawDac: 0x800,
+			pulseDac: 0,
+			noiseDac: 0,
+			waveformMask: 0xA0,
+			model: SidChipModel.Mos6581,
+			out var activeWaveforms);
+
+		Assert.Equal(2, activeWaveforms);
+		Assert.Equal(0u, mapped);
+		Assert.InRange(SidAnalog.ConvertCombinedWaveformDac12(mapped, 0xA0, SidChipModel.Mos6581), -0.01, 0.01);
 	}
 
 	[Fact]

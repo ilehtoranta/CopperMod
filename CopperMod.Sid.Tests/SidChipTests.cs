@@ -615,7 +615,7 @@ public sealed class SidChipTests
 	[Theory]
 	[InlineData(false)]
 	[InlineData(true)]
-	public void Mos6581NoiseSawInPhaseTwoOnlyDoesNotWriteBack(bool traced)
+	public void Mos6581NoiseSawInPhaseTwoOnlyWritesBack(bool traced)
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		if (traced)
@@ -630,7 +630,8 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), PulledLowNoiseBits(0x020u));
+		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -650,7 +651,7 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
-	public void Mos6581NoiseSawInBothShiftPhasesWritesBackOnPhaseTwo()
+	public void Mos6581NoiseSawSkipsFirstShiftPhaseAndWritesBackOnPhaseTwo()
 	{
 		var chip = CreateTracedNoisePhaseChip(out var trace);
 
@@ -658,9 +659,9 @@ public sealed class SidChipTests
 		chip.Write(0x04, 0xA0);
 		chip.Render(2);
 
-		var phase1 = Frame(trace, cycle: 17, voice: 0);
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
-		var pulledLowBits = PulledLowNoiseBits(phase1.WaveformDac) & PulledLowNoiseBits(phase2.WaveformDac);
+		var phase1 = Frame(trace, cycle: 17, voice: 0);
+		var pulledLowBits = PulledLowNoiseBits(phase2.WaveformDac);
 		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), pulledLowBits);
 
 		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
@@ -671,7 +672,7 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
-	public void Mos6581NoiseWritebackRequiresMatchingNonNoiseWaveformAcrossBothPhases()
+	public void Mos6581NoiseWritebackUsesCurrentCombinedWaveformOnPhaseTwo()
 	{
 		var chip = CreateTracedNoisePhaseChip(out var trace);
 
@@ -682,9 +683,10 @@ public sealed class SidChipTests
 		chip.Render(1);
 
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), PulledLowNoiseBits(phase2.WaveformDac));
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
-		Assert.False(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
+		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -698,9 +700,8 @@ public sealed class SidChipTests
 		chip.Write(0x04, 0xB0);
 		chip.Render(1);
 
-		var phase1 = Frame(trace, cycle: 17, voice: 0);
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
-		var pulledLowBits = PulledLowNoiseBits(phase1.WaveformDac) & PulledLowNoiseBits(phase2.WaveformDac);
+		var pulledLowBits = PulledLowNoiseBits(phase2.WaveformDac);
 		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), pulledLowBits);
 
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));

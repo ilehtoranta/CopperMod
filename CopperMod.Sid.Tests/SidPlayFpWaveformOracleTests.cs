@@ -2800,6 +2800,12 @@ public sealed class SidPlayFpWaveformOracleTests
 	{
 		var candidateFlatness = SpectralFlatness(candidate, candidateStart, length);
 		Assert.InRange(candidateFlatness, 0.03, 1.05);
+		var referenceAc = AcRms(reference, referenceStart, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		var maximumCandidateAc = Math.Max(0.0010, referenceAc * 0.75);
+		Assert.True(
+			candidateAc <= maximumCandidateAc,
+			$"{segment.Name} combined-noise residue should stay near-null: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}, limit {maximumCandidateAc:0.0000}.");
 
 		ReadOnlySpan<double> bands = stackalloc[] { 1000.0, 2000.0, 4000.0, 8000.0, 12000.0, 16000.0 };
 		var referenceEnergy = 0.0;
