@@ -134,6 +134,8 @@ public sealed record ControllerBindingSource
 	public int Bit { get; init; }
 	/// <summary>Gets the expected hat value for <see cref="ControllerBindingSourceKind.Hat"/> sources.</summary>
 	public int? HatValue { get; init; }
+	/// <summary>Gets whether the source is logically active when the physical value is cleared.</summary>
+	public bool Invert { get; init; }
 }
 
 /// <summary>

@@ -169,7 +169,14 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 				break;
 			case ControllerElement.LeftTrigger:
 			case ControllerElement.RightTrigger:
-				SetTrigger(builder, binding.Target, ReadAxisSource(source, report, length), binding.Axis);
+				if (source.Kind == ControllerBindingSourceKind.ReportBit || source.Kind == ControllerBindingSourceKind.Hat)
+				{
+					SetDigitalTrigger(builder, binding.Target, ReadButtonSource(source, report, length));
+				}
+				else
+				{
+					SetTrigger(builder, binding.Target, ReadAxisSource(source, report, length), binding.Axis);
+				}
 				break;
 			default:
 				SetButton(builder, binding.Target, ReadButtonSource(source, report, length));
@@ -190,12 +197,18 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 	private static bool ReadButtonSource(ControllerBindingSource source, byte[] report, int length)
 		=> source.Kind switch
 		{
-			ControllerBindingSourceKind.ReportBit => source.Bit is >= 0 and < 8 && (report[source.Offset] & (1 << source.Bit)) != 0,
+			ControllerBindingSourceKind.ReportBit => source.Bit is >= 0 and < 8 && ReadBitSource(source, report),
 			ControllerBindingSourceKind.Hat => source.HatValue.HasValue && MatchesHatDirection(report[source.Offset] & 0x0F, source.HatValue.Value),
 			ControllerBindingSourceKind.ReportByte => report[source.Offset] != 0,
 			ControllerBindingSourceKind.ReportInt16LittleEndian => source.Offset + 1 < length && BitConverter.ToInt16(report, source.Offset) != 0,
 			_ => false
 		};
+
+	private static bool ReadBitSource(ControllerBindingSource source, byte[] report)
+	{
+		var isSet = (report[source.Offset] & (1 << source.Bit)) != 0;
+		return source.Invert ? !isSet : isSet;
+	}
 
 	private static bool MatchesHatDirection(int actual, int expected)
 	{
@@ -238,6 +251,18 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 		else
 		{
 			builder.RightTrigger = value;
+		}
+	}
+
+	private static void SetDigitalTrigger(CopperControllerSnapshotBuilder builder, ControllerElement control, bool pressed)
+	{
+		if (control == ControllerElement.LeftTrigger)
+		{
+			builder.LeftTrigger = pressed ? 1 : 0;
+		}
+		else
+		{
+			builder.RightTrigger = pressed ? 1 : 0;
 		}
 	}
 

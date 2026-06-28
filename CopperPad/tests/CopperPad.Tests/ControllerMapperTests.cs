@@ -113,6 +113,83 @@ public sealed class ControllerMapperTests
 	}
 
 	[Fact]
+	public void ProfileMapper_SupportsActiveLowReportBits()
+	{
+		var device = Device(0x0079, 0x0006, "Generic USB Joystick");
+		var profiles = new ControllerProfileSet
+		{
+			Profiles =
+			[
+				new ControllerProfile
+				{
+					Name = "active-low dpad",
+					VendorId = 0x0079,
+					ProductId = 0x0006,
+					Bindings =
+					[
+						new ControllerBinding
+						{
+							Target = ControllerElement.DPadUp,
+							Source = new ControllerBindingSource
+							{
+								Kind = ControllerBindingSourceKind.ReportBit,
+								Offset = 6,
+								Bit = 0,
+								Invert = true
+							}
+						}
+					]
+				}
+			]
+		};
+
+		var mapper = ControllerMapperFactory.Create(device, profiles);
+		var neutral = mapper.Map(new RawControllerInput(device, [0, 0, 0, 0, 0, 0, 0x0F], 7, DateTimeOffset.UtcNow));
+		var pressed = mapper.Map(new RawControllerInput(device, [0, 0, 0, 0, 0, 0, 0x0E], 7, DateTimeOffset.UtcNow));
+
+		Assert.False(neutral.IsPressed(ControllerElement.DPadUp));
+		Assert.True(pressed.IsPressed(ControllerElement.DPadUp));
+	}
+
+	[Fact]
+	public void ProfileMapper_MapsDigitalTriggerBitsToTriggerAxes()
+	{
+		var device = Device(0x0079, 0x0006, "Generic USB Joystick");
+		var profiles = new ControllerProfileSet
+		{
+			Profiles =
+			[
+				new ControllerProfile
+				{
+					Name = "digital triggers",
+					VendorId = 0x0079,
+					ProductId = 0x0006,
+					Bindings =
+					[
+						new ControllerBinding
+						{
+							Target = ControllerElement.LeftTrigger,
+							Source = new ControllerBindingSource
+							{
+								Kind = ControllerBindingSourceKind.ReportBit,
+								Offset = 7,
+								Bit = 0
+							}
+						}
+					]
+				}
+			]
+		};
+
+		var mapper = ControllerMapperFactory.Create(device, profiles);
+		var neutral = mapper.Map(new RawControllerInput(device, [0, 0, 0, 0, 0, 0, 0, 0], 8, DateTimeOffset.UtcNow));
+		var pressed = mapper.Map(new RawControllerInput(device, [0, 0, 0, 0, 0, 0, 0, 1], 8, DateTimeOffset.UtcNow));
+
+		Assert.Equal(0, neutral.GetAxis(ControllerElement.LeftTrigger), precision: 3);
+		Assert.Equal(1, pressed.GetAxis(ControllerElement.LeftTrigger), precision: 3);
+	}
+
+	[Fact]
 	public void UnknownDevice_ProducesDiagnosticState()
 	{
 		var device = Device(0x9999, 0x8888, "Mystery Device", isGameControllerUsage: false);
