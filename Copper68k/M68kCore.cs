@@ -1285,66 +1285,94 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryExecutePlannedInstruction(ushort opcode, uint instructionPc)
         {
-            ref readonly var plan = ref M68kOpcodePlanTable.Plans[opcode];
-            switch (plan.Kind)
+            var kind = M68kOpcodePlanTable.Kinds[opcode];
+            switch (kind)
             {
                 case M68kOpcodePlanKind.Nop:
                     AddCycles(4);
-                    RecordPlannedFast(plan.Kind);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Moveq:
-                    ExecutePlannedMoveq(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedMoveq(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Branch:
-                    ExecutePlannedBranch(opcode, instructionPc, in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedBranch(opcode, instructionPc);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Dbcc:
-                    ExecutePlannedDbcc(opcode, in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedDbcc(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.QuickRegister:
-                    ExecutePlannedQuickRegister(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedQuickRegister(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Move:
-                    ExecutePlannedMove(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedMove(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.MoveLongPostincrementToData:
+                    ExecutePlannedMoveLongPostincrementToData(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.MoveLongDataToPostincrement:
+                    ExecutePlannedMoveLongDataToPostincrement(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Immediate:
-                    ExecutePlannedImmediate(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedImmediate(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.ImmediateBtst:
-                    ExecutePlannedImmediateBtst(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedImmediateBtst(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.RegisterArithmetic:
-                    ExecutePlannedRegisterArithmetic(in plan);
-                    RecordPlannedFast(plan.Kind);
+                    ExecutePlannedRegisterArithmetic(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                    ExecutePlannedOrLongToDataRegister(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                    ExecutePlannedEorLongToDataRegister(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                    ExecutePlannedAndLongToDataRegister(opcode);
+                    RecordPlannedFast(kind);
+                    return true;
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
+                    ExecutePlannedAddLongToDataRegister(opcode);
+                    RecordPlannedFast(kind);
                     return true;
                 default:
                     return false;
             }
         }
 
-        private void ExecutePlannedMoveq(in M68kOpcodePlan plan)
+        private void ExecutePlannedMoveq(ushort opcode)
         {
-            State.D[plan.Register] = unchecked((uint)(int)plan.Displacement);
-            State.SetNegativeZero(State.D[plan.Register], M68kOperandSize.Long);
+            var register = (opcode >> 9) & 7;
+            State.D[register] = unchecked((uint)(int)(sbyte)(opcode & 0xFF));
+            State.SetNegativeZero(State.D[register], M68kOperandSize.Long);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddCycles(4);
         }
 
-        private void ExecutePlannedBranch(ushort opcode, uint instructionPc, in M68kOpcodePlan plan)
+        private void ExecutePlannedBranch(ushort opcode, uint instructionPc)
         {
             var branchBase = State.ProgramCounter;
-            var offset = plan.ExtensionDisplacement
+            var displacement = opcode & 0xFF;
+            var extensionDisplacement = displacement == 0;
+            var offset = extensionDisplacement
                 ? unchecked((short)FetchWord())
-                : plan.Displacement;
-            if (plan.Condition == 0 || CheckCondition(plan.Condition))
+                : unchecked((sbyte)displacement);
+            var condition = (opcode >> 8) & 0x0F;
+            if (condition == 0 || CheckCondition(condition))
             {
                 var target = unchecked((uint)(branchBase + offset));
                 if (_instructionFrequency.Enabled)
@@ -1353,7 +1381,7 @@ namespace Copper68k
                         instructionPc,
                         opcode,
                         target,
-                        plan.ExtensionDisplacement ? 4 : 2);
+                        extensionDisplacement ? 4 : 2);
                 }
 
                 State.ProgramCounter = target;
@@ -1364,14 +1392,16 @@ namespace Copper68k
             AddCycles(8);
         }
 
-        private void ExecutePlannedDbcc(ushort opcode, in M68kOpcodePlan plan)
+        private void ExecutePlannedDbcc(ushort opcode)
         {
             var branchBase = State.ProgramCounter;
             var displacement = unchecked((short)FetchWord());
-            if (!CheckCondition(plan.Condition))
+            var condition = (opcode >> 8) & 0x0F;
+            if (!CheckCondition(condition))
             {
-                var counter = (ushort)((State.D[plan.Register] & 0xFFFF) - 1);
-                State.D[plan.Register] = (State.D[plan.Register] & 0xFFFF_0000) | counter;
+                var register = opcode & 7;
+                var counter = (ushort)((State.D[register] & 0xFFFF) - 1);
+                State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
                 if (counter != 0xFFFF)
                 {
                     var target = unchecked((uint)(branchBase + displacement));
@@ -1392,107 +1422,158 @@ namespace Copper68k
             AddCycles(12);
         }
 
-        private void ExecutePlannedQuickRegister(in M68kOpcodePlan plan)
+        private void ExecutePlannedQuickRegister(ushort opcode)
         {
-            var count = plan.QuickValue;
-            var register = plan.DestinationRegister;
-            if (plan.DestinationMode == 1)
+            var count = (opcode >> 9) & 7;
+            if (count == 0)
+            {
+                count = 8;
+            }
+
+            var size = DecodeQuickSize(opcode);
+            var register = opcode & 7;
+            var subtract = (opcode & 0x0100) != 0;
+            if (((opcode >> 3) & 7) == 1)
             {
                 SetAddressRegister(
                     register,
-                    plan.Variant != 0
+                    subtract
                         ? unchecked(State.A[register] - (uint)count)
                         : unchecked(State.A[register] + (uint)count));
                 AddCycles(8);
                 return;
             }
 
-            var old = State.D[register] & M68kCpuState.Mask(plan.Size);
-            var result = plan.Variant != 0
-                ? Subtract(old, count, plan.Size, setExtend: true)
-                : Add(old, count, plan.Size, setExtend: true);
-            WriteDataRegister(register, result, plan.Size);
-            AddCycles(plan.Size == M68kOperandSize.Long ? 8 : 4);
+            var old = State.D[register] & M68kCpuState.Mask(size);
+            var result = subtract
+                ? Subtract(old, (uint)count, size, setExtend: true)
+                : Add(old, (uint)count, size, setExtend: true);
+            WriteDataRegister(register, result, size);
+            AddCycles(size == M68kOperandSize.Long ? 8 : 4);
         }
 
-        private void ExecutePlannedMove(in M68kOpcodePlan plan)
+        private void ExecutePlannedMove(ushort opcode)
         {
-            var source = ResolvePlannedEa(plan.SourceMode, plan.SourceRegister, plan.Size);
+            var size = DecodePlannedMoveSize(opcode);
+            var sourceMode = (opcode >> 3) & 7;
+            var sourceRegister = opcode & 7;
+            var destinationMode = (opcode >> 6) & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var source = ResolvePlannedEa(sourceMode, sourceRegister, size);
             var value = ReadPlannedEaValue(in source);
-            var destination = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            var destination = ResolvePlannedEa(destinationMode, destinationRegister, size);
             WritePlannedEaValue(in destination, value);
-            if (plan.DestinationMode != 1)
+            if (destinationMode != 1)
             {
-                State.SetNegativeZero(value, plan.Size);
+                State.SetNegativeZero(value, size);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddCycles(EstimatePlannedMoveCycles(source.EaCycles, destination.IsRegister, plan.Size));
+            AddCycles(EstimatePlannedMoveCycles(source.EaCycles, destination.IsRegister, size));
         }
 
-        private void ExecutePlannedImmediate(in M68kOpcodePlan plan)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedMoveLongPostincrementToData(ushort opcode)
         {
-            var immediate = FetchImmediate(plan.Size);
-            var destinationEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            var sourceRegister = opcode & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var sourceAddress = State.A[sourceRegister];
+            SetAddressRegister(sourceRegister, unchecked(sourceAddress + 4));
+            var value = ReadLong(sourceAddress);
+            State.D[destinationRegister] = value;
+            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            AddCycles(12);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedMoveLongDataToPostincrement(ushort opcode)
+        {
+            var sourceRegister = opcode & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var destinationAddress = State.A[destinationRegister];
+            SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
+            var value = State.D[sourceRegister];
+            WriteLong(destinationAddress, value);
+            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            AddCycles(12);
+        }
+
+        private void ExecutePlannedImmediate(ushort opcode)
+        {
+            var size = DecodeImmediateSize(opcode);
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var immediate = FetchImmediate(size);
+            var destinationEa = ResolvePlannedEa(mode, register, size);
             var destination = ReadPlannedEaValue(in destinationEa);
-            switch (plan.Variant)
+            switch (opcode & 0xFF00)
             {
-                case 0:
+                case 0x0000:
                     destination |= immediate;
                     WritePlannedEaValue(in destinationEa, destination);
-                    SetLogicFlags(destination, plan.Size);
+                    SetLogicFlags(destination, size);
                     break;
-                case 1:
+                case 0x0200:
                     destination &= immediate;
                     WritePlannedEaValue(in destinationEa, destination);
-                    SetLogicFlags(destination, plan.Size);
+                    SetLogicFlags(destination, size);
                     break;
-                case 2:
-                    destination = Subtract(destination, immediate, plan.Size, setExtend: true);
+                case 0x0400:
+                    destination = Subtract(destination, immediate, size, setExtend: true);
                     WritePlannedEaValue(in destinationEa, destination);
                     break;
-                case 3:
-                    destination = Add(destination, immediate, plan.Size, setExtend: true);
+                case 0x0600:
+                    destination = Add(destination, immediate, size, setExtend: true);
                     WritePlannedEaValue(in destinationEa, destination);
                     break;
-                case 4:
+                case 0x0A00:
                     destination ^= immediate;
                     WritePlannedEaValue(in destinationEa, destination);
-                    SetLogicFlags(destination, plan.Size);
+                    SetLogicFlags(destination, size);
                     break;
                 default:
-                    _ = Subtract(destination, immediate, plan.Size, setExtend: false, storeResult: false);
+                    _ = Subtract(destination, immediate, size, setExtend: false, storeResult: false);
                     break;
             }
 
-            AddCycles(plan.Variant == 5
-                ? GetCmpiCycles(plan.Size, plan.DestinationMode, plan.DestinationRegister)
-                : plan.Size == M68kOperandSize.Long ? 16 : 8);
+            AddCycles((opcode & 0xFF00) == 0x0C00
+                ? GetCmpiCycles(size, mode, register)
+                : size == M68kOperandSize.Long ? 16 : 8);
         }
 
-        private void ExecutePlannedImmediateBtst(in M68kOpcodePlan plan)
+        private void ExecutePlannedImmediateBtst(ushort opcode)
         {
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var size = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
             var bit = FetchWord() & 31;
-            var bitEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            var bitEa = ResolvePlannedEa(mode, register, size);
             var value = ReadPlannedEaValue(in bitEa);
-            var maskedBit = plan.DestinationMode == 0 ? bit : bit & 7;
+            var maskedBit = mode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
-            AddCycles(GetImmediateBtstCycles(plan.DestinationMode, plan.DestinationRegister));
+            AddCycles(GetImmediateBtstCycles(mode, register));
         }
 
-        private void ExecutePlannedRegisterArithmetic(in M68kOpcodePlan plan)
+        private void ExecutePlannedRegisterArithmetic(ushort opcode)
         {
-            var line = plan.Variant >> 4;
-            var opmode = plan.Variant & 7;
+            var line = opcode >> 12;
+            var opmode = (opcode >> 6) & 7;
             var registerToEa = opmode >= 4;
             if (line == 0xB)
             {
                 registerToEa = true;
             }
 
-            var eaValue = State.D[plan.SourceRegister] & M68kCpuState.Mask(plan.Size);
-            var regValue = State.D[plan.Register] & M68kCpuState.Mask(plan.Size);
+            var register = (opcode >> 9) & 7;
+            var sourceRegister = opcode & 7;
+            var size = DecodePlannedRegisterArithmeticSize(opmode);
+            var eaValue = State.D[sourceRegister] & M68kCpuState.Mask(size);
+            var regValue = State.D[register] & M68kCpuState.Mask(size);
             uint result;
             switch (line)
             {
@@ -1500,29 +1581,29 @@ namespace Copper68k
                     result = eaValue | regValue;
                     if (registerToEa)
                     {
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
+                        WriteDataRegister(sourceRegister, result, size);
                     }
                     else
                     {
-                        WriteDataRegister(plan.Register, result, plan.Size);
+                        WriteDataRegister(register, result, size);
                     }
 
-                    SetLogicFlags(result, plan.Size);
+                    SetLogicFlags(result, size);
                     break;
                 case 0x9:
-                    result = Subtract(regValue, eaValue, plan.Size, setExtend: true);
-                    WriteDataRegister(plan.Register, result, plan.Size);
+                    result = Subtract(regValue, eaValue, size, setExtend: true);
+                    WriteDataRegister(register, result, size);
                     break;
                 case 0xB:
                     if (opmode >= 4)
                     {
                         result = eaValue ^ regValue;
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
-                        SetLogicFlags(result, plan.Size);
+                        WriteDataRegister(sourceRegister, result, size);
+                        SetLogicFlags(result, size);
                     }
                     else
                     {
-                        _ = Subtract(regValue, eaValue, plan.Size, setExtend: false, storeResult: false);
+                        _ = Subtract(regValue, eaValue, size, setExtend: false, storeResult: false);
                     }
 
                     break;
@@ -1530,23 +1611,89 @@ namespace Copper68k
                     result = eaValue & regValue;
                     if (registerToEa)
                     {
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
+                        WriteDataRegister(sourceRegister, result, size);
                     }
                     else
                     {
-                        WriteDataRegister(plan.Register, result, plan.Size);
+                        WriteDataRegister(register, result, size);
                     }
 
-                    SetLogicFlags(result, plan.Size);
+                    SetLogicFlags(result, size);
                     break;
                 default:
-                    result = Add(regValue, eaValue, plan.Size, setExtend: true);
-                    WriteDataRegister(plan.Register, result, plan.Size);
+                    result = Add(regValue, eaValue, size, setExtend: true);
+                    WriteDataRegister(register, result, size);
                     break;
             }
 
-            AddCycles(plan.Size == M68kOperandSize.Long ? 12 : 8);
+            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedOrLongToDataRegister(ushort opcode)
+        {
+            var register = (opcode >> 9) & 7;
+            var result = State.D[opcode & 7] | State.D[register];
+            State.D[register] = result;
+            SetLogicFlags(result, M68kOperandSize.Long);
+            AddCycles(12);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedEorLongToDataRegister(ushort opcode)
+        {
+            var sourceRegister = opcode & 7;
+            var result = State.D[sourceRegister] ^ State.D[(opcode >> 9) & 7];
+            State.D[sourceRegister] = result;
+            SetLogicFlags(result, M68kOperandSize.Long);
+            AddCycles(12);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedAndLongToDataRegister(ushort opcode)
+        {
+            var register = (opcode >> 9) & 7;
+            var result = State.D[opcode & 7] & State.D[register];
+            State.D[register] = result;
+            SetLogicFlags(result, M68kOperandSize.Long);
+            AddCycles(12);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedAddLongToDataRegister(ushort opcode)
+        {
+            var register = (opcode >> 9) & 7;
+            State.D[register] = Add(
+                State.D[register],
+                State.D[opcode & 7],
+                M68kOperandSize.Long,
+                setExtend: true);
+            AddCycles(12);
+        }
+
+        private static M68kOperandSize DecodeQuickSize(ushort opcode)
+            => ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+
+        private static M68kOperandSize DecodePlannedMoveSize(ushort opcode)
+            => (opcode >> 12) switch
+            {
+                1 => M68kOperandSize.Byte,
+                2 => M68kOperandSize.Long,
+                _ => M68kOperandSize.Word
+            };
+
+        private static M68kOperandSize DecodePlannedRegisterArithmeticSize(int opmode)
+            => opmode switch
+            {
+                0 or 4 => M68kOperandSize.Byte,
+                1 or 5 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
 
         private PlannedEaOperand ResolvePlannedEa(int mode, int register, M68kOperandSize size)
         {
@@ -1730,6 +1877,8 @@ namespace Copper68k
                     _plannedQuickRegisterInstructions++;
                     break;
                 case M68kOpcodePlanKind.Move:
+                case M68kOpcodePlanKind.MoveLongPostincrementToData:
+                case M68kOpcodePlanKind.MoveLongDataToPostincrement:
                     _plannedMoveInstructions++;
                     break;
                 case M68kOpcodePlanKind.Immediate:
@@ -1739,6 +1888,10 @@ namespace Copper68k
                     _plannedImmediateBtstInstructions++;
                     break;
                 case M68kOpcodePlanKind.RegisterArithmetic:
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     _plannedRegisterArithmeticInstructions++;
                     break;
             }

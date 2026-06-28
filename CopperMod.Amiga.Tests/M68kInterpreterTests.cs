@@ -182,6 +182,33 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void PlannedInterpreterUsesExactHotFullContactShapePlans()
+	{
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongPostincrementToData,
+			M68kOpcodePlanTable.Kinds[0x2018]);
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongPostincrementToData,
+			M68kOpcodePlanTable.Kinds[0x221A]);
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongDataToPostincrement,
+			M68kOpcodePlanTable.Kinds[0x22C0]);
+
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongEorToDestination,
+			M68kOpcodePlanTable.Kinds[0xB183]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongAndToRegister,
+			M68kOpcodePlanTable.Kinds[0xC087]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongAddToRegister,
+			M68kOpcodePlanTable.Kinds[0xD080]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongOrToRegister,
+			M68kOpcodePlanTable.Kinds[0x8081]);
+	}
+
+	[Fact]
 	public void PlannedInterpreterMatchesScalarForBranchBtstAndImmediateLoop()
 	{
 		var program = Words(
