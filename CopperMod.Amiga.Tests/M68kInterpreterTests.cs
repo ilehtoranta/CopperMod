@@ -151,6 +151,84 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void PlannedInterpreterMatchesScalarForFullContactTransformLoop()
+	{
+		var program = Words(
+			0x2018, // MOVE.L (A0)+,D0
+			0x221A, // MOVE.L (A2)+,D1
+			0xB183, // EOR.L D0,D3
+			0xB383, // EOR.L D1,D3
+			0xC087, // AND.L D7,D0
+			0xC287, // AND.L D7,D1
+			0xD080, // ADD.L D0,D0
+			0x8081, // OR.L D1,D0
+			0x22C0, // MOVE.L D0,(A1)+
+			0x51CA, 0xFFEC, // DBRA D2,loop
+			0x60E8); // BRA.S loop
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true);
+		SetupTransformParityState(scalar.Cpu.State, scalar.Bus);
+		SetupTransformParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 64);
+
+		AssertParity(scalar, planned);
+		var counters = planned.Cpu.CapturePlannedInterpreterCounters();
+		Assert.True(counters.FastInstructions > 0);
+		Assert.True(counters.MoveInstructions > 0);
+		Assert.True(counters.RegisterArithmeticInstructions > 0);
+		Assert.True(counters.DbccInstructions > 0);
+	}
+
+	[Fact]
+	public void PlannedInterpreterMatchesScalarForBranchBtstAndImmediateLoop()
+	{
+		var program = Words(
+			0x322E, 0x0002, // MOVE.W 2(A6),D1
+			0x0201, 0x00FF, // ANDI.B #$FF,D1
+			0x6702, // BEQ.S skip
+			0x5380, // SUBQ.L #1,D0
+			0x0814, 0x000E, // BTST #14,(A4)
+			0x66F2, // BNE.S start
+			0x4E71); // NOP
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true);
+		SetupBranchParityState(scalar.Cpu.State, scalar.Bus);
+		SetupBranchParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 48);
+
+		AssertParity(scalar, planned);
+		var counters = planned.Cpu.CapturePlannedInterpreterCounters();
+		Assert.True(counters.BranchInstructions > 0);
+		Assert.True(counters.ImmediateInstructions > 0);
+		Assert.True(counters.ImmediateBtstInstructions > 0);
+		Assert.True(counters.QuickRegisterInstructions > 0);
+	}
+
+	[Fact]
+	public void PlannedInterpreterUsesFetchedOpcodeNotProgramCounterCache()
+	{
+		var scalar = CreateParityCpu(Words(0x4E71), enableOpcodePlan: false);
+		var planned = CreateParityCpu(Words(0x4E71), enableOpcodePlan: true);
+
+		scalar.Cpu.ExecuteInstruction();
+		planned.Cpu.ExecuteInstruction();
+		Write(scalar.Bus.Memory, 0x1000, 0x70, 0x05); // MOVEQ #5,D0
+		Write(planned.Bus.Memory, 0x1000, 0x70, 0x05);
+		scalar.Cpu.State.ProgramCounter = 0x1000;
+		planned.Cpu.State.ProgramCounter = 0x1000;
+
+		scalar.Cpu.ExecuteInstruction();
+		planned.Cpu.ExecuteInstruction();
+
+		AssertParity(scalar, planned);
+		Assert.Equal(5u, planned.Cpu.State.D[0]);
+	}
+
+	[Fact]
 	public void WaitBlitPollingLoopUsesDocumentedCpuCadence()
 	{
 		var bus = new CycleCountingBus();
@@ -1312,6 +1390,80 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 
+	private static byte[] Words(params ushort[] words)
+	{
+		var data = new byte[words.Length * 2];
+		for (var i = 0; i < words.Length; i++)
+		{
+			data[i * 2] = (byte)(words[i] >> 8);
+			data[(i * 2) + 1] = (byte)words[i];
+		}
+
+		return data;
+	}
+
+	private static ParityRun CreateParityCpu(byte[] program, bool enableOpcodePlan)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, program);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: enableOpcodePlan);
+		cpu.Reset(0x1000, 0x8000);
+		return new ParityRun(cpu, bus);
+	}
+
+	private static void SetupTransformParityState(M68kCpuState state, TestBus bus)
+	{
+		state.A[0] = 0x2000;
+		state.A[1] = 0x3000;
+		state.A[2] = 0x2400;
+		state.D[2] = 3;
+		state.D[3] = 0x5555_5555;
+		state.D[7] = 0x0F0F_0F0F;
+		for (var offset = 0; offset < 0x80; offset += 4)
+		{
+			bus.WriteLong(0x2000u + (uint)offset, 0x0102_0304u + (uint)offset);
+			bus.WriteLong(0x2400u + (uint)offset, 0x1020_3040u + (uint)offset);
+		}
+	}
+
+	private static void SetupBranchParityState(M68kCpuState state, TestBus bus)
+	{
+		state.D[0] = 4;
+		state.A[4] = 0x2400;
+		state.A[6] = 0x2000;
+		Write(bus.Memory, 0x2002, 0x00, 0x7F);
+		Write(bus.Memory, 0x2400, 0x40, 0x00);
+	}
+
+	private static void ExecuteBoth(M68kInterpreter scalar, M68kInterpreter planned, int instructions)
+	{
+		for (var i = 0; i < instructions; i++)
+		{
+			scalar.ExecuteInstruction();
+			planned.ExecuteInstruction();
+		}
+	}
+
+	private static void AssertParity(ParityRun scalar, ParityRun planned)
+	{
+		Assert.Equal(scalar.Cpu.State.ProgramCounter, planned.Cpu.State.ProgramCounter);
+		Assert.Equal(scalar.Cpu.State.Cycles, planned.Cpu.State.Cycles);
+		Assert.Equal(scalar.Cpu.State.StatusRegister, planned.Cpu.State.StatusRegister);
+		Assert.Equal(scalar.Cpu.State.LastOpcode, planned.Cpu.State.LastOpcode);
+		Assert.Equal(scalar.Cpu.State.LastInstructionProgramCounter, planned.Cpu.State.LastInstructionProgramCounter);
+		Assert.Equal(scalar.Cpu.State.D, planned.Cpu.State.D);
+		Assert.Equal(scalar.Cpu.State.A, planned.Cpu.State.A);
+		for (var address = 0x1000; address < 0x3100; address++)
+		{
+			Assert.Equal(scalar.Bus.Memory[address], planned.Bus.Memory[address]);
+		}
+	}
+
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
@@ -1334,6 +1486,10 @@ public sealed class M68kInterpreterTests
 		bus.MapReadOnlyMemory(0x00FC0000, rom);
 		return bus;
 	}
+
+
+	private sealed record ParityRun(M68kInterpreter Cpu, TestBus Bus);
+
 
 	private sealed class TestBus : IM68kBus
 	{

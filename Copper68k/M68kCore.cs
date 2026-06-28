@@ -1053,10 +1053,23 @@ namespace Copper68k
         private readonly IM68kBus _bus;
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
+        private readonly bool _enableOpcodePlan;
         private M68kInstructionFetchWindow _instructionFetchWindow;
         private bool _instructionCycleFloorActive;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
+        private bool _plannedInterpreterCountersEnabled;
+        private long _plannedFastInstructions;
+        private long _plannedScalarFallbackInstructions;
+        private long _plannedNopInstructions;
+        private long _plannedMoveqInstructions;
+        private long _plannedBranchInstructions;
+        private long _plannedDbccInstructions;
+        private long _plannedQuickRegisterInstructions;
+        private long _plannedMoveInstructions;
+        private long _plannedImmediateInstructions;
+        private long _plannedImmediateBtstInstructions;
+        private long _plannedRegisterArithmeticInstructions;
 
         public M68kInterpreter(IM68kBus bus)
             : this(bus, new M68kCpuState())
@@ -1067,7 +1080,8 @@ namespace Copper68k
             IM68kBus bus,
             M68kCpuState state,
             M68kInstructionFrequencyMatrix? instructionFrequency = null,
-            bool enableInstructionFetchWindow = true)
+            bool enableInstructionFetchWindow = true,
+            bool enableOpcodePlan = true)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _instructionFetchWindowBus = enableInstructionFetchWindow
@@ -1075,6 +1089,7 @@ namespace Copper68k
                 : null;
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
+            _enableOpcodePlan = enableOpcodePlan;
         }
 
         public M68kCpuState State { get; }
@@ -1090,6 +1105,43 @@ namespace Copper68k
 
         internal void ResetInstructionFrequency()
             => _instructionFrequency.Reset();
+
+        internal bool PlannedInterpreterCountersEnabled
+        {
+            get => _plannedInterpreterCountersEnabled;
+            set => _plannedInterpreterCountersEnabled = value;
+        }
+
+        internal M68kPlannedInterpreterCounters CapturePlannedInterpreterCounters()
+            => _plannedInterpreterCountersEnabled
+                ? new M68kPlannedInterpreterCounters(
+                    _plannedFastInstructions,
+                    _plannedScalarFallbackInstructions,
+                    _plannedNopInstructions,
+                    _plannedMoveqInstructions,
+                    _plannedBranchInstructions,
+                    _plannedDbccInstructions,
+                    _plannedQuickRegisterInstructions,
+                    _plannedMoveInstructions,
+                    _plannedImmediateInstructions,
+                    _plannedImmediateBtstInstructions,
+                    _plannedRegisterArithmeticInstructions)
+                : M68kPlannedInterpreterCounters.Empty;
+
+        internal void ResetPlannedInterpreterCounters()
+        {
+            _plannedFastInstructions = 0;
+            _plannedScalarFallbackInstructions = 0;
+            _plannedNopInstructions = 0;
+            _plannedMoveqInstructions = 0;
+            _plannedBranchInstructions = 0;
+            _plannedDbccInstructions = 0;
+            _plannedQuickRegisterInstructions = 0;
+            _plannedMoveInstructions = 0;
+            _plannedImmediateInstructions = 0;
+            _plannedImmediateBtstInstructions = 0;
+            _plannedRegisterArithmeticInstructions = 0;
+        }
 
         bool IM68kInstructionFrequencyProvider.InstructionFrequencyEnabled
         {
@@ -1157,49 +1209,7 @@ namespace Copper68k
             BeginInstructionCycleFloor(startCycles);
             try
             {
-                var instructionPc = State.ProgramCounter;
-                var opcode = FetchWord();
-                State.LastOpcode = opcode;
-                State.LastInstructionProgramCounter = instructionPc;
-                _instructionFrequency.Record(instructionPc, opcode);
-
-                var decoded = DecodeByOpcodeLine(opcode, instructionPc);
-                if (decoded)
-                {
-                    return CompleteInstruction(startCycles);
-                }
-
-                if ((opcode & 0xF000) == 0xA000)
-                {
-                    RaiseException(10, instructionPc, 34);
-                    return CompleteInstruction(startCycles);
-                }
-
-                if ((opcode & 0xF000) == 0xF000)
-                {
-                    if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
-                    {
-                        var trapId = FetchWord();
-                        var returnProgramCounter = State.ProgramCounter;
-                        if (_bus.TryInvokeHostTrap(instructionPc, trapId, State))
-                        {
-                            AddCycles(16);
-                            if (!State.Halted && State.ProgramCounter == returnProgramCounter)
-                            {
-                                State.ProgramCounter = PullLong();
-                            }
-
-                            return CompleteInstruction(startCycles);
-                        }
-
-                        State.ProgramCounter = returnProgramCounter;
-                    }
-
-                    RaiseException(11, instructionPc, 34);
-                    return CompleteInstruction(startCycles);
-                }
-
-                throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+                return ExecuteInstructionBody(startCycles);
             }
             catch (M68kAddressErrorException)
             {
@@ -1212,6 +1222,525 @@ namespace Copper68k
             finally
             {
                 _instructionCycleFloorActive = false;
+            }
+        }
+
+        private int ExecuteInstructionBody(long startCycles)
+        {
+            var instructionPc = State.ProgramCounter;
+            var opcode = FetchWord();
+            State.LastOpcode = opcode;
+            State.LastInstructionProgramCounter = instructionPc;
+            if (_instructionFrequency.Enabled)
+            {
+                _instructionFrequency.Record(instructionPc, opcode);
+            }
+
+            if (_enableOpcodePlan &&
+                TryExecutePlannedInstruction(opcode, instructionPc))
+            {
+                return CompleteInstruction(startCycles);
+            }
+
+            RecordPlannedScalarFallback();
+            var decoded = DecodeByOpcodeLine(opcode, instructionPc);
+            if (decoded)
+            {
+                return CompleteInstruction(startCycles);
+            }
+
+            if ((opcode & 0xF000) == 0xA000)
+            {
+                RaiseException(10, instructionPc, 34);
+                return CompleteInstruction(startCycles);
+            }
+
+            if ((opcode & 0xF000) == 0xF000)
+            {
+                if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
+                {
+                    var trapId = FetchWord();
+                    var returnProgramCounter = State.ProgramCounter;
+                    if (_bus.TryInvokeHostTrap(instructionPc, trapId, State))
+                    {
+                        AddCycles(16);
+                        if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                        {
+                            State.ProgramCounter = PullLong();
+                        }
+
+                        return CompleteInstruction(startCycles);
+                    }
+
+                    State.ProgramCounter = returnProgramCounter;
+                }
+
+                RaiseException(11, instructionPc, 34);
+                return CompleteInstruction(startCycles);
+            }
+
+            throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryExecutePlannedInstruction(ushort opcode, uint instructionPc)
+        {
+            ref readonly var plan = ref M68kOpcodePlanTable.Plans[opcode];
+            switch (plan.Kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                    AddCycles(4);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.Moveq:
+                    ExecutePlannedMoveq(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.Branch:
+                    ExecutePlannedBranch(opcode, instructionPc, in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.Dbcc:
+                    ExecutePlannedDbcc(opcode, in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.QuickRegister:
+                    ExecutePlannedQuickRegister(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.Move:
+                    ExecutePlannedMove(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.Immediate:
+                    ExecutePlannedImmediate(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.ImmediateBtst:
+                    ExecutePlannedImmediateBtst(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                case M68kOpcodePlanKind.RegisterArithmetic:
+                    ExecutePlannedRegisterArithmetic(in plan);
+                    RecordPlannedFast(plan.Kind);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void ExecutePlannedMoveq(in M68kOpcodePlan plan)
+        {
+            State.D[plan.Register] = unchecked((uint)(int)plan.Displacement);
+            State.SetNegativeZero(State.D[plan.Register], M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            AddCycles(4);
+        }
+
+        private void ExecutePlannedBranch(ushort opcode, uint instructionPc, in M68kOpcodePlan plan)
+        {
+            var branchBase = State.ProgramCounter;
+            var offset = plan.ExtensionDisplacement
+                ? unchecked((short)FetchWord())
+                : plan.Displacement;
+            if (plan.Condition == 0 || CheckCondition(plan.Condition))
+            {
+                var target = unchecked((uint)(branchBase + offset));
+                if (_instructionFrequency.Enabled)
+                {
+                    _instructionFrequency.RecordTakenBranch(
+                        instructionPc,
+                        opcode,
+                        target,
+                        plan.ExtensionDisplacement ? 4 : 2);
+                }
+
+                State.ProgramCounter = target;
+                AddCycles(10);
+                return;
+            }
+
+            AddCycles(8);
+        }
+
+        private void ExecutePlannedDbcc(ushort opcode, in M68kOpcodePlan plan)
+        {
+            var branchBase = State.ProgramCounter;
+            var displacement = unchecked((short)FetchWord());
+            if (!CheckCondition(plan.Condition))
+            {
+                var counter = (ushort)((State.D[plan.Register] & 0xFFFF) - 1);
+                State.D[plan.Register] = (State.D[plan.Register] & 0xFFFF_0000) | counter;
+                if (counter != 0xFFFF)
+                {
+                    var target = unchecked((uint)(branchBase + displacement));
+                    if (_instructionFrequency.Enabled)
+                    {
+                        _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                    }
+
+                    State.ProgramCounter = target;
+                    AddCycles(10);
+                    return;
+                }
+
+                AddCycles(14);
+                return;
+            }
+
+            AddCycles(12);
+        }
+
+        private void ExecutePlannedQuickRegister(in M68kOpcodePlan plan)
+        {
+            var count = plan.QuickValue;
+            var register = plan.DestinationRegister;
+            if (plan.DestinationMode == 1)
+            {
+                SetAddressRegister(
+                    register,
+                    plan.Variant != 0
+                        ? unchecked(State.A[register] - (uint)count)
+                        : unchecked(State.A[register] + (uint)count));
+                AddCycles(8);
+                return;
+            }
+
+            var old = State.D[register] & M68kCpuState.Mask(plan.Size);
+            var result = plan.Variant != 0
+                ? Subtract(old, count, plan.Size, setExtend: true)
+                : Add(old, count, plan.Size, setExtend: true);
+            WriteDataRegister(register, result, plan.Size);
+            AddCycles(plan.Size == M68kOperandSize.Long ? 8 : 4);
+        }
+
+        private void ExecutePlannedMove(in M68kOpcodePlan plan)
+        {
+            var source = ResolvePlannedEa(plan.SourceMode, plan.SourceRegister, plan.Size);
+            var value = ReadPlannedEaValue(in source);
+            var destination = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            WritePlannedEaValue(in destination, value);
+            if (plan.DestinationMode != 1)
+            {
+                State.SetNegativeZero(value, plan.Size);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+
+            AddCycles(EstimatePlannedMoveCycles(source.EaCycles, destination.IsRegister, plan.Size));
+        }
+
+        private void ExecutePlannedImmediate(in M68kOpcodePlan plan)
+        {
+            var immediate = FetchImmediate(plan.Size);
+            var destinationEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            var destination = ReadPlannedEaValue(in destinationEa);
+            switch (plan.Variant)
+            {
+                case 0:
+                    destination |= immediate;
+                    WritePlannedEaValue(in destinationEa, destination);
+                    SetLogicFlags(destination, plan.Size);
+                    break;
+                case 1:
+                    destination &= immediate;
+                    WritePlannedEaValue(in destinationEa, destination);
+                    SetLogicFlags(destination, plan.Size);
+                    break;
+                case 2:
+                    destination = Subtract(destination, immediate, plan.Size, setExtend: true);
+                    WritePlannedEaValue(in destinationEa, destination);
+                    break;
+                case 3:
+                    destination = Add(destination, immediate, plan.Size, setExtend: true);
+                    WritePlannedEaValue(in destinationEa, destination);
+                    break;
+                case 4:
+                    destination ^= immediate;
+                    WritePlannedEaValue(in destinationEa, destination);
+                    SetLogicFlags(destination, plan.Size);
+                    break;
+                default:
+                    _ = Subtract(destination, immediate, plan.Size, setExtend: false, storeResult: false);
+                    break;
+            }
+
+            AddCycles(plan.Variant == 5
+                ? GetCmpiCycles(plan.Size, plan.DestinationMode, plan.DestinationRegister)
+                : plan.Size == M68kOperandSize.Long ? 16 : 8);
+        }
+
+        private void ExecutePlannedImmediateBtst(in M68kOpcodePlan plan)
+        {
+            var bit = FetchWord() & 31;
+            var bitEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            var value = ReadPlannedEaValue(in bitEa);
+            var maskedBit = plan.DestinationMode == 0 ? bit : bit & 7;
+            State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
+            AddCycles(GetImmediateBtstCycles(plan.DestinationMode, plan.DestinationRegister));
+        }
+
+        private void ExecutePlannedRegisterArithmetic(in M68kOpcodePlan plan)
+        {
+            var line = plan.Variant >> 4;
+            var opmode = plan.Variant & 7;
+            var registerToEa = opmode >= 4;
+            if (line == 0xB)
+            {
+                registerToEa = true;
+            }
+
+            var eaValue = State.D[plan.SourceRegister] & M68kCpuState.Mask(plan.Size);
+            var regValue = State.D[plan.Register] & M68kCpuState.Mask(plan.Size);
+            uint result;
+            switch (line)
+            {
+                case 0x8:
+                    result = eaValue | regValue;
+                    if (registerToEa)
+                    {
+                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
+                    }
+                    else
+                    {
+                        WriteDataRegister(plan.Register, result, plan.Size);
+                    }
+
+                    SetLogicFlags(result, plan.Size);
+                    break;
+                case 0x9:
+                    result = Subtract(regValue, eaValue, plan.Size, setExtend: true);
+                    WriteDataRegister(plan.Register, result, plan.Size);
+                    break;
+                case 0xB:
+                    if (opmode >= 4)
+                    {
+                        result = eaValue ^ regValue;
+                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
+                        SetLogicFlags(result, plan.Size);
+                    }
+                    else
+                    {
+                        _ = Subtract(regValue, eaValue, plan.Size, setExtend: false, storeResult: false);
+                    }
+
+                    break;
+                case 0xC:
+                    result = eaValue & regValue;
+                    if (registerToEa)
+                    {
+                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
+                    }
+                    else
+                    {
+                        WriteDataRegister(plan.Register, result, plan.Size);
+                    }
+
+                    SetLogicFlags(result, plan.Size);
+                    break;
+                default:
+                    result = Add(regValue, eaValue, plan.Size, setExtend: true);
+                    WriteDataRegister(plan.Register, result, plan.Size);
+                    break;
+            }
+
+            AddCycles(plan.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private PlannedEaOperand ResolvePlannedEa(int mode, int register, M68kOperandSize size)
+        {
+            switch (mode)
+            {
+                case 0:
+                    return PlannedEaOperand.DataRegister(register, size);
+                case 1:
+                    return PlannedEaOperand.AddressRegister(register, size);
+                case 2:
+                    return PlannedEaOperand.Memory(State.A[register], size, GetEaOperandCycles(mode, register, size));
+                case 3:
+                {
+                    var address = State.A[register];
+                    SetAddressRegister(register, State.A[register] + AddressIncrement(register, size));
+                    return PlannedEaOperand.Memory(address, size, GetEaOperandCycles(mode, register, size));
+                }
+                case 4:
+                    SetAddressRegister(register, State.A[register] - AddressIncrement(register, size));
+                    return PlannedEaOperand.Memory(State.A[register], size, GetEaOperandCycles(mode, register, size));
+                case 5:
+                {
+                    var displacement = unchecked((short)FetchWord());
+                    return PlannedEaOperand.Memory(
+                        unchecked((uint)(State.A[register] + displacement)),
+                        size,
+                        GetEaOperandCycles(mode, register, size));
+                }
+                case 6:
+                {
+                    var extension = FetchWord();
+                    return PlannedEaOperand.Memory(
+                        M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[register], extension, State.D, State.A),
+                        size,
+                        GetEaOperandCycles(mode, register, size));
+                }
+                case 7:
+                    return ResolvePlannedMode7(register, size);
+                default:
+                    throw new InvalidOperationException("Invalid planned effective address mode.");
+            }
+        }
+
+        private PlannedEaOperand ResolvePlannedMode7(int register, M68kOperandSize size)
+        {
+            switch (register)
+            {
+                case 0:
+                    return PlannedEaOperand.Memory(unchecked((uint)(short)FetchWord()), size, GetEaOperandCycles(7, register, size));
+                case 1:
+                    return PlannedEaOperand.Memory(FetchLong(), size, GetEaOperandCycles(7, register, size));
+                case 2:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var displacement = unchecked((short)FetchWord());
+                    return PlannedEaOperand.Memory(
+                        unchecked((uint)(extensionAddress + displacement)),
+                        size,
+                        GetEaOperandCycles(7, register, size));
+                }
+                case 3:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var extension = FetchWord();
+                    return PlannedEaOperand.Memory(
+                        M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(extensionAddress, extension, State.D, State.A),
+                        size,
+                        GetEaOperandCycles(7, register, size));
+                }
+                case 4:
+                    return PlannedEaOperand.ImmediateValue(FetchImmediate(size), size);
+                default:
+                    return RaisePlannedIllegalInstruction();
+            }
+        }
+
+        private PlannedEaOperand RaisePlannedIllegalInstruction()
+        {
+            RaiseException(4, State.LastInstructionProgramCounter, 34);
+            throw M68kIllegalInstructionException.Instance;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadPlannedEaValue(in PlannedEaOperand operand)
+        {
+            return operand.Kind switch
+            {
+                0 => State.D[operand.Register] & M68kCpuState.Mask(operand.Size),
+                1 => operand.Size == M68kOperandSize.Word ? State.A[operand.Register] & 0xFFFF : State.A[operand.Register],
+                2 => operand.Size switch
+                {
+                    M68kOperandSize.Byte => ReadByte(operand.Address),
+                    M68kOperandSize.Word => ReadWord(operand.Address),
+                    _ => ReadLong(operand.Address)
+                },
+                3 => operand.Immediate & M68kCpuState.Mask(operand.Size),
+                _ => 0
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WritePlannedEaValue(in PlannedEaOperand operand, uint value)
+        {
+            value &= M68kCpuState.Mask(operand.Size);
+            switch (operand.Kind)
+            {
+                case 0:
+                    WriteDataRegister(operand.Register, value, operand.Size);
+                    return;
+                case 1:
+                    SetAddressRegister(
+                        operand.Register,
+                        operand.Size == M68kOperandSize.Word
+                            ? M68kCpuState.SignExtend(value, M68kOperandSize.Word)
+                            : value);
+                    return;
+                case 2:
+                    if (operand.Size == M68kOperandSize.Byte)
+                    {
+                        WriteByte(operand.Address, (byte)value);
+                    }
+                    else if (operand.Size == M68kOperandSize.Word)
+                    {
+                        WriteWord(operand.Address, (ushort)value);
+                    }
+                    else
+                    {
+                        WriteLong(operand.Address, value);
+                    }
+
+                    return;
+                default:
+                    throw new M68kEmulationException("Cannot write to an immediate MC68000 operand.");
+            }
+        }
+
+        private static int EstimatePlannedMoveCycles(int sourceEaCycles, bool destinationIsRegister, M68kOperandSize size)
+        {
+            var baseCycles = size == M68kOperandSize.Long ? 12 : 8;
+            if (destinationIsRegister)
+            {
+                baseCycles = Math.Max(baseCycles, 4 + sourceEaCycles);
+            }
+
+            return baseCycles;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordPlannedScalarFallback()
+        {
+            if (_plannedInterpreterCountersEnabled)
+            {
+                _plannedScalarFallbackInstructions++;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordPlannedFast(M68kOpcodePlanKind kind)
+        {
+            if (!_plannedInterpreterCountersEnabled)
+            {
+                return;
+            }
+
+            _plannedFastInstructions++;
+            switch (kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                    _plannedNopInstructions++;
+                    break;
+                case M68kOpcodePlanKind.Moveq:
+                    _plannedMoveqInstructions++;
+                    break;
+                case M68kOpcodePlanKind.Branch:
+                    _plannedBranchInstructions++;
+                    break;
+                case M68kOpcodePlanKind.Dbcc:
+                    _plannedDbccInstructions++;
+                    break;
+                case M68kOpcodePlanKind.QuickRegister:
+                    _plannedQuickRegisterInstructions++;
+                    break;
+                case M68kOpcodePlanKind.Move:
+                    _plannedMoveInstructions++;
+                    break;
+                case M68kOpcodePlanKind.Immediate:
+                    _plannedImmediateInstructions++;
+                    break;
+                case M68kOpcodePlanKind.ImmediateBtst:
+                    _plannedImmediateBtstInstructions++;
+                    break;
+                case M68kOpcodePlanKind.RegisterArithmetic:
+                    _plannedRegisterArithmeticInstructions++;
+                    break;
             }
         }
 
@@ -1360,7 +1889,11 @@ namespace Copper68k
                 if (condition == 2 ? !carryOrZero : carryOrZero)
                 {
                     var target = (uint)(branchBase + offset);
-                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    if (_instructionFrequency.Enabled)
+                    {
+                        _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    }
+
                     State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
@@ -1378,7 +1911,11 @@ namespace Copper68k
                 if ((State.StatusRegister & M68kCpuState.Zero) == 0)
                 {
                     var target = (uint)(branchBase + offset);
-                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    if (_instructionFrequency.Enabled)
+                    {
+                        _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    }
+
                     State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
@@ -1396,7 +1933,11 @@ namespace Copper68k
                 if ((State.StatusRegister & M68kCpuState.Zero) != 0)
                 {
                     var target = (uint)(branchBase + offset);
-                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    if (_instructionFrequency.Enabled)
+                    {
+                        _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                    }
+
                     State.ProgramCounter = target;
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
@@ -1412,7 +1953,11 @@ namespace Copper68k
             if (CheckCondition(condition))
             {
                 var target = (uint)(branchBase + offset);
-                _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                if (_instructionFrequency.Enabled)
+                {
+                    _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
+                }
+
                 State.ProgramCounter = target;
                 AddCycles(displacement == 0 ? 10 : 10);
             }
@@ -1932,7 +2477,11 @@ namespace Copper68k
                     if (counter != 0xFFFF)
                     {
                         var target = (uint)(branchBase + displacement);
-                        _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                        if (_instructionFrequency.Enabled)
+                        {
+                            _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
+                        }
+
                         State.ProgramCounter = target;
                         AddCycles(10);
                     }
@@ -2938,14 +3487,17 @@ namespace Copper68k
             return _instructionFetchWindow.ReadWord(address);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             var cycle = State.Cycles;
+
             var value = _bus.ReadByte(address, ref cycle, accessKind);
             State.Cycles = cycle;
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
             if ((address & 1) != 0)
@@ -2955,11 +3507,13 @@ namespace Copper68k
             }
 
             var cycle = State.Cycles;
+
             var value = _bus.ReadWord(address, ref cycle, accessKind);
             State.Cycles = cycle;
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint ReadLong(uint address)
         {
             if ((address & 1) != 0)
@@ -2969,18 +3523,22 @@ namespace Copper68k
             }
 
             var cycle = State.Cycles;
+
             var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
             State.Cycles = cycle;
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteByte(uint address, byte value)
         {
             var cycle = State.Cycles;
+
             _bus.WriteByte(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteWord(uint address, ushort value)
         {
             if ((address & 1) != 0)
@@ -2990,10 +3548,12 @@ namespace Copper68k
             }
 
             var cycle = State.Cycles;
+
             _bus.WriteWord(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteLong(uint address, uint value)
         {
             if ((address & 1) != 0)
@@ -3003,6 +3563,7 @@ namespace Copper68k
             }
 
             var cycle = State.Cycles;
+
             _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             State.Cycles = cycle;
         }
@@ -3138,6 +3699,45 @@ namespace Copper68k
 
         private static int CountBits(int value)
             => M68kIntegerSemantics.CountBits((uint)value);
+
+        private readonly struct PlannedEaOperand
+        {
+            private PlannedEaOperand(int kind, int register, uint address, uint immediate, M68kOperandSize size, int eaCycles)
+            {
+                Kind = kind;
+                Register = register;
+                Address = address;
+                Immediate = immediate;
+                Size = size;
+                EaCycles = eaCycles;
+            }
+
+            public int Kind { get; }
+
+            public int Register { get; }
+
+            public uint Address { get; }
+
+            public uint Immediate { get; }
+
+            public M68kOperandSize Size { get; }
+
+            public int EaCycles { get; }
+
+            public bool IsRegister => Kind is 0 or 1;
+
+            public static PlannedEaOperand DataRegister(int register, M68kOperandSize size)
+                => new PlannedEaOperand(0, register, 0, 0, size, 0);
+
+            public static PlannedEaOperand AddressRegister(int register, M68kOperandSize size)
+                => new PlannedEaOperand(1, register, 0, 0, size, 0);
+
+            public static PlannedEaOperand Memory(uint address, M68kOperandSize size, int eaCycles)
+                => new PlannedEaOperand(2, 0, address, 0, size, eaCycles);
+
+            public static PlannedEaOperand ImmediateValue(uint value, M68kOperandSize size)
+                => new PlannedEaOperand(3, 0, 0, value, size, size == M68kOperandSize.Long ? 8 : 4);
+        }
 
         private readonly struct EaOperand
         {

@@ -929,7 +929,11 @@ namespace Copper68k
                 throw new ArgumentException("The MC68040 interpreter requires an MC68040 CPU profile.", nameof(profile));
             }
 
-            _approximateIntegerFallback = new M68kInterpreter(_bus, State, _instructionFrequency);
+            _approximateIntegerFallback = new M68kInterpreter(
+                _bus,
+                State,
+                _instructionFrequency,
+                enableOpcodePlan: false);
         }
 
         public override int ExecuteInstruction()
