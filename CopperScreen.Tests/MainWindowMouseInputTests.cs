@@ -100,12 +100,32 @@ public sealed class MainWindowMouseInputTests
 		var defaultInput = CopperScreenInputOptions.Default;
 		var swappedInput = CopperScreenInputOptions.Create(2);
 
+		Assert.Equal("mouse", defaultInput.Port1ProfileId);
+		Assert.Equal("numpad-joystick", defaultInput.Port2ProfileId);
 		Assert.Equal(1, defaultInput.MousePort);
 		Assert.Equal(0, defaultInput.MousePortIndex);
 		Assert.Equal(1, defaultInput.JoystickPortIndex);
 		Assert.Equal(2, swappedInput.MousePort);
 		Assert.Equal(1, swappedInput.MousePortIndex);
 		Assert.Equal(0, swappedInput.JoystickPortIndex);
+	}
+
+	[Fact]
+	public void InputPortsCanBeExplicitlyLeftEmpty()
+	{
+		var input = CopperScreenInputOptions.Create(
+			CopperScreenControllerProfile.None.Id,
+			CopperScreenControllerProfile.None.Id,
+			CopperScreenInputOptions.DefaultControllerProfiles);
+
+		Assert.Equal("none", input.Port1ProfileId);
+		Assert.Equal("none", input.Port2ProfileId);
+		Assert.Equal(CopperScreenControllerKind.None, input.GetProfileForPort(1).Kind);
+		Assert.Equal(CopperScreenControllerKind.None, input.GetProfileForPort(2).Kind);
+		Assert.False(input.IsMousePort(0));
+		Assert.False(input.IsMousePort(1));
+		Assert.False(input.TryGetKeyboardJoystickMap(0, out _));
+		Assert.False(input.TryGetKeyboardJoystickMap(1, out _));
 	}
 
 	[Fact]

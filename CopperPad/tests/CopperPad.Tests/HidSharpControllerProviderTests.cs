@@ -50,6 +50,25 @@ public sealed class HidSharpControllerProviderTests
 		Assert.False(controllerProvider.TryGetSnapshot(device.Id, out _));
 	}
 
+	[Fact]
+	public void Provider_CanRequireHidGameControllerUsage()
+	{
+		var unknownHid = ControllerMapperTests.Device(0xFFFF, 0xBACE, "Unknown HID controller", isGameControllerUsage: false);
+		var joystick = ControllerMapperTests.Device(0x1111, 0x2222, "HID joystick", isGameControllerUsage: true);
+		var provider = new FakeHidDeviceProvider();
+		provider.SetDevices(unknownHid, joystick);
+		provider.SetStream(joystick.Id, new FakeHidInputStream(joystick.MaxInputReportLength));
+		using var controllerProvider = new HidSharpControllerProvider(provider, new HidSharpControllerProviderOptions
+		{
+			RequireGameControllerUsage = true
+		});
+
+		controllerProvider.Start();
+
+		var controller = Assert.Single(controllerProvider.GetControllers());
+		Assert.Equal(joystick.Id, controller.Id);
+	}
+
 	private static async Task<CopperControllerSnapshot> WaitForSnapshotAsync(HidSharpControllerProvider provider, string id)
 	{
 		for (var i = 0; i < 50; i++)

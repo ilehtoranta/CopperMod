@@ -122,7 +122,7 @@ public sealed class HidSharpControllerProvider : IControllerProvider
 	private void RescanLocked()
 	{
 		var devices = _provider.GetDevices()
-			.Where(device => ControllerMapperFactory.IsCandidate(device, _options.Profiles))
+			.Where(device => ControllerMapperFactory.IsCandidate(device, _options.Profiles, _options.RequireGameControllerUsage))
 			.GroupBy(device => device.Id, StringComparer.Ordinal)
 			.Select(group => group.First())
 			.ToArray();

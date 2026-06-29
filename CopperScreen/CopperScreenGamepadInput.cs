@@ -19,6 +19,19 @@ internal static class CopperScreenGamepadInput
 			CopperScreenControllerKind.Gamepad,
 			CopperScreenJoystickKeyMap.Empty);
 
+	internal static bool IsJoystickController(CopperControllerInfo info)
+		=> info.IsConnected &&
+			!IsUnknownHidPlaceholder(info.DisplayName) &&
+			info.MappingSource != ControllerMappingSource.None &&
+			HasGamepadProfile(info.SupportedProfiles);
+
+	private static bool HasGamepadProfile(IReadOnlySet<ControllerProfileKind> profiles)
+		=> profiles.Contains(ControllerProfileKind.StandardGamepad) ||
+			profiles.Contains(ControllerProfileKind.ExtendedGamepad);
+
+	private static bool IsUnknownHidPlaceholder(string displayName)
+		=> displayName.StartsWith("Unknown HID", StringComparison.OrdinalIgnoreCase);
+
 	internal static bool TryFindControllerIdForProfile(
 		string profileId,
 		IReadOnlyDictionary<string, string> profileIdsByControllerId,
@@ -73,5 +86,28 @@ internal static class CopperScreenGamepadInput
 		}
 
 		return actions;
+	}
+
+	internal static bool TryGetAssignmentPort(CopperControllerSnapshot snapshot, out int port)
+	{
+		port = 0;
+		if (!snapshot.IsConnected ||
+			IsUnknownHidPlaceholder(snapshot.DisplayName) ||
+			snapshot.MappingSource == ControllerMappingSource.None ||
+			!HasGamepadProfile(snapshot.SupportedProfiles))
+		{
+			return false;
+		}
+
+		var x = snapshot.GetAxis(ControllerElement.LeftStickX);
+		var left = snapshot.IsPressed(ControllerElement.DPadLeft) || x < -StickThreshold;
+		var right = snapshot.IsPressed(ControllerElement.DPadRight) || x > StickThreshold;
+		if (left == right)
+		{
+			return false;
+		}
+
+		port = left ? 1 : 2;
+		return true;
 	}
 }

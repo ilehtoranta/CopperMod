@@ -45,8 +45,13 @@ internal static class ControllerMapperFactory
 	internal static ControllerMappingInfo Describe(HidDeviceDescriptor device, ControllerProfileSet profiles)
 		=> Create(device, profiles).MappingInfo;
 
-	internal static bool IsCandidate(HidDeviceDescriptor device, ControllerProfileSet profiles)
+	internal static bool IsCandidate(HidDeviceDescriptor device, ControllerProfileSet profiles, bool requireGameControllerUsage = false)
 	{
+		if (requireGameControllerUsage && !device.IsGameControllerUsage)
+		{
+			return false;
+		}
+
 		if (profiles.FindMatch(ToInfo(device, true, device.Diagnostic)) != null)
 		{
 			return true;
