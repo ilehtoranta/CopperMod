@@ -50,6 +50,7 @@ internal sealed class MainWindow : Window
 	private readonly Border _settingsPanel;
 	private readonly Border _benchPanel;
 	private readonly Border _debuggerPanel;
+	private readonly Border _gamepadAssignmentOverlay;
 	private readonly TextBlock _diskStatus;
 	private readonly TextBlock _ledFilterStatus;
 	private readonly TextBlock _cpuPcStatus;
@@ -86,10 +87,19 @@ internal sealed class MainWindow : Window
 	private readonly Dictionary<string, int> _gamepadPortMasksByControllerId = new(StringComparer.Ordinal);
 	private readonly Dictionary<string, CopperScreenJoystickActions> _lastGamepadActionsByControllerId = new(StringComparer.Ordinal);
 	private readonly HashSet<string> _connectedGamepadControllerIds = new(StringComparer.Ordinal);
+	private readonly Queue<string> _gamepadAssignmentControllerQueue = new();
+	private readonly HashSet<string> _queuedGamepadAssignmentControllerIds = new(StringComparer.Ordinal);
+	private readonly HashSet<string> _ignoredGamepadAssignmentControllerIds = new(StringComparer.Ordinal);
 	private readonly List<string> _gamepadControllerIdsToRemove = new();
 	private readonly object _gamepadInputGate = new();
 	private readonly Action _applyPendingGamepadInputsAction;
 	private bool _gamepadInputPostQueued;
+	private TextBlock _gamepadAssignmentTitle = null!;
+	private TextBlock _gamepadAssignmentDetails = null!;
+	private TextBlock _gamepadAssignmentPort1 = null!;
+	private TextBlock _gamepadAssignmentPort2 = null!;
+	private string? _activeGamepadAssignmentControllerId;
+	private bool _activeGamepadAssignmentNeedsNeutral;
 	private TextBlock _settingsStatus = null!;
 	private Button _settingsCloseButton = null!;
 	private Button _settingsStartButton = null!;
@@ -173,7 +183,10 @@ internal sealed class MainWindow : Window
 		}
 
 		_bench = new CopperBenchViewModel();
-		_gamepadHost = new CopperControllerHost(new HidSharpControllerProvider());
+		_gamepadHost = new CopperControllerHost(new HidSharpControllerProvider(new HidSharpControllerProviderOptions
+		{
+			RequireGameControllerUsage = true
+		}));
 		_gamepadHost.ControllersChanged += OnGamepadControllersChanged;
 		_applyPendingGamepadInputsAction = ApplyPendingGamepadInputs;
 
@@ -222,11 +235,13 @@ internal sealed class MainWindow : Window
 		_debuggerPanel = CreateDebuggerPanel();
 		_toolbar = CreateToolbar();
 		_settingsPanel = CreateSettingsPanel();
+		_gamepadAssignmentOverlay = CreateGamepadAssignmentOverlay();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
 		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
 		_root.Children.Add(_settingsPanel);
+		_root.Children.Add(_gamepadAssignmentOverlay);
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
@@ -348,7 +363,13 @@ internal sealed class MainWindow : Window
 			0,
 			0,
 			0,
+			0,
 			2,
+			0,
+			0,
+			0,
+			0,
+			0,
 			0,
 			0,
 			0,
@@ -388,11 +409,17 @@ internal sealed class MainWindow : Window
 		var profiles = _settingsDraft.Input.ControllerProfiles.ToDictionary(profile => profile.Id, StringComparer.OrdinalIgnoreCase);
 		foreach (var controller in controllers)
 		{
+			if (!CopperScreenGamepadInput.IsJoystickController(controller.Info))
+			{
+				continue;
+			}
+
 			var profile = CopperScreenGamepadInput.CreateProfile(controller.Info);
 			_connectedGamepadControllerIds.Add(controller.Info.Id);
 			_gamepadProfileIdsByControllerId[controller.Info.Id] = profile.Id;
 			profiles[profile.Id] = profile;
 			AttachGamepadController(controller);
+			QueueGamepadAssignmentIfNeeded(controller, profile.Id);
 		}
 
 		RemoveDisconnectedGamepadControllers();
@@ -406,6 +433,7 @@ internal sealed class MainWindow : Window
 
 		RebuildGamepadPortBindings();
 		ApplyCurrentGamepadSnapshots();
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private void AttachGamepadController(CopperController controller)
@@ -449,6 +477,12 @@ internal sealed class MainWindow : Window
 			_gamepadProfileIdsByControllerId.Remove(controllerId);
 			_gamepadPortMasksByControllerId.Remove(controllerId);
 			_lastGamepadActionsByControllerId.Remove(controllerId);
+			_queuedGamepadAssignmentControllerIds.Remove(controllerId);
+			if (string.Equals(_activeGamepadAssignmentControllerId, controllerId, StringComparison.Ordinal))
+			{
+				_activeGamepadAssignmentControllerId = null;
+				_gamepadAssignmentOverlay.IsVisible = false;
+			}
 		}
 	}
 
@@ -530,6 +564,11 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		if (string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal))
+		{
+			ApplyGamepadAssignmentSnapshot(controller);
+		}
+
 		if (!_gamepadPortMasksByControllerId.TryGetValue(controller.Info.Id, out var portMask))
 		{
 			return;
@@ -551,6 +590,151 @@ internal sealed class MainWindow : Window
 				SetJoystickPort(portIndex, actions);
 			}
 		}
+	}
+
+	private void QueueGamepadAssignmentIfNeeded(CopperController controller, string profileId)
+	{
+		if (_ignoredGamepadAssignmentControllerIds.Contains(controller.Info.Id) ||
+			_queuedGamepadAssignmentControllerIds.Contains(controller.Info.Id) ||
+			string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal) ||
+			IsGamepadProfileAssigned(profileId))
+		{
+			return;
+		}
+
+		_gamepadAssignmentControllerQueue.Enqueue(controller.Info.Id);
+		_queuedGamepadAssignmentControllerIds.Add(controller.Info.Id);
+	}
+
+	private bool IsGamepadProfileAssigned(string profileId)
+		=> string.Equals(_settingsDraft.Input.Port1ProfileId, profileId, StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(_settingsDraft.Input.Port2ProfileId, profileId, StringComparison.OrdinalIgnoreCase);
+
+	private void TryShowNextGamepadAssignmentOverlay()
+	{
+		if (!CanShowGamepadAssignmentOverlay())
+		{
+			RefreshGamepadAssignmentOverlayVisibility();
+			return;
+		}
+
+		if (_activeGamepadAssignmentControllerId != null)
+		{
+			RefreshGamepadAssignmentOverlayVisibility();
+			return;
+		}
+
+		while (_gamepadAssignmentControllerQueue.Count > 0)
+		{
+			var controllerId = _gamepadAssignmentControllerQueue.Dequeue();
+			_queuedGamepadAssignmentControllerIds.Remove(controllerId);
+			if (!_gamepadControllersById.TryGetValue(controllerId, out var controller) ||
+				!_gamepadProfileIdsByControllerId.TryGetValue(controllerId, out var profileId) ||
+				_ignoredGamepadAssignmentControllerIds.Contains(controllerId) ||
+				IsGamepadProfileAssigned(profileId))
+			{
+				continue;
+			}
+
+			_activeGamepadAssignmentControllerId = controllerId;
+			_activeGamepadAssignmentNeedsNeutral = true;
+			RefreshGamepadAssignmentOverlayText(controller);
+			RefreshGamepadAssignmentOverlayVisibility();
+			ApplyGamepadAssignmentSnapshot(controller);
+			return;
+		}
+
+		RefreshGamepadAssignmentOverlayVisibility();
+	}
+
+	private bool CanShowGamepadAssignmentOverlay()
+		=> _runtime != null &&
+			!_settingsVisible &&
+			!_bench.IsOverlayVisible &&
+			_visibleDebugSnapshot == null;
+
+	private void RefreshGamepadAssignmentOverlayVisibility()
+	{
+		_gamepadAssignmentOverlay.IsVisible = _activeGamepadAssignmentControllerId != null && CanShowGamepadAssignmentOverlay();
+	}
+
+	private bool IsGamepadAssignmentOverlayVisible()
+		=> _activeGamepadAssignmentControllerId != null && _gamepadAssignmentOverlay.IsVisible;
+
+	private void RefreshGamepadAssignmentOverlayText(CopperController controller)
+	{
+		_gamepadAssignmentTitle.Text = "Assign Gamepad";
+		_gamepadAssignmentDetails.Text = string.IsNullOrWhiteSpace(controller.Info.DisplayName)
+			? "Move the controller left or right to choose an Amiga joystick port."
+			: controller.Info.DisplayName + Environment.NewLine + "Move left or right to choose an Amiga joystick port.";
+		_gamepadAssignmentPort1.Text = "Move left" + Environment.NewLine + "Port 1" + Environment.NewLine + "Currently: " + GetPortAssignmentDisplayName(1);
+		_gamepadAssignmentPort2.Text = "Move right" + Environment.NewLine + "Port 2" + Environment.NewLine + "Currently: " + GetPortAssignmentDisplayName(2);
+	}
+
+	private string GetPortAssignmentDisplayName(int port)
+		=> _settingsDraft.Input.GetProfileForPort(port).DisplayName;
+
+	private void ApplyGamepadAssignmentSnapshot(CopperController controller)
+	{
+		if (!IsGamepadAssignmentOverlayVisible() ||
+			!string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		var snapshot = controller.GetSnapshot();
+		if (!CopperScreenGamepadInput.TryGetAssignmentPort(snapshot, out var port))
+		{
+			var horizontalActions = CopperScreenGamepadInput.GetActions(snapshot) &
+				(CopperScreenJoystickActions.Left | CopperScreenJoystickActions.Right);
+			if (horizontalActions == CopperScreenJoystickActions.None)
+			{
+				_activeGamepadAssignmentNeedsNeutral = false;
+			}
+
+			return;
+		}
+
+		if (_activeGamepadAssignmentNeedsNeutral)
+		{
+			return;
+		}
+
+		AssignActiveGamepadToPort(port);
+	}
+
+	private void AssignActiveGamepadToPort(int port)
+	{
+		if (_activeGamepadAssignmentControllerId == null ||
+			!_gamepadProfileIdsByControllerId.TryGetValue(_activeGamepadAssignmentControllerId, out var profileId))
+		{
+			IgnoreActiveGamepadAssignment();
+			return;
+		}
+
+		ClearSettingsStartupError();
+		_settingsDraft.Input = _settingsDraft.Input.WithPortAssignment(port, profileId);
+		_inputOptions = _settingsDraft.Input;
+		_runtime?.SetInputOptions(_inputOptions);
+		_activeGamepadAssignmentControllerId = null;
+		_gamepadAssignmentOverlay.IsVisible = false;
+		RefreshControllerSelectors();
+		RebuildGamepadPortBindings();
+		ApplyCurrentGamepadSnapshots();
+		UpdateSettingsStatus();
+		TryShowNextGamepadAssignmentOverlay();
+	}
+
+	private void IgnoreActiveGamepadAssignment()
+	{
+		if (_activeGamepadAssignmentControllerId != null)
+		{
+			_ignoredGamepadAssignmentControllerIds.Add(_activeGamepadAssignmentControllerId);
+		}
+
+		_activeGamepadAssignmentControllerId = null;
+		_gamepadAssignmentOverlay.IsVisible = false;
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private static WindowIcon LoadWindowIcon()
@@ -639,7 +823,7 @@ internal sealed class MainWindow : Window
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, cpuMs={state.LastCpuFrameMilliseconds:F2}, hwMs={state.LastHardwareFrameMilliseconds:F2}, displayMs={state.LastDisplayFrameMilliseconds:F2}, audioMs={state.LastAudioFrameMilliseconds:F2}, reserveMs={state.LastPresentationBufferReserveMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, copyMs={state.LastPublishCopyMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -786,6 +970,13 @@ internal sealed class MainWindow : Window
 
 		if (_runtime == null)
 		{
+			return;
+		}
+
+		if (args.Key == Key.Escape && IsGamepadAssignmentOverlayVisible())
+		{
+			IgnoreActiveGamepadAssignment();
+			args.Handled = true;
 			return;
 		}
 
@@ -1264,6 +1455,101 @@ internal sealed class MainWindow : Window
 			Child = panel
 		};
 	}
+
+	private Border CreateGamepadAssignmentOverlay()
+	{
+		_gamepadAssignmentTitle = new TextBlock
+		{
+			Text = "Assign Gamepad",
+			FontSize = 20,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = Brushes.White,
+			TextAlignment = TextAlignment.Center
+		};
+		_gamepadAssignmentDetails = new TextBlock
+		{
+			Foreground = new SolidColorBrush(Color.FromRgb(210, 222, 238)),
+			TextAlignment = TextAlignment.Center,
+			TextWrapping = TextWrapping.Wrap
+		};
+		_gamepadAssignmentPort1 = CreateGamepadAssignmentPortHint();
+		_gamepadAssignmentPort2 = CreateGamepadAssignmentPortHint();
+
+		var portGrid = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			},
+			ColumnSpacing = 10
+		};
+		portGrid.Children.Add(WrapGamepadAssignmentHint(_gamepadAssignmentPort1));
+		var port2 = WrapGamepadAssignmentHint(_gamepadAssignmentPort2);
+		Grid.SetColumn(port2, 1);
+		portGrid.Children.Add(port2);
+
+		var commands = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 8,
+			HorizontalAlignment = HorizontalAlignment.Center
+		};
+		commands.Children.Add(CreatePanelButton("Ignore", IgnoreActiveGamepadAssignment));
+
+		var panel = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 12,
+			MaxWidth = 560
+		};
+		panel.Children.Add(_gamepadAssignmentTitle);
+		panel.Children.Add(_gamepadAssignmentDetails);
+		panel.Children.Add(portGrid);
+		panel.Children.Add(commands);
+
+		var card = new Border
+		{
+			CornerRadius = new CornerRadius(6),
+			Background = new SolidColorBrush(Color.FromArgb(244, 18, 22, 28)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(116, 190, 255)),
+			BorderThickness = new Thickness(1),
+			Padding = new Thickness(18, 16),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Center,
+			Child = panel
+		};
+
+		var overlay = new Border
+		{
+			Background = new SolidColorBrush(Color.FromArgb(132, 3, 7, 12)),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			IsVisible = false,
+			Child = card
+		};
+		return overlay;
+	}
+
+	private static TextBlock CreateGamepadAssignmentPortHint()
+		=> new()
+		{
+			Foreground = Brushes.White,
+			TextAlignment = TextAlignment.Center,
+			TextWrapping = TextWrapping.Wrap
+		};
+
+	private static Border WrapGamepadAssignmentHint(TextBlock text)
+		=> new()
+		{
+			Background = new SolidColorBrush(Color.FromRgb(28, 36, 48)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(70, 82, 98)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Padding = new Thickness(10, 8),
+			MinWidth = 190,
+			Child = text
+		};
 
 	private Border CreateSettingsNavigation()
 	{
@@ -3115,6 +3401,8 @@ internal sealed class MainWindow : Window
 			Grid.SetRow(_debuggerPanel, 0);
 			Grid.SetRowSpan(_debuggerPanel, 2);
 			_debuggerPanel.Margin = new Thickness(12, 78, 12, 12);
+			Grid.SetRow(_gamepadAssignmentOverlay, 0);
+			Grid.SetRowSpan(_gamepadAssignmentOverlay, 2);
 			return;
 		}
 
@@ -3126,6 +3414,8 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(_debuggerPanel, 1);
 		Grid.SetRowSpan(_debuggerPanel, 1);
 		_debuggerPanel.Margin = new Thickness(12, 12, 12, 12);
+		Grid.SetRow(_gamepadAssignmentOverlay, 1);
+		Grid.SetRowSpan(_gamepadAssignmentOverlay, 1);
 	}
 
 	private void ToggleOverscan()
@@ -3521,6 +3811,7 @@ internal sealed class MainWindow : Window
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
 		UpdateToolbarStatus();
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private void RefreshDebuggerUi(CopperScreenDebugSnapshot? snapshot)
@@ -3530,6 +3821,7 @@ internal sealed class MainWindow : Window
 		{
 			_debuggerPanel.IsVisible = snapshot != null;
 			_benchPanel.IsVisible = _bench.IsOverlayVisible && snapshot == null;
+			TryShowNextGamepadAssignmentOverlay();
 			return;
 		}
 
@@ -3544,6 +3836,7 @@ internal sealed class MainWindow : Window
 			_debuggerDisassembly.Text = string.Empty;
 			_debuggerStack.Text = string.Empty;
 			_debuggerDevices.Text = string.Empty;
+			TryShowNextGamepadAssignmentOverlay();
 			return;
 		}
 
@@ -3553,6 +3846,7 @@ internal sealed class MainWindow : Window
 		_debuggerDisassembly.Text = string.Join(Environment.NewLine, snapshot.Disassembly);
 		_debuggerStack.Text = string.Join(Environment.NewLine, snapshot.StackWords);
 		_debuggerDevices.Text = FormatDebuggerDevices(snapshot);
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private static string FormatDebuggerDevices(CopperScreenDebugSnapshot snapshot)
@@ -3692,7 +3986,13 @@ internal sealed class MainWindow : Window
 			$"Video queue: {state.PresentationQueueDepth}/{state.PresentationQueueCapacity}\n" +
 			$"Video queue throttles: {state.PresentationQueueFullThrottleCount}\n" +
 			$"Emulator frame: {state.LastEmulationFrameMilliseconds:F2} ms\n" +
+			$"  CPU/boot: {state.LastCpuFrameMilliseconds:F2} ms\n" +
+			$"  Hardware catch-up: {state.LastHardwareFrameMilliseconds:F2} ms\n" +
+			$"  Display render: {state.LastDisplayFrameMilliseconds:F2} ms\n" +
+			$"  Audio extract/mix: {state.LastAudioFrameMilliseconds:F2} ms\n" +
+			$"Presentation buffer reserve: {state.LastPresentationBufferReserveMilliseconds:F2} ms\n" +
 			$"Runtime publish: {state.LastPublishFrameMilliseconds:F2} ms\n" +
+			$"Runtime publish copy: {state.LastPublishCopyMilliseconds:F2} ms\n" +
 			$"Presentation callback: {_lastPresentationFrameMilliseconds:F2} ms\n" +
 			$"Framebuffer upload: {_lastPresenterUpdateMilliseconds:F2} ms\n" +
 			$"Framebuffer render: {_presenter.LastRenderMilliseconds:F2} ms";

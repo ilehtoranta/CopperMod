@@ -56,7 +56,13 @@ internal readonly record struct CopperScreenState(
 	int PresentationQueueCapacity,
 	long PresentationQueueFullThrottleCount,
 	double LastPublishFrameMilliseconds,
-	double LastEmulationFrameMilliseconds);
+	double LastPublishCopyMilliseconds,
+	double LastPresentationBufferReserveMilliseconds,
+	double LastEmulationFrameMilliseconds,
+	double LastCpuFrameMilliseconds,
+	double LastHardwareFrameMilliseconds,
+	double LastDisplayFrameMilliseconds,
+	double LastAudioFrameMilliseconds);
 
 internal sealed class CopperScreenFrameLease : IDisposable
 {
@@ -129,7 +135,10 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private bool _pausedStatePublished;
 	private long _nextSteadyAudioFrameTimestamp;
 	private double _lastPublishFrameMilliseconds;
+	private double _lastPublishCopyMilliseconds;
+	private double _lastPresentationBufferReserveMilliseconds;
 	private double _lastEmulationFrameMilliseconds;
+	private double _lastAudioFrameMilliseconds;
 	private bool _disposed;
 
 	private CopperScreenRuntime(CopperScreenEmulator emulator, ICopperScreenAudioOutput? audio, bool disposeAudio)
@@ -716,27 +725,37 @@ internal sealed class CopperScreenRuntime : IDisposable
 				return;
 			}
 
+			var presentationQueuedAudioBuffers = _audio?.QueuedBufferCount ?? queuedAudioBuffers;
+			var reservedBufferIndex = TryReservePresentationFrameBuffer(
+				presentationQueuedAudioBuffers,
+				out var reservedFrameNumber);
+			var presentationFramebuffer = reservedBufferIndex >= 0
+				? _frameBuffers[reservedBufferIndex]
+				: _emulator.Framebuffer;
 			var startTimestamp = Stopwatch.GetTimestamp();
 			int audioFrames;
 			try
 			{
-				_emulator.RenderNextFrame();
+				_emulator.RenderNextFrame(presentationFramebuffer);
+				var audioStartTimestamp = Stopwatch.GetTimestamp();
 				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+				if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)
+				{
+					_emulator.CaptureDriveStates(_floppyDriveAudioStates);
+					_floppyDriveAudio.Mix(_audioBuffer.AsSpan(0, audioFrames * AudioChannels), audioFrames, AudioChannels, _floppyDriveAudioStates);
+				}
+
+				_lastAudioFrameMilliseconds = Stopwatch.GetElapsedTime(audioStartTimestamp).TotalMilliseconds;
 			}
 			catch (Exception ex)
 			{
 				CopperScreenCrashLog.WriteException("CopperScreenRuntime.RenderFrames", ex, ex);
 				_emulator.CaptureFatalException(ex);
 				_audioBuffer.AsSpan().Clear();
+				_lastAudioFrameMilliseconds = 0;
 				_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
 				PublishCurrentFrame(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? queuedAudioBuffers);
 				return;
-			}
-
-			if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)
-			{
-				_emulator.CaptureDriveStates(_floppyDriveAudioStates);
-				_floppyDriveAudio.Mix(_audioBuffer.AsSpan(0, audioFrames * AudioChannels), audioFrames, AudioChannels, _floppyDriveAudioStates);
 			}
 
 			_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
@@ -745,8 +764,72 @@ internal sealed class CopperScreenRuntime : IDisposable
 				_audioSubmitFailures++;
 			}
 
-			PublishCurrentFrame(framesRendered: 1, queuedAudioBuffers: _audio?.QueuedBufferCount ?? queuedAudioBuffers);
+			if (reservedBufferIndex >= 0)
+			{
+				PublishRenderedFrame(
+					reservedBufferIndex,
+					reservedFrameNumber,
+					framesRendered: 1,
+					queuedAudioBuffers: _audio?.QueuedBufferCount ?? queuedAudioBuffers);
+			}
 		}
+	}
+
+	private int TryReservePresentationFrameBuffer(int queuedAudioBuffers, out long frameNumber)
+	{
+		var reserveStartTimestamp = Stopwatch.GetTimestamp();
+		lock (_presentationSync)
+		{
+			if (ShouldReplaceQueuedPresentationFrames(queuedAudioBuffers))
+			{
+				var queueCapacity = GetPublishPresentationQueueCapacity(queuedAudioBuffers);
+				while (_presentationQueueCount >= queueCapacity && TryDropOldestPresentationFrameNoLock())
+				{
+					_presentationQueueFullThrottleCount++;
+				}
+			}
+
+			if (_presentationQueueCount >= MaxQueuedPresentationFrames)
+			{
+				_presentationQueueFullThrottleCount++;
+				frameNumber = 0;
+				_lastPresentationBufferReserveMilliseconds = Stopwatch.GetElapsedTime(reserveStartTimestamp).TotalMilliseconds;
+				return -1;
+			}
+
+			var bufferIndex = SelectWritableFrameBufferNoLock();
+			if (bufferIndex < 0)
+			{
+				_droppedFrames++;
+				_presentationBufferDroppedFrames++;
+				frameNumber = 0;
+				_lastPresentationBufferReserveMilliseconds = Stopwatch.GetElapsedTime(reserveStartTimestamp).TotalMilliseconds;
+				return -1;
+			}
+
+			frameNumber = _latestFrameNumber + 1;
+			_lastPresentationBufferReserveMilliseconds = Stopwatch.GetElapsedTime(reserveStartTimestamp).TotalMilliseconds;
+			return bufferIndex;
+		}
+	}
+
+	private void PublishRenderedFrame(int bufferIndex, long frameNumber, int framesRendered, int queuedAudioBuffers)
+	{
+		var publishStartTimestamp = Stopwatch.GetTimestamp();
+		_pendingCopperBenchRequest |= _emulator.ConsumeCopperBenchRequest();
+		_lastPublishCopyMilliseconds = 0;
+		var state = CaptureState(framesRendered, queuedAudioBuffers, _frameDriveStates[bufferIndex]);
+		lock (_presentationSync)
+		{
+			_writeBufferIndex = bufferIndex;
+			_latestBufferIndex = bufferIndex;
+			_latestFrameNumber = frameNumber;
+			_latestState = WithCurrentPresentationDiagnostics(state with { FrameNumber = frameNumber });
+			EnqueuePresentationFrameNoLock(new PresentationFrameEntry(bufferIndex, frameNumber, _latestState));
+		}
+
+		_lastPublishFrameMilliseconds = Stopwatch.GetElapsedTime(publishStartTimestamp).TotalMilliseconds;
+		FramePublished?.Invoke();
 	}
 
 	private void PublishCurrentFrame(int framesRendered, int queuedAudioBuffers)
@@ -769,6 +852,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			if (_presentationQueueCount >= MaxQueuedPresentationFrames)
 			{
 				_presentationQueueFullThrottleCount++;
+				_lastPublishCopyMilliseconds = 0;
 				_lastPublishFrameMilliseconds = Stopwatch.GetElapsedTime(publishStartTimestamp).TotalMilliseconds;
 				return;
 			}
@@ -778,6 +862,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			{
 				_droppedFrames++;
 				_presentationBufferDroppedFrames++;
+				_lastPublishCopyMilliseconds = 0;
 				_lastPublishFrameMilliseconds = Stopwatch.GetElapsedTime(publishStartTimestamp).TotalMilliseconds;
 				return;
 			}
@@ -785,7 +870,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 			frameNumber = _latestFrameNumber + 1;
 		}
 
+		var copyStartTimestamp = Stopwatch.GetTimestamp();
 		_emulator.Framebuffer.AsSpan().CopyTo(_frameBuffers[nextBuffer]);
+		_lastPublishCopyMilliseconds = Stopwatch.GetElapsedTime(copyStartTimestamp).TotalMilliseconds;
 		_lastPublishFrameMilliseconds = Stopwatch.GetElapsedTime(publishStartTimestamp).TotalMilliseconds;
 		var state = CaptureState(framesRendered, queuedAudioBuffers, _frameDriveStates[nextBuffer]);
 		lock (_presentationSync)
@@ -838,7 +925,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 			PresentationQueueDepth = _presentationQueueCount,
 			PresentationQueueCapacity = GetPublishPresentationQueueCapacity(state.QueuedAudioBuffers),
 			PresentationQueueFullThrottleCount = _presentationQueueFullThrottleCount,
-			LastPublishFrameMilliseconds = _lastPublishFrameMilliseconds
+			LastPublishFrameMilliseconds = _lastPublishFrameMilliseconds,
+			LastPublishCopyMilliseconds = _lastPublishCopyMilliseconds,
+			LastPresentationBufferReserveMilliseconds = _lastPresentationBufferReserveMilliseconds
 		};
 
 	private int GetPublishPresentationQueueCapacity(int queuedAudioBuffers)
@@ -908,7 +997,13 @@ internal sealed class CopperScreenRuntime : IDisposable
 			MaxQueuedPresentationFrames,
 			_presentationQueueFullThrottleCount,
 			_lastPublishFrameMilliseconds,
-			_lastEmulationFrameMilliseconds);
+			_lastPublishCopyMilliseconds,
+			_lastPresentationBufferReserveMilliseconds,
+			_lastEmulationFrameMilliseconds,
+			_emulator.LastFrameTiming.CpuMilliseconds,
+			_emulator.LastFrameTiming.HardwareMilliseconds,
+			_emulator.LastFrameTiming.DisplayMilliseconds,
+			_lastAudioFrameMilliseconds);
 	}
 
 	private CopperScreenDriveState[] CaptureDriveStates()

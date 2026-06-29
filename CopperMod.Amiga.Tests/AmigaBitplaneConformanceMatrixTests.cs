@@ -1542,7 +1542,9 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFFFFFF00u, Pixel(frame, firstYellow + 15, StandardY));
         Assert.Equal(0xFF000000u, Pixel(frame, firstYellow + 16, StandardY));
-        Assert.True(bus.Display.CaptureSnapshot().LastTimelineFallbackCount > 0);
+        var snapshot = bus.Display.CaptureSnapshot();
+        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeLine);
+        Assert.True(snapshot.LastActiveTimelineFrameCount > 0);
     }
 
     private static void BpldatDisabledPlanesDoNotContribute()

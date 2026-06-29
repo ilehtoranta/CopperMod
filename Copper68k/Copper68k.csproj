@@ -9,8 +9,8 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <PackageVersion>1.1.0</PackageVersion>
-    <PackageReleaseNotes>Adds an opt-in internal MC68040 JIT backend through M68kCoreOptions, public JIT bus capability interfaces for host integration, and keeps the default MC68040 factory path on the interpreter for source-compatible package consumers.</PackageReleaseNotes>
+    <PackageVersion>1.1.1</PackageVersion>
+    <PackageReleaseNotes>Maintenance release with internal 68k interpreter timing and dispatch refactors, expanded 68020/68030 timing coverage, 68000 interpreter performance tuning, benchmark instrumentation updates, and SPDX copyright headers. No public API changes.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

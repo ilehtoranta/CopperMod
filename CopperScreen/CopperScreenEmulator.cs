@@ -1,9 +1,15 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using CopperMod.Amiga;
 
 namespace CopperScreen;
+
+internal readonly record struct CopperScreenEmulatorFrameTiming(
+	double CpuMilliseconds,
+	double HardwareMilliseconds,
+	double DisplayMilliseconds);
 
 internal sealed class CopperScreenEmulator : IDisposable
 {
@@ -99,6 +105,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public int[] Framebuffer { get; }
 
+	internal CopperScreenEmulatorFrameTiming LastFrameTiming { get; private set; }
+
 	public string? DiskPath { get; private set; }
 
 	public string StatusText { get; private set; }
@@ -141,6 +149,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public M68kJitCounters JitCounters => _machine.Cpu is M68kJitCore jit ? jit.Counters : default;
 
+	internal M68kPlannedInterpreterCounters PlannedInterpreterCounters =>
+		_machine.Cpu is M68kInterpreter interpreter
+			? interpreter.CapturePlannedInterpreterCounters()
+			: M68kPlannedInterpreterCounters.Empty;
+
 	public M68kInstructionFrequencySnapshot InstructionFrequency =>
 		_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider
 			? frequencyProvider.CaptureInstructionFrequency()
@@ -166,6 +179,22 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (_machine.Cpu is IM68kInstructionFrequencyProvider frequencyProvider)
 		{
 			frequencyProvider.InstructionFrequencyEnabled = enabled;
+		}
+	}
+
+	internal void ResetPlannedInterpreterCounters()
+	{
+		if (_machine.Cpu is M68kInterpreter interpreter)
+		{
+			interpreter.ResetPlannedInterpreterCounters();
+		}
+	}
+
+	internal void SetPlannedInterpreterCountersEnabled(bool enabled)
+	{
+		if (_machine.Cpu is M68kInterpreter interpreter)
+		{
+			interpreter.PlannedInterpreterCountersEnabled = enabled;
 		}
 	}
 
@@ -1040,11 +1069,21 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	[HotPath]
 	public void RenderNextFrame()
-		=> RenderNextFrame(renderPresentation: true);
+		=> RenderNextFrame(Framebuffer, renderPresentation: true);
 
 	[HotPath]
 	internal void RenderNextFrame(bool renderPresentation)
+		=> RenderNextFrame(Framebuffer, renderPresentation);
+
+	[HotPath]
+	internal void RenderNextFrame(int[] presentationFramebuffer)
+		=> RenderNextFrame(presentationFramebuffer, renderPresentation: true);
+
+	[HotPath]
+	private void RenderNextFrame(int[] presentationFramebuffer, bool renderPresentation)
 	{
+		ValidatePresentationFramebuffer(presentationFramebuffer);
+		LastFrameTiming = default;
 		ApplyInputState();
 		if (_startupError != null)
 		{
@@ -1053,7 +1092,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 			StatusText = _startupError;
 			if (renderPresentation)
 			{
-				RenderStatusFrame(StatusText);
+				var displayStart = Stopwatch.GetTimestamp();
+				RenderStatusFrame(StatusText, presentationFramebuffer);
+				LastFrameTiming = LastFrameTiming with
+				{
+					DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
+				};
 			}
 
 			AdvanceInputPulse();
@@ -1067,7 +1111,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 			StatusText = "insert disk image";
 			if (renderPresentation)
 			{
-				RenderNoDiskFrame();
+				var displayStart = Stopwatch.GetTimestamp();
+				RenderNoDiskFrame(presentationFramebuffer);
+				LastFrameTiming = LastFrameTiming with
+				{
+					DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
+				};
 			}
 
 			AdvanceInputPulse();
@@ -1118,7 +1167,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 				StatusText = ex.Message;
 				if (renderPresentation)
 				{
-					RenderStatusFrame(StatusText);
+					var displayStart = Stopwatch.GetTimestamp();
+					RenderStatusFrame(StatusText, presentationFramebuffer);
+					LastFrameTiming = LastFrameTiming with
+					{
+						DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
+					};
 				}
 
 				AdvanceInputPulse();
@@ -1130,22 +1184,48 @@ internal sealed class CopperScreenEmulator : IDisposable
 		var executionTargetCycle = GetBootExecutionTargetCycle(_targetCycle);
 		BeginFrameAudio(_targetCycle);
 		AmigaBootResult result;
+		var cpuStart = Stopwatch.GetTimestamp();
 		result = _boot.ContinueExecutionUntilCycle(
 			executionTargetCycle,
 			GetBootMaxInstructionsPerFrame(),
 			_renderFrameAudioUntil);
+		LastFrameTiming = LastFrameTiming with
+		{
+			CpuMilliseconds = Stopwatch.GetElapsedTime(cpuStart).TotalMilliseconds
+		};
 
 		FinishFrameAudio();
 		if (HandleBootResult(result))
 		{
+			if (renderPresentation)
+			{
+				var displayStart = Stopwatch.GetTimestamp();
+				RenderStatusFrame(StatusText, presentationFramebuffer);
+				LastFrameTiming = LastFrameTiming with
+				{
+					DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
+				};
+			}
+
 			AdvanceInputPulse();
 			return;
 		}
 
+		var hardwareStart = Stopwatch.GetTimestamp();
 		_machine.Bus.AdvanceHardwareTo(_targetCycle);
+		LastFrameTiming = LastFrameTiming with
+		{
+			HardwareMilliseconds = Stopwatch.GetElapsedTime(hardwareStart).TotalMilliseconds
+		};
+
 		if (renderPresentation)
 		{
-			RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle);
+			var displayStart = Stopwatch.GetTimestamp();
+			RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle, presentationFramebuffer);
+			LastFrameTiming = LastFrameTiming with
+			{
+				DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
+			};
 		}
 
 		AdvanceInputPulse();
@@ -1362,12 +1442,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 	}
 
 	private void RenderPresentationFrame(long frameStartCycle, long frameEndCycle)
+		=> RenderPresentationFrame(frameStartCycle, frameEndCycle, Framebuffer);
+
+	private void RenderPresentationFrame(long frameStartCycle, long frameEndCycle, int[] framebuffer)
 	{
+		ValidatePresentationFramebuffer(framebuffer);
 		if (!_machine.Bus.Display.InterlaceEnabled)
 		{
 			InvalidateInterlacePresentationHistory();
 			_machine.Bus.Display.RenderFrame(
-				MemoryMarshal.Cast<int, uint>(Framebuffer.AsSpan()),
+				MemoryMarshal.Cast<int, uint>(framebuffer.AsSpan()),
 				frameStartCycle,
 				frameEndCycle);
 			return;
@@ -1388,23 +1472,27 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_interlacePresentationFrameValid = true;
 		}
 
-		ComposeInterlacePresentationFrame(interlaceField);
+		ComposeInterlacePresentationFrame(interlaceField, framebuffer);
 	}
 
 	private void ComposeInterlacePresentationFrame(int interlaceField)
+		=> ComposeInterlacePresentationFrame(interlaceField, Framebuffer);
+
+	private void ComposeInterlacePresentationFrame(int interlaceField, int[] framebuffer)
 	{
+		ValidatePresentationFramebuffer(framebuffer);
 		switch (_presentationOptions.LacedMode)
 		{
 			case CopperScreenLacedPresentationMode.CrtFlicker:
 				ComposeCrtFlickerInterlaceFrame(
 					_interlacePresentationFrame,
-					Framebuffer,
+					framebuffer,
 					_machine.Bus.Display.Width,
 					_machine.Bus.Display.Height,
 					interlaceField);
 				break;
 			default:
-				_interlacePresentationFrame.AsSpan().CopyTo(Framebuffer);
+				_interlacePresentationFrame.AsSpan().CopyTo(framebuffer);
 				break;
 		}
 	}
@@ -1668,25 +1756,42 @@ internal sealed class CopperScreenEmulator : IDisposable
 	}
 
 	private void RenderNoDiskFrame()
+		=> RenderNoDiskFrame(Framebuffer);
+
+	private void RenderNoDiskFrame(int[] framebuffer)
 	{
+		ValidatePresentationFramebuffer(framebuffer);
 		if (_profile.UsesKickstartRom)
 		{
-			InsertDiskScreenRenderer.RenderHostStatus(Framebuffer, Width, Height, StatusText);
+			InsertDiskScreenRenderer.RenderHostStatus(framebuffer, Width, Height, StatusText);
 			return;
 		}
 
-		InsertDiskScreenRenderer.Render(Framebuffer, Width, Height);
+		InsertDiskScreenRenderer.Render(framebuffer, Width, Height);
 	}
 
 	private void RenderStatusFrame(string status)
+		=> RenderStatusFrame(status, Framebuffer);
+
+	private void RenderStatusFrame(string status, int[] framebuffer)
 	{
+		ValidatePresentationFramebuffer(framebuffer);
 		if (_profile.UsesKickstartRom)
 		{
-			InsertDiskScreenRenderer.RenderHostStatus(Framebuffer, Width, Height, status);
+			InsertDiskScreenRenderer.RenderHostStatus(framebuffer, Width, Height, status);
 			return;
 		}
 
-		InsertDiskScreenRenderer.RenderStatus(Framebuffer, Width, Height, status);
+		InsertDiskScreenRenderer.RenderStatus(framebuffer, Width, Height, status);
+	}
+
+	private void ValidatePresentationFramebuffer(int[] framebuffer)
+	{
+		ArgumentNullException.ThrowIfNull(framebuffer);
+		if (framebuffer.Length < Width * Height)
+		{
+			throw new ArgumentException("Presentation framebuffer is too small.", nameof(framebuffer));
+		}
 	}
 
 	private CopperScreenDebugSnapshot CreateDebugSnapshot(string reasonCode, string message, string[] diagnostics)

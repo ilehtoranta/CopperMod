@@ -1311,7 +1311,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
-	public void TimedFallbackUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
+	public void ArchivedTimelineUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
 		EnableSpriteDma(bus, 0x8220);
@@ -1329,9 +1329,10 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 15));
 		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
 		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-		Assert.Equal(0, snapshot.LastArchivedTimelineFrameCount);
+		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
 		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineSegmentCount);
+		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
+		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
 	}
 
 	[Fact]

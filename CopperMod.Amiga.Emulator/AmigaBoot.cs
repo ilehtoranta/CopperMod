@@ -1026,7 +1026,8 @@ namespace CopperMod.Amiga
 
                 _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
                 _owner.AdvanceSyntheticVBlankInterruptServers(previousCycle, currentCycle);
-                _owner._machine.Bus.AdvanceHardwareEventsTo(currentCycle);
+                var interruptMask = (_owner._machine.Cpu.State.StatusRegister >> 8) & 0x07;
+                _owner._machine.Bus.AdvanceHardwareEventsTo(currentCycle, interruptMask);
                 _owner._machine.DispatchPendingHardwareInterrupt();
 
                 _instructions += instructionCount;
