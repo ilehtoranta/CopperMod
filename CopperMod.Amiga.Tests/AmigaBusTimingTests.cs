@@ -60,6 +60,169 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void ExactCpuChipSlotFastHelperMatchesGenericSingleSlotGrant()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Cpu,
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			20,
+			isWrite: false);
+
+		var generic = genericEngine.Arbitrate(request, new AmigaBusAccessResult(request, 20, 20));
+		fastEngine.GrantCpuDataSingleSlot(
+			request.Kind,
+			request.Target,
+			request.Address,
+			request.Size,
+			request.RequestedCycle,
+			request.IsWrite,
+			out var granted,
+			out var completed);
+
+		Assert.Equal(generic.GrantedCycle, granted);
+		Assert.Equal(generic.CompletedCycle, completed);
+		Assert.Equal(genericEngine.LastReservation?.GrantedCycle, fastEngine.LastReservation?.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Cpu, fastEngine.LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void ExactCpuChipSlotFastHelperMatchesGenericLongGrant()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Cpu,
+			AmigaBusAccessKind.CpuDataWrite,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Long,
+			20,
+			isWrite: true);
+
+		var generic = genericEngine.Arbitrate(request, new AmigaBusAccessResult(request, 20, 20));
+		fastEngine.GrantCpuDataLongSlots(
+			request.Kind,
+			request.Target,
+			request.Address,
+			request.RequestedCycle,
+			request.IsWrite,
+			out var firstWordCycle,
+			out var secondWordCycle,
+			out var completed);
+
+		Assert.Equal(generic.GrantedCycle, firstWordCycle);
+		Assert.Equal(generic.GrantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles), secondWordCycle);
+		Assert.Equal(generic.CompletedCycle, completed);
+		Assert.Equal(genericEngine.LastReservation?.CompletedCycle, fastEngine.LastReservation?.CompletedCycle);
+	}
+
+	[Fact]
+	public void ExactCpuChipSlotFastHelperMatchesGenericRefreshContention()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Cpu,
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			0,
+			isWrite: false);
+
+		var generic = genericEngine.Arbitrate(request, new AmigaBusAccessResult(request, 0, 0));
+		fastEngine.GrantCpuDataSingleSlot(
+			request.Kind,
+			request.Target,
+			request.Address,
+			request.Size,
+			request.RequestedCycle,
+			request.IsWrite,
+			out var granted,
+			out var completed);
+
+		Assert.Equal(generic.GrantedCycle, granted);
+		Assert.Equal(generic.CompletedCycle, completed);
+		Assert.True(granted > request.RequestedCycle);
+	}
+
+	[Fact]
+	public void ExactCpuChipSlotFastHelperMatchesGenericDisplaySlotContention()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		const long requestedCycle = 20;
+		genericEngine.ReserveBitplaneDmaSlot(0x2000, requestedCycle);
+		fastEngine.ReserveBitplaneDmaSlot(0x2000, requestedCycle);
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Cpu,
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			requestedCycle,
+			isWrite: false);
+
+		var generic = genericEngine.Arbitrate(request, new AmigaBusAccessResult(request, requestedCycle, requestedCycle));
+		fastEngine.GrantCpuDataSingleSlot(
+			request.Kind,
+			request.Target,
+			request.Address,
+			request.Size,
+			request.RequestedCycle,
+			request.IsWrite,
+			out var granted,
+			out var completed);
+
+		Assert.Equal(generic.GrantedCycle, granted);
+		Assert.Equal(generic.CompletedCycle, completed);
+		Assert.True(granted > requestedCycle);
+	}
+
+	[Fact]
+	public void ExactCpuChipSlotFastHelperMatchesGenericNiceBlitterMisses()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		genericEngine.BlitterPriorityEnabled = false;
+		fastEngine.BlitterPriorityEnabled = false;
+		ReserveBlitterWordSlot(genericEngine, 20);
+		ReserveBlitterWordSlot(genericEngine, 24);
+		ReserveBlitterWordSlot(genericEngine, 28);
+		ReserveBlitterWordSlot(fastEngine, 20);
+		ReserveBlitterWordSlot(fastEngine, 24);
+		ReserveBlitterWordSlot(fastEngine, 28);
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Cpu,
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			20,
+			isWrite: false);
+
+		var generic = genericEngine.Arbitrate(request, new AmigaBusAccessResult(request, 20, 20));
+		fastEngine.GrantCpuDataSingleSlot(
+			request.Kind,
+			request.Target,
+			request.Address,
+			request.Size,
+			request.RequestedCycle,
+			request.IsWrite,
+			out var granted,
+			out var completed);
+
+		Assert.Equal(generic.GrantedCycle, granted);
+		Assert.Equal(generic.CompletedCycle, completed);
+		Assert.Equal(28, granted);
+	}
+
+	[Fact]
 	public void PseudoFastUsesChipSlotSchedulerButRealFastIsZeroWait()
 	{
 		var bus = new AmigaBus(
@@ -76,6 +239,94 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(20, realFastCycle);
 		Assert.Contains(bus.BusAccesses, access => access.Request.Target == AmigaBusAccessTarget.ExpansionRam);
 		Assert.Contains(bus.BusAccesses, access => access.Request.Target == AmigaBusAccessTarget.RealFastRam);
+	}
+
+	[Fact]
+	public void ExactCpuChipFastPathReadsChipRamAndRecordsScalarReservation()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		Write(bus.ChipRam, 0x1000, 0x12, 0x34);
+		var cycle = 20L;
+
+		var value = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(0x1234, value);
+		var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		Assert.Equal(AmigaBusAccessTarget.ChipRam, reservation.Request.Target);
+		Assert.Equal(AmigaBusAccessKind.CpuDataRead, reservation.Request.Kind);
+		Assert.Equal(reservation.CompletedCycle, cycle);
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void ExactCpuChipFastPathWritePreservesPresentationGrantCycle()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		Write(bus.ChipRam, 0x2400, 0x12, 0x34);
+		var cycle = 20L;
+
+		bus.WriteWord(0x00002400, 0x9ABC, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		Assert.Equal(reservation.CompletedCycle, cycle);
+		Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x2400, reservation.GrantedCycle - 1));
+		Assert.Equal(0x9ABC, bus.ReadChipWordForPresentation(0x2400, reservation.GrantedCycle));
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void ExactCpuChipFastPathLongWriteUsesSecondCpuWordCycle()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		Write(bus.ChipRam, 0x2400, 0x12, 0x34, 0x56, 0x78);
+		var cycle = 20L;
+
+		bus.WriteLong(0x00002400, 0x9ABCDEF0, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		var secondWordCycle = reservation.GrantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles);
+		Assert.Equal(reservation.CompletedCycle, cycle);
+		Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x2400, reservation.GrantedCycle - 1));
+		Assert.Equal(0x9ABC, bus.ReadChipWordForPresentation(0x2400, reservation.GrantedCycle));
+		Assert.Equal(0x5678, bus.ReadChipWordForPresentation(0x2402, secondWordCycle - 1));
+		Assert.Equal(0xDEF0, bus.ReadChipWordForPresentation(0x2402, secondWordCycle));
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void ExactCpuChipFastPathUsesChipSlotTimingForExpansionRam()
+	{
+		var bus = new AmigaBus(
+			expansionRamSize: 0x10000,
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true);
+		Write(bus.ExpansionRam, 0, 0xCA, 0xFE);
+		var cycle = 20L;
+
+		var value = bus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(0xCAFE, value);
+		var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		Assert.Equal(AmigaBusAccessTarget.ExpansionRam, reservation.Request.Target);
+		Assert.Equal(reservation.CompletedCycle, cycle);
+		Assert.True(cycle > 20);
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void ExactCpuChipFastPathFallsBackWhenBusAccessCaptureIsEnabled()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		Write(bus.ChipRam, 0x1000, 0x12, 0x34);
+		var cycle = 20L;
+
+		var value = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(0x1234, value);
+		Assert.Contains(bus.BusAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.Request.Target == AmigaBusAccessTarget.ChipRam &&
+			access.Request.Kind == AmigaBusAccessKind.CpuDataRead);
 	}
 
 	[Fact]
@@ -2289,6 +2540,19 @@ public sealed class AmigaBusTimingTests
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
+	}
+
+	private static void ReserveBlitterWordSlot(AgnusHrmSlotEngine engine, long cycle)
+	{
+		var request = new AmigaBusAccessRequest(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			AmigaBusAccessTarget.ChipRam,
+			0x3000,
+			AmigaBusAccessSize.Word,
+			cycle,
+			isWrite: false);
+		_ = engine.Arbitrate(request, new AmigaBusAccessResult(request, cycle, cycle));
 	}
 
 	private static long OutputRowStartCycle(int row)

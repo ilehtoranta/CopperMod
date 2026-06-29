@@ -51,6 +51,9 @@ namespace CopperMod.Amiga
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
+        private const string ExactCpuChipSlotFastPathSwitch = "CopperMod.Amiga.ExactCpuChipSlotFastPath";
+        private const string ExactCpuChipSlotFastPathEnvironmentVariable = "COPPER_AMIGA_EXACT_CPU_CHIP_SLOT_FAST";
+        private const bool ExactCpuChipSlotFastPathDefault = true;
         private const byte CiaAPortAResetLatch = 0xFC;
         private const byte CiaAPortAResetDataDirection = 0x03;
         private const byte CiaAPortAOverlayBit = 0x01;
@@ -77,6 +80,7 @@ namespace CopperMod.Amiga
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
+        private readonly bool _useExactCpuChipSlotFastPath;
         private readonly bool _liveAgnusDmaDefault;
         private readonly AmigaRealTimeClock? _realTimeClock;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
@@ -170,6 +174,7 @@ namespace CopperMod.Amiga
             _useFastZeroWaitAccesses =
                 !captureBusAccesses &&
                 _useChipSlotScheduler;
+            _useExactCpuChipSlotFastPath = ResolveExactCpuChipSlotFastPath();
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
@@ -191,6 +196,33 @@ namespace CopperMod.Amiga
             CiaB.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             AudioDmaMinimumPeriod = audioDmaMinimumPeriod;
+        }
+
+        private static bool ResolveExactCpuChipSlotFastPath()
+        {
+            if (AppContext.TryGetSwitch(ExactCpuChipSlotFastPathSwitch, out var switchEnabled))
+            {
+                return switchEnabled;
+            }
+
+            var value = Environment.GetEnvironmentVariable(ExactCpuChipSlotFastPathEnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return ExactCpuChipSlotFastPathDefault;
+            }
+
+            return value.Trim() switch
+            {
+                "1" => true,
+                "true" => true,
+                "TRUE" => true,
+                "True" => true,
+                "0" => false,
+                "false" => false,
+                "FALSE" => false,
+                "False" => false,
+                _ => ExactCpuChipSlotFastPathDefault
+            };
         }
 
         public Paula Paula { get; }
@@ -588,12 +620,14 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            _ = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Byte,
                 ref cycle,
-                isWrite: false);
+                isWrite: false,
+                out _,
+                out _);
             value = memory[offset];
             return true;
         }
@@ -613,12 +647,14 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            _ = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Word,
                 ref cycle,
-                isWrite: false);
+                isWrite: false,
+                out _,
+                out _);
             value = (ushort)((memory[offset] << 8) | memory[offset + 1]);
             return true;
         }
@@ -638,12 +674,14 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            _ = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Long,
                 ref cycle,
-                isWrite: false);
+                isWrite: false,
+                out _,
+                out _);
             value = ((uint)memory[offset] << 24) |
                 ((uint)memory[offset + 1] << 16) |
                 ((uint)memory[offset + 2] << 8) |
@@ -665,13 +703,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var access = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Byte,
                 ref cycle,
-                isWrite: true);
-            WriteExactCpuDataByte(target, normalizedAddress, memory, offset, value, access.GrantedCycle);
+                isWrite: true,
+                out var grantedCycle,
+                out _);
+            WriteExactCpuDataByte(target, normalizedAddress, memory, offset, value, grantedCycle);
             return true;
         }
 
@@ -689,13 +729,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var access = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Word,
                 ref cycle,
-                isWrite: true);
-            WriteExactCpuDataWord(target, normalizedAddress, memory, offset, value, access.GrantedCycle);
+                isWrite: true,
+                out var grantedCycle,
+                out _);
+            WriteExactCpuDataWord(target, normalizedAddress, memory, offset, value, grantedCycle);
             return true;
         }
 
@@ -713,20 +755,22 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var access = CommitExactCpuDataAccess(
+            CommitExactCpuDataAccess(
                 target,
                 normalizedAddress,
                 AmigaBusAccessSize.Long,
                 ref cycle,
-                isWrite: true);
+                isWrite: true,
+                out var grantedCycle,
+                out var secondWordCycle);
             WriteExactCpuDataLong(
                 target,
                 normalizedAddress,
                 memory,
                 offset,
                 value,
-                access.GrantedCycle,
-                GetSecondWordCycle(access));
+                grantedCycle,
+                secondWordCycle);
             return true;
         }
 
@@ -801,14 +845,30 @@ namespace CopperMod.Amiga
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private AmigaBusAccessResult CommitExactCpuDataAccess(
+        private void CommitExactCpuDataAccess(
             AmigaBusAccessTarget target,
             uint address,
             AmigaBusAccessSize size,
             ref long cycle,
-            bool isWrite)
+            bool isWrite,
+            out long grantedCycle,
+            out long secondWordCycle)
         {
             var requestedCycle = cycle;
+            if (TryCommitExactCpuChipDataAccessFast(
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out secondWordCycle,
+                out var completedCycle))
+            {
+                cycle = completedCycle;
+                return;
+            }
+
             var access = GrantFastCpuAccess(
                 target,
                 address,
@@ -818,7 +878,84 @@ namespace CopperMod.Amiga
                 isWrite);
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite);
             cycle = access.CompletedCycle;
-            return access;
+            grantedCycle = access.GrantedCycle;
+            secondWordCycle = GetSecondWordCycle(access);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryCommitExactCpuChipDataAccessFast(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long secondWordCycle,
+            out long completedCycle)
+        {
+            grantedCycle = 0;
+            secondWordCycle = 0;
+            completedCycle = 0;
+            if (!_useExactCpuChipSlotFastPath ||
+                !_useFastZeroWaitAccesses ||
+                _captureBusAccesses ||
+                (target != AmigaBusAccessTarget.ChipRam && target != AmigaBusAccessTarget.ExpansionRam) ||
+                !ShouldUseChipSlotScheduler(target))
+            {
+                return false;
+            }
+
+            var grantRequestCycle = requestedCycle;
+            _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite);
+            grantRequestCycle = Blitter.AdvanceThroughCpuStall(grantRequestCycle);
+            grantRequestCycle = Math.Max(0, grantRequestCycle);
+            _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
+            PrepareLiveDisplayBeforeExactCpuChipGrantIfNeeded(size, grantRequestCycle);
+
+            if (size == AmigaBusAccessSize.Long)
+            {
+                _hrmSlotEngine.GrantCpuDataLongSlots(
+                    isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                    target,
+                    address,
+                    grantRequestCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out completedCycle);
+            }
+            else
+            {
+                _hrmSlotEngine.GrantCpuDataSingleSlot(
+                    isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle);
+                secondWordCycle = grantedCycle;
+            }
+
+            Agnus.RecordCpuChipWaitCycles(grantedCycle - grantRequestCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrepareLiveDisplayBeforeExactCpuChipGrantIfNeeded(
+            AmigaBusAccessSize size,
+            long grantCycle)
+        {
+            if (!LiveAgnusDmaEnabled ||
+                size != AmigaBusAccessSize.Word ||
+                !Display.HasLiveDisplayWork())
+            {
+                return;
+            }
+
+            Display.CaptureLiveDisplayDmaBeforeHrmGrant(grantCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
