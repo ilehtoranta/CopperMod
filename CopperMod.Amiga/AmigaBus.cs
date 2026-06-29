@@ -37,6 +37,7 @@ namespace CopperMod.Amiga
         IM68kCodeReader,
         IM68kPhysicalAddressMap,
         IM68kFastMemoryBus,
+        IM68kExactCpuDataBus,
         IM68kInstructionFetchWindowBus,
         IM68kJitBus,
         IM68kJitFastMemoryBus,
@@ -552,6 +553,359 @@ namespace CopperMod.Amiga
             _ = accessKind;
             WriteHostLong(address, value);
             return true;
+        }
+
+        bool IM68kExactCpuDataBus.TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
+            => TryReadExactCpuDataByte(address, ref cycle, out value);
+
+        bool IM68kExactCpuDataBus.TryReadExactCpuDataWord(uint address, ref long cycle, out ushort value)
+            => TryReadExactCpuDataWord(address, ref cycle, out value);
+
+        bool IM68kExactCpuDataBus.TryReadExactCpuDataLong(uint address, ref long cycle, out uint value)
+            => TryReadExactCpuDataLong(address, ref cycle, out value);
+
+        bool IM68kExactCpuDataBus.TryWriteExactCpuDataByte(uint address, byte value, ref long cycle)
+            => TryWriteExactCpuDataByte(address, value, ref cycle);
+
+        bool IM68kExactCpuDataBus.TryWriteExactCpuDataWord(uint address, ushort value, ref long cycle)
+            => TryWriteExactCpuDataWord(address, value, ref cycle);
+
+        bool IM68kExactCpuDataBus.TryWriteExactCpuDataLong(uint address, uint value, ref long cycle)
+            => TryWriteExactCpuDataLong(address, value, ref cycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                1,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                value = 0;
+                return false;
+            }
+
+            _ = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Byte,
+                ref cycle,
+                isWrite: false);
+            value = memory[offset];
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadExactCpuDataWord(uint address, ref long cycle, out ushort value)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                2,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                value = 0;
+                return false;
+            }
+
+            _ = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Word,
+                ref cycle,
+                isWrite: false);
+            value = (ushort)((memory[offset] << 8) | memory[offset + 1]);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadExactCpuDataLong(uint address, ref long cycle, out uint value)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                4,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                value = 0;
+                return false;
+            }
+
+            _ = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Long,
+                ref cycle,
+                isWrite: false);
+            value = ((uint)memory[offset] << 24) |
+                ((uint)memory[offset + 1] << 16) |
+                ((uint)memory[offset + 2] << 8) |
+                memory[offset + 3];
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteExactCpuDataByte(uint address, byte value, ref long cycle)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                1,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                return false;
+            }
+
+            var access = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Byte,
+                ref cycle,
+                isWrite: true);
+            WriteExactCpuDataByte(target, normalizedAddress, memory, offset, value, access.GrantedCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteExactCpuDataWord(uint address, ushort value, ref long cycle)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                2,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                return false;
+            }
+
+            var access = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Word,
+                ref cycle,
+                isWrite: true);
+            WriteExactCpuDataWord(target, normalizedAddress, memory, offset, value, access.GrantedCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteExactCpuDataLong(uint address, uint value, ref long cycle)
+        {
+            if (!TryGetExactCpuDataMemory(
+                address,
+                4,
+                out var normalizedAddress,
+                out var target,
+                out var memory,
+                out var offset))
+            {
+                return false;
+            }
+
+            var access = CommitExactCpuDataAccess(
+                target,
+                normalizedAddress,
+                AmigaBusAccessSize.Long,
+                ref cycle,
+                isWrite: true);
+            WriteExactCpuDataLong(
+                target,
+                normalizedAddress,
+                memory,
+                offset,
+                value,
+                access.GrantedCycle,
+                GetSecondWordCycle(access));
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryGetExactCpuDataMemory(
+            uint address,
+            int byteCount,
+            out uint normalizedAddress,
+            out AmigaBusAccessTarget target,
+            out byte[] memory,
+            out int offset)
+        {
+            normalizedAddress = NormalizeAddress(address);
+            target = AmigaBusAccessTarget.Unmapped;
+            memory = Array.Empty<byte>();
+            offset = 0;
+            if (!_useFastZeroWaitAccesses ||
+                byteCount <= 0 ||
+                (ulong)normalizedAddress + (ulong)byteCount > 0x0100_0000UL)
+            {
+                return false;
+            }
+
+            var lastAddress = normalizedAddress + (uint)(byteCount - 1);
+            if (IsRomOverlayAddress(normalizedAddress) ||
+                IsRomOverlayAddress(lastAddress))
+            {
+                return false;
+            }
+
+            if (_chipRam.Length != 0 &&
+                normalizedAddress < _chipRamDecodeSize &&
+                (ulong)normalizedAddress + (ulong)byteCount <= (ulong)_chipRamDecodeSize)
+            {
+                var chipOffset = (int)(normalizedAddress & ((uint)_chipRam.Length - 1u));
+                if ((ulong)chipOffset + (ulong)byteCount <= (ulong)_chipRam.Length)
+                {
+                    target = AmigaBusAccessTarget.ChipRam;
+                    memory = _chipRam;
+                    offset = chipOffset;
+                    return true;
+                }
+            }
+
+            if (_realFastRam.Length != 0 &&
+                normalizedAddress >= RealFastRamBase)
+            {
+                var realFastOffset = normalizedAddress - RealFastRamBase;
+                if ((ulong)realFastOffset + (ulong)byteCount <= (ulong)_realFastRam.Length)
+                {
+                    target = AmigaBusAccessTarget.RealFastRam;
+                    memory = _realFastRam;
+                    offset = (int)realFastOffset;
+                    return true;
+                }
+            }
+
+            if (_expansionRam.Length != 0 &&
+                normalizedAddress >= ExpansionRamBase)
+            {
+                var expansionOffset = normalizedAddress - ExpansionRamBase;
+                if ((ulong)expansionOffset + (ulong)byteCount <= (ulong)_expansionRam.Length)
+                {
+                    target = AmigaBusAccessTarget.ExpansionRam;
+                    memory = _expansionRam;
+                    offset = (int)expansionOffset;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private AmigaBusAccessResult CommitExactCpuDataAccess(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            ref long cycle,
+            bool isWrite)
+        {
+            var requestedCycle = cycle;
+            var access = GrantFastCpuAccess(
+                target,
+                address,
+                size,
+                cycle,
+                isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                isWrite);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite);
+            cycle = access.CompletedCycle;
+            return access;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteExactCpuDataByte(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte[] memory,
+            int offset,
+            byte value,
+            long grantedCycle)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam)
+            {
+                _presentationWriteHistory.RecordByte(offset, memory[offset], value, grantedCycle);
+                memory[offset] = value;
+                TouchCodePage(address);
+                return;
+            }
+
+            memory[offset] = value;
+            TouchCodePage(address);
+            NotifyJitEligibleMemoryWritten(address, 1);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteExactCpuDataWord(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte[] memory,
+            int offset,
+            ushort value,
+            long grantedCycle)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam)
+            {
+                _presentationWriteHistory.RecordByte(offset, memory[offset], (byte)(value >> 8), grantedCycle);
+                _presentationWriteHistory.RecordByte(offset + 1, memory[offset + 1], (byte)value, grantedCycle);
+                memory[offset] = (byte)(value >> 8);
+                memory[offset + 1] = (byte)value;
+                TouchCodePage(address);
+                TouchCodePage(address + 1);
+                return;
+            }
+
+            memory[offset] = (byte)(value >> 8);
+            memory[offset + 1] = (byte)value;
+            TouchCodePage(address);
+            TouchCodePage(address + 1);
+            NotifyJitEligibleMemoryWritten(address, 2);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteExactCpuDataLong(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte[] memory,
+            int offset,
+            uint value,
+            long firstWordCycle,
+            long secondWordCycle)
+        {
+            if (target == AmigaBusAccessTarget.ChipRam)
+            {
+                _presentationWriteHistory.RecordByte(offset, memory[offset], (byte)(value >> 24), firstWordCycle);
+                _presentationWriteHistory.RecordByte(offset + 1, memory[offset + 1], (byte)(value >> 16), firstWordCycle);
+                _presentationWriteHistory.RecordByte(offset + 2, memory[offset + 2], (byte)(value >> 8), secondWordCycle);
+                _presentationWriteHistory.RecordByte(offset + 3, memory[offset + 3], (byte)value, secondWordCycle);
+                memory[offset] = (byte)(value >> 24);
+                memory[offset + 1] = (byte)(value >> 16);
+                memory[offset + 2] = (byte)(value >> 8);
+                memory[offset + 3] = (byte)value;
+                TouchCodePage(address);
+                TouchCodePage(address + 1);
+                TouchCodePage(address + 2);
+                TouchCodePage(address + 3);
+                return;
+            }
+
+            memory[offset] = (byte)(value >> 24);
+            memory[offset + 1] = (byte)(value >> 16);
+            memory[offset + 2] = (byte)(value >> 8);
+            memory[offset + 3] = (byte)value;
+            TouchCodePage(address);
+            TouchCodePage(address + 1);
+            TouchCodePage(address + 2);
+            TouchCodePage(address + 3);
+            NotifyJitEligibleMemoryWritten(address, 4);
         }
 
         bool IM68kInstructionFetchWindowBus.TryGetInstructionFetchWindow(
@@ -1958,8 +2312,26 @@ namespace CopperMod.Amiga
                 targetCycle,
                 AmigaHardwareEventMask.All | AmigaHardwareEventMask.CpuBoundary);
 
+        public void AdvanceHardwareEventsTo(long targetCycle, int cpuInterruptMask)
+        {
+            var mask = (AmigaHardwareEventMask.All & ~AmigaHardwareEventMask.PaulaRegister) |
+                AmigaHardwareEventMask.CpuBoundary;
+            if (Paula.HasCpuWakeWorkThrough(targetCycle, cpuInterruptMask))
+            {
+                mask |= AmigaHardwareEventMask.PaulaRegister;
+            }
+
+            _hardwareScheduler.DrainTo(targetCycle, mask);
+        }
+
         public AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot()
             => _hardwareScheduler.CaptureSnapshot();
+
+        public void SetHardwareSchedulerHostProfilingEnabled(bool enabled)
+            => _hardwareScheduler.HostProfilingEnabled = enabled;
+
+        public void ResetHardwareSchedulerHostProfile()
+            => _hardwareScheduler.ResetHostProfile();
 
         internal bool TrySkipRasterlineScheduleDrain(
             long currentCycle,

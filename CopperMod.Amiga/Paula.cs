@@ -60,6 +60,8 @@ namespace CopperMod.Amiga
 
         public ushort Intreq => _registerTimeline.Intreq;
 
+        internal ulong RegisterWakeVersion => _registerWakeVersion;
+
         public ushort ActiveInterruptBits
         {
             get
@@ -313,6 +315,30 @@ namespace CopperMod.Amiga
             return candidate == long.MaxValue
                 ? null
                 : ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        internal long? GetNextCpuWakeCandidateCycle(long currentCycle, long targetCycle, int cpuInterruptMask)
+        {
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            var candidate = GetCpuWakeCandidateCycle(cpuInterruptMask);
+            return candidate == long.MaxValue
+                ? null
+                : ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        internal bool HasCpuWakeWorkThrough(long targetCycle, int cpuInterruptMask)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            if (targetCycle < _registerTimeline.LastCycle)
+            {
+                return false;
+            }
+
+            return GetCpuWakeCandidateCycle(cpuInterruptMask) <= targetCycle;
         }
 
         public PaulaChannelSnapshot GetChannelSnapshot(int channel)
@@ -938,11 +964,7 @@ namespace CopperMod.Amiga
                 return _registerWakeCandidateCycle;
             }
 
-            var candidate = long.MaxValue;
-            if (_registerTimeline.PendingWriteIndex < _pendingWrites.Count)
-            {
-                candidate = Math.Min(candidate, _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle);
-            }
+            var candidate = GetPendingRegisterWriteCycle();
 
             for (var i = 0; i < _registerTimeline.Channels.Length; i++)
             {
@@ -958,6 +980,44 @@ namespace CopperMod.Amiga
             _registerWakeCandidateCycle = candidate;
             _registerWakeCandidateVersion = _registerWakeVersion;
             return candidate;
+        }
+
+        private long GetPendingRegisterWriteCycle()
+            => _registerTimeline.PendingWriteIndex < _pendingWrites.Count
+                ? _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle
+                : long.MaxValue;
+
+        private long GetCpuWakeCandidateCycle(int cpuInterruptMask)
+        {
+            var candidate = GetPendingRegisterWriteCycle();
+            if (!CanAudioInterruptReachCpu(cpuInterruptMask))
+            {
+                return candidate;
+            }
+
+            for (var i = 0; i < _registerTimeline.Channels.Length; i++)
+            {
+                var channelCandidate = _registerTimeline.Channels[i].GetNextRegisterWakeCandidateCycle(
+                    _registerTimeline,
+                    this);
+                if (channelCandidate.HasValue)
+                {
+                    candidate = Math.Min(candidate, channelCandidate.Value);
+                }
+            }
+
+            return candidate;
+        }
+
+        private bool CanAudioInterruptReachCpu(int cpuInterruptMask)
+        {
+            if ((_registerTimeline.Intena & IntenaMasterEnable) == 0 ||
+                (_registerTimeline.Intena & AudioInterruptMask) == 0)
+            {
+                return false;
+            }
+
+            return cpuInterruptMask < 0 || GetHighestInterruptLevel(AudioInterruptMask) > (cpuInterruptMask & 0x07);
         }
 
         private static long? MinWakeCandidate(long? candidate, long? eventCycle)

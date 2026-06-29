@@ -209,6 +209,7 @@ namespace CopperMod.Amiga
         private long _liveDisplayWakeCandidateCacheCapturedThroughCycle;
         private bool _liveDisplayWakeCandidateCacheHasValue;
         private long _liveDisplayWakeCandidateCacheValue;
+        private ulong _liveWakeVersion;
         private bool _liveCopperWaitCycleValid;
         private ushort _liveCopperWaitFirst;
         private ushort _liveCopperWaitSecond;
@@ -366,6 +367,8 @@ namespace CopperMod.Amiga
         internal int BitplaneDataSpanCount => _bitplaneDataSpans.Count;
 
         internal bool LiveDmaEnabled => _liveDmaEnabled;
+
+        internal ulong LiveWakeVersion => _liveWakeVersion;
 
         internal bool HasLiveDmaCapturedThrough(long cycle)
         {
@@ -834,6 +837,7 @@ namespace CopperMod.Amiga
             _archivedPaletteSnapshotCount = 0;
             _displayTimeline.Reset(0);
             _archivedDisplayTimeline.Reset(long.MinValue);
+            _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
             ClearLiveFrameCapture(0);
         }
@@ -908,6 +912,7 @@ namespace CopperMod.Amiga
             }
 
             _pendingWrites.Insert(insertIndex, pending);
+            _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
             if (!_advancingLiveDma && _liveFrameValid && cycle <= _liveCapturedThroughCycle)
             {
@@ -1563,6 +1568,11 @@ namespace CopperMod.Amiga
                     break;
                 case TimelineRejectReason.UnsafeLine:
                     _lastArchiveRejectUnsafeLine++;
+                    if (TryFindFirstUnsafeTimelineLine(_displayTimeline, out var unsafeOffset, out var unsafeIsCopper))
+                    {
+                        _lastArchiveRejectUnsafeOffset = unsafeOffset;
+                        _lastArchiveRejectUnsafeIsCopper = unsafeIsCopper;
+                    }
                     break;
                 case TimelineRejectReason.MissingBitplaneFetch:
                     _lastArchiveRejectMissingBitplaneFetch++;
@@ -1686,6 +1696,7 @@ namespace CopperMod.Amiga
             _liveTimelineUnsafeOffset = 0;
             _liveTimelineUnsafeIsCopper = false;
             AdvanceLiveGeneration();
+            _liveWakeVersion++;
             _displayTimeline.Reset(frameStartCycle);
             _spriteFrameCommands.Clear();
             CaptureInitialManualSpriteFrameCommands();
@@ -3357,18 +3368,26 @@ namespace CopperMod.Amiga
 
             if (!suppressMove && CanCopperWriteRegister(register))
             {
-                _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
-                AdvanceLiveDisplayWindowStateToCycle(dataCycle);
-                EnsureTimelineLineStartedBeforeDisplayWrite(dataCycle);
-                if (dataCycle > _liveFrameStartCycle && register is 0x08E or 0x090)
+                var affectsDisplay = IsDisplayRegisterWrite(register);
+                if (affectsDisplay)
                 {
-                    _liveFrameHasLateDisplayWindowWrites = true;
+                    _currentCopperRow = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle);
+                    AdvanceLiveDisplayWindowStateToCycle(dataCycle);
+                    EnsureTimelineLineStartedBeforeDisplayWrite(dataCycle);
+                    if (dataCycle > _liveFrameStartCycle && register is 0x08E or 0x090)
+                    {
+                        _liveFrameHasLateDisplayWindowWrites = true;
+                    }
                 }
 
                 ApplyCopperMove(register, value, dataCycle, applyHardwareSideEffects: true);
-                RecordLiveFrameWrite(dataCycle, register, value, isCopper: true);
-                RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
-                RecordTimelineDisplayWrite(dataCycle, register, isCopper: true);
+                if (affectsDisplay)
+                {
+                    RecordLiveFrameWrite(dataCycle, register, value, isCopper: true);
+                    RefreshLiveLineStateAfterDisplayStateChange(dataCycle);
+                    RecordTimelineDisplayWrite(dataCycle, register, isCopper: true);
+                }
+
                 if (register == 0x088)
                 {
                     _liveCopper.JumpTo(_copperListPointer, dataCycle);
@@ -4847,6 +4866,8 @@ namespace CopperMod.Amiga
             var savedRenderingArchivedTimeline = _renderingArchivedTimeline;
             _renderingArchivedTimeline = useArchivedPalette;
             _trackDisplayWindowState = true;
+            _bitplaneDataSpans.Clear();
+            timeline.CopyBitplaneDataSpansTo(_bitplaneDataSpans);
             try
             {
                 var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
@@ -5700,16 +5721,17 @@ namespace CopperMod.Amiga
             DisplayTimelineState state,
             DisplayFrameTimeline timeline)
         {
+            var hasBitplaneDataSpans = HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop);
             if (state.PlaneCount <= 0 || !IsBitplaneDmaEnabled(state.Dmacon))
             {
-                return true;
+                return !hasBitplaneDataSpans;
             }
 
             var highResolution = IsHighResolutionEnabled(state.Bplcon0);
             var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
             if ((state.Bplcon0 & 0x0800) != 0 ||
                 (!highResolution && (state.Bplcon0 & 0x0004) != 0) ||
-                HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop) ||
+                hasBitplaneDataSpans ||
                 (highResolution && (dualPlayfield || (state.Bplcon1 & 0x00FF) != 0)))
             {
                 return false;
@@ -8335,6 +8357,11 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (!IsDisplayRegisterWrite(offset))
+            {
+                return;
+            }
+
             if (IsTimelineSpritePointerWrite(offset))
             {
                 return;
@@ -8379,11 +8406,36 @@ namespace CopperMod.Amiga
                 row,
                 x,
                 snapshotIndex,
-                IsTimelineUnsafeDisplayWrite(offset));
+                IsTimelineUnsafeDisplayWrite(offset),
+                offset,
+                isCopper);
             if (_displayTimeline.SegmentCount > MaxTimelineSegmentsPerFrame)
             {
                 _liveTimelineUnsafeForFrame = true;
             }
+        }
+
+        private static bool TryFindFirstUnsafeTimelineLine(DisplayFrameTimeline timeline, out ushort offset, out bool isCopper)
+        {
+            for (var row = 0; row < LowResOutputHeight; row++)
+            {
+                if (!timeline.HasLine(row))
+                {
+                    continue;
+                }
+
+                var line = timeline.GetLine(row);
+                if (line.UnsafeForTimelineRender)
+                {
+                    offset = line.UnsafeOffset;
+                    isCopper = line.UnsafeIsCopper;
+                    return true;
+                }
+            }
+
+            offset = 0;
+            isCopper = false;
+            return false;
         }
 
         private int CaptureTimelineStateSnapshot(int row, LiveLineState fallbackState)
@@ -8449,7 +8501,12 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (offset is 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102 or 0x104 or 0x108 or 0x10A)
+            if (offset >= 0x110 && offset <= 0x11A)
+            {
+                return false;
+            }
+
+            if (offset is 0x02E or 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102 or 0x104 or 0x108 or 0x10A)
             {
                 return false;
             }
@@ -8774,7 +8831,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            _bitplaneDataSpans.Add(new BitplaneDataSpan(
+            var span = new BitplaneDataSpan(
                 row,
                 xStart,
                 xStop,
@@ -8783,7 +8840,16 @@ namespace CopperMod.Amiga
                 _bitplaneDataRegisters[2],
                 _bitplaneDataRegisters[3],
                 _bitplaneDataRegisters[4],
-                _bitplaneDataRegisters[5]));
+                _bitplaneDataRegisters[5]);
+            _bitplaneDataSpans.Add(span);
+            if (_advancingLiveDma &&
+                _liveFrameValid &&
+                !_liveTimelineUnsafeForFrame &&
+                cycle >= _liveFrameStartCycle &&
+                cycle < _liveFrameStartCycle + PalFrameCycles)
+            {
+                _displayTimeline.RecordBitplaneDataSpan(span);
+            }
         }
 
         private bool TryGetBitplaneDataWritePosition(long cycle, out int row, out int xStart)
@@ -11999,6 +12065,7 @@ namespace CopperMod.Amiga
             private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[LowResOutputHeight];
             private readonly List<DisplayTimelineState> _states = new List<DisplayTimelineState>(1024);
             private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
+            private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
             private readonly Dictionary<PlanarChunkKey, PlanarChunkDecoded> _planarChunkCache = new Dictionary<PlanarChunkKey, PlanarChunkDecoded>(4096);
             private long _frameStartCycle;
             private int _generation = 1;
@@ -12053,6 +12120,7 @@ namespace CopperMod.Amiga
                 SpriteDeniedFetchCount = 0;
                 _stateCount = 0;
                 _spriteFrameCommands.Clear();
+                _bitplaneDataSpans.Clear();
                 _planarChunkCache.Clear();
                 _generation++;
                 if (_generation != int.MaxValue)
@@ -12092,6 +12160,14 @@ namespace CopperMod.Amiga
                     if (_spriteFrameCommands[i].Row >= row)
                     {
                         _spriteFrameCommands.RemoveAt(i);
+                    }
+                }
+
+                for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+                {
+                    if (_bitplaneDataSpans[i].Row >= row)
+                    {
+                        _bitplaneDataSpans.RemoveAt(i);
                     }
                 }
 
@@ -12208,6 +12284,25 @@ namespace CopperMod.Amiga
                     _lines[row].Valid;
             }
 
+            public void RecordBitplaneDataSpan(BitplaneDataSpan span)
+            {
+                if (_bitplaneDataSpans.Count >= MaxBitplaneDataSpans)
+                {
+                    return;
+                }
+
+                _bitplaneDataSpans.Add(span);
+                _planarChunkCache.Clear();
+            }
+
+            public void CopyBitplaneDataSpansTo(List<BitplaneDataSpan> destination)
+            {
+                for (var i = 0; i < _bitplaneDataSpans.Count; i++)
+                {
+                    destination.Add(_bitplaneDataSpans[i]);
+                }
+            }
+
             public bool TryGetBitplaneFetchLine(int row, out DisplayLineTimeline line)
             {
                 if ((uint)row >= (uint)_lines.Length)
@@ -12240,7 +12335,13 @@ namespace CopperMod.Amiga
                 SegmentCount++;
             }
 
-            public void RecordDisplayChange(int row, int x, int stateIndex, bool unsafeForTimelineRender)
+            public void RecordDisplayChange(
+                int row,
+                int x,
+                int stateIndex,
+                bool unsafeForTimelineRender,
+                ushort offset,
+                bool isCopper)
             {
                 if ((uint)row >= (uint)_lines.Length)
                 {
@@ -12256,6 +12357,8 @@ namespace CopperMod.Amiga
                 if (unsafeForTimelineRender)
                 {
                     line.UnsafeForTimelineRender = true;
+                    line.UnsafeOffset = (ushort)(offset & 0x01FE);
+                    line.UnsafeIsCopper = isCopper;
                 }
 
                 x = Math.Clamp(x, 0, AmigaConstants.PalLowResWidth);
@@ -12546,6 +12649,8 @@ namespace CopperMod.Amiga
             public int Generation;
             public bool Valid;
             public bool UnsafeForTimelineRender;
+            public ushort UnsafeOffset;
+            public bool UnsafeIsCopper;
 
             public int SegmentCount => Segments.Count;
 
@@ -12554,6 +12659,8 @@ namespace CopperMod.Amiga
                 Segments.Clear();
                 Valid = false;
                 UnsafeForTimelineRender = false;
+                UnsafeOffset = 0;
+                UnsafeIsCopper = false;
                 Array.Clear(BitplaneFetchMasks);
                 Array.Clear(BitplaneDeniedMasks);
                 Array.Clear(SpriteFetchMasks);

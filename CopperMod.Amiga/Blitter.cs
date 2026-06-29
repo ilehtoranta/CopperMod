@@ -527,6 +527,7 @@ namespace CopperMod.Amiga
         private long _lastDmaCycle;
         private int _completedMicroOps;
         private bool _completionPending;
+        private ulong _wakeVersion;
         private readonly List<DeferredRegisterWrite> _deferredRegisterWrites = new List<DeferredRegisterWrite>();
         private bool _deferredRestartPending;
         private ushort _deferredRestartBltsize;
@@ -631,6 +632,7 @@ namespace CopperMod.Amiga
             _lastDmaCycle = 0;
             _completedMicroOps = 0;
             _completionPending = false;
+            _wakeVersion++;
             _deferredRegisterWrites.Clear();
             _deferredRestartPending = false;
             _deferredRestartBltsize = 0;
@@ -665,6 +667,8 @@ namespace CopperMod.Amiga
 
         public bool Busy => _busy;
 
+        internal ulong WakeVersion => _wakeVersion;
+
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
@@ -675,16 +679,19 @@ namespace CopperMod.Amiga
                 {
                     _deferredRestartPending = true;
                     _deferredRestartBltsize = value;
+                    _wakeVersion++;
                     return;
                 }
 
                 StartBlit(value, cycle);
+                _wakeVersion++;
                 return;
             }
 
             if (_busy && ShouldDeferBusyRegisterWrite(offset))
             {
                 _deferredRegisterWrites.Add(new DeferredRegisterWrite(offset, value));
+                _wakeVersion++;
                 return;
             }
 
@@ -693,6 +700,8 @@ namespace CopperMod.Amiga
             {
                 _useD = false;
             }
+
+            _wakeVersion++;
         }
 
         private void ApplyRegisterWrite(ushort offset, ushort value)
@@ -772,44 +781,59 @@ namespace CopperMod.Amiga
         public void AdvanceTo(long targetCycle)
         {
             System.Diagnostics.Debug.Assert(targetCycle >= 0, "Blitter advance cycles must be non-negative.");
-            if (!_busy)
+            var previousCycle = _currentCycle;
+            var previousBusy = _busy;
+            var previousCompletionPending = _completionPending;
+            try
             {
-                _currentCycle = Math.Max(_currentCycle, targetCycle);
-                return;
-            }
-
-            while (_busy)
-            {
-                if (_completionPending)
-                {
-                    if (_currentCycle > targetCycle)
-                    {
-                        return;
-                    }
-
-                    FinalizePendingCompletion();
-                    continue;
-                }
-
-                if (RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
+                if (!_busy)
                 {
                     _currentCycle = Math.Max(_currentCycle, targetCycle);
                     return;
                 }
 
-                var stepEndCycle = GetCurrentStepEndCycle();
-                if (stepEndCycle > targetCycle)
+                while (_busy)
                 {
-                    return;
-                }
+                    if (_completionPending)
+                    {
+                        if (_currentCycle > targetCycle)
+                        {
+                            return;
+                        }
 
-                if (_lineMode)
-                {
-                    StepLinePixel(targetCycle);
+                        FinalizePendingCompletion();
+                        continue;
+                    }
+
+                    if (RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
+                    {
+                        _currentCycle = Math.Max(_currentCycle, targetCycle);
+                        return;
+                    }
+
+                    var stepEndCycle = GetCurrentStepEndCycle();
+                    if (stepEndCycle > targetCycle)
+                    {
+                        return;
+                    }
+
+                    if (_lineMode)
+                    {
+                        StepLinePixel(targetCycle);
+                    }
+                    else
+                    {
+                        StepAreaWord(targetCycle);
+                    }
                 }
-                else
+            }
+            finally
+            {
+                if (_currentCycle != previousCycle ||
+                    _busy != previousBusy ||
+                    _completionPending != previousCompletionPending)
                 {
-                    StepAreaWord(targetCycle);
+                    _wakeVersion++;
                 }
             }
         }

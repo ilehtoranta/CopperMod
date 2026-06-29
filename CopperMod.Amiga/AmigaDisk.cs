@@ -647,6 +647,7 @@ namespace CopperMod.Amiga
         private AmigaEncodedTrack? _cachedTrack;
         private int _cachedTrackCylinder = -1;
         private int _cachedTrackHead = -1;
+        private ulong _wakeVersion;
 
         public IAmigaDiskImage? Disk { get; private set; }
 
@@ -666,12 +667,15 @@ namespace CopperMod.Amiga
 
         public bool WriteProtected { get; private set; }
 
+        internal ulong WakeVersion => _wakeVersion;
+
         public void Insert(IAmigaDiskImage disk, bool markChanged = false, bool? writeProtected = null)
         {
             Disk = disk ?? throw new ArgumentNullException(nameof(disk));
             DiskChanged = markChanged;
             WriteProtected = writeProtected ?? disk.DefaultWriteProtected;
             ClearTrackCache();
+            _wakeVersion++;
         }
 
         public void Eject()
@@ -680,6 +684,7 @@ namespace CopperMod.Amiga
             DiskChanged = true;
             WriteProtected = false;
             ClearTrackCache();
+            _wakeVersion++;
         }
 
         public void ResetPosition()
@@ -690,6 +695,7 @@ namespace CopperMod.Amiga
             MotorOnCycle = 0;
             Selected = false;
             ClearTrackCache();
+            _wakeVersion++;
         }
 
         public void SetHead(int head)
@@ -702,6 +708,7 @@ namespace CopperMod.Amiga
 
             Head = normalizedHead;
             ClearTrackCache();
+            _wakeVersion++;
         }
 
         public void SetMotorOn(bool motorOn)
@@ -718,16 +725,29 @@ namespace CopperMod.Amiga
 
             MotorOn = motorOn;
             MotorOnCycle = motorOn ? cycle : 0;
+            _wakeVersion++;
         }
 
         public void SetSelected(bool selected)
         {
+            if (Selected == selected)
+            {
+                return;
+            }
+
             Selected = selected;
+            _wakeVersion++;
         }
 
         public void SetWriteProtected(bool writeProtected)
         {
+            if (WriteProtected == writeProtected)
+            {
+                return;
+            }
+
             WriteProtected = writeProtected;
+            _wakeVersion++;
         }
 
         public void Step(int delta)
@@ -737,6 +757,7 @@ namespace CopperMod.Amiga
             {
                 Cylinder = cylinder;
                 ClearTrackCache();
+                _wakeVersion++;
             }
 
             if (Disk != null)
@@ -919,6 +940,7 @@ namespace CopperMod.Amiga
         private long _schedulerSyncCandidateWakeSources;
         private long _schedulerIndexPulseWakeSources;
         private long _schedulerPassiveByteReadyWakeSources;
+        private ulong _schedulerWakeVersion;
 
         public AmigaDiskController(AmigaBus bus, int connectedDriveCount = 1, bool enableSpecialization = false)
         {
@@ -955,6 +977,21 @@ namespace CopperMod.Amiga
         public int TransferCount => _transferCount;
 
         public bool DivergenceTraceEnabled => _traceRecorder != null;
+
+        internal ulong SchedulerWakeVersion
+        {
+            get
+            {
+                unchecked
+                {
+                    return _schedulerWakeVersion ^
+                        (Drive0.WakeVersion * 397UL) ^
+                        (Drive1.WakeVersion * 1543UL) ^
+                        (Drive2.WakeVersion * 6151UL) ^
+                        (Drive3.WakeVersion * 24593UL);
+                }
+            }
+        }
 
         internal void ConfigureDivergenceTrace(string backend, Func<AmigaDiskTraceCpuContext>? cpuContextProvider)
             => _traceRecorder?.Configure(backend, cpuContextProvider);
@@ -1082,6 +1119,8 @@ namespace CopperMod.Amiga
             {
                 drive.ResetPosition();
             }
+
+            _schedulerWakeVersion++;
         }
 
         public void AdvanceTo(long targetCycle)
@@ -1093,7 +1132,12 @@ namespace CopperMod.Amiga
 
             if (CanSkipAdvanceTo(targetCycle))
             {
-                _currentCycle = targetCycle;
+                if (_currentCycle != targetCycle)
+                {
+                    _currentCycle = targetCycle;
+                    _schedulerWakeVersion++;
+                }
+
                 return;
             }
 
@@ -1113,6 +1157,7 @@ namespace CopperMod.Amiga
             }
 
             AdvanceIndexPulsesTo(targetCycle);
+            _schedulerWakeVersion++;
         }
 
         public void AdvanceEventsTo(long targetCycle)
@@ -1135,9 +1180,15 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            var previousCycle = _currentCycle;
             _currentCycle = targetCycle;
             if (!hasEvent)
             {
+                if (previousCycle != _currentCycle)
+                {
+                    _schedulerWakeVersion++;
+                }
+
                 return;
             }
 
@@ -1160,6 +1211,8 @@ namespace CopperMod.Amiga
             {
                 AdvanceIndexPulsesTo(targetCycle);
             }
+
+            _schedulerWakeVersion++;
         }
 
         public void AdvanceCiaEventsTo(long targetCycle)
@@ -1175,8 +1228,13 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            var previousCycle = _currentCycle;
             _currentCycle = targetCycle;
             AdvanceIndexPulsesTo(targetCycle);
+            if (previousCycle != _currentCycle || targetCycle >= _nextIndexPulseCycle)
+            {
+                _schedulerWakeVersion++;
+            }
         }
 
         private void AdvanceIndexPulsesTo(long targetCycle)
@@ -1791,6 +1849,8 @@ namespace CopperMod.Amiga
                     AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
             }
+
+            _schedulerWakeVersion++;
         }
 
         public void WriteCiaBRegister(int register, byte value, long cycle)
@@ -1864,6 +1924,7 @@ namespace CopperMod.Amiga
             }
 
             TryStartPendingDma(cycle);
+            _schedulerWakeVersion++;
         }
 
         private void AdvanceDriveControlStreamsTo(long cycle)

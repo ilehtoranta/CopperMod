@@ -1213,6 +1213,72 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void WakeAgendaSkipsRepeatedSlotContendedReadsBeforeNextHardwareEvent()
+	{
+		var bus = new AmigaBus();
+		var cycle = 4L;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var before = bus.CaptureHardwareSchedulerSnapshot();
+
+		for (var i = 0; i < 16; i++)
+		{
+			cycle += 4;
+			_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		}
+
+		var after = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(
+			after.WakeAgendaCacheHits > before.WakeAgendaCacheHits,
+			$"Expected repeated slot-contended reads to hit the wake agenda, before={before.WakeAgendaCacheHits}, after={after.WakeAgendaCacheHits}");
+		Assert.True(
+			after.WakeAgendaDrainSkips > before.WakeAgendaDrainSkips,
+			$"Expected repeated slot-contended reads to skip drains through the wake agenda, before={before.WakeAgendaDrainSkips}, after={after.WakeAgendaDrainSkips}");
+	}
+
+	[Fact]
+	public void WakeAgendaDoesNotHideDirectSameCyclePaulaWriteAfterCachedSlotRead()
+	{
+		var bus = new AmigaBus();
+		var cycle = 20L;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		cycle += 4;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var before = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(before.WakeAgendaCacheHits > 0);
+
+		var writeCycle = cycle + 4;
+		bus.Paula.ScheduleWrite(writeCycle, 0x09C, (ushort)(0x8000 | AmigaConstants.IntreqBlitter));
+		var readCycle = writeCycle;
+		_ = bus.ReadWord(0x00001000, ref readCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+		var after = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(
+			after.WakeAgendaCacheMisses > before.WakeAgendaCacheMisses,
+			$"Expected direct Paula scheduling to miss the stale wake agenda entry, before={before.WakeAgendaCacheMisses}, after={after.WakeAgendaCacheMisses}");
+	}
+
+	[Fact]
+	public void WakeAgendaInvalidatesWhenCustomWriteSchedulesHardwareWork()
+	{
+		var bus = new AmigaBus();
+		var cycle = 20L;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		cycle += 4;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var before = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(before.WakeAgendaCacheHits > 0);
+
+		cycle += 4;
+		bus.WriteWord(0x00DFF09C, (ushort)(0x8000 | AmigaConstants.IntreqCopper), ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var after = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(
+			after.WakeAgendaInvalidations > before.WakeAgendaInvalidations,
+			$"Expected a custom write to invalidate the wake agenda, before={before.WakeAgendaInvalidations}, after={after.WakeAgendaInvalidations}");
+	}
+
+	[Fact]
 	public void IntreqTimedReadObservesVblankAtExactCycle()
 	{
 		var bus = new AmigaBus();
@@ -2147,6 +2213,46 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void CpuBatchWakeCandidateIgnoresDisabledPaulaAudioDmaEvent()
+	{
+		var bus = new AmigaBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+		bus.Paula.ScheduleWrite(0, 0x0A0, 0x0000);
+		bus.Paula.ScheduleWrite(0, 0x0A2, 0x1000);
+		bus.Paula.ScheduleWrite(0, 0x0A4, 0x0001);
+		bus.Paula.ScheduleWrite(0, 0x0A6, 0x0001);
+		bus.Paula.ScheduleWrite(0, 0x096, 0x8201);
+		bus.Paula.AdvanceTo(0);
+
+		var internalCandidate = bus.Paula.GetNextWakeCandidateCycle(0, 100);
+		var cpuCandidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
+
+		Assert.Equal(34, internalCandidate);
+		Assert.Equal(100, cpuCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBoundaryHardwareAdvanceDefersDisabledPaulaAudioDmaEvent()
+	{
+		var bus = new AmigaBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+		bus.Paula.ScheduleWrite(0, 0x0A0, 0x0000);
+		bus.Paula.ScheduleWrite(0, 0x0A2, 0x1000);
+		bus.Paula.ScheduleWrite(0, 0x0A4, 0x0001);
+		bus.Paula.ScheduleWrite(0, 0x0A6, 0x0001);
+		bus.Paula.ScheduleWrite(0, 0x096, 0x8201);
+		bus.Paula.AdvanceTo(0);
+
+		bus.AdvanceHardwareEventsTo(100, cpuInterruptMask: 0);
+		var deferredCandidate = bus.Paula.GetNextWakeCandidateCycle(0, 100);
+		bus.AdvanceDmaTo(100);
+
+		Assert.Equal(34, deferredCandidate);
+		Assert.Null(bus.Paula.GetNextWakeCandidateCycle(0, 100));
+	}
+
+	[Fact]
 	public void StoppedCpuWakeCandidateIncludesPaulaAudioSampleEvent()
 	{
 		var bus = new AmigaBus(audioDmaMinimumPeriod: 1);
@@ -2160,9 +2266,10 @@ public sealed class AmigaBusTimingTests
 		bus.Paula.ScheduleWrite(0, 0x09C, 0x0080);
 		bus.Paula.AdvanceTo(0);
 
-		var candidate = bus.GetNextStoppedCpuWakeCandidateCycle(0, 100);
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
 		Assert.Equal(34, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.Paula, wakeSource);
 	}
 
 	[Fact]
