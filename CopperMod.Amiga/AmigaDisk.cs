@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -134,6 +139,28 @@ namespace CopperMod.Amiga
         {
             cacheHit = false;
             var track = RequireTrack();
+            if (_accelerationEnabled && track.BitLength <= _rollingWords.Length && !RequiresDynamicRead(track))
+            {
+                EnsureRollingWords(track);
+                var fastCount = 0;
+                for (var offset = 0; offset < track.BitLength; offset++)
+                {
+                    if ((byte)(_rollingWords[offset] >> 8) != sync)
+                    {
+                        continue;
+                    }
+
+                    if (fastCount < destination.Length)
+                    {
+                        destination[fastCount] = offset;
+                    }
+
+                    fastCount++;
+                }
+
+                return Math.Min(fastCount, destination.Length);
+            }
+
             var count = 0;
             for (var offset = 0; offset < track.BitLength; offset++)
             {
@@ -279,20 +306,42 @@ namespace CopperMod.Amiga
             var track = RequireTrack();
             _syncOffsetCount = 0;
             _syncOffsetOverflow = false;
-            for (var offset = 0; offset < track.BitLength; offset++)
+            if (_accelerationEnabled && track.BitLength <= _rollingWords.Length && !RequiresDynamicRead(track))
             {
-                if (ReadUInt16(offset) != sync)
+                EnsureRollingWords(track);
+                for (var offset = 0; offset < track.BitLength; offset++)
                 {
-                    continue;
-                }
+                    if (_rollingWords[offset] != sync)
+                    {
+                        continue;
+                    }
 
-                if (_syncOffsetCount < _syncOffsets.Length)
+                    if (_syncOffsetCount < _syncOffsets.Length)
+                    {
+                        _syncOffsets[_syncOffsetCount++] = offset;
+                        continue;
+                    }
+
+                    _syncOffsetOverflow = true;
+                }
+            }
+            else
+            {
+                for (var offset = 0; offset < track.BitLength; offset++)
                 {
-                    _syncOffsets[_syncOffsetCount++] = offset;
-                    continue;
-                }
+                    if (ReadUInt16(offset) != sync)
+                    {
+                        continue;
+                    }
 
-                _syncOffsetOverflow = true;
+                    if (_syncOffsetCount < _syncOffsets.Length)
+                    {
+                        _syncOffsets[_syncOffsetCount++] = offset;
+                        continue;
+                    }
+
+                    _syncOffsetOverflow = true;
+                }
             }
 
             _syncCacheWord = sync;
@@ -328,8 +377,29 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            var span = track.EncodedData.Span;
+            var directLimit = Math.Max(0, track.BitLength - 15);
             for (var offset = 0; offset < track.BitLength; offset++)
             {
+                if (offset < directLimit)
+                {
+                    var byteOffset = offset >> 3;
+                    var bitShift = offset & 7;
+                    if (bitShift == 0)
+                    {
+                        _rollingWords[offset] = (ushort)((span[byteOffset] << 8) | span[byteOffset + 1]);
+                    }
+                    else
+                    {
+                        var window = (uint)((span[byteOffset] << 16) |
+                            (span[byteOffset + 1] << 8) |
+                            span[byteOffset + 2]);
+                        _rollingWords[offset] = (ushort)((window >> (8 - bitShift)) & 0xFFFF);
+                    }
+
+                    continue;
+                }
+
                 _rollingWords[offset] = track.ReadUInt16AtBit(offset);
             }
 
@@ -843,7 +913,7 @@ namespace CopperMod.Amiga
         private const ushort DskDat = 0x026;
         private const ushort DskSync = 0x07E;
         private const ushort AdkCon = 0x09E;
-        private const ushort DskBlkInterrupt = 0x0002;
+        private const ushort DskBlkInterrupt = AmigaConstants.IntreqDiskBlock;
         private const ushort DskSynInterrupt = 0x1000;
         private const ushort DmaconMasterEnable = 0x0200;
         private const ushort DmaconDiskEnable = 0x0010;

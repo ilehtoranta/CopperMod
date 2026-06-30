@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace CopperMod.Amiga
 {
     internal static class AmigaConstants
@@ -20,6 +25,7 @@ namespace CopperMod.Amiga
         public const int A500InterruptRecognitionDelayCpuCycles = A500InterruptRecognitionDelayColorClocks * A500PalCpuCyclesPerColorClock;
         public const int A500CopperIntreqDelayColorClocks = 2;
         public const int A500CopperIntreqDelayCpuCycles = A500CopperIntreqDelayColorClocks * A500PalCpuCyclesPerColorClock;
+        public const ushort IntreqDiskBlock = 0x0002;
         public const ushort IntreqPorts = 0x0008;
         public const ushort IntreqCopper = 0x0010;
         public const ushort IntreqVerticalBlank = 0x0020;
