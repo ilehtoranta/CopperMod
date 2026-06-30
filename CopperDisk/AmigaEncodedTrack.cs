@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace CopperDisk;
@@ -169,12 +170,9 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
     /// <param name="value">The bit offset to wrap.</param>
     /// <param name="divisor">The positive wrap length.</param>
     /// <returns>The wrapped offset.</returns>
-    public static int WrapBitOffset(int value, int divisor)
+    internal static int WrapBitOffset(int value, int divisor)
     {
-        if (divisor <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(divisor));
-        }
+        Debug.Assert(divisor > 0);
 
         var result = value % divisor;
         return result < 0 ? result + divisor : result;
@@ -182,10 +180,7 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
 
     private ulong ReadBits(int bitOffset, int bitCount)
     {
-        if (bitCount is < 0 or > 64)
-        {
-            throw new ArgumentOutOfRangeException(nameof(bitCount));
-        }
+        Debug.Assert(bitCount is >= 0 and <= 64);
 
         if (BitLength <= 0)
         {
@@ -234,7 +229,7 @@ public readonly struct AmigaEncodedTrack : IAmigaTrack
     {
         if (regions == null || regions.Count == 0)
         {
-            return Array.Empty<AmigaTrackRegion>();
+            return [];
         }
 
         var normalized = regions.ToArray();

@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace CopperMod.Amiga
@@ -140,16 +141,20 @@ namespace CopperMod.Amiga
                 throw new ArgumentOutOfRangeException(nameof(divisor));
             }
 
+            return WrapBitOffsetUnchecked(value, divisor);
+        }
+
+        private static int WrapBitOffsetUnchecked(int value, int divisor)
+        {
+            Debug.Assert(divisor > 0);
+
             var result = value % divisor;
             return result < 0 ? result + divisor : result;
         }
 
         private ulong ReadBits(int bitOffset, int bitCount)
         {
-            if (bitCount is < 0 or > 64)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bitCount));
-            }
+            Debug.Assert(bitCount is >= 0 and <= 64);
 
             if (BitLength <= 0)
             {
@@ -157,7 +162,7 @@ namespace CopperMod.Amiga
             }
 
             var span = EncodedData.Span;
-            bitOffset = WrapBitOffset(bitOffset, BitLength);
+            bitOffset = WrapBitOffsetUnchecked(bitOffset, BitLength);
             var endBit = bitOffset + bitCount;
             if (bitCount == 0)
             {
@@ -198,7 +203,7 @@ namespace CopperMod.Amiga
         {
             if (regions == null || regions.Count == 0)
             {
-                return Array.Empty<AmigaTrackRegion>();
+                return [];
             }
 
             var normalized = regions.ToArray();
