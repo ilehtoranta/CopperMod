@@ -592,6 +592,50 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
+	public void ProfileStoreRoundTripsExplicitEmptyAndGamepadPorts()
+	{
+		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(Path.Combine(baseDirectory, "Profiles"));
+		try
+		{
+			var gamepad = new CopperScreenControllerProfile(
+				"gamepad-test",
+				"Test Gamepad",
+				CopperScreenControllerKind.Gamepad,
+				CopperScreenJoystickKeyMap.Empty);
+			var draft = CopperScreenSettingsDraft.FromProfile(CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _));
+			draft.Id = "roundtrip-input";
+			draft.DisplayName = "Roundtrip Input";
+			draft.Input = CopperScreenInputOptions.Create(
+				CopperScreenControllerProfile.None.Id,
+				gamepad.Id,
+				CopperScreenInputOptions.DefaultControllerProfiles.Append(gamepad));
+
+			var savedPath = CopperScreenProfileStore.Save(draft, baseDirectory);
+
+			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
+			Assert.Equal("none", loaded.Input.Port1ProfileId);
+			Assert.Equal("gamepad-test", loaded.Input.Port2ProfileId);
+			Assert.Equal(CopperScreenControllerKind.None, loaded.Input.GetProfileForPort(1).Kind);
+			Assert.Equal(CopperScreenControllerKind.Gamepad, loaded.Input.GetProfileForPort(2).Kind);
+			Assert.Contains(loaded.Input.ControllerProfiles, profile =>
+				profile.Id == "gamepad-test" &&
+				profile.DisplayName == "Test Gamepad" &&
+				profile.Kind == CopperScreenControllerKind.Gamepad);
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(baseDirectory, recursive: true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Fact]
 	public void ProfileStoreRoundTripsHardfilePartitionMetadata()
 	{
 		var baseDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

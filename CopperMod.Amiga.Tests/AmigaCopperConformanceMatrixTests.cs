@@ -92,6 +92,9 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "presentation Copper replay does not request INTREQ":
                 PresentationCopperReplayDoesNotRequestIntreq();
                 break;
+            case "live Copper INTREQ does not invalidate presentation timeline":
+                LiveCopperIntreqDoesNotInvalidatePresentationTimeline();
+                break;
             case "COPxLC high word masks unused DMA bits":
                 CopperLocationHighWordMasksUnusedDmaBits();
                 break;
@@ -140,6 +143,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("blitter-wait", "BFD set ignores blitter busy"),
         Executable("interrupts", "Copper MOVE can request INTREQ"),
         Executable("interrupts", "presentation Copper replay does not request INTREQ"),
+        Executable("interrupts", "live Copper INTREQ does not invalidate presentation timeline"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
         Executable("restricted-registers", "Copper danger register protection via COPCON"),
         Executable("restricted-registers", "MOVE to always-protected register stops Copper"),
@@ -405,6 +409,38 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.Equal(writesBeforeRender, bus.CustomRegisterWrites.Count);
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
         Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+    }
+
+    private static void LiveCopperIntreqDoesNotInvalidatePresentationTimeline()
+    {
+        var bus = CreateSlotCopperBus();
+        WriteCopperList(
+            bus,
+            CopperList,
+            (0x0180, 0x0000),
+            (0x2F41, 0xFFFE),
+            (0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+            (0x0180, 0x0F00),
+            (0xFFFF, 0xFFFE));
+        bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
+        SetCopperPointer(bus, 1, CopperList);
+        bus.WriteWord(0x00DFF096, 0x8280);
+        bus.AdvanceDmaTo(FrameCycles());
+
+        var frame = RenderLowResFrame(bus, 0, FrameCycles());
+        var snapshot = bus.Display.CaptureSnapshot();
+        var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
+        var triggerX = (0x40 - 0x38) * 2;
+
+        Assert.Contains(
+            bus.CustomRegisterWrites,
+            write => write.Address == 0x09C &&
+                (write.Value & AmigaConstants.IntreqCopper) != 0);
+        Assert.Equal(0xFFFF0000u, Pixel(frame, triggerX + 64, triggerY));
+        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeLine);
+        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
+        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
+        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
     }
 
     private static void CopperLocationHighWordMasksUnusedDmaBits()

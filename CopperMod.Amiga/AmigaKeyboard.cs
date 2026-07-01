@@ -133,7 +133,7 @@ namespace CopperMod.Amiga
 
         public AmigaKeyboard(Action<byte, long> deliver)
         {
-            _deliver = deliver ?? throw new ArgumentNullException(nameof(deliver));
+            _deliver = deliver;
         }
 
         public byte LastRawKey => _lastRawKey;

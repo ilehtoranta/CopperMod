@@ -54,15 +54,15 @@ internal sealed class PlayStationControllerMapper : IControllerMapper
 	public string Name => "known-playstation";
 	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known PlayStation HID");
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
 		var report = input.Report;
 		var offset = input.Length > 6 && report[0] is 0x01 or 0x11 or 0x31 ? 1 : 0;
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		if (input.Length - offset < 6)
 		{
 			builder.Diagnostic = "PlayStation HID report is too short.";
-			return builder.Build(input.Device, input.Timestamp);
+			return builder.Build(input.Device, input.Timestamp, MappingInfo);
 		}
 
 		builder.LeftX = InputNormalization.NormalizeAxis(report[offset], 0, 255);
@@ -97,7 +97,7 @@ internal sealed class PlayStationControllerMapper : IControllerMapper
 			builder.Guide = (report[offset + 6] & 0x01) != 0;
 		}
 
-		return builder.Build(input.Device, input.Timestamp);
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 }
 
@@ -106,15 +106,15 @@ internal sealed class SwitchProControllerMapper : IControllerMapper
 	public string Name => "known-switch-pro";
 	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known Switch Pro HID");
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
 		var report = input.Report;
 		var offset = input.Length > 12 && report[0] == 0x30 ? 3 : 0;
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		if (input.Length - offset < 7)
 		{
 			builder.Diagnostic = "Switch Pro HID report is too short.";
-			return builder.Build(input.Device, input.Timestamp);
+			return builder.Build(input.Device, input.Timestamp, MappingInfo);
 		}
 
 		var rightButtons = report[offset];
@@ -148,7 +148,7 @@ internal sealed class SwitchProControllerMapper : IControllerMapper
 			builder.RightY = InputNormalization.NormalizeAxis(Read12(report[offset + 7] >> 4, report[offset + 8]), 0, 4095, invert: true);
 		}
 
-		return builder.Build(input.Device, input.Timestamp);
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 
 	private static int Read12(int lowByte, int highNibbleByte)
@@ -160,15 +160,15 @@ internal sealed class XboxControllerMapper : IControllerMapper
 	public string Name => "known-xbox-hid";
 	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Known Xbox HID");
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
 		var report = input.Report;
 		var offset = input.Length > 13 && report[0] is 0x01 or 0x20 ? 1 : 0;
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		if (input.Length - offset < 12)
 		{
 			builder.Diagnostic = "Xbox HID report is too short or exposed in a non-HID driver mode.";
-			return builder.Build(input.Device, input.Timestamp);
+			return builder.Build(input.Device, input.Timestamp, MappingInfo);
 		}
 
 		var buttons = report[offset];
@@ -195,6 +195,6 @@ internal sealed class XboxControllerMapper : IControllerMapper
 			builder.RightY = InputNormalization.NormalizeAxis(BitConverter.ToInt16(report, offset + 11), short.MinValue, short.MaxValue, 0, invert: true);
 		}
 
-		return builder.Build(input.Device, input.Timestamp);
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 }

@@ -4,13 +4,19 @@ using GameController;
 
 namespace CopperPad;
 
+/// <summary>
+/// Apple GameController provider for iOS and Mac Catalyst targets.
+/// </summary>
 public sealed class GameControllerControllerProvider : IControllerProvider
 {
 	private readonly Dictionary<string, CopperControllerSnapshot> _snapshots = new(StringComparer.Ordinal);
 
+	/// <inheritdoc />
 	public event EventHandler<CopperControllersChangedEventArgs>? ControllersChanged;
+	/// <inheritdoc />
 	public event EventHandler<CopperControllerSnapshotChangedEventArgs>? SnapshotChanged;
 
+	/// <inheritdoc />
 	public void Start()
 	{
 		GCController.Notifications.ObserveDidConnect((_, _) => PublishControllers());
@@ -18,18 +24,22 @@ public sealed class GameControllerControllerProvider : IControllerProvider
 		PublishControllers();
 	}
 
+	/// <inheritdoc />
 	public void Stop()
 	{
 		_snapshots.Clear();
 		PublishControllers();
 	}
 
+	/// <inheritdoc />
 	public IReadOnlyList<CopperControllerInfo> GetControllers()
 		=> GCController.Controllers.Select(ToInfo).ToArray();
 
+	/// <inheritdoc />
 	public bool TryGetSnapshot(string controllerId, out CopperControllerSnapshot snapshot)
 		=> _snapshots.TryGetValue(controllerId, out snapshot!);
 
+	/// <inheritdoc />
 	public void Dispose()
 		=> Stop();
 

@@ -454,7 +454,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void PartialPlaybackLiveDmaUsesRawPeriodRequestsAndChannelSlotGrants()
+	public void PartialPlaybackLiveDmaUsesMinimumPeriodForRefillRequests()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -472,7 +472,7 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 34, 488, 942 }, requestedCycles);
+		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
 	}
 
 	[Fact]
@@ -505,7 +505,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void FullLiveDmaUsesRawPeriodRequestsAndChannelSlotGrants()
+	public void FullLiveDmaUsesMinimumPeriodForRefillRequests()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -523,7 +523,7 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 34, 488, 942 }, requestedCycles);
+		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
 	}
 
 	[Fact]

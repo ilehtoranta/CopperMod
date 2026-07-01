@@ -11,8 +11,17 @@ using HidSharp.Reports.Input;
 
 namespace CopperPad;
 
+/// <summary>
+/// Describes the mapping selected for a HID controller.
+/// </summary>
+/// <param name="Source">Human-readable mapping source.</param>
+/// <param name="Name">Human-readable mapping name.</param>
 public sealed record ControllerMappingInfo(string Source, string Name)
 {
+	/// <summary>
+	/// Formats the mapping source and name for display.
+	/// </summary>
+	/// <returns>A display string for the mapping.</returns>
 	public override string ToString()
 		=> string.IsNullOrWhiteSpace(Name) ? Source : $"{Source}: {Name}";
 }
@@ -166,7 +175,7 @@ internal sealed class SdlControllerMapper(SdlControllerMapping mapping, HidDevic
 	public string Name => "sdl:" + mapping.Name;
 	public ControllerMappingInfo MappingInfo { get; } = new("SDL DB", mapping.Name);
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
 		var snapshot = _decoder.Decode(input);
 		var state = mapping.Map(input.Device, input.Timestamp, snapshot);
@@ -214,15 +223,15 @@ internal sealed record SdlControllerMapping(
 
 	public ControllerMappingInfo MappingInfo { get; } = new("SDL DB", Name);
 
-	public VirtualXboxControllerState Map(HidDeviceDescriptor device, DateTimeOffset timestamp, SdlInputSnapshot snapshot)
+	public CopperControllerSnapshot Map(HidDeviceDescriptor device, DateTimeOffset timestamp, SdlInputSnapshot snapshot)
 	{
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		foreach (var binding in Bindings)
 		{
 			ApplyBinding(builder, binding, snapshot);
 		}
 
-		return builder.Build(device, timestamp);
+		return builder.Build(device, timestamp, MappingInfo);
 	}
 
 	public static SdlControllerMapping? TryParse(string line)
@@ -301,7 +310,7 @@ internal sealed record SdlControllerMapping(
 		return true;
 	}
 
-	private static void ApplyBinding(VirtualXboxStateBuilder builder, SdlControllerBinding binding, SdlInputSnapshot snapshot)
+	private static void ApplyBinding(CopperControllerSnapshotBuilder builder, SdlControllerBinding binding, SdlInputSnapshot snapshot)
 	{
 		if (IsAxis(binding.Target))
 		{
@@ -410,7 +419,7 @@ internal sealed record SdlControllerMapping(
 	private static bool IsTrigger(ControllerElement control)
 		=> control is ControllerElement.LeftTrigger or ControllerElement.RightTrigger;
 
-	private static void SetAxis(VirtualXboxStateBuilder builder, ControllerElement control, double value)
+	private static void SetAxis(CopperControllerSnapshotBuilder builder, ControllerElement control, double value)
 	{
 		switch (control)
 		{
@@ -421,7 +430,7 @@ internal sealed record SdlControllerMapping(
 		}
 	}
 
-	private static void SetTrigger(VirtualXboxStateBuilder builder, ControllerElement control, double value)
+	private static void SetTrigger(CopperControllerSnapshotBuilder builder, ControllerElement control, double value)
 	{
 		if (control == ControllerElement.LeftTrigger)
 		{
@@ -433,7 +442,7 @@ internal sealed record SdlControllerMapping(
 		}
 	}
 
-	private static void SetButton(VirtualXboxStateBuilder builder, ControllerElement control, bool pressed)
+	private static void SetButton(CopperControllerSnapshotBuilder builder, ControllerElement control, bool pressed)
 	{
 		switch (control)
 		{

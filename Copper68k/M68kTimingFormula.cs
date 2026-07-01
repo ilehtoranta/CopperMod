@@ -254,6 +254,26 @@ namespace Copper68k
             return true;
         }
 
+        public static M68kTimingDescriptor ForOperandShape(
+            M68kInstructionTimingKey key,
+            string label,
+            bool useHeadTail)
+        {
+            var (source, destination) = SplitOperands(label);
+            return new(
+                M68kTimingFormulaKind.OperandShape,
+                ClassifyOperation(key, label),
+                ParseSize(label),
+                source,
+                destination,
+                ClassifyBranchOutcome(key, label),
+                RegisterCount: 0,
+                GetOperandShapeBarriers(key),
+                key,
+                label,
+                GetOperandShapePlanShape(key, useHeadTail));
+        }
+
         public static M68kTimingDescriptor ForMovemLong(
             M68kInstructionTimingKey key,
             string label,
@@ -861,6 +881,7 @@ namespace Copper68k
                 "AbsoluteWord" => "(xxx).W",
                 "AbsoluteLong" => "(xxx).L",
                 "Immediate" => "#<data>",
+                "EffectiveAddress" => "<ea>",
                 "ConditionCodeRegister" => "CCR",
                 "StatusRegister" => "SR",
                 _ => string.Empty
@@ -1717,5 +1738,20 @@ namespace Copper68k
                 registerToMemory,
                 model,
                 fixedCycles));
+
+        public static M68kInstructionPlan CreateOperandShapePlan(
+            M68kInstructionTimingKey key,
+            string label,
+            M68kAcceleratorModel model,
+            int? fixedCycles)
+        {
+            if (fixedCycles is int nativeCycles)
+            {
+                return M68kInstructionPlan.CreateFlat(key, label, nativeCycles);
+            }
+
+            var useHeadTail = model == M68kAcceleratorModel.M68030;
+            return CreatePlan(M68kTimingDescriptor.ForOperandShape(key, label, useHeadTail));
+        }
     }
 }

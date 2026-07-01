@@ -111,6 +111,29 @@ public sealed class HardwareSpecializationTests
     }
 
     [Fact]
+    public void PreparedTrackByteSyncIndexMatchesRawTrackAtArbitraryOffsets()
+    {
+        var track = new AmigaEncodedTrack(new byte[] { 0x44, 0x89, 0xAA, 0x55, 0xF0 }, bitLength: 37);
+        var prepared = new AmigaPreparedTrack(track);
+        Span<int> offsets = stackalloc int[64];
+
+        foreach (var sync in new byte[] { 0x44, 0x89, 0x92, 0xA9, 0xF0, 0x00 })
+        {
+            var count = prepared.CopyByteSyncOffsets(sync, offsets, out _);
+            var expected = new List<int>();
+            for (var offset = 0; offset < track.BitLength; offset++)
+            {
+                if (track.ReadByteAtBit(offset) == sync)
+                {
+                    expected.Add(offset);
+                }
+            }
+
+            Assert.Equal(expected, offsets[..count].ToArray());
+        }
+    }
+
+    [Fact]
     public void BlitterSpecializationCountersRecordKernelUse()
     {
         var bus = new AmigaBus(enableHardwareSpecialization: true);

@@ -1311,14 +1311,14 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
-	public void TimedFallbackUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
+	public void ArchivedTimelineUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
 		EnableSpriteDma(bus, 0x8220);
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
 		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.WriteWord(0x00DFF088, 0x0000, RowCycle(StandardY + 1));
+		bus.WriteWord(0x00DFF02E, 0x0000, RowCycle(StandardY + 1));
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
 		bus.AdvanceDmaTo(FrameCycles());
@@ -1329,9 +1329,10 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 15));
 		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
 		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-		Assert.Equal(0, snapshot.LastArchivedTimelineFrameCount);
+		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
 		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineSegmentCount);
+		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
+		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
 	}
 
 	[Fact]

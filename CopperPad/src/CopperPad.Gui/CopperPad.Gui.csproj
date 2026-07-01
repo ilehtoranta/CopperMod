@@ -9,6 +9,7 @@
     <Title>CopperPad GUI</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Avalonia controller tester, mapper, and calibrator for CopperPad.</Description>
+    <ApplicationIcon>Assets\copperpad-icon.ico</ApplicationIcon>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
@@ -30,6 +31,14 @@
   <ItemGroup>
     <ProjectReference Include="..\CopperPad\CopperPad.csproj" />
     <ProjectReference Include="..\CopperPad.HidSharp\CopperPad.HidSharp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="README.md" />
+    <Content Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="LICENSE" />
+    <Content Include="..\CopperPad\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="THIRD-PARTY-NOTICES.md" />
+    <Content Include="..\CopperPad\ThirdParty\SDL_GameControllerDB\LICENSE" Link="third-party\SDL_GameControllerDB\LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="third-party\SDL_GameControllerDB\LICENSE" />
+    <Content Include="..\CopperPad\ThirdParty\SDL_GameControllerDB\gamecontrollerdb.txt" Link="third-party\SDL_GameControllerDB\gamecontrollerdb.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="third-party\SDL_GameControllerDB\gamecontrollerdb.txt" />
   </ItemGroup>
 
 </Project>

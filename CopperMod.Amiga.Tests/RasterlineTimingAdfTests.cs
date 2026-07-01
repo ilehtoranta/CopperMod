@@ -3,19 +3,19 @@ using Xunit.Abstractions;
 
 namespace CopperMod.Amiga.Tests;
 
-public sealed class CopperLineTimingAdfTests
+public sealed class RasterlineTimingAdfTests
 {
-	private const int ResultRowCount = 27;
+	private const int ResultRowCount = 28;
 	private const int ResultsAddress = 0x0004_8000;
 	private readonly ITestOutputHelper _output;
 
-	public CopperLineTimingAdfTests(ITestOutputHelper output)
+	public RasterlineTimingAdfTests(ITestOutputHelper output)
 	{
 		_output = output;
 	}
 
 	[Fact]
-	public void CopperLineTimingTestAdfProducesResultRowsWhenAvailable()
+	public void RasterlineTimingTestAdfProducesResultRowsWhenAvailable()
 	{
 		var path = TryFindWorkspaceFile("CopperScreen", "TestImages", "timing-test.adf");
 		if (path == null)
@@ -50,7 +50,7 @@ public sealed class CopperLineTimingAdfTests
 
 		WriteResultReport(path, rows, maxFrames, machine.Cpu.State.Cycles);
 		Assert.Fail(
-			$"CopperLine timing-test did not complete {ResultRowCount} rows in {maxFrames} frames. " +
+			$"Rasterline timing-test did not complete {ResultRowCount} rows in {maxFrames} frames. " +
 			$"PC=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6}, " +
 			$"cycles={machine.Cpu.State.Cycles}, completedBootBlock={result.CompletedBootBlock}.");
 	}
@@ -64,13 +64,13 @@ public sealed class CopperLineTimingAdfTests
 	}
 
 	private static bool RowsComplete(ReadOnlySpan<uint> rows)
-		=> rows[26] != 0;
+		=> rows[^1] != 0;
 
 	private void WriteResultReport(string adfPath, ReadOnlySpan<uint> rows, int frames, long cycles)
 	{
 		var lines = new List<string>
 		{
-			"# CopperLine timing-test results from CopperMod.Amiga",
+			"# Rasterline timing-test results from CopperMod.Amiga",
 			"adf=" + adfPath,
 			"frames=" + frames.ToString(System.Globalization.CultureInfo.InvariantCulture),
 			"cycles=" + cycles.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -90,6 +90,8 @@ public sealed class CopperLineTimingAdfTests
 	{
 		Assert.InRange(rows[8], 14_000u, 14_300u);
 		Assert.True(rows[19] != rows[22], "Handler entry row should include CPU interrupt-recognition latency beyond raw VERTB raise.");
+		Assert.NotEqual(0xFFFF_FFFFu, rows[27]);
+		Assert.Equal(0x64u, (rows[27] >> 8) & 0xFFu);
 	}
 
 	private static string? TryFindWorkspaceFile(params string[] parts)
@@ -137,6 +139,7 @@ public sealed class CopperLineTimingAdfTests
 		"beam cck during D-only clear blit",
 		"beam cck during A->D fill blit",
 		"beam cck during line blit",
-		"beam cck during A->D fill with 3-bitplane display + BLTPRI"
+		"beam cck during A->D fill with 3-bitplane display + BLTPRI",
+		"VHPOSR when INTREQR COPER first reads set"
 	];
 }

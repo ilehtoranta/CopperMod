@@ -3866,6 +3866,35 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
+	public void DivuWordDataRegisterToDataRegisterDividesUnsignedLongByWord()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x80C1); // DIVU.W D1,D0
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0001_2345;
+		cpu.State.D[1] = 0x0000_0400;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0345_0048u, cpu.State.D[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(46, cpu.State.NativeCycles);
+		Assert.Equal(23, cpu.State.Cycles);
+	}
+
+	[Fact]
 	public void MuluLongDataRegisterStoresLowLongAndOverflow()
 	{
 		var bus = new ZeroWaitCodeBus();
@@ -4062,6 +4091,35 @@ public sealed class M68020InterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void MulsWordAddressDisplacementToDataRegisterMultipliesSignedWords()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xC5E9, 0x0004); // MULS.W 4(A1),D2
+		bus.WriteWord(0x3004, 0xFFFE);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[1] = 0x3000;
+		cpu.State.D[2] = 0xFFFF_0003;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xFFFF_FFFAu, cpu.State.D[2]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+		Assert.Equal(46, cpu.State.NativeCycles);
+		Assert.Equal(23, cpu.State.Cycles);
 	}
 
 	[Fact]
@@ -5295,17 +5353,30 @@ public sealed class M68020InterpreterTests
 	}
 
 	[Fact]
-	public void UnsupportedExactOpcodeFailsInsteadOfFallingBackToM68000Timing()
+	public void MuluWordDataRegisterToDataRegisterExecutesWithExactTiming()
 	{
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0xC0C0); // MULU.W D0,D0
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0xFFFF_0007;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
 
-		var exception = Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+		cpu.ExecuteInstruction();
 
-		Assert.Equal(0xC0C0, exception.Opcode);
-		Assert.Equal(CodeBase, exception.ProgramCounter);
+		Assert.Equal(0x0000_0031u, cpu.State.D[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(46, cpu.State.NativeCycles);
+		Assert.Equal(23, cpu.State.Cycles);
 	}
 
 	private static void WriteAmigaBusWords(AmigaBus bus, uint address, params ushort[] words)

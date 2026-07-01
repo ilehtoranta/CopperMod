@@ -43,6 +43,7 @@ namespace CopperMod.Amiga
         private bool _todReadLatched;
         private byte _icrMask;
         private byte _icrPending;
+        private ulong _wakeVersion;
 
         public AmigaCia(AmigaCiaId id)
         {
@@ -61,6 +62,8 @@ namespace CopperMod.Amiga
 
         public long TimerAIntervalCycles => _timerA.LatchTicks * CpuCyclesPerCiaTick;
 
+        internal ulong WakeVersion => _wakeVersion;
+
         public void Reset(byte initialPortA = 0, byte initialPortADataDirection = 0)
         {
             Array.Clear(_registers);
@@ -74,6 +77,7 @@ namespace CopperMod.Amiga
             _timerB.Reset();
             _icrMask = 0;
             _icrPending = 0;
+            _wakeVersion++;
         }
 
         public byte ReadRegister(int register)
@@ -164,12 +168,16 @@ namespace CopperMod.Amiga
                     _registers[register] = value;
                     break;
             }
+
+            _wakeVersion++;
         }
 
         public byte AbleInterrupts(byte value, long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
         {
             AdvanceTo(cycle, interruptEvents);
-            return UpdateInterruptMask(value, cycle, interruptEvents);
+            var previous = UpdateInterruptMask(value, cycle, interruptEvents);
+            _wakeVersion++;
+            return previous;
         }
 
         public byte SetInterrupts(byte value, long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
@@ -186,6 +194,7 @@ namespace CopperMod.Amiga
                 _icrPending = (byte)(_icrPending & ~bits);
             }
 
+            _wakeVersion++;
             return previous;
         }
 
@@ -194,6 +203,7 @@ namespace CopperMod.Amiga
             AdvanceTo(cycle, interruptEvents);
             _registers[0x0C] = value;
             SetPending(SerialInterruptMask, cycle, interruptEvents);
+            _wakeVersion++;
         }
 
         public void IncrementTod(long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
@@ -203,12 +213,15 @@ namespace CopperMod.Amiga
             {
                 SetPending(TodInterruptMask, cycle, interruptEvents);
             }
+
+            _wakeVersion++;
         }
 
         public void PulseFlag(long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)
         {
             AdvanceTo(cycle, interruptEvents);
             SetPending(FlagInterruptMask, cycle, interruptEvents);
+            _wakeVersion++;
         }
 
         public long? GetNextInterruptCycle(long maxCycle)
@@ -255,6 +268,8 @@ namespace CopperMod.Amiga
             {
                 _timerB.AdvanceTo(targetCycle, this, TimerBInterruptMask, interruptEvents, null);
             }
+
+            _wakeVersion++;
         }
 
         private byte UpdateInterruptMask(byte value, long cycle, IList<AmigaCiaInterruptEvent> interruptEvents)

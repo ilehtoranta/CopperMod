@@ -1,5 +1,11 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace CopperMod.Amiga
@@ -135,16 +141,20 @@ namespace CopperMod.Amiga
                 throw new ArgumentOutOfRangeException(nameof(divisor));
             }
 
+            return WrapBitOffsetUnchecked(value, divisor);
+        }
+
+        private static int WrapBitOffsetUnchecked(int value, int divisor)
+        {
+            Debug.Assert(divisor > 0);
+
             var result = value % divisor;
             return result < 0 ? result + divisor : result;
         }
 
         private ulong ReadBits(int bitOffset, int bitCount)
         {
-            if (bitCount is < 0 or > 64)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bitCount));
-            }
+            Debug.Assert(bitCount is >= 0 and <= 64);
 
             if (BitLength <= 0)
             {
@@ -152,7 +162,32 @@ namespace CopperMod.Amiga
             }
 
             var span = EncodedData.Span;
-            bitOffset = WrapBitOffset(bitOffset, BitLength);
+            bitOffset = WrapBitOffsetUnchecked(bitOffset, BitLength);
+            var endBit = bitOffset + bitCount;
+            if (bitCount == 0)
+            {
+                return 0;
+            }
+
+            if (endBit <= BitLength)
+            {
+                var byteOffset = bitOffset >> 3;
+                var bitShift = bitOffset & 7;
+                var byteCount = (bitShift + bitCount + 7) >> 3;
+                if (byteCount <= 8)
+                {
+                    var window = 0ul;
+                    for (var index = 0; index < byteCount; index++)
+                    {
+                        window = (window << 8) | span[byteOffset + index];
+                    }
+
+                    var shift = (byteCount * 8) - bitShift - bitCount;
+                    window >>= shift;
+                    return bitCount == 64 ? window : window & ((1ul << bitCount) - 1);
+                }
+            }
+
             var value = 0ul;
             for (var bit = 0; bit < bitCount; bit++)
             {
@@ -168,7 +203,7 @@ namespace CopperMod.Amiga
         {
             if (regions == null || regions.Count == 0)
             {
-                return Array.Empty<AmigaTrackRegion>();
+                return [];
             }
 
             var normalized = regions.ToArray();

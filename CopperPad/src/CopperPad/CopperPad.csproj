@@ -23,27 +23,16 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1591;1701;1702;NU1900</NoWarn>
+    <NoWarn>1701;1702;NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="ControllerDiagnostics.cs" />
-    <Compile Remove="ControllerHost.cs" />
-    <Compile Remove="ControllerMappers.cs" />
-    <Compile Remove="ControllerTypes.cs" />
-    <Compile Remove="HidAbstractions.cs" />
-    <Compile Remove="HidSharpDeviceProvider.cs" />
-    <Compile Remove="InputNormalization.cs" />
-    <Compile Remove="KnownControllerMappers.cs" />
-    <Compile Remove="SdlGameControllerDb.cs" />
+    <None Include="..\..\LICENSE" Link="LICENSE" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

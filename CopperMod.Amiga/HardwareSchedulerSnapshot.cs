@@ -1,0 +1,33 @@
+namespace CopperMod.Amiga
+{
+    internal readonly record struct AmigaHardwareSchedulerSnapshot(
+        long LastDrainCycle,
+        long DrainCount,
+        long BusAccessDrainCount,
+        long SameCycleDrainCount,
+        long RasterEvents,
+        long CiaEvents,
+        long PaulaEvents,
+        long DiskEvents,
+        long AgnusEvents,
+        long BlitterEvents,
+        long RasterlineCacheHits,
+        long RasterlineCacheMisses,
+        long RasterlineCacheRebuilds,
+        long RasterlineCacheInvalidations,
+        long WakeAgendaCacheHits,
+        long WakeAgendaCacheMisses,
+        long WakeAgendaDrainSkips,
+        long WakeAgendaInvalidations,
+        bool HostProfilingEnabled,
+        long HostDrainTicks,
+        long HostWakeQueryTicks,
+        long HostSameCycleQueryTicks,
+        long HostRasterlineSkipTicks,
+        long HostRasterTicks,
+        long HostCiaTicks,
+        long HostPaulaTicks,
+        long HostDiskTicks,
+        long HostAgnusTicks,
+        long HostBlitterTicks);
+}

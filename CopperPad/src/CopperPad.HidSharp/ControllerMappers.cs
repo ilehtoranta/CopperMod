@@ -10,12 +10,12 @@ internal interface IControllerMapper
 	string Name { get; }
 	ControllerMappingInfo MappingInfo { get; }
 
-	VirtualXboxControllerState Map(RawControllerInput input);
+	CopperControllerSnapshot Map(RawControllerInput input);
 }
 
 internal static class ControllerMapperFactory
 {
-	public static IControllerMapper Create(HidDeviceDescriptor device, ControllerProfileSet profiles)
+	internal static IControllerMapper Create(HidDeviceDescriptor device, ControllerProfileSet profiles)
 	{
 		var info = ToInfo(device, true, device.Diagnostic);
 		var profile = profiles.FindMatch(info);
@@ -42,11 +42,16 @@ internal static class ControllerMapperFactory
 		return new DiagnosticControllerMapper("No HID gamepad usage or matching profile was found.");
 	}
 
-	public static ControllerMappingInfo Describe(HidDeviceDescriptor device, ControllerProfileSet profiles)
+	internal static ControllerMappingInfo Describe(HidDeviceDescriptor device, ControllerProfileSet profiles)
 		=> Create(device, profiles).MappingInfo;
 
-	public static bool IsCandidate(HidDeviceDescriptor device, ControllerProfileSet profiles)
+	internal static bool IsCandidate(HidDeviceDescriptor device, ControllerProfileSet profiles, bool requireGameControllerUsage = false)
 	{
+		if (requireGameControllerUsage && !device.IsGameControllerUsage)
+		{
+			return false;
+		}
+
 		if (profiles.FindMatch(ToInfo(device, true, device.Diagnostic)) != null)
 		{
 			return true;
@@ -79,10 +84,10 @@ internal sealed class DiagnosticControllerMapper(string diagnostic) : IControlle
 	public string Name => "diagnostic";
 	public ControllerMappingInfo MappingInfo { get; } = new("Diagnostic", diagnostic);
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
-		var builder = new VirtualXboxStateBuilder { Diagnostic = diagnostic };
-		return builder.Build(input.Device, input.Timestamp);
+		var builder = new CopperControllerSnapshotBuilder { Diagnostic = diagnostic };
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 }
 
@@ -91,15 +96,15 @@ internal sealed class GenericConventionControllerMapper : IControllerMapper
 	public string Name => "generic-convention";
 	public ControllerMappingInfo MappingInfo { get; } = new("Fallback", "Generic HID convention");
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
 		var report = input.Report;
 		var offset = input.Device.ReportsUseId && input.Length > 8 ? 1 : 0;
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		if (input.Length - offset < 8)
 		{
 			builder.Diagnostic = "Generic HID report is too short for the convention mapper.";
-			return builder.Build(input.Device, input.Timestamp);
+			return builder.Build(input.Device, input.Timestamp, MappingInfo);
 		}
 
 		builder.LeftX = InputNormalization.NormalizeAxis(report[offset], 0, 255);
@@ -110,10 +115,10 @@ internal sealed class GenericConventionControllerMapper : IControllerMapper
 		builder.RightTrigger = InputNormalization.NormalizeTrigger(report[offset + 5], 0, 255);
 		ApplyButtonByte(builder, report[offset + 6]);
 		ApplyHat(builder, report[offset + 7] & 0x0F);
-		return builder.Build(input.Device, input.Timestamp);
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 
-	internal static void ApplyButtonByte(VirtualXboxStateBuilder builder, int buttons)
+	internal static void ApplyButtonByte(CopperControllerSnapshotBuilder builder, int buttons)
 	{
 		builder.A = (buttons & (1 << 0)) != 0;
 		builder.B = (buttons & (1 << 1)) != 0;
@@ -125,7 +130,7 @@ internal sealed class GenericConventionControllerMapper : IControllerMapper
 		builder.Start = (buttons & (1 << 7)) != 0;
 	}
 
-	internal static void ApplyHat(VirtualXboxStateBuilder builder, int hat)
+	internal static void ApplyHat(CopperControllerSnapshotBuilder builder, int hat)
 	{
 		var directions = InputNormalization.HatToDirections(hat);
 		builder.DPadUp = directions.Up;
@@ -140,18 +145,18 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 	public string Name => "profile:" + profile.Name;
 	public ControllerMappingInfo MappingInfo { get; } = new("User profile", profile.Name);
 
-	public VirtualXboxControllerState Map(RawControllerInput input)
+	public CopperControllerSnapshot Map(RawControllerInput input)
 	{
-		var builder = new VirtualXboxStateBuilder();
+		var builder = new CopperControllerSnapshotBuilder();
 		foreach (var binding in profile.Bindings)
 		{
 			ApplyBinding(builder, binding, input.Report, input.Length);
 		}
 
-		return builder.Build(input.Device, input.Timestamp);
+		return builder.Build(input.Device, input.Timestamp, MappingInfo);
 	}
 
-	private static void ApplyBinding(VirtualXboxStateBuilder builder, ControllerBinding binding, byte[] report, int length)
+	private static void ApplyBinding(CopperControllerSnapshotBuilder builder, ControllerBinding binding, byte[] report, int length)
 	{
 		var source = binding.Source;
 		if (source.Offset < 0 || source.Offset >= length)
@@ -169,7 +174,14 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 				break;
 			case ControllerElement.LeftTrigger:
 			case ControllerElement.RightTrigger:
-				SetTrigger(builder, binding.Target, ReadAxisSource(source, report, length), binding.Axis);
+				if (source.Kind == ControllerBindingSourceKind.ReportBit || source.Kind == ControllerBindingSourceKind.Hat)
+				{
+					SetDigitalTrigger(builder, binding.Target, ReadButtonSource(source, report, length));
+				}
+				else
+				{
+					SetTrigger(builder, binding.Target, ReadAxisSource(source, report, length), binding.Axis);
+				}
 				break;
 			default:
 				SetButton(builder, binding.Target, ReadButtonSource(source, report, length));
@@ -190,12 +202,18 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 	private static bool ReadButtonSource(ControllerBindingSource source, byte[] report, int length)
 		=> source.Kind switch
 		{
-			ControllerBindingSourceKind.ReportBit => source.Bit is >= 0 and < 8 && (report[source.Offset] & (1 << source.Bit)) != 0,
+			ControllerBindingSourceKind.ReportBit => source.Bit is >= 0 and < 8 && ReadBitSource(source, report),
 			ControllerBindingSourceKind.Hat => source.HatValue.HasValue && MatchesHatDirection(report[source.Offset] & 0x0F, source.HatValue.Value),
 			ControllerBindingSourceKind.ReportByte => report[source.Offset] != 0,
 			ControllerBindingSourceKind.ReportInt16LittleEndian => source.Offset + 1 < length && BitConverter.ToInt16(report, source.Offset) != 0,
 			_ => false
 		};
+
+	private static bool ReadBitSource(ControllerBindingSource source, byte[] report)
+	{
+		var isSet = (report[source.Offset] & (1 << source.Bit)) != 0;
+		return source.Invert ? !isSet : isSet;
+	}
 
 	private static bool MatchesHatDirection(int actual, int expected)
 	{
@@ -207,7 +225,7 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 			(!expectedDirections.Right || actualDirections.Right);
 	}
 
-	private static void SetAxis(VirtualXboxStateBuilder builder, ControllerElement control, int raw, AxisCalibration? calibration)
+	private static void SetAxis(CopperControllerSnapshotBuilder builder, ControllerElement control, int raw, AxisCalibration? calibration)
 	{
 		calibration ??= new AxisCalibration();
 		var value = InputNormalization.NormalizeAxis(
@@ -227,7 +245,7 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 		}
 	}
 
-	private static void SetTrigger(VirtualXboxStateBuilder builder, ControllerElement control, int raw, AxisCalibration? calibration)
+	private static void SetTrigger(CopperControllerSnapshotBuilder builder, ControllerElement control, int raw, AxisCalibration? calibration)
 	{
 		calibration ??= new AxisCalibration();
 		var value = InputNormalization.NormalizeTrigger(raw, calibration.Minimum, calibration.Maximum, calibration.Deadzone, calibration.Saturation);
@@ -241,7 +259,19 @@ internal sealed class ProfileControllerMapper(ControllerProfile profile) : ICont
 		}
 	}
 
-	private static void SetButton(VirtualXboxStateBuilder builder, ControllerElement control, bool pressed)
+	private static void SetDigitalTrigger(CopperControllerSnapshotBuilder builder, ControllerElement control, bool pressed)
+	{
+		if (control == ControllerElement.LeftTrigger)
+		{
+			builder.LeftTrigger = pressed ? 1 : 0;
+		}
+		else
+		{
+			builder.RightTrigger = pressed ? 1 : 0;
+		}
+	}
+
+	private static void SetButton(CopperControllerSnapshotBuilder builder, ControllerElement control, bool pressed)
 	{
 		switch (control)
 		{

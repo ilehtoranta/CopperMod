@@ -68,14 +68,14 @@ public sealed class SdlGameControllerDbTests
 
 		var state = mapping.Map(ControllerMapperTests.Device(1, 2, "Full Pad"), DateTimeOffset.UtcNow, snapshot);
 
-		Assert.True(state.A);
-		Assert.True(state.DPadDown);
-		Assert.InRange(state.LeftTrigger, 0.99, 1.0);
-		Assert.Equal(0, state.RightTrigger, precision: 3);
-		Assert.InRange(state.LeftX, 0.99, 1.0);
-		Assert.InRange(state.LeftY, 0.99, 1.0);
-		Assert.InRange(state.RightX, 0.99, 1.0);
-		Assert.InRange(state.RightY, 0.99, 1.0);
+		Assert.True(state.IsPressed(ControllerElement.A));
+		Assert.True(state.IsPressed(ControllerElement.DPadDown));
+		Assert.InRange(state.GetAxis(ControllerElement.LeftTrigger), 0.99, 1.0);
+		Assert.Equal(0, state.GetAxis(ControllerElement.RightTrigger), precision: 3);
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.LeftStickY), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickY), 0.99, 1.0);
 	}
 
 	[Fact]
@@ -96,10 +96,10 @@ public sealed class SdlGameControllerDbTests
 
 		var state = mapping.Map(ControllerMapperTests.Device(0x0079, 0x0006, "Generic USB Joystick"), DateTimeOffset.UtcNow, snapshot);
 
-		Assert.True(state.A);
-		Assert.True(state.Y);
-		Assert.InRange(state.RightX, 0.99, 1.0);
-		Assert.InRange(state.RightY, 0.99, 1.0);
+		Assert.True(state.IsPressed(ControllerElement.A));
+		Assert.True(state.IsPressed(ControllerElement.Y));
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickX), 0.99, 1.0);
+		Assert.InRange(state.GetAxis(ControllerElement.RightStickY), 0.99, 1.0);
 	}
 
 	[Fact]
@@ -131,8 +131,8 @@ public sealed class SdlGameControllerDbTests
 		var state = mapper.Map(new RawControllerInput(device, [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 7, DateTimeOffset.UtcNow));
 
 		Assert.Equal("User profile", mapper.MappingInfo.Source);
-		Assert.True(state.B);
-		Assert.False(state.A);
+		Assert.True(state.IsPressed(ControllerElement.B));
+		Assert.False(state.IsPressed(ControllerElement.A));
 	}
 
 	[Fact]

@@ -12,6 +12,13 @@ namespace CopperPad.Gui;
 
 internal sealed class MainWindow : Window, IDisposable
 {
+	private static readonly TimeSpan RawReportUiInterval = TimeSpan.FromMilliseconds(50);
+	private static readonly TimeSpan ReportTextUpdateInterval = TimeSpan.FromSeconds(1);
+	private static readonly TimeSpan CaptureStatusUpdateInterval = TimeSpan.FromSeconds(1);
+	private static readonly TimeSpan ExplicitCaptureStatusHold = TimeSpan.FromSeconds(1.5);
+	private static readonly TimeSpan GuidedMappingArmDelay = TimeSpan.FromMilliseconds(900);
+	private static readonly TimeSpan GuidedMappingReadyDelay = TimeSpan.FromMilliseconds(900);
+	private static readonly TimeSpan GuidedMappingLockDelay = TimeSpan.FromSeconds(1);
 	private static readonly ControllerElement[] AxisTargets =
 	[
 		ControllerElement.LeftStickX,
@@ -25,7 +32,6 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly FileControllerProfileStore _profileStore = new(CopperPadProfilePaths.GetDefaultProfilePath());
 	private readonly ControllerDiagnosticsHost _host;
 	private readonly ListBox _deviceList = new();
-	private readonly TextBlock _deviceDetails = TextBlock();
 	private readonly TextBlock _statusText = TextBlock();
 	private readonly TextBlock _deviceFilterText = TextBlock();
 	private readonly CheckBox _showAllDevicesCheck = new() { Content = "Show all HID" };
@@ -42,6 +48,7 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly TextBlock _descriptorText = MonospaceTextBlock();
 	private readonly TextBlock _reportRateText = TextBlock();
 	private readonly TextBlock _captureStatusText = TextBlock();
+	private readonly TextBlock _guidedPromptText = TextBlock();
 	private readonly TextBlock _validationText = TextBlock();
 	private readonly TextBlock _calibrationStatusText = TextBlock();
 	private readonly TextBlock _calibrationPreviewText = TextBlock();
@@ -50,35 +57,59 @@ internal sealed class MainWindow : Window, IDisposable
 	private readonly ProgressBar _leftTrigger = new() { Minimum = 0, Maximum = 1, Height = 16 };
 	private readonly ProgressBar _rightTrigger = new() { Minimum = 0, Maximum = 1, Height = 16 };
 	private readonly Dictionary<ControllerElement, Border> _indicators = new();
-	private readonly ComboBox _targetBox = new() { MinWidth = 170 };
-	private readonly ComboBox _sourceKindBox = new() { MinWidth = 190 };
+	private readonly ComboBox _targetBox = new() { MinWidth = 220 };
+	private readonly ComboBox _sourceKindBox = new() { MinWidth = 220 };
 	private readonly NumericUpDown _offsetBox = NumberBox(0, 512);
 	private readonly NumericUpDown _bitBox = NumberBox(0, 7);
 	private readonly NumericUpDown _hatBox = NumberBox(0, 8);
-	private readonly ListBox _bindingsList = new() { MinHeight = 180 };
+	private readonly CheckBox _sourceInvertCheck = new() { Content = "Active low / inverted" };
+	private readonly ListBox _bindingsList = new() { MinHeight = 140, MaxHeight = 260 };
+	private readonly Button _startGuidedMappingButton = new() { Content = "Start Guided Mapping" };
+	private readonly Button _skipGuidedMappingButton = new() { Content = "Skip", IsEnabled = false };
+	private readonly Button _stopGuidedMappingButton = new() { Content = "Stop", IsEnabled = false };
 	private readonly Button _useSuggestionButton = new() { Content = "Use Change", IsEnabled = false };
+	private readonly Button _ignoreSuggestionButton = new() { Content = "Ignore Change", IsEnabled = false };
 	private readonly Button _saveProfileButton = new() { Content = "Save Profile" };
 	private readonly Button _newOverrideButton = new() { Content = "New Override", IsEnabled = false };
 	private readonly ComboBox _calibrationTargetBox = new() { MinWidth = 170 };
 	private readonly CheckBox _invertCheck = new() { Content = "Invert" };
 	private readonly Slider _deadzoneSlider = new() { Minimum = 0, Maximum = 0.95, Value = 0.1, Width = 180 };
 	private readonly Slider _saturationSlider = new() { Minimum = 0.1, Maximum = 1, Value = 1, Width = 180 };
+	private readonly object _rawReportGate = new();
 	private ControllerProfileSet _profiles = ControllerProfileSet.Empty;
 	private IReadOnlyList<HidDeviceInfo> _allDevices = Array.Empty<HidDeviceInfo>();
 	private ControllerProfile? _draftProfile;
 	private HidDeviceInfo? _selectedDevice;
+	private PendingRawReport? _pendingRawReport;
 	private byte[]? _lastReport;
 	private byte[]? _previousReport;
 	private byte[]? _baselineReport;
+	private byte[]? _guidedReleaseBaselineReport;
 	private ControllerBindingSource? _suggestedSource;
+	private ControllerBindingSource? _guidedReleaseSource;
+	private readonly GuidedMappingCapture _guidedCapture = new(GuidedMappingLockDelay);
+	private readonly HashSet<string> _guidedIgnoredSourceKeys = new(StringComparer.Ordinal);
 	private readonly Queue<DateTimeOffset> _reportTimes = new();
 	private AxisCalibrationCapture? _calibrationCapture;
+	private DateTimeOffset _nextRawReportUiUpdate = DateTimeOffset.MinValue;
+	private DateTimeOffset _lastReportTextUpdate = DateTimeOffset.MinValue;
+	private DateTimeOffset _lastCaptureStatusUpdate = DateTimeOffset.MinValue;
+	private DateTimeOffset _captureStatusHoldUntil = DateTimeOffset.MinValue;
+	private bool _rawReportDispatchScheduled;
+	private bool _guidedMappingActive;
+	private bool _guidedArming;
+	private bool _guidedWaitingForNeutral;
+	private bool _guidedReadyPromptShown;
+	private bool _guidedLockCheckScheduled;
+	private int _guidedTargetIndex;
+	private DateTimeOffset _guidedArmUntil;
+	private DateTimeOffset _guidedAcceptInputAt;
 	private bool _calibrationActive;
 	private bool _disposed;
 
 	public MainWindow()
 	{
-		_host = new ControllerDiagnosticsHost(new ControllerHostOptions());
+		_host = new ControllerDiagnosticsHost(new HidSharpControllerProviderOptions());
 		Title = "CopperPad";
 		Width = 1180;
 		Height = 760;
@@ -87,8 +118,8 @@ internal sealed class MainWindow : Window, IDisposable
 		Content = BuildContent();
 
 		_host.DevicesChanged += (_, args) => PostUi("Device refresh failed", () => OnDevicesChanged(args));
-		_host.RawReportReceived += (_, args) => PostUi("Raw report update failed", () => OnRawReport(args));
-		_host.StateChanged += (_, args) => PostUi("Controller state update failed", () => OnStateChanged(args.State));
+		_host.RawReportReceived += (_, args) => QueueRawReport(args);
+		_host.SnapshotChanged += (_, args) => PostUi("Controller snapshot update failed", () => OnSnapshotChanged(args.Snapshot));
 		Opened += async (_, _) => await TryRunUiActionAsync("Startup failed", InitializeAsync).ConfigureAwait(true);
 		Closed += (_, _) => Dispose();
 	}
@@ -152,7 +183,7 @@ internal sealed class MainWindow : Window, IDisposable
 	{
 		var panel = new Grid
 		{
-			RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+			RowDefinitions = new RowDefinitions("Auto,Auto,*"),
 			ColumnDefinitions = new ColumnDefinitions("*"),
 			Margin = new Thickness(0, 0, 12, 0)
 		};
@@ -175,9 +206,6 @@ internal sealed class MainWindow : Window, IDisposable
 		};
 		Grid.SetRow(_deviceList, 2);
 		panel.Children.Add(_deviceList);
-		_deviceDetails.Margin = new Thickness(0, 10, 0, 0);
-		Grid.SetRow(_deviceDetails, 3);
-		panel.Children.Add(_deviceDetails);
 		return panel;
 	}
 
@@ -288,8 +316,8 @@ internal sealed class MainWindow : Window, IDisposable
 
 	private Control BuildMapTab()
 	{
-		_targetBox.ItemsSource = Enum.GetValues<ControllerElement>();
-		_targetBox.SelectedItem = ControllerElement.A;
+		_targetBox.ItemsSource = MappingTargetItem.All;
+		_targetBox.SelectedIndex = 0;
 		_targetBox.SelectionChanged += (_, _) => PopulateFieldsFromSelectedTarget();
 		_sourceKindBox.ItemsSource = Enum.GetValues<ControllerBindingSourceKind>();
 		_sourceKindBox.SelectedItem = ControllerBindingSourceKind.ReportBit;
@@ -306,42 +334,81 @@ internal sealed class MainWindow : Window, IDisposable
 			if (_suggestedSource != null)
 			{
 				SetSourceFields(_suggestedSource);
+				SetCaptureStatus("Suggestion copied to fields. Click Add / Update to store the binding.", ExplicitCaptureStatusHold);
 			}
 		};
+		_ignoreSuggestionButton.Click += (_, _) => IgnoreSuggestedSource();
+		_startGuidedMappingButton.Click += (_, _) => StartGuidedMapping();
+		_skipGuidedMappingButton.Click += (_, _) => SkipGuidedTarget();
+		_stopGuidedMappingButton.Click += (_, _) => StopGuidedMapping("Guided mapping stopped.");
+
+		var guidedPanel = new StackPanel
+		{
+			Spacing = 8,
+			Margin = new Thickness(0, 0, 0, 12)
+		};
+		_guidedPromptText.FontSize = 18;
+		_guidedPromptText.FontWeight = FontWeight.SemiBold;
+		_guidedPromptText.Margin = new Thickness(10);
+		_guidedPromptText.Text = "Guided mapping asks for one control at a time and locks the detected input automatically.";
+		guidedPanel.Children.Add(new Border
+		{
+			Background = new SolidColorBrush(Color.FromRgb(36, 48, 54)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(84, 150, 168)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Child = _guidedPromptText
+		});
+		var guidedActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+		guidedActions.Children.Add(_startGuidedMappingButton);
+		guidedActions.Children.Add(_skipGuidedMappingButton);
+		guidedActions.Children.Add(_stopGuidedMappingButton);
+		guidedPanel.Children.Add(guidedActions);
 
 		var editor = new Grid
 		{
-			ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,*"),
-			RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto"),
+			ColumnDefinitions = new ColumnDefinitions("Auto,220,Auto,220"),
+			RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto"),
 			Margin = new Thickness(0, 0, 0, 12),
-			ColumnSpacing = 8,
+			ColumnSpacing = 12,
 			RowSpacing = 8
 		};
 		AddFormRow(editor, 0, "Target", _targetBox, "Kind", _sourceKindBox);
 		AddFormRow(editor, 1, "Offset", _offsetBox, "Bit", _bitBox);
 		AddFormRow(editor, 2, "Hat", _hatBox, "", new StackPanel());
+		AddFormRow(editor, 3, "Options", _sourceInvertCheck, "", new StackPanel());
 		var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
 		actions.Children.Add(Button("Capture Baseline", (_, _) => CaptureBaseline()));
 		actions.Children.Add(_useSuggestionButton);
+		actions.Children.Add(_ignoreSuggestionButton);
 		actions.Children.Add(Button("Add / Update", (_, _) => AddOrUpdateBinding()));
 		actions.Children.Add(Button("Remove", (_, _) => RemoveSelectedBinding()));
-		Grid.SetRow(actions, 3);
+		actions.Children.Add(Button("Clear Bindings", (_, _) => ClearBindings()));
+		Grid.SetRow(actions, 4);
 		Grid.SetColumnSpan(actions, 4);
 		editor.Children.Add(actions);
 
 		var root = new Grid
 		{
-			RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"),
+			RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto,Auto"),
 			Margin = new Thickness(8)
 		};
+		root.Children.Add(guidedPanel);
+		Grid.SetRow(editor, 1);
 		root.Children.Add(editor);
-		Grid.SetRow(_bindingsList, 1);
-		root.Children.Add(_bindingsList);
+		var bindingsScroll = new ScrollViewer
+		{
+			Content = _bindingsList,
+			VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+			HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+		};
+		Grid.SetRow(bindingsScroll, 2);
+		root.Children.Add(bindingsScroll);
 		_captureStatusText.Margin = new Thickness(0, 10, 0, 0);
-		Grid.SetRow(_captureStatusText, 2);
+		Grid.SetRow(_captureStatusText, 3);
 		root.Children.Add(_captureStatusText);
 		_validationText.Margin = new Thickness(0, 8, 0, 0);
-		Grid.SetRow(_validationText, 3);
+		Grid.SetRow(_validationText, 4);
 		root.Children.Add(_validationText);
 		UpdateSourceFieldAvailability();
 		return root;
@@ -492,12 +559,28 @@ internal sealed class MainWindow : Window, IDisposable
 		_lastReport = null;
 		_previousReport = null;
 		_baselineReport = null;
+		_guidedReleaseBaselineReport = null;
 		_suggestedSource = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		_guidedReleaseSource = null;
 		_reportTimes.Clear();
+		_lastReportTextUpdate = DateTimeOffset.MinValue;
+		_lastCaptureStatusUpdate = DateTimeOffset.MinValue;
+		_captureStatusHoldUntil = DateTimeOffset.MinValue;
+		_guidedMappingActive = false;
+		_guidedArming = false;
+		_guidedWaitingForNeutral = false;
+		_guidedReadyPromptShown = false;
+		_guidedLockCheckScheduled = false;
+		_guidedCapture.Reset();
+		_guidedIgnoredSourceKeys.Clear();
+		_guidedReleaseSource = null;
+		_guidedReleaseBaselineReport = null;
+		UpdateGuidedButtons();
 		_host.SelectDevice(device?.Id);
 		if (device == null)
 		{
-			_deviceDetails.Text = "No controllers found.";
 			_descriptorText.Text = "";
 			_controllerSummaryText.Text = "Select a controller.";
 			_draftProfile = null;
@@ -526,66 +609,131 @@ internal sealed class MainWindow : Window, IDisposable
 		UpdateCaptureStatus();
 	}
 
-	private void OnRawReport(ControllerRawReportReceivedEventArgs args)
+	private void QueueRawReport(ControllerRawReportReceivedEventArgs args)
 	{
-		if (_selectedDevice == null || !string.Equals(args.Device.Id, _selectedDevice.Id, StringComparison.Ordinal))
+		TimeSpan delay;
+		lock (_rawReportGate)
+		{
+			_pendingRawReport = new PendingRawReport(args.Device, args.Report.ToArray(), args.Timestamp);
+			if (_rawReportDispatchScheduled)
+			{
+				return;
+			}
+
+			_rawReportDispatchScheduled = true;
+			var now = DateTimeOffset.UtcNow;
+			delay = _nextRawReportUiUpdate > now ? _nextRawReportUiUpdate - now : TimeSpan.Zero;
+		}
+
+		Dispatcher.UIThread.Post(() => DispatcherTimer.RunOnce(ProcessPendingRawReport, delay));
+	}
+
+	private void ProcessPendingRawReport()
+	{
+		PendingRawReport? pending;
+		lock (_rawReportGate)
+		{
+			pending = _pendingRawReport;
+			_pendingRawReport = null;
+			_rawReportDispatchScheduled = false;
+			_nextRawReportUiUpdate = DateTimeOffset.UtcNow + RawReportUiInterval;
+		}
+
+		if (pending != null)
+		{
+			TryRunUiAction("Raw report update failed", () => OnRawReport(pending));
+		}
+	}
+
+	private void OnRawReport(PendingRawReport pending)
+	{
+		if (_selectedDevice == null || !string.Equals(pending.Device.Id, _selectedDevice.Id, StringComparison.Ordinal))
 		{
 			return;
 		}
 
 		_previousReport = _lastReport;
-		_lastReport = args.Report.ToArray();
-		_rawHexText.Text = ToHexRows(_lastReport);
-		_reportTimes.Enqueue(args.Timestamp);
-		while (_reportTimes.Count > 0 && args.Timestamp - _reportTimes.Peek() > TimeSpan.FromSeconds(1))
+		_lastReport = pending.Report;
+		_reportTimes.Enqueue(pending.Timestamp);
+		while (_reportTimes.Count > 0 && pending.Timestamp - _reportTimes.Peek() > TimeSpan.FromSeconds(1))
 		{
 			_reportTimes.Dequeue();
 		}
 
-		_reportRateText.Text = $"Reports: {_reportTimes.Count}/s   Last: {args.Timestamp:HH:mm:ss.fff}";
-		var changes = ReportAnalyzer.DetectChanges(_previousReport, _lastReport);
-		_changedBytesText.Text = changes.Count == 0
-			? "Changed bytes: none"
-			: "Changed bytes: " + string.Join(", ", changes.Take(10).Select(change => $"{change.Offset}: {change.Baseline:X2}->{change.Current:X2}"));
+		if (_lastReportTextUpdate == DateTimeOffset.MinValue ||
+			pending.Timestamp - _lastReportTextUpdate >= ReportTextUpdateInterval)
+		{
+			_lastReportTextUpdate = pending.Timestamp;
+			_rawHexText.Text = ToHexRows(_lastReport);
+			_reportRateText.Text = $"Reports: {_reportTimes.Count}/s   Last: {pending.Timestamp:HH:mm:ss.fff}";
+			var changes = ReportAnalyzer.DetectChanges(_previousReport, _lastReport);
+			_changedBytesText.Text = changes.Count == 0
+				? "Changed bytes: none"
+				: "Changed bytes: " + string.Join(", ", changes.Take(10).Select(change => $"{change.Offset}: {change.Baseline:X2}->{change.Current:X2}"));
+		}
+
 		if (_baselineReport != null)
 		{
-			var best = ReportAnalyzer.GetBestChange(_baselineReport, _lastReport);
-			_suggestedSource = best?.SuggestedSource;
-			_useSuggestionButton.IsEnabled = _suggestedSource != null;
-			UpdateCaptureStatus();
+			var baselineChanges = ReportAnalyzer.DetectChanges(_baselineReport, _lastReport);
+			var neutralChanges = _previousReport == null
+				? Array.Empty<ReportChange>()
+				: ReportAnalyzer.DetectChanges(_previousReport, _lastReport);
+			UpdateGuidedMapping(baselineChanges, neutralChanges, pending.Timestamp);
+			var selectedTarget = GetSelectedTarget();
+			var best = SelectBestSuggestedChange(selectedTarget, baselineChanges);
+			if (best != null)
+			{
+				_suggestedSource = best.SuggestedSource;
+				_useSuggestionButton.IsEnabled = true;
+				_ignoreSuggestionButton.IsEnabled = true;
+			}
+			else
+			{
+				_suggestedSource = null;
+				_useSuggestionButton.IsEnabled = false;
+				_ignoreSuggestionButton.IsEnabled = false;
+			}
+
+			UpdateCaptureStatus(force: false);
 		}
 
 		ObserveCalibration(_lastReport);
 	}
 
-	private void OnStateChanged(VirtualXboxControllerState state)
+	private void OnSnapshotChanged(CopperControllerSnapshot state)
 	{
 		if (_selectedDevice == null || !string.Equals(state.ControllerId, _selectedDevice.Id, StringComparison.Ordinal))
 		{
 			return;
 		}
 
-		_leftStick.SetPosition(state.LeftX, state.LeftY);
-		_rightStick.SetPosition(state.RightX, state.RightY);
-		_leftTrigger.Value = state.LeftTrigger;
-		_rightTrigger.Value = state.RightTrigger;
-		SetIndicator(ControllerElement.A, state.A);
-		SetIndicator(ControllerElement.B, state.B);
-		SetIndicator(ControllerElement.X, state.X);
-		SetIndicator(ControllerElement.Y, state.Y);
-		SetIndicator(ControllerElement.LeftShoulder, state.LeftShoulder);
-		SetIndicator(ControllerElement.RightShoulder, state.RightShoulder);
-		SetIndicator(ControllerElement.Select, state.Back);
-		SetIndicator(ControllerElement.Start, state.Start);
-		SetIndicator(ControllerElement.Menu, state.Guide);
-		SetIndicator(ControllerElement.LeftStickButton, state.LeftStick);
-		SetIndicator(ControllerElement.RightStickButton, state.RightStick);
-		SetIndicator(ControllerElement.DPadUp, state.DPadUp);
-		SetIndicator(ControllerElement.DPadDown, state.DPadDown);
-		SetIndicator(ControllerElement.DPadLeft, state.DPadLeft);
-		SetIndicator(ControllerElement.DPadRight, state.DPadRight);
+		var leftX = state.GetAxis(ControllerElement.LeftStickX);
+		var leftY = state.GetAxis(ControllerElement.LeftStickY);
+		var rightX = state.GetAxis(ControllerElement.RightStickX);
+		var rightY = state.GetAxis(ControllerElement.RightStickY);
+		var leftTrigger = state.GetAxis(ControllerElement.LeftTrigger);
+		var rightTrigger = state.GetAxis(ControllerElement.RightTrigger);
+		_leftStick.SetPosition(leftX, leftY);
+		_rightStick.SetPosition(rightX, rightY);
+		_leftTrigger.Value = leftTrigger;
+		_rightTrigger.Value = rightTrigger;
+		SetIndicator(ControllerElement.A, state.IsPressed(ControllerElement.A));
+		SetIndicator(ControllerElement.B, state.IsPressed(ControllerElement.B));
+		SetIndicator(ControllerElement.X, state.IsPressed(ControllerElement.X));
+		SetIndicator(ControllerElement.Y, state.IsPressed(ControllerElement.Y));
+		SetIndicator(ControllerElement.LeftShoulder, state.IsPressed(ControllerElement.LeftShoulder));
+		SetIndicator(ControllerElement.RightShoulder, state.IsPressed(ControllerElement.RightShoulder));
+		SetIndicator(ControllerElement.Select, state.IsPressed(ControllerElement.Select));
+		SetIndicator(ControllerElement.Start, state.IsPressed(ControllerElement.Start));
+		SetIndicator(ControllerElement.Menu, state.IsPressed(ControllerElement.Menu));
+		SetIndicator(ControllerElement.LeftStickButton, state.IsPressed(ControllerElement.LeftStickButton));
+		SetIndicator(ControllerElement.RightStickButton, state.IsPressed(ControllerElement.RightStickButton));
+		SetIndicator(ControllerElement.DPadUp, state.IsPressed(ControllerElement.DPadUp));
+		SetIndicator(ControllerElement.DPadDown, state.IsPressed(ControllerElement.DPadDown));
+		SetIndicator(ControllerElement.DPadLeft, state.IsPressed(ControllerElement.DPadLeft));
+		SetIndicator(ControllerElement.DPadRight, state.IsPressed(ControllerElement.DPadRight));
 		_stateText.Text =
-			$"LX {state.LeftX:0.00}  LY {state.LeftY:0.00}  RX {state.RightX:0.00}  RY {state.RightY:0.00}  LT {state.LeftTrigger:0.00}  RT {state.RightTrigger:0.00}";
+			$"LX {leftX:0.00}  LY {leftY:0.00}  RX {rightX:0.00}  RY {rightY:0.00}  LT {leftTrigger:0.00}  RT {rightTrigger:0.00}";
 		if (!string.IsNullOrWhiteSpace(state.Diagnostic))
 		{
 			SetStatus(state.Diagnostic);
@@ -597,7 +745,14 @@ internal sealed class MainWindow : Window, IDisposable
 		_baselineReport = _lastReport?.ToArray();
 		_suggestedSource = null;
 		_useSuggestionButton.IsEnabled = false;
-		UpdateCaptureStatus();
+		_ignoreSuggestionButton.IsEnabled = false;
+		if (_baselineReport == null)
+		{
+			SetCaptureStatus("No report received yet. Move or press the controller once, then capture baseline again.", ExplicitCaptureStatusHold);
+			return;
+		}
+
+		SetCaptureStatus($"Baseline captured: {_baselineReport.Length} bytes. Press or move one physical control.", ExplicitCaptureStatusHold);
 	}
 
 	private void AddOrUpdateBinding()
@@ -614,7 +769,433 @@ internal sealed class MainWindow : Window, IDisposable
 		UpdateBindingList();
 		UpdateValidation();
 		LoadCalibrationFromTarget();
+		SetCaptureStatus($"Added / updated {target}: {ReportAnalyzer.FormatSource(binding.Source)}", ExplicitCaptureStatusHold);
 	}
+
+	private void StartGuidedMapping()
+	{
+		if (_draftProfile == null)
+		{
+			SetCaptureStatus("Create a profile before guided mapping.", ExplicitCaptureStatusHold);
+			return;
+		}
+
+		if (_lastReport == null)
+		{
+			SetCaptureStatus("No neutral report yet. Release the controller controls and wait for input reports.", ExplicitCaptureStatusHold);
+			return;
+		}
+
+		var firstMissing = ProfileEditor.MappableTargets
+			.Select((target, index) => new { target, index })
+			.FirstOrDefault(item => !_draftProfile.Bindings.Any(binding => binding.Target == item.target));
+		_guidedTargetIndex = firstMissing?.index ?? 0;
+		_guidedMappingActive = true;
+		_guidedIgnoredSourceKeys.Clear();
+		_suggestedSource = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		UpdateGuidedButtons();
+		BeginGuidedArming();
+	}
+
+	private void IgnoreSuggestedSource()
+	{
+		if (_suggestedSource == null)
+		{
+			return;
+		}
+
+		var ignored = ReportAnalyzer.FormatSource(_suggestedSource);
+		AddGuidedIgnoredSource(_suggestedSource);
+		_suggestedSource = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		_guidedCapture.Reset();
+		SetCaptureStatus("Ignoring " + ignored + " for this mapping session.", ExplicitCaptureStatusHold);
+	}
+
+	private void SkipGuidedTarget()
+	{
+		if (!_guidedMappingActive)
+		{
+			return;
+		}
+
+		if (_guidedWaitingForNeutral)
+		{
+			AdvanceGuidedTarget();
+			return;
+		}
+
+		AdvanceGuidedTarget();
+	}
+
+	private void StopGuidedMapping(string message)
+	{
+		_guidedMappingActive = false;
+		_guidedArming = false;
+		_guidedWaitingForNeutral = false;
+		_guidedReadyPromptShown = false;
+		_guidedLockCheckScheduled = false;
+		_guidedCapture.Reset();
+		_guidedIgnoredSourceKeys.Clear();
+		_guidedReleaseSource = null;
+		_guidedReleaseBaselineReport = null;
+		_suggestedSource = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		UpdateGuidedButtons();
+		_guidedPromptText.Text = "Guided mapping asks for one control at a time and locks the detected input automatically.";
+		SetCaptureStatus(message, ExplicitCaptureStatusHold);
+	}
+
+	private void UpdateGuidedMapping(
+		IReadOnlyList<ReportChange> changes,
+		IReadOnlyList<ReportChange> neutralChanges,
+		DateTimeOffset timestamp)
+	{
+		if (!_guidedMappingActive || _baselineReport == null || _lastReport == null)
+		{
+			return;
+		}
+
+		if (_guidedArming)
+		{
+			AddGuidedIgnoredChanges(changes);
+			AddGuidedIgnoredChanges(neutralChanges);
+
+			if (timestamp >= _guidedArmUntil)
+			{
+				_guidedArming = false;
+				_guidedReadyPromptShown = false;
+				_guidedAcceptInputAt = timestamp + GuidedMappingReadyDelay;
+				_guidedCapture.Reset();
+				ShowGuidedPrompt();
+			}
+
+			return;
+		}
+
+		if (_guidedWaitingForNeutral)
+		{
+			if (_guidedReleaseSource != null &&
+				_guidedReleaseBaselineReport != null &&
+				GuidedMappingCapture.IsSourceReleased(_guidedReleaseSource, _guidedReleaseBaselineReport, _lastReport))
+			{
+				AdvanceGuidedTarget();
+			}
+
+			return;
+		}
+
+		if (timestamp < _guidedAcceptInputAt)
+		{
+			AddGuidedIgnoredChanges(changes);
+			AddGuidedIgnoredChanges(neutralChanges);
+
+			return;
+		}
+
+		if (!_guidedReadyPromptShown)
+		{
+			AddGuidedIgnoredChanges(changes);
+			AddGuidedIgnoredChanges(neutralChanges);
+
+			_baselineReport = _lastReport.ToArray();
+			_guidedCapture.Reset();
+			_guidedReadyPromptShown = true;
+			ShowGuidedPrompt();
+			return;
+		}
+
+		var target = ProfileEditor.MappableTargets[_guidedTargetIndex];
+		var candidate = SelectGuidedCandidate(target, changes);
+		if (!_guidedCapture.Observe(target, candidate, _baselineReport, _lastReport, timestamp))
+		{
+			if (_guidedCapture.CandidateSource != null)
+			{
+				ScheduleGuidedLockCheck();
+			}
+
+			return;
+		}
+
+		CommitGuidedLockedSource();
+	}
+
+	private ReportChange? SelectGuidedCandidate(ControllerElement target, IReadOnlyList<ReportChange> changes)
+	{
+		if (_baselineReport == null || _lastReport == null)
+		{
+			return null;
+		}
+
+		var bestScore = -1;
+		ReportChange? best = null;
+		foreach (var change in changes)
+		{
+			var normalized = GuidedMappingCapture.NormalizeForTarget(target, change, _baselineReport, _lastReport);
+			var source = normalized.SuggestedSource;
+			if (IsGuidedSourceIgnored(source) ||
+				IsGuidedSourceAlreadyBound(target, source))
+			{
+				continue;
+			}
+
+			var score = GuidedMappingCapture.GetCandidateScore(target, normalized, _baselineReport, _lastReport) +
+				ProfileEditor.GetSourcePreferenceScore(_draftProfile, target, source);
+			if (score > bestScore)
+			{
+				bestScore = score;
+				best = normalized;
+			}
+		}
+
+		return best;
+	}
+
+	private ReportChange? SelectBestSuggestedChange(ControllerElement target, IReadOnlyList<ReportChange> changes)
+	{
+		if (_baselineReport == null || _lastReport == null)
+		{
+			return null;
+		}
+
+		var bestScore = int.MinValue;
+		ReportChange? best = null;
+		foreach (var change in changes)
+		{
+			var normalized = GuidedMappingCapture.NormalizeForTarget(target, change, _baselineReport, _lastReport);
+			var source = normalized.SuggestedSource;
+			if (IsGuidedSourceIgnored(source))
+			{
+				continue;
+			}
+
+			var score = GuidedMappingCapture.GetCandidateScore(target, normalized, _baselineReport, _lastReport) +
+				ProfileEditor.GetSourcePreferenceScore(_draftProfile, target, source);
+			if (score > bestScore)
+			{
+				bestScore = score;
+				best = normalized;
+			}
+		}
+
+		return bestScore >= 0 ? best : null;
+	}
+
+	private void AddGuidedIgnoredChanges(IReadOnlyList<ReportChange> changes)
+	{
+		foreach (var change in changes)
+		{
+			AddGuidedIgnoredSource(change.SuggestedSource);
+		}
+	}
+
+	private void AddGuidedIgnoredSource(ControllerBindingSource source)
+	{
+		_guidedIgnoredSourceKeys.Add(ProfileEditor.GetSourceKey(source));
+		if (source.Kind == ControllerBindingSourceKind.ReportBit)
+		{
+			_guidedIgnoredSourceKeys.Add(ProfileEditor.GetSourceKey(source with { Invert = !source.Invert }));
+		}
+	}
+
+	private bool IsGuidedSourceIgnored(ControllerBindingSource source)
+	{
+		if (_guidedIgnoredSourceKeys.Contains(ProfileEditor.GetSourceKey(source)))
+		{
+			return true;
+		}
+
+		return source.Kind == ControllerBindingSourceKind.ReportBit &&
+			_guidedIgnoredSourceKeys.Contains(ProfileEditor.GetSourceKey(source with { Invert = !source.Invert }));
+	}
+
+	private void ScheduleGuidedLockCheck()
+	{
+		if (_guidedLockCheckScheduled)
+		{
+			return;
+		}
+
+		_guidedLockCheckScheduled = true;
+		DispatcherTimer.RunOnce(() =>
+			TryRunUiAction("Guided mapping lock failed", () =>
+			{
+				_guidedLockCheckScheduled = false;
+				if (!_guidedMappingActive ||
+					_guidedArming ||
+					_guidedWaitingForNeutral ||
+					_baselineReport == null ||
+					_lastReport == null)
+				{
+					return;
+				}
+
+				if (_guidedCapture.TryLockCandidate(_baselineReport, _lastReport, DateTimeOffset.UtcNow))
+				{
+					CommitGuidedLockedSource();
+				}
+			}),
+			GuidedMappingLockDelay);
+	}
+
+	private void CommitGuidedLockedSource()
+	{
+		if (_guidedCapture.LockedSource == null || _baselineReport == null)
+		{
+			return;
+		}
+
+		_guidedLockCheckScheduled = false;
+		var lockedSource = _guidedCapture.LockedSource;
+		_guidedReleaseSource = lockedSource;
+		_guidedReleaseBaselineReport = _baselineReport.ToArray();
+		ApplyGuidedBinding(lockedSource);
+		_guidedWaitingForNeutral = true;
+		_guidedCapture.Reset();
+		UpdateGuidedButtons();
+		ShowGuidedPrompt();
+	}
+
+	private void ApplyGuidedBinding(ControllerBindingSource source)
+	{
+		if (_draftProfile == null)
+		{
+			return;
+		}
+
+		var target = ProfileEditor.MappableTargets[_guidedTargetIndex];
+		var existingAxis = _draftProfile.Bindings.FirstOrDefault(binding => binding.Target == target)?.Axis;
+		var binding = ProfileEditor.CreateBinding(target, source, existingAxis);
+		_draftProfile = ProfileEditor.UpsertBinding(_draftProfile, binding);
+		SetSelectedTarget(target);
+		SetSourceFields(source);
+		UpdateBindingList();
+		UpdateValidation();
+		LoadCalibrationFromTarget();
+	}
+
+	private void AdvanceGuidedTarget()
+	{
+		_guidedTargetIndex++;
+		_suggestedSource = null;
+		_guidedReleaseSource = null;
+		_guidedReleaseBaselineReport = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		if (_guidedTargetIndex >= ProfileEditor.MappableTargets.Count)
+		{
+			StopGuidedMapping("Guided mapping complete. Save the profile, then test controls.");
+			return;
+		}
+
+		BeginGuidedArming();
+	}
+
+	private void BeginGuidedArming()
+	{
+		if (_lastReport == null)
+		{
+			StopGuidedMapping("No controller reports are available.");
+			return;
+		}
+
+		_baselineReport = _lastReport.ToArray();
+		_guidedArming = true;
+		_guidedWaitingForNeutral = false;
+		_guidedLockCheckScheduled = false;
+		_guidedReleaseSource = null;
+		_guidedReleaseBaselineReport = null;
+		_guidedCapture.Reset();
+		_guidedArmUntil = DateTimeOffset.UtcNow + GuidedMappingArmDelay;
+		UpdateGuidedButtons();
+		_guidedPromptText.Text = "Release all controls. Measuring neutral input...";
+		SetCaptureStatus("Measuring neutral input before the next action.", ExplicitCaptureStatusHold);
+	}
+
+	private void ShowGuidedPrompt()
+	{
+		if (!_guidedMappingActive)
+		{
+			return;
+		}
+
+		var target = ProfileEditor.MappableTargets[_guidedTargetIndex];
+		SetSelectedTarget(target);
+		if (_guidedArming)
+		{
+			_guidedPromptText.Text = "Release all controls. Measuring neutral input...";
+			return;
+		}
+
+		if (_guidedWaitingForNeutral)
+		{
+			_guidedPromptText.Text = $"Locked {MappingTargetItem.All[_guidedTargetIndex]}. Release controls, or click Continue if the controller stays active.";
+			SetCaptureStatus($"Locked {target}. Release controls or click Continue.", ExplicitCaptureStatusHold);
+			return;
+		}
+
+		if (!_guidedReadyPromptShown)
+		{
+			_guidedPromptText.Text = $"Get ready: {GetGuidedActionText(target)}. Wait for the next prompt.";
+			SetCaptureStatus("Ignoring early changes while you get ready.", ExplicitCaptureStatusHold);
+			return;
+		}
+
+		_guidedPromptText.Text = $"Do this now: {GetGuidedActionText(target)}";
+		SetCaptureStatus($"Waiting for {MappingTargetItem.All[_guidedTargetIndex]}...", ExplicitCaptureStatusHold);
+	}
+
+	private void UpdateGuidedButtons()
+	{
+		_startGuidedMappingButton.IsEnabled = !_guidedMappingActive;
+		_skipGuidedMappingButton.IsEnabled = _guidedMappingActive;
+		_skipGuidedMappingButton.Content = _guidedWaitingForNeutral ? "Continue" : "Skip";
+		_stopGuidedMappingButton.IsEnabled = _guidedMappingActive;
+	}
+
+	private bool IsGuidedSourceAlreadyBound(ControllerElement target, ControllerBindingSource source)
+	{
+		if (_draftProfile == null)
+		{
+			return false;
+		}
+
+		var sourceKey = ProfileEditor.GetSourceKey(source);
+		return _draftProfile.Bindings.Any(binding =>
+			binding.Target != target &&
+			string.Equals(ProfileEditor.GetSourceKey(binding.Source), sourceKey, StringComparison.Ordinal));
+	}
+
+	private static string GetGuidedActionText(ControllerElement target)
+		=> target switch
+		{
+			ControllerElement.South => "press the bottom face button (South / A)",
+			ControllerElement.East => "press the right face button (East / B)",
+			ControllerElement.West => "press the left face button (West / X)",
+			ControllerElement.North => "press the top face button (North / Y)",
+			ControllerElement.DPadUp => "press D-pad up",
+			ControllerElement.DPadDown => "press D-pad down",
+			ControllerElement.DPadLeft => "press D-pad left",
+			ControllerElement.DPadRight => "press D-pad right",
+			ControllerElement.LeftShoulder => "press the left shoulder button",
+			ControllerElement.RightShoulder => "press the right shoulder button",
+			ControllerElement.Select => "press Select / Back / View",
+			ControllerElement.Start => "press Start / Options",
+			ControllerElement.Menu => "press Menu / Guide / Home",
+			ControllerElement.LeftStickButton => "press the left stick button",
+			ControllerElement.RightStickButton => "press the right stick button",
+			ControllerElement.LeftStickX => "move the left stick left or right",
+			ControllerElement.LeftStickY => "move the left stick up or down",
+			ControllerElement.RightStickX => "move the right stick left or right",
+			ControllerElement.RightStickY => "move the right stick up or down",
+			ControllerElement.LeftTrigger => "pull the left trigger",
+			ControllerElement.RightTrigger => "pull the right trigger",
+			_ => "press or move " + target
+		};
 
 	private void RemoveSelectedBinding()
 	{
@@ -627,6 +1208,26 @@ internal sealed class MainWindow : Window, IDisposable
 		UpdateBindingList();
 		UpdateValidation();
 		LoadCalibrationFromTarget();
+		SetCaptureStatus($"Removed {GetSelectedTarget()} binding.", ExplicitCaptureStatusHold);
+	}
+
+	private void ClearBindings()
+	{
+		if (_draftProfile == null)
+		{
+			return;
+		}
+
+		_draftProfile = _draftProfile with { Bindings = [] };
+		_guidedIgnoredSourceKeys.Clear();
+		_guidedCapture.Reset();
+		_suggestedSource = null;
+		_useSuggestionButton.IsEnabled = false;
+		_ignoreSuggestionButton.IsEnabled = false;
+		UpdateBindingList();
+		UpdateValidation();
+		LoadCalibrationFromTarget();
+		SetCaptureStatus("Cleared all bindings. Start guided mapping again.", ExplicitCaptureStatusHold);
 	}
 
 	private void CreateNewOverrideDraft()
@@ -817,7 +1418,7 @@ internal sealed class MainWindow : Window, IDisposable
 
 	private void SetBindingFields(ControllerBinding binding)
 	{
-		_targetBox.SelectedItem = binding.Target;
+		SetSelectedTarget(binding.Target);
 		SetSourceFields(binding.Source);
 	}
 
@@ -827,6 +1428,7 @@ internal sealed class MainWindow : Window, IDisposable
 		_offsetBox.Value = source.Offset;
 		_bitBox.Value = source.Bit;
 		_hatBox.Value = source.HatValue ?? 0;
+		_sourceInvertCheck.IsChecked = source.Invert;
 		UpdateSourceFieldAvailability();
 	}
 
@@ -840,12 +1442,22 @@ internal sealed class MainWindow : Window, IDisposable
 			Kind = kind,
 			Offset = DecimalToInt(_offsetBox.Value),
 			Bit = DecimalToInt(_bitBox.Value),
-			HatValue = kind == ControllerBindingSourceKind.Hat ? DecimalToInt(_hatBox.Value) : null
+			HatValue = kind == ControllerBindingSourceKind.Hat ? DecimalToInt(_hatBox.Value) : null,
+			Invert = kind == ControllerBindingSourceKind.ReportBit && _sourceInvertCheck.IsChecked == true
 		};
 	}
 
 	private ControllerElement GetSelectedTarget()
-		=> _targetBox.SelectedItem is ControllerElement control ? control : ControllerElement.A;
+		=> _targetBox.SelectedItem is MappingTargetItem item ? item.Element : ControllerElement.South;
+
+	private void SetSelectedTarget(ControllerElement target)
+	{
+		var item = MappingTargetItem.All.FirstOrDefault(item => item.Element == target);
+		if (item != null)
+		{
+			_targetBox.SelectedItem = item;
+		}
+	}
 
 	private void StartCalibrationCapture()
 	{
@@ -1002,10 +1614,8 @@ internal sealed class MainWindow : Window, IDisposable
 		var profileText = ProfileDocumentDisplay.Format(_profileStore.Path, savedProfile != null, _draftProfile);
 		_controllerSummaryText.Text =
 			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
-		_deviceDetails.Text =
-			$"{_selectedDevice.ProductName}\n{mappingText}\n{profileText}\nVID/PID: 0x{_selectedDevice.VendorId:X4}/0x{_selectedDevice.ProductId:X4}\nTransport: {_selectedDevice.Transport}\nInput report: {_selectedDevice.MaxInputReportLength} bytes\nReport IDs: {(_selectedDevice.ReportsUseId ? "yes" : "no")}\nUsage: {(_selectedDevice.IsGameControllerUsage ? "game controller" : "generic HID")}\n{_selectedDevice.Diagnostic}";
 		_descriptorText.Text = mappingText + "\n" + profileText + "\n\nDescriptor\n" + ToHexRows(_selectedDevice.ReportDescriptor);
-		_saveProfileButton.Content = savedProfile == null ? "Create Override" : "Save Override";
+		_saveProfileButton.Content = "Save Profile";
 		_testProfileButton.IsEnabled = savedProfile != null;
 		_createProfileButton.IsEnabled = true;
 		_editProfileButton.IsEnabled = savedProfile != null;
@@ -1085,21 +1695,45 @@ internal sealed class MainWindow : Window, IDisposable
 		}
 	}
 
-	private void UpdateCaptureStatus()
+	private void UpdateCaptureStatus(bool force = true)
 	{
+		var now = DateTimeOffset.UtcNow;
+		if (!force)
+		{
+			if (now < _captureStatusHoldUntil)
+			{
+				return;
+			}
+
+			if (_lastCaptureStatusUpdate != DateTimeOffset.MinValue &&
+				now - _lastCaptureStatusUpdate < CaptureStatusUpdateInterval)
+			{
+				return;
+			}
+		}
+
 		if (_baselineReport == null)
 		{
-			_captureStatusText.Text = "Baseline: none";
+			SetCaptureStatus("Baseline: none");
 			return;
 		}
 
 		if (_suggestedSource == null)
 		{
-			_captureStatusText.Text = $"Baseline: {_baselineReport.Length} bytes   Change: none";
+			SetCaptureStatus($"Baseline: {_baselineReport.Length} bytes   Change: none");
 			return;
 		}
 
-		_captureStatusText.Text = "Suggested source: " + ReportAnalyzer.FormatSource(_suggestedSource);
+		SetCaptureStatus("Suggested source: " + ReportAnalyzer.FormatSource(_suggestedSource));
+	}
+
+	private void SetCaptureStatus(string text, TimeSpan? holdFor = null)
+	{
+		_captureStatusText.Text = text;
+		_lastCaptureStatusUpdate = DateTimeOffset.UtcNow;
+		_captureStatusHoldUntil = holdFor.HasValue
+			? _lastCaptureStatusUpdate + holdFor.Value
+			: DateTimeOffset.MinValue;
 	}
 
 	private void UpdateSourceFieldAvailability()
@@ -1109,6 +1743,7 @@ internal sealed class MainWindow : Window, IDisposable
 			: ControllerBindingSourceKind.ReportBit;
 		_bitBox.IsEnabled = kind == ControllerBindingSourceKind.ReportBit;
 		_hatBox.IsEnabled = kind == ControllerBindingSourceKind.Hat;
+		_sourceInvertCheck.IsEnabled = kind == ControllerBindingSourceKind.ReportBit;
 	}
 
 	private void SetIndicator(ControllerElement control, bool active)
@@ -1167,7 +1802,8 @@ internal sealed class MainWindow : Window, IDisposable
 			Minimum = min,
 			Maximum = max,
 			Increment = 1,
-			Width = 90
+			Width = 130,
+			MinWidth = 130
 		};
 
 	private static Control LabeledControl(string label, Control control)
@@ -1198,6 +1834,8 @@ internal sealed class MainWindow : Window, IDisposable
 
 	private static int DecimalToInt(decimal? value)
 		=> (int)(value ?? 0);
+
+	private sealed record PendingRawReport(HidDeviceInfo Device, byte[] Report, DateTimeOffset Timestamp);
 
 	private static bool IsRecoverableHidException(Exception ex)
 		=> ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException;
@@ -1244,7 +1882,7 @@ internal sealed class MainWindow : Window, IDisposable
 		public ControllerBinding Binding { get; } = binding;
 
 		public override string ToString()
-			=> $"{Binding.Target}: {ReportAnalyzer.FormatSource(Binding.Source)}";
+			=> $"{new MappingTargetItem(Binding.Target)}: {ReportAnalyzer.FormatSource(Binding.Source)}";
 	}
 
 	private enum WorkspaceMode

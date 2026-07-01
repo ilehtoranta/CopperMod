@@ -7,49 +7,95 @@ using System.Collections.Concurrent;
 
 namespace CopperPad;
 
+/// <summary>
+/// Desktop HID controller provider backed by HidSharp and SDL_GameControllerDB mappings.
+/// </summary>
 public sealed class HidSharpControllerProvider : IControllerProvider
 {
-	private static readonly IReadOnlySet<ControllerProfileKind> MappedProfiles = new HashSet<ControllerProfileKind>
-	{
-		ControllerProfileKind.StandardGamepad,
-		ControllerProfileKind.ExtendedGamepad,
-		ControllerProfileKind.RawInput
-	};
-
-	private readonly ControllerHost _host;
+	private readonly IHidDeviceProvider _provider;
+	private readonly HidSharpControllerProviderOptions _options;
+	private readonly object _gate = new();
 	private readonly ConcurrentDictionary<string, CopperControllerSnapshot> _snapshots = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, ControllerSession> _sessions = new(StringComparer.Ordinal);
+	private bool _started;
 	private bool _disposed;
 
-	public HidSharpControllerProvider(ControllerHostOptions? options = null)
+	/// <summary>
+	/// Creates a HidSharp controller provider using the local device list.
+	/// </summary>
+	/// <param name="options">Provider options, or <see langword="null"/> for defaults.</param>
+	public HidSharpControllerProvider(HidSharpControllerProviderOptions? options = null)
+		: this(new HidSharpDeviceProvider(), options ?? new HidSharpControllerProviderOptions())
 	{
-		_host = new ControllerHost(options);
-		_host.ControllersChanged += OnControllersChanged;
-		_host.ControllerStateChanged += OnControllerStateChanged;
 	}
 
+	internal HidSharpControllerProvider(IHidDeviceProvider provider, HidSharpControllerProviderOptions options)
+	{
+		_provider = provider;
+		_options = options;
+		_provider.Changed += OnProviderChanged;
+	}
+
+	/// <inheritdoc />
 	public event EventHandler<CopperControllersChangedEventArgs>? ControllersChanged;
+	/// <inheritdoc />
 	public event EventHandler<CopperControllerSnapshotChangedEventArgs>? SnapshotChanged;
 
+	/// <inheritdoc />
 	public void Start()
 	{
 		ThrowIfDisposed();
-		_host.Start();
-		PublishControllers();
+		lock (_gate)
+		{
+			if (_started)
+			{
+				return;
+			}
+
+			_started = true;
+			RescanLocked();
+		}
 	}
 
+	/// <inheritdoc />
 	public void Stop()
 	{
-		_host.Stop();
-		_snapshots.Clear();
-		PublishControllers();
+		lock (_gate)
+		{
+			if (!_started)
+			{
+				return;
+			}
+
+			_started = false;
+			foreach (var session in _sessions.Values)
+			{
+				session.Dispose();
+			}
+
+			_sessions.Clear();
+			_snapshots.Clear();
+			RaiseControllersChangedLocked();
+		}
 	}
 
+	/// <inheritdoc />
 	public IReadOnlyList<CopperControllerInfo> GetControllers()
-		=> _host.GetControllers().Select(ToCopperInfo).ToArray();
+	{
+		lock (_gate)
+		{
+			return _sessions.Values
+				.Select(session => session.Info)
+				.OrderBy(info => info.DisplayName, StringComparer.OrdinalIgnoreCase)
+				.ToArray();
+		}
+	}
 
+	/// <inheritdoc />
 	public bool TryGetSnapshot(string controllerId, out CopperControllerSnapshot snapshot)
 		=> _snapshots.TryGetValue(controllerId, out snapshot!);
 
+	/// <inheritdoc />
 	public void Dispose()
 	{
 		if (_disposed)
@@ -58,89 +104,144 @@ public sealed class HidSharpControllerProvider : IControllerProvider
 		}
 
 		_disposed = true;
-		_host.ControllersChanged -= OnControllersChanged;
-		_host.ControllerStateChanged -= OnControllerStateChanged;
-		_host.Dispose();
+		_provider.Changed -= OnProviderChanged;
+		Stop();
 	}
 
-	private void OnControllersChanged(object? sender, ControllersChangedEventArgs args)
+	private void OnProviderChanged(object? sender, EventArgs args)
 	{
-		var present = args.Controllers.Select(controller => controller.Id).ToHashSet(StringComparer.Ordinal);
-		foreach (var stale in _snapshots.Keys.Where(id => !present.Contains(id)).ToArray())
+		lock (_gate)
 		{
+			if (_started)
+			{
+				RescanLocked();
+			}
+		}
+	}
+
+	private void RescanLocked()
+	{
+		var devices = _provider.GetDevices()
+			.Where(device => ControllerMapperFactory.IsCandidate(device, _options.Profiles, _options.RequireGameControllerUsage))
+			.GroupBy(device => device.Id, StringComparer.Ordinal)
+			.Select(group => group.First())
+			.ToArray();
+		var presentIds = devices.Select(device => device.Id).ToHashSet(StringComparer.Ordinal);
+		foreach (var stale in _sessions.Keys.Where(id => !presentIds.Contains(id)).ToArray())
+		{
+			_sessions[stale].Dispose();
+			_sessions.Remove(stale);
 			_snapshots.TryRemove(stale, out _);
 		}
 
-		ControllersChanged?.Invoke(this, new CopperControllersChangedEventArgs(args.Controllers.Select(ToCopperInfo).ToArray()));
+		foreach (var device in devices)
+		{
+			if (_sessions.ContainsKey(device.Id))
+			{
+				continue;
+			}
+
+			var mapper = ControllerMapperFactory.Create(device, _options.Profiles);
+			var session = new ControllerSession(device, mapper, _provider, _options.ReadTimeout, PublishSnapshot);
+			_sessions.Add(device.Id, session);
+			_snapshots[device.Id] = CopperControllerSnapshotBuilder.Disconnected(device, DateTimeOffset.UtcNow, mapper.MappingInfo, device.Diagnostic);
+			session.Start();
+		}
+
+		RaiseControllersChangedLocked();
 	}
 
-	private void OnControllerStateChanged(object? sender, ControllerStateChangedEventArgs args)
+	private void PublishSnapshot(CopperControllerSnapshot snapshot)
 	{
-		var snapshot = ToSnapshot(args.State);
 		_snapshots[snapshot.ControllerId] = snapshot;
 		SnapshotChanged?.Invoke(this, new CopperControllerSnapshotChangedEventArgs(snapshot));
 	}
 
-	private void PublishControllers()
+	private void RaiseControllersChangedLocked()
 		=> ControllersChanged?.Invoke(this, new CopperControllersChangedEventArgs(GetControllers()));
-
-	private static CopperControllerInfo ToCopperInfo(ControllerInfo info)
-		=> new(
-			info.Id,
-			info.ProductName,
-			info.VendorId,
-			info.ProductId,
-			info.Transport,
-			info.IsConnected,
-			MappedProfiles,
-			info.IsConnected ? ControllerMappingSource.Fallback : ControllerMappingSource.None,
-			null,
-			info.Diagnostic);
-
-	private static CopperControllerSnapshot ToSnapshot(VirtualXboxControllerState state)
-	{
-		var elements = new Dictionary<ControllerElement, ControllerElementValue>
-		{
-			[ControllerElement.South] = ControllerElementValue.Button(state.A),
-			[ControllerElement.East] = ControllerElementValue.Button(state.B),
-			[ControllerElement.West] = ControllerElementValue.Button(state.X),
-			[ControllerElement.North] = ControllerElementValue.Button(state.Y),
-			[ControllerElement.LeftShoulder] = ControllerElementValue.Button(state.LeftShoulder),
-			[ControllerElement.RightShoulder] = ControllerElementValue.Button(state.RightShoulder),
-			[ControllerElement.Select] = ControllerElementValue.Button(state.Back),
-			[ControllerElement.Start] = ControllerElementValue.Button(state.Start),
-			[ControllerElement.Menu] = ControllerElementValue.Button(state.Guide),
-			[ControllerElement.LeftStickButton] = ControllerElementValue.Button(state.LeftStick),
-			[ControllerElement.RightStickButton] = ControllerElementValue.Button(state.RightStick),
-			[ControllerElement.DPadUp] = ControllerElementValue.Button(state.DPadUp),
-			[ControllerElement.DPadDown] = ControllerElementValue.Button(state.DPadDown),
-			[ControllerElement.DPadLeft] = ControllerElementValue.Button(state.DPadLeft),
-			[ControllerElement.DPadRight] = ControllerElementValue.Button(state.DPadRight),
-			[ControllerElement.LeftStickX] = ControllerElementValue.Axis(state.LeftX),
-			[ControllerElement.LeftStickY] = ControllerElementValue.Axis(state.LeftY),
-			[ControllerElement.RightStickX] = ControllerElementValue.Axis(state.RightX),
-			[ControllerElement.RightStickY] = ControllerElementValue.Axis(state.RightY),
-			[ControllerElement.LeftTrigger] = ControllerElementValue.Trigger(state.LeftTrigger),
-			[ControllerElement.RightTrigger] = ControllerElementValue.Trigger(state.RightTrigger)
-		};
-
-		return new CopperControllerSnapshot(
-			state.ControllerId,
-			state.Timestamp,
-			state.IsConnected,
-			state.ProductName,
-			state.VendorId,
-			state.ProductId,
-			state.Transport,
-			elements,
-			MappedProfiles,
-			state.IsConnected ? ControllerMappingSource.Fallback : ControllerMappingSource.None,
-			null,
-			state.Diagnostic);
-	}
 
 	private void ThrowIfDisposed()
 	{
 		ObjectDisposedException.ThrowIf(_disposed, nameof(HidSharpControllerProvider));
+	}
+
+	private sealed class ControllerSession : IDisposable
+	{
+		private readonly HidDeviceDescriptor _device;
+		private readonly IControllerMapper _mapper;
+		private readonly IHidDeviceProvider _provider;
+		private readonly TimeSpan _readTimeout;
+		private readonly Action<CopperControllerSnapshot> _publish;
+		private readonly CancellationTokenSource _cancellation = new();
+		private Task? _task;
+
+		public ControllerSession(
+			HidDeviceDescriptor device,
+			IControllerMapper mapper,
+			IHidDeviceProvider provider,
+			TimeSpan readTimeout,
+			Action<CopperControllerSnapshot> publish)
+		{
+			_device = device;
+			_mapper = mapper;
+			_provider = provider;
+			_readTimeout = readTimeout;
+			_publish = publish;
+			Info = CopperControllerSnapshotBuilder.ToInfo(device, true, mapper.MappingInfo, device.Diagnostic);
+		}
+
+		public CopperControllerInfo Info { get; private set; }
+
+		public void Start() => _task = Task.Run(ReadLoopAsync);
+
+		public void Dispose()
+		{
+			_cancellation.Cancel();
+			try
+			{
+				_task?.Wait(TimeSpan.FromSeconds(1));
+			}
+			catch (AggregateException)
+			{
+			}
+			catch (OperationCanceledException)
+			{
+			}
+
+			_cancellation.Dispose();
+		}
+
+		private async Task ReadLoopAsync()
+		{
+			try
+			{
+				using var stream = _provider.Open(_device, _readTimeout);
+				var buffer = new byte[Math.Max(1, stream.MaxInputReportLength)];
+				while (!_cancellation.IsCancellationRequested)
+				{
+					var read = await stream.ReadAsync(buffer, _cancellation.Token).ConfigureAwait(false);
+					if (read <= 0)
+					{
+						continue;
+					}
+
+					var snapshot = new byte[read];
+					Array.Copy(buffer, snapshot, read);
+					var input = new RawControllerInput(_device, snapshot, read, DateTimeOffset.UtcNow);
+					var mapped = _mapper.Map(input);
+					Info = CopperControllerSnapshotBuilder.ToInfo(_device, true, _mapper.MappingInfo, mapped.Diagnostic);
+					_publish(mapped);
+				}
+			}
+			catch (OperationCanceledException)
+			{
+			}
+			catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException)
+			{
+				var diagnostic = "HID read failed: " + ex.Message;
+				Info = CopperControllerSnapshotBuilder.ToInfo(_device, false, _mapper.MappingInfo, diagnostic);
+				_publish(CopperControllerSnapshotBuilder.Disconnected(_device, DateTimeOffset.UtcNow, _mapper.MappingInfo, diagnostic));
+			}
+		}
 	}
 }

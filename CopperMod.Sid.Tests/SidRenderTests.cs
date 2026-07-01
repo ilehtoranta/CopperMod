@@ -132,6 +132,70 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void PsidInitThatEnablesInterruptsStillReachesScheduledPlayRoutine()
+	{
+		var payload = new byte[]
+		{
+			0x58,             // init: CLI
+			0x60,             // RTS
+			0xA9, 0x0F,       // play: LDA #$0F
+			0x8D, 0x18, 0xD4, // STA $D418
+			0x60              // RTS
+		};
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			payload,
+			playAddress: 0x1002,
+			songs: 1,
+			startSong: 1,
+			speed: 0,
+			title: "CLI Init PSID"));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+		var buffer = new float[options.GetSampleCount(song.GetCurrentTickFrameCount(options))];
+
+		song.RenderTick(buffer, options);
+
+		Assert.NotEqual(0x0000, GetCpuProgramCounter(song));
+		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x0F);
+	}
+
+	[Fact]
+	public void PsidPlayAddressZeroRunsInstalledInterruptHandler()
+	{
+		var payload = new byte[]
+		{
+			0x78,             // init: SEI
+			0xA9, 0x10,       // LDA #<irq
+			0x8D, 0x14, 0x03, // STA $0314
+			0xA9, 0x10,       // LDA #>irq
+			0x8D, 0x15, 0x03, // STA $0315
+			0x58,             // CLI
+			0x60,             // RTS
+			0xEA, 0xEA, 0xEA, 0xEA, // pad to $1010
+			0xEE, 0x00, 0x02, // irq: INC $0200
+			0xAD, 0x00, 0x02, // LDA $0200
+			0x8D, 0x18, 0xD4, // STA $D418
+			0x4C, 0x31, 0xEA  // JMP $EA31
+		};
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			payload,
+			playAddress: 0x0000,
+			songs: 1,
+			startSong: 1,
+			speed: 1,
+			title: "PSID Play Zero IRQ"));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+
+		for (var tick = 0; tick < 32; tick++)
+		{
+			_ = RenderNextTick(song, options);
+		}
+
+		Assert.False(GetCpuHalted(song));
+		Assert.True(GetCpuStackPointer(song) > 0xE0);
+		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value != 0x0F);
+	}
+
+	[Fact]
 	public void CiaTimedPsidPlayRoutineStillStartsAtTickStart()
 	{
 		var song = (SidSong)new SidFormat().Load(CreateOneWritePsid(speed: 1));
@@ -667,6 +731,35 @@ public sealed class SidRenderTests
 	}
 
 	[Fact]
+	public void RsidInitThatReturnsAfterHostTimeoutFallsBackToIdleLoop()
+	{
+		var program = new byte[]
+		{
+			0xA2, 0x00,       // LDX #$00; 256 outer loops
+			0xA0, 0x00,       // outer: LDY #$00; 256 inner loops
+			0x88,             // inner: DEY
+			0xD0, 0xFD,       // BNE inner
+			0xCA,             // DEX
+			0xD0, 0xF8,       // BNE outer; total delay exceeds the init watchdog
+			0xA9, 0x0F,       // LDA #$0F
+			0x8D, 0x18, 0xD4, // STA $D418
+			0x60              // RTS after the watchdog has left the init running
+		};
+		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreateRsid(program));
+		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
+
+		for (var tick = 0; tick < 32; tick++)
+		{
+			_ = RenderNextTick(song, options);
+		}
+
+		var pc = GetCpuProgramCounter(song);
+		Assert.False(GetCpuHalted(song));
+		Assert.InRange(pc, 0xFF94, 0xFF98);
+		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x0F);
+	}
+
+	[Fact]
 	public void RealGameOverDigiSectionStaysFiniteAndAvoidsSharpAliasedJumpsWhenPresent()
 	{
 		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Game_Over.sid");
@@ -732,6 +825,13 @@ public sealed class SidRenderTests
 		var machine = GetMachine(song);
 		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
 		return (bool)cpu.GetType().GetProperty("Halted")!.GetValue(cpu)!;
+	}
+
+	private static int GetCpuStackPointer(SidSong song)
+	{
+		var machine = GetMachine(song);
+		var cpu = machine.GetType().GetProperty("Cpu")!.GetValue(machine)!;
+		return (byte)cpu.GetType().GetProperty("StackPointer")!.GetValue(cpu)!;
 	}
 
 	private static byte[] CreateOneWritePsid(uint speed)

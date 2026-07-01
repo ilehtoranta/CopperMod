@@ -1,6 +1,7 @@
 using CopperMod.Amiga;
 using CopperDisk;
 using System.IO.Compression;
+using System.Reflection;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -123,6 +124,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("media-routing", "selected head/cylinder supplies DMA data");
 			yield return DiskConformanceRow.Executable("raw-bitstream", "DMA without WORDSYNC starts at current stream position");
 			yield return DiskConformanceRow.Executable("registers", "DSKDATR/DSKDAT data register latch");
+			yield return DiskConformanceRow.Executable("dma-control", "disk DMA latch is consumed after granted read word");
 			yield return DiskConformanceRow.Executable("wordsync", "resynchronize active read DMA on every DSKSYNC match");
 			yield return DiskConformanceRow.Executable("cia-drive-lines", "write-protect sensor");
 			yield return DiskConformanceRow.Executable("cia-drive-lines", "500ms motor spin-up delay before DSKRDY");
@@ -130,6 +132,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			yield return DiskConformanceRow.Executable("diagnostics", "bounded disk DMA trace records start/completion/cancel/sync-miss state");
 			yield return DiskConformanceRow.Executable("write-dma", "ADF write DMA updates writable in-memory media");
 			yield return DiskConformanceRow.Executable("write-dma", "write-protect and read-only media block media mutation");
+			yield return DiskConformanceRow.Executable("write-dma", "disk DMA latch is consumed after granted write word");
 			yield return DiskConformanceRow.Executable("write-dma", "WORDSYNC gates write DMA start");
 			yield return DiskConformanceRow.Executable("wordsync", "MSBSYNC/GCR byte sync mode");
 			yield return DiskConformanceRow.Executable("timing", "ADKCON FAST two-microsecond bit-cell mode");
@@ -883,6 +886,26 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void DiskDmaLatchIsConsumedAfterGrantedWriteWord()
+	{
+		var disk = new WritableTrackDisk(AmigaEncodedTrack.FromBytes(WordsToBytes(0xAAAA)));
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(disk, writeProtected: false);
+		WriteChipWord(bus, DmaBase, 0x5AA5);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		WriteDsklenStartSequence(bus, words: 1, cycle, writeMode: true);
+		CompleteDiskDma(bus);
+
+		var latch = GetPrivateField<object>(bus.Disk, "_diskDmaWordLatch");
+		var hasValue = (bool)latch.GetType().GetProperty("HasValue")!.GetValue(latch)!;
+		Assert.False(hasValue);
+		Assert.Equal(0x5AA5, bus.ReadWord(0x00DFF008));
+		Assert.Equal(0x5AA5, disk.Track.ReadUInt16AtBit(0));
+	}
+
+	[Fact]
 	public void WordSyncWriteDmaWaitsForDskSyncBeforeConsumingMemoryWords()
 	{
 		var bus = CreateBusWithTrack(0xAAAA, SyncWord, 0xBBBB);
@@ -953,6 +976,21 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		CompleteDiskDma(bus);
 
 		Assert.Equal(0x2222, bus.ReadWord(0x00DFF008));
+	}
+
+	[Fact]
+	public void DiskDmaLatchIsConsumedAfterGrantedReadWord()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+
+		StartDiskDma(bus, DmaBase, words: 1);
+		CompleteDiskDma(bus);
+
+		var latch = GetPrivateField<object>(bus.Disk, "_diskDmaWordLatch");
+		var hasValue = (bool)latch.GetType().GetProperty("HasValue")!.GetValue(latch)!;
+		Assert.False(hasValue);
+		Assert.Equal(0x1234, bus.ReadWord(0x00DFF008));
+		Assert.Equal(0x1234, ReadChipWord(bus, DmaBase));
 	}
 
 	[Fact]
@@ -1729,6 +1767,15 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		}
 
 		return new AmigaEncodedTrack(shifted, bitLength);
+	}
+
+	private static T GetPrivateField<T>(object instance, string fieldName)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		return Assert.IsAssignableFrom<T>(field.GetValue(instance));
 	}
 
 	private static bool ReadBit(ReadOnlySpan<byte> data, int bitOffset)

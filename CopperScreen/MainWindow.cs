@@ -9,6 +9,7 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
+using CopperPad;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -20,16 +21,36 @@ internal sealed class MainWindow : Window
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
+	private const double SettingsNavigationWidth = 172;
+	private const double SettingsRowLabelWidth = 134;
+	private static readonly string[] SettingsPageTitles =
+	[
+		"Profiles",
+		"Machine",
+		"Memory",
+		"Floppy Drives",
+		"Display",
+		"Audio",
+		"Input"
+	];
 	internal static readonly string[] AmigaDiskImagePickerPatterns = ["*.adf", "*.adz", "*.dms", "*.ipf", "*.zip"];
+	private sealed record ArchiveDiskAssignmentDialogResult(CopperScreenDriveDiskAssignment[] Assignments, int FloppyDriveCount);
+	private sealed record ArchiveEntryChoice(string Label, string? DiskPath)
+	{
+		public override string ToString() => Label;
+	}
+
 	private long _presentedFrames;
 	private CopperScreenRuntime? _runtime;
 	private readonly CopperBenchViewModel _bench;
+	private readonly CopperControllerHost _gamepadHost;
 	private readonly FramebufferPresenter _presenter;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
 	private readonly Border _settingsPanel;
 	private readonly Border _benchPanel;
 	private readonly Border _debuggerPanel;
+	private readonly Border _gamepadAssignmentOverlay;
 	private readonly TextBlock _diskStatus;
 	private readonly TextBlock _ledFilterStatus;
 	private readonly TextBlock _cpuPcStatus;
@@ -61,10 +82,30 @@ internal sealed class MainWindow : Window
 	private CopperScreenSettingsDraft _settingsDraft;
 	private CopperScreenInputOptions _inputOptions = CopperScreenInputOptions.Default;
 	private readonly CopperScreenJoystickActions[] _pressedJoystickActionsByPort = new CopperScreenJoystickActions[2];
+	private readonly Dictionary<string, string> _gamepadProfileIdsByControllerId = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, CopperController> _gamepadControllersById = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, int> _gamepadPortMasksByControllerId = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, CopperScreenJoystickActions> _lastGamepadActionsByControllerId = new(StringComparer.Ordinal);
+	private readonly HashSet<string> _connectedGamepadControllerIds = new(StringComparer.Ordinal);
+	private readonly Queue<string> _gamepadAssignmentControllerQueue = new();
+	private readonly HashSet<string> _queuedGamepadAssignmentControllerIds = new(StringComparer.Ordinal);
+	private readonly HashSet<string> _ignoredGamepadAssignmentControllerIds = new(StringComparer.Ordinal);
+	private readonly List<string> _gamepadControllerIdsToRemove = new();
+	private readonly object _gamepadInputGate = new();
+	private readonly Action _applyPendingGamepadInputsAction;
+	private bool _gamepadInputPostQueued;
+	private TextBlock _gamepadAssignmentTitle = null!;
+	private TextBlock _gamepadAssignmentDetails = null!;
+	private TextBlock _gamepadAssignmentPort1 = null!;
+	private TextBlock _gamepadAssignmentPort2 = null!;
+	private string? _activeGamepadAssignmentControllerId;
+	private bool _activeGamepadAssignmentNeedsNeutral;
 	private TextBlock _settingsStatus = null!;
 	private Button _settingsCloseButton = null!;
 	private Button _settingsStartButton = null!;
-	private TabControl _settingsTabs = null!;
+	private ContentControl _settingsPageHost = null!;
+	private Control[] _settingsPages = Array.Empty<Control>();
+	private Button[] _settingsNavigationButtons = Array.Empty<Button>();
 	private int _settingsPageIndex;
 	private string? _settingsStartupError;
 	private ListBox _profileList = null!;
@@ -142,6 +183,12 @@ internal sealed class MainWindow : Window
 		}
 
 		_bench = new CopperBenchViewModel();
+		_gamepadHost = new CopperControllerHost(new HidSharpControllerProvider(new HidSharpControllerProviderOptions
+		{
+			RequireGameControllerUsage = true
+		}));
+		_gamepadHost.ControllersChanged += OnGamepadControllersChanged;
+		_applyPendingGamepadInputsAction = ApplyPendingGamepadInputs;
 
 		_presenter = new FramebufferPresenter(AmigaConstants.PalHighResWidth, AmigaConstants.PalHighResHeight)
 		{
@@ -188,11 +235,13 @@ internal sealed class MainWindow : Window
 		_debuggerPanel = CreateDebuggerPanel();
 		_toolbar = CreateToolbar();
 		_settingsPanel = CreateSettingsPanel();
+		_gamepadAssignmentOverlay = CreateGamepadAssignmentOverlay();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
 		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
 		_root.Children.Add(_settingsPanel);
+		_root.Children.Add(_gamepadAssignmentOverlay);
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
@@ -216,6 +265,7 @@ internal sealed class MainWindow : Window
 			}
 
 			_runtime?.Start();
+			StartGamepadHost();
 			PresentNextFrame(forceStatus: true);
 		};
 		_presenter.PointerMoved += (_, args) => UpdateMousePort(args);
@@ -265,6 +315,9 @@ internal sealed class MainWindow : Window
 				_runtime.FramePublished -= QueueFramePresentation;
 				_runtime.Dispose();
 			}
+
+			_gamepadHost.ControllersChanged -= OnGamepadControllersChanged;
+			_gamepadHost.Dispose();
 		};
 	}
 
@@ -310,11 +363,378 @@ internal sealed class MainWindow : Window
 			0,
 			0,
 			0,
+			0,
 			2,
 			0,
 			0,
 			0,
+			0,
+			0,
+			0,
+			0,
+			0,
 			0);
+	}
+
+	private void StartGamepadHost()
+	{
+		try
+		{
+			_gamepadHost.Start();
+			SyncGamepadControllers();
+		}
+		catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or NotSupportedException)
+		{
+			SetSettingsError("Gamepad scan failed: " + ex.Message);
+		}
+	}
+
+	private void OnGamepadControllersChanged(object? sender, CopperControllersChangedEventArgs args)
+		=> Dispatcher.UIThread.Post(() =>
+		{
+			try
+			{
+				SyncGamepadControllers();
+			}
+			catch (Exception ex)
+			{
+				SetSettingsError("Gamepad refresh failed: " + ex.Message);
+			}
+		});
+
+	private void SyncGamepadControllers()
+	{
+		var controllers = _gamepadHost.GetControllers();
+		_connectedGamepadControllerIds.Clear();
+		var profiles = _settingsDraft.Input.ControllerProfiles.ToDictionary(profile => profile.Id, StringComparer.OrdinalIgnoreCase);
+		foreach (var controller in controllers)
+		{
+			if (!CopperScreenGamepadInput.IsJoystickController(controller.Info))
+			{
+				continue;
+			}
+
+			var profile = CopperScreenGamepadInput.CreateProfile(controller.Info);
+			_connectedGamepadControllerIds.Add(controller.Info.Id);
+			_gamepadProfileIdsByControllerId[controller.Info.Id] = profile.Id;
+			profiles[profile.Id] = profile;
+			AttachGamepadController(controller);
+			QueueGamepadAssignmentIfNeeded(controller, profile.Id);
+		}
+
+		RemoveDisconnectedGamepadControllers();
+		_settingsDraft.Input = _settingsDraft.Input.WithControllerProfiles(profiles.Values);
+		_inputOptions = _settingsDraft.Input;
+		_runtime?.SetInputOptions(_inputOptions);
+		if (_port1ControllerBox != null)
+		{
+			RefreshControllerSelectors();
+		}
+
+		RebuildGamepadPortBindings();
+		ApplyCurrentGamepadSnapshots();
+		TryShowNextGamepadAssignmentOverlay();
+	}
+
+	private void AttachGamepadController(CopperController controller)
+	{
+		if (_gamepadControllersById.TryGetValue(controller.Info.Id, out var existing) &&
+			ReferenceEquals(existing, controller))
+		{
+			return;
+		}
+
+		if (existing != null)
+		{
+			existing.ElementChanged -= OnGamepadElementChanged;
+			existing.ProfileChanged -= OnGamepadProfileChanged;
+		}
+
+		_gamepadControllersById[controller.Info.Id] = controller;
+		controller.ElementChanged += OnGamepadElementChanged;
+		controller.ProfileChanged += OnGamepadProfileChanged;
+	}
+
+	private void RemoveDisconnectedGamepadControllers()
+	{
+		_gamepadControllerIdsToRemove.Clear();
+		foreach (var controllerId in _gamepadControllersById.Keys)
+		{
+			if (!_connectedGamepadControllerIds.Contains(controllerId))
+			{
+				_gamepadControllerIdsToRemove.Add(controllerId);
+			}
+		}
+
+		foreach (var controllerId in _gamepadControllerIdsToRemove)
+		{
+			if (_gamepadControllersById.Remove(controllerId, out var controller))
+			{
+				controller.ElementChanged -= OnGamepadElementChanged;
+				controller.ProfileChanged -= OnGamepadProfileChanged;
+			}
+
+			_gamepadProfileIdsByControllerId.Remove(controllerId);
+			_gamepadPortMasksByControllerId.Remove(controllerId);
+			_lastGamepadActionsByControllerId.Remove(controllerId);
+			_queuedGamepadAssignmentControllerIds.Remove(controllerId);
+			if (string.Equals(_activeGamepadAssignmentControllerId, controllerId, StringComparison.Ordinal))
+			{
+				_activeGamepadAssignmentControllerId = null;
+				_gamepadAssignmentOverlay.IsVisible = false;
+			}
+		}
+	}
+
+	private void RebuildGamepadPortBindings()
+	{
+		_gamepadPortMasksByControllerId.Clear();
+		_lastGamepadActionsByControllerId.Clear();
+		var boundPortMask = 0;
+		for (var portIndex = 0; portIndex < _pressedJoystickActionsByPort.Length; portIndex++)
+		{
+			var profile = _inputOptions.GetProfileForPort(portIndex + 1);
+			if (profile.Kind != CopperScreenControllerKind.Gamepad ||
+				!CopperScreenGamepadInput.TryFindControllerIdForProfile(profile.Id, _gamepadProfileIdsByControllerId, out var controllerId))
+			{
+				continue;
+			}
+
+			var portMask = 1 << portIndex;
+			boundPortMask |= portMask;
+			_gamepadPortMasksByControllerId.TryGetValue(controllerId, out var controllerPortMask);
+			_gamepadPortMasksByControllerId[controllerId] = controllerPortMask | portMask;
+		}
+
+		for (var portIndex = 0; portIndex < _pressedJoystickActionsByPort.Length; portIndex++)
+		{
+			if ((boundPortMask & (1 << portIndex)) == 0)
+			{
+				SetJoystickPort(portIndex, CopperScreenJoystickActions.None);
+			}
+		}
+	}
+
+	[HotPath]
+	private void OnGamepadElementChanged(object? sender, CopperElementChangedEventArgs args)
+		=> QueueGamepadInput();
+
+	[HotPath]
+	private void OnGamepadProfileChanged(object? sender, CopperProfileChangedEventArgs args)
+		=> QueueGamepadInput();
+
+	[HotPath]
+	private void QueueGamepadInput()
+	{
+		lock (_gamepadInputGate)
+		{
+			if (_gamepadInputPostQueued)
+			{
+				return;
+			}
+
+			_gamepadInputPostQueued = true;
+		}
+
+		Dispatcher.UIThread.Post(_applyPendingGamepadInputsAction);
+	}
+
+	private void ApplyPendingGamepadInputs()
+	{
+		lock (_gamepadInputGate)
+		{
+			_gamepadInputPostQueued = false;
+		}
+
+		ApplyCurrentGamepadSnapshots();
+	}
+
+	private void ApplyCurrentGamepadSnapshots()
+	{
+		foreach (var controller in _gamepadControllersById.Values)
+		{
+			ApplyGamepadSnapshot(controller);
+		}
+	}
+
+	private void ApplyGamepadSnapshot(CopperController controller)
+	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
+		if (string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal))
+		{
+			ApplyGamepadAssignmentSnapshot(controller);
+		}
+
+		if (!_gamepadPortMasksByControllerId.TryGetValue(controller.Info.Id, out var portMask))
+		{
+			return;
+		}
+
+		var snapshot = controller.GetSnapshot();
+		var actions = snapshot.IsConnected ? CopperScreenGamepadInput.GetActions(snapshot) : CopperScreenJoystickActions.None;
+		if (_lastGamepadActionsByControllerId.TryGetValue(controller.Info.Id, out var previousActions) &&
+			previousActions == actions)
+		{
+			return;
+		}
+
+		_lastGamepadActionsByControllerId[controller.Info.Id] = actions;
+		for (var portIndex = 0; portIndex < _pressedJoystickActionsByPort.Length; portIndex++)
+		{
+			if ((portMask & (1 << portIndex)) != 0)
+			{
+				SetJoystickPort(portIndex, actions);
+			}
+		}
+	}
+
+	private void QueueGamepadAssignmentIfNeeded(CopperController controller, string profileId)
+	{
+		if (_ignoredGamepadAssignmentControllerIds.Contains(controller.Info.Id) ||
+			_queuedGamepadAssignmentControllerIds.Contains(controller.Info.Id) ||
+			string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal) ||
+			IsGamepadProfileAssigned(profileId))
+		{
+			return;
+		}
+
+		_gamepadAssignmentControllerQueue.Enqueue(controller.Info.Id);
+		_queuedGamepadAssignmentControllerIds.Add(controller.Info.Id);
+	}
+
+	private bool IsGamepadProfileAssigned(string profileId)
+		=> string.Equals(_settingsDraft.Input.Port1ProfileId, profileId, StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(_settingsDraft.Input.Port2ProfileId, profileId, StringComparison.OrdinalIgnoreCase);
+
+	private void TryShowNextGamepadAssignmentOverlay()
+	{
+		if (!CanShowGamepadAssignmentOverlay())
+		{
+			RefreshGamepadAssignmentOverlayVisibility();
+			return;
+		}
+
+		if (_activeGamepadAssignmentControllerId != null)
+		{
+			RefreshGamepadAssignmentOverlayVisibility();
+			return;
+		}
+
+		while (_gamepadAssignmentControllerQueue.Count > 0)
+		{
+			var controllerId = _gamepadAssignmentControllerQueue.Dequeue();
+			_queuedGamepadAssignmentControllerIds.Remove(controllerId);
+			if (!_gamepadControllersById.TryGetValue(controllerId, out var controller) ||
+				!_gamepadProfileIdsByControllerId.TryGetValue(controllerId, out var profileId) ||
+				_ignoredGamepadAssignmentControllerIds.Contains(controllerId) ||
+				IsGamepadProfileAssigned(profileId))
+			{
+				continue;
+			}
+
+			_activeGamepadAssignmentControllerId = controllerId;
+			_activeGamepadAssignmentNeedsNeutral = true;
+			RefreshGamepadAssignmentOverlayText(controller);
+			RefreshGamepadAssignmentOverlayVisibility();
+			ApplyGamepadAssignmentSnapshot(controller);
+			return;
+		}
+
+		RefreshGamepadAssignmentOverlayVisibility();
+	}
+
+	private bool CanShowGamepadAssignmentOverlay()
+		=> _runtime != null &&
+			!_settingsVisible &&
+			!_bench.IsOverlayVisible &&
+			_visibleDebugSnapshot == null;
+
+	private void RefreshGamepadAssignmentOverlayVisibility()
+	{
+		_gamepadAssignmentOverlay.IsVisible = _activeGamepadAssignmentControllerId != null && CanShowGamepadAssignmentOverlay();
+	}
+
+	private bool IsGamepadAssignmentOverlayVisible()
+		=> _activeGamepadAssignmentControllerId != null && _gamepadAssignmentOverlay.IsVisible;
+
+	private void RefreshGamepadAssignmentOverlayText(CopperController controller)
+	{
+		_gamepadAssignmentTitle.Text = "Assign Gamepad";
+		_gamepadAssignmentDetails.Text = string.IsNullOrWhiteSpace(controller.Info.DisplayName)
+			? "Move the controller left or right to choose an Amiga joystick port."
+			: controller.Info.DisplayName + Environment.NewLine + "Move left or right to choose an Amiga joystick port.";
+		_gamepadAssignmentPort1.Text = "Move left" + Environment.NewLine + "Port 1" + Environment.NewLine + "Currently: " + GetPortAssignmentDisplayName(1);
+		_gamepadAssignmentPort2.Text = "Move right" + Environment.NewLine + "Port 2" + Environment.NewLine + "Currently: " + GetPortAssignmentDisplayName(2);
+	}
+
+	private string GetPortAssignmentDisplayName(int port)
+		=> _settingsDraft.Input.GetProfileForPort(port).DisplayName;
+
+	private void ApplyGamepadAssignmentSnapshot(CopperController controller)
+	{
+		if (!IsGamepadAssignmentOverlayVisible() ||
+			!string.Equals(_activeGamepadAssignmentControllerId, controller.Info.Id, StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		var snapshot = controller.GetSnapshot();
+		if (!CopperScreenGamepadInput.TryGetAssignmentPort(snapshot, out var port))
+		{
+			var horizontalActions = CopperScreenGamepadInput.GetActions(snapshot) &
+				(CopperScreenJoystickActions.Left | CopperScreenJoystickActions.Right);
+			if (horizontalActions == CopperScreenJoystickActions.None)
+			{
+				_activeGamepadAssignmentNeedsNeutral = false;
+			}
+
+			return;
+		}
+
+		if (_activeGamepadAssignmentNeedsNeutral)
+		{
+			return;
+		}
+
+		AssignActiveGamepadToPort(port);
+	}
+
+	private void AssignActiveGamepadToPort(int port)
+	{
+		if (_activeGamepadAssignmentControllerId == null ||
+			!_gamepadProfileIdsByControllerId.TryGetValue(_activeGamepadAssignmentControllerId, out var profileId))
+		{
+			IgnoreActiveGamepadAssignment();
+			return;
+		}
+
+		ClearSettingsStartupError();
+		_settingsDraft.Input = _settingsDraft.Input.WithPortAssignment(port, profileId);
+		_inputOptions = _settingsDraft.Input;
+		_runtime?.SetInputOptions(_inputOptions);
+		_activeGamepadAssignmentControllerId = null;
+		_gamepadAssignmentOverlay.IsVisible = false;
+		RefreshControllerSelectors();
+		RebuildGamepadPortBindings();
+		ApplyCurrentGamepadSnapshots();
+		UpdateSettingsStatus();
+		TryShowNextGamepadAssignmentOverlay();
+	}
+
+	private void IgnoreActiveGamepadAssignment()
+	{
+		if (_activeGamepadAssignmentControllerId != null)
+		{
+			_ignoredGamepadAssignmentControllerIds.Add(_activeGamepadAssignmentControllerId);
+		}
+
+		_activeGamepadAssignmentControllerId = null;
+		_gamepadAssignmentOverlay.IsVisible = false;
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private static WindowIcon LoadWindowIcon()
@@ -403,7 +823,7 @@ internal sealed class MainWindow : Window
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, cpuMs={state.LastCpuFrameMilliseconds:F2}, hwMs={state.LastHardwareFrameMilliseconds:F2}, displayMs={state.LastDisplayFrameMilliseconds:F2}, audioMs={state.LastAudioFrameMilliseconds:F2}, reserveMs={state.LastPresentationBufferReserveMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, copyMs={state.LastPublishCopyMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)
@@ -553,6 +973,13 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		if (args.Key == Key.Escape && IsGamepadAssignmentOverlayVisible())
+		{
+			IgnoreActiveGamepadAssignment();
+			args.Handled = true;
+			return;
+		}
+
 		if (_mouseGrabActive && (args.Key == Key.F10 || args.PhysicalKey == PhysicalKey.F10))
 		{
 			ReleaseMouseGrab();
@@ -683,6 +1110,16 @@ internal sealed class MainWindow : Window
 		}
 
 		var actions = _pressedJoystickActionsByPort[portIndex];
+		SetJoystickPort(portIndex, actions);
+	}
+
+	private void SetJoystickPort(int portIndex, CopperScreenJoystickActions actions)
+	{
+		if (_runtime == null)
+		{
+			return;
+		}
+
 		_runtime.SetJoystickPort(
 			portIndex,
 			IsPressed(actions, CopperScreenJoystickActions.Up),
@@ -916,12 +1353,12 @@ internal sealed class MainWindow : Window
 				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
 				new ColumnDefinition(GridLength.Auto)
 			},
-			Margin = new Thickness(0, 0, 0, 10)
+			Margin = new Thickness(0, 0, 0, 8)
 		};
 		header.Children.Add(new TextBlock
 		{
 			Text = "CopperScreen Settings",
-			FontSize = 22,
+			FontSize = 18,
 			FontWeight = FontWeight.SemiBold,
 			Foreground = Brushes.White,
 			VerticalAlignment = VerticalAlignment.Center
@@ -932,25 +1369,42 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(header, 0);
 		panel.Children.Add(header);
 
-		_settingsTabs = new TabControl
+		_settingsPages =
+		[
+			CreateProfilesSettingsPage(),
+			CreateMachineSettingsPage(),
+			CreateMemorySettingsPage(),
+			CreateFloppySettingsPage(),
+			CreateDisplaySettingsPage(),
+			CreateAudioSettingsPage(),
+			CreateInputSettingsPage()
+		];
+		_settingsPageIndex = Math.Clamp(_settingsPageIndex, 0, _settingsPages.Length - 1);
+
+		var settingsBody = new Grid
 		{
-			Background = Brushes.Transparent,
-			Foreground = Brushes.White,
 			HorizontalAlignment = HorizontalAlignment.Stretch,
-			VerticalAlignment = VerticalAlignment.Stretch
-		};
-		_settingsTabs.Items.Add(CreateSettingsTab("General", CreateGeneralSettingsPage()));
-		_settingsTabs.Items.Add(CreateSettingsTab("Advanced", CreateAdvancedSettingsPage()));
-		_settingsTabs.SelectedIndex = _settingsPageIndex;
-		_settingsTabs.SelectionChanged += (_, _) =>
-		{
-			if (_settingsTabs.SelectedIndex >= 0)
+			VerticalAlignment = VerticalAlignment.Stretch,
+			ColumnDefinitions =
 			{
-				_settingsPageIndex = _settingsTabs.SelectedIndex;
+				new ColumnDefinition(new GridLength(SettingsNavigationWidth)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
 			}
 		};
-		Grid.SetRow(_settingsTabs, 1);
-		panel.Children.Add(_settingsTabs);
+
+		settingsBody.Children.Add(CreateSettingsNavigation());
+		_settingsPageHost = new ContentControl
+		{
+			Content = _settingsPages[_settingsPageIndex],
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			Margin = new Thickness(8, 0, 0, 0)
+		};
+		Grid.SetColumn(_settingsPageHost, 1);
+		settingsBody.Children.Add(_settingsPageHost);
+		Grid.SetRow(settingsBody, 1);
+		panel.Children.Add(settingsBody);
+		RefreshSettingsNavigation();
 
 		var commands = new Grid
 		{
@@ -992,7 +1446,9 @@ internal sealed class MainWindow : Window
 			BorderThickness = new Thickness(1),
 			Padding = new Thickness(12),
 			Margin = new Thickness(12, 78, 12, 12),
-			MaxWidth = 1120,
+			MinWidth = 920,
+			MinHeight = 560,
+			MaxWidth = 1060,
 			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Stretch,
 			IsVisible = _settingsVisible,
@@ -1000,82 +1456,307 @@ internal sealed class MainWindow : Window
 		};
 	}
 
-	private static TabItem CreateSettingsTab(string text, Control content)
+	private Border CreateGamepadAssignmentOverlay()
 	{
-		return new TabItem
+		_gamepadAssignmentTitle = new TextBlock
 		{
-			Header = new TextBlock
-			{
-				Text = text,
-				Foreground = new SolidColorBrush(Color.FromRgb(232, 242, 255)),
-				FontWeight = FontWeight.SemiBold,
-				Margin = new Thickness(8, 3)
-			},
-			Content = content,
-			Background = new SolidColorBrush(Color.FromRgb(34, 40, 50)),
-			Foreground = new SolidColorBrush(Color.FromRgb(232, 242, 255)),
-			BorderBrush = new SolidColorBrush(Color.FromRgb(78, 90, 108)),
-			BorderThickness = new Thickness(1),
-			Padding = new Thickness(4, 2),
-			Margin = new Thickness(0, 0, 6, 0)
+			Text = "Assign Gamepad",
+			FontSize = 20,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = Brushes.White,
+			TextAlignment = TextAlignment.Center
 		};
+		_gamepadAssignmentDetails = new TextBlock
+		{
+			Foreground = new SolidColorBrush(Color.FromRgb(210, 222, 238)),
+			TextAlignment = TextAlignment.Center,
+			TextWrapping = TextWrapping.Wrap
+		};
+		_gamepadAssignmentPort1 = CreateGamepadAssignmentPortHint();
+		_gamepadAssignmentPort2 = CreateGamepadAssignmentPortHint();
+
+		var portGrid = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			},
+			ColumnSpacing = 10
+		};
+		portGrid.Children.Add(WrapGamepadAssignmentHint(_gamepadAssignmentPort1));
+		var port2 = WrapGamepadAssignmentHint(_gamepadAssignmentPort2);
+		Grid.SetColumn(port2, 1);
+		portGrid.Children.Add(port2);
+
+		var commands = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 8,
+			HorizontalAlignment = HorizontalAlignment.Center
+		};
+		commands.Children.Add(CreatePanelButton("Ignore", IgnoreActiveGamepadAssignment));
+
+		var panel = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 12,
+			MaxWidth = 560
+		};
+		panel.Children.Add(_gamepadAssignmentTitle);
+		panel.Children.Add(_gamepadAssignmentDetails);
+		panel.Children.Add(portGrid);
+		panel.Children.Add(commands);
+
+		var card = new Border
+		{
+			CornerRadius = new CornerRadius(6),
+			Background = new SolidColorBrush(Color.FromArgb(244, 18, 22, 28)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(116, 190, 255)),
+			BorderThickness = new Thickness(1),
+			Padding = new Thickness(18, 16),
+			HorizontalAlignment = HorizontalAlignment.Center,
+			VerticalAlignment = VerticalAlignment.Center,
+			Child = panel
+		};
+
+		var overlay = new Border
+		{
+			Background = new SolidColorBrush(Color.FromArgb(132, 3, 7, 12)),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			IsVisible = false,
+			Child = card
+		};
+		return overlay;
 	}
 
-	private Control CreateGeneralSettingsPage()
+	private static TextBlock CreateGamepadAssignmentPortHint()
+		=> new()
+		{
+			Foreground = Brushes.White,
+			TextAlignment = TextAlignment.Center,
+			TextWrapping = TextWrapping.Wrap
+		};
+
+	private static Border WrapGamepadAssignmentHint(TextBlock text)
+		=> new()
+		{
+			Background = new SolidColorBrush(Color.FromRgb(28, 36, 48)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(70, 82, 98)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Padding = new Thickness(10, 8),
+			MinWidth = 190,
+			Child = text
+		};
+
+	private Border CreateSettingsNavigation()
 	{
-		var layout = CreateSettingsForm();
-		layout.Children.Add(CreateSettingsSection("Profiles"));
+		var layout = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 3
+		};
+
+		var buttons = new List<Button>(SettingsPageTitles.Length);
+		AddHeading("Settings");
+		AddNavigationButton(0, SettingsPageTitles[0]);
+		AddNavigationButton(1, SettingsPageTitles[1]);
+		AddHeading("Hardware");
+		AddNavigationButton(2, SettingsPageTitles[2]);
+		AddNavigationButton(3, SettingsPageTitles[3]);
+		AddHeading("Host");
+		AddNavigationButton(4, SettingsPageTitles[4]);
+		AddNavigationButton(5, SettingsPageTitles[5]);
+		AddNavigationButton(6, SettingsPageTitles[6]);
+		_settingsNavigationButtons = buttons.ToArray();
+
+		return new Border
+		{
+			Background = new SolidColorBrush(Color.FromRgb(22, 27, 34)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(69, 80, 96)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Padding = new Thickness(8, 8, 8, 10),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch,
+			Child = layout
+		};
+
+		void AddHeading(string text)
+		{
+			layout.Children.Add(new TextBlock
+			{
+				Text = text,
+				Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+				FontWeight = FontWeight.SemiBold,
+				FontSize = 12,
+				Margin = new Thickness(2, layout.Children.Count == 0 ? 0 : 8, 0, 2)
+			});
+		}
+
+		void AddNavigationButton(int pageIndex, string text)
+		{
+			var button = CreateSettingsNavigationButton(text, () => SelectSettingsPage(pageIndex));
+			buttons.Add(button);
+			layout.Children.Add(button);
+		}
+	}
+
+	private static Button CreateSettingsNavigationButton(string text, Action action)
+	{
+		var button = new Button
+		{
+			Content = new TextBlock
+			{
+				Text = text,
+				TextTrimming = TextTrimming.CharacterEllipsis,
+				VerticalAlignment = VerticalAlignment.Center
+			},
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			HorizontalContentAlignment = HorizontalAlignment.Stretch,
+			Padding = new Thickness(8, 4),
+			BorderThickness = new Thickness(1),
+			Cursor = new Cursor(StandardCursorType.Hand)
+		};
+		button.Click += (_, _) => action();
+		return button;
+	}
+
+	private void SelectSettingsPage(int pageIndex)
+	{
+		if ((uint)pageIndex >= (uint)_settingsPages.Length)
+		{
+			return;
+		}
+
+		_settingsPageIndex = pageIndex;
+		_settingsPageHost.Content = _settingsPages[pageIndex];
+		RefreshSettingsNavigation();
+	}
+
+	private void RefreshSettingsNavigation()
+	{
+		for (var i = 0; i < _settingsNavigationButtons.Length; i++)
+		{
+			var selected = i == _settingsPageIndex;
+			var button = _settingsNavigationButtons[i];
+			button.Background = new SolidColorBrush(selected ? Color.FromRgb(43, 73, 103) : Color.FromRgb(28, 34, 43));
+			button.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(104, 168, 224) : Color.FromRgb(48, 58, 72));
+			button.Foreground = new SolidColorBrush(selected ? Color.FromRgb(246, 251, 255) : Color.FromRgb(203, 213, 225));
+			if (button.Content is TextBlock text)
+			{
+				text.Foreground = button.Foreground;
+				text.FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal;
+			}
+		}
+	}
+
+	private Control CreateProfilesSettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var profileList = CreateSettingsGroupForm();
 		_profileDirectoryText = new TextBlock
 		{
 			Foreground = new SolidColorBrush(Color.FromRgb(170, 184, 202)),
 			TextWrapping = TextWrapping.Wrap
 		};
-		layout.Children.Add(CreateSettingsRow("Folder", _profileDirectoryText));
+		profileList.Children.Add(CreateSettingsRow("Folder", _profileDirectoryText));
 		_profileList = new ListBox
 		{
-			MinHeight = 140,
-			MaxHeight = 180,
+			MinHeight = 220,
+			MaxHeight = 300,
 			HorizontalAlignment = HorizontalAlignment.Stretch
 		};
-		layout.Children.Add(CreateSettingsRow("Choose", _profileList));
-		layout.Children.Add(CreateSettingsSection("Profile"));
-		_profileIdBox = AddTextSetting(layout, "Profile id");
-		_profileNameBox = AddTextSetting(layout, "Display name");
-		_profileDescriptionBox = AddTextSetting(layout, "Description");
-		_kickstartSourceBox = AddComboSetting(layout, "Kickstart", ["CopperStart", "KickstartRom", "Kickstart13Rom", "DiagRom"]);
-		_kickstartRomBox = AddTextSetting(layout, "Kickstart ROM");
-		_cpuBackendBox = AddComboSetting(layout, "CPU", ["AccurateM68000", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68000", "JitM68040"]);
-		layout.Children.Add(CreateSettingsSection("Memory"));
-		_chipRamBox = AddTextSetting(layout, "Chip RAM KB");
-		_pseudoFastRamBox = AddTextSetting(layout, "Pseudo-fast RAM KB");
-		_pseudoFastBaseBox = AddTextSetting(layout, "Pseudo-fast base");
-		_realFastRamBox = AddTextSetting(layout, "Real fast RAM KB");
-		_realFastBaseBox = AddTextSetting(layout, "Real fast base");
+		profileList.Children.Add(CreateSettingsRow("Choose", _profileList));
+		layout.Children.Add(CreateSettingsGroup("Profile Set", profileList));
+
+		var profileMetadata = CreateSettingsGroupForm();
+		_profileIdBox = AddTextSetting(profileMetadata, "Profile id");
+		_profileNameBox = AddTextSetting(profileMetadata, "Display name");
+		_profileDescriptionBox = AddTextSetting(profileMetadata, "Description");
+		layout.Children.Add(CreateSettingsGroup("Profile Metadata", profileMetadata));
+
+		return CreateScrollableSettingsPage(layout);
+	}
+
+	private Control CreateMachineSettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var kickstart = CreateSettingsGroupForm();
+		_kickstartSourceBox = AddComboSetting(kickstart, "Kickstart", ["CopperStart", "KickstartRom", "Kickstart13Rom", "DiagRom"]);
+		_kickstartRomBox = AddTextSetting(kickstart, "ROM path");
+		var cpu = CreateSettingsGroupForm();
+		_cpuBackendBox = AddComboSetting(cpu, "CPU backend", ["AccurateM68000", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68000", "JitM68040"]);
+
+		layout.Children.Add(CreateSettingsGroupPair(
+			CreateSettingsGroup("Kickstart", kickstart),
+			CreateSettingsGroup("CPU", cpu)));
+
+		return CreateScrollableSettingsPage(layout);
+	}
+
+	private Control CreateMemorySettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var chipAndPseudoFast = CreateSettingsGroupForm();
+		_chipRamBox = AddTextSetting(chipAndPseudoFast, "Chip RAM KB");
+		_pseudoFastRamBox = AddTextSetting(chipAndPseudoFast, "Pseudo-fast KB");
+		_pseudoFastBaseBox = AddTextSetting(chipAndPseudoFast, "Pseudo-fast base");
+		var realFast = CreateSettingsGroupForm();
+		_realFastRamBox = AddTextSetting(realFast, "Real fast KB");
+		_realFastBaseBox = AddTextSetting(realFast, "Real fast base");
 		_rtcEnabledBox = new CheckBox { Content = "Enabled" };
 		_rtcEnabledBox.IsCheckedChanged += (_, _) => ApplyRtcEnabledSetting();
-		layout.Children.Add(CreateSettingsRow("RTC clock", _rtcEnabledBox));
-		layout.Children.Add(CreateSettingsSection("Floppy drives"));
-		_floppyDriveCountBox = AddComboSetting(layout, "Floppy drives", ["1", "2", "3", "4"], markRestart: false);
+		realFast.Children.Add(CreateSettingsRow("RTC clock", _rtcEnabledBox));
+
+		layout.Children.Add(CreateSettingsGroupPair(
+			CreateSettingsGroup("Chip and Pseudo-fast RAM", chipAndPseudoFast),
+			CreateSettingsGroup("Real Fast RAM", realFast)));
+
+		return CreateScrollableSettingsPage(layout);
+	}
+
+	private Control CreateFloppySettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var driveOptions = CreateSettingsGroupForm();
+		_floppyDriveCountBox = AddComboSetting(driveOptions, "Connected", ["1", "2", "3", "4"], markRestart: false);
 		_floppyDriveCountBox.SelectionChanged += (_, _) => ApplyFloppyDriveCountSetting();
+		layout.Children.Add(CreateSettingsGroup("Drive Configuration", driveOptions));
+
+		var driveMedia = CreateSettingsGroupForm();
 		for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
 		{
-			var row = new StackPanel
+			var row = new Grid
 			{
-				Orientation = Orientation.Horizontal,
-				Spacing = 6
+				ColumnDefinitions =
+				{
+					new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+					new ColumnDefinition(GridLength.Auto),
+					new ColumnDefinition(GridLength.Auto)
+				}
 			};
 			var box = new TextBox
 			{
-				MinWidth = 420,
+				MinWidth = 300,
+				HorizontalAlignment = HorizontalAlignment.Stretch,
 				PlaceholderText = $"DF{driveIndex} disk image"
 			};
 			var index = driveIndex;
 			var browse = CreatePanelButton("Browse", () => _ = PickSettingsDiskAsync(index));
+			browse.Margin = new Thickness(6, 0, 0, 0);
 			box.TextChanged += (_, _) => ApplyDrivePathTextSetting(index);
 			var writeProtect = new CheckBox
 			{
 				Content = "WP",
-				VerticalAlignment = VerticalAlignment.Center
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(8, 0, 0, 0)
 			};
 			writeProtect.IsCheckedChanged += async (_, _) =>
 			{
@@ -1104,75 +1785,161 @@ internal sealed class MainWindow : Window
 			_driveBrowseButtons[driveIndex] = browse;
 			_driveWriteProtectBoxes[driveIndex] = writeProtect;
 			row.Children.Add(box);
+			Grid.SetColumn(browse, 1);
 			row.Children.Add(browse);
+			Grid.SetColumn(writeProtect, 2);
 			row.Children.Add(writeProtect);
-			layout.Children.Add(CreateSettingsRow($"DF{driveIndex}", row));
+			driveMedia.Children.Add(CreateSettingsRow($"DF{driveIndex}", row));
 		}
 
-		return new ScrollViewer { Content = layout };
+		layout.Children.Add(CreateSettingsGroup("Disk Images", driveMedia));
+		return CreateScrollableSettingsPage(layout);
 	}
 
-	private Control CreateAdvancedSettingsPage()
+	private Control CreateDisplaySettingsPage()
 	{
-		var layout = CreateSettingsForm();
-		layout.Children.Add(CreateSettingsSection("Display"));
-		_lacedPresentationModeBox = AddComboSetting(layout, "Laced display", ["CRT flicker", "Stable weave"], markRestart: false);
+		var layout = CreateSettingsPageLayout();
+
+		var display = CreateSettingsGroupForm();
+		_lacedPresentationModeBox = AddComboSetting(display, "Laced display", ["CRT flicker", "Stable weave"], markRestart: false);
 		_lacedPresentationModeBox.SelectionChanged += (_, _) => ApplyPresentationSettingsLive();
-		layout.Children.Add(CreateSettingsSection("Audio"));
+		layout.Children.Add(CreateSettingsGroup("Video Output", display));
+
+		return CreateScrollableSettingsPage(layout);
+	}
+
+	private Control CreateAudioSettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var audio = CreateSettingsGroupForm();
 		_floppySoundsEnabledBox = new CheckBox { Content = "Enabled" };
 		_floppySoundsEnabledBox.IsCheckedChanged += (_, _) => ApplyFloppySoundsEnabledSetting();
-		layout.Children.Add(CreateSettingsRow("Floppy sounds", _floppySoundsEnabledBox));
-		_floppySoundModeBox = AddComboSetting(layout, "Sound mode", ["Synthetic", "Samples"]);
-		_floppySoundPackBox = AddTextSetting(layout, "Sound pack");
-		_floppySoundVolumeBox = AddTextSetting(layout, "Sound volume");
-		layout.Children.Add(CreateSettingsSection("Input"));
-		_port1ControllerBox = AddComboSetting(layout, "Port 1 controller", [], markRestart: false);
+		audio.Children.Add(CreateSettingsRow("Floppy sounds", _floppySoundsEnabledBox));
+		_floppySoundModeBox = AddComboSetting(audio, "Sound mode", ["Synthetic", "Samples"]);
+		_floppySoundPackBox = AddTextSetting(audio, "Sound pack");
+		_floppySoundVolumeBox = AddTextSetting(audio, "Sound volume");
+		layout.Children.Add(CreateSettingsGroup("Floppy Drive Sound", audio));
+
+		return CreateScrollableSettingsPage(layout);
+	}
+
+	private Control CreateInputSettingsPage()
+	{
+		var layout = CreateSettingsPageLayout();
+
+		var ports = CreateSettingsGroupForm();
+		_port1ControllerBox = AddComboSetting(ports, "Port 1 controller", [], markRestart: false);
 		_port1ControllerBox.SelectionChanged += (_, _) => ApplyInputSettingsLive();
-		_port2ControllerBox = AddComboSetting(layout, "Port 2 controller", [], markRestart: false);
+		_port2ControllerBox = AddComboSetting(ports, "Port 2 controller", [], markRestart: false);
 		_port2ControllerBox.SelectionChanged += (_, _) => ApplyInputSettingsLive();
-		_controllerProfileChooser = AddComboSetting(layout, "Edit profile", [], markRestart: false);
+		layout.Children.Add(CreateSettingsGroup("Joystick Ports", ports));
+
+		var profile = CreateSettingsGroupForm();
+		_controllerProfileChooser = AddComboSetting(profile, "Edit profile", [], markRestart: false);
 		_controllerProfileChooser.SelectionChanged += (_, _) => RefreshSelectedControllerProfileEditor();
-		_controllerProfileNameBox = AddTextSetting(layout, "Profile name", markRestart: false);
+		_controllerProfileNameBox = AddTextSetting(profile, "Profile name", markRestart: false);
 		_controllerProfileNameBox.LostFocus += (_, _) => ApplyControllerProfileEditor();
-		_controllerProfileKindBox = AddComboSetting(layout, "Profile kind", ["None", "Mouse", "KeyboardJoystick", "Gamepad"], markRestart: false);
+		_controllerProfileKindBox = AddComboSetting(profile, "Profile kind", ["None", "Mouse", "KeyboardJoystick", "Gamepad"], markRestart: false);
 		_controllerProfileKindBox.SelectionChanged += (_, _) => ApplyControllerProfileEditor();
+		layout.Children.Add(CreateSettingsGroup("Controller Profile", profile));
+
+		var keyboardMap = CreateSettingsGroupForm();
 		var labels = new[] { "Joy up", "Joy down", "Joy left", "Joy right", "Joy fire", "Joy second" };
 		for (var i = 0; i < _joystickKeyBoxes.Length; i++)
 		{
-			var box = AddTextSetting(layout, labels[i], markRestart: false);
+			var box = AddTextSetting(keyboardMap, labels[i], markRestart: false);
 			var index = i;
 			box.LostFocus += (_, _) => ApplyControllerProfileEditor();
 			_joystickKeyBoxes[index] = box;
 		}
+		layout.Children.Add(CreateSettingsGroup("Keyboard Joystick Map", keyboardMap));
 
-		return new ScrollViewer { Content = layout };
+		return CreateScrollableSettingsPage(layout);
 	}
 
-	private static StackPanel CreateSettingsForm()
+	private static StackPanel CreateSettingsPageLayout()
 	{
 		return new StackPanel
 		{
 			Orientation = Orientation.Vertical,
-			Spacing = 7,
-			Margin = new Thickness(0, 2, 12, 2)
+			Spacing = 8,
+			Margin = new Thickness(0, 0, 8, 0)
 		};
 	}
 
-	private static TextBlock CreateSettingsSection(string text)
+	private static StackPanel CreateSettingsGroupForm()
 	{
-		return new TextBlock
+		return new StackPanel
 		{
-			Text = text,
-			FontSize = 15,
-			FontWeight = FontWeight.SemiBold,
-			Foreground = new SolidColorBrush(Color.FromRgb(232, 240, 248)),
-			Margin = new Thickness(0, 8, 0, 2)
+			Orientation = Orientation.Vertical,
+			Spacing = 7
 		};
+	}
+
+	private static ScrollViewer CreateScrollableSettingsPage(Control content)
+	{
+		return new ScrollViewer
+		{
+			Content = content,
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch
+		};
+	}
+
+	private static Border CreateSettingsGroup(string title, Control content)
+	{
+		var layout = new StackPanel
+		{
+			Orientation = Orientation.Vertical,
+			Spacing = 7
+		};
+		layout.Children.Add(new TextBlock
+		{
+			Text = title,
+			FontSize = 13,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = new SolidColorBrush(Color.FromRgb(116, 190, 255)),
+			Margin = new Thickness(0, 0, 0, 1)
+		});
+		layout.Children.Add(content);
+
+		return new Border
+		{
+			Background = new SolidColorBrush(Color.FromRgb(24, 29, 36)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(70, 82, 98)),
+			BorderThickness = new Thickness(1),
+			CornerRadius = new CornerRadius(4),
+			Padding = new Thickness(10, 8),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			Child = layout
+		};
+	}
+
+	private static Grid CreateSettingsGroupPair(Control left, Control right)
+	{
+		var grid = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			}
+		};
+		grid.Children.Add(left);
+		right.Margin = new Thickness(8, 0, 0, 0);
+		Grid.SetColumn(right, 1);
+		grid.Children.Add(right);
+		return grid;
 	}
 
 	private TextBox AddTextSetting(StackPanel layout, string label, bool markRestart = true)
 	{
-		var box = new TextBox { MinWidth = 320 };
+		var box = new TextBox
+		{
+			MinWidth = 220,
+			HorizontalAlignment = HorizontalAlignment.Stretch
+		};
 		if (markRestart)
 		{
 			box.TextChanged += (_, _) => MarkSettingsRestartRequired();
@@ -1187,7 +1954,8 @@ internal sealed class MainWindow : Window
 		var combo = new ComboBox
 		{
 			ItemsSource = items,
-			MinWidth = 180
+			MinWidth = 180,
+			HorizontalAlignment = HorizontalAlignment.Stretch
 		};
 		if (markRestart)
 		{
@@ -1204,16 +1972,19 @@ internal sealed class MainWindow : Window
 		{
 			ColumnDefinitions =
 			{
-				new ColumnDefinition(new GridLength(150)),
+				new ColumnDefinition(new GridLength(SettingsRowLabelWidth)),
 				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
-			}
+			},
+			MinHeight = 28
 		};
 		row.Children.Add(new TextBlock
 		{
 			Text = label,
 			Foreground = new SolidColorBrush(Color.FromRgb(198, 208, 220)),
+			TextTrimming = TextTrimming.CharacterEllipsis,
 			VerticalAlignment = VerticalAlignment.Center
 		});
+		control.HorizontalAlignment = HorizontalAlignment.Stretch;
 		Grid.SetColumn(control, 1);
 		row.Children.Add(control);
 		return row;
@@ -1401,7 +2172,7 @@ internal sealed class MainWindow : Window
 			_floppySoundVolumeBox.Text = _settingsDraft.FloppyDriveAudio.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_lacedPresentationModeBox.SelectedItem = FormatLacedPresentationMode(_settingsDraft.PresentationOptions.LacedMode);
 			RefreshControllerSelectors();
-			_settingsTabs.SelectedIndex = Math.Clamp(_settingsPageIndex, 0, _settingsTabs.ItemCount - 1);
+			SelectSettingsPage(Math.Clamp(_settingsPageIndex, 0, _settingsPages.Length - 1));
 		}
 		finally
 		{
@@ -1543,6 +2314,7 @@ internal sealed class MainWindow : Window
 		_settingsDraft.MarkRequiresRestart();
 		_inputOptions = _settingsDraft.Input;
 		_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
+		SyncGamepadControllers();
 		RefreshSettingsUi();
 	}
 
@@ -1617,6 +2389,7 @@ internal sealed class MainWindow : Window
 		_runtime = CopperScreenRuntime.Create(options);
 		_runtime.FramePublished += QueueFramePresentation;
 		_latestState = _runtime.CurrentState;
+		ApplyCurrentGamepadSnapshots();
 		_lastSeenFrameNumber = 0;
 		_presentedFrames = 0;
 		_settingsDraft.ClearRestartRequired();
@@ -1669,6 +2442,8 @@ internal sealed class MainWindow : Window
 			_inputOptions = _settingsDraft.Input;
 			_runtime?.SetInputOptions(_inputOptions);
 			_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
+			RebuildGamepadPortBindings();
+			ApplyCurrentGamepadSnapshots();
 			ClearSettingsStartupError();
 			return true;
 		}
@@ -1756,6 +2531,8 @@ internal sealed class MainWindow : Window
 			_settingsDraft.Input = _settingsDraft.Input.WithControllerProfiles(profiles);
 			_inputOptions = _settingsDraft.Input;
 			_runtime?.SetInputOptions(_inputOptions);
+			RebuildGamepadPortBindings();
+			ApplyCurrentGamepadSnapshots();
 			RefreshControllerSelectors();
 			_updatingSettingsUi = true;
 			try
@@ -1790,6 +2567,8 @@ internal sealed class MainWindow : Window
 			_settingsDraft.Input = ReadInputOptionsFromUi();
 			_inputOptions = _settingsDraft.Input;
 			_runtime?.SetInputOptions(_inputOptions);
+			RebuildGamepadPortBindings();
+			ApplyCurrentGamepadSnapshots();
 			UpdateSettingsStatus();
 		}
 		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
@@ -1849,6 +2628,11 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		if (await TryAssignArchiveDiskSetAsync(path).ConfigureAwait(true))
+		{
+			return;
+		}
+
 		ClearSettingsStartupError();
 		_settingsDraft.DriveDiskPaths[driveIndex] = path;
 		SetDrivePathTextSilently(driveIndex, path);
@@ -1862,6 +2646,256 @@ internal sealed class MainWindow : Window
 			UpdateToolbarStatus();
 		}
 		UpdateSettingsStatus();
+	}
+
+	private async Task<bool> TryAssignArchiveDiskSetAsync(string path)
+	{
+		if (!CopperScreenDiskImageArchive.TryReadDiskSet(path, out var diskSet, out var error))
+		{
+			return false;
+		}
+
+		if (error != null)
+		{
+			SetSettingsError(error);
+			return true;
+		}
+
+		if (diskSet == null || diskSet.Entries.Count < 2)
+		{
+			return false;
+		}
+
+		var result = await ShowArchiveDiskAssignmentDialogAsync(diskSet).ConfigureAwait(true);
+		if (result == null)
+		{
+			return true;
+		}
+
+		await ApplyArchiveDiskAssignmentsAsync(result).ConfigureAwait(true);
+		return true;
+	}
+
+	private Task<ArchiveDiskAssignmentDialogResult?> ShowArchiveDiskAssignmentDialogAsync(CopperScreenArchiveDiskSet diskSet)
+	{
+		var defaultAssignments = diskSet.CreateDefaultAssignments();
+		var choices = new List<ArchiveEntryChoice> { new("(empty)", null) };
+		choices.AddRange(diskSet.Entries.Select(entry => new ArchiveEntryChoice(entry.ToString(), entry.ReferencePath)));
+		var comboBoxes = new ComboBox[4];
+		var rowLabels = new TextBlock[4];
+		var currentDriveCount = Math.Clamp(_settingsDraft.FloppyDriveCount, 1, 4);
+		var defaultDriveCount = Math.Max(currentDriveCount, GetRequiredDriveCount(defaultAssignments));
+		var canConnectExtraDrives = currentDriveCount < 4;
+		var connectExtraBox = canConnectExtraDrives
+			? new CheckBox
+			{
+				Content = "Temporarily connect additional floppy drives",
+				IsChecked = defaultDriveCount > currentDriveCount,
+				Foreground = new SolidColorBrush(Color.FromRgb(220, 226, 235)),
+				Margin = new Thickness(0, 2, 0, 2)
+			}
+			: null;
+
+		var dialog = new Window
+		{
+			Title = "Assign ZIP Disk Images",
+			SizeToContent = SizeToContent.WidthAndHeight,
+			CanResize = false,
+			WindowStartupLocation = WindowStartupLocation.CenterOwner,
+			Background = new SolidColorBrush(Color.FromRgb(14, 18, 24))
+		};
+
+		var layout = new Grid
+		{
+			Width = 640,
+			RowDefinitions =
+			{
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(GridLength.Auto),
+				new RowDefinition(GridLength.Auto)
+			},
+			Margin = new Thickness(14)
+		};
+
+		var title = new TextBlock
+		{
+			Text = $"{Path.GetFileName(diskSet.ArchivePath)} contains {diskSet.Entries.Count} disk images",
+			FontSize = 17,
+			FontWeight = FontWeight.SemiBold,
+			Foreground = Brushes.White,
+			Margin = new Thickness(0, 0, 0, 4)
+		};
+		Grid.SetRow(title, 0);
+		layout.Children.Add(title);
+
+		var details = new TextBlock
+		{
+			Text = "Choose which image goes into each floppy drive for this run.",
+			Foreground = new SolidColorBrush(Color.FromRgb(190, 202, 218)),
+			TextWrapping = TextWrapping.Wrap,
+			Margin = new Thickness(0, 0, 0, 8)
+		};
+		Grid.SetRow(details, 1);
+		layout.Children.Add(details);
+
+		var form = CreateSettingsGroupForm();
+		if (connectExtraBox != null)
+		{
+			form.Children.Add(connectExtraBox);
+		}
+
+		for (var driveIndex = 0; driveIndex < comboBoxes.Length; driveIndex++)
+		{
+			var combo = new ComboBox
+			{
+				ItemsSource = choices,
+				MinWidth = 420,
+				HorizontalAlignment = HorizontalAlignment.Stretch
+			};
+			var defaultPath = defaultAssignments[driveIndex].DiskPath;
+			combo.SelectedItem = choices.FirstOrDefault(choice => string.Equals(choice.DiskPath, defaultPath, StringComparison.Ordinal)) ?? choices[0];
+			comboBoxes[driveIndex] = combo;
+			var label = new TextBlock
+			{
+				Text = $"DF{driveIndex}",
+				Foreground = new SolidColorBrush(Color.FromRgb(198, 208, 220)),
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			rowLabels[driveIndex] = label;
+			form.Children.Add(CreateSettingsRow(label, combo));
+		}
+
+		if (connectExtraBox != null)
+		{
+			connectExtraBox.IsCheckedChanged += (_, _) => RefreshDriveRows();
+		}
+		RefreshDriveRows();
+
+		Grid.SetRow(form, 2);
+		layout.Children.Add(form);
+
+		var commands = new StackPanel
+		{
+			Orientation = Orientation.Horizontal,
+			Spacing = 6,
+			HorizontalAlignment = HorizontalAlignment.Right,
+			Margin = new Thickness(0, 12, 0, 0)
+		};
+		commands.Children.Add(CreatePanelButton("Cancel", () => dialog.Close(null)));
+		commands.Children.Add(CreatePanelButton("Assign", () =>
+		{
+			var assignments = new CopperScreenDriveDiskAssignment[4];
+			var enabledDriveCount = GetEnabledDriveCount();
+			for (var driveIndex = 0; driveIndex < assignments.Length; driveIndex++)
+			{
+				var selected = driveIndex < enabledDriveCount ? comboBoxes[driveIndex].SelectedItem as ArchiveEntryChoice : null;
+				assignments[driveIndex] = new CopperScreenDriveDiskAssignment(driveIndex, selected?.DiskPath);
+			}
+
+			var driveCount = Math.Max(currentDriveCount, GetRequiredDriveCount(assignments));
+			dialog.Close(new ArchiveDiskAssignmentDialogResult(assignments, driveCount));
+		}));
+		Grid.SetRow(commands, 3);
+		layout.Children.Add(commands);
+
+		dialog.Content = new Border
+		{
+			Background = new SolidColorBrush(Color.FromRgb(20, 24, 31)),
+			BorderBrush = new SolidColorBrush(Color.FromRgb(92, 108, 132)),
+			BorderThickness = new Thickness(1),
+			Padding = new Thickness(0),
+			Child = layout
+		};
+
+		return dialog.ShowDialog<ArchiveDiskAssignmentDialogResult?>(this);
+
+		void RefreshDriveRows()
+		{
+			var driveCount = GetEnabledDriveCount();
+			for (var driveIndex = 0; driveIndex < comboBoxes.Length; driveIndex++)
+			{
+				var enabled = driveIndex < driveCount;
+				comboBoxes[driveIndex].IsEnabled = enabled;
+				rowLabels[driveIndex].Foreground = new SolidColorBrush(enabled
+					? Color.FromRgb(198, 208, 220)
+					: Color.FromRgb(118, 129, 145));
+			}
+		}
+
+		int GetEnabledDriveCount()
+			=> connectExtraBox?.IsChecked == true ? 4 : currentDriveCount;
+	}
+
+	private static Grid CreateSettingsRow(TextBlock label, Control control)
+	{
+		var row = new Grid
+		{
+			ColumnDefinitions =
+			{
+				new ColumnDefinition(new GridLength(SettingsRowLabelWidth)),
+				new ColumnDefinition(new GridLength(1, GridUnitType.Star))
+			},
+			MinHeight = 28
+		};
+		row.Children.Add(label);
+		control.HorizontalAlignment = HorizontalAlignment.Stretch;
+		Grid.SetColumn(control, 1);
+		row.Children.Add(control);
+		return row;
+	}
+
+	private async Task ApplyArchiveDiskAssignmentsAsync(ArchiveDiskAssignmentDialogResult result)
+	{
+		ClearSettingsStartupError();
+		var driveCount = Math.Clamp(result.FloppyDriveCount, 1, 4);
+		var wasUpdating = _updatingSettingsUi;
+		_updatingSettingsUi = true;
+		try
+		{
+			_settingsDraft.FloppyDriveCount = driveCount;
+			_floppyDriveCountBox.SelectedItem = driveCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			for (var driveIndex = 0; driveIndex < _settingsDraft.DriveDiskPaths.Length; driveIndex++)
+			{
+				var assignment = result.Assignments.FirstOrDefault(item => item.DriveIndex == driveIndex);
+				_settingsDraft.DriveDiskPaths[driveIndex] = assignment.DiskPath;
+				_settingsDraft.DriveWriteProtected[driveIndex] = null;
+				_drivePathBoxes[driveIndex].Text = assignment.DiskPath ?? string.Empty;
+				_driveWriteProtectBoxes[driveIndex].IsChecked = null;
+			}
+		}
+		finally
+		{
+			_updatingSettingsUi = wasUpdating;
+		}
+
+		UpdateDriveSettingsEnabled();
+		if (_runtime == null)
+		{
+			_latestState = CreateIdleState(_settingsDraft);
+			UpdateToolbarStatus();
+			_settingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(206, 248, 213));
+			_settingsStatus.Text = $"Assigned {result.Assignments.Count(assignment => !string.IsNullOrWhiteSpace(assignment.DiskPath))} ZIP disk image(s)";
+			return;
+		}
+
+		_settingsDraft.MarkRequiresRestart();
+		UpdateSettingsStatus();
+		await StartRuntimeFromSettingsAsync().ConfigureAwait(true);
+	}
+
+	private static int GetRequiredDriveCount(IReadOnlyList<CopperScreenDriveDiskAssignment> assignments)
+	{
+		var driveCount = 1;
+		foreach (var assignment in assignments)
+		{
+			if (!string.IsNullOrWhiteSpace(assignment.DiskPath))
+			{
+				driveCount = Math.Max(driveCount, assignment.DriveIndex + 1);
+			}
+		}
+
+		return Math.Clamp(driveCount, 1, 4);
 	}
 
 	private void SetSettingsError(string error)
@@ -2367,6 +3401,8 @@ internal sealed class MainWindow : Window
 			Grid.SetRow(_debuggerPanel, 0);
 			Grid.SetRowSpan(_debuggerPanel, 2);
 			_debuggerPanel.Margin = new Thickness(12, 78, 12, 12);
+			Grid.SetRow(_gamepadAssignmentOverlay, 0);
+			Grid.SetRowSpan(_gamepadAssignmentOverlay, 2);
 			return;
 		}
 
@@ -2378,6 +3414,8 @@ internal sealed class MainWindow : Window
 		Grid.SetRow(_debuggerPanel, 1);
 		Grid.SetRowSpan(_debuggerPanel, 1);
 		_debuggerPanel.Margin = new Thickness(12, 12, 12, 12);
+		Grid.SetRow(_gamepadAssignmentOverlay, 1);
+		Grid.SetRowSpan(_gamepadAssignmentOverlay, 1);
 	}
 
 	private void ToggleOverscan()
@@ -2624,6 +3662,11 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		if (await TryAssignArchiveDiskSetAsync(path).ConfigureAwait(true))
+		{
+			return;
+		}
+
 		if ((uint)driveIndex < (uint)_settingsDraft.DriveDiskPaths.Length)
 		{
 			_settingsDraft.DriveDiskPaths[driveIndex] = path;
@@ -2768,6 +3811,7 @@ internal sealed class MainWindow : Window
 		RefreshEntryList();
 		RefreshCopperBenchDetails();
 		UpdateToolbarStatus();
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private void RefreshDebuggerUi(CopperScreenDebugSnapshot? snapshot)
@@ -2777,6 +3821,7 @@ internal sealed class MainWindow : Window
 		{
 			_debuggerPanel.IsVisible = snapshot != null;
 			_benchPanel.IsVisible = _bench.IsOverlayVisible && snapshot == null;
+			TryShowNextGamepadAssignmentOverlay();
 			return;
 		}
 
@@ -2791,6 +3836,7 @@ internal sealed class MainWindow : Window
 			_debuggerDisassembly.Text = string.Empty;
 			_debuggerStack.Text = string.Empty;
 			_debuggerDevices.Text = string.Empty;
+			TryShowNextGamepadAssignmentOverlay();
 			return;
 		}
 
@@ -2800,6 +3846,7 @@ internal sealed class MainWindow : Window
 		_debuggerDisassembly.Text = string.Join(Environment.NewLine, snapshot.Disassembly);
 		_debuggerStack.Text = string.Join(Environment.NewLine, snapshot.StackWords);
 		_debuggerDevices.Text = FormatDebuggerDevices(snapshot);
+		TryShowNextGamepadAssignmentOverlay();
 	}
 
 	private static string FormatDebuggerDevices(CopperScreenDebugSnapshot snapshot)
@@ -2939,7 +3986,13 @@ internal sealed class MainWindow : Window
 			$"Video queue: {state.PresentationQueueDepth}/{state.PresentationQueueCapacity}\n" +
 			$"Video queue throttles: {state.PresentationQueueFullThrottleCount}\n" +
 			$"Emulator frame: {state.LastEmulationFrameMilliseconds:F2} ms\n" +
+			$"  CPU/boot: {state.LastCpuFrameMilliseconds:F2} ms\n" +
+			$"  Hardware catch-up: {state.LastHardwareFrameMilliseconds:F2} ms\n" +
+			$"  Display render: {state.LastDisplayFrameMilliseconds:F2} ms\n" +
+			$"  Audio extract/mix: {state.LastAudioFrameMilliseconds:F2} ms\n" +
+			$"Presentation buffer reserve: {state.LastPresentationBufferReserveMilliseconds:F2} ms\n" +
 			$"Runtime publish: {state.LastPublishFrameMilliseconds:F2} ms\n" +
+			$"Runtime publish copy: {state.LastPublishCopyMilliseconds:F2} ms\n" +
 			$"Presentation callback: {_lastPresentationFrameMilliseconds:F2} ms\n" +
 			$"Framebuffer upload: {_lastPresenterUpdateMilliseconds:F2} ms\n" +
 			$"Framebuffer render: {_presenter.LastRenderMilliseconds:F2} ms";

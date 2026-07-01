@@ -222,6 +222,11 @@ namespace CopperMod.Sid
             }
 
             var mapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+            if ((waveformMask & 0x80) != 0)
+            {
+                return mapped;
+            }
+
             var disagreement = (sourceBleedUnion & ~combinedDac) & 0x0FFFu;
             var bleed = (disagreement >> Math.Min(activeWaveforms + 2, 5)) & (uint)GetMos6581CombinedWeakMask(waveformMask);
             return (mapped | bleed) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
@@ -635,7 +640,7 @@ namespace CopperMod.Sid
 
                 if ((mask & 0x80) != 0)
                 {
-                    bias[mask] -= 0.010;
+                    bias[mask] = Mos6581CombinedWaveformGain[mask];
                 }
             }
 

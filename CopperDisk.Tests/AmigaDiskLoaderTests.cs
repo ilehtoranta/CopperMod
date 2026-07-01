@@ -66,6 +66,19 @@ public sealed class AmigaDiskLoaderTests
     }
 
     [Fact]
+    public void EncodedTrackReadsAcrossByteBoundariesAndWrapsAtBitLength()
+    {
+        var track = new AmigaEncodedTrack(new byte[] { 0x12, 0x34, 0x50 }, 20);
+        var fullTrack = new AmigaEncodedTrack(new byte[] { 0x12, 0x34, 0x56, 0x78, 0x90 }, 40);
+
+        Assert.Equal(0x12, track.ReadByteAtBit(0));
+        Assert.Equal(0x2345, track.ReadUInt16AtBit(4));
+        Assert.Equal(0x5123, track.ReadUInt16AtBit(16));
+        Assert.Equal(0x2345u, track.ReadUInt32AtBit(4) >> 16);
+        Assert.Equal(0x23456789u, fullTrack.ReadUInt32AtBit(4));
+    }
+
+    [Fact]
     public void UnformattedTrackUsesPalSizedSyntheticRevolution()
     {
         var track = AmigaDosTrackEncoder.CreateUnformattedTrack();

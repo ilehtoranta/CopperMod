@@ -121,15 +121,21 @@ public sealed class SidPlayFpWaveformOracleTests
 			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected oracle WAV: " + wavPath);
 
 			var reference = MeasurementWav.Read(wavPath);
-			var candidate = RenderCopperMod(sidPath, RenderSeconds);
+			var candidateRaw = RenderCopperMod(sidPath, RenderSeconds);
+			var candidatePlayer = RenderCopperModPlayer(candidateRaw);
 			Assert.Equal(SampleRate, reference.SampleRate);
 			Assert.True(reference.Samples.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
-			Assert.True(candidate.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
+			Assert.True(candidateRaw.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
+			Assert.True(candidatePlayer.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
 
-			WriteOptionalReport(reference.Samples, candidate);
+			WriteOptionalReport(reference.Samples, candidateRaw, candidatePlayer);
 			for (var i = 0; i < Segments.Length; i++)
 			{
-				AssertSegmentMatches(Segments[i], i, reference.Samples, candidate);
+				AssertSegmentMatches(
+					Segments[i],
+					i,
+					reference.Samples,
+					CandidateForSegment(Segments[i], candidateRaw, candidatePlayer));
 			}
 		}
 		finally
@@ -409,7 +415,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	private static void WriteOptionalReport(float[] reference, float[] candidate)
+	private static void WriteOptionalReport(float[] reference, float[] candidateRaw, float[] candidatePlayer)
 	{
 		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_REPORT");
 		if (string.IsNullOrWhiteSpace(path))
@@ -420,10 +426,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		path = Path.GetFullPath(path);
 		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
 		var builder = new StringBuilder();
-		builder.AppendLine("segment,kind,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,corr");
+		builder.AppendLine("segment,kind,candidate_stream,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,corr");
 		for (var i = 0; i < Segments.Length; i++)
 		{
 			var segment = Segments[i];
+			var candidate = CandidateForSegment(segment, candidateRaw, candidatePlayer);
 			var start = SecondsToSamples(((i * FramesPerSegment) / (double)SegmentRate) + 0.10);
 			var length = SecondsToSamples(0.18);
 			var offset = FindBestCandidateOffset(reference, candidate, start, length, maxOffset: SampleRate / 40);
@@ -436,6 +443,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			builder
 				.Append(EscapeCsv(segment.Name)).Append(',')
 				.Append(segment.Kind).Append(',')
+				.Append(UsesPlayerOutputForSegment(segment.Name) ? "player" : "raw").Append(',')
 				.Append(offset.ToString(CultureInfo.InvariantCulture)).Append(',')
 				.Append(referenceMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append(candidateMean.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
@@ -448,6 +456,12 @@ public sealed class SidPlayFpWaveformOracleTests
 
 		File.WriteAllText(path, builder.ToString());
 	}
+
+	private static float[] CandidateForSegment(OracleSegment segment, float[] raw, float[] player)
+		=> UsesPlayerOutputForSegment(segment.Name) ? player : raw;
+
+	private static bool UsesPlayerOutputForSegment(string segmentName)
+		=> segmentName.StartsWith("pulse-width-", StringComparison.Ordinal);
 
 	private static string EscapeCsv(string value)
 		=> value.Contains(',') || value.Contains('"')
@@ -2786,6 +2800,12 @@ public sealed class SidPlayFpWaveformOracleTests
 	{
 		var candidateFlatness = SpectralFlatness(candidate, candidateStart, length);
 		Assert.InRange(candidateFlatness, 0.03, 1.05);
+		var referenceAc = AcRms(reference, referenceStart, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		var maximumCandidateAc = Math.Max(0.0010, referenceAc * 0.75);
+		Assert.True(
+			candidateAc <= maximumCandidateAc,
+			$"{segment.Name} combined-noise residue should stay near-null: reference AC {referenceAc:0.0000}, candidate AC {candidateAc:0.0000}, limit {maximumCandidateAc:0.0000}.");
 
 		ReadOnlySpan<double> bands = stackalloc[] { 1000.0, 2000.0, 4000.0, 8000.0, 12000.0, 16000.0 };
 		var referenceEnergy = 0.0;

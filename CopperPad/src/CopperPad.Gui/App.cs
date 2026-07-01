@@ -4,11 +4,14 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
+using Avalonia.Threading;
 
 namespace CopperPad.Gui;
 
 internal sealed class App : Application
 {
+	public static GuiStartupOptions StartupOptions { get; set; } = new(SmokeTest: false);
+
 	public override void Initialize()
 	{
 		RequestedThemeVariant = ThemeVariant.Dark;
@@ -19,14 +22,23 @@ internal sealed class App : Application
 	{
 		if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
 		{
+			var startupFailed = false;
 			try
 			{
 				desktop.MainWindow = new MainWindow();
 			}
 			catch (Exception ex)
 			{
+				startupFailed = true;
 				CrashLog.Write("Main window initialization failed", ex);
 				desktop.MainWindow = CreateCrashWindow(ex);
+			}
+
+			if (StartupOptions.SmokeTest)
+			{
+				var exitCode = startupFailed ? 1 : 0;
+				desktop.MainWindow.Opened += (_, _) =>
+					DispatcherTimer.RunOnce(() => desktop.Shutdown(exitCode), TimeSpan.FromMilliseconds(350));
 			}
 		}
 

@@ -265,6 +265,39 @@ public sealed class CopperScreenRuntimeTests
 	}
 
 	[Fact]
+	public void RuntimeRendersFramesDirectlyIntoQueuedPresentationBuffer()
+	{
+		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
+		var lastSeenFrameNumber = 0L;
+		DrainPresentationFrames(runtime, ref lastSeenFrameNumber);
+		const int sentinel = unchecked((int)0x55667788);
+		Array.Fill(emulator.Framebuffer, sentinel);
+
+		runtime.Start();
+
+		CopperScreenFrameLease? lease = null;
+		try
+		{
+			Assert.True(SpinWait.SpinUntil(() =>
+			{
+				lease = runtime.TryAcquireNextPresentationFrame(ref lastSeenFrameNumber);
+				return lease != null;
+			}, TimeSpan.FromSeconds(1)));
+
+			Assert.NotNull(lease);
+			Assert.NotEqual(sentinel, lease.Framebuffer[0]);
+			Assert.Equal(0, lease.State.LastPublishCopyMilliseconds);
+			Assert.True(lease.State.LastPresentationBufferReserveMilliseconds >= 0);
+			Assert.True(lease.State.LastDisplayFrameMilliseconds >= 0);
+		}
+		finally
+		{
+			lease?.Dispose();
+		}
+	}
+
+	[Fact]
 	public void FullPresentationQueueReplacesOldestQueuedFrameWithNewestFrame()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();

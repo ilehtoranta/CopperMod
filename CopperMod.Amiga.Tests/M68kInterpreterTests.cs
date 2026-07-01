@@ -4,6 +4,14 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class M68kInterpreterTests
 {
+	public static IEnumerable<object[]> OpcodePlanDispatchVariants()
+	{
+		yield return new object[] { (int)M68kOpcodePlanDispatch.KindTable };
+		yield return new object[] { (int)M68kOpcodePlanDispatch.ComputedKind };
+		yield return new object[] { (int)M68kOpcodePlanDispatch.PackedPlan };
+		yield return new object[] { (int)M68kOpcodePlanDispatch.DelegateTable };
+	}
+
 	[Fact]
 	public void MoveqAddqAndDbraUseDocumentedControlFlow()
 	{
@@ -148,6 +156,196 @@ public sealed class M68kInterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void PlannedInterpreterMatchesScalarForFullContactTransformLoop()
+	{
+		var program = Words(
+			0x2018, // MOVE.L (A0)+,D0
+			0x221A, // MOVE.L (A2)+,D1
+			0xB183, // EOR.L D0,D3
+			0xB383, // EOR.L D1,D3
+			0xC087, // AND.L D7,D0
+			0xC287, // AND.L D7,D1
+			0xD080, // ADD.L D0,D0
+			0x8081, // OR.L D1,D0
+			0x22C0, // MOVE.L D0,(A1)+
+			0x51CA, 0xFFEC, // DBRA D2,loop
+			0x60E8); // BRA.S loop
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true);
+		SetupTransformParityState(scalar.Cpu.State, scalar.Bus);
+		SetupTransformParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 64);
+
+		AssertParity(scalar, planned);
+		var counters = planned.Cpu.CapturePlannedInterpreterCounters();
+		Assert.True(counters.FastInstructions > 0);
+		Assert.True(counters.MoveInstructions > 0);
+		Assert.True(counters.RegisterArithmeticInstructions > 0);
+		Assert.True(counters.DbccInstructions > 0);
+	}
+
+	[Fact]
+	public void PlannedInterpreterUsesExactHotFullContactShapePlans()
+	{
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongPostincrementToData,
+			M68kOpcodePlanTable.Kinds[0x2018]);
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongPostincrementToData,
+			M68kOpcodePlanTable.Kinds[0x221A]);
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongDataToPostincrement,
+			M68kOpcodePlanTable.Kinds[0x22C0]);
+
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongEorToDestination,
+			M68kOpcodePlanTable.Kinds[0xB183]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongAndToRegister,
+			M68kOpcodePlanTable.Kinds[0xC087]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongAddToRegister,
+			M68kOpcodePlanTable.Kinds[0xD080]);
+		Assert.Equal(
+			M68kOpcodePlanKind.DataRegisterLongOrToRegister,
+			M68kOpcodePlanTable.Kinds[0x8081]);
+	}
+
+	[Fact]
+	public void PlannedDispatchTablesMatchKindTableForEveryOpcode()
+	{
+		for (var opcode = 0; opcode <= 0xFFFF; opcode++)
+		{
+			var word = (ushort)opcode;
+			var kind = M68kOpcodePlanTable.Kinds[word];
+			Assert.Equal(kind, M68kOpcodePlanTable.ComputeKind(word));
+			Assert.Equal(kind, M68kOpcodePlanTable.PackedPlans[word].Kind);
+			Assert.Equal(kind != M68kOpcodePlanKind.Unsupported, M68kInterpreter.HasDelegatePlanForOpcode(word));
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedDispatchVariantMatchesScalarForFullContactTransformLoop(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var program = Words(
+			0x2018, // MOVE.L (A0)+,D0
+			0x221A, // MOVE.L (A2)+,D1
+			0xB183, // EOR.L D0,D3
+			0xB383, // EOR.L D1,D3
+			0xC087, // AND.L D7,D0
+			0xC287, // AND.L D7,D1
+			0xD080, // ADD.L D0,D0
+			0x8081, // OR.L D1,D0
+			0x22C0, // MOVE.L D0,(A1)+
+			0x51CA, 0xFFEC, // DBRA D2,loop
+			0x60E8); // BRA.S loop
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+		SetupTransformParityState(scalar.Cpu.State, scalar.Bus);
+		SetupTransformParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 64);
+
+		AssertParity(scalar, planned);
+		Assert.True(planned.Cpu.CapturePlannedInterpreterCounters().FastInstructions > 0);
+	}
+
+	[Fact]
+	public void PlannedInterpreterMatchesScalarForBranchBtstAndImmediateLoop()
+	{
+		var program = Words(
+			0x322E, 0x0002, // MOVE.W 2(A6),D1
+			0x0201, 0x00FF, // ANDI.B #$FF,D1
+			0x6702, // BEQ.S skip
+			0x5380, // SUBQ.L #1,D0
+			0x0814, 0x000E, // BTST #14,(A4)
+			0x66F2, // BNE.S start
+			0x4E71); // NOP
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true);
+		SetupBranchParityState(scalar.Cpu.State, scalar.Bus);
+		SetupBranchParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 48);
+
+		AssertParity(scalar, planned);
+		var counters = planned.Cpu.CapturePlannedInterpreterCounters();
+		Assert.True(counters.BranchInstructions > 0);
+		Assert.True(counters.ImmediateInstructions > 0);
+		Assert.True(counters.ImmediateBtstInstructions > 0);
+		Assert.True(counters.QuickRegisterInstructions > 0);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedDispatchVariantMatchesScalarForDbraD0Loop(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var program = Words(
+			0x51C8, 0xFFFE, // DBRA D0,loop
+			0x4E71); // NOP
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+		scalar.Cpu.State.D[0] = 3;
+		planned.Cpu.State.D[0] = 3;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 5);
+
+		AssertParity(scalar, planned);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedDispatchVariantMatchesScalarForBranchBtstAndImmediateLoop(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var program = Words(
+			0x322E, 0x0002, // MOVE.W 2(A6),D1
+			0x0201, 0x00FF, // ANDI.B #$FF,D1
+			0x6702, // BEQ.S skip
+			0x5380, // SUBQ.L #1,D0
+			0x0814, 0x000E, // BTST #14,(A4)
+			0x66F2, // BNE.S start
+			0x4E71); // NOP
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+		SetupBranchParityState(scalar.Cpu.State, scalar.Bus);
+		SetupBranchParityState(planned.Cpu.State, planned.Bus);
+		planned.Cpu.PlannedInterpreterCountersEnabled = true;
+
+		ExecuteBoth(scalar.Cpu, planned.Cpu, 48);
+
+		AssertParity(scalar, planned);
+		Assert.True(planned.Cpu.CapturePlannedInterpreterCounters().FastInstructions > 0);
+	}
+
+	[Fact]
+	public void PlannedInterpreterUsesFetchedOpcodeNotProgramCounterCache()
+	{
+		var scalar = CreateParityCpu(Words(0x4E71), enableOpcodePlan: false);
+		var planned = CreateParityCpu(Words(0x4E71), enableOpcodePlan: true);
+
+		scalar.Cpu.ExecuteInstruction();
+		planned.Cpu.ExecuteInstruction();
+		Write(scalar.Bus.Memory, 0x1000, 0x70, 0x05); // MOVEQ #5,D0
+		Write(planned.Bus.Memory, 0x1000, 0x70, 0x05);
+		scalar.Cpu.State.ProgramCounter = 0x1000;
+		planned.Cpu.State.ProgramCounter = 0x1000;
+
+		scalar.Cpu.ExecuteInstruction();
+		planned.Cpu.ExecuteInstruction();
+
+		AssertParity(scalar, planned);
+		Assert.Equal(5u, planned.Cpu.State.D[0]);
 	}
 
 	[Fact]
@@ -1168,6 +1366,24 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void InterpreterUsesInstructionFetchWindowForSequentialOpcodeWords()
+	{
+		var bus = new InstructionFetchWindowBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x71); // NOP
+		Write(bus.Memory, 0x1002, 0x4E, 0x71); // NOP
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(1, bus.WindowRequests);
+		Assert.Equal(2, bus.WindowCommits);
+		Assert.Equal(0, bus.GenericInstructionFetchWordReads);
+		Assert.Equal(8, cpu.State.Cycles);
+	}
+
+	[Fact]
 	public void ClrMemoryReadsDestinationBeforeWritingZero()
 	{
 		var bus = new TestBus();
@@ -1195,6 +1411,73 @@ public sealed class M68kInterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void InterpreterUsesExactCpuDataBusForMemoryOperands()
+	{
+		var bus = new ExactCpuDataTestBus();
+		Write(bus.Memory, 0x1000, 0x20, 0x10); // MOVE.L (A0),D0
+		Write(bus.Memory, 0x1002, 0x22, 0x80); // MOVE.L D0,(A1)
+		Write(bus.Memory, 0x2000, 0x12, 0x34, 0x56, 0x78);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.A[1] = 0x3000;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.D[0]);
+		Assert.Equal(0x1234_5678u, ReadLong(bus.Memory, 0x3000));
+		Assert.Equal(1, bus.ExactReadLongCount);
+		Assert.Equal(1, bus.ExactWriteLongCount);
+		Assert.Equal(0, bus.GenericDataReadCount);
+		Assert.Equal(0, bus.GenericDataWriteCount);
+	}
+
+	[Fact]
+	public void AmigaBusExactCpuDataHelpersMatchGenericChipRamAccess()
+	{
+		var genericBus = CreateExactCpuDataAmigaBus();
+		var exactBus = CreateExactCpuDataAmigaBus();
+		Write(genericBus.ChipRam, 0x2000, 0x12, 0x34, 0x56, 0x78);
+		Write(exactBus.ChipRam, 0x2000, 0x12, 0x34, 0x56, 0x78);
+		IM68kBus generic = genericBus;
+		IM68kExactCpuDataBus exact = exactBus;
+		var genericReadCycle = 100L;
+		var exactReadCycle = 100L;
+
+		var genericValue = generic.ReadLong(0x2000, ref genericReadCycle, M68kBusAccessKind.CpuDataRead);
+		var exactGranted = exact.TryReadExactCpuDataLong(0x2000, ref exactReadCycle, out var exactValue);
+
+		Assert.True(exactGranted);
+		Assert.Equal(genericValue, exactValue);
+		Assert.Equal(genericReadCycle, exactReadCycle);
+
+		var genericWriteCycle = 120L;
+		var exactWriteCycle = 120L;
+		generic.WriteLong(0x2010, 0x89AB_CDEF, ref genericWriteCycle, M68kBusAccessKind.CpuDataWrite);
+		var exactWrote = exact.TryWriteExactCpuDataLong(0x2010, 0x89AB_CDEF, ref exactWriteCycle);
+
+		Assert.True(exactWrote);
+		Assert.Equal(genericWriteCycle, exactWriteCycle);
+		Assert.Equal(
+			BigEndian.ReadUInt32(genericBus.ChipRam, 0x2010, "generic chip write"),
+			BigEndian.ReadUInt32(exactBus.ChipRam, 0x2010, "exact chip write"));
+	}
+
+	[Fact]
+	public void AmigaBusExactCpuDataHelpersFallBackForDiagnosticsAndDevices()
+	{
+		IM68kExactCpuDataBus captured = new AmigaBus(captureBusAccesses: true);
+		var cycle = 20L;
+		Assert.False(captured.TryReadExactCpuDataWord(0x2000, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+
+		IM68kExactCpuDataBus devices = CreateExactCpuDataAmigaBus();
+		Assert.False(devices.TryReadExactCpuDataWord(0x00DFF002, ref cycle, out _));
+		Assert.Equal(20L, cycle);
 	}
 
 	[Fact]
@@ -1294,6 +1577,84 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x0000_1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 
+	private static byte[] Words(params ushort[] words)
+	{
+		var data = new byte[words.Length * 2];
+		for (var i = 0; i < words.Length; i++)
+		{
+			data[i * 2] = (byte)(words[i] >> 8);
+			data[(i * 2) + 1] = (byte)words[i];
+		}
+
+		return data;
+	}
+
+	private static ParityRun CreateParityCpu(
+		byte[] program,
+		bool enableOpcodePlan,
+		M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, program);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: enableOpcodePlan,
+			opcodePlanDispatch: opcodePlanDispatch);
+		cpu.Reset(0x1000, 0x8000);
+		return new ParityRun(cpu, bus);
+	}
+
+	private static void SetupTransformParityState(M68kCpuState state, TestBus bus)
+	{
+		state.A[0] = 0x2000;
+		state.A[1] = 0x3000;
+		state.A[2] = 0x2400;
+		state.D[2] = 3;
+		state.D[3] = 0x5555_5555;
+		state.D[7] = 0x0F0F_0F0F;
+		for (var offset = 0; offset < 0x80; offset += 4)
+		{
+			bus.WriteLong(0x2000u + (uint)offset, 0x0102_0304u + (uint)offset);
+			bus.WriteLong(0x2400u + (uint)offset, 0x1020_3040u + (uint)offset);
+		}
+	}
+
+	private static void SetupBranchParityState(M68kCpuState state, TestBus bus)
+	{
+		state.D[0] = 4;
+		state.A[4] = 0x2400;
+		state.A[6] = 0x2000;
+		Write(bus.Memory, 0x2002, 0x00, 0x7F);
+		Write(bus.Memory, 0x2400, 0x40, 0x00);
+	}
+
+	private static void ExecuteBoth(M68kInterpreter scalar, M68kInterpreter planned, int instructions)
+	{
+		for (var i = 0; i < instructions; i++)
+		{
+			scalar.ExecuteInstruction();
+			planned.ExecuteInstruction();
+		}
+	}
+
+	private static void AssertParity(ParityRun scalar, ParityRun planned)
+	{
+		Assert.Equal(scalar.Cpu.State.ProgramCounter, planned.Cpu.State.ProgramCounter);
+		Assert.Equal(scalar.Cpu.State.Cycles, planned.Cpu.State.Cycles);
+		Assert.Equal(scalar.Cpu.State.StatusRegister, planned.Cpu.State.StatusRegister);
+		Assert.Equal(scalar.Cpu.State.LastOpcode, planned.Cpu.State.LastOpcode);
+		Assert.Equal(scalar.Cpu.State.LastInstructionProgramCounter, planned.Cpu.State.LastInstructionProgramCounter);
+		Assert.Equal(scalar.Cpu.State.D, planned.Cpu.State.D);
+		Assert.Equal(scalar.Cpu.State.A, planned.Cpu.State.A);
+		for (var address = 0x1000; address < 0x3100; address++)
+		{
+			Assert.Equal(scalar.Bus.Memory[address], planned.Bus.Memory[address]);
+		}
+	}
+
 	private static void Write(byte[] memory, int address, params byte[] data)
 	{
 		Array.Copy(data, 0, memory, address, data.Length);
@@ -1315,6 +1676,162 @@ public sealed class M68kInterpreterTests
 		program.CopyTo(rom);
 		bus.MapReadOnlyMemory(0x00FC0000, rom);
 		return bus;
+	}
+
+	private static AmigaBus CreateExactCpuDataAmigaBus()
+		=> new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: false,
+			enableLiveDisplayDma: false);
+
+	private sealed record ParityRun(M68kInterpreter Cpu, TestBus Bus);
+
+	private sealed class ExactCpuDataTestBus : IM68kBus, IM68kExactCpuDataBus
+	{
+		public byte[] Memory { get; } = new byte[0x0100_0000];
+
+		public int ExactReadLongCount { get; private set; }
+
+		public int ExactWriteLongCount { get; private set; }
+
+		public int GenericDataReadCount { get; private set; }
+
+		public int GenericDataWriteCount { get; private set; }
+
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: false);
+			cycle += 2;
+			return Memory[address];
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: false);
+			cycle += 4;
+			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
+		}
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: false);
+			cycle += 8;
+			return ReadLongValue(address);
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: true);
+			Memory[address] = value;
+			cycle += 2;
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: true);
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
+			cycle += 4;
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			RecordGenericAccess(accessKind, isWrite: true);
+			WriteLongValue(address, value);
+			cycle += 8;
+		}
+
+		public bool HasHostTrapStub(uint address)
+		{
+			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
+			_ = state;
+			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
+		}
+
+		public bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
+		{
+			cycle += 2;
+			value = Memory[address];
+			return true;
+		}
+
+		public bool TryReadExactCpuDataWord(uint address, ref long cycle, out ushort value)
+		{
+			cycle += 4;
+			value = (ushort)((Memory[address] << 8) | Memory[address + 1]);
+			return true;
+		}
+
+		public bool TryReadExactCpuDataLong(uint address, ref long cycle, out uint value)
+		{
+			ExactReadLongCount++;
+			cycle += 8;
+			value = ReadLongValue(address);
+			return true;
+		}
+
+		public bool TryWriteExactCpuDataByte(uint address, byte value, ref long cycle)
+		{
+			Memory[address] = value;
+			cycle += 2;
+			return true;
+		}
+
+		public bool TryWriteExactCpuDataWord(uint address, ushort value, ref long cycle)
+		{
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
+			cycle += 4;
+			return true;
+		}
+
+		public bool TryWriteExactCpuDataLong(uint address, uint value, ref long cycle)
+		{
+			ExactWriteLongCount++;
+			WriteLongValue(address, value);
+			cycle += 8;
+			return true;
+		}
+
+		private void RecordGenericAccess(M68kBusAccessKind accessKind, bool isWrite)
+		{
+			if (accessKind == M68kBusAccessKind.CpuDataRead)
+			{
+				GenericDataReadCount++;
+			}
+			else if (accessKind == M68kBusAccessKind.CpuDataWrite)
+			{
+				GenericDataWriteCount++;
+			}
+
+			_ = isWrite;
+		}
+
+		private uint ReadLongValue(uint address)
+			=> ((uint)Memory[address] << 24) |
+				((uint)Memory[address + 1] << 16) |
+				((uint)Memory[address + 2] << 8) |
+				Memory[address + 3];
+
+		private void WriteLongValue(uint address, uint value)
+		{
+			Memory[address] = (byte)(value >> 24);
+			Memory[address + 1] = (byte)(value >> 16);
+			Memory[address + 2] = (byte)(value >> 8);
+			Memory[address + 3] = (byte)value;
+		}
 	}
 
 	private sealed class TestBus : IM68kBus
@@ -1403,6 +1920,114 @@ public sealed class M68kInterpreterTests
 			Memory[address + 1] = (byte)(value >> 16);
 			Memory[address + 2] = (byte)(value >> 8);
 			Memory[address + 3] = (byte)value;
+		}
+	}
+
+	private sealed class InstructionFetchWindowBus : IM68kBus, IM68kInstructionFetchWindowBus
+	{
+		private readonly uint[] _generation = { 1u };
+
+		public byte[] Memory { get; } = new byte[0x0100_0000];
+
+		public int WindowRequests { get; private set; }
+
+		public int WindowCommits { get; private set; }
+
+		public int GenericInstructionFetchWordReads { get; private set; }
+
+		public bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
+		{
+			WindowRequests++;
+			window = new M68kInstructionFetchWindow(
+				Memory,
+				(int)address,
+				address,
+				address + 0x100,
+				0xFFFF_FFFF,
+				0,
+				_generation,
+				_generation[0]);
+			return true;
+		}
+
+		public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+		{
+			_ = window;
+			_ = address;
+			WindowCommits++;
+			cycle += 2;
+		}
+
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			cycle += 2;
+			return Memory[address];
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
+			{
+				GenericInstructionFetchWordReads++;
+			}
+
+			cycle += 2;
+			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
+		}
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			cycle += 4;
+			return ((uint)Memory[address] << 24) |
+				((uint)Memory[address + 1] << 16) |
+				((uint)Memory[address + 2] << 8) |
+				Memory[address + 3];
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = value;
+			cycle += 2;
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = (byte)(value >> 8);
+			Memory[address + 1] = (byte)value;
+			cycle += 2;
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			_ = accessKind;
+			Memory[address] = (byte)(value >> 24);
+			Memory[address + 1] = (byte)(value >> 16);
+			Memory[address + 2] = (byte)(value >> 8);
+			Memory[address + 3] = (byte)value;
+			cycle += 4;
+		}
+
+		public bool HasHostTrapStub(uint address)
+		{
+			_ = address;
+			return false;
+		}
+
+		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+		{
+			_ = instructionProgramCounter;
+			_ = trapId;
+			_ = state;
+			return false;
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+			_ = cycle;
 		}
 	}
 

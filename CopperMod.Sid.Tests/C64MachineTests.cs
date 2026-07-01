@@ -520,6 +520,26 @@ public sealed class C64MachineTests
 	}
 
 	[Fact]
+	public void RtiDummyReadCanAcknowledgeCia2NmiRegister()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0xEA, 0x4C, 0x00, 0x20 }, a: 0, x: 0, y: 0);
+		machine.Write(0x0001, 0x35, 0);
+		machine.Write(0xFFFA, 0x0C, 0);
+		machine.Write(0xFFFB, 0xDD, 0);
+		machine.Write(0xDD0C, 0x40, 0);
+		machine.Write(0xDD04, 0x02, 0);
+		machine.Write(0xDD05, 0x00, 0);
+		machine.Write(0xDD0D, 0x81, 0);
+		machine.Write(0xDD0E, 0x19, 0);
+
+		machine.RunCycles(80);
+
+		Assert.Equal(C64InterruptSource.Cia2, machine.DebugState.LastInterruptSource);
+		Assert.False(machine.DebugState.Cia2.InterruptLine);
+		Assert.False(machine.DebugState.Cia2NmiLine);
+	}
+
+	[Fact]
 	public void CiaInterruptRegisterReadRefreshesNmiLineAtReadCycle()
 	{
 		var machine = CreateInstructionMachine(new byte[] { 0xEA }, a: 0, x: 0, y: 0);
@@ -1058,6 +1078,33 @@ public sealed class C64MachineTests
 			$"Expected CPU to return through KERNAL IRQ service, got ${machine.Cpu.ProgramCounter:X4}.");
 	}
 
+	[Fact]
+	public void InstalledIrqServiceSurvivesOverwrittenRamUnderKernal()
+	{
+		var machine = CreateRsidMachine(IrqTimerProgramWithOverwrittenKernalRam());
+
+		machine.Cpu.Status &= 0xFB;
+		machine.RunCycles(500);
+
+		Assert.Equal(0x02, machine.Ram[0xEA31]);
+		Assert.False(machine.Cpu.Halted);
+		Assert.Equal(C64InterruptSource.Cia1, machine.DebugState.LastInterruptSource);
+		Assert.True(machine.Read(0x00A2) > 0, "Expected the resident KERNAL IRQ service to update the jiffy clock.");
+	}
+
+	[Fact]
+	public void InstalledIrqServiceParksBreakInstruction()
+	{
+		var machine = CreateInstructionMachine(new byte[] { 0x00, 0xEA }, a: 0x12, x: 0x34, y: 0x56);
+		var stackPointer = machine.Cpu.StackPointer;
+
+		machine.RunCycles(80);
+
+		Assert.False(machine.Cpu.Halted);
+		Assert.InRange(machine.Cpu.ProgramCounter, 0xFF94, 0xFF98);
+		Assert.Equal(stackPointer, machine.Cpu.StackPointer);
+	}
+
 	private static C64Machine CreateRsidMachine(byte[] program)
 	{
 		var module = SidParser.Parse(SidFixtureBuilder.CreateRsid(program));
@@ -1228,6 +1275,26 @@ public sealed class C64MachineTests
 			0xA9, 0x0C,       // irq: LDA #$0C
 			0x8D, 0x18, 0xD4, // STA $D418
 			0x4C, 0x31, 0xEA  // JMP $EA31; KERNAL updates time, acknowledges CIA/VIC, and exits
+		};
+	}
+
+	private static byte[] IrqTimerProgramWithOverwrittenKernalRam()
+	{
+		return new byte[]
+		{
+			0x78,             // SEI
+			0xA9, 0x35,       // LDA #$35
+			0x85, 0x01,       // STA $01; I/O visible, KERNAL RAM visible
+			0xA9, 0x02,       // LDA #$02
+			0x8D, 0x31, 0xEA, // STA $EA31; overwrite RAM under the default IRQ handler with KIL
+			0xA9, 0x02,       // LDA #$02
+			0x8D, 0x04, 0xDC, // STA $DC04
+			0xA9, 0x00,       // LDA #$00
+			0x8D, 0x05, 0xDC, // STA $DC05
+			0xA9, 0x11,       // LDA #$11
+			0x8D, 0x0E, 0xDC, // STA $DC0E
+			0x58,             // CLI
+			0x60              // RTS
 		};
 	}
 

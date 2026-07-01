@@ -33,7 +33,6 @@ namespace CopperMod.Sid
         private const ushort KernalIrqExitAddress = 0xEA81;
         private const ushort KernalNmiHandlerAddress = 0xFE50;
         private const ushort KernalUpdateClockAddress = 0xFFEA;
-        private const ushort KernalIrqUserVectorJumpAddress = 0xFF58;
         private const ushort KernalCintAddress = 0xFF81;
         private const ushort KernalIoInitAddress = 0xFF84;
         private const ushort KernalRamTasAddress = 0xFF87;
@@ -74,6 +73,8 @@ namespace CopperMod.Sid
         private int _basicInputScheduleIndex;
         private int _romBasicInputScheduleIndex;
         private bool _realRomInstalled;
+        private bool _kernalInterruptServiceActive;
+        private bool _clearKernalInterruptServiceAfterInstruction;
         private readonly byte[] _videoVicRegisters = new byte[0x40];
         private readonly List<C64SpriteRegisterSnapshot> _spriteRegisterSnapshots = new List<C64SpriteRegisterSnapshot>(32);
         private long _videoFrameNumber;
@@ -190,6 +191,8 @@ namespace CopperMod.Sid
             _kernalCursorColumn = 0;
             _kernalCursorRow = 0;
             _kernalTextColor = DefaultTextColor;
+            _kernalInterruptServiceActive = false;
+            _clearKernalInterruptServiceAfterInstruction = false;
             if (_module.IsCartridge)
             {
                 InstallKernalRamVectors();
@@ -223,12 +226,12 @@ namespace CopperMod.Sid
             Cpu.Reset(_module.InitAddress);
             PreparePsidRoutineCall(_module.InitAddress);
             Cpu.BeginSubroutine(_module.InitAddress, (byte)subSongIndex);
-            RunUntilSubroutineReturn(250_000);
+            RunUntilSubroutineReturn(250_000, serviceInterrupts: _module.Kind != SidFileKind.Psid);
             var initRoutineCycles = Cpu.Cycles;
             Sid.AdvanceTo(Cpu.Cycles);
             CapturePsidInitCiaTimerInterval(subSongIndex);
             _psidPlayOffsetCycles = ComputePsidPlayOffsetCycles(psidUsesCiaTiming, initRoutineCycles);
-            if (_module.IsRsid && Cpu.ProgramCounter == 0xFFFF)
+            if (_module.RunsContinuously && Cpu.ProgramCounter == 0xFFFF)
             {
                 Cpu.ProgramCounter = IdleLoopAddress;
             }
@@ -280,7 +283,7 @@ namespace CopperMod.Sid
                     _psidPlayActive = true;
                 }
 
-                RunUntilSubroutineReturn(250_000);
+                RunUntilSubroutineReturn(250_000, serviceInterrupts: false);
                 if (Cpu.ProgramCounter == 0xFFFF || Cpu.Halted)
                 {
                     _psidPlayActive = false;
@@ -313,12 +316,14 @@ namespace CopperMod.Sid
 
             while (Cpu.Cycles < target && !Cpu.Halted)
             {
+                ParkReturnedContinuousRoutine();
                 var before = Cpu.Cycles;
                 BeginCpuInstruction();
                 var executed = Cpu.ExecuteInstruction();
                 CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
                 ServicePendingInterrupts();
+                ParkReturnedContinuousRoutine();
                 if (Cpu.Cycles == before)
                 {
                     Cpu.ResetCycles();
@@ -336,7 +341,7 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        public void RunUntilSubroutineReturn(long maxCycles)
+        public void RunUntilSubroutineReturn(long maxCycles, bool serviceInterrupts = true)
         {
             var target = Cpu.Cycles + maxCycles;
             while (Cpu.Cycles < target && !Cpu.Halted && Cpu.ProgramCounter != 0xFFFF)
@@ -345,7 +350,10 @@ namespace CopperMod.Sid
                 var executed = Cpu.ExecuteInstruction();
                 CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
-                ServicePendingInterrupts();
+                if (serviceInterrupts)
+                {
+                    ServicePendingInterrupts();
+                }
             }
         }
 
@@ -507,6 +515,9 @@ namespace CopperMod.Sid
         [HotPath]
         private void RunPsidPlayUntil(long targetCycle, ref bool active)
         {
+            // Direct PSID play calls are driven by CopperMod's scheduler; servicing
+            // emulated IRQs inside the routine can vector PlaySID-era tunes into
+            // uninitialized RAM after they execute CLI during setup.
             while (active && Cpu.Cycles < targetCycle && !Cpu.Halted && Cpu.ProgramCounter != 0xFFFF)
             {
                 var before = Cpu.Cycles;
@@ -514,7 +525,6 @@ namespace CopperMod.Sid
                 var executed = Cpu.ExecuteInstruction();
                 CompleteCpuInstruction();
                 AdvanceHardwareTo(Cpu.Cycles);
-                ServicePendingInterrupts();
                 if (Cpu.Cycles == before)
                 {
                     active = false;
@@ -622,6 +632,12 @@ namespace CopperMod.Sid
 
             var kernalVisible = IsKernalVisible();
             if (_easyFlash != null && _easyFlash.TryRead(address, kernalVisible, out value))
+            {
+                CaptureCpuBusRead(busCycle, address, value, kind);
+                return value;
+            }
+
+            if (TryReadResidentKernalInterruptStub(address, kind, out value))
             {
                 CaptureCpuBusRead(busCycle, address, value, kind);
                 return value;
@@ -789,6 +805,19 @@ namespace CopperMod.Sid
 
             _ram[PalNtscFlagAddress] = GetVideoStandardFlag();
             ApplyPsidCompatibilityRegisterDefaults(usesCiaTiming);
+            if (_module.PlayAddress == 0)
+            {
+                InstallKernalInterruptStubs();
+            }
+        }
+
+        [HotPath]
+        private void ParkReturnedContinuousRoutine()
+        {
+            if (_module.RunsContinuously && Cpu.ProgramCounter == 0xFFFF)
+            {
+                Cpu.ProgramCounter = IdleLoopAddress;
+            }
         }
 
         private void ApplyPsidCompatibilityRegisterDefaults(bool usesCiaTiming)
@@ -922,14 +951,14 @@ namespace CopperMod.Sid
                 return;
             }
 
+            InstallKernalInterruptStubs();
+        }
+
+        private void InstallKernalInterruptStubs()
+        {
             InstallKernalRamVectors();
             WriteWord(0xFFFE, KernalIrqEntryAddress);
             WriteWord(0xFFFA, KernalNmiEntryAddress);
-
-            WriteRamStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
-            WriteRamStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
-            WriteRamStub(KernalNmiHandlerAddress, 0xAD, 0x0D, 0xDD, 0x40);
-            WriteRamStub(RtiStubAddress, 0x40); // RTI
 
             _ram[IdleLoopAddress + 0] = 0xEA; // NOP
             _ram[IdleLoopAddress + 1] = 0xEA; // NOP
@@ -955,8 +984,29 @@ namespace CopperMod.Sid
             WriteKernalStub(KernalIrqExitAddress, 0x68, 0xA8, 0x68, 0xAA, 0x68, 0x40); // PLA/TAY, PLA/TAX, PLA, RTI
             WriteKernalStub(KernalNmiEntryAddress, 0x6C, 0x18, 0x03);
             WriteKernalStub(KernalNmiHandlerAddress, 0xAD, 0x0D, 0xDD, 0x40);
-            WriteKernalStub(KernalIrqUserVectorJumpAddress, 0x6C, 0x14, 0x03); // JMP ($0314)
-            WriteKernalStub(KernalIrqEntryAddress, 0x48, 0x8A, 0x48, 0x98, 0x48, 0x6C, 0x14, 0x03);
+            WriteKernalStub(
+                KernalIrqEntryAddress,
+                0x48,                         // PHA
+                0x8A,                         // TXA
+                0x48,                         // PHA
+                0x98,                         // TYA
+                0x48,                         // PHA
+                0xBA,                         // TSX
+                0xBD, 0x04, 0x01,             // LDA $0104,X; stacked status after A/X/Y saves
+                0x29, 0x10,                   // AND #$10; BRK flag
+                0xD0, 0x03,                   // BNE break cleanup
+                0x6C, 0x14, 0x03,             // JMP ($0314)
+                0x68,                         // PLA
+                0xA8,                         // TAY
+                0x68,                         // PLA
+                0xAA,                         // TAX
+                0x68,                         // PLA
+                0x68,                         // PLA; discard status
+                0x68,                         // PLA; discard return low
+                0x68,                         // PLA; discard return high
+                0x4C,
+                (byte)(IdleLoopAddress & 0xFF),
+                (byte)(IdleLoopAddress >> 8));
             WriteKernalStub(KernalCintAddress, 0x60);
             WriteKernalStub(KernalIoInitAddress, 0x60);
             WriteKernalStub(KernalRamTasAddress, 0x60);
@@ -1008,6 +1058,74 @@ namespace CopperMod.Sid
                     throw new InvalidDataException(
                         "C64 ROM image must be 16 KiB BASIC+KERNAL or 20 KiB BASIC+KERNAL+CHAR.");
             }
+        }
+
+        [HotPath]
+        private bool TryReadResidentKernalInterruptStub(ushort address, Mos6510BusAccessKind kind, out byte value)
+        {
+            value = 0;
+            if (address < KernalRomStart)
+            {
+                return false;
+            }
+
+            if (!_kernalInterruptServiceActive && kind == Mos6510BusAccessKind.OpcodeFetch)
+            {
+                if (address == KernalIrqEntryAddress && IsInstalledRamVector(0xFFFE, KernalIrqEntryAddress))
+                {
+                    _kernalInterruptServiceActive = true;
+                }
+                else if (address == KernalNmiEntryAddress && IsInstalledRamVector(0xFFFA, KernalNmiEntryAddress))
+                {
+                    _kernalInterruptServiceActive = true;
+                }
+            }
+
+            if (!_kernalInterruptServiceActive || !IsResidentKernalInterruptStubAddress(address))
+            {
+                return false;
+            }
+
+            value = _kernalRom[address - KernalRomStart];
+            if (kind == Mos6510BusAccessKind.OpcodeFetch && IsResidentKernalInterruptReturnOpcode(address))
+            {
+                _clearKernalInterruptServiceAfterInstruction = true;
+            }
+
+            return true;
+        }
+
+        [HotPath]
+        private bool IsInstalledRamVector(ushort vectorAddress, ushort target)
+        {
+            return _ram[vectorAddress] == (byte)(target & 0xFF) &&
+                   _ram[(ushort)(vectorAddress + 1)] == (byte)(target >> 8);
+        }
+
+        [HotPath]
+        private static bool IsResidentKernalInterruptStubAddress(ushort address)
+        {
+            return IsInRange(address, KernalIrqHandlerAddress, 15) ||
+                   IsInRange(address, 0xEA7E, 9) ||
+                   IsInRange(address, KernalNmiEntryAddress, 3) ||
+                   IsInRange(address, KernalNmiHandlerAddress, 4) ||
+                   IsInRange(address, KernalUpdateClockAddress, 15) ||
+                   IsInRange(address, KernalIrqEntryAddress, 30) ||
+                   address == RtiStubAddress;
+        }
+
+        [HotPath]
+        private static bool IsResidentKernalInterruptReturnOpcode(ushort address)
+        {
+            return address == KernalIrqExitAddress + 5 ||
+                   address == KernalNmiHandlerAddress + 3 ||
+                   address == RtiStubAddress;
+        }
+
+        [HotPath]
+        private static bool IsInRange(ushort address, ushort start, int length)
+        {
+            return address >= start && address < start + length;
         }
 
         private bool TryHandleKernalOpcodeFetch(ushort address, Mos6510BusAccessKind kind, out byte value)
@@ -1312,12 +1430,26 @@ namespace CopperMod.Sid
             if (_pendingCpuStallCycles <= 0)
             {
                 _cpuInstructionActive = false;
+                CompleteKernalInterruptServiceInstruction();
                 return;
             }
 
             Cpu.AdvanceCycles(_pendingCpuStallCycles);
             _pendingCpuStallCycles = 0;
             _cpuInstructionActive = false;
+            CompleteKernalInterruptServiceInstruction();
+        }
+
+        [HotPath]
+        private void CompleteKernalInterruptServiceInstruction()
+        {
+            if (!_clearKernalInterruptServiceAfterInstruction)
+            {
+                return;
+            }
+
+            _kernalInterruptServiceActive = false;
+            _clearKernalInterruptServiceAfterInstruction = false;
         }
 
         [HotPath]
@@ -1439,8 +1571,13 @@ namespace CopperMod.Sid
                 _nmiPending = false;
                 _lastInterruptSource = C64InterruptSource.Cia2;
                 BeginCpuInstruction();
-                Cpu.TryRequestNmi();
+                var serviced = Cpu.TryRequestNmi();
                 CompleteCpuInstruction();
+                if (serviced && Cpu.ProgramCounter == KernalNmiEntryAddress)
+                {
+                    _kernalInterruptServiceActive = true;
+                }
+
                 AdvanceHardwareTo(Cpu.Cycles);
                 RefreshInterruptLines();
                 return;
@@ -1459,6 +1596,11 @@ namespace CopperMod.Sid
                 _lastInterruptSource = _vic.IrqLine
                     ? C64InterruptSource.Vic
                     : C64InterruptSource.Cia1;
+                if (Cpu.ProgramCounter == KernalIrqEntryAddress)
+                {
+                    _kernalInterruptServiceActive = true;
+                }
+
                 AdvanceHardwareTo(Cpu.Cycles);
                 RefreshInterruptLines();
             }

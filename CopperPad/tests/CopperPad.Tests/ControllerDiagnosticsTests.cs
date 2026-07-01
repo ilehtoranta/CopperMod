@@ -8,7 +8,7 @@ public sealed class ControllerDiagnosticsTests
 		var device = ControllerMapperTests.Device(0x1234, 0x5678, "Diagnostic Device", maxInputLength: 12);
 		var provider = new FakeHidDeviceProvider();
 		provider.SetDevices(device);
-		using var host = new ControllerDiagnosticsHost(provider, new ControllerHostOptions());
+		using var host = new ControllerDiagnosticsHost(provider, new HidSharpControllerProviderOptions());
 		IReadOnlyList<HidDeviceInfo>? observed = null;
 		host.DevicesChanged += (_, args) => observed = args.Devices;
 
@@ -24,7 +24,7 @@ public sealed class ControllerDiagnosticsTests
 	public void DiagnosticsHost_PublishesScanDiagnosticWhenEnumerationFails()
 	{
 		var provider = new FakeHidDeviceProvider { GetDevicesException = new NotSupportedException("descriptor unavailable") };
-		using var host = new ControllerDiagnosticsHost(provider, new ControllerHostOptions());
+		using var host = new ControllerDiagnosticsHost(provider, new HidSharpControllerProviderOptions());
 		HidDevicesChangedEventArgs? observed = null;
 		host.DevicesChanged += (_, args) => observed = args;
 
@@ -69,11 +69,11 @@ public sealed class ControllerDiagnosticsTests
 				}
 			]
 		};
-		using var host = new ControllerDiagnosticsHost(provider, new ControllerHostOptions { Profiles = profiles });
+		using var host = new ControllerDiagnosticsHost(provider, new HidSharpControllerProviderOptions { Profiles = profiles });
 		var raw = new TaskCompletionSource<ControllerRawReportReceivedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-		var state = new TaskCompletionSource<VirtualXboxControllerState>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var state = new TaskCompletionSource<CopperControllerSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
 		host.RawReportReceived += (_, args) => raw.TrySetResult(args);
-		host.StateChanged += (_, args) => state.TrySetResult(args.State);
+		host.SnapshotChanged += (_, args) => state.TrySetResult(args.Snapshot);
 
 		host.Start();
 		host.SelectDevice(device.Id);
@@ -84,8 +84,8 @@ public sealed class ControllerDiagnosticsTests
 
 		Assert.Equal(device.Id, rawReport.Device.Id);
 		Assert.Equal([0x01, 255], rawReport.Report);
-		Assert.True(mapped.A);
-		Assert.InRange(mapped.LeftTrigger, 0.99, 1.0);
+		Assert.True(mapped.IsPressed(ControllerElement.A));
+		Assert.InRange(mapped.GetAxis(ControllerElement.LeftTrigger), 0.99, 1.0);
 	}
 
 	private static async Task<T> WaitAsync<T>(Task<T> task)
