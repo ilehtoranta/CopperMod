@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 using CopperMod.Amiga;
@@ -270,6 +275,11 @@ internal static class CopperScreenDiskImageArchive
 			throw new AmigaEmulationException("ZIP archive entry is not a supported disk image.");
 		}
 
+		if (TryLoadArchiveEntryInMemory(entry, out var disk))
+		{
+			return disk;
+		}
+
 		var tempPath = Path.Combine(Path.GetTempPath(), "copperscreen-" + Guid.NewGuid().ToString("N") + Path.GetExtension(entry.Name));
 		try
 		{
@@ -289,6 +299,27 @@ internal static class CopperScreenDiskImageArchive
 			{
 			}
 		}
+	}
+
+	private static bool TryLoadArchiveEntryInMemory(ZipArchiveEntry entry, out AmigaDiskImage disk)
+	{
+		disk = null!;
+		var extension = Path.GetExtension(entry.Name);
+		if (!extension.Equals(".adf", StringComparison.OrdinalIgnoreCase))
+		{
+			return false;
+		}
+
+		if (entry.Length != AmigaDiskImage.StandardAdfSize)
+		{
+			return false;
+		}
+
+		var data = new byte[AmigaDiskImage.StandardAdfSize];
+		using var input = entry.Open();
+		input.ReadExactly(data);
+		disk = AmigaDiskImage.FromAdfBytes(data, Path.GetFileName(entry.Name));
+		return true;
 	}
 
 	private static bool IsSupportedDiskEntryName(string name)
