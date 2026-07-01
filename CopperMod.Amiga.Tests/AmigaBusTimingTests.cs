@@ -1487,6 +1487,28 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void WakeAgendaSkipsSlotContendedReadsWithFutureLiveDisplayWork()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		bus.Display.ScheduleWrite(AmigaConstants.A500PalCpuCyclesPerRasterLine, 0x180, 0x0123);
+		var cycle = 20L;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var before = bus.CaptureHardwareSchedulerSnapshot();
+
+		for (var i = 0; i < 16; i++)
+		{
+			cycle += 4;
+			_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		}
+
+		var after = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(
+			after.WakeAgendaDrainSkips > before.WakeAgendaDrainSkips,
+			$"Expected future live display work not to block slot-contended wake agenda skips, before={before.WakeAgendaDrainSkips}, after={after.WakeAgendaDrainSkips}");
+		Assert.Equal(before.AgnusEvents, after.AgnusEvents);
+	}
+
+	[Fact]
 	public void WakeAgendaDoesNotHideDirectSameCyclePaulaWriteAfterCachedSlotRead()
 	{
 		var bus = new AmigaBus();

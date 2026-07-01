@@ -39,7 +39,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (TrySkipDrainWithWakeAgenda(targetCycle, mask, agnusAlreadyAdvanced: false))
+            if (TrySkipDrainWithWakeAgenda(targetCycle, mask))
             {
                 MarkClean(targetCycle, mask);
                 return;
@@ -75,7 +75,7 @@ namespace CopperMod.Amiga
                     _agnusEvents++;
                 }
 
-                if (TrySkipDrainWithWakeAgenda(targetCycle, mask, agnusAlreadyAdvanced: true))
+                if (TrySkipDrainWithWakeAgenda(targetCycle, mask))
                 {
                     MarkClean(targetCycle, mask);
                     return;
@@ -258,10 +258,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (TrySkipDrainWithWakeAgenda(
-                targetCycle,
-                SlotContendedMemoryAccessMask,
-                agnusAlreadyAdvanced: false))
+            if (TrySkipDrainWithWakeAgenda(targetCycle, SlotContendedMemoryAccessMask))
             {
                 MarkClean(targetCycle, SlotContendedMemoryAccessMask);
                 return;
@@ -277,7 +274,7 @@ namespace CopperMod.Amiga
             try
             {
                 var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
-                if (_bus.Display.HasLiveDisplayWork())
+                if (HasSlotContendedAgnusWorkThrough(targetCycle))
                 {
                     if (HostProfilingEnabled)
                     {
@@ -293,10 +290,7 @@ namespace CopperMod.Amiga
                     _agnusEvents++;
                 }
 
-                if (TrySkipDrainWithWakeAgenda(
-                    targetCycle,
-                    SlotContendedMemoryAccessMask,
-                    agnusAlreadyAdvanced: true))
+                if (TrySkipDrainWithWakeAgenda(targetCycle, SlotContendedMemoryAccessMask))
                 {
                     MarkClean(targetCycle, SlotContendedMemoryAccessMask);
                     return;
@@ -370,6 +364,19 @@ namespace CopperMod.Amiga
             {
                 _draining = false;
             }
+        }
+
+        private bool HasSlotContendedAgnusWorkThrough(long targetCycle)
+        {
+            if (_agnusDrainCycle >= targetCycle)
+            {
+                return false;
+            }
+
+            var currentCycle = _agnusDrainCycle >= 0
+                ? Math.Min(_agnusDrainCycle, targetCycle)
+                : 0;
+            return _bus.GetNextAgnusEventCycle(currentCycle, targetCycle) <= targetCycle;
         }
 
         private bool IsMaskDrainedThrough(AmigaHardwareEventMask mask, long targetCycle)

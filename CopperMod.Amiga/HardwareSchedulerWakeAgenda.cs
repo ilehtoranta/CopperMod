@@ -24,19 +24,11 @@ namespace CopperMod.Amiga
 
         private bool TrySkipDrainWithWakeAgenda(
             long targetCycle,
-            AmigaHardwareEventMask mask,
-            bool agnusAlreadyAdvanced)
+            AmigaHardwareEventMask mask)
         {
             if (!_hasDrained ||
                 _earliestDirtyCycle <= targetCycle ||
                 !CanUseWakeAgenda(mask))
-            {
-                return false;
-            }
-
-            if (!agnusAlreadyAdvanced &&
-                (mask & AmigaHardwareEventMask.Agnus) != 0 &&
-                _bus.Display.HasLiveDisplayWork())
             {
                 return false;
             }
