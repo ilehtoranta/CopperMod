@@ -1,6 +1,6 @@
 using Copper68k;
 
-namespace CopperMod.Amiga.Tests;
+namespace Copper68k.Tests;
 
 public sealed class M68kTimingFormulaTests
 {

@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -1067,8 +1072,8 @@ namespace CopperMod.Amiga
                 return cachedLatch;
             }
 
-            var read = _bus.ReadPaulaDmaWord(channel, address, requestedCycle);
-            var latch = new PaulaDmaReadLatch(channel, address, requestedCycle, read);
+            var reservation = _bus.ReservePaulaDmaWord(channel, address, requestedCycle);
+            var latch = new PaulaDmaReadLatch(channel, address, requestedCycle, reservation);
             queue.AddConsumed(latch, kind);
             return latch;
         }
@@ -1185,42 +1190,27 @@ namespace CopperMod.Amiga
             public bool TryConsume(uint address, long requestedCycle, PaulaTimelineKind kind, out PaulaDmaReadLatch latch)
             {
                 CompactConsumedPrefix();
-                if (_count == 0)
+                for (var i = 0; i < _count; i++)
                 {
-                    latch = default;
-                    return false;
-                }
+                    ref var record = ref _records[IndexOf(i)];
+                    if (record.IsConsumed(kind))
+                    {
+                        continue;
+                    }
 
-                if (TryConsumeAt(0, address, requestedCycle, kind, out latch))
-                {
+                    if (!record.MatchesAddress(address))
+                    {
+                        latch = default;
+                        return false;
+                    }
+
+                    record.MarkConsumed(kind);
+                    latch = record.Latch;
                     CompactConsumedPrefix();
                     return true;
                 }
 
-                if (_count == 1)
-                {
-                    return false;
-                }
-
-                var last = _count - 1;
-                if (TryConsumeAt(last, address, requestedCycle, kind, out latch))
-                {
-                    return true;
-                }
-
-                if (requestedCycle > _records[IndexOf(last)].Latch.RequestedCycle)
-                {
-                    return false;
-                }
-
-                for (var i = 1; i < last; i++)
-                {
-                    if (TryConsumeAt(i, address, requestedCycle, kind, out latch))
-                    {
-                        return true;
-                    }
-                }
-
+                latch = default;
                 return false;
             }
 
@@ -1252,25 +1242,6 @@ namespace CopperMod.Amiga
                 {
                     _start = 0;
                 }
-            }
-
-            private bool TryConsumeAt(
-                int logicalIndex,
-                uint address,
-                long requestedCycle,
-                PaulaTimelineKind kind,
-                out PaulaDmaReadLatch latch)
-            {
-                ref var record = ref _records[IndexOf(logicalIndex)];
-                if (!record.Matches(address, requestedCycle) || record.IsConsumed(kind))
-                {
-                    latch = default;
-                    return false;
-                }
-
-                record.MarkConsumed(kind);
-                latch = record.Latch;
-                return true;
             }
 
             private void EnsureCapacity(int required)
@@ -1314,8 +1285,8 @@ namespace CopperMod.Amiga
 
             public bool ConsumedByBoth => AudioConsumed && RegisterConsumed;
 
-            public bool Matches(uint address, long requestedCycle)
-                => Latch.Address == address && Latch.RequestedCycle == requestedCycle;
+            public bool MatchesAddress(uint address)
+                => Latch.Address == address;
 
             public bool IsConsumed(PaulaTimelineKind kind)
                 => kind == PaulaTimelineKind.Audio ? AudioConsumed : RegisterConsumed;
@@ -1335,13 +1306,17 @@ namespace CopperMod.Amiga
 
         private readonly struct PaulaDmaReadLatch
         {
-            public PaulaDmaReadLatch(int channel, uint address, long requestedCycle, PaulaDmaReadResult read)
+            public PaulaDmaReadLatch(
+                int channel,
+                uint address,
+                long requestedCycle,
+                AmigaDmaWordReservation reservation)
             {
                 Channel = channel;
                 Address = address;
                 RequestedCycle = requestedCycle;
-                Value = read.Value;
-                LoadCycle = read.BusAccess.CompletedCycle;
+                Reservation = reservation;
+                LoadCycle = reservation.CompletedCycle;
             }
 
             public int Channel { get; }
@@ -1350,7 +1325,7 @@ namespace CopperMod.Amiga
 
             public long RequestedCycle { get; }
 
-            public ushort Value { get; }
+            public AmigaDmaWordReservation Reservation { get; }
 
             public long LoadCycle { get; }
         }
@@ -1738,7 +1713,14 @@ namespace CopperMod.Amiga
                 long cycle,
                 in DmaContext context,
                 long targetCycle)
-                => StartDmaWordOutput(latch.Value, cycle, in context, targetCycle);
+            {
+                var reservation = latch.Reservation;
+                StartDmaWordOutput(
+                    context.Bus.CommitPaulaDmaWord(in reservation).Value,
+                    cycle,
+                    in context,
+                    targetCycle);
+            }
 
             private void StartDmaWordOutput(
                 ushort word,

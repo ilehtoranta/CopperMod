@@ -201,6 +201,28 @@ namespace CopperMod.Amiga
         public long AccessCycles => CompletedCycle - GrantedCycle;
     }
 
+    internal readonly struct AmigaDmaWordReservation
+    {
+        public AmigaDmaWordReservation(uint address, bool granted, AmigaBusAccessResult access)
+        {
+            Address = address;
+            Granted = granted;
+            Access = access;
+        }
+
+        public uint Address { get; }
+
+        public bool Granted { get; }
+
+        public AmigaBusAccessResult Access { get; }
+
+        public long RequestedCycle => Access.RequestedCycle;
+
+        public long GrantedCycle => Access.GrantedCycle;
+
+        public long CompletedCycle => Access.CompletedCycle;
+    }
+
     internal interface IAmigaBusArbiter
     {
         AmigaBusAccessResult Arbitrate(AmigaBusAccessRequest request);
@@ -932,6 +954,69 @@ namespace CopperMod.Amiga
             _lastReservation = adjusted;
             AdvanceTo(completed);
             return adjusted;
+        }
+
+        [HotPath]
+        public AmigaBusAccessResult ReservePaulaDmaWordSlot(int channel, uint address, long requestedCycle)
+        {
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Paula,
+                AmigaBusAccessKind.PaulaDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false,
+                channel);
+            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Paula, channel);
+            AmigaBusAccessResult result;
+            while (!TryCommitFixedSingleWordSlot(
+                request,
+                AgnusChipSlotOwner.Paula,
+                candidate,
+                AgnusChipSlotPriority.Paula,
+                out result))
+            {
+                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, AgnusChipSlotOwner.Paula, channel);
+            }
+
+            return result;
+        }
+
+        [HotPath]
+        public bool TryReserveDiskDmaWordSlotThrough(
+            uint address,
+            bool isWrite,
+            long requestedCycle,
+            long latestGrantCycle,
+            out AmigaBusAccessResult result)
+        {
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Disk,
+                AmigaBusAccessKind.DiskDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Disk);
+            while (candidate <= latestGrantCycle)
+            {
+                if (TryCommitFixedSingleWordSlot(
+                    request,
+                    AgnusChipSlotOwner.Disk,
+                    candidate,
+                    AgnusChipSlotPriority.Disk,
+                    out result))
+                {
+                    return true;
+                }
+
+                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, AgnusChipSlotOwner.Disk);
+            }
+
+            result = new AmigaBusAccessResult(request, candidate, candidate);
+            return false;
         }
 
         private bool TryCommitFixedSlot(

@@ -383,6 +383,39 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void DiskReadDmaReplaySerializesBusRequestsAcrossSplitAdvances()
+	{
+		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
+
+		StartDiskDma(bus, DmaBase, words: 4);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		for (var cycle = 0L; cycle < completionCycle; cycle += AgnusChipSlotScheduler.SlotCycles)
+		{
+			bus.AdvanceDmaTo(cycle);
+		}
+
+		bus.AdvanceDmaTo(completionCycle);
+		bus.Paula.AdvanceTo(completionCycle);
+
+		var diskAccesses = bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.DiskDma)
+			.ToArray();
+		Assert.Equal(4, diskAccesses.Length);
+		for (var i = 1; i < diskAccesses.Length; i++)
+		{
+			Assert.True(
+				diskAccesses[i].RequestedCycle >= diskAccesses[i - 1].CompletedCycle,
+				$"Disk DMA request {i} at {diskAccesses[i].RequestedCycle} overlapped prior completion {diskAccesses[i - 1].CompletedCycle}.");
+		}
+
+		var agnus = bus.Agnus.CaptureSnapshot();
+		Assert.Equal(0, agnus.DiskDeniedFixedSlotCount);
+		Assert.Equal(0, agnus.DiskDeniedFixedSlotBlockerCount);
+		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
+		Assert.Equal(0x4444, ReadChipWord(bus, DmaBase + 6));
+	}
+
+	[Fact]
 	public void DskbytrReportsByteReadyDataAndClearsReadyOnRead()
 	{
 		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };

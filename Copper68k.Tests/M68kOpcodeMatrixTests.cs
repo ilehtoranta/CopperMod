@@ -1,7 +1,7 @@
-using CopperMod.Amiga;
+using Copper68k;
 using Xunit.Abstractions;
 
-namespace CopperMod.Amiga.Tests;
+namespace Copper68k.Tests;
 
 public sealed class M68kOpcodeMatrixTests
 {
@@ -144,25 +144,25 @@ public sealed class M68kOpcodeMatrixTests
 	{
 		public byte[] Memory { get; } = new byte[0x0100_0000];
 
-		public List<(uint Address, M68kBusAccessKind Kind, AmigaBusAccessSize Size, bool IsWrite)> Accesses { get; } = new();
+		public List<(uint Address, M68kBusAccessKind Kind, MatrixBusAccessSize Size, bool IsWrite)> Accesses { get; } = new();
 
 		public int ExternalResetCount { get; private set; }
 
 		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, false));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Byte, false));
 			return Memory[address];
 		}
 
 		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, false));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Word, false));
 			return (ushort)((Memory[address] << 8) | Memory[address + 1]);
 		}
 
 		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, false));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Long, false));
 			return ((uint)Memory[address] << 24) |
 				((uint)Memory[address + 1] << 16) |
 				((uint)Memory[address + 2] << 8) |
@@ -171,19 +171,19 @@ public sealed class M68kOpcodeMatrixTests
 
 		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Byte, true));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Byte, true));
 			Memory[address] = value;
 		}
 
 		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Word, true));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Word, true));
 			WriteWordRaw(address, value);
 		}
 
 		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
 		{
-			Accesses.Add((address, accessKind, AmigaBusAccessSize.Long, true));
+			Accesses.Add((address, accessKind, MatrixBusAccessSize.Long, true));
 			WriteLongRaw(address, value);
 		}
 
@@ -226,6 +226,13 @@ public sealed class M68kOpcodeMatrixTests
 	{
 		Executable,
 		Pending
+	}
+
+	private enum MatrixBusAccessSize
+	{
+		Byte,
+		Word,
+		Long
 	}
 
 	private enum MatrixSize

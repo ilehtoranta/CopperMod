@@ -1,15 +1,15 @@
-using CopperMod.Amiga;
+using Copper68k;
 
-namespace CopperMod.Amiga.Tests;
+namespace Copper68k.Tests;
 
 public sealed class M68kStoppedFastForwardTests
 {
-	private const uint FastCodeBase = AmigaConstants.A500BootPseudoFastRamBase;
+	private const uint FastCodeBase = 0x1000;
 
 	[Fact]
 	public void JitStoppedCpuFastForwardsToTargetAsOneLogicalInstruction()
 	{
-		var bus = new AmigaBus(expansionRamSize: 64 * 1024);
+		var bus = new Copper68kTestBus();
 		var cpu = new M68kJitCore(bus);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.State.Stopped = true;
@@ -35,7 +35,7 @@ public sealed class M68kStoppedFastForwardTests
 	[Fact]
 	public void InterpreterStoppedCpuFastForwardsToTargetAsOneLogicalInstruction()
 	{
-		var bus = new AmigaBus(expansionRamSize: 64 * 1024);
+		var bus = new Copper68kTestBus();
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.State.Stopped = true;
@@ -55,7 +55,7 @@ public sealed class M68kStoppedFastForwardTests
 	[Fact]
 	public void StoppedFastForwardBoundaryCanWakeCpuThroughNormalInterruptRequest()
 	{
-		var bus = new AmigaBus(expansionRamSize: 64 * 1024);
+		var bus = new Copper68kTestBus();
 		bus.WriteLong(0x70, 0x0000_2000);
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(FastCodeBase, 0x4000);
@@ -71,7 +71,7 @@ public sealed class M68kStoppedFastForwardTests
 		Assert.Equal(0x3FFAu, cpu.State.A[7]);
 		Assert.Equal(FastCodeBase, bus.ReadLong(0x3FFC));
 		Assert.Equal(0x2000, bus.ReadWord(0x3FFA));
-		Assert.Equal(114, cpu.State.Cycles);
+		Assert.Equal(94, cpu.State.Cycles);
 	}
 
 	private class FastForwardBoundary : IM68kStoppedCpuFastForwardBoundary

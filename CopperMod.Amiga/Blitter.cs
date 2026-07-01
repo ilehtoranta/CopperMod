@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 
@@ -1547,18 +1552,19 @@ namespace CopperMod.Amiga
 
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, uint address, long cycle)
         {
-            var value = _bus.ReadChipWordForDeviceWithResult(
+            var reservation = _bus.ReserveChipWordForDevice(
                 AmigaBusRequester.Blitter,
                 AmigaBusAccessKind.Blitter,
                 GetEffectiveBlitterAddress(address),
                 cycle);
-            RecordBlitterDma(value.BusAccess);
-            return new BlitterDmaReadLatch(source, value.Value, value.BusAccess);
+            RecordBlitterDma(reservation.Access);
+            return new BlitterDmaReadLatch(source, reservation);
         }
 
-        private static ushort ConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch)
+        private ushort ConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch)
         {
-            var value = latch.Value;
+            var reservation = latch.Reservation;
+            var value = _bus.CommitDmaWordRead(in reservation);
             latch = default;
             return value;
         }
@@ -1575,15 +1581,15 @@ namespace CopperMod.Amiga
 
         private AmigaBusAccessResult CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
-            var access = _bus.WriteChipWordForDeviceWithResult(
+            var reservation = _bus.ReserveChipWordWriteForDevice(
                 AmigaBusRequester.Blitter,
                 AmigaBusAccessKind.Blitter,
                 GetEffectiveBlitterAddress(address),
-                latch.Value,
                 cycle);
-            RecordBlitterDma(access);
+            _bus.CommitDmaWordWrite(in reservation, latch.Value);
+            RecordBlitterDma(reservation.Access);
             latch = default;
-            return access;
+            return reservation.Access;
         }
 
         private uint AddModulo(uint pointer, short modulo, bool descending)
@@ -1620,18 +1626,17 @@ namespace CopperMod.Amiga
 
         private readonly struct BlitterDmaReadLatch
         {
-            public BlitterDmaReadLatch(BlitterDmaSource source, ushort value, AmigaBusAccessResult busAccess)
+            public BlitterDmaReadLatch(BlitterDmaSource source, AmigaDmaWordReservation reservation)
             {
                 Source = source;
-                Value = value;
-                BusAccess = busAccess;
+                Reservation = reservation;
             }
 
             public BlitterDmaSource Source { get; }
 
-            public ushort Value { get; }
+            public AmigaDmaWordReservation Reservation { get; }
 
-            public AmigaBusAccessResult BusAccess { get; }
+            public AmigaBusAccessResult BusAccess => Reservation.Access;
         }
 
         private readonly struct BlitterDmaWriteLatch

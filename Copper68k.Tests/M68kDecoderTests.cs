@@ -1,14 +1,14 @@
-using CopperMod.Amiga;
+using Copper68k;
 
-namespace CopperMod.Amiga.Tests;
+namespace Copper68k.Tests;
 
 public sealed class M68kDecoderTests
 {
 	[Fact]
 	public void DecodesMoveq()
 	{
-		var bus = new AmigaBus();
-		WriteWords(bus, 0x1000, 0x7012);
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x7012);
 
 		var decoded = Decode(bus, 0x1000);
 
@@ -23,8 +23,8 @@ public sealed class M68kDecoderTests
 	[Fact]
 	public void DecodesMoveaLongImmediate()
 	{
-		var bus = new AmigaBus();
-		WriteWords(bus, 0x1000, 0x207C, 0x1234, 0x5678);
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x207C, 0x1234, 0x5678);
 
 		var decoded = Decode(bus, 0x1000);
 
@@ -40,8 +40,8 @@ public sealed class M68kDecoderTests
 	[Fact]
 	public void DecodesPcRelativeLea()
 	{
-		var bus = new AmigaBus();
-		WriteWords(bus, 0x1000, 0x41FA, 0x0010);
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x41FA, 0x0010);
 
 		var decoded = Decode(bus, 0x1000);
 
@@ -55,8 +55,8 @@ public sealed class M68kDecoderTests
 	[Fact]
 	public void DecodesDbccAsTraceStop()
 	{
-		var bus = new AmigaBus();
-		WriteWords(bus, 0x1000, 0x51C8, 0xFFFC);
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x51C8, 0xFFFC);
 
 		var decoded = Decode(bus, 0x1000);
 
@@ -70,9 +70,9 @@ public sealed class M68kDecoderTests
 	[Fact]
 	public void KeepsSystemAndExceptionInstructionsOutOfTraces()
 	{
-		var bus = new AmigaBus();
-		WriteWords(bus, 0x1000, 0x4E72, 0x2700);
-		WriteWords(bus, 0x2000, 0xA000);
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x4E72, 0x2700);
+		bus.WriteWords(0x2000, 0xA000);
 
 		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var stopReason));
 		Assert.Equal(M68kJitBailoutReason.SystemInstruction, stopReason);
@@ -83,24 +83,16 @@ public sealed class M68kDecoderTests
 	[Fact]
 	public void KeepsHostTrapRootsOutOfTraces()
 	{
-		var bus = new AmigaBus();
+		var bus = new Copper68kTestBus();
 		bus.RegisterHostTrapStub(0x1000, _ => { });
 
 		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var reason));
 		Assert.Equal(M68kJitBailoutReason.HostTrap, reason);
 	}
 
-	private static M68kDecodedInstruction Decode(AmigaBus bus, uint address)
+	private static M68kDecodedInstruction Decode(Copper68kTestBus bus, uint address)
 	{
 		Assert.True(M68kDecoder.TryDecode(bus, address, out var decoded, out var reason), reason.ToString());
 		return decoded;
-	}
-
-	private static void WriteWords(AmigaBus bus, uint address, params ushort[] words)
-	{
-		for (var i = 0; i < words.Length; i++)
-		{
-			bus.WriteWord(address + (uint)(i * 2), words[i]);
-		}
 	}
 }

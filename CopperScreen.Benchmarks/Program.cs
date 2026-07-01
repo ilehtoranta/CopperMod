@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CopperMod.Amiga;
 using CopperScreen;
@@ -130,8 +131,9 @@ static OpcodeDispatchBenchmarkRun CreateOpcodeDispatchCpu(
 {
     var bus = new OpcodeDispatchBenchmarkBus(workload.MemorySize);
     WriteWords(bus.Memory, 0x1000, workload.Program);
-    var cpu = new M68kInterpreter(
+    var cpu = M68kCoreFactory.CreateM68000Core(
         bus,
+        default(OpcodeDispatchBenchmarkCpuDataAccess),
         new M68kCpuState(),
         instructionFrequency: null,
         enableInstructionFetchWindow: true,
@@ -2268,13 +2270,88 @@ internal readonly record struct OpcodeDispatchBenchmarkResult(
     public double InstructionsPerSecond => Instructions / Math.Max(Elapsed.TotalSeconds, double.Epsilon);
 }
 
-internal sealed record OpcodeDispatchBenchmarkRun(M68kInterpreter Cpu, OpcodeDispatchBenchmarkBus Bus) : IDisposable
+internal sealed record OpcodeDispatchBenchmarkRun(
+    M68kInterpreterCore<OpcodeDispatchBenchmarkBus, OpcodeDispatchBenchmarkCpuDataAccess> Cpu,
+    OpcodeDispatchBenchmarkBus Bus) : IDisposable
 {
     public void Dispose()
         => Cpu.Dispose();
 }
 
-internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBus, IM68kInstructionFetchWindowBus
+internal readonly struct OpcodeDispatchBenchmarkCpuDataAccess :
+    IM68kCpuDataAccess<OpcodeDispatchBenchmarkBus, OpcodeDispatchBenchmarkCpuDataAccess>
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static byte ReadByte(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.TryReadExactCpuDataByte(address, ref cycle, out var value)
+            ? value
+            : ReadByteFallback(bus, address, ref cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ushort ReadWord(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.TryReadExactCpuDataWord(address, ref cycle, out var value)
+            ? value
+            : ReadWordFallback(bus, address, ref cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint ReadLong(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.TryReadExactCpuDataLong(address, ref cycle, out var value)
+            ? value
+            : ReadLongFallback(bus, address, ref cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteByte(OpcodeDispatchBenchmarkBus bus, uint address, byte value, ref long cycle)
+    {
+        if (!bus.TryWriteExactCpuDataByte(address, value, ref cycle))
+        {
+            WriteByteFallback(bus, address, value, ref cycle);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteWord(OpcodeDispatchBenchmarkBus bus, uint address, ushort value, ref long cycle)
+    {
+        if (!bus.TryWriteExactCpuDataWord(address, value, ref cycle))
+        {
+            WriteWordFallback(bus, address, value, ref cycle);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteLong(OpcodeDispatchBenchmarkBus bus, uint address, uint value, ref long cycle)
+    {
+        if (!bus.TryWriteExactCpuDataLong(address, value, ref cycle))
+        {
+            WriteLongFallback(bus, address, value, ref cycle);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static byte ReadByteFallback(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ushort ReadWordFallback(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static uint ReadLongFallback(OpcodeDispatchBenchmarkBus bus, uint address, ref long cycle)
+        => bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void WriteByteFallback(OpcodeDispatchBenchmarkBus bus, uint address, byte value, ref long cycle)
+        => bus.WriteByte(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void WriteWordFallback(OpcodeDispatchBenchmarkBus bus, uint address, ushort value, ref long cycle)
+        => bus.WriteWord(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void WriteLongFallback(OpcodeDispatchBenchmarkBus bus, uint address, uint value, ref long cycle)
+        => bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+}
+
+internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kInstructionFetchWindowBus
 {
     private readonly uint[] _generation = [1];
     private readonly int _memorySize;
@@ -2363,6 +2440,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
     public void ResetExternalDevices(long cycle)
         => _ = cycle;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
     {
         _ = cycle;
@@ -2370,6 +2448,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryReadExactCpuDataWord(uint address, ref long cycle, out ushort value)
     {
         _ = cycle;
@@ -2377,6 +2456,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryReadExactCpuDataLong(uint address, ref long cycle, out uint value)
     {
         _ = cycle;
@@ -2384,6 +2464,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWriteExactCpuDataByte(uint address, byte value, ref long cycle)
     {
         _ = cycle;
@@ -2391,6 +2472,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWriteExactCpuDataWord(uint address, ushort value, ref long cycle)
     {
         _ = cycle;
@@ -2398,6 +2480,7 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kExactCpuDataBu
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWriteExactCpuDataLong(uint address, uint value, ref long cycle)
     {
         _ = cycle;

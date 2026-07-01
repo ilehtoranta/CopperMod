@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace Copper68k
@@ -161,19 +162,49 @@ namespace Copper68k
         bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
-    internal interface IM68kExactCpuDataBus
+    internal interface IM68kCpuDataAccess<TBus, TSelf>
+        where TBus : IM68kBus
+        where TSelf : struct, IM68kCpuDataAccess<TBus, TSelf>
     {
-        bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value);
+        static abstract byte ReadByte(TBus bus, uint address, ref long cycle);
 
-        bool TryReadExactCpuDataWord(uint address, ref long cycle, out ushort value);
+        static abstract ushort ReadWord(TBus bus, uint address, ref long cycle);
 
-        bool TryReadExactCpuDataLong(uint address, ref long cycle, out uint value);
+        static abstract uint ReadLong(TBus bus, uint address, ref long cycle);
 
-        bool TryWriteExactCpuDataByte(uint address, byte value, ref long cycle);
+        static abstract void WriteByte(TBus bus, uint address, byte value, ref long cycle);
 
-        bool TryWriteExactCpuDataWord(uint address, ushort value, ref long cycle);
+        static abstract void WriteWord(TBus bus, uint address, ushort value, ref long cycle);
 
-        bool TryWriteExactCpuDataLong(uint address, uint value, ref long cycle);
+        static abstract void WriteLong(TBus bus, uint address, uint value, ref long cycle);
+    }
+
+    internal readonly struct M68kNoExactCpuDataAccess<TBus> : IM68kCpuDataAccess<TBus, M68kNoExactCpuDataAccess<TBus>>
+        where TBus : IM68kBus
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static byte ReadByte(TBus bus, uint address, ref long cycle)
+            => bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ushort ReadWord(TBus bus, uint address, ref long cycle)
+            => bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static uint ReadLong(TBus bus, uint address, ref long cycle)
+            => bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteByte(TBus bus, uint address, byte value, ref long cycle)
+            => bus.WriteByte(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteWord(TBus bus, uint address, ushort value, ref long cycle)
+            => bus.WriteWord(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteLong(TBus bus, uint address, uint value, ref long cycle)
+            => bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
     }
 
     internal readonly struct M68kInstructionFetchWindow
@@ -384,6 +415,25 @@ namespace Copper68k
         public static M68kCoreFactory Default { get; } = new M68kCoreFactory();
 
         internal static M68kOpcodePlanDispatch M68000OpcodePlanDispatch { get; set; } = M68kOpcodePlanDispatch.KindTable;
+
+        internal static M68kInterpreterCore<TBus, TCpuDataAccess> CreateM68000Core<TBus, TCpuDataAccess>(
+            TBus bus,
+            TCpuDataAccess cpuDataAccess,
+            M68kCpuState? state = null,
+            M68kInstructionFrequencyMatrix? instructionFrequency = null,
+            bool enableInstructionFetchWindow = true,
+            bool enableOpcodePlan = true,
+            M68kOpcodePlanDispatch? opcodePlanDispatch = null)
+            where TBus : IM68kBus
+            where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
+            => new M68kInterpreterCore<TBus, TCpuDataAccess>(
+                bus,
+                cpuDataAccess,
+                state ?? new M68kCpuState(),
+                instructionFrequency,
+                enableInstructionFetchWindow,
+                enableOpcodePlan,
+                opcodePlanDispatch ?? M68000OpcodePlanDispatch);
 
         /// <inheritdoc />
         public IM68kCore Create(M68kCpuModel model, IM68kBus bus)
@@ -1068,17 +1118,25 @@ namespace Copper68k
         }
     }
 
-    internal sealed class M68kInterpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    internal class M68kInterpreterCore<TBus, TCpuDataAccess> : IM68kBatchCore, IM68kInstructionFrequencyProvider
+        where TBus : IM68kBus
+        where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
     {
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private static readonly M68kPlannedInstructionHandler?[] s_plannedInstructionHandlers = CreatePlannedInstructionHandlers();
         private readonly IM68kBus _bus;
-        private readonly IM68kExactCpuDataBus? _exactCpuDataBus;
+        private readonly TBus _typedBus;
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         private readonly M68kOpcodePlanDispatch _opcodePlanDispatch;
         private M68kInstructionFetchWindow _instructionFetchWindow;
+        private uint _prefetchAddress;
+        private ushort _prefetchWord;
+        private long _prefetchCompletedCycle;
+        private bool _prefetchValid;
+        private long _cpuBusCycle;
+        private long _cpuRetireBusCycle;
         private bool _instructionCycleFloorActive;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
@@ -1095,25 +1153,28 @@ namespace Copper68k
         private long _plannedImmediateBtstInstructions;
         private long _plannedRegisterArithmeticInstructions;
 
-        private delegate bool M68kPlannedInstructionHandler(M68kInterpreter interpreter, ushort opcode, uint instructionPc);
+        private delegate bool M68kPlannedInstructionHandler(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc);
 
-        public M68kInterpreter(
-            IM68kBus bus,
+        public M68kInterpreterCore(
+            TBus bus,
+            TCpuDataAccess cpuDataAccess,
             M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
-            : this(bus, new M68kCpuState(), opcodePlanDispatch: opcodePlanDispatch)
+            : this(bus, cpuDataAccess, new M68kCpuState(), opcodePlanDispatch: opcodePlanDispatch)
         {
         }
 
-        internal M68kInterpreter(
-            IM68kBus bus,
+        internal M68kInterpreterCore(
+            TBus bus,
+            TCpuDataAccess cpuDataAccess,
             M68kCpuState state,
             M68kInstructionFrequencyMatrix? instructionFrequency = null,
             bool enableInstructionFetchWindow = true,
             bool enableOpcodePlan = true,
             M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
         {
-            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-            _exactCpuDataBus = bus as IM68kExactCpuDataBus;
+            _typedBus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _bus = bus;
+            _ = cpuDataAccess;
             _instructionFetchWindowBus = enableInstructionFetchWindow
                 ? bus as IM68kInstructionFetchWindowBus
                 : null;
@@ -1299,13 +1360,17 @@ namespace Copper68k
                         AddCycles(16);
                         if (!State.Halted && State.ProgramCounter == returnProgramCounter)
                         {
-                            State.ProgramCounter = PullLong();
+                            SetProgramCounterAndFlushPrefetch(PullLong());
+                        }
+                        else
+                        {
+                            FlushPrefetch();
                         }
 
                         return CompleteInstruction(startCycles);
                     }
 
-                    State.ProgramCounter = returnProgramCounter;
+                    SetProgramCounterAndFlushPrefetch(returnProgramCounter);
                 }
 
                 RaiseException(11, instructionPc, 34);
@@ -1518,7 +1583,7 @@ namespace Copper68k
                 _ => null
             };
 
-        private static bool ExecuteNopDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteNopDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = opcode;
             _ = instructionPc;
@@ -1527,7 +1592,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteMoveqDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteMoveqDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedMoveq(opcode);
@@ -1535,14 +1600,14 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteBranchDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteBranchDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             interpreter.ExecutePlannedBranch(opcode, instructionPc);
             interpreter.RecordPlannedFast(M68kOpcodePlanKind.Branch);
             return true;
         }
 
-        private static bool ExecuteDbccDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteDbccDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedDbcc(opcode);
@@ -1550,7 +1615,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteQuickRegisterDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteQuickRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedQuickRegister(opcode);
@@ -1558,7 +1623,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteMoveDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteMoveDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedMove(opcode);
@@ -1566,7 +1631,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteMoveLongPostincrementToDataDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteMoveLongPostincrementToDataDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedMoveLongPostincrementToData(opcode);
@@ -1574,7 +1639,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteMoveLongDataToPostincrementDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteMoveLongDataToPostincrementDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedMoveLongDataToPostincrement(opcode);
@@ -1582,7 +1647,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteImmediateDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteImmediateDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedImmediate(opcode);
@@ -1590,7 +1655,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteImmediateBtstDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteImmediateBtstDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedImmediateBtst(opcode);
@@ -1598,7 +1663,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteRegisterArithmeticDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteRegisterArithmeticDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedRegisterArithmetic(opcode);
@@ -1606,7 +1671,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteOrLongToDataRegisterDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteOrLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedOrLongToDataRegister(opcode);
@@ -1614,7 +1679,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteEorLongToDataRegisterDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteEorLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedEorLongToDataRegister(opcode);
@@ -1622,7 +1687,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteAndLongToDataRegisterDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteAndLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedAndLongToDataRegister(opcode);
@@ -1630,7 +1695,7 @@ namespace Copper68k
             return true;
         }
 
-        private static bool ExecuteAddLongToDataRegisterDelegatePlan(M68kInterpreter interpreter, ushort opcode, uint instructionPc)
+        private static bool ExecuteAddLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
         {
             _ = instructionPc;
             interpreter.ExecutePlannedAddLongToDataRegister(opcode);
@@ -1669,7 +1734,7 @@ namespace Copper68k
                         extensionDisplacement ? 4 : 2);
                 }
 
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(10);
                 return;
             }
@@ -1701,7 +1766,7 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                     }
 
-                    State.ProgramCounter = target;
+                    SetProgramCounterAndFlushPrefetch(target);
                     AddCycles(10);
                     return;
                 }
@@ -1729,7 +1794,7 @@ namespace Copper68k
                     _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                 }
 
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(10);
                 return;
             }
@@ -2078,7 +2143,7 @@ namespace Copper68k
                         plan.ExtensionDisplacement ? 4 : 2);
                 }
 
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(10);
                 return;
             }
@@ -2109,7 +2174,7 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, State.LastOpcode, target, 4);
                     }
 
-                    State.ProgramCounter = target;
+                    SetProgramCounterAndFlushPrefetch(target);
                     AddCycles(10);
                     return;
                 }
@@ -2613,10 +2678,11 @@ namespace Copper68k
         {
             Array.Clear(State.D);
             Array.Clear(State.A);
-            State.ProgramCounter = programCounter;
+            SetProgramCounterAndFlushPrefetch(programCounter);
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
             State.StatusRegister = M68kCpuState.ResetStatusRegister;
             State.Cycles = 0;
+            ResetPrefetchPipeline();
             State.Halted = false;
             State.Stopped = false;
             State.LastOpcode = 0;
@@ -2628,7 +2694,7 @@ namespace Copper68k
         {
             State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);
-            State.ProgramCounter = address;
+            SetProgramCounterAndFlushPrefetch(address);
             State.Halted = false;
             State.Stopped = false;
         }
@@ -2651,7 +2717,7 @@ namespace Copper68k
             State.StatusRegister = (ushort)((State.StatusRegister & 0xF8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
             PushLong(State.ProgramCounter);
             PushWord(savedStatusRegister);
-            State.ProgramCounter = ReadLong(vectorAddress);
+            SetProgramCounterAndFlushPrefetch(ReadLong(vectorAddress));
             AddCycles(44);
         }
 
@@ -2727,7 +2793,7 @@ namespace Copper68k
             {
                 var target = (uint)(branchBase + offset);
                 PushLong(State.ProgramCounter);
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(displacement == 0 ? 18 : 18);
                 return true;
             }
@@ -2743,7 +2809,7 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    State.ProgramCounter = target;
+                    SetProgramCounterAndFlushPrefetch(target);
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -2765,7 +2831,7 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    State.ProgramCounter = target;
+                    SetProgramCounterAndFlushPrefetch(target);
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -2787,7 +2853,7 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    State.ProgramCounter = target;
+                    SetProgramCounterAndFlushPrefetch(target);
                     AddCycles(displacement == 0 ? 10 : 10);
                 }
                 else
@@ -2807,7 +2873,7 @@ namespace Copper68k
                     _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                 }
 
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(displacement == 0 ? 10 : 10);
             }
             else
@@ -3048,14 +3114,14 @@ namespace Copper68k
                     var statusRegister = PullWord();
                     var programCounter = PullLong();
                     State.StatusRegister = statusRegister;
-                    State.ProgramCounter = programCounter;
+                    SetProgramCounterAndFlushPrefetch(programCounter);
                     AddCycles(20);
                     return true;
                 }
                 case 0x4E75:
                 {
                     var programCounter = PullLong();
-                    State.ProgramCounter = programCounter;
+                    SetProgramCounterAndFlushPrefetch(programCounter);
                     AddCycles(16);
                     return true;
                 }
@@ -3148,7 +3214,7 @@ namespace Copper68k
                 State.StatusRegister |= M68kCpuState.Supervisor;
                 PushLong(State.ProgramCounter);
                 PushWord(savedStatusRegister);
-                State.ProgramCounter = ReadLong(vector * 4);
+                SetProgramCounterAndFlushPrefetch(ReadLong(vector * 4));
                 AddCycles(34);
                 return true;
             }
@@ -3225,7 +3291,7 @@ namespace Copper68k
             {
                 var target = State.A[opcode & 7];
                 PushLong(State.ProgramCounter);
-                State.ProgramCounter = target;
+                SetProgramCounterAndFlushPrefetch(target);
                 AddCycles(16);
                 return true;
             }
@@ -3234,7 +3300,7 @@ namespace Copper68k
             {
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
                 PushLong(State.ProgramCounter);
-                State.ProgramCounter = ea.Address;
+                SetProgramCounterAndFlushPrefetch(ea.Address);
                 AddCycles(18);
                 return true;
             }
@@ -3242,7 +3308,7 @@ namespace Copper68k
             if ((opcode & 0xFFC0) == 0x4EC0)
             {
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
-                State.ProgramCounter = ea.Address;
+                SetProgramCounterAndFlushPrefetch(ea.Address);
                 AddCycles(12);
                 return true;
             }
@@ -3331,7 +3397,7 @@ namespace Copper68k
                             _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                         }
 
-                        State.ProgramCounter = target;
+                        SetProgramCounterAndFlushPrefetch(target);
                         AddCycles(10);
                     }
                     else
@@ -4296,13 +4362,30 @@ namespace Copper68k
             };
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort FetchWord()
         {
             var address = State.ProgramCounter;
-            var value = _instructionFetchWindowBus != null
-                ? FetchWordFromInstructionWindow(address)
-                : ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
-            State.ProgramCounter += 2;
+            if (!_prefetchValid || _prefetchAddress != address)
+            {
+                RefillPrefetchSlot(address);
+            }
+
+            var value = _prefetchWord;
+            var completedCycle = _prefetchCompletedCycle;
+            State.ProgramCounter = unchecked(address + 2);
+            if (State.Cycles < completedCycle)
+            {
+                State.Cycles = completedCycle;
+            }
+
+            if (_cpuRetireBusCycle < completedCycle)
+            {
+                _cpuRetireBusCycle = completedCycle;
+            }
+
+            _prefetchValid = false;
+            FillPrefetchSlot(unchecked(address + 2));
             return value;
         }
 
@@ -4313,66 +4396,99 @@ namespace Copper68k
             return ((uint)high << 16) | low;
         }
 
-        private ushort FetchWordFromInstructionWindow(uint address)
+        private void FlushPrefetch()
         {
-            if ((address & 1) != 0)
-            {
-                return ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
-            }
+            _prefetchValid = false;
+        }
 
-            var bus = _instructionFetchWindowBus!;
-            if (!_instructionFetchWindow.ContainsWord(address))
-            {
-                if (!bus.TryGetInstructionFetchWindow(address, out _instructionFetchWindow) ||
-                    !_instructionFetchWindow.ContainsWord(address))
-                {
-                    return ReadWord(address, M68kBusAccessKind.CpuInstructionFetch);
-                }
-            }
+        private void SetProgramCounterAndFlushPrefetch(uint target)
+        {
+            State.ProgramCounter = target;
+            FlushPrefetch();
+        }
 
-            var cycle = State.Cycles;
-            bus.CommitInstructionFetchWindowWord(in _instructionFetchWindow, address, ref cycle);
-            State.Cycles = cycle;
-            return _instructionFetchWindow.ReadWord(address);
+        private void ResetPrefetchPipeline()
+        {
+            FlushPrefetch();
+            _cpuBusCycle = State.Cycles;
+            _cpuRetireBusCycle = State.Cycles;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
+        private void RefillPrefetchSlot(uint address)
         {
-            var cycle = State.Cycles;
-            if (accessKind == M68kBusAccessKind.CpuDataRead &&
-                _exactCpuDataBus != null &&
-                _exactCpuDataBus.TryReadExactCpuDataByte(address, ref cycle, out var fastValue))
+            FlushPrefetch();
+            FillPrefetchSlot(address);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void FillPrefetchSlot(uint address)
+        {
+            var value = ReadPrefetchWord(address, out var completedCycle);
+            _prefetchAddress = address;
+            _prefetchWord = value;
+            _prefetchCompletedCycle = completedCycle;
+            _prefetchValid = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadPrefetchWord(uint address, out long completedCycle)
+        {
+            var cycle = BeginCpuBusAccessCycle();
+            var value = ReadInstructionFetchWord(address, ref cycle);
+            _cpuBusCycle = cycle;
+            completedCycle = cycle;
+            return value;
+        }
+
+        private ushort ReadInstructionFetchWord(uint address, ref long cycle)
+        {
+            if ((address & 1) != 0)
             {
-                State.Cycles = cycle;
-                return fastValue;
+                State.Cycles = Math.Max(State.Cycles, cycle);
+                _cpuBusCycle = Math.Max(_cpuBusCycle, cycle);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, cycle);
+                RaiseAddressError(address, isWrite: false, M68kBusAccessKind.CpuInstructionFetch);
+                throw M68kAddressErrorException.Instance;
             }
 
-            var value = _bus.ReadByte(address, ref cycle, accessKind);
-            State.Cycles = cycle;
+            if (_instructionFetchWindowBus != null)
+            {
+                var bus = _instructionFetchWindowBus;
+                if (!_instructionFetchWindow.ContainsWord(address) &&
+                    (!bus.TryGetInstructionFetchWindow(address, out _instructionFetchWindow) ||
+                    !_instructionFetchWindow.ContainsWord(address)))
+                {
+                    return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+                }
+
+                bus.CommitInstructionFetchWindowWord(in _instructionFetchWindow, address, ref cycle);
+                return _instructionFetchWindow.ReadWord(address);
+            }
+
+            return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private byte ReadByte(uint address)
+        {
+            var cycle = BeginCpuBusAccessCycle();
+            var value = TCpuDataAccess.ReadByte(_typedBus, address, ref cycle);
+            CompleteCpuBusAccess(cycle);
             return value;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
+        private ushort ReadWord(uint address)
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: false, accessKind);
-                throw M68kAddressErrorException.Instance;
+                ThrowOddAddressAccess(address, isWrite: false, M68kBusAccessKind.CpuDataRead);
             }
 
-            var cycle = State.Cycles;
-            if (accessKind == M68kBusAccessKind.CpuDataRead &&
-                _exactCpuDataBus != null &&
-                _exactCpuDataBus.TryReadExactCpuDataWord(address, ref cycle, out var fastValue))
-            {
-                State.Cycles = cycle;
-                return fastValue;
-            }
-
-            var value = _bus.ReadWord(address, ref cycle, accessKind);
-            State.Cycles = cycle;
+            var cycle = BeginCpuBusAccessCycle();
+            var value = TCpuDataAccess.ReadWord(_typedBus, address, ref cycle);
+            CompleteCpuBusAccess(cycle);
             return value;
         }
 
@@ -4381,36 +4497,21 @@ namespace Copper68k
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: false, M68kBusAccessKind.CpuDataRead);
-                throw M68kAddressErrorException.Instance;
+                ThrowOddAddressAccess(address, isWrite: false, M68kBusAccessKind.CpuDataRead);
             }
 
-            var cycle = State.Cycles;
-            if (_exactCpuDataBus != null &&
-                _exactCpuDataBus.TryReadExactCpuDataLong(address, ref cycle, out var fastValue))
-            {
-                State.Cycles = cycle;
-                return fastValue;
-            }
-
-            var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
-            State.Cycles = cycle;
+            var cycle = BeginCpuBusAccessCycle();
+            var value = TCpuDataAccess.ReadLong(_typedBus, address, ref cycle);
+            CompleteCpuBusAccess(cycle);
             return value;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteByte(uint address, byte value)
         {
-            var cycle = State.Cycles;
-            if (_exactCpuDataBus != null &&
-                _exactCpuDataBus.TryWriteExactCpuDataByte(address, value, ref cycle))
-            {
-                State.Cycles = cycle;
-                return;
-            }
-
-            _bus.WriteByte(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            State.Cycles = cycle;
+            var cycle = BeginCpuBusAccessCycle();
+            TCpuDataAccess.WriteByte(_typedBus, address, value, ref cycle);
+            CompleteCpuBusAccess(cycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4418,20 +4519,12 @@ namespace Copper68k
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
-                throw M68kAddressErrorException.Instance;
+                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
             }
 
-            var cycle = State.Cycles;
-            if (_exactCpuDataBus != null &&
-                _exactCpuDataBus.TryWriteExactCpuDataWord(address, value, ref cycle))
-            {
-                State.Cycles = cycle;
-                return;
-            }
-
-            _bus.WriteWord(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            State.Cycles = cycle;
+            var cycle = BeginCpuBusAccessCycle();
+            TCpuDataAccess.WriteWord(_typedBus, address, value, ref cycle);
+            CompleteCpuBusAccess(cycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4439,20 +4532,24 @@ namespace Copper68k
         {
             if ((address & 1) != 0)
             {
-                RaiseAddressError(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
-                throw M68kAddressErrorException.Instance;
+                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
             }
 
-            var cycle = State.Cycles;
-            if (_exactCpuDataBus != null &&
-                _exactCpuDataBus.TryWriteExactCpuDataLong(address, value, ref cycle))
-            {
-                State.Cycles = cycle;
-                return;
-            }
+            var cycle = BeginCpuBusAccessCycle();
+            TCpuDataAccess.WriteLong(_typedBus, address, value, ref cycle);
+            CompleteCpuBusAccess(cycle);
+        }
 
-            _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            State.Cycles = cycle;
+        [DoesNotReturn]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ThrowOddAddressAccess(uint address, bool isWrite, M68kBusAccessKind accessKind)
+        {
+            var faultCycle = BeginCpuBusAccessCycle();
+            State.Cycles = faultCycle;
+            _cpuBusCycle = faultCycle;
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, faultCycle);
+            RaiseAddressError(address, isWrite, accessKind);
+            throw M68kAddressErrorException.Instance;
         }
 
         private void PushWord(ushort value)
@@ -4482,6 +4579,22 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long BeginCpuBusAccessCycle()
+            => State.Cycles < _cpuBusCycle ? _cpuBusCycle : State.Cycles;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteCpuBusAccess(long completedCycle)
+        {
+            _cpuBusCycle = completedCycle;
+            if (_cpuRetireBusCycle < completedCycle)
+            {
+                _cpuRetireBusCycle = completedCycle;
+            }
+
+            State.Cycles = completedCycle;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AddCycles(int cycles)
         {
             System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
@@ -4499,13 +4612,23 @@ namespace Copper68k
             _instructionCycleFloorActive = true;
             _instructionCycleStart = startCycle;
             _instructionCycleFloor = startCycle;
+            if (_cpuBusCycle < startCycle)
+            {
+                _cpuBusCycle = startCycle;
+            }
+
+            if (_cpuRetireBusCycle < startCycle)
+            {
+                _cpuRetireBusCycle = startCycle;
+            }
         }
 
         private int CompleteInstruction(long startCycle)
         {
-            if (State.Cycles < _instructionCycleFloor)
+            var completedCycle = Math.Max(_instructionCycleFloor, _cpuRetireBusCycle);
+            if (State.Cycles < completedCycle)
             {
-                State.Cycles = _instructionCycleFloor;
+                State.Cycles = completedCycle;
             }
 
             return (int)(State.Cycles - startCycle);
@@ -4518,7 +4641,7 @@ namespace Copper68k
             State.StatusRegister |= M68kCpuState.Supervisor;
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
-            State.ProgramCounter = ReadLong((uint)(vector * 4));
+            SetProgramCounterAndFlushPrefetch(ReadLong((uint)(vector * 4)));
             AddCycles(cycles);
         }
 
@@ -4531,7 +4654,7 @@ namespace Copper68k
             PushWord(State.LastOpcode);
             PushLong(faultAddress);
             PushWord(CreateBusErrorStatusWord(faultAddress, savedStatusRegister, isWrite, accessKind));
-            State.ProgramCounter = ReadLong(0x0000_000C);
+            SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
             AddCycles(AddressErrorExceptionCycles);
         }
 
@@ -4628,12 +4751,12 @@ namespace Copper68k
 
         private readonly struct EaOperand
         {
-            private readonly M68kInterpreter _cpu;
+            private readonly M68kInterpreterCore<TBus, TCpuDataAccess> _cpu;
             private readonly int _kind;
             private readonly int _reg;
             private readonly uint _immediate;
 
-            private EaOperand(M68kInterpreter cpu, int kind, int reg, uint address, uint immediate, M68kOperandSize size, int eaCycles)
+            private EaOperand(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, int kind, int reg, uint address, uint immediate, M68kOperandSize size, int eaCycles)
             {
                 _cpu = cpu;
                 _kind = kind;
@@ -4652,22 +4775,22 @@ namespace Copper68k
 
             public bool IsRegister => _kind is 0 or 1;
 
-            public static EaOperand DataRegister(M68kInterpreter cpu, int reg, M68kOperandSize size)
+            public static EaOperand DataRegister(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, int reg, M68kOperandSize size)
             {
                 return new EaOperand(cpu, 0, reg, 0, 0, size, eaCycles: 0);
             }
 
-            public static EaOperand AddressRegister(M68kInterpreter cpu, int reg, M68kOperandSize size)
+            public static EaOperand AddressRegister(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, int reg, M68kOperandSize size)
             {
                 return new EaOperand(cpu, 1, reg, 0, 0, size, eaCycles: 0);
             }
 
-            public static EaOperand Memory(M68kInterpreter cpu, uint address, M68kOperandSize size, int eaCycles)
+            public static EaOperand Memory(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, uint address, M68kOperandSize size, int eaCycles)
             {
                 return new EaOperand(cpu, 2, 0, address, 0, size, eaCycles);
             }
 
-            public static EaOperand Immediate(M68kInterpreter cpu, uint value, M68kOperandSize size)
+            public static EaOperand Immediate(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, uint value, M68kOperandSize size)
             {
                 return new EaOperand(cpu, 3, 0, 0, value, size, eaCycles: size == M68kOperandSize.Long ? 8 : 4);
             }
@@ -4724,5 +4847,36 @@ namespace Copper68k
                 }
             }
         }
+    }
+
+    internal sealed class M68kInterpreter : M68kInterpreterCore<IM68kBus, M68kNoExactCpuDataAccess<IM68kBus>>
+    {
+        public M68kInterpreter(
+            IM68kBus bus,
+            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+            : base(bus, default, opcodePlanDispatch)
+        {
+        }
+
+        internal M68kInterpreter(
+            IM68kBus bus,
+            M68kCpuState state,
+            M68kInstructionFrequencyMatrix? instructionFrequency = null,
+            bool enableInstructionFetchWindow = true,
+            bool enableOpcodePlan = true,
+            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+            : base(
+                bus,
+                default,
+                state,
+                instructionFrequency,
+                enableInstructionFetchWindow,
+                enableOpcodePlan,
+                opcodePlanDispatch)
+        {
+        }
+
+        internal static new bool HasDelegatePlanForOpcode(ushort opcode)
+            => M68kInterpreterCore<IM68kBus, M68kNoExactCpuDataAccess<IM68kBus>>.HasDelegatePlanForOpcode(opcode);
     }
 }

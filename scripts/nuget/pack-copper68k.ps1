@@ -22,7 +22,8 @@ function Invoke-DotNet {
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $project = Join-Path $repoRoot "Copper68k\Copper68k.csproj"
-$testProject = Join-Path $repoRoot "CopperMod.Amiga.Tests\CopperMod.Amiga.Tests.csproj"
+$copper68kTestProject = Join-Path $repoRoot "Copper68k.Tests\Copper68k.Tests.csproj"
+$amigaTestProject = Join-Path $repoRoot "CopperMod.Amiga.Tests\CopperMod.Amiga.Tests.csproj"
 $testFilter = "M68k|M68020|M68040"
 
 if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
@@ -36,13 +37,15 @@ New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
 if (-not $NoRestore) {
     Invoke-DotNet -Arguments @("restore", $project)
-    Invoke-DotNet -Arguments @("restore", $testProject)
+    Invoke-DotNet -Arguments @("restore", $copper68kTestProject)
+    Invoke-DotNet -Arguments @("restore", $amigaTestProject)
 }
 
 Invoke-DotNet -Arguments @("build", $project, "-c", $Configuration, "--no-restore")
 
 if (-not $SkipTests) {
-    Invoke-DotNet -Arguments @("test", $testProject, "-c", $Configuration, "--no-restore", "--filter", $testFilter)
+    Invoke-DotNet -Arguments @("test", $copper68kTestProject, "-c", $Configuration, "--no-restore")
+    Invoke-DotNet -Arguments @("test", $amigaTestProject, "-c", $Configuration, "--no-restore", "--filter", $testFilter)
 }
 
 $packProperties = @("/p:EnablePackageValidation=true")

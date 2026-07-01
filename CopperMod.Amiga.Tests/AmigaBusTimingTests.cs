@@ -60,6 +60,45 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void DmaWordReservationSamplesChipRamAtCommitGrantCycle()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		const uint address = 0x1000;
+
+		bus.WriteChipDmaWordAtGrantedSlot(address, 0x1111, 0);
+		var reservation = bus.ReserveChipWordForDevice(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			address,
+			20);
+		Assert.True(reservation.GrantedCycle > 0);
+
+		bus.WriteChipDmaWordAtGrantedSlot(address, 0x2222, reservation.GrantedCycle - 1);
+
+		Assert.Equal(0x2222, bus.CommitDmaWordRead(in reservation));
+	}
+
+	[Fact]
+	public void DmaWordWriteReservationCommitsChipRamOnlyWhenConsumed()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		const uint address = 0x1000;
+
+		bus.WriteChipDmaWordAtGrantedSlot(address, 0x1111, 0);
+		var reservation = bus.ReserveChipWordWriteForDevice(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			address,
+			20);
+
+		Assert.Equal(0x1111, bus.ReadChipDmaWordAtGrantedSlot(address, reservation.GrantedCycle));
+
+		bus.CommitDmaWordWrite(in reservation, 0x3333);
+
+		Assert.Equal(0x3333, bus.ReadChipDmaWordAtGrantedSlot(address, reservation.GrantedCycle + 1));
+	}
+
+	[Fact]
 	public void ExactCpuChipSlotFastHelperMatchesGenericSingleSlotGrant()
 	{
 		var genericEngine = new AgnusHrmSlotEngine();
@@ -1919,10 +1958,20 @@ public sealed class AmigaBusTimingTests
 
 		cpu.ExecuteInstruction();
 
-		var fetch = Assert.Single(bus.BusAccesses, access => access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch);
-		Assert.Equal(0, fetch.RequestedCycle);
-		Assert.Equal(5, fetch.GrantedCycle);
-		Assert.Equal(8, fetch.CompletedCycle);
+		var fetches = bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch)
+			.OrderBy(access => access.Request.Address)
+			.ToArray();
+		Assert.Equal(2, fetches.Length);
+		Assert.Equal(0x1000u, fetches[0].Request.Address);
+		Assert.Equal(0x1002u, fetches[1].Request.Address);
+		Assert.Equal(0, fetches[0].RequestedCycle);
+		Assert.Equal(5, fetches[0].GrantedCycle);
+		Assert.Equal(8, fetches[0].CompletedCycle);
+		Assert.Equal(fetches[0].CompletedCycle, fetches[1].RequestedCycle);
+		Assert.Equal(13, fetches[1].GrantedCycle);
+		Assert.Equal(16, fetches[1].CompletedCycle);
+		Assert.NotEqual(fetches[0].RequestedCycle, fetches[1].RequestedCycle);
 		Assert.Equal(8, cpu.State.Cycles);
 	}
 
@@ -2274,6 +2323,46 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(36, afterWrite.BusAccess.GrantedCycle);
 		Assert.Equal(0x1234, beforeWrite.Value);
 		Assert.Equal(0x5678, afterWrite.Value);
+	}
+
+	[Fact]
+	public void PaulaDmaChannelReadsUseHrmChannelSlotOrder()
+	{
+		var bus = new AmigaBus();
+
+		var accesses = Enumerable
+			.Range(0, AmigaConstants.PaulaChannelCount)
+			.Select(channel => bus.ReadPaulaDmaWord(channel, 0x2400u + ((uint)channel * 2u), 0).BusAccess)
+			.ToArray();
+
+		Assert.Equal(
+			new long[]
+			{
+				AgnusHrmOcsSlotTable.FirstPaulaHorizontal * AgnusChipSlotScheduler.SlotCycles,
+				(AgnusHrmOcsSlotTable.FirstPaulaHorizontal + 2) * AgnusChipSlotScheduler.SlotCycles,
+				(AgnusHrmOcsSlotTable.FirstPaulaHorizontal + 4) * AgnusChipSlotScheduler.SlotCycles,
+				(AgnusHrmOcsSlotTable.FirstPaulaHorizontal + 6) * AgnusChipSlotScheduler.SlotCycles
+			},
+			accesses.Select(access => access.GrantedCycle).ToArray());
+		Assert.Equal(new[] { 0, 1, 2, 3 }, accesses.Select(access => access.Request.Channel).ToArray());
+		Assert.Equal(AgnusChipSlotOwner.Paula, bus.Agnus.CaptureSnapshot().LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void PaulaDmaSameChannelRetryPreservesDeniedSlotAccounting()
+	{
+		var bus = new AmigaBus();
+
+		var first = bus.ReadPaulaDmaWord(0, 0x2400, 0).BusAccess;
+		var second = bus.ReadPaulaDmaWord(0, 0x2402, 0).BusAccess;
+		var snapshot = bus.Agnus.CaptureSnapshot();
+
+		Assert.Equal(AgnusHrmOcsSlotTable.FirstPaulaHorizontal * AgnusChipSlotScheduler.SlotCycles, first.GrantedCycle);
+		Assert.Equal(first.GrantedCycle + AmigaConstants.A500PalCpuCyclesPerRasterLine, second.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Paula, snapshot.LastDeniedFixedSlot?.Owner);
+		Assert.Equal(AgnusChipSlotOwner.Paula, snapshot.LastDeniedFixedSlotBlocker?.Owner);
+		Assert.Equal(1, snapshot.PaulaDeniedFixedSlotCount);
+		Assert.Equal(1, snapshot.PaulaDeniedFixedSlotBlockerCount);
 	}
 
 	[Fact]
