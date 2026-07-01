@@ -209,6 +209,16 @@ namespace Copper68k
 
     internal readonly struct M68kInstructionFetchWindow
     {
+        public static M68kInstructionFetchWindow Empty { get; } = new(
+            Array.Empty<byte>(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            Array.Empty<uint>(),
+            0);
+
         public M68kInstructionFetchWindow(
             byte[] memory,
             int memoryOffset,
@@ -249,8 +259,7 @@ namespace Copper68k
         public bool ContainsWord(uint address)
         {
             var generationSource = GenerationSource;
-            if (generationSource == null ||
-                generationSource.Length == 0 ||
+            if (generationSource.Length == 0 ||
                 generationSource[0] != Generation)
             {
                 return false;
@@ -1178,6 +1187,7 @@ namespace Copper68k
             _instructionFetchWindowBus = enableInstructionFetchWindow
                 ? bus as IM68kInstructionFetchWindowBus
                 : null;
+            _instructionFetchWindow = M68kInstructionFetchWindow.Empty;
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
             _opcodePlanDispatch = enableOpcodePlan ? opcodePlanDispatch : M68kOpcodePlanDispatch.Scalar;
@@ -4456,7 +4466,7 @@ namespace Copper68k
             {
                 var bus = _instructionFetchWindowBus;
                 if (!_instructionFetchWindow.ContainsWord(address) &&
-                    (!bus.TryGetInstructionFetchWindow(address, out _instructionFetchWindow) ||
+                    (!TryGetInstructionFetchWindow(bus, address, out _instructionFetchWindow) ||
                     !_instructionFetchWindow.ContainsWord(address)))
                 {
                     return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
@@ -4467,6 +4477,21 @@ namespace Copper68k
             }
 
             return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetInstructionFetchWindow(
+            IM68kInstructionFetchWindowBus bus,
+            uint address,
+            out M68kInstructionFetchWindow window)
+        {
+            if (bus.TryGetInstructionFetchWindow(address, out window))
+            {
+                return true;
+            }
+
+            window = M68kInstructionFetchWindow.Empty;
+            return false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
