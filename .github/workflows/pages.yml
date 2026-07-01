@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - docs/**
+      - '!docs/**/*.md'
       - .github/workflows/pages.yml
   workflow_dispatch:
 
