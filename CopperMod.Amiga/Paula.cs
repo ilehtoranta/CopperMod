@@ -34,14 +34,27 @@ namespace CopperMod.Amiga
         private ushort _vhposr;
         private ushort _lastCpuActiveInterruptBits;
         private long _copperInterruptRecognitionCycle = long.MinValue;
+        private int _interruptSourcePendingWriteIndex;
         private ulong _registerWakeVersion;
         private ulong _registerWakeCandidateVersion = ulong.MaxValue;
         private long _registerWakeCandidateCycle = long.MaxValue;
+        private ulong _dmaWakeCandidateVersion = ulong.MaxValue;
+        private long _dmaWakeCandidateCycle = long.MaxValue;
+        private ulong _interruptSourceWakeCandidateVersion = ulong.MaxValue;
+        private long _interruptSourceWakeCandidateCycle = long.MaxValue;
+        private ulong _pendingInterruptSourceWriteCandidateVersion = ulong.MaxValue;
+        private int _pendingInterruptSourceWriteCandidateIndex = -1;
+        private long _pendingInterruptSourceWriteCandidateCycle = long.MaxValue;
         private float[][]? _captureSamples;
         private int _captureFrameIndex;
         private int _captureSampleRate;
         private long _startDmaWordOutputCount;
+        private long _interruptSourceDmaSkippedCount;
+        private long _interruptSourceDmaForcedCatchUpCount;
+        private long _paulaDmaWordReservationCount;
+        private long _registerDmaFastForwardIterationCount;
         private bool _hotCounterDiagnosticsEnabled;
+        private bool _registerDmaFastForwardEnabled;
 
         public Paula(AmigaBus bus)
         {
@@ -56,6 +69,20 @@ namespace CopperMod.Amiga
 
         internal long StartDmaWordOutputCount => _startDmaWordOutputCount;
 
+        internal long InterruptSourceDmaSkippedCount => _interruptSourceDmaSkippedCount;
+
+        internal long InterruptSourceDmaForcedCatchUpCount => _interruptSourceDmaForcedCatchUpCount;
+
+        internal long PaulaDmaWordReservationCount => _paulaDmaWordReservationCount;
+
+        internal long RegisterDmaFastForwardIterationCount => _registerDmaFastForwardIterationCount;
+
+        internal bool RegisterDmaFastForwardEnabled
+        {
+            get => _registerDmaFastForwardEnabled;
+            set => _registerDmaFastForwardEnabled = value;
+        }
+
         internal bool HotCounterDiagnosticsEnabled
         {
             set => _hotCounterDiagnosticsEnabled = value;
@@ -64,6 +91,8 @@ namespace CopperMod.Amiga
         public ushort Intena => _registerTimeline.Intena;
 
         public ushort Intreq => _registerTimeline.Intreq;
+
+        internal bool AreAllAudioInterruptsPending => (_registerTimeline.Intreq & AudioInterruptMask) == AudioInterruptMask;
 
         internal ulong RegisterWakeVersion => _registerWakeVersion;
 
@@ -94,11 +123,16 @@ namespace CopperMod.Amiga
             _vhposr = 0;
             _lastCpuActiveInterruptBits = 0;
             _copperInterruptRecognitionCycle = long.MinValue;
+            _interruptSourcePendingWriteIndex = 0;
             InvalidateRegisterWakeCandidateCache();
             _captureSamples = null;
             _captureFrameIndex = 0;
             _captureSampleRate = 0;
             _startDmaWordOutputCount = 0;
+            _interruptSourceDmaSkippedCount = 0;
+            _interruptSourceDmaForcedCatchUpCount = 0;
+            _paulaDmaWordReservationCount = 0;
+            _registerDmaFastForwardIterationCount = 0;
         }
 
         public byte ReadByte(ushort offset)
@@ -322,6 +356,32 @@ namespace CopperMod.Amiga
                 : ClampWakeCandidate(candidate, currentCycle, targetCycle);
         }
 
+        internal long? GetNextDmaWakeCandidateCycle(long currentCycle, long targetCycle)
+        {
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            var candidate = GetDmaWakeCandidateCycle();
+            return candidate == long.MaxValue
+                ? null
+                : ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        internal long? GetNextInterruptSourceWakeCandidateCycle(long currentCycle, long targetCycle)
+        {
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            var candidate = GetInterruptSourceWakeCandidateCycle();
+            return candidate == long.MaxValue
+                ? null
+                : ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
         internal long? GetNextCpuWakeCandidateCycle(long currentCycle, long targetCycle, int cpuInterruptMask)
         {
             if (targetCycle <= currentCycle)
@@ -472,6 +532,23 @@ namespace CopperMod.Amiga
         public void AdvanceRegisterObservableTo(long targetCycle)
             => AdvanceTimelineTo(_registerTimeline, targetCycle, PaulaTimelineKind.Register);
 
+        internal void AdvanceDmaObservableTo(long targetCycle)
+            => AdvanceTimelineTo(_registerTimeline, targetCycle, PaulaTimelineKind.Register);
+
+        internal void AdvanceInterruptSourcesTo(long targetCycle)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            if (WillAudioInterruptBitsRemainPendingAfterInterruptSourceWrites(targetCycle))
+            {
+                ApplyInterruptSourceWritesTo(targetCycle);
+                _interruptSourceDmaSkippedCount++;
+                return;
+            }
+
+            _interruptSourceDmaForcedCatchUpCount++;
+            AdvanceDmaObservableTo(targetCycle);
+        }
+
         public void AdvanceRegisterWritesTo(long targetCycle)
             => ApplyRegisterWritesTo(targetCycle);
 
@@ -484,6 +561,23 @@ namespace CopperMod.Amiga
             }
 
             return GetRegisterWakeCandidateCycle() <= targetCycle;
+        }
+
+        internal bool HasDmaWorkThrough(long targetCycle)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            if (targetCycle < _registerTimeline.LastCycle)
+            {
+                return false;
+            }
+
+            return GetDmaWakeCandidateCycle() <= targetCycle;
+        }
+
+        internal bool HasInterruptSourceWorkThrough(long targetCycle)
+        {
+            targetCycle = Math.Max(0, targetCycle);
+            return GetInterruptSourceWakeCandidateCycle() <= targetCycle;
         }
 
         private void AdvanceAudioTo(long targetCycle)
@@ -510,6 +604,7 @@ namespace CopperMod.Amiga
             AdvanceChannels(timeline, kind, targetCycle);
             if (kind == PaulaTimelineKind.Register)
             {
+                SyncInterruptSourcePendingWriteIndexTo(timeline.PendingWriteIndex);
                 RefreshCpuInterruptVisibility(targetCycle);
                 InvalidateRegisterWakeCandidateCache();
             }
@@ -536,10 +631,115 @@ namespace CopperMod.Amiga
                 ApplyWrite(_registerTimeline, PaulaTimelineKind.Register, write.Offset, write.Value);
             }
 
+            SyncInterruptSourcePendingWriteIndexTo(_registerTimeline.PendingWriteIndex);
             RefreshCpuInterruptVisibility(targetCycle);
             InvalidateRegisterWakeCandidateCache();
             CompactPendingWrites();
             CompactDmaReadLatches();
+        }
+
+        private void ApplyInterruptSourceWritesTo(long targetCycle)
+        {
+            if (_interruptSourcePendingWriteIndex >= _pendingWrites.Count ||
+                _pendingWrites[_interruptSourcePendingWriteIndex].Cycle > targetCycle)
+            {
+                return;
+            }
+
+            while (_interruptSourcePendingWriteIndex < _pendingWrites.Count &&
+                _pendingWrites[_interruptSourcePendingWriteIndex].Cycle <= targetCycle)
+            {
+                var write = _pendingWrites[_interruptSourcePendingWriteIndex++];
+                switch (write.Offset)
+                {
+                    case 0x096:
+                        var dmaconMask = (ushort)(write.Value & WritableDmaconMask);
+                        if ((write.Value & 0x8000) != 0)
+                        {
+                            _registerTimeline.Dmacon |= dmaconMask;
+                        }
+                        else
+                        {
+                            _registerTimeline.Dmacon &= (ushort)~dmaconMask;
+                        }
+
+                        WriteRegisterWord(0x002, _registerTimeline.Dmacon);
+                        break;
+                    case 0x09A:
+                        ApplySetClear(ref _registerTimeline.Intena, write.Value);
+                        WriteRegisterWord(0x01C, _registerTimeline.Intena);
+                        RefreshCpuInterruptVisibility(write.Cycle);
+                        break;
+                    case 0x09C:
+                        var mask = (ushort)(write.Value & WritableIntreqMask);
+                        if ((write.Value & 0x8000) != 0)
+                        {
+                            _registerTimeline.Intreq |= mask;
+                            QueuePendingEnabledAudioInterrupts(write.Cycle, mask);
+                        }
+                        else
+                        {
+                            _registerTimeline.Intreq &= (ushort)~mask;
+                        }
+
+                        WriteRegisterWord(0x01E, _registerTimeline.Intreq);
+                        RefreshCpuInterruptVisibility(write.Cycle);
+                        break;
+                    case 0x09E:
+                        ApplySetClear(ref _registerTimeline.Adkcon, write.Value);
+                        WriteRegisterWord(0x010, _registerTimeline.Adkcon);
+                        break;
+                }
+            }
+
+            InvalidateRegisterWakeCandidateCache();
+            CompactPendingWrites();
+        }
+
+        private bool WillAudioInterruptBitsRemainPendingAfterInterruptSourceWrites(long targetCycle)
+        {
+            if (GetPendingInterruptSourceWriteCycle() > targetCycle)
+            {
+                return AreAllAudioInterruptsPending;
+            }
+
+            var audioBits = (ushort)(_registerTimeline.Intreq & AudioInterruptMask);
+            var startIndex = _pendingInterruptSourceWriteCandidateIndex >= 0
+                ? _pendingInterruptSourceWriteCandidateIndex
+                : _interruptSourcePendingWriteIndex;
+            for (var i = startIndex; i < _pendingWrites.Count; i++)
+            {
+                var write = _pendingWrites[i];
+                if (write.Cycle > targetCycle)
+                {
+                    break;
+                }
+
+                if (write.Offset != 0x09C)
+                {
+                    continue;
+                }
+
+                var mask = (ushort)(write.Value & WritableIntreqMask & AudioInterruptMask);
+                if ((write.Value & 0x8000) != 0)
+                {
+                    audioBits |= mask;
+                }
+                else
+                {
+                    audioBits &= (ushort)~mask;
+                }
+            }
+
+            return audioBits == AudioInterruptMask;
+        }
+
+        private void SyncInterruptSourcePendingWriteIndexTo(int pendingWriteIndex)
+        {
+            if (pendingWriteIndex > _interruptSourcePendingWriteIndex)
+            {
+                _interruptSourcePendingWriteIndex = pendingWriteIndex;
+            }
         }
 
         private bool HasPendingWriteThrough(PaulaTimelineState timeline, long targetCycle)
@@ -712,7 +912,7 @@ namespace CopperMod.Amiga
 
         private void RequestAudioInterrupt(PaulaTimelineKind kind, int channel, long cycle)
         {
-            if (kind != PaulaTimelineKind.Register)
+            if (kind == PaulaTimelineKind.Audio)
             {
                 return;
             }
@@ -728,6 +928,12 @@ namespace CopperMod.Amiga
         {
             bit = (ushort)(bit & 0x3FFF);
             if (bit == 0)
+            {
+                return;
+            }
+
+            if ((bit & AudioInterruptMask) != 0 &&
+                (_registerTimeline.Intreq & AudioInterruptMask) == AudioInterruptMask)
             {
                 return;
             }
@@ -960,6 +1166,9 @@ namespace CopperMod.Amiga
             }
 
             _registerWakeCandidateVersion = ulong.MaxValue;
+            _dmaWakeCandidateVersion = ulong.MaxValue;
+            _interruptSourceWakeCandidateVersion = ulong.MaxValue;
+            _pendingInterruptSourceWriteCandidateVersion = ulong.MaxValue;
         }
 
         private long GetRegisterWakeCandidateCycle()
@@ -991,6 +1200,76 @@ namespace CopperMod.Amiga
             => _registerTimeline.PendingWriteIndex < _pendingWrites.Count
                 ? _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle
                 : long.MaxValue;
+
+        private long GetDmaWakeCandidateCycle()
+        {
+            if (_dmaWakeCandidateVersion == _registerWakeVersion)
+            {
+                return _dmaWakeCandidateCycle;
+            }
+
+            var candidate = GetPendingRegisterWriteCycle();
+
+            for (var i = 0; i < _registerTimeline.Channels.Length; i++)
+            {
+                var channelCandidate = _registerTimeline.Channels[i].GetNextDmaWakeCandidateCycle(
+                    _registerTimeline,
+                    this);
+                if (channelCandidate.HasValue)
+                {
+                    candidate = Math.Min(candidate, channelCandidate.Value);
+                }
+            }
+
+            _dmaWakeCandidateCycle = candidate;
+            _dmaWakeCandidateVersion = _registerWakeVersion;
+            return candidate;
+        }
+
+        private long GetInterruptSourceWakeCandidateCycle()
+        {
+            if (_interruptSourceWakeCandidateVersion == _registerWakeVersion)
+            {
+                return _interruptSourceWakeCandidateCycle;
+            }
+
+            var candidate = GetPendingInterruptSourceWriteCycle();
+            if (!AreAllAudioInterruptsPending)
+            {
+                candidate = Math.Min(candidate, GetDmaWakeCandidateCycle());
+            }
+
+            _interruptSourceWakeCandidateCycle = candidate;
+            _interruptSourceWakeCandidateVersion = _registerWakeVersion;
+            return candidate;
+        }
+
+        private long GetPendingInterruptSourceWriteCycle()
+        {
+            if (_pendingInterruptSourceWriteCandidateVersion == _registerWakeVersion)
+            {
+                return _pendingInterruptSourceWriteCandidateCycle;
+            }
+
+            _pendingInterruptSourceWriteCandidateIndex = -1;
+            _pendingInterruptSourceWriteCandidateCycle = long.MaxValue;
+            for (var i = _interruptSourcePendingWriteIndex; i < _pendingWrites.Count; i++)
+            {
+                var write = _pendingWrites[i];
+                if (IsInterruptSourceWriteOffset(write.Offset))
+                {
+                    _pendingInterruptSourceWriteCandidateIndex = i;
+                    _pendingInterruptSourceWriteCandidateCycle = write.Cycle;
+                    break;
+                }
+            }
+
+            _pendingInterruptSourceWriteCandidateVersion = _registerWakeVersion;
+            return _pendingInterruptSourceWriteCandidateCycle;
+        }
+
+        private static bool IsInterruptSourceWriteOffset(ushort offset)
+            => offset is 0x096 or 0x09A or 0x09C or 0x09E;
 
         private long GetCpuWakeCandidateCycle(int cpuInterruptMask)
         {
@@ -1052,7 +1331,9 @@ namespace CopperMod.Amiga
 
         private void CompactPendingWrites()
         {
-            var consumed = Math.Min(_audioTimeline.PendingWriteIndex, _registerTimeline.PendingWriteIndex);
+            var consumed = Math.Min(
+                Math.Min(_audioTimeline.PendingWriteIndex, _registerTimeline.PendingWriteIndex),
+                _interruptSourcePendingWriteIndex);
             if (consumed < 64 || consumed * 2 < _pendingWrites.Count)
             {
                 return;
@@ -1061,6 +1342,7 @@ namespace CopperMod.Amiga
             _pendingWrites.RemoveRange(0, consumed);
             _audioTimeline.PendingWriteIndex -= consumed;
             _registerTimeline.PendingWriteIndex -= consumed;
+            _interruptSourcePendingWriteIndex -= consumed;
         }
 
         private PaulaDmaReadLatch GetOrCreateDmaReadLatch(int channel, uint address, long requestedCycle, PaulaTimelineKind kind)
@@ -1073,9 +1355,46 @@ namespace CopperMod.Amiga
             }
 
             var reservation = _bus.ReservePaulaDmaWord(channel, address, requestedCycle);
+            _paulaDmaWordReservationCount++;
             var latch = new PaulaDmaReadLatch(channel, address, requestedCycle, reservation);
             queue.AddConsumed(latch, kind);
             return latch;
+        }
+
+        private bool TryGetOrCreateDmaReadLatchAtSlot(
+            int channel,
+            uint address,
+            long requestCycle,
+            long slotCycle,
+            PaulaTimelineKind kind,
+            out PaulaDmaReadLatch latch)
+        {
+            address = _bus.MaskChipDmaAddress(address);
+            var queue = _dmaReadLatchQueues[channel];
+            if (queue.TryConsume(address, requestCycle, kind, out latch))
+            {
+                return true;
+            }
+
+            if (!_bus.TryReservePaulaDmaWordExactSlot(channel, address, slotCycle, out var reservation))
+            {
+                latch = default;
+                return false;
+            }
+
+            _paulaDmaWordReservationCount++;
+            latch = new PaulaDmaReadLatch(channel, address, requestCycle, reservation);
+            queue.AddConsumed(latch, kind);
+            return true;
+        }
+
+        private static long GetNextAudioDmaSlotCycle(int channel, long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            return AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(
+                cycle,
+                AgnusChipSlotOwner.Paula,
+                channel);
         }
 
         private void CompactDmaReadLatches()
@@ -1094,6 +1413,16 @@ namespace CopperMod.Amiga
             }
 
             _startDmaWordOutputCount++;
+        }
+
+        private void RecordRegisterDmaFastForwardIterations(long count)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            _registerDmaFastForwardIterationCount += count;
         }
 
         private void ResetDmaReadLatchQueues()
@@ -1289,17 +1618,22 @@ namespace CopperMod.Amiga
                 => Latch.Address == address;
 
             public bool IsConsumed(PaulaTimelineKind kind)
-                => kind == PaulaTimelineKind.Audio ? AudioConsumed : RegisterConsumed;
+                => kind switch
+                {
+                    PaulaTimelineKind.Audio => AudioConsumed,
+                    _ => RegisterConsumed
+                };
 
             public void MarkConsumed(PaulaTimelineKind kind)
             {
-                if (kind == PaulaTimelineKind.Audio)
+                switch (kind)
                 {
-                    AudioConsumed = true;
-                }
-                else
-                {
-                    RegisterConsumed = true;
+                    case PaulaTimelineKind.Audio:
+                        AudioConsumed = true;
+                        break;
+                    default:
+                        RegisterConsumed = true;
+                        break;
                 }
             }
         }
@@ -1357,6 +1691,10 @@ namespace CopperMod.Amiga
             private bool _hasPrefetchedDmaWord;
             private PaulaDmaReadLatch _pendingDmaLatch;
             private bool _hasPendingDmaWord;
+            private bool _pendingDmaServed;
+            private uint _pendingDmaRequestAddress;
+            private long _pendingDmaRequestCycle;
+            private long _pendingDmaServiceCycle;
             private long _pendingDmaLoadCycle;
             private long _pendingDmaNextFetchCycle;
             private int _pendingDmaInterruptCount;
@@ -1401,6 +1739,10 @@ namespace CopperMod.Amiga
                 _hasPrefetchedDmaWord = false;
                 _pendingDmaLatch = default;
                 _hasPendingDmaWord = false;
+                _pendingDmaServed = false;
+                _pendingDmaRequestAddress = 0;
+                _pendingDmaRequestCycle = long.MaxValue;
+                _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaNextFetchCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
@@ -1463,10 +1805,17 @@ namespace CopperMod.Amiga
                 var context = new DmaContext(bus, paula, timeline, kind);
                 while (true)
                 {
+                    if (TryFastForwardStableRegisterDmaTo(targetCycle, in context))
+                    {
+                        continue;
+                    }
+
+                    ServicePendingDmaRequestThrough(targetCycle, in context);
                     if (_hasPendingDmaWord)
                     {
                         var sampleDue = _hasDataWord && _nextSampleCycle <= targetCycle;
-                        if (_pendingDmaLoadCycle <= targetCycle &&
+                        if (_pendingDmaServed &&
+                            _pendingDmaLoadCycle <= targetCycle &&
                             (!sampleDue || _pendingDmaLoadCycle <= _nextSampleCycle))
                         {
                             CompletePendingDmaWord(in context, targetCycle);
@@ -1498,7 +1847,8 @@ namespace CopperMod.Amiga
                         if (DmaEnabled &&
                             UsesLiveAgnusAudioDma(context.Bus) &&
                             !_hasPrefetchedDmaWord &&
-                            _hasPendingDmaWord)
+                            _hasPendingDmaWord &&
+                            _pendingDmaServed)
                         {
                             _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                         }
@@ -1531,7 +1881,9 @@ namespace CopperMod.Amiga
                         }
 
                         _nextSampleCycle += GetPeriodCycles(Period);
-                        if (UsesLiveAgnusAudioDma(context.Bus) && _hasPendingDmaWord)
+                        if (UsesLiveAgnusAudioDma(context.Bus) &&
+                            _hasPendingDmaWord &&
+                            _pendingDmaServed)
                         {
                             _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                         }
@@ -1544,12 +1896,78 @@ namespace CopperMod.Amiga
                 }
             }
 
+            private bool TryFastForwardStableRegisterDmaTo(long targetCycle, in DmaContext context)
+            {
+                if (!context.Paula.RegisterDmaFastForwardEnabled ||
+                    context.Kind == PaulaTimelineKind.Audio ||
+                    !DmaEnabled ||
+                    !_hasDataWord ||
+                    _nextByteIsLow ||
+                    context.Paula.IsAttachedSource(context.Timeline, Index) ||
+                    context.Paula.HasPendingWriteThrough(context.Timeline, targetCycle))
+                {
+                    return false;
+                }
+
+                var iterations = 0L;
+                while (DmaEnabled &&
+                    _hasDataWord &&
+                    !_nextByteIsLow &&
+                    !context.Paula.IsAttachedSource(context.Timeline, Index) &&
+                    !context.Paula.HasPendingWriteThrough(context.Timeline, targetCycle))
+                {
+                    if (_hasPendingDmaWord)
+                    {
+                        ServicePendingDmaRequestThrough(targetCycle, in context);
+                        if (_pendingDmaLoadTarget == DmaLoadTarget.StartupDiscard ||
+                            !_pendingDmaServed ||
+                            _pendingDmaLoadCycle > targetCycle)
+                        {
+                            break;
+                        }
+
+                        CompletePendingDmaWord(in context, targetCycle);
+                        iterations++;
+                        continue;
+                    }
+
+                    if (_nextSampleCycle > targetCycle)
+                    {
+                        break;
+                    }
+
+                    if (_hasPrefetchedDmaWord)
+                    {
+                        var latch = _prefetchedDmaLatch;
+                        ClearPrefetchedDmaWord();
+                        StartDmaWordOutput(
+                            latch,
+                            _nextSampleCycle,
+                            in context,
+                            targetCycle);
+                        iterations++;
+                        continue;
+                    }
+
+                    RequestPrefetchWord(_nextSampleCycle, in context);
+                    iterations++;
+                    if (!_hasPrefetchedDmaWord &&
+                        (!_hasPendingDmaWord || !_pendingDmaServed || _pendingDmaLoadCycle > targetCycle))
+                    {
+                        break;
+                    }
+                }
+
+                context.Paula.RecordRegisterDmaFastForwardIterations(iterations);
+                return iterations > 0;
+            }
+
             public long? GetNextWakeCandidateCycle()
             {
                 long? candidate = null;
                 if (_hasPendingDmaWord)
                 {
-                    candidate = _pendingDmaLoadCycle;
+                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
                 }
 
                 if (DmaEnabled || _hasDataWord)
@@ -1565,7 +1983,28 @@ namespace CopperMod.Amiga
                 long? candidate = null;
                 if (_hasPendingDmaWord)
                 {
-                    candidate = _pendingDmaLoadCycle;
+                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
+                }
+
+                if (_hasDataWord && _nextByteIsLow && paula.IsAttachedSource(timeline, Index))
+                {
+                    candidate = MinWakeCandidate(candidate, _nextSampleCycle);
+                }
+
+                if (DmaEnabled)
+                {
+                    candidate = MinWakeCandidate(candidate, GetNextDmaRegisterBoundaryCycle());
+                }
+
+                return candidate;
+            }
+
+            public long? GetNextDmaWakeCandidateCycle(PaulaTimelineState timeline, Paula paula)
+            {
+                long? candidate = null;
+                if (_hasPendingDmaWord)
+                {
+                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
                 }
 
                 if (_hasDataWord && _nextByteIsLow && paula.IsAttachedSource(timeline, Index))
@@ -1648,19 +2087,20 @@ namespace CopperMod.Amiga
                     interruptCount++;
                 }
 
-                var dmaLatch = context.Paula.GetOrCreateDmaReadLatch(Index, _currentAddress, requestCycle, context.Kind);
+                var requestAddress = _currentAddress;
                 _currentAddress = context.Bus.AddChipDmaPointerOffset(_currentAddress, 2);
                 _remainingWords--;
-                _pendingDmaLatch = dmaLatch;
                 _hasPendingDmaWord = true;
-                _pendingDmaLoadCycle = dmaLatch.LoadCycle;
+                _pendingDmaServed = false;
+                _pendingDmaRequestAddress = requestAddress;
+                _pendingDmaRequestCycle = requestCycle;
+                _pendingDmaServiceCycle = UsesLiveAgnusAudioDma(context.Bus)
+                    ? GetNextAudioDmaSlotCycle(Index, requestCycle)
+                    : requestCycle;
+                _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaNextFetchCycle = requestCycle + (GetDmaPeriodCycles(Period, context.Bus) * 2);
                 _pendingDmaLoadTarget = loadTarget;
                 _nextDmaFetchCycle = _pendingDmaNextFetchCycle;
-                if (!_hasDataWord)
-                {
-                    _nextSampleCycle = _pendingDmaLoadCycle;
-                }
 
                 if (forceInterrupt || _remainingWords == 0)
                 {
@@ -1668,9 +2108,69 @@ namespace CopperMod.Amiga
                 }
 
                 _pendingDmaInterruptCount = interruptCount;
-                if (_pendingDmaLoadCycle <= cycle)
+                if (UsesLiveAgnusAudioDma(context.Bus))
+                {
+                    ServicePendingDmaRequestThrough(cycle, in context);
+                }
+                else
+                {
+                    var dmaLatch = context.Paula.GetOrCreateDmaReadLatch(Index, requestAddress, requestCycle, context.Kind);
+                    MarkPendingDmaServed(dmaLatch);
+                }
+
+                if (_pendingDmaServed && _pendingDmaLoadCycle <= cycle)
                 {
                     CompletePendingDmaWord(in context, cycle);
+                }
+            }
+
+            private void ServicePendingDmaRequestThrough(long targetCycle, in DmaContext context)
+            {
+                if (!_hasPendingDmaWord || _pendingDmaServed)
+                {
+                    return;
+                }
+
+                if (!UsesLiveAgnusAudioDma(context.Bus))
+                {
+                    var dmaLatch = context.Paula.GetOrCreateDmaReadLatch(
+                        Index,
+                        _pendingDmaRequestAddress,
+                        _pendingDmaRequestCycle,
+                        context.Kind);
+                    MarkPendingDmaServed(dmaLatch);
+                    return;
+                }
+
+                while (_pendingDmaServiceCycle <= targetCycle)
+                {
+                    if (context.Paula.TryGetOrCreateDmaReadLatchAtSlot(
+                        Index,
+                        _pendingDmaRequestAddress,
+                        _pendingDmaRequestCycle,
+                        _pendingDmaServiceCycle,
+                        context.Kind,
+                        out var dmaLatch))
+                    {
+                        MarkPendingDmaServed(dmaLatch);
+                        return;
+                    }
+
+                    _pendingDmaServiceCycle = GetNextAudioDmaSlotCycle(
+                        Index,
+                        _pendingDmaServiceCycle + AgnusChipSlotScheduler.SlotCycles);
+                }
+            }
+
+            private void MarkPendingDmaServed(PaulaDmaReadLatch dmaLatch)
+            {
+                _pendingDmaLatch = dmaLatch;
+                _pendingDmaServed = true;
+                _pendingDmaLoadCycle = dmaLatch.LoadCycle;
+                _pendingDmaServiceCycle = long.MaxValue;
+                if (!_hasDataWord)
+                {
+                    _nextSampleCycle = _pendingDmaLoadCycle;
                 }
             }
 
@@ -1733,7 +2233,7 @@ namespace CopperMod.Amiga
                 _hasDataWord = true;
                 CurrentSample = unchecked((sbyte)(word >> 8));
                 var periodCycles = GetPeriodCycles(Period);
-                if (context.Kind == PaulaTimelineKind.Register &&
+                if (context.Kind != PaulaTimelineKind.Audio &&
                     TrySkipRegisterLowByteDmaOutput(cycle, in context, periodCycles))
                 {
                     return;
@@ -1751,15 +2251,16 @@ namespace CopperMod.Amiga
                     !context.Paula.IsAttachedSource(context.Timeline, Index))
                 {
                     CurrentSample = unchecked((sbyte)word);
-                    _nextByteIsLow = false;
-                    _nextSampleCycle += periodCycles;
-                    if (DmaEnabled &&
-                        UsesLiveAgnusAudioDma(context.Bus) &&
-                        !_hasPrefetchedDmaWord &&
-                        _hasPendingDmaWord)
-                    {
-                        _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
-                    }
+                _nextByteIsLow = false;
+                _nextSampleCycle += periodCycles;
+                if (DmaEnabled &&
+                    UsesLiveAgnusAudioDma(context.Bus) &&
+                    !_hasPrefetchedDmaWord &&
+                    _hasPendingDmaWord &&
+                    _pendingDmaServed)
+                {
+                    _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
+                }
                 }
             }
 
@@ -1782,7 +2283,10 @@ namespace CopperMod.Amiga
                 _nextByteIsLow = false;
                 _nextSampleCycle = nextWordCycle;
                 RequestPrefetchWord(cycle, in context);
-                if (UsesLiveAgnusAudioDma(context.Bus) && !_hasPrefetchedDmaWord && _hasPendingDmaWord)
+                if (UsesLiveAgnusAudioDma(context.Bus) &&
+                    !_hasPrefetchedDmaWord &&
+                    _hasPendingDmaWord &&
+                    _pendingDmaServed)
                 {
                     _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                 }
@@ -1800,6 +2304,10 @@ namespace CopperMod.Amiga
             {
                 _pendingDmaLatch = default;
                 _hasPendingDmaWord = false;
+                _pendingDmaServed = false;
+                _pendingDmaRequestAddress = 0;
+                _pendingDmaRequestCycle = long.MaxValue;
+                _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaNextFetchCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;

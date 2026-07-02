@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Diagnostics;
 
 namespace CopperMod.Amiga
@@ -146,6 +151,24 @@ namespace CopperMod.Amiga
                 _paulaEvents++;
             }
 
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
+                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceInterruptSourcesTo(cycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                _paulaEvents++;
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
+                _bus.Paula.HasDmaWorkThrough(cycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceDmaObservableTo(cycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                _paulaEvents++;
+            }
+
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 HasDiskWakeSourceThrough(cycle, mask) &&
                 HasDiskWorkThrough(cycle, mask))
@@ -188,10 +211,10 @@ namespace CopperMod.Amiga
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
-            if (_bus.Paula.HasRegisterObservableWorkThrough(cycle))
+            if (_bus.Paula.HasDmaWorkThrough(cycle))
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Paula.AdvanceRegisterObservableTo(cycle);
+                _bus.Paula.AdvanceDmaObservableTo(cycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 _paulaEvents++;
             }
@@ -225,10 +248,10 @@ namespace CopperMod.Amiga
 
         private void ProcessSlotContendedTargetCatchUpProfiled(long targetCycle, bool blitterWasBusyAtDrainStart)
         {
-            if (_bus.Paula.HasRegisterObservableWorkThrough(targetCycle))
+            if (_bus.Paula.HasDmaWorkThrough(targetCycle))
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateWakeAgenda();
             }
@@ -281,6 +304,24 @@ namespace CopperMod.Amiga
             {
                 var start = Stopwatch.GetTimestamp();
                 _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                InvalidateWakeAgenda();
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
+                (forceCatchUp || _bus.Paula.HasInterruptSourceWorkThrough(targetCycle)))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceInterruptSourcesTo(targetCycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                InvalidateWakeAgenda();
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
+                (forceCatchUp || _bus.Paula.HasDmaWorkThrough(targetCycle)))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateWakeAgenda();
             }

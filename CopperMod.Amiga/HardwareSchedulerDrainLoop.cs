@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Diagnostics;
 
@@ -169,6 +174,16 @@ namespace CopperMod.Amiga
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0)
             {
                 _paulaDrainCycle = Math.Max(_paulaDrainCycle, targetCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
+            {
+                _paulaDrainCycle = Math.Max(_paulaDrainCycle, targetCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0)
+            {
+                _paulaDmaDrainCycle = Math.Max(_paulaDmaDrainCycle, targetCycle);
             }
 
             if ((mask & AmigaHardwareEventMask.DiskEvents) != 0)
@@ -366,6 +381,28 @@ namespace CopperMod.Amiga
             }
         }
 
+        private void AdvanceSlotContendedPaulaDmaTo(long targetCycle)
+        {
+            if (!_bus.Paula.HasDmaWorkThrough(targetCycle))
+            {
+                return;
+            }
+
+            if (HostProfilingEnabled)
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+            }
+            else
+            {
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
+            }
+
+            _paulaEvents++;
+            InvalidateWakeAgenda();
+        }
+
         private bool HasSlotContendedAgnusWorkThrough(long targetCycle)
         {
             if (_agnusDrainCycle >= targetCycle)
@@ -384,6 +421,8 @@ namespace CopperMod.Amiga
             return ((mask & AmigaHardwareEventMask.Raster) == 0 || _rasterDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.CiaTimers) == 0 || _ciaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.PaulaRegister) == 0 || _paulaDrainCycle >= targetCycle) &&
+                ((mask & AmigaHardwareEventMask.PaulaInterruptSources) == 0 || _paulaDrainCycle >= targetCycle) &&
+                ((mask & AmigaHardwareEventMask.PaulaDma) == 0 || _paulaDmaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.DiskEvents) == 0 || _diskEventDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.DiskCiaEvents) == 0 || _diskCiaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.DiskPassiveInput) == 0 || _diskPassiveDrainCycle >= targetCycle) &&
@@ -407,6 +446,16 @@ namespace CopperMod.Amiga
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0)
             {
                 cycle = Math.Min(cycle, _paulaDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
+            {
+                cycle = Math.Min(cycle, _paulaDrainCycle);
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0)
+            {
+                cycle = Math.Min(cycle, _paulaDmaDrainCycle);
             }
 
             if ((mask & AmigaHardwareEventMask.DiskEvents) != 0)
@@ -462,6 +511,16 @@ namespace CopperMod.Amiga
                 candidate = Min(candidate, GetNextPaulaEventCycle(currentCycle, targetCycle));
             }
 
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
+            {
+                candidate = Min(candidate, GetNextPaulaInterruptSourceEventCycle(currentCycle, targetCycle));
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0)
+            {
+                candidate = Min(candidate, GetNextPaulaDmaEventCycle(currentCycle, targetCycle));
+            }
+
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 HasDiskWakeSourceThrough(targetCycle, mask))
             {
@@ -495,7 +554,7 @@ namespace CopperMod.Amiga
         private long GetNextSlotContendedEventCycleUncached(long currentCycle, long targetCycle)
         {
             var candidate = long.MaxValue;
-            candidate = Min(candidate, GetNextPaulaEventCycle(currentCycle, targetCycle));
+            candidate = Min(candidate, GetNextPaulaDmaEventCycle(currentCycle, targetCycle));
 
             if (HasDiskWakeSourceThrough(targetCycle, SlotContendedMemoryAccessMask))
             {
@@ -531,6 +590,20 @@ namespace CopperMod.Amiga
                 _bus.Paula.HasRegisterObservableWorkThrough(cycle))
             {
                 _bus.Paula.AdvanceRegisterObservableTo(cycle);
+                _paulaEvents++;
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
+                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
+            {
+                _bus.Paula.AdvanceInterruptSourcesTo(cycle);
+                _paulaEvents++;
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
+                _bus.Paula.HasDmaWorkThrough(cycle))
+            {
+                _bus.Paula.AdvanceDmaObservableTo(cycle);
                 _paulaEvents++;
             }
 
@@ -570,9 +643,9 @@ namespace CopperMod.Amiga
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
-            if (_bus.Paula.HasRegisterObservableWorkThrough(cycle))
+            if (_bus.Paula.HasDmaWorkThrough(cycle))
             {
-                _bus.Paula.AdvanceRegisterObservableTo(cycle);
+                _bus.Paula.AdvanceDmaObservableTo(cycle);
                 _paulaEvents++;
             }
 
@@ -599,9 +672,9 @@ namespace CopperMod.Amiga
 
         private void ProcessSlotContendedTargetCatchUp(long targetCycle, bool blitterWasBusyAtDrainStart)
         {
-            if (_bus.Paula.HasRegisterObservableWorkThrough(targetCycle))
+            if (_bus.Paula.HasDmaWorkThrough(targetCycle))
             {
-                _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
                 InvalidateWakeAgenda();
             }
 
@@ -647,6 +720,20 @@ namespace CopperMod.Amiga
                 InvalidateWakeAgenda();
             }
 
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
+                (forceCatchUp || _bus.Paula.HasInterruptSourceWorkThrough(targetCycle)))
+            {
+                _bus.Paula.AdvanceInterruptSourcesTo(targetCycle);
+                InvalidateWakeAgenda();
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
+                (forceCatchUp || _bus.Paula.HasDmaWorkThrough(targetCycle)))
+            {
+                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
+                InvalidateWakeAgenda();
+            }
+
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 (forceCatchUp ||
                     (HasDiskWakeSourceThrough(targetCycle, mask) && HasDiskWorkThrough(targetCycle, mask))))
@@ -688,6 +775,18 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
+                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
+            {
+                return true;
+            }
+
+            if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
+                _bus.Paula.HasDmaWorkThrough(cycle))
+            {
+                return true;
+            }
+
             return (mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 HasDiskWakeSourceThrough(cycle, mask) &&
                 HasDiskWorkThrough(cycle, mask);
@@ -695,7 +794,7 @@ namespace CopperMod.Amiga
 
         private bool HasSlotContendedSameCycleWork(long cycle)
         {
-            return _bus.Paula.HasRegisterObservableWorkThrough(cycle) ||
+            return _bus.Paula.HasDmaWorkThrough(cycle) ||
                 (HasDiskWakeSourceThrough(cycle, SlotContendedMemoryAccessMask) &&
                     HasDiskWorkThrough(cycle, SlotContendedMemoryAccessMask));
         }
@@ -708,6 +807,26 @@ namespace CopperMod.Amiga
             }
 
             return _bus.Paula.GetNextWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+        }
+
+        private long GetNextPaulaDmaEventCycle(long currentCycle, long targetCycle)
+        {
+            if (_bus.Paula.HasDmaWorkThrough(currentCycle))
+            {
+                return currentCycle;
+            }
+
+            return _bus.Paula.GetNextDmaWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+        }
+
+        private long GetNextPaulaInterruptSourceEventCycle(long currentCycle, long targetCycle)
+        {
+            if (_bus.Paula.HasInterruptSourceWorkThrough(currentCycle))
+            {
+                return currentCycle;
+            }
+
+            return _bus.Paula.GetNextInterruptSourceWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
         }
 
         private long GetNextAgnusEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)

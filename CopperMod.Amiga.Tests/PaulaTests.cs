@@ -234,6 +234,238 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void DmaObservableAdvanceFetchesWithoutAdvancingAudioTimeline()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		var before = bus.Paula.GetChannelSnapshot(0);
+
+		bus.Paula.AdvanceDmaObservableTo(42);
+		var after = bus.Paula.GetChannelSnapshot(0);
+		var grantsAfterDma = CapturePaulaDmaGrants(bus);
+
+		Assert.Equal(before.CurrentSample, after.CurrentSample);
+		Assert.Equal(before.HasDataWord, after.HasDataWord);
+		Assert.Equal(before.NextSampleCycle, after.NextSampleCycle);
+		Assert.Equal(new long[] { 0, 34, 38, 42 }, grantsAfterDma.Select(grant => grant.RequestedCycle));
+		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
+	}
+
+	[Fact]
+	public void AudioTimelineReusesDmaObservableLatchesWithoutDuplicateGrant()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		bus.Paula.AdvanceDmaObservableTo(42);
+		var grantsAfterDma = CapturePaulaDmaGrants(bus);
+		var buffer = new float[2];
+
+		bus.Paula.RenderSample(38, buffer, 0, 2, advanceRegisterObservable: false);
+		var grantsAfterAudio = CapturePaulaDmaGrants(bus);
+
+		Assert.Equal(grantsAfterDma, grantsAfterAudio);
+		Assert.True(buffer[0] > 0.20f);
+	}
+
+	[Fact]
+	public void LiveAudioDmaSlotWithoutPendingRequestDoesNotReadChipRam()
+	{
+		var bus = CreateLivePaulaSlotBus();
+
+		bus.Paula.AdvanceDmaObservableTo(AudioSlotCycle(0, 0));
+
+		Assert.Empty(CapturePaulaDmaAccesses(bus));
+	}
+
+	[Fact]
+	public void LiveAudioDmaPendingRequestIsServedAtExactChannelSlot()
+	{
+		var bus = CreateLivePaulaSlotBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		var slot = AudioSlotCycle(0, 0);
+
+		bus.Paula.AdvanceDmaObservableTo(slot);
+
+		var dma = Assert.Single(CapturePaulaDmaAccesses(bus));
+		Assert.Equal(slot, dma.RequestedCycle);
+		Assert.Equal(slot, dma.GrantedCycle);
+		Assert.Equal(slot + AmigaConstants.A500PalCpuCyclesPerColorClock, dma.CompletedCycle);
+	}
+
+	[Fact]
+	public void LiveAudioDmaRequestCreatedAfterSlotWaitsForNextLineSlot()
+	{
+		var bus = CreateLivePaulaSlotBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		var firstSlot = AudioSlotCycle(0, 0);
+		var nextLineSlot = AudioSlotCycle(1, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, firstSlot + 2);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, firstSlot + 2);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, firstSlot + 2);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, firstSlot + 2);
+
+		bus.Paula.AdvanceDmaObservableTo(nextLineSlot);
+
+		var dma = Assert.Single(CapturePaulaDmaAccesses(bus));
+		Assert.Equal(nextLineSlot, dma.RequestedCycle);
+		Assert.Equal(nextLineSlot, dma.GrantedCycle);
+	}
+
+	[Fact]
+	public void LiveAudioDmaObservableWordIsReusedByAudioTimelineWithoutDuplicateGrant()
+	{
+		var bus = CreateLivePaulaSlotBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		var prefetchCompletion = AudioSlotCycle(1, 0) + AmigaConstants.A500PalCpuCyclesPerColorClock;
+		bus.Paula.AdvanceDmaObservableTo(prefetchCompletion);
+		var grantsAfterDma = CapturePaulaDmaGrants(bus);
+		var buffer = new float[2];
+
+		bus.Paula.RenderSample(prefetchCompletion, buffer, 0, 2, advanceRegisterObservable: false);
+		var grantsAfterAudio = CapturePaulaDmaGrants(bus);
+
+		Assert.Equal(grantsAfterDma, grantsAfterAudio);
+		Assert.True(buffer[0] > 0.20f);
+	}
+
+	[Fact]
+	public void SaturatedInterruptSourceAdvanceAppliesWritesWithoutDmaCatchUp()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x8780, 0);
+		var before = bus.Paula.GetChannelSnapshot(0);
+
+		bus.Paula.AdvanceInterruptSourcesTo(42);
+		var after = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(0x0201, bus.Paula.Dmacon & 0x0201);
+		Assert.Equal(0x0780, bus.Paula.Intreq & 0x0780);
+		Assert.Equal(before.CurrentSample, after.CurrentSample);
+		Assert.Equal(before.HasDataWord, after.HasDataWord);
+		Assert.Equal(before.NextSampleCycle, after.NextSampleCycle);
+		Assert.Empty(CapturePaulaDmaGrants(bus));
+		Assert.Equal(1, bus.Paula.InterruptSourceDmaSkippedCount);
+		Assert.Equal(0, bus.Paula.InterruptSourceDmaForcedCatchUpCount);
+	}
+
+	[Fact]
+	public void InterruptSourceAdvanceFallsBackToDmaAfterAudioBitIsCleared()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x09C, 0x8780, 0);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 1);
+
+		bus.Paula.AdvanceInterruptSourcesTo(42);
+
+		Assert.NotEmpty(CapturePaulaDmaGrants(bus));
+		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
+		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Channel == 0);
+		Assert.Equal(0, bus.Paula.InterruptSourceDmaSkippedCount);
+		Assert.Equal(1, bus.Paula.InterruptSourceDmaForcedCatchUpCount);
+	}
+
+	[Fact]
+	public void SaturatedInterruptSourceIntenaWriteRefreshesCpuVisibilityWithoutDmaCatchUp()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x09C, 0x8780, 0);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 10);
+
+		bus.Paula.AdvanceInterruptSourcesTo(10);
+
+		Assert.Equal(0x4080, bus.Paula.Intena & 0x4080);
+		Assert.Equal(0x0080, bus.Paula.ActiveInterruptBits & 0x0080);
+		Assert.Empty(CapturePaulaDmaGrants(bus));
+		Assert.Equal(1, bus.Paula.InterruptSourceDmaSkippedCount);
+		Assert.Equal(0, bus.Paula.InterruptSourceDmaForcedCatchUpCount);
+	}
+
+	[Fact]
+	public void RegisterDmaFastForwardMatchesSlowPathForStableDma()
+	{
+		var fast = CreateStableRegisterDmaBus();
+		var slow = CreateStableRegisterDmaBus();
+		fast.Paula.RegisterDmaFastForwardEnabled = true;
+		slow.Paula.RegisterDmaFastForwardEnabled = false;
+
+		fast.Paula.AdvanceRegisterObservableTo(120);
+		slow.Paula.AdvanceRegisterObservableTo(120);
+
+		Assert.Equal(slow.Paula.GetChannelSnapshot(0), fast.Paula.GetChannelSnapshot(0));
+		Assert.Equal(CapturePaulaDmaGrants(slow), CapturePaulaDmaGrants(fast));
+		Assert.Equal(
+			slow.Paula.DrainInterrupts().Select(interruptEvent => interruptEvent.Cycle).ToArray(),
+			fast.Paula.DrainInterrupts().Select(interruptEvent => interruptEvent.Cycle).ToArray());
+		Assert.True(fast.Paula.RegisterDmaFastForwardIterationCount > 0);
+	}
+
+	[Fact]
+	public void RegisterDmaFastForwardDoesNotBypassAttachedModulationBoundary()
+	{
+		var fast = CreateAttachedPeriodDmaBus();
+		var slow = CreateAttachedPeriodDmaBus();
+		fast.Paula.RegisterDmaFastForwardEnabled = true;
+		slow.Paula.RegisterDmaFastForwardEnabled = false;
+
+		fast.Paula.AdvanceRegisterObservableTo(100);
+		slow.Paula.AdvanceRegisterObservableTo(100);
+
+		Assert.Equal(slow.Paula.GetChannelSnapshot(0), fast.Paula.GetChannelSnapshot(0));
+		Assert.Equal(slow.Paula.GetChannelSnapshot(1), fast.Paula.GetChannelSnapshot(1));
+		Assert.Equal(CapturePaulaDmaGrants(slow), CapturePaulaDmaGrants(fast));
+		Assert.Equal(0, fast.Paula.RegisterDmaFastForwardIterationCount);
+	}
+
+	[Fact]
+	public void RegisterDmaFastForwardPreservesZeroPeriodDmaTiming()
+	{
+		var fast = CreateZeroPeriodDmaBus();
+		var slow = CreateZeroPeriodDmaBus();
+		fast.Paula.RegisterDmaFastForwardEnabled = true;
+		slow.Paula.RegisterDmaFastForwardEnabled = false;
+
+		fast.Paula.AdvanceRegisterObservableTo(262_182);
+		slow.Paula.AdvanceRegisterObservableTo(262_182);
+
+		Assert.Equal(slow.Paula.GetChannelSnapshot(0), fast.Paula.GetChannelSnapshot(0));
+		Assert.Equal(CapturePaulaDmaGrants(slow), CapturePaulaDmaGrants(fast));
+	}
+
+	[Fact]
 	public void RegisterReadAheadDoesNotChangeLaterManualAudioPlayback()
 	{
 		var polled = CreatePaulaComponentBus();
@@ -472,14 +704,14 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
+		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(2, 0) }, requestedCycles);
 	}
 
 	[Fact]
 	public void DmaAudioBelowMinimumPeriodRepeatsLowByteUntilNextDmaWordArrives()
 	{
 		var probe = CreateMinimumPeriodDmaUnderrunBus();
-		probe.Paula.AdvanceTo(1_000);
+		probe.Paula.AdvanceTo(2_000);
 		var dma = probe.BusAccesses
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.ToArray();
@@ -523,7 +755,7 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new long[] { 0, 496, 992 }, requestedCycles);
+		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(2, 0) }, requestedCycles);
 	}
 
 	[Fact]
@@ -625,6 +857,11 @@ public sealed class PaulaTests
 			.Select(access => (access.Request.Address, access.RequestedCycle, access.GrantedCycle))
 			.ToArray();
 
+	private static AmigaBusAccessResult[] CapturePaulaDmaAccesses(AmigaBus bus)
+		=> bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.ToArray();
+
 	private static void ScheduleManualRewriteSequence(AmigaBus bus)
 	{
 		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
@@ -651,10 +888,68 @@ public sealed class PaulaTests
 			audioDmaMinimumPeriod: 1);
 	}
 
+	private static AmigaBus CreateLivePaulaSlotBus()
+	{
+		return new AmigaBus(
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false,
+			audioDmaMinimumPeriod: 1);
+	}
+
+	private static long AudioSlotCycle(int line, int channel)
+	{
+		return ((long)line * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
+			((AgnusHrmOcsSlotTable.FirstPaulaHorizontal + (channel * 2)) *
+				AmigaConstants.A500PalCpuCyclesPerColorClock);
+	}
+
 	private static AmigaBus CreateDefaultMinimumPaulaBus()
 	{
 		return new AmigaBus(
 			enableLiveAgnusDma: false);
+	}
+
+	private static AmigaBus CreateStableRegisterDmaBus()
+	{
+		var bus = CreatePaulaComponentBus();
+		for (var i = 0; i < 32; i++)
+		{
+			bus.ChipRam[0x1000 + i] = (byte)(0x10 + i);
+		}
+
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0008, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		return bus;
+	}
+
+	private static AmigaBus CreateZeroPeriodDmaBus()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0000, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		return bus;
+	}
+
+	private static AmigaBus CreateAttachedPeriodDmaBus()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.ChipRam[0x1000] = 0x00;
+		bus.ChipRam[0x1001] = 0x05;
+		bus.ChipRam[0x1002] = 0x00;
+		bus.ChipRam[0x1003] = 0x06;
+		SchedulePaulaWrite(bus, 0x09E, 0x8010, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		return bus;
 	}
 
 	private static AmigaBus CreateMinimumPeriodDmaUnderrunBus()

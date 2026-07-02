@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 
 namespace CopperMod.Amiga
@@ -18,6 +23,8 @@ namespace CopperMod.Amiga
         CiaRegisterSample = 1 << 9,
         DiskRegisterSample = 1 << 10,
         CpuBoundary = 1 << 11,
+        PaulaInterruptSources = 1 << 12,
+        PaulaDma = 1 << 13,
         All = Raster |
             CiaTimers |
             PaulaRegister |

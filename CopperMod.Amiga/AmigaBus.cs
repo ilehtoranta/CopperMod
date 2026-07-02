@@ -1844,6 +1844,51 @@ namespace CopperMod.Amiga
             return new AmigaDmaWordReservation(address, granted: true, access);
         }
 
+        internal bool TryReservePaulaDmaWordExactSlot(
+            int channel,
+            uint address,
+            long slotCycle,
+            out AmigaDmaWordReservation reservation)
+        {
+            address = MaskChipDmaAddress(address);
+            slotCycle = Math.Max(0, slotCycle);
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Paula,
+                AmigaBusAccessKind.PaulaDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                slotCycle,
+                isWrite: false,
+                channel);
+
+            AmigaBusAccessResult access;
+            bool granted;
+            if (!_useChipSlotScheduler)
+            {
+                access = new AmigaBusAccessResult(request, slotCycle, slotCycle);
+                granted = true;
+            }
+            else
+            {
+                _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
+                if (Display.HasLiveDisplayWork())
+                {
+                    Display.CaptureLiveDisplayDmaBeforeHrmGrant(slotCycle);
+                }
+
+                granted = TryReserveExactFixedDmaSlot(request, out access);
+            }
+
+            reservation = new AmigaDmaWordReservation(address, granted, access);
+            if (granted)
+            {
+                CaptureDmaReservation(in reservation);
+            }
+
+            return granted;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private AmigaBusAccessResult ReserveLivePaulaDmaWordSlot(int channel, uint address, long requestedCycle)
         {

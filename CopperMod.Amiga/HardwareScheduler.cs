@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 
 namespace CopperMod.Amiga
@@ -13,7 +18,7 @@ namespace CopperMod.Amiga
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Blitter;
         private const AmigaHardwareEventMask SlotContendedMemoryAccessMask =
-            AmigaHardwareEventMask.PaulaRegister |
+            AmigaHardwareEventMask.PaulaDma |
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Agnus |
             AmigaHardwareEventMask.Blitter;
@@ -27,6 +32,7 @@ namespace CopperMod.Amiga
         private long _rasterDrainCycle;
         private long _ciaDrainCycle;
         private long _paulaDrainCycle;
+        private long _paulaDmaDrainCycle;
         private long _diskEventDrainCycle;
         private long _diskCiaDrainCycle;
         private long _diskPassiveDrainCycle;
@@ -77,6 +83,7 @@ namespace CopperMod.Amiga
             _rasterDrainCycle = -1;
             _ciaDrainCycle = -1;
             _paulaDrainCycle = -1;
+            _paulaDmaDrainCycle = -1;
             _diskEventDrainCycle = -1;
             _diskCiaDrainCycle = -1;
             _diskPassiveDrainCycle = -1;

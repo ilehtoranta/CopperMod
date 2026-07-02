@@ -1657,7 +1657,7 @@ public sealed class AmigaBusTimingTests
 		bus.Disk.Drive0.SetSelected(true);
 		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
 		bus.Paula.ScheduleWrite(0, 0x096, 0x8210);
-		bus.Paula.AdvanceTo(0);
+		bus.Paula.AdvanceTo(32);
 		bus.Disk.WriteRegister(0x020, 0x0000, 0);
 		bus.Disk.WriteRegister(0x022, 0x1000, 0);
 		bus.Disk.WriteRegister(0x024, 0x8002, 0);
@@ -1735,7 +1735,7 @@ public sealed class AmigaBusTimingTests
 		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
 		bus.Paula.ScheduleWrite(0, 0x0A6, 0x0004);
 		bus.Paula.ScheduleWrite(0, 0x0AA, 0x1234);
-		bus.Paula.AdvanceTo(0);
+		bus.Paula.AdvanceTo(32);
 		var audioBefore = bus.Paula.GetChannelSnapshot(0);
 		var targetCycle = readyCycle + DiskByteCycleCount(trackByteLength: 2, byteCount: 1);
 
@@ -2124,7 +2124,7 @@ public sealed class AmigaBusTimingTests
 		bus.WriteWord(0x00DFF0A6, 0x0002);
 		bus.WriteWord(0x00DFF096, 0x8201);
 
-		bus.Paula.AdvanceTo(0);
+		bus.Paula.AdvanceTo(32);
 
 		var dma = Assert.Single(bus.BusAccesses, access => access.Request.Kind == AmigaBusAccessKind.PaulaDma);
 		Assert.Equal(AmigaBusRequester.Paula, dma.Request.Requester);
@@ -2589,7 +2589,7 @@ public sealed class AmigaBusTimingTests
 		var internalCandidate = bus.Paula.GetNextWakeCandidateCycle(0, 100);
 		var cpuCandidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
-		Assert.Equal(34, internalCandidate);
+		Assert.Equal(32, internalCandidate);
 		Assert.Equal(100, cpuCandidate);
 		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, wakeSource);
 	}
@@ -2610,7 +2610,7 @@ public sealed class AmigaBusTimingTests
 		var deferredCandidate = bus.Paula.GetNextWakeCandidateCycle(0, 100);
 		bus.AdvanceDmaTo(100);
 
-		Assert.Equal(34, deferredCandidate);
+		Assert.Equal(32, deferredCandidate);
 		Assert.Null(bus.Paula.GetNextWakeCandidateCycle(0, 100));
 	}
 
@@ -2630,7 +2630,7 @@ public sealed class AmigaBusTimingTests
 
 		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
-		Assert.Equal(34, candidate);
+		Assert.Equal(32, candidate);
 		Assert.Equal(M68kTraceBatchWakeSource.Paula, wakeSource);
 	}
 

@@ -1,8 +1,13 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace CopperMod.Amiga
 {
     internal sealed partial class AmigaHardwareScheduler
     {
-        private static AmigaHardwareEventMask GetCpuAccessMask(
+        private AmigaHardwareEventMask GetCpuAccessMask(
             AmigaBusAccessTarget target,
             uint address,
             bool isWrite)
@@ -35,7 +40,7 @@ namespace CopperMod.Amiga
             return AmigaHardwareEventMask.None;
         }
 
-        private static AmigaHardwareEventMask GetCustomRegisterReadMask(uint address)
+        private AmigaHardwareEventMask GetCustomRegisterReadMask(uint address)
         {
             switch (AmigaBus.GetCustomRegisterReadAdvanceKindForScheduler(address))
             {
@@ -48,11 +53,7 @@ namespace CopperMod.Amiga
                         AmigaHardwareEventMask.Blitter;
 
                 case CustomRegisterReadAdvanceKind.InterruptSources:
-                    return AmigaHardwareEventMask.Raster |
-                        AmigaHardwareEventMask.CiaTimers |
-                        AmigaHardwareEventMask.PaulaRegister |
-                        AmigaHardwareEventMask.DiskEvents |
-                        AmigaHardwareEventMask.Blitter;
+                    return GetInterruptSourcesReadMask();
 
                 case CustomRegisterReadAdvanceKind.DiskEventOnly:
                     return AmigaHardwareEventMask.PaulaRegister |
@@ -68,6 +69,19 @@ namespace CopperMod.Amiga
                 default:
                     return AmigaHardwareEventMask.PaulaRegister;
             }
+        }
+
+        private AmigaHardwareEventMask GetInterruptSourcesReadMask()
+        {
+            var paulaMask = _bus.Paula.AreAllAudioInterruptsPending
+                ? AmigaHardwareEventMask.PaulaInterruptSources
+                : AmigaHardwareEventMask.PaulaRegister;
+
+            return AmigaHardwareEventMask.Raster |
+                AmigaHardwareEventMask.CiaTimers |
+                paulaMask |
+                AmigaHardwareEventMask.DiskEvents |
+                AmigaHardwareEventMask.Blitter;
         }
     }
 }
