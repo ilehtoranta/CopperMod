@@ -5,7 +5,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class RasterlineTimingAdfTests
 {
-	private const int ResultRowCount = 28;
+	private const int ResultRowCount = 31;
 	private const int ResultsAddress = 0x0004_8000;
 	private readonly ITestOutputHelper _output;
 
@@ -92,6 +92,10 @@ public sealed class RasterlineTimingAdfTests
 		Assert.True(rows[19] != rows[22], "Handler entry row should include CPU interrupt-recognition latency beyond raw VERTB raise.");
 		Assert.NotEqual(0xFFFF_FFFFu, rows[27]);
 		Assert.Equal(0x64u, (rows[27] >> 8) & 0xFFu);
+		foreach (var row in rows[28..31])
+		{
+			Assert.NotEqual(0u, row);
+		}
 	}
 
 	private static string? TryFindWorkspaceFile(params string[] parts)
@@ -140,6 +144,9 @@ public sealed class RasterlineTimingAdfTests
 		"beam cck during A->D fill blit",
 		"beam cck during line blit",
 		"beam cck during A->D fill with 3-bitplane display + BLTPRI",
-		"VHPOSR when INTREQR COPER first reads set"
+		"VHPOSR when INTREQR COPER first reads set",
+		"independent move.w pair x8192 after 68060 enable probe",
+		"RAW-dependent move.w pair x8192 after 68060 enable probe",
+		"dbra baseline x8192 after 68060 enable probe"
 	];
 }
