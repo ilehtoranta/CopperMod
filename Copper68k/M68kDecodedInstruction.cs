@@ -49,6 +49,7 @@ namespace Copper68k
         ExtLong,
         Swap,
         Exg,
+        Movep,
         Mulu,
         Muls,
         Divu,
@@ -838,6 +839,38 @@ namespace Copper68k
             reason = M68kJitBailoutReason.None;
             if (TryDecodeImmediateToStatus(pc, opcode, ref cursor, out instruction))
             {
+                return true;
+            }
+
+            if ((opcode & 0xF138) == 0x0108)
+            {
+                var local = cursor;
+                var displacement = local.FetchWord();
+                var dataRegister = (opcode >> 9) & 7;
+                var addressRegister = opcode & 7;
+                var isLong = (opcode & 0x0040) != 0;
+                var registerToMemory = (opcode & 0x0080) != 0;
+                cursor = local;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.Movep,
+                    isLong ? M68kOperandSize.Long : M68kOperandSize.Word,
+                    registerToMemory
+                        ? new M68kDecodedEa(M68kJitEaKind.DataRegister, dataRegister, 0, 0, 0, 0)
+                        : new M68kDecodedEa(M68kJitEaKind.AddressDisplacement, addressRegister, pc + 2, displacement, 0, 0),
+                    registerToMemory
+                        ? new M68kDecodedEa(M68kJitEaKind.AddressDisplacement, addressRegister, pc + 2, displacement, 0, 0)
+                        : new M68kDecodedEa(M68kJitEaKind.DataRegister, dataRegister, 0, 0, 0, 0),
+                    dataRegister,
+                    0,
+                    0,
+                    0,
+                    registerToMemory ? 1 : 0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: false);
                 return true;
             }
 

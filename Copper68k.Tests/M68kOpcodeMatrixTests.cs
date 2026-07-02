@@ -118,7 +118,6 @@ public sealed class M68kOpcodeMatrixTests
 
 		Assert.Contains(pendingReport, line => line.StartsWith("ABCD=", StringComparison.Ordinal));
 		Assert.Contains(pendingReport, line => line.StartsWith("MOVE=", StringComparison.Ordinal));
-		Assert.Contains(pendingReport, line => line.StartsWith("MOVEP=", StringComparison.Ordinal));
 		Assert.DoesNotContain(M68kOpcodeMatrix.Rows, row => row.Status == MatrixStatus.Pending && row.PendingReason == "Skipped");
 	}
 
@@ -1173,6 +1172,10 @@ public sealed class M68kOpcodeMatrixTests
 				"MOVE|data-move|Byte|#imm|Dn" => new M68kExecutionCase(NoPrepare, VerifyMoveImmediateByteToD0),
 				"MOVEA|address-move|Long|#imm|An" => new M68kExecutionCase(NoPrepare, VerifyMoveALongImmediateToA0),
 				"MOVEM|registers-to-memory|Long|register-list|-(An)" => new M68kExecutionCase(PrepareMovemRegisterToMemory, VerifyMovemRegisterToMemory),
+				"MOVEP|memory-to-register|Word|d16(An)|Dn" => new M68kExecutionCase(PrepareMovep, VerifyMovepMemoryToRegister),
+				"MOVEP|memory-to-register|Long|d16(An)|Dn" => new M68kExecutionCase(PrepareMovep, VerifyMovepMemoryToRegister),
+				"MOVEP|register-to-memory|Word|Dn|d16(An)" => new M68kExecutionCase(PrepareMovep, VerifyMovepRegisterToMemory),
+				"MOVEP|register-to-memory|Long|Dn|d16(An)" => new M68kExecutionCase(PrepareMovep, VerifyMovepRegisterToMemory),
 				"MOVE USP|to-usp|Long|An|USP" => new M68kExecutionCase(NoPrepare, VerifyMoveToUsp),
 				"MOVE USP|from-usp|Long|USP|An" => new M68kExecutionCase(PrepareMoveFromUsp, VerifyMoveFromUsp),
 				"EXG|address-address|Long|An|An" => new M68kExecutionCase(PrepareExgAddress, VerifyExgAddress),
@@ -1262,6 +1265,62 @@ public sealed class M68kOpcodeMatrixTests
 			VerifyNextPc(bus, cpu, row);
 			Assert.Equal(0x2FFCu, cpu.State.A[0]);
 			Assert.Equal(0x1111_2222u, ReadLong(bus, 0x2FFC));
+		}
+
+		private static void PrepareMovep(MatrixBus bus, M68kInterpreter cpu, M68kMatrixRow row)
+		{
+			_ = row;
+			cpu.State.A[0] = 0x3000;
+			cpu.State.D[0] = 0xAABB_CDEF;
+			cpu.State.StatusRegister = M68kCpuState.Supervisor |
+				M68kCpuState.Extend |
+				M68kCpuState.Negative |
+				M68kCpuState.Zero |
+				M68kCpuState.Overflow |
+				M68kCpuState.Carry;
+			bus.Memory[0x3010] = 0x12;
+			bus.Memory[0x3012] = 0x34;
+			bus.Memory[0x3014] = 0x56;
+			bus.Memory[0x3016] = 0x78;
+		}
+
+		private static void VerifyMovepMemoryToRegister(MatrixBus bus, M68kInterpreter cpu, M68kMatrixRow row)
+		{
+			VerifyNextPc(bus, cpu, row);
+			Assert.Equal(
+				row.Size == MatrixSize.Long ? 0x1234_5678u : 0xAABB_1234u,
+				cpu.State.D[0]);
+			VerifyMovepPreservedStatus(cpu);
+		}
+
+		private static void VerifyMovepRegisterToMemory(MatrixBus bus, M68kInterpreter cpu, M68kMatrixRow row)
+		{
+			VerifyNextPc(bus, cpu, row);
+			if (row.Size == MatrixSize.Long)
+			{
+				Assert.Equal(0xAA, bus.Memory[0x3010]);
+				Assert.Equal(0xBB, bus.Memory[0x3012]);
+				Assert.Equal(0xCD, bus.Memory[0x3014]);
+				Assert.Equal(0xEF, bus.Memory[0x3016]);
+			}
+			else
+			{
+				Assert.Equal(0xCD, bus.Memory[0x3010]);
+				Assert.Equal(0xEF, bus.Memory[0x3012]);
+			}
+
+			VerifyMovepPreservedStatus(cpu);
+		}
+
+		private static void VerifyMovepPreservedStatus(M68kInterpreter cpu)
+		{
+			Assert.Equal(M68kCpuState.Supervisor |
+				M68kCpuState.Extend |
+				M68kCpuState.Negative |
+				M68kCpuState.Zero |
+				M68kCpuState.Overflow |
+				M68kCpuState.Carry,
+				cpu.State.StatusRegister);
 		}
 
 		private static void VerifyMoveToUsp(MatrixBus bus, M68kInterpreter cpu, M68kMatrixRow row)

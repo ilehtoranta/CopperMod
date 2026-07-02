@@ -1006,17 +1006,55 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
-	public void DynamicBitOperationRejectsAddressRegisterDestination()
+	public void ImmediateBitOperationRejectsAddressRegisterDestination()
 	{
 		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0x01, 0xC8); // BSET D0,A0 is illegal on MC68000
+		Write(bus.Memory, 0x1000, 0x08, 0xC8, 0x00, 0x00); // BSET #0,A0 is illegal on MC68000
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(0x1000, 0x3000);
 
 		var exception = Assert.Throws<UnsupportedM68kOpcodeException>(() => cpu.ExecuteInstruction());
 
-		Assert.Equal(0x01C8, exception.Opcode);
+		Assert.Equal(0x08C8, exception.Opcode);
 		Assert.Equal(0x1000u, exception.ProgramCounter);
+	}
+
+	[Fact]
+	public void MovepExecutesOn68000Interpreter()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x05, 0x49, 0x00, 0x11); // MOVEP.L $11(A1),D2
+		Write(bus.Memory, 0x1004, 0x01, 0x89, 0x00, 0x19); // MOVEP.W D0,$19(A1)
+		bus.Memory[0x3011] = 0x12;
+		bus.Memory[0x3013] = 0x34;
+		bus.Memory[0x3015] = 0x56;
+		bus.Memory[0x3017] = 0x78;
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[1] = 0x3000;
+		cpu.State.D[0] = 0xAABB_CDEF;
+		cpu.State.D[2] = 0xFFFF_FFFF;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.D[2]);
+		Assert.Equal(0xCD, bus.Memory[0x3019]);
+		Assert.Equal(0xEF, bus.Memory[0x301B]);
+		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
+		Assert.Equal(M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry,
+			cpu.State.StatusRegister);
 	}
 
 	[Fact]

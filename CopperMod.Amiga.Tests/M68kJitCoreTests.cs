@@ -4982,6 +4982,75 @@ public sealed class M68kJitCoreTests
 		Assert.Equal((M68kJitOperation)operation, instruction.Operation);
 	}
 
+	[Theory]
+	[InlineData(0x0108, (int)M68kOperandSize.Word, 0)]
+	[InlineData(0x0148, (int)M68kOperandSize.Long, 0)]
+	[InlineData(0x0188, (int)M68kOperandSize.Word, 1)]
+	[InlineData(0x01C8, (int)M68kOperandSize.Long, 1)]
+	public void JitDecoderClassifiesMovepBeforeDynamicBitOpcodes(ushort opcode, int size, int variant)
+	{
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase, opcode, 0x0010);
+
+		Assert.True(M68kDecoder.TryDecode(bus, RealFastCodeBase, out var instruction, out var reason));
+		Assert.Equal(M68kJitBailoutReason.None, reason);
+		Assert.Equal(M68kJitOperation.Movep, instruction.Operation);
+		Assert.Equal((M68kOperandSize)size, instruction.Size);
+		Assert.Equal(variant, instruction.Variant);
+		Assert.Equal(4, instruction.Length);
+	}
+
+	[Fact]
+	public void JitCompiledHelperMatchesInterpreterForMovepLoop()
+	{
+		var words = new ushort[]
+		{
+			0x0549, 0x0011, // MOVEP.L $11(A1),D2
+			0x0189, 0x0019, // MOVEP.W D0,$19(A1)
+			0x60F6          // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		WriteWords(interpreterBus, 0x2010, 0x0012, 0x0034, 0x0056, 0x0078);
+		WriteWords(jitBus, 0x2010, 0x0012, 0x0034, 0x0056, 0x0078);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.A[1] = jit.State.A[1] = 0x2000;
+		interpreter.State.D[0] = jit.State.D[0] = 0xAABB_CDEF;
+		interpreter.State.D[2] = jit.State.D[2] = 0xFFFF_FFFF;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Negative |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		var interpreted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(800, null, new CountingBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(0x12, jitBus.ReadByte(0x2011));
+		Assert.Equal(0x34, jitBus.ReadByte(0x2013));
+		Assert.Equal(0x56, jitBus.ReadByte(0x2015));
+		Assert.Equal(0x78, jitBus.ReadByte(0x2017));
+		Assert.Equal(interpreterBus.ReadByte(0x2019), jitBus.ReadByte(0x2019));
+		Assert.Equal(interpreterBus.ReadByte(0x201B), jitBus.ReadByte(0x201B));
+		Assert.Equal(0xCD, jitBus.ReadByte(0x2019));
+		Assert.Equal(0xEF, jitBus.ReadByte(0x201B));
+	}
+
 	[Fact]
 	public void JitCompiledHelperMatchesInterpreterForRegisterBcdLoop()
 	{

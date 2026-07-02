@@ -8465,6 +8465,9 @@ namespace Copper68k
                 case M68kJitOperation.Movem:
                     ExecuteMovem(source, size, registerMask, memoryToRegisters: variant != 0);
                     return true;
+                case M68kJitOperation.Movep:
+                    ExecuteMovep(source, destination, size, registerToMemory: variant != 0);
+                    return true;
                 case M68kJitOperation.ExtWord:
                     ExecuteExt(register, M68kOperandSize.Word);
                     return true;
@@ -9496,6 +9499,46 @@ namespace Copper68k
             }
 
             AddCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
+        }
+
+        private void ExecuteMovep(
+            M68kDecodedEa source,
+            M68kDecodedEa destination,
+            M68kOperandSize size,
+            bool registerToMemory)
+        {
+            var address = ResolveEaAddress(registerToMemory ? destination : source, size, applySideEffects: false);
+            if (registerToMemory)
+            {
+                var value = State.D[source.Register];
+                if (size == M68kOperandSize.Long)
+                {
+                    WriteByte(address, (byte)(value >> 24));
+                    WriteByte(unchecked(address + 2), (byte)(value >> 16));
+                    WriteByte(unchecked(address + 4), (byte)(value >> 8));
+                    WriteByte(unchecked(address + 6), (byte)value);
+                }
+                else
+                {
+                    WriteByte(address, (byte)(value >> 8));
+                    WriteByte(unchecked(address + 2), (byte)value);
+                }
+            }
+            else if (size == M68kOperandSize.Long)
+            {
+                State.D[destination.Register] =
+                    ((uint)ReadByte(address) << 24) |
+                    ((uint)ReadByte(unchecked(address + 2)) << 16) |
+                    ((uint)ReadByte(unchecked(address + 4)) << 8) |
+                    ReadByte(unchecked(address + 6));
+            }
+            else
+            {
+                var value = (ushort)((ReadByte(address) << 8) | ReadByte(unchecked(address + 2)));
+                WriteDataRegister(destination.Register, value, M68kOperandSize.Word);
+            }
+
+            AddCycles(size == M68kOperandSize.Long ? 24 : 16);
         }
 
         private void ExecuteMovemForV2Batch(M68kDecodedEa ea, M68kOperandSize size, ushort registerMask, bool memoryToRegisters)

@@ -2902,6 +2902,12 @@ namespace Copper68k
                 return true;
             }
 
+            if ((opcode & 0xF138) == 0x0108)
+            {
+                ExecuteMovep(opcode);
+                return true;
+            }
+
             if ((opcode & 0xFFC0) == 0x0800 && TryDecodeImmediateBtst(opcode))
             {
                 return true;
@@ -3051,6 +3057,47 @@ namespace Copper68k
 
             AddCycles(high == 0x0C00 ? GetCmpiCycles(size, mode, reg) : size == M68kOperandSize.Long ? 16 : 8);
             return true;
+        }
+
+        private void ExecuteMovep(ushort opcode)
+        {
+            var dataRegister = (opcode >> 9) & 7;
+            var addressRegister = opcode & 7;
+            var address = unchecked((uint)(State.A[addressRegister] + unchecked((int)(short)FetchWord())));
+            var isLong = (opcode & 0x0040) != 0;
+            var registerToMemory = (opcode & 0x0080) != 0;
+
+            if (registerToMemory)
+            {
+                var value = State.D[dataRegister];
+                if (isLong)
+                {
+                    WriteByte(address, (byte)(value >> 24));
+                    WriteByte(unchecked(address + 2), (byte)(value >> 16));
+                    WriteByte(unchecked(address + 4), (byte)(value >> 8));
+                    WriteByte(unchecked(address + 6), (byte)value);
+                }
+                else
+                {
+                    WriteByte(address, (byte)(value >> 8));
+                    WriteByte(unchecked(address + 2), (byte)value);
+                }
+            }
+            else if (isLong)
+            {
+                State.D[dataRegister] =
+                    ((uint)ReadByte(address) << 24) |
+                    ((uint)ReadByte(unchecked(address + 2)) << 16) |
+                    ((uint)ReadByte(unchecked(address + 4)) << 8) |
+                    ReadByte(unchecked(address + 6));
+            }
+            else
+            {
+                var value = (ushort)((ReadByte(address) << 8) | ReadByte(unchecked(address + 2)));
+                WriteDataRegister(dataRegister, value, M68kOperandSize.Word);
+            }
+
+            AddCycles(isLong ? 24 : 16);
         }
 
         private bool DecodeImmediateToStatusRegister(ushort opcode, uint instructionPc)
