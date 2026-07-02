@@ -994,8 +994,6 @@ namespace CopperMod.Amiga
         private static readonly long DiskMotorReadyDelayCycles = Math.Max(
             1,
             (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
-        private static readonly bool UseLegacyDiskInputPublisher =
-            string.Equals(Environment.GetEnvironmentVariable("COPPER_AMIGA_LEGACY_DISK_INPUT"), "1", StringComparison.Ordinal);
 
         private readonly AmigaBus _bus;
         private readonly bool _specializationEnabled;
@@ -3380,98 +3378,6 @@ namespace CopperMod.Amiga
 
         private void AdvanceDiskInputTo(long cycle)
         {
-            if (UseLegacyDiskInputPublisher)
-            {
-                AdvanceDiskInputToLegacy(cycle);
-                return;
-            }
-
-            PublishDiskInputTo(cycle);
-        }
-
-        private void AdvanceDiskInputToLegacy(long cycle)
-        {
-            _schedulerInputAdvanceCalls++;
-            if (_traceRecorder != null)
-            {
-                var traceDrive = ResolveTraceDrive(-1);
-                var traceStream = GetTraceStream(traceDrive);
-                AppendDivergenceTrace(
-                    AmigaDiskTraceEventKind.DiskInputAdvance,
-                    traceStream?.Cycle ?? _currentCycle,
-                    drive: traceDrive,
-                    targetCycle: cycle,
-                    detail: "start");
-            }
-
-            var nextInputAdvanceCycle = long.MaxValue;
-            var nextSyncAdvanceCycle = long.MaxValue;
-            for (var driveIndex = 0; driveIndex < _drives.Length; driveIndex++)
-            {
-                var drive = _drives[driveIndex];
-                var stream = _streams[driveIndex];
-                if (!IsDriveConnected(driveIndex))
-                {
-                    stream.Cycle = cycle;
-                    continue;
-                }
-
-                if (cycle <= stream.Cycle)
-                {
-                    continue;
-                }
-
-                if (drive.Disk == null || !drive.MotorOn)
-                {
-                    stream.Cycle = cycle;
-                    continue;
-                }
-
-                var readyCycle = GetDriveReadyCycle(drive);
-                if (cycle < readyCycle)
-                {
-                    stream.Cycle = cycle;
-                    continue;
-                }
-
-                if (stream.Cycle < readyCycle)
-                {
-                    SetStreamPosition(stream, stream.Position, readyCycle);
-                }
-
-                var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
-                ResetStreamIfTrackChanged(drive, stream, stream.Cycle);
-                var preparedTrack = GetPreparedTrack(drive, stream, track);
-                var cyclesPerBit = GetDiskDmaCyclesPerBit(track.BitLength);
-                AdvanceInputStreamTo(drive, stream, preparedTrack, cyclesPerBit, cycle, drive.Selected);
-                if (drive.Selected)
-                {
-                    nextSyncAdvanceCycle = Math.Min(
-                        nextSyncAdvanceCycle,
-                        GetNextSyncCompletionCycle(drive, stream, preparedTrack, cyclesPerBit));
-                    nextInputAdvanceCycle = Math.Min(
-                        nextInputAdvanceCycle,
-                        GetNextSelectedInputAdvanceCycle(drive, stream, preparedTrack, cyclesPerBit));
-                }
-            }
-
-            _nextDiskInputAdvanceCycle = nextInputAdvanceCycle == long.MaxValue ? 0 : nextInputAdvanceCycle;
-            _nextDiskSyncAdvanceCycle = nextSyncAdvanceCycle == long.MaxValue ? -1 : nextSyncAdvanceCycle;
-            if (_traceRecorder != null)
-            {
-                var traceDrive = ResolveTraceDrive(-1);
-                AppendDivergenceTrace(
-                    AmigaDiskTraceEventKind.DiskInputAdvance,
-                    cycle,
-                    drive: traceDrive,
-                    targetCycle: cycle,
-                    candidateCycle: _nextDiskInputAdvanceCycle,
-                    detail: "end");
-            }
-        }
-
-        private void PublishDiskInputTo(long cycle)
-        {
             _schedulerInputAdvanceCalls++;
             if (_traceRecorder != null)
             {
@@ -3811,47 +3717,6 @@ namespace CopperMod.Amiga
             return (plan.StartPosition + elapsedBits) % plan.TrackBitLength;
         }
 
-        private void AdvanceInputStreamTo(
-            AmigaFloppyDrive drive,
-            DiskStreamState stream,
-            AmigaPreparedTrack track,
-            double cyclesPerBit,
-            long cycle,
-            bool selected)
-        {
-            if (cycle <= stream.Cycle)
-            {
-                return;
-            }
-
-            var startCycle = stream.Cycle;
-            var startPosition = stream.Position;
-            var elapsedBits = (cycle - startCycle) / cyclesPerBit;
-            var endPositionAbsolute = startPosition + elapsedBits;
-            if (selected)
-            {
-                UpdateDskbytrData(track, startPosition, endPositionAbsolute);
-                SignalSyncMatches(drive, stream, track, startCycle, startPosition, endPositionAbsolute, cyclesPerBit);
-            }
-
-            SetStreamPosition(stream, endPositionAbsolute % track.BitLength, cycle);
-        }
-
-        private long GetNextSelectedInputAdvanceCycle(
-            AmigaFloppyDrive drive,
-            DiskStreamState stream,
-            AmigaPreparedTrack track,
-            double cyclesPerBit)
-        {
-            var nextBytePosition = (Math.Floor(stream.Position / 8.0) + 1.0) * 8.0;
-            var nextByteCycle = stream.Cycle + CyclesForBits(nextBytePosition - stream.Position, cyclesPerBit);
-            var nextSyncCycle = GetNextSyncCompletionCycle(drive, stream, track, cyclesPerBit);
-            var wordEqualExpireCycle = _dskbytrWordEqualUntilCycle >= stream.Cycle
-                ? _dskbytrWordEqualUntilCycle + 1
-                : long.MaxValue;
-            return Math.Min(Math.Min(nextByteCycle, nextSyncCycle), wordEqualExpireCycle);
-        }
-
         private long GetNextSelectedSyncCompletionCycle(long targetCycle)
         {
             var driveIndex = GetSelectedDriveIndex();
@@ -3941,87 +3806,6 @@ namespace CopperMod.Amiga
                     return stream.Cycle + CyclesForBits(completionPosition - stream.Position, cyclesPerBit);
                 }
 
-                AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
-            }
-        }
-
-        private void UpdateDskbytrData(AmigaPreparedTrack track, double startPosition, double endPositionAbsolute)
-        {
-            var completedBefore = (long)Math.Floor(startPosition / 8.0);
-            var completedAfter = (long)Math.Floor(endPositionAbsolute / 8.0);
-            if (completedAfter <= completedBefore)
-            {
-                return;
-            }
-
-            var byteStartBit = Mod((int)((completedAfter - 1) * 8), track.BitLength);
-            _dskbytrData = ReadPreparedByte(track, byteStartBit);
-            if (completedAfter >= 2)
-            {
-                var wordStartBit = Mod((int)((completedAfter - 2) * 8), track.BitLength);
-                _diskDataRegister = ReadPreparedUInt16(track, wordStartBit);
-            }
-
-            _dskbytrByteReady = true;
-        }
-
-        private void SignalSyncMatches(
-            AmigaFloppyDrive drive,
-            DiskStreamState stream,
-            AmigaPreparedTrack track,
-            long startCycle,
-            double startPosition,
-            double endPositionAbsolute,
-            double cyclesPerBit)
-        {
-            var length = track.BitLength;
-            var syncMode = GetInputSyncMode();
-            var syncBitCount = GetSyncBitCount(syncMode);
-            if (length < syncBitCount)
-            {
-                return;
-            }
-
-            var syncOffsetCount = GetSyncOffsets(drive, stream, track, length, syncMode);
-            if (syncOffsetCount <= 0)
-            {
-                return;
-            }
-
-            var startOffset = (int)Math.Floor(startPosition - syncBitCount) + 1;
-            var syncOffsetIndex = startOffset <= 0
-                ? 0
-                : LowerBound(stream.SyncCacheOffsets, syncOffsetCount, startOffset);
-            var rotationBase = 0.0;
-            if (syncOffsetIndex >= syncOffsetCount)
-            {
-                syncOffsetIndex = 0;
-                rotationBase = length;
-            }
-
-            while (true)
-            {
-                var completionPosition = rotationBase + stream.SyncCacheOffsets[syncOffsetIndex] + syncBitCount;
-                if (completionPosition <= startPosition)
-                {
-                    AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
-                    continue;
-                }
-
-                if (completionPosition > endPositionAbsolute)
-                {
-                    break;
-                }
-
-                var matchCycle = startCycle + CyclesForBits(completionPosition - startPosition, cyclesPerBit);
-                _dskbytrWordEqualUntilCycle = Math.Max(_dskbytrWordEqualUntilCycle, matchCycle + DiskWordEqualHoldCycles);
-                AppendDivergenceTrace(
-                    AmigaDiskTraceEventKind.DiskInterruptWrite,
-                    matchCycle,
-                    register: 0x09C,
-                    value: (ushort)(0x8000 | DskSynInterrupt),
-                    detail: "dsksyn");
-                _bus.RequestHardwareInterrupt(DskSynInterrupt, matchCycle);
                 AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
             }
         }
