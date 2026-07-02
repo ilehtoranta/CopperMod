@@ -1135,15 +1135,6 @@ namespace CopperMod.Amiga
             return GetEffectivePeriod(period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
         }
 
-        private static long GetDmaPeriodCycles(int period, AmigaBus bus)
-        {
-            var effectivePeriod = GetEffectivePeriod(period);
-            var dmaPeriod = UsesLiveAgnusAudioDma(bus)
-                ? Math.Max(effectivePeriod, bus.AudioDmaMinimumPeriod)
-                : effectivePeriod;
-            return dmaPeriod * AmigaConstants.A500PalCpuCyclesPerColorClock;
-        }
-
         private static long GetEffectivePeriod(int period)
         {
             if (period == 0)
@@ -1686,7 +1677,6 @@ namespace CopperMod.Amiga
             private bool _hasDataWord;
             private bool _nextByteIsLow;
             private long _nextSampleCycle;
-            private long _nextDmaFetchCycle;
             private PaulaDmaReadLatch _prefetchedDmaLatch;
             private bool _hasPrefetchedDmaWord;
             private PaulaDmaReadLatch _pendingDmaLatch;
@@ -1696,7 +1686,6 @@ namespace CopperMod.Amiga
             private long _pendingDmaRequestCycle;
             private long _pendingDmaServiceCycle;
             private long _pendingDmaLoadCycle;
-            private long _pendingDmaNextFetchCycle;
             private int _pendingDmaInterruptCount;
             private DmaLoadTarget _pendingDmaLoadTarget;
             private uint _currentAddress;
@@ -1734,7 +1723,6 @@ namespace CopperMod.Amiga
                 _hasDataWord = false;
                 _nextByteIsLow = false;
                 _nextSampleCycle = 0;
-                _nextDmaFetchCycle = long.MaxValue;
                 _prefetchedDmaLatch = default;
                 _hasPrefetchedDmaWord = false;
                 _pendingDmaLatch = default;
@@ -1744,7 +1732,6 @@ namespace CopperMod.Amiga
                 _pendingDmaRequestCycle = long.MaxValue;
                 _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
-                _pendingDmaNextFetchCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
                 _pendingDmaLoadTarget = DmaLoadTarget.Prefetch;
                 _currentAddress = 0;
@@ -1764,7 +1751,6 @@ namespace CopperMod.Amiga
                     DmaEnabled = false;
                     _hasDataWord = false;
                     _nextByteIsLow = false;
-                    _nextDmaFetchCycle = long.MaxValue;
                     ClearPrefetchedDmaWord();
                     ClearPendingDmaWord();
                     return;
@@ -1777,7 +1763,6 @@ namespace CopperMod.Amiga
                 ClearPendingDmaWord();
                 _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
-                _nextDmaFetchCycle = cycle;
                 var context = new DmaContext(bus, paula, timeline, kind);
                 RequestStartupDiscardWord(cycle, in context);
             }
@@ -1791,7 +1776,6 @@ namespace CopperMod.Amiga
                 _nextByteIsLow = true;
                 CurrentSample = unchecked((sbyte)(value >> 8));
                 _nextSampleCycle = cycle + GetPeriodCycles(Period);
-                _nextDmaFetchCycle = long.MaxValue;
                 paula.RequestAudioInterrupt(kind, Index, cycle);
             }
 
@@ -2033,11 +2017,6 @@ namespace CopperMod.Amiga
                 }
 
                 var nextWordCycle = _nextSampleCycle + GetPeriodCycles(Period);
-                if (_nextDmaFetchCycle != long.MaxValue)
-                {
-                    nextWordCycle = Math.Max(nextWordCycle, _nextDmaFetchCycle);
-                }
-
                 return nextWordCycle;
             }
 
@@ -2076,9 +2055,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                var requestCycle = UsesLiveAgnusAudioDma(context.Bus)
-                    ? Math.Max(cycle, _nextDmaFetchCycle)
-                    : cycle;
+                var requestCycle = cycle;
                 var interruptCount = 0;
                 if (_remainingWords <= 0)
                 {
@@ -2098,9 +2075,7 @@ namespace CopperMod.Amiga
                     ? GetNextAudioDmaSlotCycle(Index, requestCycle)
                     : requestCycle;
                 _pendingDmaLoadCycle = long.MaxValue;
-                _pendingDmaNextFetchCycle = requestCycle + (GetDmaPeriodCycles(Period, context.Bus) * 2);
                 _pendingDmaLoadTarget = loadTarget;
-                _nextDmaFetchCycle = _pendingDmaNextFetchCycle;
 
                 if (forceInterrupt || _remainingWords == 0)
                 {
@@ -2309,7 +2284,6 @@ namespace CopperMod.Amiga
                 _pendingDmaRequestCycle = long.MaxValue;
                 _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
-                _pendingDmaNextFetchCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
                 _pendingDmaLoadTarget = DmaLoadTarget.Prefetch;
             }

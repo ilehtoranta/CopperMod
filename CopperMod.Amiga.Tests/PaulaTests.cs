@@ -686,7 +686,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void PartialPlaybackLiveDmaUsesMinimumPeriodForRefillRequests()
+	public void PartialPlaybackLiveDmaRefillsAtNextChannelSlotWhenWordIsNeeded()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -704,7 +704,38 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(2, 0) }, requestedCycles);
+		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(1, 0), AudioSlotCycle(2, 0) }, requestedCycles);
+	}
+
+	[Fact]
+	public void LiveDmaBelowMinimumPeriodRepeatsSampleWithoutStretchingPeriodClock()
+	{
+		var bus = new AmigaBus(
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false);
+		bus.ChipRam[0x1000] = 0x00;
+		bus.ChipRam[0x1001] = 0x00;
+		bus.ChipRam[0x1002] = 0x7F;
+		bus.ChipRam[0x1003] = 0x81;
+		bus.ChipRam[0x1004] = 0x40;
+		bus.ChipRam[0x1005] = 0xC0;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0003, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0071, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		var buffer = new float[8];
+
+		bus.Paula.RenderSample(488, buffer, 0, 2);
+		bus.Paula.RenderSample(714, buffer, 1, 2);
+		bus.Paula.RenderSample(940, buffer, 2, 2);
+		var afterUnderrun = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.RenderSample(1166, buffer, 3, 2);
+
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.True(buffer[4] < -0.20f);
+		Assert.True(buffer[6] > 0.10f);
+		Assert.Equal(1166, afterUnderrun.NextSampleCycle);
 	}
 
 	[Fact]
@@ -737,7 +768,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void FullLiveDmaUsesMinimumPeriodForRefillRequests()
+	public void FullLiveDmaRefillsAtNextChannelSlotWhenWordIsNeeded()
 	{
 		var bus = new AmigaBus(
 			enableLiveAgnusDma: true,
@@ -755,7 +786,7 @@ public sealed class PaulaTests
 			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
 			.Select(access => access.RequestedCycle)
 			.ToArray();
-		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(2, 0) }, requestedCycles);
+		Assert.Equal(new[] { AudioSlotCycle(0, 0), AudioSlotCycle(1, 0), AudioSlotCycle(2, 0) }, requestedCycles);
 	}
 
 	[Fact]
