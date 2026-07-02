@@ -137,6 +137,12 @@ namespace Copper68k
             typeof(M68kJitCore),
             "CompleteCompiledInstructionCycles",
             typeof(int));
+        private static readonly MethodInfo Negx = RequiredStaticMethod(
+            typeof(M68kIntegerSemantics),
+            nameof(M68kIntegerSemantics.Negx),
+            typeof(uint),
+            typeof(int),
+            typeof(int));
 
         private static readonly PropertyInfo StateProperty = RequiredProperty(typeof(M68kJitCore), nameof(M68kJitCore.State));
         private static readonly PropertyInfo DataRegistersProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.D));
@@ -225,7 +231,7 @@ namespace Copper68k
                 M68kJitOperation.Tst => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmpi => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmp => instruction.Source.Kind == M68kJitEaKind.DataRegister,
-                M68kJitOperation.Not or M68kJitOperation.Neg => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction),
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
                 _ => false
@@ -256,7 +262,7 @@ namespace Copper68k
                 M68kJitOperation.Addi or M68kJitOperation.Subi or
                 M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori => IsSupportedReadWriteEa(instruction.Destination),
                 M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor => IsSupportedBinaryArithmeticEa(instruction),
-                M68kJitOperation.Not or M68kJitOperation.Neg => IsSupportedReadWriteEa(instruction.Destination),
+                M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => IsSupportedReadWriteEa(instruction.Destination),
                 M68kJitOperation.M68040Fpu => M68040FpuHelpers.UsesBus(instruction),
                 _ => false
             };
@@ -452,6 +458,10 @@ namespace Copper68k
                     return;
                 case M68kJitOperation.Neg:
                     EmitNeg(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Negx:
+                    EmitNegx(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.ExtWord:
@@ -903,6 +913,32 @@ namespace Copper68k
             il.Emit(OpCodes.Ldc_I4_0);
             il.Emit(OpCodes.Stloc, destination);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: true);
+            EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
+            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitNegx(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        {
+            var source = il.DeclareLocal(typeof(uint));
+            var packed = il.DeclareLocal(typeof(ulong));
+            var result = il.DeclareLocal(typeof(uint));
+            var status = il.DeclareLocal(typeof(int));
+            EmitReadForModify(il, context, instruction.Destination, instruction.Size, out var address, out var memory);
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldloc, source);
+            EmitLoadStatus(il, context);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Size);
+            il.Emit(OpCodes.Call, Negx);
+            il.Emit(OpCodes.Stloc, packed);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Conv_U4);
+            il.Emit(OpCodes.Stloc, result);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Ldc_I4, 32);
+            il.Emit(OpCodes.Shr_Un);
+            il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Stloc, status);
+            EmitStoreStatus(il, context, status);
             EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
             EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
         }
@@ -1761,6 +1797,10 @@ namespace Copper68k
 
         private static MethodInfo RequiredMethod(Type type, string name, params Type[] parameterTypes)
             => type.GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic, parameterTypes) ??
+                throw new MissingMethodException(type.FullName, name);
+
+        private static MethodInfo RequiredStaticMethod(Type type, string name, params Type[] parameterTypes)
+            => type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic, parameterTypes) ??
                 throw new MissingMethodException(type.FullName, name);
 
         internal readonly struct TraceEmitContext

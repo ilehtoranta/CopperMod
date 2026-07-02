@@ -3390,7 +3390,7 @@ namespace Copper68k
             }
 
             var unary = opcode & 0xFF00;
-            if (unary is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
+            if (unary is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
                 var size = DecodeImmediateSize(opcode);
                 if (size == 0)
@@ -3403,6 +3403,10 @@ namespace Copper68k
                 var value = ea.Read();
                 switch (unary)
                 {
+                    case 0x4000:
+                        value = SubtractWithExtend(0, value, size);
+                        ea.Write(value);
+                        break;
                     case 0x4200:
                         value = 0;
                         ea.Write(value);

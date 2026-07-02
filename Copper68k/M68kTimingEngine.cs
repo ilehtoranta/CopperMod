@@ -47,6 +47,7 @@ namespace Copper68k
         ExtWordData,
         TstWordData,
         Moveq,
+        NegxLongData,
         NegLongData,
         NotByteData,
         ClrDataLong,

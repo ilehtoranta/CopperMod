@@ -191,6 +191,14 @@ namespace Copper68k
         private static readonly MethodInfo DivideV2RegisterMethod =
             typeof(M68kJitCore).GetMethod(nameof(DivideV2Register), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(DivideV2Register));
+        private static readonly MethodInfo NegxMethod =
+            typeof(M68kIntegerSemantics).GetMethod(
+                nameof(M68kIntegerSemantics.Negx),
+                BindingFlags.Static | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(uint), typeof(int), typeof(int) },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kIntegerSemantics).FullName, nameof(M68kIntegerSemantics.Negx));
         private static readonly MethodInfo GetMultiplyCoreCyclesMethod =
             typeof(M68kJitCore).GetMethod(nameof(GetMultiplyCoreCycles), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetMultiplyCoreCycles));
@@ -4190,7 +4198,7 @@ namespace Copper68k
                 M68kJitOperation.And or M68kJitOperation.Or => IsV2LogicalInstruction(instruction, allowMemoryRead),
                 M68kJitOperation.Eor => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
                     (_v2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
-                M68kJitOperation.Not or M68kJitOperation.Neg => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap or M68kJitOperation.Exg => true,
                 M68kJitOperation.ShiftRegister => true,
                 M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic => IsV2BitInstruction(instruction),
@@ -4240,6 +4248,7 @@ namespace Copper68k
                 M68kJitOperation.Eori or
                 M68kJitOperation.Not or
                 M68kJitOperation.Neg or
+                M68kJitOperation.Negx or
                 M68kJitOperation.Mulu or
                 M68kJitOperation.Muls or
                 M68kJitOperation.Divu or
@@ -4286,7 +4295,7 @@ namespace Copper68k
                 M68kJitOperation.And or M68kJitOperation.Or => IsV2LogicalInstruction(instruction, options, allowMemoryRead),
                 M68kJitOperation.Eor => instruction.Destination.Kind == M68kJitEaKind.DataRegister ||
                     (options.V2BusAccessEnabled && IsV2MemoryWriteEa(instruction.Destination)),
-                M68kJitOperation.Not or M68kJitOperation.Neg => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap or M68kJitOperation.Exg => true,
                 M68kJitOperation.ShiftRegister => true,
                 M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic => IsV2BitInstruction(instruction, options),
@@ -4336,6 +4345,7 @@ namespace Copper68k
                 M68kJitOperation.Eori or
                 M68kJitOperation.Not or
                 M68kJitOperation.Neg or
+                M68kJitOperation.Negx or
                 M68kJitOperation.Mulu or
                 M68kJitOperation.Muls or
                 M68kJitOperation.Divu or
@@ -4735,6 +4745,7 @@ namespace Copper68k
 
                     return;
                 case M68kJitOperation.Clr:
+                case M68kJitOperation.Negx:
                 case M68kJitOperation.Neg:
                 case M68kJitOperation.Not:
                 case M68kJitOperation.Addi:
@@ -4886,6 +4897,7 @@ namespace Copper68k
                 case M68kJitOperation.ExtLong:
                 case M68kJitOperation.Swap:
                 case M68kJitOperation.Not:
+                case M68kJitOperation.Negx:
                 case M68kJitOperation.Neg:
                     MarkV2DataRegisterDirty(instruction.Register >= 0
                         ? instruction.Register
@@ -5397,6 +5409,9 @@ namespace Copper68k
                     return;
                 case M68kJitOperation.Neg:
                     EmitV2Neg(il, context, instruction);
+                    return;
+                case M68kJitOperation.Negx:
+                    EmitV2Negx(il, context, instruction);
                     return;
                 case M68kJitOperation.Abcd:
                     EmitV2Bcd(il, context, instruction, subtract: false);
@@ -5945,6 +5960,31 @@ namespace Copper68k
             EmitV2ArithmeticResult(il, destination, source, result, instruction.Size, add: false);
             context.EmitStoreDataRegister(instruction.Destination.Register, result, instruction.Size);
             context.EmitSetPendingArithmetic(V2PendingFlags.Subtract, destination, source, result, instruction.Size, setExtend: true);
+            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private static void EmitV2Negx(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
+        {
+            var source = il.DeclareLocal(typeof(uint));
+            var packed = il.DeclareLocal(typeof(ulong));
+            var result = il.DeclareLocal(typeof(uint));
+            context.EmitMaterializePendingFlags();
+            context.EmitLoadDataRegister(instruction.Destination.Register, instruction.Size);
+            il.Emit(OpCodes.Stloc, source);
+            il.Emit(OpCodes.Ldloc, source);
+            il.Emit(OpCodes.Ldloc, context.StatusRegister);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Size);
+            il.Emit(OpCodes.Call, NegxMethod);
+            il.Emit(OpCodes.Stloc, packed);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Conv_U4);
+            il.Emit(OpCodes.Stloc, result);
+            context.EmitStoreDataRegister(instruction.Destination.Register, result, instruction.Size);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Ldc_I4, 32);
+            il.Emit(OpCodes.Shr_Un);
+            il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Stloc, context.StatusRegister);
             context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 12 : 8);
         }
 
@@ -8705,6 +8745,9 @@ namespace Copper68k
                 case M68kJitOperation.Neg:
                     ExecuteNeg(destination, size);
                     return true;
+                case M68kJitOperation.Negx:
+                    ExecuteNegx(destination, size);
+                    return true;
                 case M68kJitOperation.Not:
                     ExecuteNot(destination, size);
                     return true;
@@ -9468,6 +9511,15 @@ namespace Copper68k
             var value = ReadEaForModify(destination, size, out var resolvedAddress, out var memory);
             var result = Subtract(0, value, size, setExtend: true);
             WriteResolvedEa(destination, size, result, resolvedAddress, memory);
+            AddCycles(size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        private void ExecuteNegx(M68kDecodedEa destination, M68kOperandSize size)
+        {
+            var value = ReadEaForModify(destination, size, out var resolvedAddress, out var memory);
+            var packed = M68kIntegerSemantics.Negx(value, State.StatusRegister, (int)size);
+            State.StatusRegister = (ushort)(packed >> 32);
+            WriteResolvedEa(destination, size, (uint)packed, resolvedAddress, memory);
             AddCycles(size == M68kOperandSize.Long ? 12 : 8);
         }
 

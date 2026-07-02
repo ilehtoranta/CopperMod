@@ -1109,9 +1109,44 @@ public sealed class M68kJitCoreTests
 			0x4A81,                 // TST.L D1
 			0x0C81, 0x0000, 0x0001, // CMPI.L #1,D1
 			0xB081,                 // CMP.L D1,D0
+			0x4041,                 // NEGX.W D1
 			0x4441,                 // NEG.W D1
 			0x4641,                 // NOT.W D1
-			0x60E8);                // BRA.S loop
+			0x60E6);                // BRA.S loop
+	}
+
+	[Fact]
+	public void JitDirectIlExecutesNegxWithStickyZero()
+	{
+		var words = new ushort[]
+		{
+			0x4041, // NEGX.W D1
+			0x60FC  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.D[1] = jit.State.D[1] = 1;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(400, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(400, null, new CountingBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.DirectIlInstructions > 0);
+		Assert.Equal(0, jit.Counters.HelperIlInstructions);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
 	}
 
 	[Fact]
@@ -5160,6 +5195,43 @@ public sealed class M68kJitCoreTests
 		Assert.DoesNotContain("ABCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
 		Assert.DoesNotContain("SBCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
 		Assert.DoesNotContain("NBCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+	}
+
+	[Fact]
+	public void JitV2BatchesNegxDataRegisterWithStickyZero()
+	{
+		var words = new ushort[]
+		{
+			0x4041, // NEGX.W D1
+			0x4082, // NEGX.L D2
+			0x60FA  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: false);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.D[1] = jit.State.D[1] = 1;
+		interpreter.State.D[2] = jit.State.D[2] = 0;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(800, 500_000, new PureBatchBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.V2TraceHits > 0);
+		Assert.True(jit.Counters.PureTraceBatchExecutions > 0);
+		Assert.True(jit.Counters.PureTraceBatchInstructions > 0);
+		Assert.DoesNotContain("NEGX", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);

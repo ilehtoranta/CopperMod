@@ -66,6 +66,7 @@ public sealed class M68kInstructionFrequencyTests
 	[Fact]
 	public void JitTargetClassifierDoesNotTreatSupportedUnaryOrStatusControlAsNextTargets()
 	{
+		Assert.Equal(M68kJitTarget.NegNot, M68kInstructionClassifier.GetJitTarget(0x4000));
 		Assert.Equal(M68kJitTarget.NegNot, M68kInstructionClassifier.GetJitTarget(0x4604));
 		Assert.Equal(M68kJitTarget.NegNot, M68kInstructionClassifier.GetJitTarget(0x4442));
 		Assert.Equal(M68kJitTarget.MultiplyDivide, M68kInstructionClassifier.GetJitTarget(0xC1F5));

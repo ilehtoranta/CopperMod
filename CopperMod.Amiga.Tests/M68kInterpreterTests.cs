@@ -787,6 +787,48 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void NegxByteDataRegisterUsesExtendAndClearsZeroForNonZeroResult()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x40, 0x00); // NEGX.B D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_5601;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_56FEu, cpu.State.D[0]);
+		Assert.Equal(8, cycles);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+
+	[Fact]
+	public void NegxByteZeroResultPreservesClearedZeroFlag()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x40, 0x00); // NEGX.B D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.Equal(8, cycles);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+
+	[Fact]
 	public void MovecRaisesIllegalInstructionExceptionOnM68000()
 	{
 		var bus = new TestBus();

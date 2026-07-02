@@ -122,6 +122,39 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static ulong Negx(uint value, int status, int sizeValue)
+        {
+            var size = (M68kOperandSize)sizeValue;
+            var arithmetic = Subtract(
+                0,
+                value,
+                size,
+                (status & M68kCpuState.Extend) != 0 ? 1u : 0u);
+            var nextStatus = status & unchecked((int)~ArithmeticFlags);
+            if (arithmetic.Value == 0 && (status & M68kCpuState.Zero) != 0)
+            {
+                nextStatus |= M68kCpuState.Zero;
+            }
+
+            if ((arithmetic.Value & M68kCpuState.SignBit(size)) != 0)
+            {
+                nextStatus |= M68kCpuState.Negative;
+            }
+
+            if (arithmetic.Overflow)
+            {
+                nextStatus |= M68kCpuState.Overflow;
+            }
+
+            if (arithmetic.Carry)
+            {
+                nextStatus |= M68kCpuState.Carry | M68kCpuState.Extend;
+            }
+
+            return ((ulong)(uint)nextStatus << 32) | arithmetic.Value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static M68kArithmeticResult CalculateAddFlags(
             uint destination,
             uint source,

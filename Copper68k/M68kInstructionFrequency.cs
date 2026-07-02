@@ -329,7 +329,7 @@ namespace Copper68k
             }
 
             return family == M68kInstructionFamily.Unary &&
-                ((opcode & 0xFF00) is 0x4400 or 0x4600)
+                ((opcode & 0xFF00) is 0x4000 or 0x4400 or 0x4600)
                 ? M68kJitTarget.NegNot
                 : M68kJitTarget.None;
         }
@@ -362,7 +362,7 @@ namespace Copper68k
             return target switch
             {
                 M68kJitTarget.MultiplyDivide => "MultiplyDivide",
-                M68kJitTarget.NegNot => "NOT/NEG",
+                M68kJitTarget.NegNot => "NEGX/NOT/NEG",
                 _ => string.Empty
             };
         }
@@ -458,7 +458,7 @@ namespace Copper68k
 
             if ((opcode & 0xFFF8) == 0x4840 ||
                 (opcode & 0xFFC0) is 0x4880 or 0x48C0 ||
-                (opcode & 0xFF00) is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
+                (opcode & 0xFF00) is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
                 return M68kInstructionFamily.Unary;
             }
@@ -628,6 +628,7 @@ namespace Copper68k
                 _ when (opcode & 0xFFC0) == 0x4E80 => "JSR",
                 _ when (opcode & 0xFFC0) == 0x4EC0 => "JMP",
                 _ when (opcode & 0xFFC0) == 0x4800 => "NBCD",
+                _ when (opcode & 0xFF00) == 0x4000 => "NEGX",
                 _ when (opcode & 0xFF00) == 0x4200 => "CLR",
                 _ when (opcode & 0xFF00) == 0x4400 => "NEG",
                 _ when (opcode & 0xFF00) == 0x4600 => "NOT",

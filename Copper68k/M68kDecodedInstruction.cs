@@ -16,6 +16,7 @@ namespace Copper68k
         Lea,
         Tst,
         Clr,
+        Negx,
         Neg,
         Not,
         Cmp,
@@ -1256,7 +1257,7 @@ namespace Copper68k
             }
 
             var unary = opcode & 0xFF00;
-            if (unary is 0x4200 or 0x4400 or 0x4600 or 0x4A00)
+            if (unary is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
                 var size = DecodeImmediateSize(opcode);
                 if (size == 0)
@@ -1278,6 +1279,7 @@ namespace Copper68k
                 cursor = local;
                 var operation = unary switch
                 {
+                    0x4000 => M68kJitOperation.Negx,
                     0x4200 => M68kJitOperation.Clr,
                     0x4400 => M68kJitOperation.Neg,
                     0x4600 => M68kJitOperation.Not,

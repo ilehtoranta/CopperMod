@@ -519,6 +519,7 @@ namespace Copper68k
                 TryCreateLeaLabel(keyName, out label) ||
                 TryCreateClearLabel(keyName, out label) ||
                 TryCreateUnaryInstructionLabel(keyName, "Tst", "TST", out label) ||
+                TryCreateUnaryInstructionLabel(keyName, "Negx", "NEGX", out label) ||
                 TryCreateUnaryInstructionLabel(keyName, "Neg", "NEG", out label) ||
                 TryCreateUnaryInstructionLabel(keyName, "Not", "NOT", out label) ||
                 TryCreateImmediateLogicalLabel(keyName, out label) ||

@@ -300,6 +300,12 @@ namespace Copper68k
                 return true;
             }
 
+            if ((opcode & 0xFFF8) == 0x4080)
+            {
+                ExecuteNegxLongData(opcode);
+                return true;
+            }
+
             if ((opcode & 0xFFF8) == 0x4480)
             {
                 ExecuteNegLongData(opcode);
@@ -1595,6 +1601,17 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Carry, destination != 0);
             State.SetFlag(M68kCpuState.Extend, destination != 0);
             CompleteTiming(M68kInstructionTimingKey.NegLongData);
+        }
+
+        private void ExecuteNegxLongData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var register = opcode & 7;
+            var packed = M68kIntegerSemantics.Negx(State.D[register], State.StatusRegister, (int)M68kOperandSize.Long);
+            State.D[register] = (uint)packed;
+            State.StatusRegister = (ushort)(packed >> 32);
+            CompleteTiming(M68kInstructionTimingKey.NegxLongData);
         }
 
         private void ExecuteNotByteData(ushort opcode)
