@@ -243,6 +243,45 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void DivuRegisterSourceUsesDataDependentTimingWithoutEaExtension()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x80, 0xC1); // DIVU.W D1,D0
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 6;
+		cpu.State.D[1] = 3;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(130, cycles);
+		Assert.Equal(2u, cpu.State.D[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
+	public void DivsMemorySourceUsesDataDependentTimingWithEaCycles()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x81, 0xD0); // DIVS.W (A0),D0
+		Write(bus.ChipRam, 0x2000, 0x00, 0x03);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 0xFFFF_FFF6; // -10
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(154, cycles);
+		Assert.Equal(0xFFFF_FFFDu, cpu.State.D[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
 	public void PlannedInterpreterMatchesScalarForFullContactTransformLoop()
 	{
 		var program = Words(

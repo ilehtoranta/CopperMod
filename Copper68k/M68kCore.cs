@@ -3699,7 +3699,8 @@ namespace Copper68k
 
             if (line == 0x8 && (opmode == 3 || opmode == 7))
             {
-                var divisor = ResolveEa(mode, eaReg, M68kOperandSize.Word).Read() & 0xFFFF;
+                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var divisor = sourceEa.Read() & 0xFFFF;
                 if (divisor == 0)
                 {
                     RaiseException(5, State.ProgramCounter, 38);
@@ -3729,16 +3730,16 @@ namespace Copper68k
                 {
                     var signedDivisor = unchecked((short)divisor);
                     var signedDividend = unchecked((int)dividend);
-                    var signedQuotient = signedDividend / signedDivisor;
-                    var signedRemainder = signedDividend % signedDivisor;
+                    var signedQuotient = (long)signedDividend / signedDivisor;
+                    var signedRemainder = (long)signedDividend % signedDivisor;
                     if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
                     {
                         State.SetFlag(M68kCpuState.Overflow, true);
                     }
                     else
                     {
-                        quotient = unchecked((uint)signedQuotient);
-                        remainder = unchecked((uint)signedRemainder);
+                        quotient = unchecked((uint)(int)signedQuotient);
+                        remainder = unchecked((uint)(int)signedRemainder);
                         State.D[reg] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
                         State.SetNegativeZero(quotient, M68kOperandSize.Word);
                         State.SetFlag(M68kCpuState.Overflow, false);
@@ -3746,7 +3747,7 @@ namespace Copper68k
                     }
                 }
 
-                AddCycles(140);
+                AddCycles(GetDivideCycles(sourceEa.EaCycles, dividend, (ushort)divisor, signed: opmode == 7));
                 return true;
             }
 
@@ -4775,6 +4776,9 @@ namespace Copper68k
 
         private static int GetMultiplyCycles(int sourceEaCycles, uint sourceValue, bool signed)
             => M68kIntegerSemantics.GetMultiplyCycles(sourceEaCycles, sourceValue, signed);
+
+        private static int GetDivideCycles(int sourceEaCycles, uint dividend, ushort divisor, bool signed)
+            => M68kIntegerSemantics.GetDivideCycles(sourceEaCycles, dividend, divisor, signed);
 
         private static int GetMultiplyCoreCycles(uint sourceValue, bool signed)
             => M68kIntegerSemantics.GetMultiplyCoreCycles(sourceValue, signed);

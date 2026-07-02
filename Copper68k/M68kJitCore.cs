@@ -189,6 +189,9 @@ namespace Copper68k
         private static readonly MethodInfo GetMultiplyCoreCyclesMethod =
             typeof(M68kJitCore).GetMethod(nameof(GetMultiplyCoreCycles), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetMultiplyCoreCycles));
+        private static readonly MethodInfo GetDivideCoreCyclesMethod =
+            typeof(M68kJitCore).GetMethod(nameof(GetDivideCoreCycles), BindingFlags.Static | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetDivideCoreCycles));
         private static readonly MethodInfo AddBcdByteMethod =
             typeof(M68kIntegerSemantics).GetMethod(
                 nameof(M68kIntegerSemantics.AddBcdByte),
@@ -6240,6 +6243,7 @@ namespace Copper68k
             var dividend = il.DeclareLocal(typeof(uint));
             var value = il.DeclareLocal(typeof(uint));
             var packed = il.DeclareLocal(typeof(ulong));
+            var cycles = il.DeclareLocal(typeof(int));
             var nonZero = il.DefineLabel();
             context.EmitMaterializePendingFlags();
             EmitV2LoadSourceValue(il, context, instruction.Source, M68kOperandSize.Word);
@@ -6274,7 +6278,14 @@ namespace Copper68k
             il.Emit(OpCodes.Shr_Un);
             il.Emit(OpCodes.Conv_I4);
             il.Emit(OpCodes.Stloc, context.StatusRegister);
-            context.EmitAddCycles(140);
+            il.Emit(OpCodes.Ldloc, dividend);
+            il.Emit(OpCodes.Ldloc, divisor);
+            il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, GetDivideCoreCyclesMethod);
+            il.Emit(OpCodes.Ldc_I4, GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Stloc, cycles);
+            context.EmitAddCycles(cycles);
         }
 
         private static void EmitV2Bra(
@@ -8063,15 +8074,15 @@ namespace Copper68k
 
             var signedDivisor = unchecked((short)divisor);
             var signedDividend = unchecked((int)dividend);
-            var signedQuotient = signedDividend / signedDivisor;
-            var signedRemainder = signedDividend % signedDivisor;
+            var signedQuotient = (long)signedDividend / signedDivisor;
+            var signedRemainder = (long)signedDividend % signedDivisor;
             if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
             {
                 return PackV2DivideResult(dividend, status | M68kCpuState.Overflow);
             }
 
-            var signedQuotientBits = unchecked((uint)signedQuotient);
-            var signedRemainderBits = unchecked((uint)signedRemainder);
+            var signedQuotientBits = unchecked((uint)(int)signedQuotient);
+            var signedRemainderBits = unchecked((uint)(int)signedRemainder);
             var packedResult = ((signedRemainderBits & 0xFFFF) << 16) | (signedQuotientBits & 0xFFFF);
             status = SetV2DivideSuccessFlags(status, signedQuotientBits);
             return PackV2DivideResult(packedResult, status);
@@ -9058,29 +9069,29 @@ namespace Copper68k
                     State.SetFlag(M68kCpuState.Carry, false);
                 }
 
-                AddCycles(140);
+                AddCycles(GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: false));
                 return true;
             }
 
             var signedDivisor = unchecked((short)divisor);
             var signedDividend = unchecked((int)dividend);
-            var signedQuotient = signedDividend / signedDivisor;
-            var signedRemainder = signedDividend % signedDivisor;
+            var signedQuotient = (long)signedDividend / signedDivisor;
+            var signedRemainder = (long)signedDividend % signedDivisor;
             if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
             {
                 State.SetFlag(M68kCpuState.Overflow, true);
             }
             else
             {
-                var quotient = unchecked((uint)signedQuotient);
-                var remainder = unchecked((uint)signedRemainder);
+                var quotient = unchecked((uint)(int)signedQuotient);
+                var remainder = unchecked((uint)(int)signedRemainder);
                 State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
                 State.SetNegativeZero(quotient, M68kOperandSize.Word);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddCycles(140);
+            AddCycles(GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: true));
             return true;
         }
 
@@ -9278,29 +9289,29 @@ namespace Copper68k
                     State.SetFlag(M68kCpuState.Carry, false);
                 }
 
-                AddCycles(140);
+                AddCycles(GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: false));
                 return;
             }
 
             var signedDivisor = unchecked((short)divisor);
             var signedDividend = unchecked((int)dividend);
-            var signedQuotient = signedDividend / signedDivisor;
-            var signedRemainder = signedDividend % signedDivisor;
+            var signedQuotient = (long)signedDividend / signedDivisor;
+            var signedRemainder = (long)signedDividend % signedDivisor;
             if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
             {
                 State.SetFlag(M68kCpuState.Overflow, true);
             }
             else
             {
-                var quotient = unchecked((uint)signedQuotient);
-                var remainder = unchecked((uint)signedRemainder);
+                var quotient = unchecked((uint)(int)signedQuotient);
+                var remainder = unchecked((uint)(int)signedRemainder);
                 State.D[register] = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
                 State.SetNegativeZero(quotient, M68kOperandSize.Word);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddCycles(140);
+            AddCycles(GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: true));
         }
 
         private bool ExecuteBinaryLogical(
@@ -11137,6 +11148,12 @@ namespace Copper68k
 
         private static int GetMultiplyCoreCycles(uint sourceValue, bool signed)
             => M68kIntegerSemantics.GetMultiplyCoreCycles(sourceValue, signed);
+
+        private static int GetDivideCoreCycles(uint dividend, ushort divisor, bool signed)
+            => M68kIntegerSemantics.GetDivideCoreCycles(dividend, divisor, signed);
+
+        private static int GetDivideCycles(int sourceEaCycles, uint dividend, ushort divisor, bool signed)
+            => M68kIntegerSemantics.GetDivideCycles(sourceEaCycles, dividend, divisor, signed);
 
         private static int GetByteWordEaOperandCycles(M68kDecodedEa ea)
         {

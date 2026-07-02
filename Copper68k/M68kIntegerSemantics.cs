@@ -281,6 +281,91 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static int GetDivideCycles(int sourceEaCycles, uint dividend, ushort divisor, bool signed)
+            => sourceEaCycles + GetDivideCoreCycles(dividend, divisor, signed);
+
+        internal static int GetDivideCoreCycles(uint dividend, ushort divisor, bool signed)
+        {
+            if (divisor == 0)
+            {
+                return 0;
+            }
+
+            return signed
+                ? GetSignedDivideCoreCycles(unchecked((int)dividend), unchecked((short)divisor))
+                : GetUnsignedDivideCoreCycles(dividend, divisor);
+        }
+
+        private static int GetUnsignedDivideCoreCycles(uint dividend, ushort divisor)
+        {
+            if ((dividend >> 16) >= divisor)
+            {
+                return 6;
+            }
+
+            var microcycles = 38;
+            var alignedDivisor = (uint)divisor << 16;
+            for (var bit = 0; bit < 15; bit++)
+            {
+                var previousDividend = dividend;
+                dividend <<= 1;
+                if ((previousDividend & 0x8000_0000u) != 0)
+                {
+                    dividend -= alignedDivisor;
+                }
+                else
+                {
+                    microcycles += 2;
+                    if (dividend >= alignedDivisor)
+                    {
+                        dividend -= alignedDivisor;
+                        microcycles--;
+                    }
+                }
+            }
+
+            return (microcycles * 2) - 4;
+        }
+
+        private static int GetSignedDivideCoreCycles(int dividend, short divisor)
+        {
+            var microcycles = dividend < 0 ? 7 : 6;
+            var absoluteDividend = AbsAsUInt32(dividend);
+            var absoluteDivisor = AbsAsUInt16(divisor);
+            if ((absoluteDividend >> 16) >= absoluteDivisor)
+            {
+                return ((microcycles + 2) * 2) - 4;
+            }
+
+            var absoluteQuotient = absoluteDividend / absoluteDivisor;
+            microcycles += 55;
+            if (divisor >= 0)
+            {
+                microcycles += dividend >= 0 ? -1 : 1;
+            }
+
+            for (var bit = 0; bit < 15; bit++)
+            {
+                if ((absoluteQuotient & 0x8000u) == 0)
+                {
+                    microcycles++;
+                }
+
+                absoluteQuotient <<= 1;
+            }
+
+            return (microcycles * 2) - 4;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint AbsAsUInt32(int value)
+            => value < 0 ? unchecked((uint)-((long)value)) : unchecked((uint)value);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort AbsAsUInt16(short value)
+            => value < 0 ? unchecked((ushort)-((int)value)) : unchecked((ushort)value);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int CountSignedMultiplyTransitions(ushort sourceValue)
         {
             var value = (uint)sourceValue;
