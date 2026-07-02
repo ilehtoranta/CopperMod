@@ -61,9 +61,6 @@ namespace CopperMod.Amiga
         private const string PaulaDmaFixedSlotFastPathSwitch = "CopperMod.Amiga.PaulaDmaFixedSlotFastPath";
         private const string PaulaDmaFixedSlotFastPathEnvironmentVariable = "COPPER_AMIGA_PAULA_DMA_FIXED_SLOT_FAST";
         private const bool PaulaDmaFixedSlotFastPathDefault = false;
-        private const string DiskDmaFixedSlotFastPathSwitch = "CopperMod.Amiga.DiskDmaFixedSlotFastPath";
-        private const string DiskDmaFixedSlotFastPathEnvironmentVariable = "COPPER_AMIGA_DISK_DMA_FIXED_SLOT_FAST";
-        private const bool DiskDmaFixedSlotFastPathDefault = true;
         private const byte CiaAPortAResetLatch = 0xFC;
         private const byte CiaAPortAResetDataDirection = 0x03;
         private const byte CiaAPortAOverlayBit = 0x01;
@@ -88,7 +85,6 @@ namespace CopperMod.Amiga
         private readonly bool _useChipSlotScheduler;
         private readonly bool _useExactCpuChipSlotFastPath;
         private readonly bool _usePaulaDmaFixedSlotFastPath;
-        private readonly bool _useDiskDmaFixedSlotFastPath;
         private readonly bool _liveAgnusDmaDefault;
         private readonly AmigaRealTimeClock? _realTimeClock;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
@@ -179,7 +175,6 @@ namespace CopperMod.Amiga
                 _useChipSlotScheduler;
             _useExactCpuChipSlotFastPath = ResolveExactCpuChipSlotFastPath();
             _usePaulaDmaFixedSlotFastPath = ResolvePaulaDmaFixedSlotFastPath();
-            _useDiskDmaFixedSlotFastPath = ResolveDiskDmaFixedSlotFastPath();
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
@@ -254,33 +249,6 @@ namespace CopperMod.Amiga
                 "FALSE" => false,
                 "False" => false,
                 _ => PaulaDmaFixedSlotFastPathDefault
-            };
-        }
-
-        private static bool ResolveDiskDmaFixedSlotFastPath()
-        {
-            if (AppContext.TryGetSwitch(DiskDmaFixedSlotFastPathSwitch, out var switchEnabled))
-            {
-                return switchEnabled;
-            }
-
-            var value = Environment.GetEnvironmentVariable(DiskDmaFixedSlotFastPathEnvironmentVariable);
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return DiskDmaFixedSlotFastPathDefault;
-            }
-
-            return value.Trim() switch
-            {
-                "1" => true,
-                "true" => true,
-                "TRUE" => true,
-                "True" => true,
-                "0" => false,
-                "false" => false,
-                "FALSE" => false,
-                "False" => false,
-                _ => DiskDmaFixedSlotFastPathDefault
             };
         }
 
@@ -656,6 +624,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Byte,
                 ref cycle,
                 isWrite: false,
+                AmigaBusAccessKind.CpuDataRead,
                 out _,
                 out _);
             value = region.Memory[region.Offset];
@@ -680,6 +649,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Word,
                 ref cycle,
                 isWrite: false,
+                AmigaBusAccessKind.CpuDataRead,
                 out _,
                 out _);
             value = (ushort)((region.Memory[region.Offset] << 8) | region.Memory[region.Offset + 1]);
@@ -704,6 +674,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Long,
                 ref cycle,
                 isWrite: false,
+                AmigaBusAccessKind.CpuDataRead,
                 out _,
                 out _);
             value = ((uint)region.Memory[region.Offset] << 24) |
@@ -730,6 +701,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Byte,
                 ref cycle,
                 isWrite: true,
+                AmigaBusAccessKind.CpuDataWrite,
                 out var grantedCycle,
                 out _);
             WriteExactCpuDataByte(region, value, grantedCycle);
@@ -753,6 +725,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Word,
                 ref cycle,
                 isWrite: true,
+                AmigaBusAccessKind.CpuDataWrite,
                 out var grantedCycle,
                 out _);
             WriteExactCpuDataWord(region, value, grantedCycle);
@@ -776,6 +749,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Long,
                 ref cycle,
                 isWrite: true,
+                AmigaBusAccessKind.CpuDataWrite,
                 out var grantedCycle,
                 out var secondWordCycle);
             WriteExactCpuDataLong(
@@ -851,6 +825,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessSize size,
             ref long cycle,
             bool isWrite,
+            AmigaBusAccessKind kind,
             out long grantedCycle,
             out long secondWordCycle)
         {
@@ -861,6 +836,7 @@ namespace CopperMod.Amiga
                 size,
                 requestedCycle,
                 isWrite,
+                kind,
                 out grantedCycle,
                 out secondWordCycle,
                 out var completedCycle))
@@ -869,13 +845,22 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var access = GrantFastCpuAccess(
-                target,
-                address,
-                size,
-                cycle,
-                isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
-                isWrite);
+            var access = _useFastZeroWaitAccesses
+                ? GrantFastCpuAccess(
+                    target,
+                    address,
+                    size,
+                    cycle,
+                    kind,
+                    isWrite)
+                : Arbitrate(
+                    AmigaBusRequester.Cpu,
+                    kind,
+                    target,
+                    address,
+                    size,
+                    cycle,
+                    isWrite);
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite);
             cycle = access.CompletedCycle;
             grantedCycle = access.GrantedCycle;
@@ -889,6 +874,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessSize size,
             long requestedCycle,
             bool isWrite,
+            AmigaBusAccessKind kind,
             out long grantedCycle,
             out long secondWordCycle,
             out long completedCycle)
@@ -915,7 +901,7 @@ namespace CopperMod.Amiga
             if (size == AmigaBusAccessSize.Long)
             {
                 _hrmSlotEngine.GrantCpuDataLongSlots(
-                    isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                    kind,
                     target,
                     address,
                     grantRequestCycle,
@@ -927,7 +913,7 @@ namespace CopperMod.Amiga
             else
             {
                 _hrmSlotEngine.GrantCpuDataSingleSlot(
-                    isWrite ? AmigaBusAccessKind.CpuDataWrite : AmigaBusAccessKind.CpuDataRead,
+                    kind,
                     target,
                     address,
                     size,
@@ -1085,31 +1071,15 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
             var target = (AmigaBusAccessTarget)window.BusTag;
-            var requestedCycle = cycle;
-            if (_useFastZeroWaitAccesses)
-            {
-                var fastAccess = GrantFastCpuAccess(
-                    target,
-                    address,
-                    AmigaBusAccessSize.Word,
-                    cycle,
-                    AmigaBusAccessKind.CpuInstructionFetch,
-                    isWrite: false);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastAccess.GrantedCycle, isWrite: false);
-                cycle = fastAccess.CompletedCycle;
-                return;
-            }
-
-            var access = Arbitrate(
-                AmigaBusRequester.Cpu,
-                AmigaBusAccessKind.CpuInstructionFetch,
+            CommitExactCpuDataTiming(
                 target,
                 address,
                 AmigaBusAccessSize.Word,
-                cycle,
-                isWrite: false);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
-            cycle = access.CompletedCycle;
+                ref cycle,
+                isWrite: false,
+                AmigaBusAccessKind.CpuInstructionFetch,
+                out _,
+                out _);
         }
 
         private static uint GetInstructionFetchPageEnd(uint address)
@@ -2132,20 +2102,59 @@ namespace CopperMod.Amiga
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryReadRowSpriteDmaWordForPresentation(
             uint address,
-            long requestedCycle,
+            long slotCycle,
             out ushort value,
             out long grantedCycle)
         {
-            var granted = TryReadDisplayDmaWordForPresentation(
+            var granted = TryReserveSpriteDmaWordExactSlot(
+                address,
+                slotCycle,
+                out var reservation);
+            grantedCycle = reservation.GrantedCycle;
+            if (!granted)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = CommitDmaWordRead(in reservation);
+            return granted;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryReserveSpriteDmaWordExactSlot(
+            uint address,
+            long slotCycle,
+            out AmigaDmaWordReservation reservation)
+        {
+            address = MaskChipDmaAddress(address);
+            slotCycle = Math.Max(0, slotCycle);
+            var request = new AmigaBusAccessRequest(
                 AmigaBusRequester.Sprite,
                 AmigaBusAccessKind.Sprite,
+                AmigaBusAccessTarget.ChipRam,
                 address,
-                requestedCycle,
-                out value,
-                out var access);
-            grantedCycle = access.GrantedCycle;
+                AmigaBusAccessSize.Word,
+                slotCycle,
+                isWrite: false);
+
+            AmigaBusAccessResult access;
+            bool granted;
+            if (!_useChipSlotScheduler)
+            {
+                access = new AmigaBusAccessResult(request, slotCycle, slotCycle);
+                granted = true;
+            }
+            else
+            {
+                granted = TryReserveExactFixedDmaSlot(request, out access);
+            }
+
+            reservation = new AmigaDmaWordReservation(address, granted, access);
+            CaptureDmaReservation(in reservation);
             return granted;
         }
 
@@ -2294,71 +2303,6 @@ namespace CopperMod.Amiga
             return _useChipSlotScheduler
                 ? AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Disk)
                 : requestedCycle;
-        }
-
-        internal bool TryReserveDiskDmaSlotThrough(
-            uint address,
-            bool isWrite,
-            long requestedCycle,
-            long latestGrantCycle,
-            out AmigaBusAccessResult access)
-        {
-            var granted = TryReserveDiskDmaWordThrough(
-                address,
-                isWrite,
-                requestedCycle,
-                latestGrantCycle,
-                out var reservation);
-            access = reservation.Access;
-            return granted;
-        }
-
-        internal bool TryReserveDiskDmaWordThrough(
-            uint address,
-            bool isWrite,
-            long requestedCycle,
-            long latestGrantCycle,
-            out AmigaDmaWordReservation reservation)
-        {
-            address = MaskChipDmaAddress(address);
-            requestedCycle = Math.Max(0, requestedCycle);
-            latestGrantCycle = Math.Max(0, latestGrantCycle);
-            var request = new AmigaBusAccessRequest(
-                AmigaBusRequester.Disk,
-                AmigaBusAccessKind.DiskDma,
-                AmigaBusAccessTarget.ChipRam,
-                address,
-                AmigaBusAccessSize.Word,
-                requestedCycle,
-                isWrite);
-            AmigaBusAccessResult access;
-            bool granted;
-            if (!_useChipSlotScheduler)
-            {
-                access = new AmigaBusAccessResult(request, requestedCycle, requestedCycle);
-                granted = requestedCycle <= latestGrantCycle;
-            }
-            else if (_useDiskDmaFixedSlotFastPath)
-            {
-                granted = _hrmSlotEngine.TryReserveDiskDmaWordSlotThrough(
-                    address,
-                    isWrite,
-                    requestedCycle,
-                    latestGrantCycle,
-                    out access);
-            }
-            else
-            {
-                granted = _hrmSlotEngine.TryReserveFixedDmaSlotThrough(
-                    request,
-                    AgnusChipSlotOwner.Disk,
-                    latestGrantCycle,
-                    out access);
-            }
-
-            reservation = new AmigaDmaWordReservation(address, granted, access);
-            CaptureDmaReservation(in reservation);
-            return granted;
         }
 
         internal bool TryReserveDiskDmaWordExactSlot(
@@ -3986,6 +3930,11 @@ namespace CopperMod.Amiga
         private uint ReadJitSlotAwareMemoryUnchecked(ref long cycle, uint address, M68kOperandSize size)
         {
             address = NormalizeAddress(address);
+            if (TryReadJitExactCpuDataMemory(address, ref cycle, size, out var exactValue))
+            {
+                return exactValue;
+            }
+
             var target = ClassifyTarget(address);
             var accessSize = ToBusAccessSize(size);
             var access = _useFastZeroWaitAccesses
@@ -4012,6 +3961,11 @@ namespace CopperMod.Amiga
         private void WriteJitSlotAwareMemoryUnchecked(ref long cycle, uint address, uint value, M68kOperandSize size)
         {
             address = NormalizeAddress(address);
+            if (TryWriteJitExactCpuDataMemory(address, ref cycle, value, size))
+            {
+                return;
+            }
+
             var target = ClassifyTarget(address);
             var accessSize = ToBusAccessSize(size);
             var access = _useFastZeroWaitAccesses
@@ -4044,6 +3998,58 @@ namespace CopperMod.Amiga
                 M68kOperandSize.Word => AmigaBusAccessSize.Word,
                 _ => AmigaBusAccessSize.Long
             };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadJitExactCpuDataMemory(
+            uint address,
+            ref long cycle,
+            M68kOperandSize size,
+            out uint value)
+        {
+            if (size == M68kOperandSize.Byte &&
+                TryReadExactCpuDataByte(address, ref cycle, out var byteValue))
+            {
+                value = byteValue;
+                return true;
+            }
+
+            if (size == M68kOperandSize.Word &&
+                TryReadExactCpuDataWord(address, ref cycle, out var wordValue))
+            {
+                value = wordValue;
+                return true;
+            }
+
+            if (size == M68kOperandSize.Long &&
+                TryReadExactCpuDataLong(address, ref cycle, out var longValue))
+            {
+                value = longValue;
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteJitExactCpuDataMemory(
+            uint address,
+            ref long cycle,
+            uint value,
+            M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                return TryWriteExactCpuDataByte(address, (byte)value, ref cycle);
+            }
+
+            if (size == M68kOperandSize.Word)
+            {
+                return TryWriteExactCpuDataWord(address, (ushort)value, ref cycle);
+            }
+
+            return TryWriteExactCpuDataLong(address, value, ref cycle);
+        }
 
         private uint ReadJitRawMemory(
             AmigaBusAccessTarget target,

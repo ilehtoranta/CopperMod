@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -644,27 +649,6 @@ namespace CopperMod.Amiga
             return TryCommitFixedSlot(request, owner, granted, out result);
         }
 
-        internal bool TryReserveFixedDmaSlotThrough(
-            AmigaBusAccessRequest request,
-            AgnusChipSlotOwner owner,
-            long latestGrantCycle,
-            out AmigaBusAccessResult result)
-        {
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner, request.Channel);
-            while (candidate <= latestGrantCycle)
-            {
-                if (TryCommitFixedSlot(request, owner, candidate, out result))
-                {
-                    return true;
-                }
-
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner, request.Channel);
-            }
-
-            result = new AmigaBusAccessResult(request, candidate, candidate);
-            return false;
-        }
-
         [HotPath]
         public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
         {
@@ -981,42 +965,6 @@ namespace CopperMod.Amiga
             }
 
             return result;
-        }
-
-        [HotPath]
-        public bool TryReserveDiskDmaWordSlotThrough(
-            uint address,
-            bool isWrite,
-            long requestedCycle,
-            long latestGrantCycle,
-            out AmigaBusAccessResult result)
-        {
-            var request = new AmigaBusAccessRequest(
-                AmigaBusRequester.Disk,
-                AmigaBusAccessKind.DiskDma,
-                AmigaBusAccessTarget.ChipRam,
-                address,
-                AmigaBusAccessSize.Word,
-                requestedCycle,
-                isWrite);
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Disk);
-            while (candidate <= latestGrantCycle)
-            {
-                if (TryCommitFixedSingleWordSlot(
-                    request,
-                    AgnusChipSlotOwner.Disk,
-                    candidate,
-                    AgnusChipSlotPriority.Disk,
-                    out result))
-                {
-                    return true;
-                }
-
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, AgnusChipSlotOwner.Disk);
-            }
-
-            result = new AmigaBusAccessResult(request, candidate, candidate);
-            return false;
         }
 
         private bool TryCommitFixedSlot(

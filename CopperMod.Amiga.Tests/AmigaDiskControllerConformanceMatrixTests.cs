@@ -429,7 +429,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		StartDiskDma(bus, DmaBase, words: 1);
 		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
 		var firstSlot = completionCycle - AgnusChipSlotScheduler.SlotCycles;
-		_ = bus.TryReserveDiskDmaWordThrough(0x2000, isWrite: false, firstSlot, firstSlot, out _);
+		_ = bus.TryReserveDiskDmaWordExactSlot(0x2000, isWrite: false, firstSlot, out _);
 
 		bus.AdvanceDmaTo(firstSlot);
 		var blockedSnapshot = bus.Disk.CaptureSnapshot();

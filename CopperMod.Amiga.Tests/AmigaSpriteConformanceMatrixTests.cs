@@ -1438,6 +1438,11 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(0, snapshot.LastArchiveRejectMissingSpriteFetch);
 		Assert.True(snapshot.LastSpriteDeniedFetchCount > 0);
 		Assert.Equal(0, snapshot.LastSpriteRecoveryAttemptCount);
+		var spriteAccesses = liveBus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.Sprite)
+			.ToArray();
+		Assert.NotEmpty(spriteAccesses);
+		Assert.All(spriteAccesses, access => Assert.Equal(access.RequestedCycle, access.GrantedCycle));
 	}
 
 	private static void WriteManualSprite(

@@ -1,5 +1,6 @@
 using CopperMod.Amiga;
 using CopperDisk;
+using Copper68k;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -349,6 +350,53 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(AmigaBusAccessTarget.ExpansionRam, reservation.Request.Target);
 		Assert.Equal(reservation.CompletedCycle, cycle);
 		Assert.True(cycle > 20);
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void JitSlotAwareChipRamUsesExactCpuSlotFastPath()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		Write(bus.ChipRam, 0x2400, 0x12, 0x34, 0x56, 0x78);
+		var readCycle = 20L;
+
+		var value = bus.ReadJitSlotAwareMemory(ref readCycle, 0x00002400, M68kOperandSize.Long);
+
+		Assert.Equal(0x12345678u, value);
+		var readReservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		Assert.Equal(AmigaBusAccessKind.CpuDataRead, readReservation.Request.Kind);
+		Assert.Equal(AmigaBusAccessTarget.ChipRam, readReservation.Request.Target);
+		Assert.Equal(readReservation.CompletedCycle, readCycle);
+		Assert.Empty(bus.BusAccesses);
+
+		var writeCycle = 40L;
+		bus.WriteJitSlotAwareMemory(ref writeCycle, 0x00002400, 0x9ABCDEF0, M68kOperandSize.Long);
+
+		var writeReservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		var secondWordCycle = writeReservation.GrantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles);
+		Assert.Equal(AmigaBusAccessKind.CpuDataWrite, writeReservation.Request.Kind);
+		Assert.Equal(writeReservation.CompletedCycle, writeCycle);
+		Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x2400, writeReservation.GrantedCycle - 1));
+		Assert.Equal(0x9ABC, bus.ReadChipWordForPresentation(0x2400, writeReservation.GrantedCycle));
+		Assert.Equal(0x5678, bus.ReadChipWordForPresentation(0x2402, secondWordCycle - 1));
+		Assert.Equal(0xDEF0, bus.ReadChipWordForPresentation(0x2402, secondWordCycle));
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
+	public void InstructionFetchWindowUsesExactCpuSlotFastPath()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		Write(bus.ChipRam, 0x2400, 0x4E, 0x71);
+		Assert.True(bus.TryGetInstructionFetchWindow(0x00002400, out var window));
+		var cycle = 20L;
+
+		bus.CommitInstructionFetchWindowWord(in window, 0x00002400, ref cycle);
+
+		var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+		Assert.Equal(AmigaBusAccessKind.CpuInstructionFetch, reservation.Request.Kind);
+		Assert.Equal(AmigaBusAccessTarget.ChipRam, reservation.Request.Target);
+		Assert.Equal(reservation.CompletedCycle, cycle);
 		Assert.Empty(bus.BusAccesses);
 	}
 
@@ -2223,6 +2271,38 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(spriteCycle, spriteAccess.GrantedCycle);
 		Assert.Equal(spriteCycle + (2 * AgnusChipSlotScheduler.SlotCycles), copperAccess.GrantedCycle);
 		Assert.Equal(AgnusChipSlotOwner.Copper, bus.Agnus.CaptureSnapshot().LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void SpriteDmaWordExactSlotReadsOnlyFixedSpriteSlot()
+	{
+		var bus = new AmigaBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x5AA5);
+		var spriteCycle = AgnusHrmOcsSlotTable.FirstSpriteHorizontal * AgnusChipSlotScheduler.SlotCycles;
+
+		Assert.True(bus.TryReadRowSpriteDmaWordForPresentation(0x1000, spriteCycle, out var value, out var grantedCycle));
+
+		Assert.Equal(0x5AA5, value);
+		Assert.Equal(spriteCycle, grantedCycle);
+		var access = Assert.Single(bus.BusAccesses, access => access.Request.Kind == AmigaBusAccessKind.Sprite);
+		Assert.Equal(spriteCycle, access.RequestedCycle);
+		Assert.Equal(spriteCycle, access.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
+	public void SpriteDmaWordExactSlotDoesNotSearchForwardFromWrongSlot()
+	{
+		var bus = new AmigaBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x5AA5);
+		var wrongCycle = (AgnusHrmOcsSlotTable.FirstSpriteHorizontal - 1) * AgnusChipSlotScheduler.SlotCycles;
+
+		Assert.False(bus.TryReadRowSpriteDmaWordForPresentation(0x1000, wrongCycle, out var value, out var grantedCycle));
+
+		Assert.Equal(0, value);
+		Assert.Equal(wrongCycle, grantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Sprite, bus.Agnus.CaptureSnapshot().LastDeniedFixedSlot?.Owner);
+		Assert.Equal(0, bus.Agnus.CaptureSnapshot().SpriteSlotGrantCount);
 	}
 
 	[Theory]
