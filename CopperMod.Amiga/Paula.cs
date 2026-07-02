@@ -1518,9 +1518,16 @@ namespace CopperMod.Amiga
                         continue;
                     }
 
-                    if (!record.MatchesAddress(address))
+                    if (record.RequestedCycle < requestedCycle)
+                    {
+                        record.MarkConsumed(kind);
+                        continue;
+                    }
+
+                    if (!record.Matches(address, requestedCycle))
                     {
                         latch = default;
+                        CompactConsumedPrefix();
                         return false;
                     }
 
@@ -1605,8 +1612,10 @@ namespace CopperMod.Amiga
 
             public bool ConsumedByBoth => AudioConsumed && RegisterConsumed;
 
-            public bool MatchesAddress(uint address)
-                => Latch.Address == address;
+            public long RequestedCycle => Latch.RequestedCycle;
+
+            public bool Matches(uint address, long requestedCycle)
+                => Latch.Address == address && Latch.RequestedCycle == requestedCycle;
 
             public bool IsConsumed(PaulaTimelineKind kind)
                 => kind switch

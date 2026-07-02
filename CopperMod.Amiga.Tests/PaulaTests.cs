@@ -739,6 +739,23 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void SparseAudioRenderingDoesNotLeaveStaleDmaLatchQueueRecords()
+	{
+		var bus = CreateMinimumPeriodDmaUnderrunBus();
+		var buffer = new float[2];
+		var sampleCycle = 0L;
+		for (var sample = 0; sample < 2_000; sample++)
+		{
+			sampleCycle += 160;
+			bus.Paula.RenderSample(sampleCycle, buffer, 0, 2, advanceRegisterObservable: false);
+		}
+
+		bus.Paula.AdvanceDmaObservableTo(sampleCycle);
+
+		Assert.All(CapturePaulaDmaLatchQueueCounts(bus), count => Assert.InRange(count, 0, 4));
+	}
+
+	[Fact]
 	public void DmaAudioBelowMinimumPeriodRepeatsLowByteUntilNextDmaWordArrives()
 	{
 		var probe = CreateMinimumPeriodDmaUnderrunBus();
@@ -938,6 +955,28 @@ public sealed class PaulaTests
 	{
 		return new AmigaBus(
 			enableLiveAgnusDma: false);
+	}
+
+	private static int[] CapturePaulaDmaLatchQueueCounts(AmigaBus bus)
+	{
+		var queuesField = typeof(Paula).GetField(
+			"_dmaReadLatchQueues",
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		Assert.NotNull(queuesField);
+		var queues = Assert.IsAssignableFrom<Array>(queuesField.GetValue(bus.Paula));
+		var counts = new int[queues.Length];
+		for (var i = 0; i < counts.Length; i++)
+		{
+			var queue = queues.GetValue(i);
+			Assert.NotNull(queue);
+			var countField = queue.GetType().GetField(
+				"_count",
+				System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+			Assert.NotNull(countField);
+			counts[i] = Assert.IsType<int>(countField.GetValue(queue));
+		}
+
+		return counts;
 	}
 
 	private static AmigaBus CreateStableRegisterDmaBus()
