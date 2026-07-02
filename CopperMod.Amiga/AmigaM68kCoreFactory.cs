@@ -17,9 +17,39 @@ namespace CopperMod.Amiga
                 : M68kCoreFactory.Default.Create(model, bus);
 
         public IM68kCore Create(M68kBackendKind backend, IM68kBus bus)
-            => backend == M68kBackendKind.AccurateM68000 && bus is AmigaBus amigaBus
-                ? M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess))
+            => bus is AmigaBus amigaBus
+                ? backend switch
+                {
+                    M68kBackendKind.AccurateM68000 => M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess)),
+                    M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000PureGraphTier(
+                        amigaBus,
+                        (state, instructionFrequency, cpuModel) => CreateJitM68000Fallback(
+                            amigaBus,
+                            state,
+                            instructionFrequency,
+                            cpuModel)),
+                    _ => M68kCoreFactory.Default.Create(backend, bus)
+                }
                 : M68kCoreFactory.Default.Create(backend, bus);
+
+        private static IM68kCore CreateJitM68000Fallback(
+            AmigaBus bus,
+            M68kCpuState state,
+            M68kInstructionFrequencyMatrix instructionFrequency,
+            M68kJitCpuModel cpuModel)
+        {
+            if (cpuModel != M68kJitCpuModel.M68000)
+            {
+                throw new M68kEmulationException($"Unexpected Amiga M68k JIT fallback CPU model: {cpuModel}.");
+            }
+
+            return M68kCoreFactory.CreateM68000Core(
+                bus,
+                default(AmigaCpuDataAccess),
+                state,
+                instructionFrequency,
+                enableInstructionFetchWindow: false);
+        }
     }
 
     internal readonly struct AmigaCpuDataAccess : IM68kCpuDataAccess<AmigaBus, AmigaCpuDataAccess>

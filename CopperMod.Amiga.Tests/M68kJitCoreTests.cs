@@ -1335,6 +1335,67 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void JitM68000PureGraphCompilesV2OnlyForSupportedLoop()
+	{
+		var bus = CreateCodeBus();
+		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		cpu.Reset(FastCodeBase, 0x4000);
+
+		var executed = cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
+
+		Assert.Equal(220, executed);
+		Assert.True(cpu.Counters.CompiledTraces > 0);
+		Assert.True(cpu.Counters.V2TraceHits > 0);
+		Assert.True(cpu.Counters.V2TraceMethodsCompiled > 0);
+		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
+		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
+		Assert.True(cpu.Counters.PureTraceBatchExecutions > 0);
+	}
+
+	[Fact]
+	public void JitNormalV2CompileKeepsClassicFallbackDelegates()
+	{
+		var bus = CreateCodeBus();
+		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
+		var cpu = new M68kJitCore(bus, enableV2: true);
+		cpu.Reset(FastCodeBase, 0x4000);
+
+		var executed = cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
+
+		Assert.Equal(220, executed);
+		Assert.True(cpu.Counters.CompiledTraces > 0);
+		Assert.True(cpu.Counters.V2TraceMethodsCompiled > 0);
+		Assert.True(cpu.Counters.ClassicTraceMethodsCompiled > 0);
+		Assert.True(cpu.Counters.PureClassicTraceMethodsCompiled > 0);
+	}
+
+	[Fact]
+	public void JitM68000PureGraphV2OnlyTraceFallsBackWithoutBatchTarget()
+	{
+		var bus = CreateCodeBus();
+		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		cpu.Reset(FastCodeBase, 0x4000);
+		cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
+		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
+		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
+
+		cpu.State.ProgramCounter = FastCodeBase;
+		cpu.State.D[0] = 0;
+		var fallbackBefore = cpu.Counters.FallbackInstructions;
+		var v2HitsBefore = cpu.Counters.V2TraceHits;
+
+		var executed = cpu.ExecuteInstructions(1, null, new CountingBoundary());
+
+		Assert.Equal(1, executed);
+		Assert.Equal(FastCodeBase + 2, cpu.State.ProgramCounter);
+		Assert.Equal(1u, cpu.State.D[0]);
+		Assert.Equal(fallbackBefore + 1, cpu.Counters.FallbackInstructions);
+		Assert.Equal(v2HitsBefore, cpu.Counters.V2TraceHits);
+	}
+
+	[Fact]
 	public void JitPureTraceBatchesDbccAndMatchesInterpreter()
 	{
 		var words = new ushort[]
@@ -1451,6 +1512,44 @@ public sealed class M68kJitCoreTests
 		Assert.True(cpu.State.Cycles >= wakeCycle);
 		Assert.Contains("target-cycle", cpu.Counters.V2TraceHandoffBlockTop ?? string.Empty);
 		Assert.DoesNotContain("target-cycle", cpu.Counters.V2TraceHandoffFailureTop ?? string.Empty);
+		Assert.True(cpu.Counters.V2TraceHandoffNoCycleSlack > 0);
+	}
+
+	[Fact]
+	public void JitV2CachesRepeatedBlockedHandoffTarget()
+	{
+		var root = FastCodeBase;
+		var target = FastCodeBase + 0x104;
+		var branchToTarget = unchecked((ushort)(target - (root + 4)));
+		var bus = CreateCodeBus();
+		WriteWords(bus, root, 0x7005, 0x6000, branchToTarget); // MOVEQ #5,D0; BRA.W target
+		WriteWords(bus, target, 0xB348); // CMPM.W (A0)+,(A1)+ is not pure V2.
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		cpu.Reset(root, 0x4000);
+		var boundary = new PureBatchBoundary();
+		for (var i = 0; i < 80; i++)
+		{
+			cpu.State.ProgramCounter = root;
+			cpu.ExecuteInstructions(20, cpu.State.Cycles + 100_000, boundary);
+		}
+
+		cpu.State.ProgramCounter = root;
+		cpu.ExecuteInstructions(20, cpu.State.Cycles + 100_000, boundary);
+		var stores = cpu.Counters.V2TraceHandoffCacheStores;
+		var hits = cpu.Counters.V2TraceHandoffCacheHits;
+		var failures = cpu.Counters.V2TraceHandoffFailures;
+
+		cpu.State.ProgramCounter = root;
+		cpu.ExecuteInstructions(20, cpu.State.Cycles + 100_000, boundary);
+
+		Assert.Equal(0x0000_0005u, cpu.State.D[0]);
+		Assert.True(
+			stores > 0,
+			$"stores={stores}, hits={cpu.Counters.V2TraceHandoffCacheHits}, attempts={cpu.Counters.V2TraceHandoffAttempts}, " +
+			$"failures={cpu.Counters.V2TraceHandoffFailures}, block={cpu.Counters.V2TraceHandoffBlockTop}");
+		Assert.True(cpu.Counters.V2TraceHandoffCacheHits > hits);
+		Assert.True(cpu.Counters.V2TraceHandoffFailures > failures);
+		Assert.Contains("bus-disabled", cpu.Counters.V2TraceHandoffBlockTop ?? string.Empty);
 	}
 
 	[Fact]
@@ -3299,6 +3398,88 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void JitV2BatchesDataRegisterMemoryMovesThroughBusAccesses()
+	{
+		var words = new ushort[]
+		{
+			0x2080, // MOVE.L D0,(A0)
+			0x30C1, // MOVE.W D1,(A0)+
+			0x10C2  // MOVE.B D2,(A0)+
+		};
+		var jitBus = CreateCodeBus();
+		var interpreterBus = CreateCodeBus();
+		WriteWords(jitBus, FastCodeBase, words);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: true);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		var boundary = new PureBatchBoundary();
+
+		for (var i = 0; i < 180; i++)
+		{
+			jit.State.ProgramCounter = FastCodeBase;
+			jit.State.D[0] = 0x1234_5678;
+			jit.State.D[1] = 0x89AB_CDEF;
+			jit.State.D[2] = 0x7654_32A5;
+			jit.State.A[0] = 0x2000;
+			jitBus.WriteLong(0x2000, 0);
+			jitBus.WriteWord(0x2004, 0);
+			interpreter.State.ProgramCounter = FastCodeBase;
+			interpreter.State.D[0] = 0x1234_5678;
+			interpreter.State.D[1] = 0x89AB_CDEF;
+			interpreter.State.D[2] = 0x7654_32A5;
+			interpreter.State.A[0] = 0x2000;
+			interpreterBus.WriteLong(0x2000, 0);
+			interpreterBus.WriteWord(0x2004, 0);
+			var jitExecuted = jit.ExecuteInstructions(3, jit.State.Cycles + 100_000, boundary);
+			var interpreterExecuted = interpreter.ExecuteInstructions(3, null, new CountingBoundary());
+			Assert.Equal(interpreterExecuted, jitExecuted);
+		}
+
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(interpreterBus.ReadLong(0x2000), jitBus.ReadLong(0x2000));
+		Assert.Equal(interpreterBus.ReadWord(0x2004), jitBus.ReadWord(0x2004));
+		Assert.True(jit.Counters.V2TraceHits > 0);
+		Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
+		Assert.True(jit.Counters.V2BusAccessBatchExecutions > 0);
+		Assert.True(jit.Counters.V2BusAccessBatchInstructions > 0);
+		Assert.DoesNotContain("MOVE.L Dn->(An)", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+		Assert.DoesNotContain("MOVE.W Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+		Assert.DoesNotContain("MOVE.B Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+	}
+
+	[Fact]
+	public void JitM68000PureGraphDoesNotTreatMemoryWriteMoveAsPureV2()
+	{
+		var words = new ushort[]
+		{
+			0x20C0, // MOVE.L D0,(A0)+
+			0x60FC  // BRA.S MOVE
+		};
+		var bus = CreateCodeBus();
+		WriteWords(bus, FastCodeBase, words);
+		var jit = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		jit.Reset(FastCodeBase, 0x4000);
+		jit.State.D[0] = 0x1234_5678;
+		jit.State.A[0] = 0x2000;
+
+		var executed = jit.ExecuteInstructions(220, jit.State.Cycles + 1_000_000, new PureBatchBoundary());
+
+		Assert.Equal(220, executed);
+		Assert.True(jit.Counters.CompiledTraces > 0);
+		Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
+		Assert.Equal(0, jit.Counters.V2TraceHits);
+		Assert.Equal(0, jit.Counters.V2BusAccessBatchExecutions);
+		Assert.Equal(0, jit.Counters.V2BusAccessBatchInstructions);
+		Assert.True(jit.Counters.V2RejectedUnsupportedEa > 0);
+		Assert.Contains("MOVE.L Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+	}
+
+	[Fact]
 	public void JitV2MemoryWriteMoveDoesNotReadDestination()
 	{
 		var words = new ushort[]
@@ -4838,6 +5019,101 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
+	}
+
+	[Fact]
+	public void JitV2BatchesRegisterBcdOperations()
+	{
+		var words = new ushort[]
+		{
+			0xC501, // ABCD D1,D2
+			0x8903, // SBCD D3,D4
+			0x4805, // NBCD D5
+			0xCD06, // ABCD D6,D6
+			0x60F6  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: false);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.D[1] = jit.State.D[1] = 0x09;
+		interpreter.State.D[2] = jit.State.D[2] = 0x90;
+		interpreter.State.D[3] = jit.State.D[3] = 0x01;
+		interpreter.State.D[4] = jit.State.D[4] = 0x50;
+		interpreter.State.D[5] = jit.State.D[5] = 0x01;
+		interpreter.State.D[6] = jit.State.D[6] = 0x49;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(800, 500_000, new PureBatchBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.True(jit.Counters.V2TraceHits > 0);
+		Assert.True(jit.Counters.PureTraceBatchExecutions > 0);
+		Assert.True(jit.Counters.PureTraceBatchInstructions > 0);
+		Assert.DoesNotContain("ABCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
+		Assert.DoesNotContain("SBCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
+		Assert.DoesNotContain("NBCD", jit.Counters.V2UnsupportedOperationTop ?? string.Empty);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+	}
+
+	[Fact]
+	public void JitV2DoesNotTreatMemoryBcdAsPureWhenBusAccessIsDisabled()
+	{
+		var words = new ushort[]
+		{
+			0xC308, // ABCD -(A0),-(A1)
+			0x8308, // SBCD -(A0),-(A1)
+			0x4812, // NBCD (A2)
+			0x60F8  // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		interpreterBus.WriteWord(0x1F00, 0x4900);
+		interpreterBus.WriteWord(0x2000, 0x4900);
+		interpreterBus.WriteWord(0x20FF, 0x5000);
+		interpreterBus.WriteWord(0x2100, 0x5000);
+		interpreterBus.WriteWord(0x2200, 0x2000);
+		jitBus.WriteWord(0x1F00, 0x4900);
+		jitBus.WriteWord(0x2000, 0x4900);
+		jitBus.WriteWord(0x20FF, 0x5000);
+		jitBus.WriteWord(0x2100, 0x5000);
+		jitBus.WriteWord(0x2200, 0x2000);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: false);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2001;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2101;
+		interpreter.State.A[2] = jit.State.A[2] = 0x2200;
+		interpreter.State.StatusRegister = jit.State.StatusRegister =
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
+
+		var interpreted = interpreter.ExecuteInstructions(80, null, new CountingBoundary());
+		var compiled = jit.ExecuteInstructions(80, 500_000, new PureBatchBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.Equal(0, jit.Counters.PureTraceBatchExecutions);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.D, jit.State.D);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(interpreterBus.ReadWord(0x1F00), jitBus.ReadWord(0x1F00));
+		Assert.Equal(interpreterBus.ReadWord(0x2000), jitBus.ReadWord(0x2000));
+		Assert.Equal(interpreterBus.ReadWord(0x20FF), jitBus.ReadWord(0x20FF));
+		Assert.Equal(interpreterBus.ReadWord(0x2100), jitBus.ReadWord(0x2100));
+		Assert.Equal(interpreterBus.ReadWord(0x2200), jitBus.ReadWord(0x2200));
 	}
 
 	[Fact]
