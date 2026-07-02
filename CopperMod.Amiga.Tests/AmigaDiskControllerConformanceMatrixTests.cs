@@ -383,6 +383,94 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void DiskReadDmaRequestIsServedAtExactFixedDiskSlot()
+	{
+		var bus = CreateBusWithTrack(0x1111);
+
+		StartDiskDma(bus, DmaBase, words: 1);
+		CompleteDiskDma(bus);
+
+		var dma = Assert.Single(CaptureDiskDmaAccesses(bus));
+		Assert.Equal(dma.GrantedCycle, dma.RequestedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Disk, AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(dma.GrantedCycle)));
+		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void DiskReadDmaRequestCreatedAfterLastDiskSlotWaitsUntilNextLine()
+	{
+		var trackBytes = Enumerable.Repeat((byte)0xFF, 32768).ToArray();
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		var readyCycle = PrepareDiskDma(bus);
+		var lineStart = ((readyCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine) + 2) *
+			AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var startCycle = lineStart + (0x0E * AmigaConstants.A500PalCpuCyclesPerColorClock);
+		var expectedSlot = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(startCycle, AgnusChipSlotOwner.Disk);
+
+		StartDiskDmaWithoutSelecting(bus, DmaBase, words: 1, startCycle);
+		bus.AdvanceDmaTo(expectedSlot - 1);
+
+		Assert.Empty(CaptureDiskDmaAccesses(bus));
+		Assert.Equal(0, ReadChipWord(bus, DmaBase));
+
+		bus.AdvanceDmaTo(expectedSlot);
+
+		var dma = Assert.Single(CaptureDiskDmaAccesses(bus));
+		Assert.Equal(expectedSlot, dma.RequestedCycle);
+		Assert.Equal(expectedSlot, dma.GrantedCycle);
+		Assert.Equal(0xFFFF, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void BlockedDiskSlotLeavesReadDmaRequestPending()
+	{
+		var bus = CreateBusWithTrack(0x1111);
+
+		StartDiskDma(bus, DmaBase, words: 1);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		var firstSlot = completionCycle - AgnusChipSlotScheduler.SlotCycles;
+		_ = bus.TryReserveDiskDmaWordThrough(0x2000, isWrite: false, firstSlot, firstSlot, out _);
+
+		bus.AdvanceDmaTo(firstSlot);
+		var blockedSnapshot = bus.Disk.CaptureSnapshot();
+
+		Assert.True(blockedSnapshot.ActiveDma);
+		Assert.Equal(DmaBase, blockedSnapshot.DiskPointer);
+		Assert.Equal(0x8001, blockedSnapshot.Dsklen);
+		Assert.Equal(0, ReadChipWord(bus, DmaBase));
+
+		var nextSlot = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(firstSlot + AgnusChipSlotScheduler.SlotCycles, AgnusChipSlotOwner.Disk);
+		bus.AdvanceDmaTo(nextSlot);
+
+		var diskDma = CaptureDiskDmaAccesses(bus)
+			.Where(access => access.Request.Address == DmaBase)
+			.Single();
+		Assert.Equal(nextSlot, diskDma.RequestedCycle);
+		Assert.Equal(nextSlot, diskDma.GrantedCycle);
+		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
+	}
+
+	[Fact]
+	public void DiskWriteDmaReadsChipWordAtExactFixedDiskSlot()
+	{
+		var disk = new WritableTrackDisk(AmigaEncodedTrack.FromBytes(WordsToBytes(0xAAAA)));
+		var bus = CreateDiskComponentBus();
+		bus.Disk.Drive0.Insert(disk, writeProtected: false);
+		WriteChipWord(bus, DmaBase, 0x5AA5);
+
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+		WriteDsklenStartSequence(bus, words: 1, cycle, writeMode: true);
+		CompleteDiskDma(bus);
+
+		var dma = Assert.Single(CaptureDiskDmaAccesses(bus));
+		Assert.True(dma.Request.IsWrite);
+		Assert.Equal(dma.GrantedCycle, dma.RequestedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Disk, AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(dma.GrantedCycle)));
+		Assert.Equal(0x5AA5, disk.Track.ReadUInt16AtBit(0));
+	}
+
+	[Fact]
 	public void DiskReadDmaReplaySerializesBusRequestsAcrossSplitAdvances()
 	{
 		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
@@ -1491,6 +1579,13 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	private static ushort ReadChipWord(AmigaBus bus, uint address)
 	{
 		return BigEndian.ReadUInt16(bus.ChipRam, checked((int)address), "disk DMA word");
+	}
+
+	private static AmigaBusAccessResult[] CaptureDiskDmaAccesses(AmigaBus bus)
+	{
+		return bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.DiskDma)
+			.ToArray();
 	}
 
 	private static void WriteChipWord(AmigaBus bus, uint address, ushort value)

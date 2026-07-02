@@ -989,6 +989,14 @@ namespace CopperMod.Amiga
         private long _activeDmaNextBusRequestCycle;
         private double _activeDmaCyclesPerBit;
         private DiskDmaWordLatch _diskDmaWordLatch;
+        private bool _activeDmaRequestPending;
+        private uint _activeDmaRequestTargetAddress;
+        private int _activeDmaRequestSourceBit;
+        private ushort _activeDmaRequestReadValue;
+        private long _activeDmaRequestCycle;
+        private long _activeDmaRequestServiceCycle;
+        private int _activeDmaRequestNextSourceBit;
+        private long _activeDmaRequestNextWordStartCycle;
         private byte[]? _activeWriteTrackData;
         private bool _activeWriteTrackMutated;
         private long _preparedTrackHits;
@@ -1751,6 +1759,11 @@ namespace CopperMod.Amiga
             if (_activeDmaTransferredWords >= _activeDmaRequestedWords)
             {
                 return _activeDmaCompletionCycle;
+            }
+
+            if (_activeDmaRequestPending)
+            {
+                return Math.Min(_activeDmaRequestServiceCycle, _activeDmaCompletionCycle);
             }
 
             var nextWordCompletionCycle = _activeDmaNextWordStartCycle + CyclesForBits(16, _activeDmaCyclesPerBit);
@@ -2521,7 +2534,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var advanceCycle = Math.Min(targetCycle, _activeDmaCompletionCycle);
+            var advanceCycle = targetCycle;
             if (_activeDmaTransferredWords < _activeDmaRequestedWords)
             {
                 var track = activeDrive.ReadEncodedTrack(_activeDmaCylinder, _activeDmaHead);
@@ -2529,6 +2542,16 @@ namespace CopperMod.Amiga
                 var preparedTrack = GetPreparedTrack(activeDrive, stream, track, _activeDmaCylinder, _activeDmaHead);
                 while (_activeDmaTransferredWords < _activeDmaRequestedWords)
                 {
+                    if (_activeDmaRequestPending)
+                    {
+                        if (!TryServeActiveDmaRequestThrough(advanceCycle))
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
                     var word = _activeDmaTransferredWords;
                     var plan = GetActiveDmaWordPlan(
                         preparedTrack,
@@ -2545,57 +2568,11 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    var busRequestCycle = Math.Max(plan.CompletionCycle, _activeDmaNextBusRequestCycle);
-                    var nextGrantCycle = _bus.PredictDiskDmaGrantCycle(busRequestCycle);
-                    if (nextGrantCycle > advanceCycle)
+                    CreateActiveDmaRequest(preparedTrack, word, plan);
+                    if (!TryServeActiveDmaRequestThrough(advanceCycle))
                     {
-                        _activeDmaCompletionCycle = Math.Max(
-                            _activeDmaCompletionCycle,
-                            _bus.PredictDiskDmaCompletionCycle(busRequestCycle));
                         break;
                     }
-
-                    var targetAddress = _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2);
-                    if (!_bus.TryReserveDiskDmaWordThrough(
-                            targetAddress,
-                            _activeDmaWriteMode,
-                            busRequestCycle,
-                            advanceCycle,
-                            out var diskReservation))
-                    {
-                        _activeDmaNextBusRequestCycle = Math.Max(busRequestCycle, diskReservation.GrantedCycle);
-                        _activeDmaCompletionCycle = Math.Max(
-                            _activeDmaCompletionCycle,
-                            _bus.PredictDiskDmaCompletionCycle(_activeDmaNextBusRequestCycle));
-                        break;
-                    }
-
-                    _activeDmaCompletionCycle = Math.Max(_activeDmaCompletionCycle, diskReservation.CompletedCycle);
-                    _activeDmaNextBusRequestCycle = diskReservation.CompletedCycle;
-                    _diskDmaWordLatch = LoadDiskDmaWordLatch(
-                        preparedTrack,
-                        targetAddress,
-                        plan.SourceBit,
-                        diskReservation);
-                    var value = ConsumeDiskDmaWordLatch(ref _diskDmaWordLatch);
-                    if (_traceRecorder != null)
-                    {
-                        AppendDivergenceTrace(
-                            AmigaDiskTraceEventKind.DmaWord,
-                            diskReservation.GrantedCycle,
-                            drive: _activeDmaDrive,
-                            requestedWords: _activeDmaRequestedWords,
-                            transferredWords: word + 1,
-                            sourceBit: plan.SourceBit,
-                            targetAddress: targetAddress,
-                            completionCycle: _activeDmaCompletionCycle,
-                            detail: _activeDmaWriteMode ? $"write=0x{value:X4}" : $"value=0x{value:X4}");
-                    }
-                    _activeDmaNextSourceBit = plan.NextSourceBit;
-                    _activeDmaNextWordStartCycle = plan.NextWordStartCycle;
-                    _activeDmaTransferredWords++;
-                    UpdateActiveDmaPointer();
-                    UpdateActiveDmaLength();
                 }
             }
 
@@ -2612,21 +2589,99 @@ namespace CopperMod.Amiga
             CompleteActiveDma();
         }
 
-        private DiskDmaWordLatch LoadDiskDmaWordLatch(
+        private void CreateActiveDmaRequest(
             AmigaPreparedTrack preparedTrack,
-            uint targetAddress,
-            int sourceBit,
-            AmigaDmaWordReservation diskReservation)
+            int word,
+            ActiveDmaWordPlan plan)
         {
-            var value = _activeDmaWriteMode
+            _activeDmaRequestTargetAddress = _bus.AddChipDmaPointerOffset(_activeDmaTargetAddress, word * 2);
+            _activeDmaRequestSourceBit = plan.SourceBit;
+            _activeDmaRequestReadValue = _activeDmaWriteMode
                 ? (ushort)0
-                : ReadPreparedUInt16(preparedTrack, sourceBit);
-            return new DiskDmaWordLatch(
-                _activeDmaWriteMode,
-                targetAddress,
-                sourceBit,
-                value,
-                diskReservation);
+                : ReadPreparedUInt16(preparedTrack, plan.SourceBit);
+            _activeDmaRequestCycle = Math.Max(plan.CompletionCycle, _activeDmaNextBusRequestCycle);
+            _activeDmaRequestServiceCycle = GetNextDiskDmaSlotCycle(_activeDmaRequestCycle);
+            _activeDmaRequestNextSourceBit = plan.NextSourceBit;
+            _activeDmaRequestNextWordStartCycle = plan.NextWordStartCycle;
+            _activeDmaRequestPending = true;
+            _activeDmaCompletionCycle = Math.Max(
+                _activeDmaCompletionCycle,
+                GetDiskDmaSlotCompletionCycle(_activeDmaRequestServiceCycle));
+        }
+
+        private bool TryServeActiveDmaRequestThrough(long targetCycle)
+        {
+            if (!_activeDmaRequestPending)
+            {
+                return true;
+            }
+
+            while (_activeDmaRequestServiceCycle <= targetCycle)
+            {
+                if (_bus.TryReserveDiskDmaWordExactSlot(
+                    _activeDmaRequestTargetAddress,
+                    _activeDmaWriteMode,
+                    _activeDmaRequestServiceCycle,
+                    out var diskReservation))
+                {
+                    _activeDmaCompletionCycle = Math.Max(_activeDmaCompletionCycle, diskReservation.CompletedCycle);
+                    _activeDmaNextBusRequestCycle = diskReservation.CompletedCycle;
+                    _diskDmaWordLatch = new DiskDmaWordLatch(
+                        _activeDmaWriteMode,
+                        _activeDmaRequestTargetAddress,
+                        _activeDmaRequestSourceBit,
+                        _activeDmaRequestReadValue,
+                        diskReservation);
+                    var value = ConsumeDiskDmaWordLatch(ref _diskDmaWordLatch);
+                    if (_traceRecorder != null)
+                    {
+                        AppendDivergenceTrace(
+                            AmigaDiskTraceEventKind.DmaWord,
+                            diskReservation.GrantedCycle,
+                            drive: _activeDmaDrive,
+                            requestedWords: _activeDmaRequestedWords,
+                            transferredWords: _activeDmaTransferredWords + 1,
+                            sourceBit: _activeDmaRequestSourceBit,
+                            targetAddress: _activeDmaRequestTargetAddress,
+                            completionCycle: _activeDmaCompletionCycle,
+                            detail: _activeDmaWriteMode ? $"write=0x{value:X4}" : $"value=0x{value:X4}");
+                    }
+
+                    _activeDmaNextSourceBit = _activeDmaRequestNextSourceBit;
+                    _activeDmaNextWordStartCycle = _activeDmaRequestNextWordStartCycle;
+                    _activeDmaTransferredWords++;
+                    UpdateActiveDmaPointer();
+                    UpdateActiveDmaLength();
+                    ClearActiveDmaRequest();
+                    return true;
+                }
+
+                _activeDmaRequestServiceCycle = GetNextDiskDmaSlotCycle(
+                    _activeDmaRequestServiceCycle + AgnusChipSlotScheduler.SlotCycles);
+            }
+
+            _activeDmaCompletionCycle = Math.Max(
+                _activeDmaCompletionCycle,
+                GetDiskDmaSlotCompletionCycle(_activeDmaRequestServiceCycle));
+            return false;
+        }
+
+        private long GetNextDiskDmaSlotCycle(long cycle)
+            => _bus.PredictDiskDmaGrantCycle(cycle);
+
+        private long GetDiskDmaSlotCompletionCycle(long slotCycle)
+            => _bus.PredictDiskDmaCompletionCycle(slotCycle);
+
+        private void ClearActiveDmaRequest()
+        {
+            _activeDmaRequestPending = false;
+            _activeDmaRequestTargetAddress = 0;
+            _activeDmaRequestSourceBit = 0;
+            _activeDmaRequestReadValue = 0;
+            _activeDmaRequestCycle = 0;
+            _activeDmaRequestServiceCycle = 0;
+            _activeDmaRequestNextSourceBit = 0;
+            _activeDmaRequestNextWordStartCycle = 0;
         }
 
         private ushort ConsumeDiskDmaWordLatch(ref DiskDmaWordLatch latch)
@@ -2971,6 +3026,7 @@ namespace CopperMod.Amiga
             _activeDmaNextBusRequestCycle = 0;
             _activeDmaCyclesPerBit = 0;
             _diskDmaWordLatch = default;
+            ClearActiveDmaRequest();
             _activeWriteTrackData = null;
             _activeWriteTrackMutated = false;
         }

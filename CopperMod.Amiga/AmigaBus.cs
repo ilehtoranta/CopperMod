@@ -2361,6 +2361,43 @@ namespace CopperMod.Amiga
             return granted;
         }
 
+        internal bool TryReserveDiskDmaWordExactSlot(
+            uint address,
+            bool isWrite,
+            long slotCycle,
+            out AmigaDmaWordReservation reservation)
+        {
+            address = MaskChipDmaAddress(address);
+            slotCycle = Math.Max(0, slotCycle);
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Disk,
+                AmigaBusAccessKind.DiskDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                slotCycle,
+                isWrite);
+            AmigaBusAccessResult access;
+            bool granted;
+            if (!_useChipSlotScheduler)
+            {
+                access = new AmigaBusAccessResult(request, slotCycle, slotCycle);
+                granted = true;
+            }
+            else
+            {
+                granted = TryReserveExactFixedDmaSlot(request, out access);
+            }
+
+            reservation = new AmigaDmaWordReservation(address, granted, access);
+            if (granted)
+            {
+                CaptureDmaReservation(in reservation);
+            }
+
+            return granted;
+        }
+
         internal ushort ReadChipDmaWordAtGrantedSlot(uint address, long grantedCycle)
         {
             address = MaskChipDmaAddress(address);
