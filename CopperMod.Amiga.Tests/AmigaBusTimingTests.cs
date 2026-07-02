@@ -1822,6 +1822,28 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void SlotContendedChipRamReadDoesNotAdvancePassiveDiskSyncInput()
+	{
+		var bus = new AmigaBus();
+		const long readyCycle = 20;
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x5AA5);
+		bus.Disk.Drive0.Insert(CreateSingleWordDisk(0x4489));
+		bus.Disk.Drive0.SetSelected(true);
+		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
+		var targetCycle = readyCycle + DiskByteCycleCount(trackByteLength: 2, byteCount: 2);
+
+		var chipCycle = targetCycle;
+		var chipValue = bus.ReadWord(0x00001000, ref chipCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(0x5AA5, chipValue);
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x9000);
+
+		var dskCycle = chipCycle;
+		var dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.NotEqual(0, dskbytr & 0x1000);
+	}
+
+	[Fact]
 	public void RegisterLatchReadsOnlyFlushDueCustomWrites()
 	{
 		var bus = new AmigaBus();

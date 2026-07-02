@@ -121,6 +121,27 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void M68040JitDoesNotTraceChipRamWhenInstructionCacheIsEnabled()
+	{
+		const uint chipCodeBase = 0x0000_1000;
+		var bus = new AmigaBus();
+		WriteWords(bus, chipCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(chipCodeBase, 0x4000);
+		EnableM68040InstructionCache(cpu);
+		var boundary = new PureBatchBoundary();
+
+		var interpreted = cpu.ExecuteInstructions(220, cpu.State.Cycles + 100_000, boundary);
+
+		Assert.Equal(220, interpreted);
+		Assert.Equal(0x0000_0001u, cpu.State.D[0]);
+		Assert.Equal(M68040InstructionCacheEnable, cpu.State.CacheControlRegister);
+		Assert.Equal(0, cpu.Counters.CompiledTraces);
+		Assert.Equal(0, cpu.Counters.TraceHits);
+		Assert.Equal(220, cpu.Counters.FallbackInstructions);
+	}
+
+	[Fact]
 	public void M68040JitAllowsRomTracesBeforeInstructionCacheIsEnabled()
 	{
 		const uint romBase = 0x00F8_0000;
@@ -3404,6 +3425,8 @@ public sealed class M68kJitCoreTests
 		{
 			0x2080, // MOVE.L D0,(A0)
 			0x30C1, // MOVE.W D1,(A0)+
+			0x20C9, // MOVE.L A1,(A0)+
+			0x20C8, // MOVE.L A0,(A0)+
 			0x10C2  // MOVE.B D2,(A0)+
 		};
 		var jitBus = CreateCodeBus();
@@ -3423,17 +3446,21 @@ public sealed class M68kJitCoreTests
 			jit.State.D[1] = 0x89AB_CDEF;
 			jit.State.D[2] = 0x7654_32A5;
 			jit.State.A[0] = 0x2000;
+			jit.State.A[1] = 0x2468_ACE0;
 			jitBus.WriteLong(0x2000, 0);
-			jitBus.WriteWord(0x2004, 0);
+			jitBus.WriteLong(0x2004, 0);
+			jitBus.WriteLong(0x2008, 0);
 			interpreter.State.ProgramCounter = FastCodeBase;
 			interpreter.State.D[0] = 0x1234_5678;
 			interpreter.State.D[1] = 0x89AB_CDEF;
 			interpreter.State.D[2] = 0x7654_32A5;
 			interpreter.State.A[0] = 0x2000;
+			interpreter.State.A[1] = 0x2468_ACE0;
 			interpreterBus.WriteLong(0x2000, 0);
-			interpreterBus.WriteWord(0x2004, 0);
-			var jitExecuted = jit.ExecuteInstructions(3, jit.State.Cycles + 100_000, boundary);
-			var interpreterExecuted = interpreter.ExecuteInstructions(3, null, new CountingBoundary());
+			interpreterBus.WriteLong(0x2004, 0);
+			interpreterBus.WriteLong(0x2008, 0);
+			var jitExecuted = jit.ExecuteInstructions(5, jit.State.Cycles + 100_000, boundary);
+			var interpreterExecuted = interpreter.ExecuteInstructions(5, null, new CountingBoundary());
 			Assert.Equal(interpreterExecuted, jitExecuted);
 		}
 
@@ -3442,13 +3469,15 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.Equal(interpreterBus.ReadLong(0x2000), jitBus.ReadLong(0x2000));
-		Assert.Equal(interpreterBus.ReadWord(0x2004), jitBus.ReadWord(0x2004));
+		Assert.Equal(interpreterBus.ReadLong(0x2004), jitBus.ReadLong(0x2004));
+		Assert.Equal(interpreterBus.ReadLong(0x2008), jitBus.ReadLong(0x2008));
 		Assert.True(jit.Counters.V2TraceHits > 0);
 		Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
 		Assert.True(jit.Counters.V2BusAccessBatchExecutions > 0);
 		Assert.True(jit.Counters.V2BusAccessBatchInstructions > 0);
 		Assert.DoesNotContain("MOVE.L Dn->(An)", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
 		Assert.DoesNotContain("MOVE.W Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+		Assert.DoesNotContain("MOVE.L An->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
 		Assert.DoesNotContain("MOVE.B Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
 	}
 
@@ -3463,6 +3492,7 @@ public sealed class M68kJitCoreTests
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, words);
 		var jit = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		jit.FallbackAttributionEnabled = true;
 		jit.Reset(FastCodeBase, 0x4000);
 		jit.State.D[0] = 0x1234_5678;
 		jit.State.A[0] = 0x2000;
@@ -3477,6 +3507,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(0, jit.Counters.V2BusAccessBatchInstructions);
 		Assert.True(jit.Counters.V2RejectedUnsupportedEa > 0);
 		Assert.Contains("MOVE.L Dn->(An)+", jit.Counters.V2UnsupportedEaTop ?? string.Empty);
+		Assert.Contains("MOVE.L Dn->(An)+", jit.Counters.FallbackInstructionTop ?? string.Empty);
+		Assert.Contains("0x", jit.Counters.FallbackRootTop ?? string.Empty);
 	}
 
 	[Fact]

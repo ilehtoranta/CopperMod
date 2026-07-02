@@ -423,7 +423,8 @@ namespace Copper68k
                 : M68020TimingModel.GetPlan(key);
 
         public bool ProbeInstructionCache(uint address)
-            => InstructionCache.Probe(address);
+            => _profile.IsInstructionCacheableAddress(address) &&
+                InstructionCache.Probe(address);
 
         public bool ProbeDataCache(uint address)
             => DataCache?.Probe(address) == true;
@@ -768,11 +769,7 @@ namespace Copper68k
                 return false;
             }
 
-            return _profile.GetBusTimingRule(address).Target is
-                M68020MemoryTarget.ExpansionRam or
-                M68020MemoryTarget.RealFastRam or
-                M68020MemoryTarget.Rom or
-                M68020MemoryTarget.HostTrap;
+            return M68020CpuProfile.IsInstructionCacheableTarget(_profile.GetBusTimingRule(address).Target);
         }
 
         private bool CanUseFastNonChipMemoryAccess(uint address, M68kBusAccessKind accessKind)

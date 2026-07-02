@@ -219,8 +219,7 @@ namespace CopperMod.Amiga
                 _paulaEvents++;
             }
 
-            if (HasDiskWakeSourceThrough(cycle, SlotContendedMemoryAccessMask) &&
-                HasDiskWorkThrough(cycle, SlotContendedMemoryAccessMask))
+            if (HasSlotContendedDiskWorkThrough(cycle))
             {
                 var start = Stopwatch.GetTimestamp();
                 _bus.Disk.AdvanceEventsTo(cycle);
@@ -256,8 +255,7 @@ namespace CopperMod.Amiga
                 InvalidateWakeAgenda();
             }
 
-            if (HasDiskWakeSourceThrough(targetCycle, SlotContendedMemoryAccessMask) &&
-                HasDiskWorkThrough(targetCycle, SlotContendedMemoryAccessMask))
+            if (HasSlotContendedDiskWorkThrough(targetCycle))
             {
                 var start = Stopwatch.GetTimestamp();
                 _bus.Disk.AdvanceEventsTo(targetCycle);

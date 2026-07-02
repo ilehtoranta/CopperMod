@@ -192,6 +192,16 @@ namespace Copper68k
             return new M68020BusTimingRule(target, M68020BusWidth.Word, 0);
         }
 
+        internal bool IsInstructionCacheableAddress(uint address)
+            => IsInstructionCacheableTarget(ClassifyTarget(address));
+
+        internal static bool IsInstructionCacheableTarget(M68020MemoryTarget target)
+            => target is
+                M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or
+                M68020MemoryTarget.Rom or
+                M68020MemoryTarget.HostTrap;
+
         internal static M68020MemoryTarget ClassifyTarget(uint address)
         {
             address &= 0x00FF_FFFF;

@@ -162,8 +162,13 @@ namespace Copper68k
         private readonly Dictionary<string, long> _pureTraceBatchWakeSources = new Dictionary<string, long>();
         private readonly Dictionary<string, long> _v2BusAccessBatchLengthBuckets = new Dictionary<string, long>();
         private readonly Dictionary<string, long> _v2BusAccessBatchWakeSources = new Dictionary<string, long>();
+        private readonly Dictionary<M68kJitFallbackReason, long> _fallbackReasonCauses = new Dictionary<M68kJitFallbackReason, long>();
+        private readonly Dictionary<M68kJitFallbackInstructionKey, long> _fallbackInstructionCauses = new Dictionary<M68kJitFallbackInstructionKey, long>();
+        private readonly Dictionary<M68kJitFallbackRootKey, long> _fallbackRootCauses = new Dictionary<M68kJitFallbackRootKey, long>();
+        private readonly Dictionary<ulong, string> _fallbackInstructionCauseCache = new Dictionary<ulong, string>();
         private readonly Dictionary<ulong, TraceEntry> _v2HandoffTraceCache = new Dictionary<ulong, TraceEntry>();
         private readonly Dictionary<ulong, V2HandoffBlockCacheEntry> _v2HandoffBlockCache = new Dictionary<ulong, V2HandoffBlockCacheEntry>();
+        private M68kJitFallbackReason _pendingFallbackReason;
         private bool _v2PendingOutOfBlockBranch;
         private uint _v2PendingOutOfBlockBranchRoot;
         private uint _v2PendingOutOfBlockBranchTarget;
@@ -462,6 +467,7 @@ namespace Copper68k
             _asyncJitEnabled = options.EnableAsyncJit;
             _asyncJitSyncFallbackEnabled = options.EnableAsyncJitSyncFallback;
             State = new M68kCpuState();
+            FallbackAttributionEnabled = IsFallbackAttributionEnabledByDefault();
             _fallback = options.FallbackFactory?.Invoke(State, _instructionFrequency, _cpuModel) ??
                 CreateFallback(bus, State, _instructionFrequency, _cpuModel);
             if (_asyncJitEnabled)
@@ -489,6 +495,8 @@ namespace Copper68k
 
         public M68kCpuState State { get; }
 
+        internal bool FallbackAttributionEnabled { get; set; }
+
         public M68kJitCounters Counters
         {
             get
@@ -505,6 +513,18 @@ namespace Copper68k
                 counters.PureTraceBatchWakeSourceTop = FormatV2DiagnosticTop(_pureTraceBatchWakeSources);
                 counters.V2BusAccessBatchLengthHistogram = FormatBatchLengthHistogram(_v2BusAccessBatchLengthBuckets);
                 counters.V2BusAccessBatchWakeSourceTop = FormatV2DiagnosticTop(_v2BusAccessBatchWakeSources);
+                if (FallbackAttributionEnabled)
+                {
+                    counters.FallbackReasonTop = FormatFallbackReasonTop(_fallbackReasonCauses);
+                    counters.FallbackInstructionTop = FormatFallbackInstructionTop(_fallbackInstructionCauses);
+                    counters.FallbackRootTop = FormatFallbackRootTop(_fallbackRootCauses);
+                }
+                else
+                {
+                    counters.FallbackReasonTop = string.Empty;
+                    counters.FallbackInstructionTop = string.Empty;
+                    counters.FallbackRootTop = string.Empty;
+                }
                 if (_asyncCompiler != null)
                 {
                     counters.AsyncMaxQueueDepth = Math.Max(counters.AsyncMaxQueueDepth, _asyncCompiler.MaxQueueDepth);
@@ -609,6 +629,14 @@ namespace Copper68k
         private static bool IsAsyncJitSyncFallbackEnabledByDefault()
         {
             var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC_SYNC_FALLBACK");
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsFallbackAttributionEnabledByDefault()
+        {
+            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_FALLBACK_ATTRIBUTION");
             return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
@@ -733,8 +761,10 @@ namespace Copper68k
             IM68kInstructionBoundary boundary,
             bool allowV2TraceHandoff = true)
         {
+            _pendingFallbackReason = M68kJitFallbackReason.Unknown;
             if (!CanUseJitForCurrentCacheState())
             {
+                _pendingFallbackReason = M68kJitFallbackReason.CacheState;
                 return 0;
             }
 
@@ -742,34 +772,50 @@ namespace Copper68k
             if (_amigaBus != null && !IsJitEligibleInstructionAddress(pc))
             {
                 RemoveTrace(pc);
+                _pendingFallbackReason = M68kJitFallbackReason.IneligibleAddress;
                 return 0;
             }
 
             if (!_traces.TryGetValue(pc, out var trace))
             {
+                _pendingFallbackReason = GetNoTraceFallbackReason(pc);
                 return 0;
             }
 
             if (!TryValidateTraceGeneration(pc, ref trace))
             {
+                _pendingFallbackReason = M68kJitFallbackReason.GenerationMismatch;
                 return 0;
             }
 
             var v2BatchExecuted = TryExecuteV2TraceBatch(trace, maxInstructions, targetCycle, boundary, allowV2TraceHandoff);
             if (v2BatchExecuted.HasValue)
             {
+                if (v2BatchExecuted.Value == 0)
+                {
+                    _pendingFallbackReason = M68kJitFallbackReason.V2ExecuteZero;
+                }
+
                 return v2BatchExecuted.Value;
             }
 
             var pureBatchExecuted = TryExecutePureTraceBatch(trace, maxInstructions, targetCycle, boundary);
             if (pureBatchExecuted.HasValue)
             {
+                if (pureBatchExecuted.Value == 0)
+                {
+                    _pendingFallbackReason = M68kJitFallbackReason.PureBatchExecuteZero;
+                }
+
                 return pureBatchExecuted.Value;
             }
 
             var compiled = trace.Compiled;
             if (compiled == null)
             {
+                _pendingFallbackReason = trace.V2Compiled == null
+                    ? M68kJitFallbackReason.NoCompiledDelegate
+                    : M68kJitFallbackReason.V2OnlyNoBatch;
                 return 0;
             }
 
@@ -778,6 +824,7 @@ namespace Copper68k
             if (executed == 0)
             {
                 _counters.SideExits++;
+                _pendingFallbackReason = M68kJitFallbackReason.ClassicSideExit;
             }
             else
             {
@@ -815,6 +862,21 @@ namespace Copper68k
             _counters.GenerationMismatches++;
             _counters.GenerationGuardExits++;
             return false;
+        }
+
+        private M68kJitFallbackReason GetNoTraceFallbackReason(uint pc)
+        {
+            if (_blacklist.ContainsKey(pc))
+            {
+                return M68kJitFallbackReason.Blacklisted;
+            }
+
+            if (_hotCounters.ContainsKey(pc))
+            {
+                return M68kJitFallbackReason.Warming;
+            }
+
+            return M68kJitFallbackReason.NoTrace;
         }
 
         private int? TryExecuteV2TraceBatch(
@@ -1828,6 +1890,7 @@ namespace Copper68k
             _fallback.ExecuteInstruction();
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
+            RecordFallbackAttribution(root, opcodeAvailable, opcode);
             if (opcodeAvailable && _cpuModel == M68kJitCpuModel.M68040 && IsM68040FpuOpcode(opcode))
             {
                 _counters.M68040FpuFallbackInstructions++;
@@ -1841,6 +1904,67 @@ namespace Copper68k
 
             ObserveHotRoot(root);
             return true;
+        }
+
+        private void RecordFallbackAttribution(
+            uint pc,
+            bool opcodeAvailable,
+            ushort opcode,
+            M68kJitFallbackReason? reasonOverride = null)
+        {
+            if (!FallbackAttributionEnabled)
+            {
+                return;
+            }
+
+            var reason = reasonOverride ?? _pendingFallbackReason;
+            if (reason == M68kJitFallbackReason.Unknown)
+            {
+                reason = M68kJitFallbackReason.NoTrace;
+            }
+
+            _fallbackReasonCauses.TryGetValue(reason, out var reasonCount);
+            _fallbackReasonCauses[reason] = reasonCount + 1;
+
+            var causeKey = GetFallbackInstructionCauseKey(pc, opcodeAvailable, opcode, out var cause);
+            var instructionKey = new M68kJitFallbackInstructionKey(reason, cause);
+            _fallbackInstructionCauses.TryGetValue(instructionKey, out var instructionCount);
+            _fallbackInstructionCauses[instructionKey] = instructionCount + 1;
+
+            var rootKey = new M68kJitFallbackRootKey(reason, causeKey);
+            _fallbackRootCauses.TryGetValue(rootKey, out var rootCount);
+            _fallbackRootCauses[rootKey] = rootCount + 1;
+        }
+
+        private ulong GetFallbackInstructionCauseKey(uint pc, bool opcodeAvailable, ushort opcode, out string cause)
+        {
+            var normalizedPc = Normalize(pc);
+            var opcodePart = opcodeAvailable ? opcode : 0x1_0000u;
+            var key = ((ulong)normalizedPc << 17) | opcodePart;
+            if (_fallbackInstructionCauseCache.TryGetValue(key, out cause!))
+            {
+                return key;
+            }
+
+            cause = FormatFallbackInstructionCause(normalizedPc, opcodeAvailable, opcode);
+            _fallbackInstructionCauseCache[key] = cause;
+            return key;
+        }
+
+        private string FormatFallbackInstructionCause(uint pc, bool opcodeAvailable, ushort opcode)
+        {
+            if (_amigaBus != null &&
+                M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out _, _cpuModel))
+            {
+                return FormatV2InstructionCause(instruction);
+            }
+
+            if (opcodeAvailable)
+            {
+                return "opcode:0x" + opcode.ToString("X4");
+            }
+
+            return "fetch";
         }
 
         private static bool IsM68040FpuOpcode(ushort opcode)
@@ -2347,6 +2471,7 @@ namespace Copper68k
             State.Cycles++;
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
+            RecordFallbackAttribution(Normalize(State.ProgramCounter), opcodeAvailable: false, opcode: 0, M68kJitFallbackReason.Stopped);
             return true;
         }
 
@@ -5370,6 +5495,11 @@ namespace Copper68k
 
         private static void EmitV2Move(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
         {
+            if (TryEmitV2RegisterToSimpleMemoryMove(il, context, instruction))
+            {
+                return;
+            }
+
             var value = il.DeclareLocal(typeof(uint));
             EmitV2LoadSourceValue(il, context, instruction.Source, instruction.Size);
             il.Emit(OpCodes.Stloc, value);
@@ -5387,6 +5517,53 @@ namespace Copper68k
 
             context.EmitSetPendingLogic(value, instruction.Size);
             context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+        }
+
+        private static bool TryEmitV2RegisterToSimpleMemoryMove(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction)
+        {
+            if (instruction.Source.Kind is not (M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister) ||
+                instruction.Destination.Kind is not (M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement))
+            {
+                return false;
+            }
+
+            var value = il.DeclareLocal(typeof(uint));
+            if (instruction.Source.Kind == M68kJitEaKind.DataRegister)
+            {
+                context.EmitLoadDataRegister(instruction.Source.Register, instruction.Size);
+            }
+            else
+            {
+                context.EmitLoadAddressRegister(instruction.Source.Register);
+                if (instruction.Size == M68kOperandSize.Word)
+                {
+                    EmitLoadUIntConstant(il, 0xFFFF);
+                    il.Emit(OpCodes.And);
+                }
+            }
+
+            il.Emit(OpCodes.Stloc, value);
+
+            var address = il.DeclareLocal(typeof(uint));
+            context.EmitLoadAddressRegister(instruction.Destination.Register);
+            il.Emit(OpCodes.Stloc, address);
+            if (instruction.Destination.Kind == M68kJitEaKind.AddressPostincrement)
+            {
+                var updated = il.DeclareLocal(typeof(uint));
+                il.Emit(OpCodes.Ldloc, address);
+                EmitLoadUIntConstant(il, AddressIncrement(instruction.Destination.Register, instruction.Size));
+                il.Emit(OpCodes.Add);
+                il.Emit(OpCodes.Stloc, updated);
+                context.EmitStoreAddressRegister(instruction.Destination.Register, updated);
+            }
+
+            EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
+            context.EmitSetPendingLogic(value, instruction.Size);
+            context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            return true;
         }
 
         private static void EmitV2Movea(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -7474,6 +7651,146 @@ namespace Copper68k
 
             return builder.ToString();
         }
+
+        private static string FormatFallbackReasonTop(Dictionary<M68kJitFallbackReason, long> counters)
+        {
+            if (counters.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var entries = new List<KeyValuePair<M68kJitFallbackReason, long>>(counters);
+            entries.Sort((left, right) =>
+            {
+                var countComparison = right.Value.CompareTo(left.Value);
+                return countComparison != 0
+                    ? countComparison
+                    : string.CompareOrdinal(FormatFallbackReason(left.Key), FormatFallbackReason(right.Key));
+            });
+
+            var builder = new StringBuilder();
+            var count = Math.Min(V2DiagnosticTopCount, entries.Count);
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append('|');
+                }
+
+                builder.Append(FormatFallbackReason(entries[i].Key));
+                builder.Append(':');
+                builder.Append(entries[i].Value);
+            }
+
+            return builder.ToString();
+        }
+
+        private static string FormatFallbackInstructionTop(Dictionary<M68kJitFallbackInstructionKey, long> counters)
+        {
+            if (counters.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var entries = new List<KeyValuePair<M68kJitFallbackInstructionKey, long>>(counters);
+            entries.Sort((left, right) =>
+            {
+                var countComparison = right.Value.CompareTo(left.Value);
+                if (countComparison != 0)
+                {
+                    return countComparison;
+                }
+
+                var reasonComparison = string.CompareOrdinal(
+                    FormatFallbackReason(left.Key.Reason),
+                    FormatFallbackReason(right.Key.Reason));
+                return reasonComparison != 0
+                    ? reasonComparison
+                    : string.CompareOrdinal(left.Key.Cause, right.Key.Cause);
+            });
+
+            var builder = new StringBuilder();
+            var count = Math.Min(V2DiagnosticTopCount, entries.Count);
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append('|');
+                }
+
+                builder.Append(FormatFallbackReason(entries[i].Key.Reason));
+                builder.Append(':');
+                builder.Append(SanitizeV2DiagnosticText(entries[i].Key.Cause));
+                builder.Append(':');
+                builder.Append(entries[i].Value);
+            }
+
+            return builder.ToString();
+        }
+
+        private string FormatFallbackRootTop(Dictionary<M68kJitFallbackRootKey, long> counters)
+        {
+            if (counters.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var entries = new List<KeyValuePair<M68kJitFallbackRootKey, long>>(counters);
+            entries.Sort((left, right) =>
+            {
+                var countComparison = right.Value.CompareTo(left.Value);
+                if (countComparison != 0)
+                {
+                    return countComparison;
+                }
+
+                var reasonComparison = string.CompareOrdinal(
+                    FormatFallbackReason(left.Key.Reason),
+                    FormatFallbackReason(right.Key.Reason));
+                return reasonComparison != 0
+                    ? reasonComparison
+                    : left.Key.CauseKey.CompareTo(right.Key.CauseKey);
+            });
+
+            var builder = new StringBuilder();
+            var count = Math.Min(V2DiagnosticTopCount, entries.Count);
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append('|');
+                }
+
+                var key = entries[i].Key;
+                builder.Append(FormatFallbackReason(key.Reason));
+                builder.Append(":0x");
+                builder.Append(((uint)(key.CauseKey >> 17)).ToString("X6"));
+                builder.Append(' ');
+                builder.Append(SanitizeV2DiagnosticText(_fallbackInstructionCauseCache[key.CauseKey]));
+                builder.Append(':');
+                builder.Append(entries[i].Value);
+            }
+
+            return builder.ToString();
+        }
+
+        private static string FormatFallbackReason(M68kJitFallbackReason reason)
+            => reason switch
+            {
+                M68kJitFallbackReason.CacheState => "cache-state",
+                M68kJitFallbackReason.IneligibleAddress => "ineligible",
+                M68kJitFallbackReason.NoTrace => "no-trace",
+                M68kJitFallbackReason.Warming => "warming",
+                M68kJitFallbackReason.Blacklisted => "blacklisted",
+                M68kJitFallbackReason.GenerationMismatch => "generation",
+                M68kJitFallbackReason.V2ExecuteZero => "v2-zero",
+                M68kJitFallbackReason.PureBatchExecuteZero => "pure-zero",
+                M68kJitFallbackReason.NoCompiledDelegate => "no-compiled",
+                M68kJitFallbackReason.V2OnlyNoBatch => "v2-only-no-batch",
+                M68kJitFallbackReason.ClassicSideExit => "classic-side-exit",
+                M68kJitFallbackReason.Stopped => "stopped",
+                _ => "unknown"
+            };
 
         private static string SanitizeV2DiagnosticText(string value)
             => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
@@ -10621,6 +10938,11 @@ namespace Copper68k
             _v2DisabledRootReasons.Clear();
             _v2HandoffTraceCache.Clear();
             _v2HandoffBlockCache.Clear();
+            _fallbackReasonCauses.Clear();
+            _fallbackInstructionCauses.Clear();
+            _fallbackRootCauses.Clear();
+            _fallbackInstructionCauseCache.Clear();
+            _pendingFallbackReason = M68kJitFallbackReason.Unknown;
             unchecked
             {
                 _asyncCompileEpoch++;
@@ -11094,21 +11416,29 @@ namespace Copper68k
 
         private bool CanUseJitForCacheState(uint root)
         {
-            if (_cpuModel != M68kJitCpuModel.M68040 ||
-                (State.CacheControlRegister & M68040InstructionCacheEnable) != 0)
+            if (_cpuModel != M68kJitCpuModel.M68040)
             {
                 return true;
             }
 
-            return _amigaBus != null &&
-                TryTranslateM68040Address(
-                    root,
-                    M68kBusAccessKind.CpuInstructionFetch,
-                    write: false,
+            if (_amigaBus == null ||
+                !TryTranslateM68040Address(
+                        root,
+                        M68kBusAccessKind.CpuInstructionFetch,
+                        write: false,
+                        byteCount: 2,
+                        out var physical,
+                        out _))
+            {
+                return false;
+            }
+
+            return (State.CacheControlRegister & M68040InstructionCacheEnable) != 0
+                ? _amigaBus.IsJitCodeAddress(
+                    physical,
                     byteCount: 2,
-                    out var physical,
-                    out _) &&
-                _amigaBus.IsJitReadOnlyCodeAddress(
+                    M68kBusAccessKind.CpuInstructionFetch)
+                : _amigaBus.IsJitReadOnlyCodeAddress(
                     physical,
                     byteCount: 2,
                     M68kBusAccessKind.CpuInstructionFetch);
@@ -12056,12 +12386,73 @@ namespace Copper68k
             V2Only
         }
 
+        private enum M68kJitFallbackReason
+        {
+            Unknown,
+            CacheState,
+            IneligibleAddress,
+            NoTrace,
+            Warming,
+            Blacklisted,
+            GenerationMismatch,
+            V2ExecuteZero,
+            PureBatchExecuteZero,
+            NoCompiledDelegate,
+            V2OnlyNoBatch,
+            ClassicSideExit,
+            Stopped
+        }
+
         private enum M68kAsyncJitQueueResult
         {
             Queued,
             DedupedPending,
             DedupedCompiling,
             Dropped
+        }
+
+        private readonly struct M68kJitFallbackInstructionKey : IEquatable<M68kJitFallbackInstructionKey>
+        {
+            public M68kJitFallbackInstructionKey(M68kJitFallbackReason reason, string cause)
+            {
+                Reason = reason;
+                Cause = cause;
+            }
+
+            public M68kJitFallbackReason Reason { get; }
+
+            public string Cause { get; }
+
+            public bool Equals(M68kJitFallbackInstructionKey other)
+                => Reason == other.Reason && string.Equals(Cause, other.Cause, StringComparison.Ordinal);
+
+            public override bool Equals(object? obj)
+                => obj is M68kJitFallbackInstructionKey other && Equals(other);
+
+            public override int GetHashCode()
+                => HashCode.Combine(Reason, StringComparer.Ordinal.GetHashCode(Cause));
+        }
+
+        private readonly struct M68kJitFallbackRootKey : IEquatable<M68kJitFallbackRootKey>
+        {
+            public M68kJitFallbackRootKey(M68kJitFallbackReason reason, ulong causeKey)
+            {
+                Reason = reason;
+                CauseKey = causeKey;
+            }
+
+            public M68kJitFallbackReason Reason { get; }
+
+            public ulong CauseKey { get; }
+
+            public bool Equals(M68kJitFallbackRootKey other)
+                => Reason == other.Reason && CauseKey == other.CauseKey;
+
+            public override bool Equals(object? obj)
+                => obj is M68kJitFallbackRootKey other && Equals(other);
+
+            public override int GetHashCode()
+                => HashCode.Combine(Reason, CauseKey);
         }
 
         private readonly struct M68kJitCompileKey : IEquatable<M68kJitCompileKey>
@@ -13103,6 +13494,12 @@ namespace Copper68k
         public long Invalidations { get; set; }
 
         public long FallbackInstructions { get; set; }
+
+        public string? FallbackReasonTop { get; set; }
+
+        public string? FallbackInstructionTop { get; set; }
+
+        public string? FallbackRootTop { get; set; }
 
         public long NativeM68040FpuIlInstructions { get; set; }
 

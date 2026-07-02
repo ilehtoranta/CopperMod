@@ -556,16 +556,26 @@ namespace CopperMod.Amiga
             var candidate = long.MaxValue;
             candidate = Min(candidate, GetNextPaulaDmaEventCycle(currentCycle, targetCycle));
 
-            if (HasDiskWakeSourceThrough(targetCycle, SlotContendedMemoryAccessMask))
-            {
-                candidate = Min(
-                    candidate,
-                    GetNextDiskEventCycle(currentCycle, targetCycle, SlotContendedMemoryAccessMask));
-            }
+            candidate = Min(candidate, GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle));
 
             candidate = Min(candidate, _bus.GetNextAgnusEventCycle(currentCycle, targetCycle));
             candidate = Min(candidate, _bus.Blitter.GetNextWakeCandidateCycle(currentCycle, targetCycle));
             return candidate;
+        }
+
+        private long GetNextSlotContendedDiskEventCycle(long currentCycle, long targetCycle)
+        {
+            if (!HasSlotContendedDiskWorkThrough(targetCycle))
+            {
+                return long.MaxValue;
+            }
+
+            if (HasSlotContendedDiskWorkThrough(currentCycle))
+            {
+                return currentCycle;
+            }
+
+            return _bus.Disk.GetNextSlotDmaWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
         }
 
         private void ProcessEventsAt(long cycle, AmigaHardwareEventMask mask)
@@ -649,8 +659,7 @@ namespace CopperMod.Amiga
                 _paulaEvents++;
             }
 
-            if (HasDiskWakeSourceThrough(cycle, SlotContendedMemoryAccessMask) &&
-                HasDiskWorkThrough(cycle, SlotContendedMemoryAccessMask))
+            if (HasSlotContendedDiskWorkThrough(cycle))
             {
                 _bus.Disk.AdvanceEventsTo(cycle);
                 InvalidateDiskWakeFalseCache();
@@ -678,8 +687,7 @@ namespace CopperMod.Amiga
                 InvalidateWakeAgenda();
             }
 
-            if (HasDiskWakeSourceThrough(targetCycle, SlotContendedMemoryAccessMask) &&
-                HasDiskWorkThrough(targetCycle, SlotContendedMemoryAccessMask))
+            if (HasSlotContendedDiskWorkThrough(targetCycle))
             {
                 _bus.Disk.AdvanceEventsTo(targetCycle);
                 InvalidateDiskWakeFalseCache();
@@ -795,9 +803,11 @@ namespace CopperMod.Amiga
         private bool HasSlotContendedSameCycleWork(long cycle)
         {
             return _bus.Paula.HasDmaWorkThrough(cycle) ||
-                (HasDiskWakeSourceThrough(cycle, SlotContendedMemoryAccessMask) &&
-                    HasDiskWorkThrough(cycle, SlotContendedMemoryAccessMask));
+                HasSlotContendedDiskWorkThrough(cycle);
         }
+
+        private bool HasSlotContendedDiskWorkThrough(long cycle)
+            => _bus.Disk.HasSlotDmaWakeSourceThrough(cycle);
 
         private long GetNextPaulaEventCycle(long currentCycle, long targetCycle)
         {
