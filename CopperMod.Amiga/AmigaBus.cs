@@ -2914,27 +2914,34 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind kind,
             bool isWrite)
         {
-            // Ultra-fast path: chip/expansion RAM read with no pending hardware events.
+            // Layer 1: single-comparison fast path for the ~80% common case
+            // (chip/expansion RAM read, no pending events, blitter idle, no slot scheduler).
             if (!isWrite &&
                 (target == AmigaBusAccessTarget.ChipRam || target == AmigaBusAccessTarget.ExpansionRam) &&
                 _hardwareScheduler.IsSlotContendedCleanThrough(requestedCycle) &&
-                !Blitter.Busy)
+                !Blitter.Busy &&
+                (!_useChipSlotScheduler || !ShouldUseChipSlotScheduler(target)))
             {
                 requestedCycle = Math.Max(0, requestedCycle);
-                var fastRequest = new AmigaBusAccessRequest(
-                    AmigaBusRequester.Cpu,
-                    kind,
-                    target,
-                    address,
-                    size,
+                return new AmigaBusAccessResult(
+                    new AmigaBusAccessRequest(AmigaBusRequester.Cpu, kind, target, address, size, requestedCycle, isWrite),
                     requestedCycle,
-                    isWrite);
-                if (!_useChipSlotScheduler || !ShouldUseChipSlotScheduler(target))
-                {
-                    return new AmigaBusAccessResult(fastRequest, requestedCycle, requestedCycle);
-                }
+                    requestedCycle);
             }
 
+            // Layer 2+3: full drain, blitter stall, slot arbitration.
+            return GrantCpuAccessSlow(target, address, size, requestedCycle, kind, isWrite);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private AmigaBusAccessResult GrantCpuAccessSlow(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            AmigaBusAccessKind kind,
+            bool isWrite)
+        {
             if (target == AmigaBusAccessTarget.ChipRam ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
                 target == AmigaBusAccessTarget.RealTimeClock ||
