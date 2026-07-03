@@ -4733,6 +4733,10 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AddInstructionCycles(int cycles)
         {
+            System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            System.Diagnostics.Debug.Assert(
+                _instructionCycleFloorActive,
+                "AddInstructionCycles may only be called while an instruction cycle floor is active.");
             _instructionCycleFloor = Math.Max(_instructionCycleFloor, _instructionCycleStart + cycles);
         }
 
