@@ -24,7 +24,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Copper6510\Copper6510.csproj" />
     <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
-    <ProjectReference Include="..\CopperMod.PerformanceAnalyzers\CopperMod.PerformanceAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <PackageReference Include="HotPathGuard.Abstractions" Version="0.1.0" />
+    <PackageReference Include="HotPathGuard.Analyzers" Version="0.1.0" PrivateAssets="all" />
     <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 

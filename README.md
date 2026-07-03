@@ -40,9 +40,9 @@ dotnet test .\CopperMod.sln
 ## Performance Guardrails
 
 CopperScreen's A500 runtime hot paths must not allocate managed objects after
-warmup. Methods and types marked with `[HotPath]` are checked by the local
-`CopperMod.PerformanceAnalyzers` Roslyn analyzer, and analyzer diagnostics are
-treated as build errors.
+warmup. Methods and types marked with `[HotPath]` are checked by the
+`HotPathGuard.Analyzers` Roslyn analyzer, and analyzer diagnostics are treated
+as build errors.
 
 Avoid LINQ, string formatting, closures, iterator or async state machines,
 boxing, heap arrays, and reference-type `new` in hot-path code. Prefer
