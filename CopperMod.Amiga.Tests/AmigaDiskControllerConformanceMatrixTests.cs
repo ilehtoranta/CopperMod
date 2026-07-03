@@ -802,6 +802,11 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		cycle = MotorReadyCycle();
 		var ready = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.NotEqual(0, ready & 0x20);
+
+		bus.AdvanceDmaTo(MotorReadyCycle());
+		cycle = MotorReadyCycle();
+		ready = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.Equal(0, ready & 0x20);
 	}
 

@@ -2234,12 +2234,6 @@ namespace CopperMod.Amiga
             return offset is DskDatr or DskBytr or DskPth or DskPtl or DskLen or DskSync;
         }
 
-        internal static bool RequiresPassiveInputAdvance(uint customRegisterAddress)
-        {
-            var offset = (ushort)(customRegisterAddress & 0x01FE);
-            return offset is DskDatr or DskBytr;
-        }
-
         private ushort ReadDskbytr()
         {
             var value = PeekDskbytr();

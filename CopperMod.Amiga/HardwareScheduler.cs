@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga
 {
@@ -24,8 +25,7 @@ namespace CopperMod.Amiga
             AmigaHardwareEventMask.Blitter;
         private const AmigaHardwareEventMask DiskWakeCacheKeyMask =
             AmigaHardwareEventMask.DiskEvents |
-            AmigaHardwareEventMask.DiskPassiveInput |
-            AmigaHardwareEventMask.DiskRegisterSample;
+            AmigaHardwareEventMask.DiskPassiveInput;
 
         private readonly AmigaBus _bus;
         private long _lastDrainCycle;
@@ -39,6 +39,12 @@ namespace CopperMod.Amiga
         private long _agnusDrainCycle;
         private long _blitterDrainCycle;
         private long _earliestDirtyCycle = long.MaxValue;
+        /// <summary>
+        /// Cached minimum of drain cycles for the <see cref="SlotContendedMemoryAccessMask"/>.
+        /// When <c>targetCycle &lt;= _slotContendedCleanThroughCycle</c> and no dirty/generation
+        /// invalidation, the drain can be skipped with a single comparison.
+        /// </summary>
+        private long _slotContendedCleanThroughCycle = -1;
         private ulong _generation;
         private ulong _lastCleanGeneration;
         private bool _hasDrained;
@@ -90,6 +96,7 @@ namespace CopperMod.Amiga
             _agnusDrainCycle = -1;
             _blitterDrainCycle = -1;
             _earliestDirtyCycle = long.MaxValue;
+            _slotContendedCleanThroughCycle = -1;
             _generation = 0;
             _lastCleanGeneration = 0;
             _hasDrained = false;
@@ -118,6 +125,7 @@ namespace CopperMod.Amiga
             cycle = Math.Max(0, cycle);
             InvalidateWakeAgenda();
             InvalidateDiskWakeFalseCache();
+            _slotContendedCleanThroughCycle = Math.Min(_slotContendedCleanThroughCycle, cycle - 1);
             _bus.InvalidateRasterlineSchedule(cycle, AmigaHardwareEventMask.All);
             if (_hasDrained && cycle <= _lastDrainCycle)
             {
@@ -125,6 +133,15 @@ namespace CopperMod.Amiga
                 _earliestDirtyCycle = Math.Min(_earliestDirtyCycle, cycle);
             }
         }
+
+        /// <summary>
+        /// Fast check: returns true if no hardware events need processing for a slot-contended
+        /// (chip RAM / expansion RAM) access at the given cycle. This is a single comparison
+        /// against a precomputed horizon and avoids the full drain-check path.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsSlotContendedCleanThrough(long targetCycle)
+            => targetCycle <= _slotContendedCleanThroughCycle;
 
         public void DrainForCpuAccess(
             AmigaBusAccessTarget target,

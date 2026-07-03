@@ -15,7 +15,6 @@ namespace CopperMod.Amiga
             targetCycle = Math.Max(0, targetCycle);
             if (mask == AmigaHardwareEventMask.None)
             {
-                MarkClean(targetCycle, mask);
                 return;
             }
 
@@ -176,11 +175,6 @@ namespace CopperMod.Amiga
                 _paulaDrainCycle = Math.Max(_paulaDrainCycle, targetCycle);
             }
 
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
-            {
-                _paulaDrainCycle = Math.Max(_paulaDrainCycle, targetCycle);
-            }
-
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0)
             {
                 _paulaDmaDrainCycle = Math.Max(_paulaDmaDrainCycle, targetCycle);
@@ -223,6 +217,21 @@ namespace CopperMod.Amiga
 
             _lastCleanGeneration = _generation;
             _hasDrained = true;
+
+            // Recompute the slot-contended clean-through horizon: the minimum drain
+            // cycle across all sources in SlotContendedMemoryAccessMask.
+            var slotClean = Math.Min(_paulaDmaDrainCycle, _diskEventDrainCycle);
+            slotClean = Math.Min(slotClean, _agnusDrainCycle);
+            slotClean = Math.Min(slotClean, _blitterDrainCycle);
+            // The cache is only valid when no dirty work is pending and generation is clean.
+            if (_earliestDirtyCycle == long.MaxValue && _generation == _lastCleanGeneration)
+            {
+                _slotContendedCleanThroughCycle = slotClean;
+            }
+            else
+            {
+                _slotContendedCleanThroughCycle = -1;
+            }
         }
 
         private bool CanSkipDrain(long targetCycle, AmigaHardwareEventMask mask)
@@ -237,9 +246,15 @@ namespace CopperMod.Amiga
 
         private bool CanSkipSlotContendedDrain(long targetCycle)
         {
+            // Fast path: single comparison against precomputed clean-through horizon.
+            if (targetCycle <= _slotContendedCleanThroughCycle)
+            {
+                return true;
+            }
+
             var dirtyAffectsTarget = _earliestDirtyCycle <= targetCycle;
             return _hasDrained &&
-                _paulaDrainCycle >= targetCycle &&
+                _paulaDmaDrainCycle >= targetCycle &&
                 _diskEventDrainCycle >= targetCycle &&
                 _agnusDrainCycle >= targetCycle &&
                 _blitterDrainCycle >= targetCycle &&
@@ -266,6 +281,12 @@ namespace CopperMod.Amiga
             return _bus.TrySkipRasterlineScheduleDrain(cursor, targetCycle, mask);
         }
 
+        // NOTE: HostProfilingEnabled branches are intentionally excluded from this method.
+        // DrainSlotContendedAccess is the hottest path in the scheduler — it runs on every
+        // chip RAM access from the CPU. The profiling branches (Stopwatch timing) add
+        // unpredictable overhead and an extra branch per iteration that defeats branch
+        // prediction. Profiling data for slot-contended drains is still collected at the
+        // outer DrainTo level via the profiling partial class.
         private void DrainSlotContendedAccess(long targetCycle)
         {
             if (CanSkipSlotContendedDrain(targetCycle))
@@ -291,17 +312,7 @@ namespace CopperMod.Amiga
                 var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
                 if (HasSlotContendedAgnusWorkThrough(targetCycle))
                 {
-                    if (HostProfilingEnabled)
-                    {
-                        var start = Stopwatch.GetTimestamp();
-                        _bus.AdvanceAgnusCoreTo(targetCycle);
-                        _hostAgnusTicks += Stopwatch.GetTimestamp() - start;
-                    }
-                    else
-                    {
-                        _bus.AdvanceAgnusCoreTo(targetCycle);
-                    }
-
+                    _bus.AdvanceAgnusCoreTo(targetCycle);
                     _agnusEvents++;
                 }
 
@@ -319,40 +330,19 @@ namespace CopperMod.Amiga
 
                 while (true)
                 {
-                    var nextCycle = HostProfilingEnabled
-                        ? GetNextSlotContendedEventCycleProfiled(cursor, targetCycle)
-                        : GetNextSlotContendedEventCycle(cursor, targetCycle);
+                    var nextCycle = GetNextSlotContendedEventCycle(cursor, targetCycle);
                     if (nextCycle == long.MaxValue || nextCycle > targetCycle)
                     {
                         break;
                     }
 
                     var generationBeforeEvent = _generation;
-                    if (HostProfilingEnabled)
-                    {
-                        ProcessSlotContendedEventsAtProfiled(nextCycle);
-                    }
-                    else
-                    {
-                        ProcessSlotContendedEventsAt(nextCycle);
-                    }
-
+                    ProcessSlotContendedEventsAt(nextCycle);
                     _bus.InvalidateRasterlineSchedule(nextCycle, SlotContendedMemoryAccessMask);
                     cursor = nextCycle == long.MaxValue ? targetCycle : nextCycle;
 
                     // Same-cycle Paula/disk work must remain visible to the CPU access.
-                    bool sameCycleWorkRemains;
-                    if (HostProfilingEnabled)
-                    {
-                        var start = Stopwatch.GetTimestamp();
-                        sameCycleWorkRemains = HasSlotContendedSameCycleWork(cursor);
-                        _hostSameCycleQueryTicks += Stopwatch.GetTimestamp() - start;
-                    }
-                    else
-                    {
-                        sameCycleWorkRemains = HasSlotContendedSameCycleWork(cursor);
-                    }
-
+                    var sameCycleWorkRemains = HasSlotContendedSameCycleWork(cursor);
                     var madeSameCycleProgress = _generation != generationBeforeEvent;
                     if (cursor < targetCycle && (!sameCycleWorkRemains || !madeSameCycleProgress))
                     {
@@ -364,15 +354,7 @@ namespace CopperMod.Amiga
                     }
                 }
 
-                if (HostProfilingEnabled)
-                {
-                    ProcessSlotContendedTargetCatchUpProfiled(targetCycle, blitterWasBusyAtDrainStart);
-                }
-                else
-                {
-                    ProcessSlotContendedTargetCatchUp(targetCycle, blitterWasBusyAtDrainStart);
-                }
-
+                ProcessSlotContendedTargetCatchUp(targetCycle, blitterWasBusyAtDrainStart);
                 MarkClean(targetCycle, SlotContendedMemoryAccessMask);
             }
             finally
@@ -388,17 +370,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (HostProfilingEnabled)
-            {
-                var start = Stopwatch.GetTimestamp();
-                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
-                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
-            }
-            else
-            {
-                _bus.Paula.AdvanceDmaObservableTo(targetCycle);
-            }
-
+            _bus.Paula.AdvanceDmaObservableTo(targetCycle);
             _paulaEvents++;
             InvalidateWakeAgenda();
         }
@@ -421,7 +393,6 @@ namespace CopperMod.Amiga
             return ((mask & AmigaHardwareEventMask.Raster) == 0 || _rasterDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.CiaTimers) == 0 || _ciaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.PaulaRegister) == 0 || _paulaDrainCycle >= targetCycle) &&
-                ((mask & AmigaHardwareEventMask.PaulaInterruptSources) == 0 || _paulaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.PaulaDma) == 0 || _paulaDmaDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.DiskEvents) == 0 || _diskEventDrainCycle >= targetCycle) &&
                 ((mask & AmigaHardwareEventMask.DiskCiaEvents) == 0 || _diskCiaDrainCycle >= targetCycle) &&
@@ -444,11 +415,6 @@ namespace CopperMod.Amiga
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0)
-            {
-                cycle = Math.Min(cycle, _paulaDrainCycle);
-            }
-
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
             {
                 cycle = Math.Min(cycle, _paulaDrainCycle);
             }
@@ -509,11 +475,6 @@ namespace CopperMod.Amiga
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0)
             {
                 candidate = Min(candidate, GetNextPaulaEventCycle(currentCycle, targetCycle));
-            }
-
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0)
-            {
-                candidate = Min(candidate, GetNextPaulaInterruptSourceEventCycle(currentCycle, targetCycle));
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0)
@@ -600,13 +561,6 @@ namespace CopperMod.Amiga
                 _bus.Paula.HasRegisterObservableWorkThrough(cycle))
             {
                 _bus.Paula.AdvanceRegisterObservableTo(cycle);
-                _paulaEvents++;
-            }
-
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
-                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
-            {
-                _bus.Paula.AdvanceInterruptSourcesTo(cycle);
                 _paulaEvents++;
             }
 
@@ -714,7 +668,6 @@ namespace CopperMod.Amiga
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
                 (forceCatchUp ||
-                    (mask & AmigaHardwareEventMask.CiaRegisterSample) != 0 ||
                     _bus.GetNextCiaTimerEventCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
             {
                 _bus.AdvanceCiaTimersCoreTo(targetCycle);
@@ -725,13 +678,6 @@ namespace CopperMod.Amiga
                 (forceCatchUp || _bus.Paula.HasRegisterObservableWorkThrough(targetCycle)))
             {
                 _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
-                InvalidateWakeAgenda();
-            }
-
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
-                (forceCatchUp || _bus.Paula.HasInterruptSourceWorkThrough(targetCycle)))
-            {
-                _bus.Paula.AdvanceInterruptSourcesTo(targetCycle);
                 InvalidateWakeAgenda();
             }
 
@@ -783,12 +729,6 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
-                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
-            {
-                return true;
-            }
-
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
                 _bus.Paula.HasDmaWorkThrough(cycle))
             {
@@ -827,16 +767,6 @@ namespace CopperMod.Amiga
             }
 
             return _bus.Paula.GetNextDmaWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
-        }
-
-        private long GetNextPaulaInterruptSourceEventCycle(long currentCycle, long targetCycle)
-        {
-            if (_bus.Paula.HasInterruptSourceWorkThrough(currentCycle))
-            {
-                return currentCycle;
-            }
-
-            return _bus.Paula.GetNextInterruptSourceWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
         }
 
         private long GetNextAgnusEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)

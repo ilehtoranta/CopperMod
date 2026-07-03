@@ -57,7 +57,7 @@ public sealed class AmigaCiaTests
 	}
 
 	[Fact]
-	public void CpuReadAdvancesCiaTimerToAccessCycle()
+	public void CpuReadObservesPublishedCiaTimerState()
 	{
 		var bus = new AmigaBus();
 		bus.WriteByte(0x00BFD400, 0x03, 0);
@@ -65,16 +65,20 @@ public sealed class AmigaCiaTests
 		bus.WriteByte(0x00BFDE00, 0x11, 0);
 
 		var cycle = 19L;
-		Assert.Equal(0x02, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x03, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
 		Assert.Equal(20, cycle);
 
 		cycle = 20L;
-		Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x03, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
 		Assert.Equal(30, cycle);
+
+		bus.AdvanceCiaTimersTo(20);
+		cycle = 20L;
+		Assert.Equal(0x02, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
 	}
 
 	[Fact]
-	public void CpuIcrReadObservesTimerUnderflowAtSameAccessCycle()
+	public void CpuIcrReadObservesPublishedTimerUnderflowOnly()
 	{
 		var bus = new AmigaBus();
 		bus.WriteByte(0x00BFD400, 0x01, 0);
@@ -83,8 +87,12 @@ public sealed class AmigaCiaTests
 		bus.WriteByte(0x00BFDE00, 0x11, 0);
 
 		var cycle = 10L;
-		Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0x00, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
 		Assert.Equal(20, cycle);
+
+		bus.AdvanceCiaTimersTo(20);
+		cycle = 10L;
+		Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
 		Assert.Equal(0x00, bus.ReadByte(0x00BFDD00));
 	}
 

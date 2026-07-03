@@ -731,7 +731,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
-	public void BlitterLineDmaconrPollingObservesBusyUntilFinalWriteCompletion()
+	public void BlitterLineDmaconrPollingDoesNotAdvanceToFinalWriteCompletion()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true);
 		var baseAddress = DestinationD + 0x1E00;
@@ -752,14 +752,19 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			cycle += AgnusChipSlotScheduler.SlotCycles;
 		}
 
-		Assert.True(firstIdleReadCycle >= 0);
+		Assert.Equal(-1, firstIdleReadCycle);
+		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+
+		bus.Blitter.AdvanceTo(cycle + 100_000);
 		var finalWrite = bus.BusAccesses
 			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
 				access.Request.Kind == AmigaBusAccessKind.Blitter &&
 				access.Request.IsWrite)
 			.OrderBy(access => access.CompletedCycle)
 			.Last();
-		Assert.True(firstIdleReadCycle >= finalWrite.CompletedCycle);
+		cycle = finalWrite.CompletedCycle;
+		var finalDmaconr = bus.ReadWord(0x00DFF002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(0, finalDmaconr & 0x4000);
 		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
 	}
 
@@ -1136,7 +1141,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 	private static void RunBlitterUntilIdle(AmigaBus bus, long cycle = 1_000_000)
 	{
-		bus.AdvanceDmaTo(cycle);
+		bus.Blitter.AdvanceTo(cycle);
 		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
 	}
 

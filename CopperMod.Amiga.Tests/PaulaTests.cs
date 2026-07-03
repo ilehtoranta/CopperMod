@@ -27,8 +27,8 @@ public sealed class PaulaTests
 	public void AudioOnlyRenderLeavesInterruptsForRegisterTimeline()
 	{
 		var bus = CreatePaulaComponentBus();
-		bus.WriteWord(0x00DFF09A, 0xC080, 0);
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
 		var buffer = new float[4];
 
 		bus.Paula.RenderSample(0, buffer, 0, 2, advanceRegisterObservable: false);
@@ -82,10 +82,12 @@ public sealed class PaulaTests
 		bus.Paula.RenderSample(5, buffer, 0, 2);
 		bus.Paula.RenderSample(6, buffer, 1, 2);
 
-		Assert.True((intreq & 0x0080) != 0);
+		Assert.Equal(0, intreq & 0x0080);
 		Assert.Equal(beforeRead.CurrentSample, afterRead.CurrentSample);
 		Assert.Equal(beforeRead.HasDataWord, afterRead.HasDataWord);
 		Assert.Equal(beforeRead.NextSampleCycle, afterRead.NextSampleCycle);
+		bus.Paula.AdvanceRegisterObservableTo(20);
+		Assert.True((bus.Paula.Intreq & 0x0080) != 0);
 		Assert.True(buffer[0] > 0.20f);
 		Assert.True(buffer[2] < -0.20f);
 	}
@@ -188,7 +190,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void CustomRegisterReadDmaFetchIsReusedWhenAudioTimelineCatchesUp()
+	public void CustomRegisterReadDoesNotPerformPaulaDmaFetch()
 	{
 		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
@@ -204,8 +206,8 @@ public sealed class PaulaTests
 		var buffer = new float[2];
 		bus.Paula.RenderSample(38, buffer, 0, 2);
 
-		Assert.Equal(3, dmaReadsAfterPoll);
-		Assert.Equal(dmaReadsAfterPoll, CountPaulaDmaReads(bus));
+		Assert.Equal(0, dmaReadsAfterPoll);
+		Assert.True(CountPaulaDmaReads(bus) > dmaReadsAfterPoll);
 		Assert.True(buffer[0] > 0.20f);
 	}
 
@@ -220,8 +222,7 @@ public sealed class PaulaTests
 		SchedulePaulaWrite(bus, 0x0A6, 0x0064, 0);
 		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
 
-		var pollCycle = 40L;
-		_ = bus.ReadWord(0x00DFF01E, ref pollCycle, AmigaBusAccessKind.CpuDataRead);
+		bus.Paula.AdvanceDmaObservableTo(40);
 		var grantsAfterPoll = CapturePaulaDmaGrants(bus);
 		var buffer = new float[2];
 

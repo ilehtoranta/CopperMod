@@ -158,8 +158,6 @@ namespace CopperMod.Amiga
             const AmigaHardwareEventMask sensitiveMask =
                 AmigaHardwareEventMask.ForceCatchUp |
                 AmigaHardwareEventMask.DiskPassiveInput |
-                AmigaHardwareEventMask.DiskRegisterSample |
-                AmigaHardwareEventMask.CiaRegisterSample |
                 AmigaHardwareEventMask.CpuBoundary |
                 AmigaHardwareEventMask.DiskCiaEvents;
             return (mask & sensitiveMask) == 0 &&

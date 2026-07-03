@@ -1418,6 +1418,46 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void LiveDmaArchivedTimelineUsesLatestCopperSpritePointerBeforeControlFetch()
+	{
+		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
+		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
+		const int movedX = StandardX + 24;
+		var movedSpriteList = SpriteListBase + 0x100;
+		foreach (var bus in new[] { presentationBus, liveBus })
+		{
+			EnableSpriteDma(bus, 0x82A0);
+			SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
+			WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
+			WriteSpriteDmaBlock(bus, movedSpriteList, movedX, StandardY, 1, 0x8000, 0x0000);
+			WriteCopperList(
+				bus,
+				CopperListBase,
+				(0x0120, (ushort)(SpriteListBase >> 16)),
+				(0x0122, (ushort)SpriteListBase),
+				(0x0120, (ushort)(movedSpriteList >> 16)),
+				(0x0122, (ushort)movedSpriteList),
+				(0xFFFF, 0xFFFE));
+			bus.WriteWord(0x00DFF080, (ushort)(CopperListBase >> 16));
+			bus.WriteWord(0x00DFF082, (ushort)CopperListBase);
+		}
+
+		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		var actual = new uint[expected.Length];
+		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
+		liveBus.AdvanceDmaTo(FrameCycles());
+		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+
+		var snapshot = liveBus.Display.CaptureSnapshot();
+		Assert.Equal(ToBgra(0), Pixel(actual, StandardX, StandardY));
+		Assert.Equal(Pixel(expected, movedX, StandardY), Pixel(actual, movedX, StandardY));
+		Assert.Equal(ToBgra(0x0F00), Pixel(actual, movedX, StandardY));
+		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
+		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
+		Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
+	}
+
+	[Fact]
 	public void LiveDmaArchivedTimelineRecordsDeniedSpriteDataSlots()
 	{
 		var presentationBus = CreateDeniedSpriteSlotBus(enableLiveDma: false);

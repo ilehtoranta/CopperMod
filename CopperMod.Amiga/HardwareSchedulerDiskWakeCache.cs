@@ -23,33 +23,19 @@ namespace CopperMod.Amiga
 
             if ((mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
             {
-                var candidate = _bus.Disk.GetNextWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
-                if ((mask & AmigaHardwareEventMask.DiskRegisterSample) != 0)
-                {
-                    candidate = Min(
-                        candidate,
-                        _bus.Disk.GetNextEventWakeCandidateCycle(
-                            currentCycle,
-                            targetCycle,
-                            includeActiveDmaProgress: true));
-                }
-
-                return candidate;
+                return _bus.Disk.GetNextWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
             }
 
-            var includeActiveDmaProgress = (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0;
-            return _bus.Disk.GetNextEventWakeCandidateCycle(currentCycle, targetCycle, includeActiveDmaProgress) ?? long.MaxValue;
+            return _bus.Disk.GetNextEventWakeCandidateCycle(currentCycle, targetCycle, includeActiveDmaProgress: true) ?? long.MaxValue;
         }
 
         private bool HasDiskWorkThrough(long cycle, AmigaHardwareEventMask mask)
         {
             return (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0
-                ? _bus.Disk.HasWakeCandidateThrough(cycle) ||
-                    ((mask & AmigaHardwareEventMask.DiskRegisterSample) != 0 &&
-                        _bus.Disk.HasEventWakeCandidateThrough(cycle, includeActiveDmaProgress: true))
+                ? _bus.Disk.HasWakeCandidateThrough(cycle)
                 : _bus.Disk.HasEventWakeCandidateThrough(
                     cycle,
-                    includeActiveDmaProgress: (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0);
+                    includeActiveDmaProgress: true);
         }
 
         private bool HasDiskWakeSourceThrough(long targetCycle, AmigaHardwareEventMask mask)
@@ -69,7 +55,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var includeActiveDmaProgress = (mask & AmigaHardwareEventMask.DiskRegisterSample) != 0;
             // False disk wake lookups are cached only to the current line end and invalidated on disk progress.
             var horizonCycle = GetLineEndCycle(targetCycle);
             if (horizonCycle > targetCycle &&
@@ -77,7 +62,7 @@ namespace CopperMod.Amiga
                     horizonCycle,
                     includePassiveInput,
                     includeEvents,
-                    includeActiveDmaProgress))
+                    includeActiveDmaProgress: true))
             {
                 CacheDiskWakeFalseThrough(cacheKey, horizonCycle);
                 return false;
@@ -87,7 +72,7 @@ namespace CopperMod.Amiga
                 targetCycle,
                 includePassiveInput,
                 includeEvents,
-                includeActiveDmaProgress);
+                includeActiveDmaProgress: true);
             if (!hasSource)
             {
                 CacheDiskWakeFalseThrough(cacheKey, targetCycle);

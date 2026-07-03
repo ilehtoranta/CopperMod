@@ -3864,7 +3864,7 @@ public sealed class AmigaDiskDisplayTests
 
     private static void RunBlitterUntilIdle(AmigaBus bus, long cycle = 100_000)
     {
-        bus.AdvanceDmaTo(cycle);
+        bus.Blitter.AdvanceTo(cycle);
         Assert.False(bus.Blitter.CaptureSnapshot().Busy);
     }
 

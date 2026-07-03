@@ -151,15 +151,6 @@ namespace CopperMod.Amiga
                 _paulaEvents++;
             }
 
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
-                _bus.Paula.HasInterruptSourceWorkThrough(cycle))
-            {
-                var start = Stopwatch.GetTimestamp();
-                _bus.Paula.AdvanceInterruptSourcesTo(cycle);
-                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
-                _paulaEvents++;
-            }
-
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
                 _bus.Paula.HasDmaWorkThrough(cycle))
             {
@@ -288,7 +279,6 @@ namespace CopperMod.Amiga
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
                 (forceCatchUp ||
-                    (mask & AmigaHardwareEventMask.CiaRegisterSample) != 0 ||
                     _bus.GetNextCiaTimerEventCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
             {
                 var start = Stopwatch.GetTimestamp();
@@ -302,15 +292,6 @@ namespace CopperMod.Amiga
             {
                 var start = Stopwatch.GetTimestamp();
                 _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
-                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
-                InvalidateWakeAgenda();
-            }
-
-            if ((mask & AmigaHardwareEventMask.PaulaInterruptSources) != 0 &&
-                (forceCatchUp || _bus.Paula.HasInterruptSourceWorkThrough(targetCycle)))
-            {
-                var start = Stopwatch.GetTimestamp();
-                _bus.Paula.AdvanceInterruptSourcesTo(targetCycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateWakeAgenda();
             }
