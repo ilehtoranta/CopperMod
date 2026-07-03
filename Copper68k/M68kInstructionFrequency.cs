@@ -457,7 +457,7 @@ namespace Copper68k
             }
 
             if ((opcode & 0xFFF8) == 0x4840 ||
-                (opcode & 0xFFC0) is 0x4880 or 0x48C0 ||
+                (opcode & 0xFFC0) is 0x4880 or 0x48C0 or 0x4AC0 ||
                 (opcode & 0xFF00) is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
                 return M68kInstructionFamily.Unary;
@@ -472,6 +472,11 @@ namespace Copper68k
             if ((opcode & 0xF1C0) == 0x41C0)
             {
                 return M68kInstructionFamily.AddressArithmetic;
+            }
+
+            if ((opcode & 0xF1C0) == 0x4180)
+            {
+                return M68kInstructionFamily.TrapException;
             }
 
             return M68kInstructionFamily.Unknown;
@@ -633,6 +638,8 @@ namespace Copper68k
                 _ when (opcode & 0xFF00) == 0x4400 => "NEG",
                 _ when (opcode & 0xFF00) == 0x4600 => "NOT",
                 _ when (opcode & 0xFF00) == 0x4A00 => "TST",
+                _ when (opcode & 0xFFC0) == 0x4AC0 => "TAS",
+                _ when (opcode & 0xF1C0) == 0x4180 => "CHK",
                 _ => "UNKNOWN"
             };
         }
