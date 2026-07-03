@@ -8471,6 +8471,11 @@ namespace Copper68k
                 }
             }
 
+            if (shifted.Overflow)
+            {
+                status |= M68kCpuState.Overflow;
+            }
+
             return PackV2ShiftResult(shifted.Value, status);
         }
 
@@ -10719,7 +10724,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Extend, shifted.Extend);
             }
 
-            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Overflow, shifted.Overflow);
             return shifted.Value;
         }
 

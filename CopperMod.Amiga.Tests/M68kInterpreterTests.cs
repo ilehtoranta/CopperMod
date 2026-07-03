@@ -1954,7 +1954,7 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
 		Assert.Equal(0x2FF2u, cpu.State.A[7]);
-		Assert.Equal(0x001D, ReadWord(bus.Memory, 0x2FF2));
+		Assert.Equal(0x3015, ReadWord(bus.Memory, 0x2FF2)); // status word: (opcode & $FFE0) | function-code
 		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x3010, ReadWord(bus.Memory, 0x2FF8));
 		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
@@ -1976,7 +1976,7 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
 		Assert.Equal(0x2FF2u, cpu.State.A[7]);
-		Assert.Equal(0x000D, ReadWord(bus.Memory, 0x2FF2));
+		Assert.Equal(0x3085, ReadWord(bus.Memory, 0x2FF2)); // status word: (opcode & $FFE0) | function-code
 		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x3080, ReadWord(bus.Memory, 0x2FF8));
 		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
@@ -2431,6 +2431,12 @@ public sealed class M68kInterpreterTests
 			Writes.Add((address + 2, (byte)(value >> 8), cycle));
 			Writes.Add((address + 3, (byte)value, cycle));
 		}
+
+		public void WriteLongDescending(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+			=> WriteLong(address, value, ref cycle, accessKind);
+
+		public uint ReadLongDescending(uint address, ref long cycle, M68kBusAccessKind accessKind)
+			=> ReadLong(address, ref cycle, accessKind);
 
 		public bool HasHostTrapStub(uint address)
 		{

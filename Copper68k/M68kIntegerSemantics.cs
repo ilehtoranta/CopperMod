@@ -211,10 +211,12 @@ namespace Copper68k
             var mask = M68kCpuState.Mask(size);
             var carry = false;
             var extend = extendIn;
+            var overflow = false;
             for (var i = 0; i < count; i++)
             {
                 if (left)
                 {
+                    var signBefore = (value & (1u << (bits - 1))) != 0;
                     carry = (value & (1u << (bits - 1))) != 0;
                     value = type switch
                     {
@@ -222,6 +224,10 @@ namespace Copper68k
                         3 => ((value << 1) & mask) | (carry ? 1u : 0u),
                         _ => (value << 1) & mask
                     };
+                    if (type == 0 && signBefore != ((value & (1u << (bits - 1))) != 0))
+                    {
+                        overflow = true;
+                    }
                 }
                 else
                 {
@@ -251,26 +257,29 @@ namespace Copper68k
                 }
             }
 
-            return new M68kShiftResult(value & mask, carry, carry, extendChanged: type != 3);
+            return new M68kShiftResult(value & mask, carry, carry, extendChanged: type != 3, overflow);
         }
 
         internal static byte AddBcdByte(byte destination, byte source, int extend, out bool carry)
+            => AddBcdByte(destination, source, extend, out carry, out _);
+
+        internal static byte AddBcdByte(byte destination, byte source, int extend, out bool carry, out bool overflow)
         {
-            var low = (destination & 0x0F) + (source & 0x0F) + extend;
-            var high = (destination >> 4) + (source >> 4);
-            if (low > 9)
+            var unadjusted = destination + source + extend;
+            var adjusted = unadjusted;
+            if (((destination & 0x0F) + (source & 0x0F) + extend) > 9)
             {
-                low -= 10;
-                high++;
+                adjusted += 0x06;
             }
 
-            carry = high > 9;
-            if (carry)
+            if (unadjusted > 0x99)
             {
-                high -= 10;
+                adjusted += 0x60;
             }
 
-            return (byte)((high << 4) | low);
+            carry = adjusted > 0xFF;
+            overflow = ((~unadjusted & adjusted) & 0x80) != 0;
+            return (byte)adjusted;
         }
 
         internal static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry)
@@ -482,12 +491,13 @@ namespace Copper68k
 
     internal readonly struct M68kShiftResult
     {
-        public M68kShiftResult(uint value, bool carry, bool extend, bool extendChanged)
+        public M68kShiftResult(uint value, bool carry, bool extend, bool extendChanged, bool overflow = false)
         {
             Value = value;
             Carry = carry;
             Extend = extend;
             ExtendChanged = extendChanged;
+            Overflow = overflow;
         }
 
         public uint Value { get; }
@@ -497,5 +507,7 @@ namespace Copper68k
         public bool Extend { get; }
 
         public bool ExtendChanged { get; }
+
+        public bool Overflow { get; }
     }
 }
