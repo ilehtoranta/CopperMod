@@ -2055,6 +2055,93 @@ namespace CopperMod.Amiga
         }
     }
 
+    internal readonly struct AmigaCpuBusPhaseTrace
+    {
+        public AmigaCpuBusPhaseTrace(
+            M68kCpuBusPhase cpuPhase,
+            AmigaBusAccessResult? busAccess,
+            long secondWordCycle,
+            AgnusChipSlotSnapshot? grantedSlot)
+        {
+            CpuPhase = cpuPhase;
+            BusAccess = busAccess;
+            SecondWordCycle = secondWordCycle;
+            GrantedSlot = grantedSlot;
+        }
+
+        public M68kCpuBusPhase CpuPhase { get; }
+
+        public AmigaBusAccessResult? BusAccess { get; }
+
+        public long SecondWordCycle { get; }
+
+        public AgnusChipSlotSnapshot? GrantedSlot { get; }
+    }
+
+    internal sealed class BoundedCpuBusPhaseLog : IReadOnlyList<AmigaCpuBusPhaseTrace>
+    {
+        private readonly AmigaCpuBusPhaseTrace[] _buffer;
+        private int _start;
+        private int _count;
+
+        public BoundedCpuBusPhaseLog(int capacity)
+        {
+            if (capacity <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Capacity must be positive.");
+            }
+
+            _buffer = new AmigaCpuBusPhaseTrace[capacity];
+        }
+
+        public int Count => _count;
+
+        public AmigaCpuBusPhaseTrace this[int index]
+        {
+            get
+            {
+                if (index < 0 || index >= _count)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(index));
+                }
+
+                return _buffer[(_start + index) % _buffer.Length];
+            }
+        }
+
+        public void Add(AmigaCpuBusPhaseTrace result)
+        {
+            if (_count < _buffer.Length)
+            {
+                _buffer[(_start + _count) % _buffer.Length] = result;
+                _count++;
+                return;
+            }
+
+            _buffer[_start] = result;
+            _start = (_start + 1) % _buffer.Length;
+        }
+
+        public void Clear()
+        {
+            _start = 0;
+            _count = 0;
+        }
+
+        public IEnumerator<AmigaCpuBusPhaseTrace> GetEnumerator()
+        {
+            for (var i = 0; i < _count; i++)
+            {
+                yield return this[i];
+            }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            return GetEnumerator();
+        }
+    }
+
     internal readonly struct PaulaDmaReadResult
     {
         public PaulaDmaReadResult(ushort value, AmigaBusAccessResult busAccess)

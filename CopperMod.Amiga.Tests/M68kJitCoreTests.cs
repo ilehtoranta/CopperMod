@@ -20,6 +20,23 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void M68000JitTasChipRamLosesWriteBack()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4A, 0xD0); // TAS (A0)
+		bus.ChipRam[0x2000] = 0x01;
+		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x01, bus.ChipRam[0x2000]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
 	public void FactoryCreatesM68040JitBackendWithM68040State()
 	{
 		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, new AmigaBus());

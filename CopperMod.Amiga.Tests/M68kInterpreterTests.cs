@@ -52,6 +52,46 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AmigaAccurateM68000TasChipRamLosesWriteBack()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4A, 0xD0); // TAS (A0)
+		bus.ChipRam[0x2000] = 0x01;
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x01, bus.ChipRam[0x2000]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.Contains(
+			bus.BusAccesses,
+			access => access.Request.Kind == AmigaBusAccessKind.CpuDataWrite &&
+				access.Request.Target == AmigaBusAccessTarget.ChipRam &&
+				access.Request.Address == 0x2000u);
+	}
+
+	[Fact]
+	public void AmigaAccurateM68000TasRealFastRamWritesBack()
+	{
+		var bus = new AmigaBus(realFastRamSize: 0x10000);
+		var targetAddress = AmigaConstants.A500RealFastRamBase + 0x2000u;
+		Write(bus.ChipRam, 0x1000, 0x4A, 0xD0); // TAS (A0)
+		bus.WriteHostByte(targetAddress, 0x01);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = targetAddress;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x81, bus.ReadHostByte(targetAddress));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
 	public void PrefetchRequestsInstructionWordsSerially()
 	{
 		var bus = new CycleCountingBus();
@@ -65,6 +105,33 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(
 			new[] { (Address: 0x1000u, Cycle: 0L), (Address: 0x1002u, Cycle: 2L) },
 			bus.InstructionFetchCycles.Take(2).ToArray());
+	}
+
+	[Fact]
+	public void CpuBusPhaseTraceRecordsSerialPrefetchWords()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x4E, 0x71); // NOP
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+
+		cpu.ExecuteInstruction();
+
+		var fetches = bus.CpuBusPhases
+			.Where(phase => phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.Take(2)
+			.ToArray();
+		Assert.Equal(2, fetches.Length);
+		Assert.Equal(0x1000u, fetches[0].InstructionProgramCounter);
+		Assert.Equal(0x1000u, fetches[0].Address);
+		Assert.Equal(M68kOperandSize.Word, fetches[0].Size);
+		Assert.Equal(0, fetches[0].RequestedCycle);
+		Assert.Equal(2, fetches[0].CompletedCycle);
+		Assert.False(fetches[0].IsWrite);
+		Assert.Equal(0x1000u, fetches[1].InstructionProgramCounter);
+		Assert.Equal(0x1002u, fetches[1].Address);
+		Assert.Equal(2, fetches[1].RequestedCycle);
+		Assert.Equal(4, fetches[1].CompletedCycle);
 	}
 
 	[Fact]
@@ -151,6 +218,49 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFF);
 		Assert.Contains((Address: 0x2000u, Cycle: 4L), bus.DataReadCycles);
+	}
+
+	[Fact]
+	public void CpuBusPhaseTraceRecordsDataReadBehindPendingPrefetch()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x30, 0x10); // MOVE.W (A0),D0
+		Write(bus.Memory, 0x2000, 0x12, 0x34);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		var dataRead = Assert.Single(bus.CpuBusPhases, phase => phase.AccessKind == M68kBusAccessKind.CpuDataRead);
+		Assert.Equal(0x1000u, dataRead.InstructionProgramCounter);
+		Assert.Equal(0x2000u, dataRead.Address);
+		Assert.Equal(M68kOperandSize.Word, dataRead.Size);
+		Assert.Equal(4, dataRead.RequestedCycle);
+		Assert.Equal(6, dataRead.CompletedCycle);
+		Assert.False(dataRead.IsWrite);
+	}
+
+	[Fact]
+	public void CpuBusPhaseTraceRecordsLongWriteSpan()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x20, 0x80); // MOVE.L D0,(A0)
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_5678;
+		cpu.State.A[0] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		var dataWrite = Assert.Single(bus.CpuBusPhases, phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(0x1000u, dataWrite.InstructionProgramCounter);
+		Assert.Equal(0x2000u, dataWrite.Address);
+		Assert.Equal(M68kOperandSize.Long, dataWrite.Size);
+		Assert.Equal(4, dataWrite.RequestedCycle);
+		Assert.Equal(8, dataWrite.CompletedCycle);
+		Assert.True(dataWrite.IsWrite);
+		Assert.Equal(0x1234_5678u, BigEndian.ReadUInt32(bus.Memory, 0x2000, "long write"));
 	}
 
 	[Fact]
@@ -2068,6 +2178,10 @@ public sealed class M68kInterpreterTests
 		}
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void WriteTasByte(ExactCpuDataTestBus bus, uint address, byte value, ref long cycle)
+			=> WriteByte(bus, address, value, ref cycle);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static void WriteWord(ExactCpuDataTestBus bus, uint address, ushort value, ref long cycle)
 		{
 			if (!bus.TryWriteExactCpuDataWord(address, value, ref cycle))
@@ -2455,7 +2569,7 @@ public sealed class M68kInterpreterTests
 		}
 	}
 
-	private sealed class CycleCountingBus : IM68kBus
+	private sealed class CycleCountingBus : IM68kBus, IM68kCpuBusPhaseTrace
 	{
 		private const int AccessCycles = 2;
 
@@ -2464,6 +2578,15 @@ public sealed class M68kInterpreterTests
 		public List<(uint Address, long Cycle)> InstructionFetchCycles { get; } = new();
 
 		public List<(uint Address, long Cycle)> DataReadCycles { get; } = new();
+
+		public List<M68kCpuBusPhase> CpuBusPhases { get; } = new();
+
+		public bool CpuBusPhaseTracingEnabled => true;
+
+		public void RecordCpuBusPhase(in M68kCpuBusPhase phase)
+		{
+			CpuBusPhases.Add(phase);
+		}
 
 		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{

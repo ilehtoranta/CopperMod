@@ -2348,6 +2348,10 @@ internal readonly struct OpcodeDispatchBenchmarkCpuDataAccess :
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteTasByte(OpcodeDispatchBenchmarkBus bus, uint address, byte value, ref long cycle)
+        => WriteByte(bus, address, value, ref cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteWord(OpcodeDispatchBenchmarkBus bus, uint address, ushort value, ref long cycle)
     {
         if (!bus.TryWriteExactCpuDataWord(address, value, ref cycle))

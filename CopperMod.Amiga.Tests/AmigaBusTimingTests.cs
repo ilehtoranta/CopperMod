@@ -2137,6 +2137,119 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void AccurateM68000CpuBusPhasesMirrorInstructionFetchWindowGrants()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71); // NOP
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x2000);
+
+		cpu.ExecuteInstruction();
+
+		var fetchPhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.Take(2)
+			.ToArray();
+		var fetchAccesses = bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch)
+			.Take(2)
+			.ToArray();
+		Assert.Equal(2, fetchPhases.Length);
+		Assert.Equal(fetchAccesses.Length, fetchPhases.Length);
+		for (var i = 0; i < fetchPhases.Length; i++)
+		{
+			var phase = fetchPhases[i];
+			var access = fetchAccesses[i];
+			Assert.True(phase.BusAccess.HasValue);
+			Assert.Equal(access.Request.Address, phase.CpuPhase.Address);
+			Assert.Equal(access.Request.RequestedCycle, phase.CpuPhase.RequestedCycle);
+			Assert.Equal(access.CompletedCycle, phase.CpuPhase.CompletedCycle);
+			var phaseAccess = phase.BusAccess.GetValueOrDefault();
+			Assert.Equal(access.GrantedCycle, phaseAccess.GrantedCycle);
+			Assert.Equal(access.CompletedCycle, phaseAccess.CompletedCycle);
+			Assert.Equal(access.GrantedCycle, phase.SecondWordCycle);
+		}
+	}
+
+	[Fact]
+	public void AccurateM68000CpuBusPhaseRecordsChipSlotWait()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71); // NOP
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 1;
+
+		cpu.ExecuteInstruction();
+
+		var waitedPhase = bus.CpuBusPhases.First(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.BusAccess.HasValue &&
+			phase.BusAccess.GetValueOrDefault().WaitCycles > 0);
+		Assert.Equal(0x1000u, waitedPhase.CpuPhase.InstructionProgramCounter);
+		Assert.Equal(0x1000u, waitedPhase.CpuPhase.Address);
+		Assert.Equal(1, waitedPhase.CpuPhase.RequestedCycle);
+		var waitedAccess = waitedPhase.BusAccess.GetValueOrDefault();
+		Assert.True(waitedAccess.GrantedCycle > waitedAccess.Request.RequestedCycle);
+		Assert.Equal(waitedAccess.GrantedCycle - waitedAccess.Request.RequestedCycle, waitedAccess.WaitCycles);
+		Assert.Equal(waitedAccess.CompletedCycle, waitedPhase.CpuPhase.CompletedCycle);
+		Assert.True(waitedPhase.GrantedSlot.HasValue);
+		var waitedSlot = waitedPhase.GrantedSlot.GetValueOrDefault();
+		Assert.Equal(AgnusChipSlotOwner.Cpu, waitedSlot.Owner);
+	}
+
+	[Fact]
+	public void AccurateM68000CpuBusPhaseLongWriteExposesSecondWordCycle()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x20, 0x80); // MOVE.L D0,(A0)
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234_5678;
+		cpu.State.A[0] = 0x2400;
+
+		cpu.ExecuteInstruction();
+
+		var writePhase = Assert.Single(
+			bus.CpuBusPhases,
+			phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		Assert.True(writePhase.BusAccess.HasValue);
+		Assert.Equal(0x2400u, writePhase.CpuPhase.Address);
+		Assert.Equal(M68kOperandSize.Long, writePhase.CpuPhase.Size);
+		var writeAccess = writePhase.BusAccess.GetValueOrDefault();
+		Assert.Equal(AmigaBusAccessSize.Long, writeAccess.Request.Size);
+		Assert.Equal(
+			writeAccess.GrantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles),
+			writePhase.SecondWordCycle);
+		Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x2400, writeAccess.GrantedCycle));
+		Assert.Equal(0x5678, bus.ReadChipWordForPresentation(0x2402, writePhase.SecondWordCycle));
+	}
+
+	[Fact]
+	public void AccurateM68000SelfModifiedQueuedPrefetchStaysDeterministic()
+	{
+		var bus = new AmigaBus();
+		Write(bus.ChipRam, 0x1000, 0x21, 0xFC, 0x70, 0x05, 0x4E, 0x71, 0x10, 0x08); // MOVE.L #$70054E71,$1008.W
+		Write(bus.ChipRam, 0x1008, 0x70, 0x01); // MOVEQ #1,D0, already queued before the write
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x7005, BigEndian.ReadUInt16(bus.ChipRam, 0x1008, "self-modified word"));
+		Assert.Equal(1u, cpu.State.D[0]);
+		Assert.Contains(
+			bus.CpuBusPhases,
+			phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.Address == 0x1008u);
+		Assert.Contains(
+			bus.CpuBusPhases,
+			phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+				phase.CpuPhase.Address == 0x1008u);
+	}
+
+	[Fact]
 	public void InstructionFetchWindowInvalidatesWhenKickstartOverlayChanges()
 	{
 		var bus = new AmigaBus();

@@ -48,7 +48,8 @@ namespace CopperMod.Amiga
                 default(AmigaCpuDataAccess),
                 state,
                 instructionFrequency,
-                enableInstructionFetchWindow: false);
+                enableInstructionFetchWindow: false,
+                enableCpuBusPhaseTrace: false);
         }
     }
 
@@ -80,6 +81,10 @@ namespace CopperMod.Amiga
                 WriteByteFallback(bus, address, value, ref cycle);
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteTasByte(AmigaBus bus, uint address, byte value, ref long cycle)
+            => bus.WriteTasCpuDataByte(address, value, ref cycle);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void WriteWord(AmigaBus bus, uint address, ushort value, ref long cycle)
