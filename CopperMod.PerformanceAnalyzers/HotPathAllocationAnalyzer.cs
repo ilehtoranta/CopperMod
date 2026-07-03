@@ -15,6 +15,7 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
     public const string StateMachineDiagnosticId = "CMPERF003";
     public const string AllowReasonDiagnosticId = "CMPERF004";
     public const string ColdCallDiagnosticId = "CMPERF005";
+    public const string BranchComplexityDiagnosticId = "CMPERF006";
 
     private static readonly DiagnosticDescriptor AllocationRule = new(
         AllocationDiagnosticId,
@@ -56,8 +57,16 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor BranchComplexityRule = new(
+        BranchComplexityDiagnosticId,
+        "Hot path method exceeds branch complexity limit",
+        "Method '{0}' has {1} branch points, exceeding MaxBranches={2}",
+        "Performance",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
-        ImmutableArray.Create(AllocationRule, AllocatingApiRule, StateMachineRule, AllowReasonRule, ColdCallRule);
+        ImmutableArray.Create(AllocationRule, AllocatingApiRule, StateMachineRule, AllowReasonRule, ColdCallRule, BranchComplexityRule);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -101,6 +110,8 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
         {
             AnalyzeNodeTree(context, declaration.Body);
         }
+
+        AnalyzeBranchComplexity(context, symbol, declaration);
     }
 
     private static void AnalyzeProperty(SyntaxNodeAnalysisContext context)
@@ -331,4 +342,108 @@ public sealed class HotPathAllocationAnalyzer : DiagnosticAnalyzer
 
     private static void Report(SyntaxNodeAnalysisContext context, DiagnosticDescriptor descriptor, Location location, params object[] messageArgs)
         => context.ReportDiagnostic(Diagnostic.Create(descriptor, location, messageArgs));
+
+    private static void AnalyzeBranchComplexity(SyntaxNodeAnalysisContext context, ISymbol symbol, BaseMethodDeclarationSyntax declaration)
+    {
+        var maxBranches = GetMaxBranches(symbol);
+        if (maxBranches <= 0)
+        {
+            return;
+        }
+
+        SyntaxNode? body = declaration.Body ?? (SyntaxNode?)(declaration as MethodDeclarationSyntax)?.ExpressionBody;
+        if (body == null)
+        {
+            return;
+        }
+
+        var branchCount = CountBranchPoints(body);
+        if (branchCount > maxBranches)
+        {
+            var methodName = symbol is IMethodSymbol ms
+                ? ms.Name
+                : symbol.Name;
+            var location = declaration is MethodDeclarationSyntax md
+                ? md.Identifier.GetLocation()
+                : declaration.GetLocation();
+            Report(context, BranchComplexityRule, location, methodName, branchCount, maxBranches);
+        }
+    }
+
+    private static int GetMaxBranches(ISymbol symbol)
+    {
+        foreach (var attribute in symbol.GetAttributes())
+        {
+            if (attribute.AttributeClass == null || !IsAttributeNamed(attribute.AttributeClass, "HotPathAttribute"))
+            {
+                continue;
+            }
+
+            foreach (var namedArg in attribute.NamedArguments)
+            {
+                if (namedArg.Key == "MaxBranches" && namedArg.Value.Value is int value)
+                {
+                    return value;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    private static int CountBranchPoints(SyntaxNode body)
+    {
+        var count = 0;
+
+        foreach (var node in body.DescendantNodesAndSelf())
+        {
+            switch (node)
+            {
+                case IfStatementSyntax:
+                    count++;
+                    break;
+                case CaseSwitchLabelSyntax:
+                    count++;
+                    break;
+                case CasePatternSwitchLabelSyntax:
+                    count++;
+                    break;
+                case SwitchExpressionArmSyntax:
+                    count++;
+                    break;
+                case ConditionalExpressionSyntax:
+                    count++;
+                    break;
+                case BinaryExpressionSyntax binary:
+                    var kind = binary.OperatorToken.Kind();
+                    if (kind == SyntaxKind.QuestionQuestionToken ||
+                        kind == SyntaxKind.AmpersandAmpersandToken ||
+                        kind == SyntaxKind.BarBarToken)
+                    {
+                        count++;
+                    }
+                    break;
+                case WhileStatementSyntax:
+                    count++;
+                    break;
+                case ForStatementSyntax:
+                    count++;
+                    break;
+                case ForEachStatementSyntax:
+                    count++;
+                    break;
+            }
+        }
+
+        // For switch expressions, subtract 1 per expression (last arm is the default)
+        foreach (var node in body.DescendantNodesAndSelf())
+        {
+            if (node is SwitchExpressionSyntax switchExpr && switchExpr.Arms.Count > 0)
+            {
+                count--;
+            }
+        }
+
+        return count;
+    }
 }

@@ -232,6 +232,67 @@ public sealed class HotPathAllocationAnalyzerTests
         Assert.Contains(diagnostics, diagnostic => diagnostic.Id == HotPathAllocationAnalyzer.ColdCallDiagnosticId);
     }
 
+    [Fact]
+    public async Task ReportsExcessiveBranchesInHotPathMethod()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using System;
+
+            namespace TestCode;
+
+            [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.Property)]
+            internal sealed class HotPathAttribute : Attribute
+            {
+                public int MaxBranches { get; set; }
+            }
+
+            internal sealed class Runtime
+            {
+                [HotPath(MaxBranches = 2)]
+                public int OverBudget(int a, int b, int c)
+                {
+                    if (a > 0) return a;
+                    if (b > 0) return b;
+                    if (c > 0) return c;
+                    return 0;
+                }
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics.Where(d => d.Id == HotPathAllocationAnalyzer.BranchComplexityDiagnosticId));
+        Assert.Contains("3 branch points", diagnostic.GetMessage());
+        Assert.Contains("MaxBranches=2", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task AllowsMethodWithinBranchBudget()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using System;
+
+            namespace TestCode;
+
+            [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.Property)]
+            internal sealed class HotPathAttribute : Attribute
+            {
+                public int MaxBranches { get; set; }
+            }
+
+            internal sealed class Runtime
+            {
+                [HotPath(MaxBranches = 3)]
+                public int WithinBudget(int a, int b)
+                {
+                    if (a > 0) return a;
+                    if (b > 0) return b;
+                    return 0;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == HotPathAllocationAnalyzer.BranchComplexityDiagnosticId);
+    }
+
     private static async Task<IReadOnlyList<Diagnostic>> AnalyzeAsync(string source)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview));
