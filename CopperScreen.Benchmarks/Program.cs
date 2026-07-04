@@ -1737,6 +1737,13 @@ static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
         snapshot.LastRasterlineDescriptorBitplaneRows,
         snapshot.LastRasterlineDescriptorSpriteRows,
         snapshot.LastRasterlineDescriptorMismatches,
+        snapshot.LastRowDmaPlansBuilt,
+        snapshot.LastRowDmaPlannedRowsExecuted,
+        snapshot.LastRowDmaBitplaneEntriesExecuted,
+        snapshot.LastRowDmaSpriteEntriesExecuted,
+        snapshot.LastRowDmaScalarFallbackRows,
+        snapshot.LastRowDmaPlanInvalidationRows,
+        snapshot.LastRowDmaPlanMismatchRows,
         display.BitplaneDataSpanCount);
 }
 
@@ -1802,6 +1809,7 @@ static string FormatDisplaySummary(DisplaySummary summary)
         $"dma={summary.BitplaneDmaFetches}/{summary.SpriteDmaFetches},missedSpr={summary.MissedSpriteSlots},spans={summary.BitplaneDataSpans}," +
         $"desc={summary.DescriptorBuilds}/{summary.DescriptorReplayAttempts}/{summary.DescriptorReplayedRows}/{summary.DescriptorFallbackRows}," +
         $"descRows={summary.DescriptorBitplaneRows}/{summary.DescriptorSpriteRows},descMis={summary.DescriptorMismatches}," +
+        $"rowPlan={summary.RowDmaPlansBuilt}/{summary.RowDmaPlannedRowsExecuted}/{summary.RowDmaBitplaneEntriesExecuted}/{summary.RowDmaSpriteEntriesExecuted}/{summary.RowDmaScalarFallbackRows}/{summary.RowDmaPlanInvalidationRows}/{summary.RowDmaPlanMismatchRows}," +
         $"bplcon={summary.Bplcon0:X4}/{summary.Bplcon1:X4}/{summary.Bplcon2:X4}";
 }
 
@@ -1946,6 +1954,13 @@ internal readonly record struct DisplaySummary(
     int DescriptorBitplaneRows,
     int DescriptorSpriteRows,
     int DescriptorMismatches,
+    int RowDmaPlansBuilt,
+    int RowDmaPlannedRowsExecuted,
+    int RowDmaBitplaneEntriesExecuted,
+    int RowDmaSpriteEntriesExecuted,
+    int RowDmaScalarFallbackRows,
+    int RowDmaPlanInvalidationRows,
+    int RowDmaPlanMismatchRows,
     int BitplaneDataSpans);
 
 internal readonly record struct DiskSummary(

@@ -202,6 +202,14 @@ namespace CopperMod.Amiga
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
+            if (_bus.Paula.HasRegisterObservableWorkThrough(cycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceRegisterObservableTo(cycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                _paulaEvents++;
+            }
+
             if (_bus.Paula.HasDmaWorkThrough(cycle))
             {
                 var start = Stopwatch.GetTimestamp();
@@ -238,6 +246,14 @@ namespace CopperMod.Amiga
 
         private void ProcessSlotContendedTargetCatchUpProfiled(long targetCycle, bool blitterWasBusyAtDrainStart)
         {
+            if (_bus.Paula.HasRegisterObservableWorkThrough(targetCycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
+                _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
+                InvalidateWakeAgenda();
+            }
+
             if (_bus.Paula.HasDmaWorkThrough(targetCycle))
             {
                 var start = Stopwatch.GetTimestamp();

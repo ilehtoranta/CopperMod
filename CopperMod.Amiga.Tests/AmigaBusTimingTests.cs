@@ -1558,7 +1558,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void WakeAgendaSkipsRepeatedSlotContendedReadsBeforeNextHardwareEvent()
+	public void SlotContendedCleanThroughSkipsRepeatedReadsBeforeNextHardwareEvent()
 	{
 		var bus = new AmigaBus();
 		var cycle = 4L;
@@ -1573,11 +1573,15 @@ public sealed class AmigaBusTimingTests
 
 		var after = bus.CaptureHardwareSchedulerSnapshot();
 		Assert.True(
-			after.WakeAgendaCacheHits > before.WakeAgendaCacheHits,
-			$"Expected repeated slot-contended reads to hit the wake agenda, before={before.WakeAgendaCacheHits}, after={after.WakeAgendaCacheHits}");
-		Assert.True(
-			after.WakeAgendaDrainSkips > before.WakeAgendaDrainSkips,
-			$"Expected repeated slot-contended reads to skip drains through the wake agenda, before={before.WakeAgendaDrainSkips}, after={after.WakeAgendaDrainSkips}");
+			after.BusAccessDrainCount > before.BusAccessDrainCount,
+			$"Expected repeated slot-contended reads to use the bus-access drain entry point, before={before.BusAccessDrainCount}, after={after.BusAccessDrainCount}");
+		Assert.Equal(before.DrainCount, after.DrainCount);
+		Assert.Equal(before.RasterEvents, after.RasterEvents);
+		Assert.Equal(before.CiaEvents, after.CiaEvents);
+		Assert.Equal(before.PaulaEvents, after.PaulaEvents);
+		Assert.Equal(before.DiskEvents, after.DiskEvents);
+		Assert.Equal(before.AgnusEvents, after.AgnusEvents);
+		Assert.Equal(before.BlitterEvents, after.BlitterEvents);
 	}
 
 	[Fact]
@@ -1603,26 +1607,20 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void WakeAgendaDoesNotHideDirectSameCyclePaulaWriteAfterCachedSlotRead()
+	public void SlotContendedCleanThroughDoesNotHideSameCycleHardwareInterruptAfterCachedSlotRead()
 	{
 		var bus = new AmigaBus();
 		var cycle = 20L;
 		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		cycle += 4;
 		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		var before = bus.CaptureHardwareSchedulerSnapshot();
-		Assert.True(before.WakeAgendaCacheHits > 0);
 
 		var writeCycle = cycle + 4;
-		bus.Paula.ScheduleWrite(writeCycle, 0x09C, (ushort)(0x8000 | AmigaConstants.IntreqBlitter));
+		bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, writeCycle);
 		var readCycle = writeCycle;
 		_ = bus.ReadWord(0x00001000, ref readCycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
-		var after = bus.CaptureHardwareSchedulerSnapshot();
-		Assert.True(
-			after.WakeAgendaCacheMisses > before.WakeAgendaCacheMisses,
-			$"Expected direct Paula scheduling to miss the stale wake agenda entry, before={before.WakeAgendaCacheMisses}, after={after.WakeAgendaCacheMisses}");
 	}
 
 	[Fact]

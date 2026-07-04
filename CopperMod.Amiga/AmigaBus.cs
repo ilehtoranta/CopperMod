@@ -1963,6 +1963,12 @@ namespace CopperMod.Amiga
         {
             FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
+            if (accessKind == AmigaBusAccessKind.CpuInstructionFetch &&
+                TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
+
             if (IsCustomRegisterWordAddress(address))
             {
                 return ReadCpuCustomWord(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
@@ -2116,7 +2122,7 @@ namespace CopperMod.Amiga
 
         internal ushort ReadHostWord(uint address)
         {
-            return ReadRawWord(address);
+            return (ushort)((ReadHostByte(address) << 8) | ReadHostByte(address + 1));
         }
 
         ushort IM68kCodeReader.ReadHostWord(uint address)
@@ -2171,7 +2177,7 @@ namespace CopperMod.Amiga
 
         internal uint ReadHostLong(uint address)
         {
-            return ReadRawLong(address);
+            return ((uint)ReadHostWord(address) << 16) | ReadHostWord(address + 2);
         }
 
         internal void WriteHostByte(uint address, byte value)
@@ -3935,6 +3941,12 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
 
+            if (_hostTrapStubs.Count != 0 &&
+                TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
+            }
+
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -4008,12 +4020,6 @@ namespace CopperMod.Amiga
             if (_mappedMemory.TryReadMappedByte(address, out var value))
             {
                 return value;
-            }
-
-            // Host traps (rare, checked last).
-            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
-            {
-                return hostTrapByte;
             }
 
             return 0;

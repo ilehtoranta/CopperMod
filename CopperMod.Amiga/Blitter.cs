@@ -533,6 +533,7 @@ namespace CopperMod.Amiga
         private int _completedMicroOps;
         private bool _completionPending;
         private ulong _wakeVersion;
+        private ulong _schedulerWakeVersion;
         private readonly List<DeferredRegisterWrite> _deferredRegisterWrites = new List<DeferredRegisterWrite>();
         private bool _deferredRestartPending;
         private ushort _deferredRestartBltsize;
@@ -637,7 +638,7 @@ namespace CopperMod.Amiga
             _lastDmaCycle = 0;
             _completedMicroOps = 0;
             _completionPending = false;
-            _wakeVersion++;
+            MarkSchedulerWakeChanged();
             _deferredRegisterWrites.Clear();
             _deferredRestartPending = false;
             _deferredRestartBltsize = 0;
@@ -674,6 +675,8 @@ namespace CopperMod.Amiga
 
         internal ulong WakeVersion => _wakeVersion;
 
+        internal ulong SchedulerWakeVersion => _schedulerWakeVersion;
+
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
@@ -684,19 +687,18 @@ namespace CopperMod.Amiga
                 {
                     _deferredRestartPending = true;
                     _deferredRestartBltsize = value;
-                    _wakeVersion++;
+                    MarkSchedulerWakeChanged();
                     return;
                 }
 
                 StartBlit(value, cycle);
-                _wakeVersion++;
                 return;
             }
 
             if (_busy && ShouldDeferBusyRegisterWrite(offset))
             {
                 _deferredRegisterWrites.Add(new DeferredRegisterWrite(offset, value));
-                _wakeVersion++;
+                MarkSchedulerWakeChanged();
                 return;
             }
 
@@ -706,7 +708,7 @@ namespace CopperMod.Amiga
                 _useD = false;
             }
 
-            _wakeVersion++;
+            MarkSchedulerWakeChanged();
         }
 
         private void ApplyRegisterWrite(ushort offset, ushort value)
@@ -834,9 +836,14 @@ namespace CopperMod.Amiga
             }
             finally
             {
-                if (_currentCycle != previousCycle ||
+                var schedulerVisibleChange =
                     _busy != previousBusy ||
-                    _completionPending != previousCompletionPending)
+                    _completionPending != previousCompletionPending;
+                if (schedulerVisibleChange)
+                {
+                    MarkSchedulerWakeChanged();
+                }
+                else if (_currentCycle != previousCycle)
                 {
                     _wakeVersion++;
                 }
@@ -932,6 +939,7 @@ namespace CopperMod.Amiga
                 _activeKernel = _specializationEnabled
                     ? _kernelCache.GetOrCreate(CreateLineKernelKey())
                     : default;
+                MarkSchedulerWakeChanged();
                 return;
             }
 
@@ -979,6 +987,13 @@ namespace CopperMod.Amiga
             _activeKernel = _specializationEnabled
                 ? _kernelCache.GetOrCreate(CreateAreaKernelKey())
                 : default;
+            MarkSchedulerWakeChanged();
+        }
+
+        private void MarkSchedulerWakeChanged()
+        {
+            _wakeVersion++;
+            _schedulerWakeVersion++;
         }
 
         private BlitterKernelKey CreateAreaKernelKey()

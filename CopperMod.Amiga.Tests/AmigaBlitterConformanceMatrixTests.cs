@@ -987,6 +987,29 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
+	public void SchedulerWakeVersionIgnoresIntermediateBlitterProgress()
+	{
+		var bus = new AmigaBus();
+		WriteWord(bus, SourceA, 0x1111);
+		WriteWord(bus, SourceA + 2, 0x2222);
+		ConfigureAreaBlit(bus, 0x09F0);
+		EnableBlitterDma(bus);
+
+		bus.WriteWord(0x00DFF058, 0x0042);
+		var beforeFullWakeVersion = bus.Blitter.WakeVersion;
+		var beforeSchedulerWakeVersion = bus.Blitter.SchedulerWakeVersion;
+		var firstStepCycle = bus.Blitter.CaptureSnapshot().CurrentCycle + 4;
+
+		bus.Blitter.AdvanceTo(firstStepCycle);
+		var snapshot = bus.Blitter.CaptureSnapshot();
+
+		Assert.True(snapshot.Busy);
+		Assert.Equal(1, snapshot.WordX);
+		Assert.True(bus.Blitter.WakeVersion > beforeFullWakeVersion);
+		Assert.Equal(beforeSchedulerWakeVersion, bus.Blitter.SchedulerWakeVersion);
+	}
+
+	[Fact]
 	public void BusyBltcon0DDisableSuppressesDestinationWrites()
 	{
 		var bus = new AmigaBus();
