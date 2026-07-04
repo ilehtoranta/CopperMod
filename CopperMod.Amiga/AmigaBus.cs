@@ -33,6 +33,7 @@ namespace CopperMod.Amiga
         IM68kFastMemoryBus,
         IM68kCpuBusPhaseTrace,
         IM68kInstructionFetchWindowBus,
+        IM68kDeferredCpuInstructionTiming,
         IM68kJitBus,
         IM68kJitFastMemoryBus,
         IM68kJitTimedMemoryBus
@@ -43,6 +44,10 @@ namespace CopperMod.Amiga
         private const int MaxPendingInterruptEvents = 65536;
         private const int InstructionFetchWindowMaxBytes = 256;
         private const uint CpuAddressMask = 0x00FF_FFFFu;
+        private const int CpuBusBankShift = 16;
+        private const int CpuBusBankSize = 1 << CpuBusBankShift;
+        private const int CpuBusBankCount = 1 << (24 - CpuBusBankShift);
+        private const int MaxDeferredPseudoFastAccesses = 64;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
@@ -57,6 +62,8 @@ namespace CopperMod.Amiga
         private const byte CiaAPortAOverlayBit = 0x01;
         private const byte CiaAPortAAudioFilterBit = 0x02;
         private readonly AmigaChipRamBackend _chipRam;
+        private readonly byte[] _chipRamData;
+        private readonly int _chipRamMask;
         private readonly AmigaLinearRamBackend _expansionRam;
         private readonly AmigaLinearRamBackend _realFastRam;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
@@ -72,10 +79,18 @@ namespace CopperMod.Amiga
         private readonly AgnusHrmSlotEngine _hrmSlotEngine;
         private readonly AmigaRasterlineScheduleCache _rasterlineScheduleCache;
         private readonly AmigaHardwareScheduler _hardwareScheduler;
+        private readonly CpuBusBankKind[] _cpuBusBankKinds = new CpuBusBankKind[CpuBusBankCount];
+        private readonly int[] _cpuBusBankOffsets = new int[CpuBusBankCount];
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
         private readonly bool _useExactCpuChipSlotFastPath;
+        /// <summary>
+        /// Combined fast-path guard: true when _useExactCpuChipSlotFastPath AND
+        /// _useFastZeroWaitAccesses AND !_captureBusAccesses. Eliminates 3 branches
+        /// from the per-access hot path.
+        /// </summary>
+        private readonly bool _exactCpuChipSlotFastPathEnabled;
         private readonly bool _usePaulaDmaFixedSlotFastPath;
         private readonly bool _liveAgnusDmaDefault;
         private readonly AmigaRealTimeClock? _realTimeClock;
@@ -89,6 +104,21 @@ namespace CopperMod.Amiga
         private long _nextHorizontalSyncIndex;
         private long _nextHorizontalSyncCycle;
         private long _lastRasterAdvanceCycle;
+        private bool _deferredCpuInstructionTimingActive;
+        private int _deferredPseudoFastAccessCount;
+        private ulong _deferredPseudoFastLongShapeBits;
+        private long _deferredPseudoFastReplayCycle;
+
+        private enum CpuBusBankKind : byte
+        {
+            Unmapped,
+            ChipRam,
+            ExpansionRam,
+            RealFastRam,
+            RomOverlay,
+            MappedRom,
+            Special
+        }
         private AmigaBusAccessResult? _lastCpuBusAccess;
         private AgnusChipSlotSnapshot? _lastCpuBusGrantedSlot;
         private uint _codeGenerationClock = 1;
@@ -152,6 +182,8 @@ namespace CopperMod.Amiga
             var chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
             var chipDmaAddressMask = (((uint)chipRamSize - 1u) & AmigaConstants.A500OcsChipDmaAddressMask) & 0x00FF_FFFEu;
             _chipRam = new AmigaChipRamBackend(chipRamSize, chipRamDecodeSize, chipDmaAddressMask, CodeGenerationPageShift);
+            _chipRamData = _chipRam.Data;
+            _chipRamMask = _chipRam.Length - 1;
             ExpansionRamBase = NormalizeAddress(expansionRamBase);
             RealFastRamBase = NormalizeAddress(realFastRamBase);
             _expansionRam = new AmigaLinearRamBackend(expansionRamSize, ExpansionRamBase, CodeGenerationPageShift);
@@ -168,6 +200,9 @@ namespace CopperMod.Amiga
                 !captureBusAccesses &&
                 _useChipSlotScheduler;
             _useExactCpuChipSlotFastPath = ResolveExactCpuChipSlotFastPath();
+            _exactCpuChipSlotFastPathEnabled = _useExactCpuChipSlotFastPath &&
+                _useFastZeroWaitAccesses &&
+                !captureBusAccesses;
             _usePaulaDmaFixedSlotFastPath = ResolvePaulaDmaFixedSlotFastPath();
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
@@ -190,6 +225,7 @@ namespace CopperMod.Amiga
             CiaB.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             AudioDmaMinimumPeriod = audioDmaMinimumPeriod;
+            RebuildCpuBusBankTable();
         }
 
         private static bool ResolveExactCpuChipSlotFastPath()
@@ -404,6 +440,7 @@ namespace CopperMod.Amiga
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
             _hardwareScheduler.Reset();
+            RebuildCpuBusBankTable();
         }
 
         public void MoveGamePortMouse(int port, int deltaX, int deltaY)
@@ -428,6 +465,7 @@ namespace CopperMod.Amiga
             var trapId = AllocateHostTrapId();
             _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
             InvalidateInstructionFetchWindows();
+            RebuildCpuBusBankTable();
             TouchCodePages(address, 4);
             NotifyJitEligibleMemoryWritten(address, 4);
             return trapId;
@@ -510,6 +548,7 @@ namespace CopperMod.Amiga
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
             _hardwareScheduler.Reset();
+            RebuildCpuBusBankTable();
         }
 
         public void MapReadOnlyMemory(uint baseAddress, ReadOnlySpan<byte> data)
@@ -531,6 +570,7 @@ namespace CopperMod.Amiga
 
             _mappedMemory.MapMemory(baseAddress, data, readOnly);
             InvalidateInstructionFetchWindows();
+            RebuildCpuBusBankTable();
         }
 
         public byte ReadByte(uint address)
@@ -564,6 +604,20 @@ namespace CopperMod.Amiga
             => WriteLong(address, value, ref cycle, ToAmigaBusAccessKind(accessKind));
 
         bool IM68kCpuBusPhaseTrace.CpuBusPhaseTracingEnabled => _captureBusAccesses;
+
+        void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuInstructionTiming(long cycle)
+        {
+            _deferredCpuInstructionTimingActive = !_captureBusAccesses;
+            _deferredPseudoFastAccessCount = 0;
+            _deferredPseudoFastLongShapeBits = 0;
+            _deferredPseudoFastReplayCycle = cycle;
+        }
+
+        void IM68kDeferredCpuInstructionTiming.FlushDeferredCpuInstructionTiming(ref long cycle)
+        {
+            FlushDeferredPseudoFastTiming(ref cycle);
+            _deferredCpuInstructionTimingActive = false;
+        }
 
         void IM68kCpuBusPhaseTrace.RecordCpuBusPhase(in M68kCpuBusPhase phase)
         {
@@ -638,9 +692,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Byte, ref cycle))
+            {
+                value = region.Memory[region.Offset];
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Byte,
                 ref cycle,
                 isWrite: false,
@@ -663,9 +723,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Word, ref cycle))
+            {
+                value = (ushort)((region.Memory[region.Offset] << 8) | region.Memory[region.Offset + 1]);
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Word,
                 ref cycle,
                 isWrite: false,
@@ -688,9 +754,18 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Long, ref cycle))
+            {
+                value = ((uint)region.Memory[region.Offset] << 24) |
+                    ((uint)region.Memory[region.Offset + 1] << 16) |
+                    ((uint)region.Memory[region.Offset + 2] << 8) |
+                    region.Memory[region.Offset + 3];
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Long,
                 ref cycle,
                 isWrite: false,
@@ -715,9 +790,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Byte, ref cycle))
+            {
+                WriteExactCpuDataByte(region, value, cycle);
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Byte,
                 ref cycle,
                 isWrite: true,
@@ -739,9 +820,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Word, ref cycle))
+            {
+                WriteExactCpuDataWord(region, value, cycle);
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Word,
                 ref cycle,
                 isWrite: true,
@@ -763,9 +850,15 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            CommitExactCpuDataTiming(
-                region.Target,
-                region.Address,
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
+                TryDeferExactCpuExpansionDataTiming(AmigaBusAccessSize.Long, ref cycle))
+            {
+                WriteExactCpuDataLong(region, value, cycle, cycle);
+                return true;
+            }
+
+            CommitExactCpuDataRamTiming(
+                in region,
                 AmigaBusAccessSize.Long,
                 ref cycle,
                 isWrite: true,
@@ -796,46 +889,161 @@ namespace CopperMod.Amiga
             }
 
             var lastAddress = normalizedAddress + (uint)(byteCount - 1);
-            if (IsRomOverlayAddress(normalizedAddress) ||
-                IsRomOverlayAddress(lastAddress))
+            var bankIndex = (int)(normalizedAddress >> CpuBusBankShift);
+            if (bankIndex != (int)(lastAddress >> CpuBusBankShift))
             {
                 return false;
             }
 
-            if (_chipRam.TryGetContiguousMemory(normalizedAddress, byteCount, out var memory, out var offset))
+            var offset = _cpuBusBankOffsets[bankIndex] + (int)(normalizedAddress & (CpuBusBankSize - 1));
+            switch (_cpuBusBankKinds[bankIndex])
             {
-                region = new AmigaExactCpuDataRamRegion(
-                    AmigaMemoryBackendKind.ChipRam,
-                    AmigaBusAccessTarget.ChipRam,
-                    normalizedAddress,
-                    memory,
-                    offset);
-                return true;
-            }
+                case CpuBusBankKind.ChipRam:
+                    if (offset < 0 || offset + byteCount > _chipRam.Length)
+                    {
+                        return false;
+                    }
 
-            if (_realFastRam.TryGetContiguousMemory(normalizedAddress, byteCount, out memory, out offset))
-            {
-                region = new AmigaExactCpuDataRamRegion(
-                    AmigaMemoryBackendKind.RealFastRam,
-                    AmigaBusAccessTarget.RealFastRam,
-                    normalizedAddress,
-                    memory,
-                    offset);
-                return true;
-            }
+                    region = new AmigaExactCpuDataRamRegion(
+                        AmigaMemoryBackendKind.ChipRam,
+                        AmigaBusAccessTarget.ChipRam,
+                        normalizedAddress,
+                        _chipRam.Data,
+                        offset);
+                    return true;
 
-            if (_expansionRam.TryGetContiguousMemory(normalizedAddress, byteCount, out memory, out offset))
-            {
-                region = new AmigaExactCpuDataRamRegion(
-                    AmigaMemoryBackendKind.ExpansionRam,
-                    AmigaBusAccessTarget.ExpansionRam,
-                    normalizedAddress,
-                    memory,
-                    offset);
-                return true;
+                case CpuBusBankKind.ExpansionRam:
+                    if (offset < 0 || offset + byteCount > _expansionRam.Length)
+                    {
+                        return false;
+                    }
+
+                    region = new AmigaExactCpuDataRamRegion(
+                        AmigaMemoryBackendKind.ExpansionRam,
+                        AmigaBusAccessTarget.ExpansionRam,
+                        normalizedAddress,
+                        _expansionRam.Data,
+                        offset);
+                    return true;
+
+                case CpuBusBankKind.RealFastRam:
+                    if (offset < 0 || offset + byteCount > _realFastRam.Length)
+                    {
+                        return false;
+                    }
+
+                    region = new AmigaExactCpuDataRamRegion(
+                        AmigaMemoryBackendKind.RealFastRam,
+                        AmigaBusAccessTarget.RealFastRam,
+                        normalizedAddress,
+                        _realFastRam.Data,
+                        offset);
+                    return true;
             }
 
             return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryDeferExactCpuExpansionDataTiming(
+            AmigaBusAccessSize size,
+            ref long cycle)
+        {
+            if (!_deferredCpuInstructionTimingActive)
+            {
+                return false;
+            }
+
+            if (_deferredPseudoFastAccessCount >= MaxDeferredPseudoFastAccesses)
+            {
+                FlushDeferredPseudoFastTiming(ref cycle);
+                return false;
+            }
+
+            var index = _deferredPseudoFastAccessCount;
+            if (index == 0)
+            {
+                _deferredPseudoFastReplayCycle = cycle;
+            }
+
+            if (size == AmigaBusAccessSize.Long)
+            {
+                _deferredPseudoFastLongShapeBits |= 1UL << index;
+            }
+
+            _deferredPseudoFastAccessCount = index + 1;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void FlushDeferredPseudoFastTiming(ref long cycle)
+        {
+            var count = _deferredPseudoFastAccessCount;
+            if (count == 0)
+            {
+                return;
+            }
+
+            var longShapeBits = _deferredPseudoFastLongShapeBits;
+            var replayCycle = _deferredPseudoFastReplayCycle;
+            _deferredPseudoFastAccessCount = 0;
+            _deferredPseudoFastLongShapeBits = 0;
+
+            for (var i = 0; i < count; i++)
+            {
+                var size = ((longShapeBits >> i) & 1UL) != 0
+                    ? AmigaBusAccessSize.Long
+                    : AmigaBusAccessSize.Word;
+                CommitExactCpuExpansionDataTiming(
+                    ExpansionRamBase,
+                    size,
+                    ref replayCycle,
+                    isWrite: false,
+                    AmigaBusAccessKind.CpuDataRead,
+                    out _,
+                    out _);
+            }
+
+            if (cycle < replayCycle)
+            {
+                cycle = replayCycle;
+            }
+
+            _deferredPseudoFastReplayCycle = cycle;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitExactCpuDataRamTiming(
+            in AmigaExactCpuDataRamRegion region,
+            AmigaBusAccessSize size,
+            ref long cycle,
+            bool isWrite,
+            AmigaBusAccessKind kind,
+            out long grantedCycle,
+            out long secondWordCycle)
+        {
+            if (region.Target == AmigaBusAccessTarget.ExpansionRam)
+            {
+                CommitExactCpuExpansionDataTiming(
+                    region.Address,
+                    size,
+                    ref cycle,
+                    isWrite,
+                    kind,
+                    out grantedCycle,
+                    out secondWordCycle);
+                return;
+            }
+
+            CommitExactCpuDataTiming(
+                region.Target,
+                region.Address,
+                size,
+                ref cycle,
+                isWrite,
+                kind,
+                out grantedCycle,
+                out secondWordCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -849,6 +1057,7 @@ namespace CopperMod.Amiga
             out long grantedCycle,
             out long secondWordCycle)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             var requestedCycle = cycle;
             if (TryCommitExactCpuChipDataAccessFast(
                 target,
@@ -859,7 +1068,8 @@ namespace CopperMod.Amiga
                 kind,
                 out grantedCycle,
                 out secondWordCycle,
-                out var completedCycle))
+                out var completedCycle,
+                synchronizeDmaAfterGrant: true))
             {
                 cycle = completedCycle;
                 return;
@@ -897,6 +1107,62 @@ namespace CopperMod.Amiga
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitExactCpuExpansionDataTiming(
+            uint address,
+            AmigaBusAccessSize size,
+            ref long cycle,
+            bool isWrite,
+            AmigaBusAccessKind kind,
+            out long grantedCycle,
+            out long secondWordCycle)
+        {
+            var requestedCycle = cycle;
+            if (TryCommitExactCpuChipDataAccessFast(
+                AmigaBusAccessTarget.ExpansionRam,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                kind,
+                out grantedCycle,
+                out secondWordCycle,
+                out var completedCycle,
+                synchronizeDmaAfterGrant: false))
+            {
+                cycle = completedCycle;
+                return;
+            }
+
+            if (_useFastZeroWaitAccesses)
+            {
+                GrantFastCpuAccessCycles(
+                    AmigaBusAccessTarget.ExpansionRam,
+                    address,
+                    size,
+                    cycle,
+                    kind,
+                    isWrite,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out var fastCompletedCycle);
+                cycle = fastCompletedCycle;
+                return;
+            }
+
+            var access = Arbitrate(
+                AmigaBusRequester.Cpu,
+                kind,
+                AmigaBusAccessTarget.ExpansionRam,
+                address,
+                size,
+                cycle,
+                isWrite);
+            cycle = access.CompletedCycle;
+            grantedCycle = access.GrantedCycle;
+            secondWordCycle = GetSecondWordCycle(access);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryCommitExactCpuChipDataAccessFast(
             AmigaBusAccessTarget target,
             uint address,
@@ -906,30 +1172,47 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind kind,
             out long grantedCycle,
             out long secondWordCycle,
-            out long completedCycle)
+            out long completedCycle,
+            bool synchronizeDmaAfterGrant)
         {
             grantedCycle = 0;
             secondWordCycle = 0;
             completedCycle = 0;
-            if (!_useExactCpuChipSlotFastPath ||
-                !_useFastZeroWaitAccesses ||
-                _captureBusAccesses ||
-                (target != AmigaBusAccessTarget.ChipRam && target != AmigaBusAccessTarget.ExpansionRam) ||
+
+            // #1: Single combined guard replaces 5 separate checks.
+            // _useExactCpuChipSlotFastPath, _useFastZeroWaitAccesses are always true in production;
+            // _captureBusAccesses is always false; target is already known to be ChipRam/ExpansionRam
+            // from the caller; ShouldUseChipSlotScheduler is the only dynamic check needed.
+            if (!_exactCpuChipSlotFastPathEnabled ||
                 !ShouldUseChipSlotScheduler(target))
             {
                 return false;
             }
 
+            // #2: Check cached clean-through cycle before full drain.
             var grantRequestCycle = requestedCycle;
-            _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite);
+            if (!_hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle))
+            {
+                _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite);
+            }
+
             if (Blitter.Busy)
             {
                 grantRequestCycle = Blitter.AdvanceThroughCpuStall(grantRequestCycle);
             }
 
             grantRequestCycle = Math.Max(0, grantRequestCycle);
-            _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
-            PrepareLiveDisplayBeforeCpuHrmGrantIfNeeded(target, size, isWrite, grantRequestCycle);
+
+            // #3: Removed per-access BlitterPriorityEnabled write.
+            // Now updated only when DMACON changes (see Paula DMACON write handler).
+
+            // #4: Inline the display preparation check to avoid method call overhead.
+            if (LiveAgnusDmaEnabled &&
+                size == AmigaBusAccessSize.Word &&
+                Display.HasLiveDisplayWork())
+            {
+                Display.CaptureLiveDisplayDmaBeforeHrmGrant(grantRequestCycle);
+            }
 
             if (size == AmigaBusAccessSize.Long)
             {
@@ -957,8 +1240,17 @@ namespace CopperMod.Amiga
                 secondWordCycle = grantedCycle;
             }
 
-            Agnus.RecordCpuChipWaitCycles(grantedCycle - grantRequestCycle);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+            // #5: Skip diagnostic call when no wait occurred.
+            if (grantedCycle > grantRequestCycle)
+            {
+                Agnus.RecordCpuChipWaitCycles(grantedCycle - grantRequestCycle);
+            }
+
+            if (synchronizeDmaAfterGrant)
+            {
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+            }
+
             return true;
         }
 
@@ -1290,6 +1582,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
@@ -1503,6 +1796,7 @@ namespace CopperMod.Amiga
 
         public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1532,6 +1826,7 @@ namespace CopperMod.Amiga
 
         internal void WriteTasCpuDataByte(uint address, byte value, ref long cycle)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1574,6 +1869,7 @@ namespace CopperMod.Amiga
 
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1617,6 +1913,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterWordAddress(address))
             {
@@ -1670,6 +1967,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
@@ -1724,6 +2022,7 @@ namespace CopperMod.Amiga
 
         public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
         {
+            FlushDeferredPseudoFastTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -3388,7 +3687,142 @@ namespace CopperMod.Amiga
                 request.Target == AmigaBusAccessTarget.CustomRegisters &&
                 !request.IsWrite;
 
+        private void RebuildCpuBusBankTable()
+        {
+            for (var bank = 0; bank < CpuBusBankCount; bank++)
+            {
+                var bankAddress = (uint)(bank << CpuBusBankShift);
+                _cpuBusBankKinds[bank] = ClassifyCpuBusBank(bankAddress, out var offset);
+                _cpuBusBankOffsets[bank] = offset;
+            }
+        }
+
+        private CpuBusBankKind ClassifyCpuBusBank(uint bankAddress, out int offset)
+        {
+            offset = 0;
+            if (HasSpecialCpuBusBankOverlap(bankAddress))
+            {
+                return CpuBusBankKind.Special;
+            }
+
+            var bankEnd = bankAddress + CpuBusBankSize - 1u;
+            var startsInOverlay = IsRomOverlayAddress(bankAddress);
+            var endsInOverlay = IsRomOverlayAddress(bankEnd);
+            if (startsInOverlay || endsInOverlay)
+            {
+                return startsInOverlay && endsInOverlay
+                    ? CpuBusBankKind.RomOverlay
+                    : CpuBusBankKind.Special;
+            }
+
+            var mappedOverlap = _mappedMemory.ContainsMappedAddressInRange(bankAddress, CpuBusBankSize);
+            var mappedOffset = 0;
+            var mappedFullBank = mappedOverlap &&
+                _mappedMemory.TryGetMappedReadMemory(bankAddress, CpuBusBankSize, out _, out mappedOffset);
+
+            var chipFullBank = _chipRam.TryGetContiguousMemory(bankAddress, CpuBusBankSize, out _, out var chipOffset);
+            var realFastFullBank = _realFastRam.TryGetContiguousMemory(bankAddress, CpuBusBankSize, out _, out var realFastOffset);
+            var expansionFullBank = _expansionRam.TryGetContiguousMemory(bankAddress, CpuBusBankSize, out _, out var expansionOffset);
+
+            if (mappedOverlap)
+            {
+                if (!mappedFullBank || chipFullBank || realFastFullBank || expansionFullBank)
+                {
+                    return CpuBusBankKind.Special;
+                }
+
+                offset = mappedOffset;
+                return CpuBusBankKind.MappedRom;
+            }
+
+            if (chipFullBank)
+            {
+                offset = chipOffset;
+                return CpuBusBankKind.ChipRam;
+            }
+
+            if (realFastFullBank)
+            {
+                offset = realFastOffset;
+                return CpuBusBankKind.RealFastRam;
+            }
+
+            if (expansionFullBank)
+            {
+                offset = expansionOffset;
+                return CpuBusBankKind.ExpansionRam;
+            }
+
+            return CpuBusBankKind.Unmapped;
+        }
+
+        private bool HasSpecialCpuBusBankOverlap(uint bankAddress)
+        {
+            var bankEndExclusive = bankAddress + CpuBusBankSize;
+            if (RangesOverlap(bankAddress, bankEndExclusive, 0x00DFF000u, 0x00DFF200u) ||
+                RangesOverlap(bankAddress, bankEndExclusive, 0x00BFD000u, 0x00BFF000u) ||
+                HasHostTrapInCpuBusBank(bankAddress) ||
+                (_realTimeClock != null && RangesOverlap(
+                    bankAddress,
+                    bankEndExclusive,
+                    AmigaRealTimeClock.BaseAddress,
+                    AmigaRealTimeClock.BaseAddress + AmigaRealTimeClock.ByteLength)))
+            {
+                return true;
+            }
+
+            if (CopperHdf.ContainsAutoConfigAddress(bankAddress) ||
+                CopperHdf.ContainsAutoConfigAddress(bankEndExclusive - 1u) ||
+                CopperHdf.ContainsBoardAddress(bankAddress) ||
+                CopperHdf.ContainsBoardAddress(bankEndExclusive - 1u))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool HasHostTrapInCpuBusBank(uint bankAddress)
+        {
+            if (_hostTrapStubs.Count == 0)
+            {
+                return false;
+            }
+
+            var bankEndExclusive = bankAddress + CpuBusBankSize;
+            foreach (var address in _hostTrapStubs.Keys)
+            {
+                var trapStart = NormalizeAddress(address);
+                var trapEndExclusive = (ulong)trapStart + 4u;
+                if ((ulong)bankAddress < trapEndExclusive && trapStart < bankEndExclusive)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool RangesOverlap(uint start, uint endExclusive, uint otherStart, uint otherEndExclusive)
+            => start < otherEndExclusive && otherStart < endExclusive;
+
         private AmigaBusAccessTarget ClassifyTarget(uint address)
+        {
+            address = NormalizeAddress(address);
+            var bankKind = _cpuBusBankKinds[(int)(address >> CpuBusBankShift)];
+            return bankKind switch
+            {
+                CpuBusBankKind.ChipRam => AmigaBusAccessTarget.ChipRam,
+                CpuBusBankKind.ExpansionRam => AmigaBusAccessTarget.ExpansionRam,
+                CpuBusBankKind.RealFastRam => AmigaBusAccessTarget.RealFastRam,
+                CpuBusBankKind.RomOverlay => AmigaBusAccessTarget.Rom,
+                CpuBusBankKind.MappedRom => AmigaBusAccessTarget.Rom,
+                CpuBusBankKind.Unmapped => AmigaBusAccessTarget.Unmapped,
+                _ => ClassifyTargetDetailed(address)
+            };
+        }
+
+        private AmigaBusAccessTarget ClassifyTargetDetailed(uint address)
         {
             if (IsRomOverlayAddress(address))
             {
@@ -3452,36 +3886,14 @@ namespace CopperMod.Amiga
         private byte ReadRawByte(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
-            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+
+            // Hot path: chip RAM (most common case).
+            if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
-                return hostTrapByte;
+                return _chipRamData[(int)address & _chipRamMask];
             }
 
-            if (TryReadRomOverlayByte(address, out var overlayValue))
-            {
-                return overlayValue;
-            }
-
-            if (TryGetChipRamOffset(address, out var chipOffset))
-            {
-                return _chipRam[chipOffset];
-            }
-
-            if (_realTimeClock != null && _realTimeClock.TryReadByte(address, out var realTimeClockValue))
-            {
-                return realTimeClockValue;
-            }
-
-            if (TryGetExpansionRamOffset(address, out var expansionOffset))
-            {
-                return _expansionRam[expansionOffset];
-            }
-
-            if (TryGetRealFastRamOffset(address, out var realFastOffset))
-            {
-                return _realFastRam[realFastOffset];
-            }
-
+            // Custom registers.
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
                 var offset = (ushort)(address - 0x00DFF000);
@@ -3503,6 +3915,33 @@ namespace CopperMod.Amiga
                 return Disk.TryReadByte(offset, out var diskValue) ? diskValue : Paula.ReadByte(offset);
             }
 
+            // ROM overlay (only during early boot).
+            if (TryReadRomOverlayByte(address, out var overlayValue))
+            {
+                return overlayValue;
+            }
+
+            // Chip RAM with overlay active.
+            if (TryGetChipRamOffset(address, out var chipOffset))
+            {
+                return _chipRam[chipOffset];
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset))
+            {
+                return _expansionRam[expansionOffset];
+            }
+
+            if (TryGetRealFastRamOffset(address, out var realFastOffset))
+            {
+                return _realFastRam[realFastOffset];
+            }
+
+            if (_realTimeClock != null && _realTimeClock.TryReadByte(address, out var realTimeClockValue))
+            {
+                return realTimeClockValue;
+            }
+
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
                 return ReadCiaRegisterValue(cia, ciaRegister);
@@ -3521,6 +3960,12 @@ namespace CopperMod.Amiga
             if (_mappedMemory.TryReadMappedByte(address, out var value))
             {
                 return value;
+            }
+
+            // Host traps (rare, checked last).
+            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
             }
 
             return 0;
@@ -3639,31 +4084,32 @@ namespace CopperMod.Amiga
         private ushort ReadRawWord(uint address)
         {
             address = NormalizeAddress(address);
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+
+            // Hot path: chip RAM (most common case).
+            if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
-                return hostTrapWord;
+                var chipOffset = (int)address & _chipRamMask;
+                var nextOffset = (chipOffset + 1) & _chipRamMask;
+                return (ushort)((_chipRamData[chipOffset] << 8) | _chipRamData[nextOffset]);
             }
 
-            if (TryReadRomOverlayWord(address, out var overlayWord))
-            {
-                return overlayWord;
-            }
-
+            // Custom registers.
             if (IsCustomRegisterWordAddress(address))
             {
                 return ReadCustomWord((ushort)(address - 0x00DFF000), long.MinValue);
             }
 
-            if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
+            // ROM overlay (only during early boot).
+            if (TryReadRomOverlayWord(address, out var overlayWord))
             {
-                var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
-                return (ushort)((_chipRam[chipOffset] << 8) | _chipRam[nextOffset]);
+                return overlayWord;
             }
 
-            if (_realTimeClock != null &&
-                (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
+            // Chip RAM with overlay active.
+            if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffsetFallback))
             {
-                return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
+                var nextOffset = (chipOffsetFallback + 1) & (_chipRam.Length - 1);
+                return (ushort)((_chipRam[chipOffsetFallback] << 8) | _chipRam[nextOffset]);
             }
 
             if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
@@ -3678,31 +4124,62 @@ namespace CopperMod.Amiga
                 return (ushort)((_realFastRam[realFastOffset] << 8) | _realFastRam[realFastOffset + 1]);
             }
 
+            if (_realTimeClock != null &&
+                (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
+            {
+                return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
+            }
+
+            // Host traps (rare, checked last).
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
+
             return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
         }
 
         private ushort ReadRawWord(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+
+            // Hot path: chip RAM (most common case).
+            if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
-                return hostTrapWord;
+                var chipOffset = (int)address & _chipRamMask;
+                var nextOffset = (chipOffset + 1) & _chipRamMask;
+                return (ushort)((_chipRamData[chipOffset] << 8) | _chipRamData[nextOffset]);
             }
 
-            if (TryReadRomOverlayWord(address, out var overlayWord))
-            {
-                return overlayWord;
-            }
-
+            // Custom registers.
             if (IsCustomRegisterWordAddress(address))
             {
                 return ReadCustomWord((ushort)(address - 0x00DFF000), sampleCycle);
             }
 
-            if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffset))
+            // ROM overlay (only during early boot).
+            if (TryReadRomOverlayWord(address, out var overlayWord))
             {
-                var nextOffset = (chipOffset + 1) & (_chipRam.Length - 1);
-                return (ushort)((_chipRam[chipOffset] << 8) | _chipRam[nextOffset]);
+                return overlayWord;
+            }
+
+            // Chip RAM with overlay active.
+            if (!IsRomOverlayAddress(address) && TryGetChipRamOffset(address, out var chipOffsetFallback))
+            {
+                var nextOffset = (chipOffsetFallback + 1) & (_chipRam.Length - 1);
+                return (ushort)((_chipRam[chipOffsetFallback] << 8) | _chipRam[nextOffset]);
+            }
+
+            if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
+                expansionOffset + 1 < _expansionRam.Length)
+            {
+                return (ushort)((_expansionRam[expansionOffset] << 8) | _expansionRam[expansionOffset + 1]);
+            }
+
+            if (TryGetRealFastRamOffset(address, out var realFastOffset) &&
+                realFastOffset + 1 < _realFastRam.Length)
+            {
+                return (ushort)((_realFastRam[realFastOffset] << 8) | _realFastRam[realFastOffset + 1]);
             }
 
             if (_realTimeClock != null &&
@@ -3712,16 +4189,10 @@ namespace CopperMod.Amiga
                     ReadRawByte(address + 1, sampleCycle));
             }
 
-            if (TryGetExpansionRamOffset(address, out var expansionOffset) &&
-                expansionOffset + 1 < _expansionRam.Length)
+            // Host traps (rare, checked last).
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
             {
-                return (ushort)((_expansionRam[expansionOffset] << 8) | _expansionRam[expansionOffset + 1]);
-            }
-
-            if (TryGetRealFastRamOffset(address, out var realFastOffset) &&
-                realFastOffset + 1 < _realFastRam.Length)
-            {
-                return (ushort)((_realFastRam[realFastOffset] << 8) | _realFastRam[realFastOffset + 1]);
+                return hostTrapWord;
             }
 
             return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
@@ -4613,6 +5084,7 @@ namespace CopperMod.Amiga
             {
                 var wasConfigured = CopperHdf.IsConfigured;
                 CopperHdf.WriteAutoConfigByte(address, value);
+                RebuildCpuBusBankTable();
                 if (!wasConfigured && CopperHdf.IsConfigured)
                 {
                     CopperHdf.InstallBootstrapTraps(this);
@@ -4881,6 +5353,7 @@ namespace CopperMod.Amiga
             {
                 _romOverlayEnabled = overlayEnabled;
                 InvalidateInstructionFetchWindows();
+                RebuildCpuBusBankTable();
             }
             else
             {

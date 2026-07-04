@@ -162,6 +162,13 @@ namespace Copper68k
         bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
+    internal interface IM68kDeferredCpuInstructionTiming
+    {
+        void BeginDeferredCpuInstructionTiming(long cycle);
+
+        void FlushDeferredCpuInstructionTiming(ref long cycle);
+    }
+
     internal interface IM68kCpuDataAccess<TBus, TSelf>
         where TBus : IM68kBus
         where TSelf : struct, IM68kCpuDataAccess<TBus, TSelf>
@@ -1196,6 +1203,7 @@ namespace Copper68k
         private readonly IM68kBus _bus;
         private readonly TBus _typedBus;
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
+        private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
         private readonly IM68kCpuBusPhaseTrace? _cpuBusPhaseTrace;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         private readonly M68kOpcodePlanDispatch _opcodePlanDispatch;
@@ -1253,6 +1261,7 @@ namespace Copper68k
             _instructionFetchWindowBus = enableInstructionFetchWindow
                 ? bus as IM68kInstructionFetchWindowBus
                 : null;
+            _deferredCpuInstructionTiming = bus as IM68kDeferredCpuInstructionTiming;
             _cpuBusPhaseTrace = enableCpuBusPhaseTrace &&
                 bus is IM68kCpuBusPhaseTrace { CpuBusPhaseTracingEnabled: true } trace
                     ? trace
@@ -5530,6 +5539,7 @@ namespace Copper68k
         {
             if ((address & 1) != 0)
             {
+                _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref cycle);
                 State.Cycles = Math.Max(State.Cycles, cycle);
                 _cpuBusCycle = Math.Max(_cpuBusCycle, cycle);
                 _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, cycle);
@@ -5726,6 +5736,7 @@ namespace Copper68k
             bool useDataAccessStackedProgramCounter = false)
         {
             var faultCycle = BeginCpuBusAccessCycle();
+            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref faultCycle);
             State.Cycles = faultCycle;
             _cpuBusCycle = faultCycle;
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, faultCycle);
@@ -5836,11 +5847,15 @@ namespace Copper68k
             _instructionCycleFloor = startCycle;
             _cpuBusCycle = Math.Max(_cpuBusCycle, startCycle);
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, startCycle);
+            _deferredCpuInstructionTiming?.BeginDeferredCpuInstructionTiming(startCycle);
         }
 
         private int CompleteInstruction(long startCycle)
         {
             var completedCycle = Math.Max(_instructionCycleFloor, _cpuRetireBusCycle);
+            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref completedCycle);
+            _cpuBusCycle = Math.Max(_cpuBusCycle, completedCycle);
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, completedCycle);
             if (State.Cycles < completedCycle)
             {
                 State.Cycles = completedCycle;

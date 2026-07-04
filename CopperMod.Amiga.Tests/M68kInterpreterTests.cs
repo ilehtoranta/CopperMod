@@ -1850,6 +1850,127 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AmigaBusDeferredPseudoFastTimingFlushMatchesImmediateExactTiming()
+	{
+		var immediateBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var deferredBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var firstAddress = immediateBus.ExpansionRamBase + 0x20;
+		var secondAddress = immediateBus.ExpansionRamBase + 0x40;
+		Write(immediateBus.ExpansionRam, 0x20, 0x12, 0x34);
+		Write(immediateBus.ExpansionRam, 0x40, 0x56, 0x78, 0x9A, 0xBC);
+		Write(deferredBus.ExpansionRam, 0x20, 0x12, 0x34);
+		Write(deferredBus.ExpansionRam, 0x40, 0x56, 0x78, 0x9A, 0xBC);
+		var immediateCycle = 20L;
+		var deferredCycle = 20L;
+		var deferredTiming = (IM68kDeferredCpuInstructionTiming)deferredBus;
+
+		Assert.True(immediateBus.TryReadExactCpuDataWord(firstAddress, ref immediateCycle, out var immediateWord));
+		Assert.True(immediateBus.TryReadExactCpuDataLong(secondAddress, ref immediateCycle, out var immediateLong));
+
+		deferredTiming.BeginDeferredCpuInstructionTiming(deferredCycle);
+		Assert.True(deferredBus.TryReadExactCpuDataWord(firstAddress, ref deferredCycle, out var deferredWord));
+		Assert.True(deferredBus.TryReadExactCpuDataLong(secondAddress, ref deferredCycle, out var deferredLong));
+		Assert.Equal(20L, deferredCycle);
+
+		deferredTiming.FlushDeferredCpuInstructionTiming(ref deferredCycle);
+
+		Assert.Equal(immediateWord, deferredWord);
+		Assert.Equal(immediateLong, deferredLong);
+		Assert.Equal(immediateCycle, deferredCycle);
+	}
+
+	[Fact]
+	public void AmigaBusDeferredPseudoFastTimingFlushesBeforeChipExactAccess()
+	{
+		var immediateBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var deferredBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var expansionAddress = immediateBus.ExpansionRamBase + 0x20;
+		Write(immediateBus.ExpansionRam, 0x20, 0x12, 0x34);
+		Write(deferredBus.ExpansionRam, 0x20, 0x12, 0x34);
+		Write(immediateBus.ChipRam, 0x2000, 0x56, 0x78);
+		Write(deferredBus.ChipRam, 0x2000, 0x56, 0x78);
+		var immediateCycle = 20L;
+		var deferredCycle = 20L;
+		var deferredTiming = (IM68kDeferredCpuInstructionTiming)deferredBus;
+
+		Assert.True(immediateBus.TryReadExactCpuDataWord(expansionAddress, ref immediateCycle, out var immediateExpansion));
+		Assert.True(immediateBus.TryReadExactCpuDataWord(0x2000, ref immediateCycle, out var immediateChip));
+
+		deferredTiming.BeginDeferredCpuInstructionTiming(deferredCycle);
+		Assert.True(deferredBus.TryReadExactCpuDataWord(expansionAddress, ref deferredCycle, out var deferredExpansion));
+		Assert.Equal(20L, deferredCycle);
+		Assert.True(deferredBus.TryReadExactCpuDataWord(0x2000, ref deferredCycle, out var deferredChip));
+
+		Assert.Equal(immediateExpansion, deferredExpansion);
+		Assert.Equal(immediateChip, deferredChip);
+		Assert.Equal(immediateCycle, deferredCycle);
+	}
+
+	[Fact]
+	public void AmigaBusDeferredPseudoFastWritesNotifyJitBeforeTimingFlush()
+	{
+		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var address = bus.ExpansionRamBase + 0x20;
+		var cycle = 20L;
+		var notifications = 0;
+		uint notifiedAddress = 0;
+		var notifiedByteCount = 0;
+		bus.JitEligibleMemoryWritten += (writtenAddress, byteCount) =>
+		{
+			notifications++;
+			notifiedAddress = writtenAddress;
+			notifiedByteCount = byteCount;
+		};
+		var deferredTiming = (IM68kDeferredCpuInstructionTiming)bus;
+
+		deferredTiming.BeginDeferredCpuInstructionTiming(cycle);
+		Assert.True(bus.TryWriteExactCpuDataLong(address, 0x1234_5678, ref cycle));
+
+		Assert.Equal(20L, cycle);
+		Assert.Equal(0x1234_5678u, BigEndian.ReadUInt32(bus.ExpansionRam, 0x20, "deferred expansion write"));
+		Assert.Equal(1, notifications);
+		Assert.Equal(address, notifiedAddress);
+		Assert.Equal(4, notifiedByteCount);
+
+		deferredTiming.FlushDeferredCpuInstructionTiming(ref cycle);
+		Assert.True(cycle >= 20L);
+	}
+
+	[Fact]
+	public void DeferredPseudoFastTimingFlushesBeforeAddressErrorFrame()
+	{
+		var bus = new AmigaBus(
+			expansionRamSize: 0x10000,
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false);
+		Write(bus.ChipRam, 0x000C, 0x00, 0x00, 0x40, 0x00);
+		Write(bus.ChipRam, 0x1000, 0x32, 0x90); // MOVE.W (A0),(A1)
+		Write(bus.ChipRam, 0x4000, 0x4E, 0x71); // NOP at address-error vector
+		Write(bus.ExpansionRam, 0x0020, 0x12, 0x34);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x00C0_8000);
+		cpu.State.A[0] = bus.ExpansionRamBase + 0x20;
+		cpu.State.A[1] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		var frameOffset = (int)(cpu.State.A[7] - bus.ExpansionRamBase);
+		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x00C0_7FF2u, cpu.State.A[7]);
+		Assert.Equal(0x3285, ReadWord(bus.ExpansionRam, frameOffset));
+		Assert.Equal(0x0000_2001u, ReadLong(bus.ExpansionRam, frameOffset + 2));
+		Assert.Equal(0x3290, ReadWord(bus.ExpansionRam, frameOffset + 6));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.ExpansionRam, frameOffset + 8));
+		Assert.Equal(0x0000_1004u, ReadLong(bus.ExpansionRam, frameOffset + 10));
+		Assert.Equal(0x00, bus.ChipRam[0x2001]);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4002u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void AmigaBusExactCpuDataHelpersMatchGenericRealFastRamAccess()
 	{
 		var genericBus = CreateExactCpuDataAmigaBus(realFastRamSize: 0x10000);
@@ -1945,6 +2066,40 @@ public sealed class M68kInterpreterTests
 		Assert.False(bus.TryReadExactCpuDataWord(0x2000, ref cycle, out _));
 		Assert.Equal(20L, cycle);
 		Assert.False(bus.TryReadExactCpuDataWord(0x2100, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+	}
+
+	[Fact]
+	public void AmigaBusExactCpuDataHelpersGuardExpansionRamBoundaries()
+	{
+		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		var finalLongAddress = bus.ExpansionRamBase + 0xFFFC;
+		Write(bus.ExpansionRam, 0xFFFC, 0x12, 0x34, 0x56, 0x78);
+		var cycle = 20L;
+
+		Assert.True(bus.TryReadExactCpuDataLong(finalLongAddress, ref cycle, out var value));
+		Assert.Equal(0x1234_5678u, value);
+
+		cycle = 20L;
+		Assert.False(bus.TryReadExactCpuDataLong(bus.ExpansionRamBase + 0xFFFE, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+	}
+
+	[Fact]
+	public void AmigaBusExactCpuDataHelpersFallBackForSpecialExpansionRamBank()
+	{
+		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		bus.RegisterHostTrapStub(bus.ExpansionRamBase, _ => { });
+		var cycle = 20L;
+
+		Assert.False(bus.TryReadExactCpuDataWord(bus.ExpansionRamBase + 0x20, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+
+		bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
+		bus.MapReadOnlyMemory(bus.ExpansionRamBase, new byte[] { 0x12, 0x34 });
+		cycle = 20L;
+
+		Assert.False(bus.TryReadExactCpuDataWord(bus.ExpansionRamBase + 0x20, ref cycle, out _));
 		Assert.Equal(20L, cycle);
 	}
 

@@ -536,6 +536,26 @@ namespace CopperMod.Amiga
             return false;
         }
 
+        public bool ContainsMappedAddressInRange(uint address, int byteCount)
+        {
+            if (byteCount <= 0)
+            {
+                return false;
+            }
+
+            var start = (ulong)address;
+            var end = start + (uint)byteCount;
+            for (var i = _regions.Count - 1; i >= 0; i--)
+            {
+                if (_regions[i].Overlaps(start, end))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public bool TryReadMappedByte(uint address, out byte value)
         {
             for (var i = _regions.Count - 1; i >= 0; i--)
@@ -628,6 +648,13 @@ namespace CopperMod.Amiga
             {
                 var offset = address - BaseAddress;
                 return address >= BaseAddress && offset < _data.Length;
+            }
+
+            public bool Overlaps(ulong start, ulong end)
+            {
+                var regionStart = (ulong)BaseAddress;
+                var regionEnd = regionStart + (uint)_data.Length;
+                return start < regionEnd && regionStart < end;
             }
 
             public bool TryGetContiguousReadMemory(uint address, int byteCount, out byte[] memory, out int offset)
