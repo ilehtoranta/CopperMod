@@ -176,18 +176,11 @@ namespace CopperMod.Amiga
 
     internal readonly struct AmigaBusAccessResult
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public AmigaBusAccessResult(AmigaBusAccessRequest request, long grantedCycle, long completedCycle)
         {
-            if (grantedCycle < request.RequestedCycle)
-            {
-                throw new ArgumentOutOfRangeException(nameof(grantedCycle), grantedCycle, "Bus grant cannot happen before the requested cycle.");
-            }
-
-            if (completedCycle < grantedCycle)
-            {
-                throw new ArgumentOutOfRangeException(nameof(completedCycle), completedCycle, "Bus completion cannot happen before the granted cycle.");
-            }
-
+            System.Diagnostics.Debug.Assert(grantedCycle >= request.RequestedCycle, "Bus grant cannot happen before the requested cycle.");
+            System.Diagnostics.Debug.Assert(completedCycle >= grantedCycle, "Bus completion cannot happen before the granted cycle.");
             Request = request;
             GrantedCycle = grantedCycle;
             CompletedCycle = completedCycle;
