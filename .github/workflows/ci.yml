@@ -23,6 +23,9 @@ jobs:
         shell: pwsh
         run: .\scripts\nuget\pack-copper68k.ps1
 
+      - name: Test Copper68k
+        run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
+
       - name: Build CopperScreen
         run: dotnet build CopperScreen\CopperScreen.csproj --configuration Release
 
