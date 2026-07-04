@@ -5,6 +5,29 @@ namespace Copper68k.Tests;
 public sealed class M68kLogicalTests
 {
 	[Fact]
+	public void TstWordPostincrementAddressErrorAdvancesAddressRegister()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x4A5D); // TST.W (A5)+
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[5] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Extend | M68kCpuState.Negative |
+			M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2103u, cpu.State.A[5]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x4A51u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x4A5D, bus.ReadWord(0x4FF8));
+	}
+
+	[Fact]
 	public void ClrWordPostincrementAddressErrorAdvancesAddressRegister()
 	{
 		var bus = new Copper68kTestBus();

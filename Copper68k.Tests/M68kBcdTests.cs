@@ -66,4 +66,25 @@ public sealed class M68kBcdTests
 		Assert.Equal(0x3B9A, bus.ReadWord(0x7686));
 		Assert.Equal(0x2708, cpu.State.StatusRegister);
 	}
+
+	[Fact]
+	public void NbcdPredecrementSetsOverflowFromDecimalCorrection()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x4821); // NBCD -(A1)
+		bus.WriteWord(0x2100, 0x4E00);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[1] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend |
+			M68kCpuState.Zero | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2100u, cpu.State.A[1]);
+		Assert.Equal(0x4B00, bus.ReadWord(0x2100));
+		Assert.Equal(M68kCpuState.Supervisor | M68kCpuState.Extend |
+			M68kCpuState.Overflow | M68kCpuState.Carry, cpu.State.StatusRegister);
+	}
 }

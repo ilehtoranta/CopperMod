@@ -1210,6 +1210,7 @@ namespace Copper68k
         private uint _activeInstructionProgramCounter;
         private uint _dataAccessStackedProgramCounter;
         private ushort? _addressErrorInstructionWord;
+        private bool? _addressErrorIsWriteOverride;
         private M68kBusAccessKind _dataReadFaultAccessKind;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
@@ -1404,6 +1405,7 @@ namespace Copper68k
             _activeInstructionProgramCounter = instructionPc;
             _dataAccessStackedProgramCounter = instructionPc;
             _addressErrorInstructionWord = null;
+            _addressErrorIsWriteOverride = null;
             _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
             var opcode = FetchWord();
             State.LastOpcode = opcode;
@@ -3787,10 +3789,22 @@ namespace Copper68k
                     AddInstructionCycles(12);
                     return true;
                 case 0x46FC:
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseException(8, instructionPc, 34);
+                        return true;
+                    }
+
                     State.StatusRegister = FetchWord();
                     AddInstructionCycles(12);
                     return true;
                 case 0x4E70:
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseException(8, instructionPc, 34);
+                        return true;
+                    }
+
                     _bus.ResetExternalDevices(State.Cycles);
                     AddInstructionCycles(132);
                     return true;
@@ -3810,17 +3824,23 @@ namespace Copper68k
                     return true;
                 case 0x4E73:
                 {
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseException(8, instructionPc, 34);
+                        return true;
+                    }
+
                     var statusRegister = PullWord();
                     var programCounter = PullLong();
                     State.StatusRegister = statusRegister;
-                    SetProgramCounterAndFlushPrefetch(programCounter);
+                    BranchTo(programCounter, State.ProgramCounter);
                     AddInstructionCycles(20);
                     return true;
                 }
                 case 0x4E75:
                 {
                     var programCounter = PullLong();
-                    SetProgramCounterAndFlushPrefetch(programCounter);
+                    BranchTo(programCounter, State.ProgramCounter);
                     AddInstructionCycles(16);
                     return true;
                 }
@@ -3835,9 +3855,13 @@ namespace Copper68k
                     }
                     return true;
                 case 0x4E77:
-                    State.StatusRegister = PullWord();
+                {
+                    SetCcr(PullWord());
+                    var programCounter = PullLong();
+                    BranchTo(programCounter, State.ProgramCounter);
                     AddInstructionCycles(12);
                     return true;
+                }
                 case 0x4AFC:
                     RaiseException(4, instructionPc, 34);
                     return true;
@@ -3873,7 +3897,15 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x40C0)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word, write: true);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Word, write: true);
+                if (mode == 3 && (ea.Address & 1) != 0)
+                {
+                    SetAddressRegister(reg, State.A[reg] + AddressIncrement(reg, M68kOperandSize.Word));
+                }
+
+                _addressErrorIsWriteOverride = false;
                 ea.Write(State.StatusRegister);
                 AddInstructionCycles(12);
                 return true;
@@ -3881,7 +3913,11 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x44C0)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
+                var ea = ResolveEa(
+                    (opcode >> 3) & 7,
+                    opcode & 7,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 SetCcr((ushort)ea.Read());
                 AddInstructionCycles(12);
                 return true;
@@ -3895,7 +3931,11 @@ namespace Copper68k
                     return true;
                 }
 
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
+                var ea = ResolveEa(
+                    (opcode >> 3) & 7,
+                    opcode & 7,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 State.StatusRegister = (ushort)ea.Read();
                 AddInstructionCycles(12);
                 return true;
@@ -3927,6 +3967,16 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x4E58)
             {
                 var reg = opcode & 7;
+                if ((State.A[reg] & 1) != 0)
+                {
+                    _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+                    ThrowOddAddressAccess(
+                        State.A[reg],
+                        isWrite: false,
+                        M68kBusAccessKind.CpuDataRead,
+                        useDataAccessStackedProgramCounter: true);
+                }
+
                 State.SetActiveStackPointer(State.A[reg]);
                 SetAddressRegister(reg, PullLong());
                 AddInstructionCycles(12);
@@ -4029,9 +4079,14 @@ namespace Copper68k
 
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Byte, write: true);
                 var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
-                var result = M68kIntegerSemantics.SubtractBcdByte(0, (byte)ea.Read(), extend, out var carry);
+                var result = M68kIntegerSemantics.SubtractBcdByte(
+                    0,
+                    (byte)ea.Read(),
+                    extend,
+                    out var carry,
+                    out var overflow);
                 ea.Write(result);
-                SetBcdFlags(result, carry);
+                SetBcdFlags(result, carry, overflow);
                 AddInstructionCycles(ea.IsRegister ? 6 : 8);
                 return true;
             }
@@ -4079,7 +4134,7 @@ namespace Copper68k
                     reg,
                     size,
                     write: writesEffectiveAddress,
-                    completeWordPostIncrementBeforeRead: writesEffectiveAddress && size == M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
                     addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
                 if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
                 {
@@ -4700,7 +4755,7 @@ namespace Copper68k
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
             var overflow = false;
             var result = subtract
-                ? M68kIntegerSemantics.SubtractBcdByte(destination, source, extend, out var carry)
+                ? M68kIntegerSemantics.SubtractBcdByte(destination, source, extend, out var carry, out overflow)
                 : M68kIntegerSemantics.AddBcdByte(destination, source, extend, out carry, out overflow);
 
             if (memoryMode)
@@ -4712,7 +4767,7 @@ namespace Copper68k
                 WriteDataRegister(destinationRegister, result, M68kOperandSize.Byte);
             }
 
-            SetBcdFlags(result, carry, subtract ? false : overflow);
+            SetBcdFlags(result, carry, overflow);
             AddInstructionCycles(memoryMode ? 18 : 6);
             return true;
         }
@@ -4968,6 +5023,7 @@ namespace Copper68k
             if (!directionMemoryToRegisters && mode == 4)
             {
                 var address = State.A[reg];
+                _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
                 for (var bit = 0; bit < 16; bit++)
                 {
                     if ((registerMask & (1 << bit)) == 0)
@@ -4984,7 +5040,7 @@ namespace Copper68k
                     }
                     else
                     {
-                        WriteLong(address, value);
+                        WriteLongDescending(address, value);
                     }
                 }
 
@@ -4995,6 +5051,8 @@ namespace Copper68k
 
             var ea = ResolveEa(mode, reg, size, write: !directionMemoryToRegisters, addressOnly: true);
             var current = ea.Address;
+            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+            _dataReadFaultAccessKind = ea.ReadFaultAccessKind;
             for (var register = 0; register < 16; register++)
             {
                 if ((registerMask & (1 << register)) == 0)
@@ -5810,6 +5868,7 @@ namespace Copper68k
         {
             var savedStatusRegister = State.StatusRegister;
             var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
+            var frameIsWrite = _addressErrorIsWriteOverride ?? isWrite;
             var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch &&
                 !useDataAccessStackedProgramCounter
                 ? State.ProgramCounter
@@ -5819,7 +5878,7 @@ namespace Copper68k
             PushWord(savedStatusRegister);
             PushWord(instructionWord);
             PushLong(faultAddress);
-            PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, isWrite, accessKind));
+            PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, frameIsWrite, accessKind));
             SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
             AddInstructionCycles(AddressErrorExceptionCycles);
         }
@@ -6083,6 +6142,8 @@ namespace Copper68k
             public uint Address { get; }
 
             public uint AddressErrorStackedProgramCounter => _addressErrorStackedProgramCounter;
+
+            public M68kBusAccessKind ReadFaultAccessKind => _readFaultAccessKind;
 
             public M68kOperandSize Size { get; }
 

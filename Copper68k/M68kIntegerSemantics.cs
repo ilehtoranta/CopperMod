@@ -204,7 +204,11 @@ namespace Copper68k
             value &= M68kCpuState.Mask(size);
             if (count == 0)
             {
-                return new M68kShiftResult(value, carry: false, extend: extendIn, extendChanged: false);
+                return new M68kShiftResult(
+                    value,
+                    carry: type == 2 && extendIn,
+                    extend: extendIn,
+                    extendChanged: false);
             }
 
             var bits = size == M68kOperandSize.Long ? 32 : size == M68kOperandSize.Word ? 16 : 8;
@@ -283,22 +287,27 @@ namespace Copper68k
         }
 
         internal static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry)
+            => SubtractBcdByte(destination, source, extend, out carry, out _);
+
+        internal static byte SubtractBcdByte(byte destination, byte source, int extend, out bool carry, out bool overflow)
         {
-            var low = (destination & 0x0F) - (source & 0x0F) - extend;
-            var high = (destination >> 4) - (source >> 4);
-            if (low < 0)
+            var unadjusted = destination - source - extend;
+            var correction = 0;
+            if (((destination & 0x0F) - (source & 0x0F) - extend) < 0)
             {
-                low += 10;
-                high--;
+                correction |= 0x06;
             }
 
-            carry = high < 0;
-            if (carry)
+            if (unadjusted < 0)
             {
-                high += 10;
+                correction |= 0x60;
             }
 
-            return (byte)((high << 4) | low);
+            var adjustedValue = unadjusted - correction;
+            var adjusted = (byte)adjustedValue;
+            carry = adjustedValue < 0;
+            overflow = ((unadjusted & ~adjusted) & 0x80) != 0;
+            return adjusted;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -5,6 +5,133 @@ namespace Copper68k.Tests;
 public sealed class M68kMoveTests
 {
 	[Fact]
+	public void MoveToCcrPostincrementSourceAddressErrorAdvancesAddressRegister()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x44DD); // MOVE (A5)+,CCR
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[5] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2103u, cpu.State.A[5]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x44D5u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x44DD, bus.ReadWord(0x4FF8));
+		Assert.Equal(0x1002u, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
+	public void MoveToSrPostincrementSourceAddressErrorAdvancesAddressRegister()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x46DD); // MOVE (A5)+,SR
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[5] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2103u, cpu.State.A[5]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x46D5u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x46DD, bus.ReadWord(0x4FF8));
+		Assert.Equal(0x1002u, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
+	public void MoveImmediateToSrInUserModeRaisesPrivilegeViolation()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x46FC, 0x2700); // MOVE #$2700,SR
+		bus.WriteLong(8 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.ResetStackPointers(0x5000, 0x3000, supervisorMode: false);
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Extend |
+			M68kCpuState.Negative | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FFAu, cpu.State.A[7]);
+		Assert.Equal(0x4FFAu, cpu.State.SupervisorStackPointer);
+		Assert.Equal(0x3000u, cpu.State.UserStackPointer);
+		Assert.Equal((ushort)(M68kCpuState.Supervisor | M68kCpuState.Extend |
+			M68kCpuState.Negative | M68kCpuState.Carry), cpu.State.StatusRegister);
+		Assert.Equal((ushort)(M68kCpuState.Trace | M68kCpuState.Extend |
+			M68kCpuState.Negative | M68kCpuState.Carry), bus.ReadWord(0x4FFA));
+		Assert.Equal(0x1000u, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
+	public void MoveFromSrPredecrementDestinationAddressErrorUsesReadStatusWord()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x40E6); // MOVE SR,-(A6)
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[6] = 0x2103;
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		var expectedStatus = M68kCpuState.Supervisor | M68kCpuState.Extend |
+			M68kCpuState.Negative | M68kCpuState.Carry;
+		Assert.Equal(0x2101u, cpu.State.A[6]);
+		Assert.Equal(expectedStatus, cpu.State.StatusRegister);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x40F5u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x40E6, bus.ReadWord(0x4FF8));
+		Assert.Equal((ushort)(M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry), bus.ReadWord(0x4FFA));
+		Assert.Equal(0x1004u, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
+	public void MoveFromSrPostincrementDestinationAddressErrorAdvancesAddressRegister()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x40DE); // MOVE SR,(A6)+
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[6] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2103u, cpu.State.A[6]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x40D5u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x40DE, bus.ReadWord(0x4FF8));
+		Assert.Equal(0x1002u, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
 	public void MoveWordAddressRegisterToPostincrementDestinationAdvancesDestination()
 	{
 		var bus = new Copper68kTestBus();

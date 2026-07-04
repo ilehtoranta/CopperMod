@@ -182,6 +182,17 @@ public sealed class M68kSingleStepConformanceTests
 	private static uint ToArchitecturalPc(uint corpusPc)
 		=> corpusPc - 4;
 
+	private static uint ToFinalArchitecturalPc(string file, SingleStepCase test)
+	{
+		if (Path.GetFileName(file).Equals("STOP.json.bin", StringComparison.OrdinalIgnoreCase) &&
+			test.Final.Pc == test.Initial.Pc)
+		{
+			return test.Final.Pc;
+		}
+
+		return ToArchitecturalPc(test.Final.Pc);
+	}
+
 	private static void AssertState(string file, SingleStepCase test, M68kCpuState actual)
 	{
 		for (var i = 0; i < 8; i++)
@@ -197,7 +208,7 @@ public sealed class M68kSingleStepConformanceTests
 		AssertEqual(file, test, "USP", test.Final.Usp, actual.UserStackPointer);
 		AssertEqual(file, test, "SSP", test.Final.Ssp, actual.SupervisorStackPointer);
 		AssertEqual(file, test, "SR", test.Final.Sr, actual.StatusRegister);
-		AssertEqual(file, test, "PC", ToArchitecturalPc(test.Final.Pc), actual.ProgramCounter);
+		AssertEqual(file, test, "PC", ToFinalArchitecturalPc(file, test), actual.ProgramCounter);
 	}
 
 	private static void AssertRam(string file, SingleStepCase test, CorpusBus bus)
