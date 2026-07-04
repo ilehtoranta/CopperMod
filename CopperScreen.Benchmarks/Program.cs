@@ -41,6 +41,12 @@ if (options.OpcodeDispatchBenchmark)
     return;
 }
 
+if (options.CiaPollBenchmark)
+{
+    RunCiaPollBenchmark(options);
+    return;
+}
+
 if (options.DiskDivergenceTrace)
 {
     Console.WriteLine($"Disk divergence trace, Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, Profile={options.Profile ?? "workload/default"}, Kickstart={FormatKickstartOption(options)}");
@@ -91,6 +97,80 @@ static void RunOpcodeDispatchBenchmarks(BenchmarkOptions options)
             }
         }
     }
+}
+
+static void RunCiaPollBenchmark(BenchmarkOptions options)
+{
+    Console.WriteLine(
+        $"CIA poll bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, Release={IsRelease()}");
+    Console.WriteLine("cia-poll\trepeat\tinstructions\tms\tinstr/sec\tcycles\tallocated bytes\tchecksum");
+    for (var repeat = 0; repeat < options.RepeatCount; repeat++)
+    {
+        var result = RunCiaPollBenchmarkIteration(options);
+        Console.WriteLine(
+            $"cia-poll\t{repeat + 1}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t{result.InstructionsPerSecond:F0}\t{result.Cycles}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}");
+    }
+}
+
+static CiaPollBenchmarkResult RunCiaPollBenchmarkIteration(BenchmarkOptions options)
+{
+    using (var warmup = CreateCiaPollCpu())
+    {
+        for (var i = 0; i < options.OpcodeDispatchWarmupInstructions; i++)
+        {
+            warmup.Cpu.ExecuteInstruction();
+        }
+    }
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    using var run = CreateCiaPollCpu();
+    var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+    var start = Stopwatch.GetTimestamp();
+    for (var i = 0; i < options.OpcodeDispatchInstructions; i++)
+    {
+        run.Cpu.ExecuteInstruction();
+    }
+
+    var elapsed = Stopwatch.GetElapsedTime(start);
+    var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+    return new CiaPollBenchmarkResult(
+        options.OpcodeDispatchInstructions,
+        elapsed,
+        run.Cpu.State.Cycles,
+        allocated,
+        CreateCiaPollChecksum(run.Cpu.State));
+}
+
+static CiaPollBenchmarkRun CreateCiaPollCpu()
+{
+    var bus = new AmigaBus(
+        chipRamSize: AmigaConstants.A500BootChipRamSize,
+        expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
+        captureBusAccesses: false,
+        enableLiveDisplayDma: false);
+    bus.Reset();
+    WriteWords(
+        bus.ChipRam,
+        0x1000,
+        [
+            0x0839, 0x0006, 0x00BF, 0xE001, // BTST #6,$00BFE001.L
+            0x60F6 // BRA.S loop
+        ]);
+    var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+    cpu.Reset(0x1000, 0x8000);
+    return new CiaPollBenchmarkRun(cpu, bus);
+}
+
+static uint CreateCiaPollChecksum(M68kCpuState state)
+{
+    var checksum = state.ProgramCounter ^ state.LastInstructionProgramCounter ^ state.LastOpcode;
+    checksum ^= (uint)state.Cycles;
+    checksum = unchecked((checksum * 16777619u) ^ state.D[0]);
+    checksum = unchecked((checksum * 16777619u) ^ state.StatusRegister);
+    return checksum;
 }
 
 static OpcodeDispatchBenchmarkResult RunOpcodeDispatchBenchmark(
@@ -1984,6 +2064,7 @@ internal readonly record struct BenchmarkOptions(
     int DumpFrameInterval,
     string? DumpChipRamPath,
     bool OpcodeDispatchBenchmark,
+    bool CiaPollBenchmark,
     M68kOpcodePlanDispatch? OpcodeDispatch,
     int OpcodeDispatchWarmupInstructions,
     int OpcodeDispatchInstructions)
@@ -2021,6 +2102,7 @@ internal readonly record struct BenchmarkOptions(
         var dumpFrameInterval = 1;
         string? dumpChipRamPath = null;
         var opcodeDispatchBenchmark = false;
+        var ciaPollBenchmark = false;
         M68kOpcodePlanDispatch? opcodeDispatch = null;
         var opcodeDispatchWarmupInstructions = smoke ? 20_000 : 200_000;
         var opcodeDispatchInstructions = smoke ? 200_000 : 2_000_000;
@@ -2095,6 +2177,10 @@ internal readonly record struct BenchmarkOptions(
             else if (string.Equals(args[i], "--opcode-dispatch-bench", StringComparison.OrdinalIgnoreCase))
             {
                 opcodeDispatchBenchmark = true;
+            }
+            else if (string.Equals(args[i], "--cia-poll-bench", StringComparison.OrdinalIgnoreCase))
+            {
+                ciaPollBenchmark = true;
             }
             else if (string.Equals(args[i], "--opcode-dispatch", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
@@ -2275,6 +2361,7 @@ internal readonly record struct BenchmarkOptions(
             Math.Max(1, dumpFrameInterval),
             dumpChipRamPath,
             opcodeDispatchBenchmark,
+            ciaPollBenchmark,
             opcodeDispatch,
             Math.Max(0, opcodeDispatchWarmupInstructions),
             Math.Max(1, opcodeDispatchInstructions));
@@ -2290,6 +2377,22 @@ internal readonly record struct BenchmarkOptions(
             "delegate" or "delegatetable" or "winuae" => M68kOpcodePlanDispatch.DelegateTable,
             _ => null
         };
+}
+
+internal readonly record struct CiaPollBenchmarkResult(
+    int Instructions,
+    TimeSpan Elapsed,
+    long Cycles,
+    long AllocatedBytes,
+    uint Checksum)
+{
+    public double InstructionsPerSecond => Instructions / Math.Max(Elapsed.TotalSeconds, double.Epsilon);
+}
+
+internal sealed record CiaPollBenchmarkRun(IM68kCore Cpu, AmigaBus Bus) : IDisposable
+{
+    public void Dispose()
+        => Cpu.Dispose();
 }
 
 internal readonly record struct OpcodeDispatchBenchmarkWorkload(

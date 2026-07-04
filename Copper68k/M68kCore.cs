@@ -1100,6 +1100,28 @@ namespace Copper68k
         }
 
         /// <summary>
+        /// Updates the negative and zero condition codes from a long-sized value
+        /// without the Mask/SignBit dispatch overhead.
+        /// </summary>
+        /// <param name="value">The 32-bit value to test.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void SetNegativeZeroLong(uint value)
+        {
+            var status = _statusRegister & unchecked((ushort)~(Zero | Negative));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & 0x8000_0000) != 0)
+            {
+                status |= Negative;
+            }
+
+            _statusRegister = (ushort)status;
+        }
+
+        /// <summary>
         /// Gets the value mask for an operand size.
         /// </summary>
         /// <param name="size">The operand size.</param>
@@ -1392,6 +1414,11 @@ namespace Copper68k
             BeginInstructionCycleFloor(startCycles);
             try
             {
+                if ((State.ProgramCounter & 1) != 0)
+                {
+                    ThrowOddInstructionFetchAddress(State.ProgramCounter);
+                }
+
                 var result = ExecuteInstructionBody(startCycles);
                 _instructionCycleFloorActive = false;
                 return result;
@@ -1412,10 +1439,6 @@ namespace Copper68k
         {
             var instructionPc = State.ProgramCounter;
             _activeInstructionProgramCounter = instructionPc;
-            _dataAccessStackedProgramCounter = instructionPc;
-            _addressErrorInstructionWord = null;
-            _addressErrorIsWriteOverride = null;
-            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
             var opcode = FetchWord();
             State.LastOpcode = opcode;
             State.LastInstructionProgramCounter = instructionPc;
@@ -1429,6 +1452,12 @@ namespace Copper68k
             {
                 return CompleteInstruction(startCycles);
             }
+
+            // Exception bookkeeping deferred to scalar path only.
+            _dataAccessStackedProgramCounter = instructionPc;
+            _addressErrorInstructionWord = null;
+            _addressErrorIsWriteOverride = null;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
 
             RecordPlannedScalarFallback();
             var decoded = DecodeByOpcodeLine(opcode, instructionPc);
@@ -1801,7 +1830,7 @@ namespace Copper68k
         {
             var register = (opcode >> 9) & 7;
             State.D[register] = unchecked((uint)(int)(sbyte)(opcode & 0xFF));
-            State.SetNegativeZero(State.D[register], M68kOperandSize.Long);
+            State.SetNegativeZeroLong(State.D[register]);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(4);
@@ -2143,7 +2172,7 @@ namespace Copper68k
             var value = ReadLong(sourceAddress);
             SetAddressRegister(sourceRegister, unchecked(sourceAddress + 4));
             State.D[destinationRegister] = value;
-            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetNegativeZeroLong(value);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
@@ -2159,7 +2188,7 @@ namespace Copper68k
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
-            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetNegativeZeroLong(value);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
@@ -2386,7 +2415,7 @@ namespace Copper68k
         private void ExecutePackedMoveq(in M68kPackedOpcodePlan plan)
         {
             State.D[plan.Register] = unchecked((uint)(int)plan.Displacement);
-            State.SetNegativeZero(State.D[plan.Register], M68kOperandSize.Long);
+            State.SetNegativeZeroLong(State.D[plan.Register]);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(4);
@@ -2638,7 +2667,7 @@ namespace Copper68k
             var value = ReadLong(sourceAddress);
             SetAddressRegister(sourceRegister, unchecked(sourceAddress + 4));
             State.D[plan.DestinationRegister] = value;
-            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetNegativeZeroLong(value);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
@@ -2653,7 +2682,7 @@ namespace Copper68k
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
-            State.SetNegativeZero(value, M68kOperandSize.Long);
+            State.SetNegativeZeroLong(value);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
@@ -3382,7 +3411,7 @@ namespace Copper68k
 
             var reg = (opcode >> 9) & 7;
             State.D[reg] = (uint)unchecked((int)(sbyte)(opcode & 0xFF));
-            State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
+            State.SetNegativeZeroLong(State.D[reg]);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(4);
@@ -4003,7 +4032,7 @@ namespace Copper68k
                 var reg = opcode & 7;
                 var value = State.D[reg];
                 State.D[reg] = (value << 16) | ((value >> 16) & 0xFFFF);
-                State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
+                State.SetNegativeZeroLong(State.D[reg]);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
                 AddInstructionCycles(4);
@@ -4035,7 +4064,7 @@ namespace Copper68k
                 var reg = opcode & 7;
                 var value = M68kCpuState.SignExtend(State.D[reg] & 0xFFFF, M68kOperandSize.Word);
                 State.D[reg] = value;
-                State.SetNegativeZero(value, M68kOperandSize.Long);
+                State.SetNegativeZeroLong(value);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
                 AddInstructionCycles(4);
@@ -4491,7 +4520,7 @@ namespace Copper68k
                     completeWordPostIncrementBeforeRead: true);
                 var source = sourceEa.Read();
                 State.D[reg] = (uint)((ushort)State.D[reg] * (ushort)source);
-                State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
+                State.SetNegativeZeroLong(State.D[reg]);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
                 AddInstructionCycles(GetMultiplyCycles(sourceEa.EaCycles, source, signed: false));
@@ -4507,7 +4536,7 @@ namespace Copper68k
                     completeWordPostIncrementBeforeRead: true);
                 var source = unchecked((short)sourceEa.Read());
                 State.D[reg] = (uint)(unchecked((short)State.D[reg]) * source);
-                State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
+                State.SetNegativeZeroLong(State.D[reg]);
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
                 AddInstructionCycles(GetMultiplyCycles(sourceEa.EaCycles, (ushort)source, signed: true));
@@ -5525,28 +5554,21 @@ namespace Copper68k
             var value = ReadInstructionFetchWord(address, ref cycle);
             _cpuBusCycle = cycle;
             completedCycle = cycle;
-            RecordCpuBusPhase(
-                address,
-                M68kOperandSize.Word,
-                requestedCycle,
-                cycle,
-                M68kBusAccessKind.CpuInstructionFetch,
-                isWrite: false);
+            if (_cpuBusPhaseTrace != null)
+            {
+                RecordCpuBusPhase(
+                    address,
+                    M68kOperandSize.Word,
+                    requestedCycle,
+                    cycle,
+                    M68kBusAccessKind.CpuInstructionFetch,
+                    isWrite: false);
+            }
             return value;
         }
 
         private ushort ReadInstructionFetchWord(uint address, ref long cycle)
         {
-            if ((address & 1) != 0)
-            {
-                _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref cycle);
-                State.Cycles = Math.Max(State.Cycles, cycle);
-                _cpuBusCycle = Math.Max(_cpuBusCycle, cycle);
-                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, cycle);
-                RaiseAddressError(address, isWrite: false, M68kBusAccessKind.CpuInstructionFetch);
-                throw M68kAddressErrorException.Instance;
-            }
-
             if (_instructionFetchWindowBus != null)
             {
                 var bus = _instructionFetchWindowBus;
@@ -5562,6 +5584,20 @@ namespace Copper68k
             }
 
             return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ThrowOddInstructionFetchAddress(uint address)
+        {
+            var cycle = BeginCpuBusAccessCycle();
+            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref cycle);
+            State.Cycles = Math.Max(State.Cycles, cycle);
+            _cpuBusCycle = Math.Max(_cpuBusCycle, cycle);
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, cycle);
+            _addressErrorInstructionWord = null;
+            _addressErrorIsWriteOverride = null;
+            RaiseAddressError(address, isWrite: false, M68kBusAccessKind.CpuInstructionFetch);
+            throw M68kAddressErrorException.Instance;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -47,7 +47,7 @@ namespace CopperMod.Amiga
         private const int CpuBusBankShift = 16;
         private const int CpuBusBankSize = 1 << CpuBusBankShift;
         private const int CpuBusBankCount = 1 << (24 - CpuBusBankShift);
-        private const int MaxDeferredPseudoFastAccesses = 64;
+        private const int MaxDeferredCpuDataAccesses = 64;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
@@ -105,9 +105,10 @@ namespace CopperMod.Amiga
         private long _nextHorizontalSyncCycle;
         private long _lastRasterAdvanceCycle;
         private bool _deferredCpuInstructionTimingActive;
-        private int _deferredPseudoFastAccessCount;
-        private ulong _deferredPseudoFastLongShapeBits;
-        private long _deferredPseudoFastReplayCycle;
+        private int _deferredCpuDataAccessCount;
+        private ulong _deferredCpuDataLongShapeBits;
+        private ulong _deferredCpuDataCiaShapeBits;
+        private long _deferredCpuDataReplayCycle;
 
         private enum CpuBusBankKind : byte
         {
@@ -608,14 +609,15 @@ namespace CopperMod.Amiga
         void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuInstructionTiming(long cycle)
         {
             _deferredCpuInstructionTimingActive = !_captureBusAccesses;
-            _deferredPseudoFastAccessCount = 0;
-            _deferredPseudoFastLongShapeBits = 0;
-            _deferredPseudoFastReplayCycle = cycle;
+            _deferredCpuDataAccessCount = 0;
+            _deferredCpuDataLongShapeBits = 0;
+            _deferredCpuDataCiaShapeBits = 0;
+            _deferredCpuDataReplayCycle = cycle;
         }
 
         void IM68kDeferredCpuInstructionTiming.FlushDeferredCpuInstructionTiming(ref long cycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             _deferredCpuInstructionTimingActive = false;
         }
 
@@ -683,8 +685,17 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
         {
+            var normalizedAddress = NormalizeAddress(address);
+            if (TryGetCiaRegister(normalizedAddress, out var cia, out var ciaRegister) &&
+                CanDeferExactCpuCiaRead(ciaRegister) &&
+                TryDeferExactCpuCiaDataTiming(ref cycle))
+            {
+                value = ReadCiaRegisterValue(cia, ciaRegister);
+                return true;
+            }
+
             if (!TryResolveExactCpuDataRamRegion(
-                address,
+                normalizedAddress,
                 1,
                 out var region))
             {
@@ -954,43 +965,80 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (_deferredPseudoFastAccessCount >= MaxDeferredPseudoFastAccesses)
+            if (_deferredCpuDataAccessCount >= MaxDeferredCpuDataAccesses)
             {
-                FlushDeferredPseudoFastTiming(ref cycle);
+                FlushDeferredCpuDataTiming(ref cycle);
                 return false;
             }
 
-            var index = _deferredPseudoFastAccessCount;
+            var index = _deferredCpuDataAccessCount;
             if (index == 0)
             {
-                _deferredPseudoFastReplayCycle = cycle;
+                _deferredCpuDataReplayCycle = cycle;
             }
 
             if (size == AmigaBusAccessSize.Long)
             {
-                _deferredPseudoFastLongShapeBits |= 1UL << index;
+                _deferredCpuDataLongShapeBits |= 1UL << index;
             }
 
-            _deferredPseudoFastAccessCount = index + 1;
+            _deferredCpuDataAccessCount = index + 1;
             return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void FlushDeferredPseudoFastTiming(ref long cycle)
+        private static bool CanDeferExactCpuCiaRead(int ciaRegister)
+            => ciaRegister is 0 or 1;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryDeferExactCpuCiaDataTiming(ref long cycle)
         {
-            var count = _deferredPseudoFastAccessCount;
+            if (!_deferredCpuInstructionTimingActive)
+            {
+                return false;
+            }
+
+            if (_deferredCpuDataAccessCount >= MaxDeferredCpuDataAccesses)
+            {
+                FlushDeferredCpuDataTiming(ref cycle);
+                return false;
+            }
+
+            var index = _deferredCpuDataAccessCount;
+            if (index == 0)
+            {
+                _deferredCpuDataReplayCycle = cycle;
+            }
+
+            _deferredCpuDataCiaShapeBits |= 1UL << index;
+            _deferredCpuDataAccessCount = index + 1;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void FlushDeferredCpuDataTiming(ref long cycle)
+        {
+            var count = _deferredCpuDataAccessCount;
             if (count == 0)
             {
                 return;
             }
 
-            var longShapeBits = _deferredPseudoFastLongShapeBits;
-            var replayCycle = _deferredPseudoFastReplayCycle;
-            _deferredPseudoFastAccessCount = 0;
-            _deferredPseudoFastLongShapeBits = 0;
+            var longShapeBits = _deferredCpuDataLongShapeBits;
+            var ciaShapeBits = _deferredCpuDataCiaShapeBits;
+            var replayCycle = _deferredCpuDataReplayCycle;
+            _deferredCpuDataAccessCount = 0;
+            _deferredCpuDataLongShapeBits = 0;
+            _deferredCpuDataCiaShapeBits = 0;
 
             for (var i = 0; i < count; i++)
             {
+                if (((ciaShapeBits >> i) & 1UL) != 0)
+                {
+                    replayCycle = CiaPeripheralAccessTiming.AlignToCiaPeripheralAccessCycle(Math.Max(0, replayCycle));
+                    continue;
+                }
+
                 var size = ((longShapeBits >> i) & 1UL) != 0
                     ? AmigaBusAccessSize.Long
                     : AmigaBusAccessSize.Word;
@@ -1009,7 +1057,7 @@ namespace CopperMod.Amiga
                 cycle = replayCycle;
             }
 
-            _deferredPseudoFastReplayCycle = cycle;
+            _deferredCpuDataReplayCycle = cycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1057,7 +1105,7 @@ namespace CopperMod.Amiga
             out long grantedCycle,
             out long secondWordCycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             var requestedCycle = cycle;
             if (TryCommitExactCpuChipDataAccessFast(
                 target,
@@ -1582,7 +1630,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
@@ -1796,7 +1844,7 @@ namespace CopperMod.Amiga
 
         public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1826,7 +1874,7 @@ namespace CopperMod.Amiga
 
         internal void WriteTasCpuDataByte(uint address, byte value, ref long cycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1869,7 +1917,7 @@ namespace CopperMod.Amiga
 
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
@@ -1913,7 +1961,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterWordAddress(address))
             {
@@ -1967,7 +2015,7 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
@@ -2022,7 +2070,7 @@ namespace CopperMod.Amiga
 
         public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredPseudoFastTiming(ref cycle);
+            FlushDeferredCpuDataTiming(ref cycle);
             address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
