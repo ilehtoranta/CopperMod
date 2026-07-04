@@ -1209,6 +1209,7 @@ namespace Copper68k
         private bool _instructionCycleFloorActive;
         private uint _activeInstructionProgramCounter;
         private uint _dataAccessStackedProgramCounter;
+        private ushort? _addressErrorInstructionWord;
         private M68kBusAccessKind _dataReadFaultAccessKind;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
@@ -1402,6 +1403,7 @@ namespace Copper68k
             var instructionPc = State.ProgramCounter;
             _activeInstructionProgramCounter = instructionPc;
             _dataAccessStackedProgramCounter = instructionPc;
+            _addressErrorInstructionWord = null;
             _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
             var opcode = FetchWord();
             State.LastOpcode = opcode;
@@ -1942,37 +1944,65 @@ namespace Copper68k
             var sourceRegister = opcode & 7;
             var destinationMode = (opcode >> 6) & 7;
             var destinationRegister = (opcode >> 9) & 7;
-            var source = ResolvePlannedEa(sourceMode, sourceRegister, size);
+            var source = ResolvePlannedEa(
+                sourceMode,
+                sourceRegister,
+                size,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
             var value = ReadPlannedEaValue(in source);
-            var updateNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
-                (sourceMode == 4 || (sourceMode == 3 && destinationMode == 6) ||
+            var updateNegativeZeroBeforeWrite =
+                (size == M68kOperandSize.Word && destinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
+                (size == M68kOperandSize.Long &&
+                ((sourceMode == 4 && destinationMode is not 2 and not 3) ||
+                    (sourceMode == 3 && destinationMode == 6) ||
                     destinationMode == 4 || destinationMode == 6 ||
                     (sourceMode == 2 && destinationMode == 5) ||
+                    (sourceMode == 3 && destinationMode == 5) ||
+                    (sourceMode == 5 && destinationMode == 5) ||
+                    (sourceMode == 6 && destinationMode == 5) ||
+                    (sourceMode == 7 && sourceRegister == 4 && destinationMode == 5) ||
                     (sourceMode == 7 && sourceRegister == 3 && destinationMode == 5) ||
+                    (sourceMode == 7 && sourceRegister == 1 && destinationMode == 5) ||
                     (sourceMode == 0 && destinationMode == 5) ||
                     (sourceMode == 1 && destinationMode == 5) ||
-                    (destinationMode == 7 && destinationRegister <= 1 && sourceMode != 3));
-            var updateZeroBeforeWrite = size == M68kOperandSize.Long && sourceMode == 5 && sourceRegister == 7;
+                    (destinationMode == 7 && destinationRegister <= 1 &&
+                        (sourceMode != 3 || destinationRegister == 0))));
+            var updateZeroBeforeWrite = size == M68kOperandSize.Long &&
+                ((sourceMode == 5 && sourceRegister == 7) ||
+                    (sourceMode == 4 && destinationMode == 2 &&
+                        !(destinationRegister <= 1 || (destinationRegister == 6 && sourceRegister == 0))) ||
+                    (sourceMode == 7 && sourceRegister == 1 && destinationMode == 2));
             var updateLowWordNegativeBeforeWrite = size == M68kOperandSize.Long &&
                 ((sourceMode == 6 && destinationMode is 2 or 3) ||
-                    (sourceMode == 2 && destinationMode == 3) ||
+                    (sourceMode == 2 && (destinationMode == 3 ||
+                        (destinationMode == 2 && destinationRegister == 2) ||
+                        (sourceRegister == 7 && destinationMode == 2))) ||
                     (sourceMode == 3 && (destinationMode is 2 or 3 || (destinationMode == 7 && destinationRegister == 1))) ||
+                    (sourceMode == 4 && destinationMode == 3) ||
                     (sourceMode == 5 && destinationMode is 2 or 3) ||
-                    (sourceMode == 7 && sourceRegister == 2 && destinationMode == 3));
+                    (sourceMode == 7 && sourceRegister == 0 && destinationMode == 3) ||
+                    (sourceMode == 7 && sourceRegister == 2 && destinationMode == 2 && destinationRegister == 6) ||
+                    (sourceMode == 7 && sourceRegister == 2 && destinationMode is 3 or 5));
             var clearNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
-                false;
+                destinationMode == 2 &&
+                ((sourceMode == 4 &&
+                        (destinationRegister <= 1 || (destinationRegister == 6 && sourceRegister == 0))) ||
+                    (sourceMode == 2 && sourceRegister != 7 && destinationRegister != 2) ||
+                    (sourceMode == 7 && sourceRegister is 2 or 3 &&
+                        !(sourceRegister == 2 && destinationRegister == 6)));
             var preserveOverflowUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((destinationMode == 6 && sourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((destinationMode == 6 && sourceMode is 0 or 1) ||
                     (sourceMode == 0 && destinationMode == 5) ||
-                    (sourceMode == 1 && destinationMode == 5));
+                    (sourceMode == 1 && destinationMode == 5) ||
+                    (sourceMode == 7 && sourceRegister == 4 && destinationMode == 5));
             var preserveCarryUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((destinationMode == 6 && destinationRegister != 7 && sourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((destinationMode == 6 && destinationRegister != 7 && sourceMode is 0 or 1) ||
                     (sourceMode == 0 && destinationMode == 6) ||
                     (sourceMode == 1 && destinationMode == 6) ||
                     (sourceMode == 0 && destinationMode == 5) ||
                     (sourceMode == 1 && destinationMode == 5));
             var deferConditionCodesUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((sourceMode == 7 && sourceRegister == 4 && destinationMode == 3) ||
+                ((sourceMode == 7 && sourceRegister == 4 && destinationMode is 2 or 3) ||
                     (sourceMode is 0 or 1 && destinationMode is 2 or 3));
             var addressErrorStackedProgramCounterOffset =
                 GetMoveDestinationAddressErrorStackedProgramCounterOffset(size, sourceMode, destinationMode, destinationRegister);
@@ -2017,6 +2047,11 @@ namespace Copper68k
                 }
             }
 
+            if (size == M68kOperandSize.Word && destinationMode == 4)
+            {
+                UsePrefetchedInstructionWordForAddressErrorFrame();
+            }
+
             WritePlannedEaValue(in destination, value);
             if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
@@ -2044,8 +2079,10 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedMoveWordDisplacementA6ToDataRegister(ushort opcode)
         {
+            var extensionAddress = State.ProgramCounter;
             var displacement = unchecked((short)FetchWord());
             var address = unchecked(State.A[6] + (uint)displacement);
+            _dataAccessStackedProgramCounter = extensionAddress;
             var value = ReadWord(address);
             WriteDataRegister((opcode >> 9) & 7, value, M68kOperandSize.Word);
             State.SetNegativeZero(value, M68kOperandSize.Word);
@@ -2060,6 +2097,16 @@ namespace Copper68k
             int destinationMode,
             int destinationRegister)
         {
+            if (size == M68kOperandSize.Word && destinationMode is 2 or 3 or 5 or 6)
+            {
+                return 2;
+            }
+
+            if (size == M68kOperandSize.Word && destinationMode == 7 && destinationRegister == 1)
+            {
+                return sourceMode is 0 or 1 ? 0 : -2;
+            }
+
             if (size != M68kOperandSize.Long)
             {
                 return 0;
@@ -2120,7 +2167,24 @@ namespace Copper68k
             var register = opcode & 7;
             var immediate = FetchImmediate(size);
             var isCompare = (opcode & 0xFF00) == 0x0C00;
-            var destinationEa = ResolvePlannedEa(mode, register, size, write: !isCompare);
+            var writesEffectiveAddress = !isCompare;
+            var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
+                size == M68kOperandSize.Long &&
+                mode is 4 or 5 or 6
+                    ? -2
+                    : 0;
+            var destinationEa = ResolvePlannedEa(
+                mode,
+                register,
+                size,
+                write: writesEffectiveAddress,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
+            {
+                SetAddressRegister(register, destinationEa.Address);
+            }
+
             var destination = ReadPlannedEaValue(in destinationEa);
             switch (opcode & 0xFF00)
             {
@@ -2416,38 +2480,68 @@ namespace Copper68k
                 return;
             }
 
-            var source = ResolvePlannedEa(plan.SourceMode, plan.SourceRegister, plan.Size);
+            var source = ResolvePlannedEa(
+                plan.SourceMode,
+                plan.SourceRegister,
+                plan.Size,
+                completeWordPostIncrementBeforeRead: plan.Size == M68kOperandSize.Word);
             var value = ReadPlannedEaValue(in source);
-            var updateNegativeZeroBeforeWrite = plan.Size == M68kOperandSize.Long &&
-                (plan.SourceMode == 4 || (plan.SourceMode == 3 && plan.DestinationMode == 6) ||
+            var updateNegativeZeroBeforeWrite =
+                (plan.Size == M68kOperandSize.Word && plan.DestinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
+                (plan.Size == M68kOperandSize.Long &&
+                ((plan.SourceMode == 4 && plan.DestinationMode is not 2 and not 3) ||
+                    (plan.SourceMode == 3 && plan.DestinationMode == 6) ||
                     plan.DestinationMode == 4 || plan.DestinationMode == 6 ||
                     (plan.SourceMode == 2 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 3 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 5 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 6 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 4 && plan.DestinationMode == 5) ||
                     (plan.SourceMode == 7 && plan.SourceRegister == 3 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 1 && plan.DestinationMode == 5) ||
                     (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
                     (plan.SourceMode == 1 && plan.DestinationMode == 5) ||
-                    (plan.DestinationMode == 7 && plan.DestinationRegister <= 1 && plan.SourceMode != 3));
-            var updateZeroBeforeWrite = plan.Size == M68kOperandSize.Long && plan.SourceMode == 5 && plan.SourceRegister == 7;
+                    (plan.DestinationMode == 7 && plan.DestinationRegister <= 1 &&
+                        (plan.SourceMode != 3 || plan.DestinationRegister == 0))));
+            var updateZeroBeforeWrite = plan.Size == M68kOperandSize.Long &&
+                ((plan.SourceMode == 5 && plan.SourceRegister == 7) ||
+                    (plan.SourceMode == 4 && plan.DestinationMode == 2 &&
+                        !(plan.DestinationRegister <= 1 ||
+                            (plan.DestinationRegister == 6 && plan.SourceRegister == 0))) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 1 && plan.DestinationMode == 2));
             var updateLowWordNegativeBeforeWrite = plan.Size == M68kOperandSize.Long &&
                 ((plan.SourceMode == 6 && plan.DestinationMode is 2 or 3) ||
-                    (plan.SourceMode == 2 && plan.DestinationMode == 3) ||
+                    (plan.SourceMode == 2 && (plan.DestinationMode == 3 ||
+                        (plan.DestinationMode == 2 && plan.DestinationRegister == 2) ||
+                        (plan.SourceRegister == 7 && plan.DestinationMode == 2))) ||
                     (plan.SourceMode == 3 && (plan.DestinationMode is 2 or 3 ||
                         (plan.DestinationMode == 7 && plan.DestinationRegister == 1))) ||
+                    (plan.SourceMode == 4 && plan.DestinationMode == 3) ||
                     (plan.SourceMode == 5 && plan.DestinationMode is 2 or 3) ||
-                    (plan.SourceMode == 7 && plan.SourceRegister == 2 && plan.DestinationMode == 3));
+                    (plan.SourceMode == 7 && plan.SourceRegister == 0 && plan.DestinationMode == 3) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 2 && plan.DestinationMode == 2 && plan.DestinationRegister == 6) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 2 && plan.DestinationMode is 3 or 5));
             var clearNegativeZeroBeforeWrite = plan.Size == M68kOperandSize.Long &&
-                false;
+                plan.DestinationMode == 2 &&
+                ((plan.SourceMode == 4 &&
+                        (plan.DestinationRegister <= 1 ||
+                            (plan.DestinationRegister == 6 && plan.SourceRegister == 0))) ||
+                    (plan.SourceMode == 2 && plan.SourceRegister != 7 && plan.DestinationRegister != 2) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister is 2 or 3 &&
+                        !(plan.SourceRegister == 2 && plan.DestinationRegister == 6)));
             var preserveOverflowUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
-                ((plan.DestinationMode == 6 && plan.SourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((plan.DestinationMode == 6 && plan.SourceMode is 0 or 1) ||
                     (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
-                    (plan.SourceMode == 1 && plan.DestinationMode == 5));
+                    (plan.SourceMode == 1 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 4 && plan.DestinationMode == 5));
             var preserveCarryUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
-                ((plan.DestinationMode == 6 && plan.DestinationRegister != 7 && plan.SourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((plan.DestinationMode == 6 && plan.DestinationRegister != 7 && plan.SourceMode is 0 or 1) ||
                     (plan.SourceMode == 0 && plan.DestinationMode == 6) ||
                     (plan.SourceMode == 1 && plan.DestinationMode == 6) ||
                     (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
                     (plan.SourceMode == 1 && plan.DestinationMode == 5));
             var deferConditionCodesUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
-                ((plan.SourceMode == 7 && plan.SourceRegister == 4 && plan.DestinationMode == 3) ||
+                ((plan.SourceMode == 7 && plan.SourceRegister == 4 && plan.DestinationMode is 2 or 3) ||
                     (plan.SourceMode is 0 or 1 && plan.DestinationMode is 2 or 3));
             var addressErrorStackedProgramCounterOffset = GetMoveDestinationAddressErrorStackedProgramCounterOffset(
                 plan.Size,
@@ -2493,6 +2587,11 @@ namespace Copper68k
                         State.SetFlag(M68kCpuState.Zero, false);
                     }
                 }
+            }
+
+            if (plan.Size == M68kOperandSize.Word && plan.DestinationMode == 4)
+            {
+                UsePrefetchedInstructionWordForAddressErrorFrame();
             }
 
             WritePlannedEaValue(in destination, value);
@@ -2775,7 +2874,7 @@ namespace Copper68k
                         register,
                         AddressIncrement(register, size),
                         completePostIncrementOnRead: !write,
-                        completePostIncrementBeforeRead: size == M68kOperandSize.Word);
+                        completePostIncrementBeforeRead: completeWordPostIncrementBeforeRead && size == M68kOperandSize.Word);
                 }
                 case 4:
                 {
@@ -2789,7 +2888,9 @@ namespace Copper68k
                         predecrementAddress,
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        GetPredecrementStackedProgramCounter(size) + (write && size == M68kOperandSize.Long ? 2u : 0u),
+                        unchecked((uint)(GetPredecrementStackedProgramCounter(size) +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)),
                         descendingLongWrite: true,
                         delayedPredecrementRegister: write && size == M68kOperandSize.Long ? register : -1,
                         delayedPredecrementValue: predecrementAddress);
@@ -2802,7 +2903,9 @@ namespace Copper68k
                         unchecked((uint)(State.A[register] + displacement)),
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
+                        unchecked((uint)(extensionAddress +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)));
                 }
                 case 6:
                 {
@@ -2812,7 +2915,9 @@ namespace Copper68k
                         M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[register], extension, State.D, State.A),
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
+                        unchecked((uint)(extensionAddress +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)));
                 }
                 case 7:
                     return ResolvePlannedMode7(register, size, write, addressErrorStackedProgramCounterOffset);
@@ -3124,40 +3229,66 @@ namespace Copper68k
                 return false;
             }
 
-            var src = ResolveEa((opcode >> 3) & 7, opcode & 7, size);
+            var src = ResolveEa(
+                (opcode >> 3) & 7,
+                opcode & 7,
+                size,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
             var value = src.Read();
             var srcMode = (opcode >> 3) & 7;
             var srcReg = opcode & 7;
             var destMode = (opcode >> 6) & 7;
             var destReg = (opcode >> 9) & 7;
-            var updateNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
-                (srcMode == 4 || (srcMode == 3 && destMode == 6) ||
+            var updateNegativeZeroBeforeWrite =
+                (size == M68kOperandSize.Word && destMode is 2 or 3 or 4 or 5 or 6 or 7) ||
+                (size == M68kOperandSize.Long &&
+                ((srcMode == 4 && destMode is not 2 and not 3) ||
+                    (srcMode == 3 && destMode == 6) ||
                     destMode == 4 || destMode == 6 ||
                     (srcMode == 2 && destMode == 5) ||
+                    (srcMode == 3 && destMode == 5) ||
+                    (srcMode == 5 && destMode == 5) ||
+                    (srcMode == 6 && destMode == 5) ||
+                    (srcMode == 7 && srcReg == 4 && destMode == 5) ||
                     (srcMode == 7 && srcReg == 3 && destMode == 5) ||
+                    (srcMode == 7 && srcReg == 1 && destMode == 5) ||
                     (srcMode == 0 && destMode == 5) ||
                     (srcMode == 1 && destMode == 5) ||
-                    (destMode == 7 && destReg <= 1 && srcMode != 3));
-            var updateZeroBeforeWrite = size == M68kOperandSize.Long && srcMode == 5 && srcReg == 7;
+                    (destMode == 7 && destReg <= 1 && (srcMode != 3 || destReg == 0))));
+            var updateZeroBeforeWrite = size == M68kOperandSize.Long &&
+                ((srcMode == 5 && srcReg == 7) ||
+                    (srcMode == 4 && destMode == 2 &&
+                        !(destReg <= 1 || (destReg == 6 && srcReg == 0))) ||
+                    (srcMode == 7 && srcReg == 1 && destMode == 2));
             var updateLowWordNegativeBeforeWrite = size == M68kOperandSize.Long &&
                 ((srcMode == 6 && destMode is 2 or 3) ||
-                    (srcMode == 2 && destMode == 3) ||
+                    (srcMode == 2 && (destMode == 3 ||
+                        (destMode == 2 && destReg == 2) ||
+                        (srcReg == 7 && destMode == 2))) ||
                     (srcMode == 3 && (destMode is 2 or 3 || (destMode == 7 && destReg == 1))) ||
+                    (srcMode == 4 && destMode == 3) ||
                     (srcMode == 5 && destMode is 2 or 3) ||
-                    (srcMode == 7 && srcReg == 2 && destMode == 3));
-            var clearNegativeZeroBeforeWrite = false;
+                    (srcMode == 7 && srcReg == 0 && destMode == 3) ||
+                    (srcMode == 7 && srcReg == 2 && destMode == 2 && destReg == 6) ||
+                    (srcMode == 7 && srcReg == 2 && destMode is 3 or 5));
+            var clearNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
+                destMode == 2 &&
+                ((srcMode == 4 && (destReg <= 1 || (destReg == 6 && srcReg == 0))) ||
+                    (srcMode == 2 && srcReg != 7 && destReg != 2) ||
+                    (srcMode == 7 && srcReg is 2 or 3 && !(srcReg == 2 && destReg == 6)));
             var preserveOverflowUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((destMode == 6 && srcMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((destMode == 6 && srcMode is 0 or 1) ||
                     (srcMode == 0 && destMode == 5) ||
-                    (srcMode == 1 && destMode == 5));
+                    (srcMode == 1 && destMode == 5) ||
+                    (srcMode == 7 && srcReg == 4 && destMode == 5));
             var preserveCarryUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((destMode == 6 && destReg != 7 && srcMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                ((destMode == 6 && destReg != 7 && srcMode is 0 or 1) ||
                     (srcMode == 0 && destMode == 6) ||
                     (srcMode == 1 && destMode == 6) ||
                     (srcMode == 0 && destMode == 5) ||
                     (srcMode == 1 && destMode == 5));
             var deferConditionCodesUntilSuccessfulWrite = size == M68kOperandSize.Long &&
-                ((srcMode == 7 && srcReg == 4 && destMode == 3) ||
+                ((srcMode == 7 && srcReg == 4 && destMode is 2 or 3) ||
                     (srcMode is 0 or 1 && destMode is 2 or 3));
             var dest = ResolveEa(
                 destMode,
@@ -3199,6 +3330,11 @@ namespace Copper68k
                         State.SetFlag(M68kCpuState.Zero, false);
                     }
                 }
+            }
+
+            if (size == M68kOperandSize.Word && destMode == 4)
+            {
+                UsePrefetchedInstructionWordForAddressErrorFrame();
             }
 
             dest.Write(value);
@@ -3512,12 +3648,24 @@ namespace Copper68k
             var immediate = FetchImmediate(size);
             var mode = (opcode >> 3) & 7;
             var reg = opcode & 7;
+            var writesEffectiveAddress = high != 0x0C00;
+            var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
+                size == M68kOperandSize.Long &&
+                mode is 4 or 5 or 6
+                    ? -2
+                    : 0;
             var ea = ResolveEa(
                 mode,
                 reg,
                 size,
-                write: high != 0x0C00,
-                completeWordPostIncrementBeforeRead: high != 0x0C00);
+                write: writesEffectiveAddress,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
+            {
+                SetAddressRegister(reg, ea.Address);
+            }
+
             var destination = ea.Read();
             switch (high)
             {
@@ -3918,7 +4066,26 @@ namespace Copper68k
                     return true;
                 }
 
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, size, write: unary != 0x4A00);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var writesEffectiveAddress = unary != 0x4A00;
+                var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
+                    size == M68kOperandSize.Long &&
+                    mode is 4 or 5 or 6
+                        ? -2
+                        : 0;
+                var ea = ResolveEa(
+                    mode,
+                    reg,
+                    size,
+                    write: writesEffectiveAddress,
+                    completeWordPostIncrementBeforeRead: writesEffectiveAddress && size == M68kOperandSize.Word,
+                    addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+                if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
+                {
+                    SetAddressRegister(reg, ea.Address);
+                }
+
                 var value = ea.Read();
                 switch (unary)
                 {
@@ -3956,7 +4123,11 @@ namespace Copper68k
             if ((opcode & 0xF1C0) == 0x4180)
             {
                 var dataRegister = (opcode >> 9) & 7;
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
+                var ea = ResolveEa(
+                    (opcode >> 3) & 7,
+                    opcode & 7,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 var upperBound = (short)(ushort)ea.Read();
                 var value = (short)(ushort)(State.D[dataRegister] & 0xFFFF);
                 var status = (ushort)(State.StatusRegister &
@@ -4066,12 +4237,22 @@ namespace Copper68k
                 return true;
             }
 
+            var addressErrorStackedProgramCounterOffset = size == M68kOperandSize.Long &&
+                mode is 4 or 5 or 6
+                    ? -2
+                    : 0;
             var ea = ResolveEa(
                 mode,
                 opcode & 7,
                 size,
                 write: true,
-                completeWordPostIncrementBeforeRead: true);
+                completeWordPostIncrementBeforeRead: true,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (size == M68kOperandSize.Long && mode == 4)
+            {
+                SetAddressRegister(opcode & 7, ea.Address);
+            }
+
             var old = ea.Read();
             var result = subtract
                 ? Subtract(old, (uint)count, size, setExtend: true)
@@ -4239,7 +4420,11 @@ namespace Copper68k
 
             if (line == 0xC && opmode == 3)
             {
-                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var sourceEa = ResolveEa(
+                    mode,
+                    eaReg,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 var source = sourceEa.Read();
                 State.D[reg] = (uint)((ushort)State.D[reg] * (ushort)source);
                 State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
@@ -4251,7 +4436,11 @@ namespace Copper68k
 
             if (line == 0xC && opmode == 7)
             {
-                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var sourceEa = ResolveEa(
+                    mode,
+                    eaReg,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 var source = unchecked((short)sourceEa.Read());
                 State.D[reg] = (uint)(unchecked((short)State.D[reg]) * source);
                 State.SetNegativeZero(State.D[reg], M68kOperandSize.Long);
@@ -4263,7 +4452,11 @@ namespace Copper68k
 
             if (line == 0x8 && (opmode == 3 || opmode == 7))
             {
-                var sourceEa = ResolveEa(mode, eaReg, M68kOperandSize.Word);
+                var sourceEa = ResolveEa(
+                    mode,
+                    eaReg,
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
                 var divisor = sourceEa.Read() & 0xFFFF;
                 if (divisor == 0)
                 {
@@ -4324,7 +4517,11 @@ namespace Copper68k
             if ((line == 0x9 || line == 0xD || line == 0xB) && (opmode == 3 || opmode == 7))
             {
                 var size = opmode == 3 ? M68kOperandSize.Word : M68kOperandSize.Long;
-                var ea = ResolveEa(mode, eaReg, size);
+                var ea = ResolveEa(
+                    mode,
+                    eaReg,
+                    size,
+                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
                 var value = ea.Read();
                 if (line == 0xB)
                 {
@@ -4365,21 +4562,41 @@ namespace Copper68k
             }
 
             var writesEffectiveAddress = registerToEa && (line != 0xB || opmode >= 4);
+            var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
+                operandSize == M68kOperandSize.Long &&
+                mode is 4 or 5 or 6
+                    ? -2
+                    : 0;
             var eaOperand = ResolveEa(
                 mode,
                 eaReg,
                 operandSize,
                 write: writesEffectiveAddress,
-                completeWordPostIncrementBeforeRead: writesEffectiveAddress);
+                completeWordPostIncrementBeforeRead: operandSize == M68kOperandSize.Word,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (writesEffectiveAddress && operandSize == M68kOperandSize.Long && mode == 4)
+            {
+                SetAddressRegister(eaReg, eaOperand.Address);
+            }
+
             var eaValue = eaOperand.Read();
             var regValue = State.D[reg] & M68kCpuState.Mask(operandSize);
             uint result;
+            void CompletePredecrementLongDestinationBeforeWrite()
+            {
+                if (writesEffectiveAddress && operandSize == M68kOperandSize.Long && mode == 4)
+                {
+                    SetAddressRegister(eaReg, eaOperand.Address);
+                }
+            }
+
             switch (line)
             {
                 case 0x8:
                     result = registerToEa ? eaValue | regValue : regValue | eaValue;
                     if (registerToEa)
                     {
+                        CompletePredecrementLongDestinationBeforeWrite();
                         eaOperand.Write(result);
                     }
                     else
@@ -4393,6 +4610,7 @@ namespace Copper68k
                     if (registerToEa)
                     {
                         result = Subtract(eaValue, regValue, operandSize, setExtend: true);
+                        CompletePredecrementLongDestinationBeforeWrite();
                         eaOperand.Write(result);
                     }
                     else
@@ -4406,6 +4624,7 @@ namespace Copper68k
                     if (opmode >= 4)
                     {
                         result = eaValue ^ regValue;
+                        CompletePredecrementLongDestinationBeforeWrite();
                         eaOperand.Write(result);
                         SetLogicFlags(result, operandSize);
                     }
@@ -4419,6 +4638,7 @@ namespace Copper68k
                     result = registerToEa ? eaValue & regValue : regValue & eaValue;
                     if (registerToEa)
                     {
+                        CompletePredecrementLongDestinationBeforeWrite();
                         eaOperand.Write(result);
                     }
                     else
@@ -4432,6 +4652,7 @@ namespace Copper68k
                     if (registerToEa)
                     {
                         result = Add(eaValue, regValue, operandSize, setExtend: true);
+                        CompletePredecrementLongDestinationBeforeWrite();
                         eaOperand.Write(result);
                     }
                     else
@@ -4689,7 +4910,12 @@ namespace Copper68k
 
             if ((opcode & 0x00C0) == 0x00C0)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word, write: true);
+                var ea = ResolveEa(
+                    (opcode >> 3) & 7,
+                    opcode & 7,
+                    M68kOperandSize.Word,
+                    write: true,
+                    completeWordPostIncrementBeforeRead: true);
                 var value = ea.Read() & 0xFFFF;
                 var type = (opcode >> 9) & 3;
                 var left = (opcode & 0x0100) != 0;
@@ -4855,7 +5081,7 @@ namespace Copper68k
                             reg,
                             AddressIncrement(reg, size),
                             completePostIncrementOnRead: !write,
-                            completePostIncrementBeforeRead: size == M68kOperandSize.Word);
+                            completePostIncrementBeforeRead: completeWordPostIncrementBeforeRead && size == M68kOperandSize.Word);
                 }
                 case 4:
                 {
@@ -4870,7 +5096,9 @@ namespace Copper68k
                         predecrementAddress,
                         size,
                         GetEaOperandCycles(mode, reg, size),
-                        GetPredecrementStackedProgramCounter(size) + (write && size == M68kOperandSize.Long ? 2u : 0u),
+                        unchecked((uint)(GetPredecrementStackedProgramCounter(size) +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)),
                         descendingLongWrite: true,
                         delayedPredecrementRegister: write && size == M68kOperandSize.Long ? reg : -1,
                         delayedPredecrementValue: predecrementAddress);
@@ -4884,7 +5112,9 @@ namespace Copper68k
                         (uint)(State.A[reg] + displacement),
                         size,
                         GetEaOperandCycles(mode, reg, size),
-                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
+                        unchecked((uint)(extensionAddress +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)));
                 }
                 case 6:
                 {
@@ -4895,7 +5125,9 @@ namespace Copper68k
                         M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[reg], extension, State.D, State.A),
                         size,
                         GetEaOperandCycles(mode, reg, size),
-                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
+                        unchecked((uint)(extensionAddress +
+                            (write && size == M68kOperandSize.Long ? 2u : 0u) +
+                            addressErrorStackedProgramCounterOffset)));
                 }
                 case 7:
                     return ResolveMode7(reg, size, write, addressErrorStackedProgramCounterOffset);
@@ -5191,6 +5423,14 @@ namespace Copper68k
             FlushPrefetch();
             _cpuBusCycle = State.Cycles;
             _cpuRetireBusCycle = State.Cycles;
+        }
+
+        private void UsePrefetchedInstructionWordForAddressErrorFrame()
+        {
+            if (_prefetchValid)
+            {
+                _addressErrorInstructionWord = _prefetchWord;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5569,6 +5809,7 @@ namespace Copper68k
             bool useDataAccessStackedProgramCounter = false)
         {
             var savedStatusRegister = State.StatusRegister;
+            var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
             var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch &&
                 !useDataAccessStackedProgramCounter
                 ? State.ProgramCounter
@@ -5576,9 +5817,9 @@ namespace Copper68k
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
-            PushWord(State.LastOpcode);
+            PushWord(instructionWord);
             PushLong(faultAddress);
-            PushWord(CreateBusErrorStatusWord(State.LastOpcode, savedStatusRegister, isWrite, accessKind));
+            PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, isWrite, accessKind));
             SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
             AddInstructionCycles(AddressErrorExceptionCycles);
         }

@@ -1916,6 +1916,39 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void AmigaBusExactCpuDataHelpersResumeChipRamAfterRomOverlayDisabled()
+	{
+		var bus = CreateExactCpuDataAmigaBus();
+		var overlayRom = new byte[0x40000];
+		Write(overlayRom, 0, 0xAB, 0xCD);
+		Write(bus.ChipRam, 0, 0x12, 0x34);
+		bus.MapReadOnlyMemory(0x00FC0000, overlayRom);
+		var cycle = 20L;
+
+		Assert.False(bus.TryReadExactCpuDataWord(0x000000, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+
+		bus.WriteByte(0x00BFE001, 0x00, 0);
+		cycle = 20L;
+		Assert.True(bus.TryReadExactCpuDataWord(0x000000, ref cycle, out var value));
+		Assert.Equal(0x1234, value);
+	}
+
+	[Fact]
+	public void AmigaBusExactCpuDataHelpersFallBackForHostTrapBank()
+	{
+		var bus = CreateExactCpuDataAmigaBus();
+		Write(bus.ChipRam, 0x2000, 0x12, 0x34);
+		bus.RegisterHostTrapStub(0x2000, _ => { });
+		var cycle = 20L;
+
+		Assert.False(bus.TryReadExactCpuDataWord(0x2000, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+		Assert.False(bus.TryReadExactCpuDataWord(0x2100, ref cycle, out _));
+		Assert.Equal(20L, cycle);
+	}
+
+	[Fact]
 	public void AmigaBusMemoryCopyHelpersUseRamBackends()
 	{
 		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000, realFastRamSize: 0x10000);

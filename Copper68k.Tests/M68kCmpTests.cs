@@ -5,6 +5,27 @@ namespace Copper68k.Tests;
 public sealed class M68kCmpTests
 {
 	[Fact]
+	public void CmpiWordPostincrementSourceAddressErrorAdvancesAddressRegister()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x0C58, 0x1234); // CMPI.W #$1234,(A0)+
+		bus.WriteLong(3 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+		cpu.State.A[0] = 0x2101;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend |
+			M68kCpuState.Negative | M68kCpuState.Zero | M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2103u, cpu.State.A[0]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+	}
+
+	[Fact]
 	public void CmpiBytePostincrementA7AdvancesStackPointerByWord()
 	{
 		var bus = new Copper68kTestBus();
