@@ -5,6 +5,27 @@ namespace Copper68k.Tests;
 public sealed class M68kBcdTests
 {
 	[Fact]
+	public void AbcdConsumesExtendFromBinaryShiftForBcdAccumulation()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0xD180, 0xC301); // ADD.L D0,D0; ABCD D1,D1
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x8000_0000;
+		cpu.State.D[1] = 0x0000_0000;
+
+		cpu.ExecuteInstruction();
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_0001u, cpu.State.D[1]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+
+	[Fact]
 	public void AbcdPredecrementMatchesSingleStepInvalidDigitOverflow()
 	{
 		var bus = new Copper68kTestBus();

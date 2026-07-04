@@ -2123,6 +2123,7 @@ namespace Copper68k
             var displacement = unchecked((short)FetchWord());
             var address = unchecked(State.A[6] + (uint)displacement);
             _dataAccessStackedProgramCounter = extensionAddress;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
             var value = ReadWord(address);
             WriteDataRegister((opcode >> 9) & 7, value, M68kOperandSize.Word);
             State.SetNegativeZero(value, M68kOperandSize.Word);

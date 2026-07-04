@@ -49,6 +49,25 @@ public sealed class M68kSystemTests
 	}
 
 	[Fact]
+	public void MoveImmediateToCcrPreservesSystemBits()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x44FC, 0x0015); // MOVE #$15,CCR
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.StatusRegister = 0xA5E0;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0xA515, cpu.State.StatusRegister);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+	}
+
+	[Fact]
 	public void RteInUserModeRaisesPrivilegeViolationWithoutPoppingUserStack()
 	{
 		var bus = new Copper68kTestBus();

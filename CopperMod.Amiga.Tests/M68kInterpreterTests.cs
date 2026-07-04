@@ -746,28 +746,6 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
-	public void AbcdConsumesExtendFromBinaryShiftForBcdAccumulation()
-	{
-		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0xD1, 0x80); // ADD.L D0,D0
-		Write(bus.Memory, 0x1002, 0xC3, 0x01); // ABCD D1,D1
-		var cpu = new M68kInterpreter(bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.D[0] = 0x8000_0000;
-		cpu.State.D[1] = 0x0000_0000;
-
-		cpu.ExecuteInstruction();
-		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
-
-		cpu.ExecuteInstruction();
-
-		Assert.Equal(0x0000_0001u, cpu.State.D[1]);
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Extend));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
-	}
-
-	[Fact]
 	public void AbcdDataRegisterUsesStickyZeroAndDecimalCarry()
 	{
 		var bus = new TestBus();
@@ -1349,25 +1327,6 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x0007_B3E4u, cpu.State.A[0]);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
-		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
-	}
-
-	[Fact]
-	public void MoveImmediateToCcrPreservesSystemBits()
-	{
-		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0x44, 0xFC, 0x00, 0x15); // MOVE #$15,CCR
-		var cpu = new M68kInterpreter(bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.StatusRegister = 0xA5E0;
-
-		cpu.ExecuteInstruction();
-
-		Assert.Equal(0xA5F5, cpu.State.StatusRegister);
-		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
-		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
 	}
 
@@ -2126,50 +2085,6 @@ public sealed class M68kInterpreterTests
 			bus.CopyFromMemory(address, destination);
 			Assert.Equal(new byte[source.Length], destination);
 		}
-	}
-
-	[Fact]
-	public void OddWordDataReadRaisesAddressErrorWith68000Frame()
-	{
-		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0x30, 0x10); // MOVE.W (A0),D0
-		bus.WriteLong(0x000C, 0x0000_4000);
-		var cpu = new M68kInterpreter(bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.A[0] = 0x2001;
-
-		cpu.ExecuteInstruction();
-
-		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x2FF2u, cpu.State.A[7]);
-		Assert.Equal(0x3015, ReadWord(bus.Memory, 0x2FF2)); // status word: (opcode & $FFE0) | function-code
-		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
-		Assert.Equal(0x3010, ReadWord(bus.Memory, 0x2FF8));
-		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
-		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
-	}
-
-	[Fact]
-	public void OddWordDataWriteRaisesAddressErrorWith68000Frame()
-	{
-		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0x30, 0x80); // MOVE.W D0,(A0)
-		bus.WriteLong(0x000C, 0x0000_4000);
-		var cpu = new M68kInterpreter(bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.D[0] = 0x1234;
-		cpu.State.A[0] = 0x2001;
-
-		cpu.ExecuteInstruction();
-
-		Assert.Equal(0x0000_4000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x2FF2u, cpu.State.A[7]);
-		Assert.Equal(0x3085, ReadWord(bus.Memory, 0x2FF2)); // status word: (opcode & $FFE0) | function-code
-		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
-		Assert.Equal(0x3080, ReadWord(bus.Memory, 0x2FF8));
-		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
-		Assert.Equal(0x0000_1004u, ReadLong(bus.Memory, 0x2FFC));
-		Assert.Equal(0x00, bus.Memory[0x2001]);
 	}
 
 	[Fact]

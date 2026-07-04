@@ -213,12 +213,28 @@ namespace Copper68k
                 new[] { typeof(byte), typeof(byte), typeof(int), typeof(bool).MakeByRefType() },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kIntegerSemantics).FullName, nameof(M68kIntegerSemantics.AddBcdByte));
+        private static readonly MethodInfo AddBcdByteWithOverflowMethod =
+            typeof(M68kIntegerSemantics).GetMethod(
+                nameof(M68kIntegerSemantics.AddBcdByte),
+                BindingFlags.Static | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(byte), typeof(byte), typeof(int), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType() },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kIntegerSemantics).FullName, nameof(M68kIntegerSemantics.AddBcdByte));
         private static readonly MethodInfo SubtractBcdByteMethod =
             typeof(M68kIntegerSemantics).GetMethod(
                 nameof(M68kIntegerSemantics.SubtractBcdByte),
                 BindingFlags.Static | BindingFlags.NonPublic,
                 binder: null,
                 new[] { typeof(byte), typeof(byte), typeof(int), typeof(bool).MakeByRefType() },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kIntegerSemantics).FullName, nameof(M68kIntegerSemantics.SubtractBcdByte));
+        private static readonly MethodInfo SubtractBcdByteWithOverflowMethod =
+            typeof(M68kIntegerSemantics).GetMethod(
+                nameof(M68kIntegerSemantics.SubtractBcdByte),
+                BindingFlags.Static | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(byte), typeof(byte), typeof(int), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType() },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kIntegerSemantics).FullName, nameof(M68kIntegerSemantics.SubtractBcdByte));
         private static readonly MethodInfo ReadMemoryValueForV2BatchMethod =
@@ -5999,6 +6015,7 @@ namespace Copper68k
             var result = il.DeclareLocal(typeof(uint));
             var extend = il.DeclareLocal(typeof(int));
             var carry = il.DeclareLocal(typeof(bool));
+            var overflow = il.DeclareLocal(typeof(bool));
             context.EmitMaterializePendingFlags();
 
             if (instruction.Operation == M68kJitOperation.Nbcd)
@@ -6023,11 +6040,12 @@ namespace Copper68k
             il.Emit(OpCodes.Conv_U1);
             il.Emit(OpCodes.Ldloc, extend);
             il.Emit(OpCodes.Ldloca, carry);
-            il.Emit(OpCodes.Call, subtract ? SubtractBcdByteMethod : AddBcdByteMethod);
+            il.Emit(OpCodes.Ldloca, overflow);
+            il.Emit(OpCodes.Call, subtract ? SubtractBcdByteWithOverflowMethod : AddBcdByteWithOverflowMethod);
             il.Emit(OpCodes.Conv_U4);
             il.Emit(OpCodes.Stloc, result);
             context.EmitStoreDataRegister(instruction.Destination.Register, result, M68kOperandSize.Byte);
-            EmitV2SetBcdFlags(il, context, result, carry);
+            EmitV2SetBcdFlags(il, context, result, carry, overflow);
             context.EmitAddCycles(6);
         }
 
@@ -6052,11 +6070,14 @@ namespace Copper68k
             ILGenerator il,
             V2EmitContext context,
             LocalBuilder result,
-            LocalBuilder carry)
+            LocalBuilder carry,
+            LocalBuilder overflow)
         {
             var zeroResult = il.DefineLabel();
             var negativeSet = il.DefineLabel();
             var negativeDone = il.DefineLabel();
+            var overflowSet = il.DefineLabel();
+            var overflowDone = il.DefineLabel();
             var carrySet = il.DefineLabel();
             var carryDone = il.DefineLabel();
 
@@ -6083,6 +6104,16 @@ namespace Copper68k
             il.Emit(OpCodes.Or);
             il.Emit(OpCodes.Stloc, context.StatusRegister);
             il.MarkLabel(negativeDone);
+
+            il.Emit(OpCodes.Ldloc, overflow);
+            il.Emit(OpCodes.Brtrue, overflowSet);
+            il.Emit(OpCodes.Br, overflowDone);
+            il.MarkLabel(overflowSet);
+            il.Emit(OpCodes.Ldloc, context.StatusRegister);
+            il.Emit(OpCodes.Ldc_I4, M68kCpuState.Overflow);
+            il.Emit(OpCodes.Or);
+            il.Emit(OpCodes.Stloc, context.StatusRegister);
+            il.MarkLabel(overflowDone);
 
             il.Emit(OpCodes.Ldloc, carry);
             il.Emit(OpCodes.Brtrue, carrySet);
@@ -9560,9 +9591,10 @@ namespace Copper68k
             }
 
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
+            var overflow = false;
             var result = subtract
-                ? M68kIntegerSemantics.SubtractBcdByte(destinationValue, sourceValue, extend, out var carry)
-                : M68kIntegerSemantics.AddBcdByte(destinationValue, sourceValue, extend, out carry);
+                ? M68kIntegerSemantics.SubtractBcdByte(destinationValue, sourceValue, extend, out var carry, out overflow)
+                : M68kIntegerSemantics.AddBcdByte(destinationValue, sourceValue, extend, out carry, out overflow);
 
             if (memoryMode)
             {
@@ -9573,7 +9605,7 @@ namespace Copper68k
                 WriteDataRegister(destination.Register, result, M68kOperandSize.Byte);
             }
 
-            SetBcdFlags(result, carry);
+            SetBcdFlags(result, carry, overflow);
             AddCycles(memoryMode ? 18 : 6);
         }
 
@@ -9581,9 +9613,9 @@ namespace Copper68k
         {
             var value = ReadEaForModify(destination, M68kOperandSize.Byte, out var resolvedAddress, out var memory);
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1 : 0;
-            var result = M68kIntegerSemantics.SubtractBcdByte(0, (byte)value, extend, out var carry);
+            var result = M68kIntegerSemantics.SubtractBcdByte(0, (byte)value, extend, out var carry, out var overflow);
             WriteResolvedEa(destination, M68kOperandSize.Byte, result, resolvedAddress, memory);
-            SetBcdFlags(result, carry);
+            SetBcdFlags(result, carry, overflow);
             AddCycles(memory ? 8 : 6);
         }
 
@@ -10701,7 +10733,7 @@ namespace Copper68k
             return arithmetic.Value;
         }
 
-        private void SetBcdFlags(byte result, bool carry)
+        private void SetBcdFlags(byte result, bool carry, bool overflow = false)
         {
             if (result != 0)
             {
@@ -10709,7 +10741,7 @@ namespace Copper68k
             }
 
             State.SetFlag(M68kCpuState.Negative, (result & 0x80) != 0);
-            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Overflow, overflow);
             State.SetFlag(M68kCpuState.Carry, carry);
             State.SetFlag(M68kCpuState.Extend, carry);
         }

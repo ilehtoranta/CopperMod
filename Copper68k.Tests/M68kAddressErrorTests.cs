@@ -5,6 +5,50 @@ namespace Copper68k.Tests;
 public sealed class M68kAddressErrorTests
 {
 	[Fact]
+	public void OddWordDataReadRaisesAddressErrorWith68000Frame()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x3010); // MOVE.W (A0),D0
+		bus.WriteLong(3 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF2u, cpu.State.A[7]);
+		Assert.Equal(0x3015, bus.ReadWord(0x2FF2)); // status word: (opcode & $FFE0) | function-code
+		Assert.Equal(0x2001u, bus.ReadLong(0x2FF4));
+		Assert.Equal(0x3010, bus.ReadWord(0x2FF8));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FFA));
+		Assert.Equal(0x1002u, bus.ReadLong(0x2FFC));
+	}
+
+	[Fact]
+	public void OddWordDataWriteRaisesAddressErrorWith68000Frame()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x3080); // MOVE.W D0,(A0)
+		bus.WriteLong(3 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x1234;
+		cpu.State.A[0] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF2u, cpu.State.A[7]);
+		Assert.Equal(0x3085, bus.ReadWord(0x2FF2)); // status word: (opcode & $FFE0) | function-code
+		Assert.Equal(0x2001u, bus.ReadLong(0x2FF4));
+		Assert.Equal(0x3080, bus.ReadWord(0x2FF8));
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FFA));
+		Assert.Equal(0x1004u, bus.ReadLong(0x2FFC));
+		Assert.Equal(0x00, bus.Memory[0x2001]);
+	}
+
+	[Fact]
 	public void DataAddressErrorStacksExtensionWordProgramCounter()
 	{
 		var bus = new Copper68kTestBus();
