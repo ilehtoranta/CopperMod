@@ -628,6 +628,8 @@ namespace Copper68k
         /// Hardware reset status register value: supervisor mode with interrupt mask 7.
         /// </summary>
         public const ushort ResetStatusRegister = 0x2700;
+        private const ushort M68000StatusRegisterMask = Trace | Supervisor | 0x0700 | ConditionCodeMask;
+        private const ushort M68020StatusRegisterMask = Trace | Master | Supervisor | 0x0700 | ConditionCodeMask;
         private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
         /// <summary>
@@ -985,6 +987,7 @@ namespace Copper68k
                 return;
             }
 
+            value &= M68000StatusRegisterMask;
             var wasSupervisor = (_statusRegister & Supervisor) != 0;
             var isSupervisor = (value & Supervisor) != 0;
             if (wasSupervisor != isSupervisor)
@@ -1006,6 +1009,7 @@ namespace Copper68k
 
         private void SetM68020StatusRegister(ushort value)
         {
+            value &= M68020StatusRegisterMask;
             SaveActiveM68020StackPointer(_statusRegister);
             _statusRegister = value;
             A[7] = GetActiveM68020StackPointer(value);
@@ -1940,11 +1944,96 @@ namespace Copper68k
             var destinationRegister = (opcode >> 9) & 7;
             var source = ResolvePlannedEa(sourceMode, sourceRegister, size);
             var value = ReadPlannedEaValue(in source);
-            var destination = ResolvePlannedEa(destinationMode, destinationRegister, size, write: true);
-            WritePlannedEaValue(in destination, value);
+            var updateNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
+                (sourceMode == 4 || (sourceMode == 3 && destinationMode == 6) ||
+                    destinationMode == 4 || destinationMode == 6 ||
+                    (sourceMode == 2 && destinationMode == 5) ||
+                    (sourceMode == 7 && sourceRegister == 3 && destinationMode == 5) ||
+                    (sourceMode == 0 && destinationMode == 5) ||
+                    (sourceMode == 1 && destinationMode == 5) ||
+                    (destinationMode == 7 && destinationRegister <= 1 && sourceMode != 3));
+            var updateZeroBeforeWrite = size == M68kOperandSize.Long && sourceMode == 5 && sourceRegister == 7;
+            var updateLowWordNegativeBeforeWrite = size == M68kOperandSize.Long &&
+                ((sourceMode == 6 && destinationMode is 2 or 3) ||
+                    (sourceMode == 2 && destinationMode == 3) ||
+                    (sourceMode == 3 && (destinationMode is 2 or 3 || (destinationMode == 7 && destinationRegister == 1))) ||
+                    (sourceMode == 5 && destinationMode is 2 or 3) ||
+                    (sourceMode == 7 && sourceRegister == 2 && destinationMode == 3));
+            var clearNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
+                false;
+            var preserveOverflowUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((destinationMode == 6 && sourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (sourceMode == 0 && destinationMode == 5) ||
+                    (sourceMode == 1 && destinationMode == 5));
+            var preserveCarryUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((destinationMode == 6 && destinationRegister != 7 && sourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (sourceMode == 0 && destinationMode == 6) ||
+                    (sourceMode == 1 && destinationMode == 6) ||
+                    (sourceMode == 0 && destinationMode == 5) ||
+                    (sourceMode == 1 && destinationMode == 5));
+            var deferConditionCodesUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((sourceMode == 7 && sourceRegister == 4 && destinationMode == 3) ||
+                    (sourceMode is 0 or 1 && destinationMode is 2 or 3));
+            var addressErrorStackedProgramCounterOffset =
+                GetMoveDestinationAddressErrorStackedProgramCounterOffset(size, sourceMode, destinationMode, destinationRegister);
+            var destination = ResolvePlannedEa(
+                destinationMode,
+                destinationRegister,
+                size,
+                write: true,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
             if (destinationMode != 1)
             {
+                if (!preserveOverflowUntilSuccessfulWrite && !deferConditionCodesUntilSuccessfulWrite)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                }
+
+                if (!deferConditionCodesUntilSuccessfulWrite)
+                {
+                    if (!preserveCarryUntilSuccessfulWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Carry, false);
+                    }
+
+                    if (updateNegativeZeroBeforeWrite)
+                    {
+                        State.SetNegativeZero(value, size);
+                    }
+                    else if (updateZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Zero, (value & M68kCpuState.Mask(size)) == 0);
+                    }
+                    else if (updateLowWordNegativeBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, (value & 0x8000) != 0);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                    else if (clearNegativeZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, false);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                }
+            }
+
+            WritePlannedEaValue(in destination, value);
+            if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
+            {
                 State.SetNegativeZero(value, size);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+            else if (destinationMode != 1 && (updateZeroBeforeWrite || updateLowWordNegativeBeforeWrite))
+            {
+                State.SetNegativeZero(value, size);
+            }
+            else if (destinationMode != 1 && !updateNegativeZeroBeforeWrite && !updateZeroBeforeWrite)
+            {
+                State.SetNegativeZero(value, size);
+            }
+            else if (destinationMode != 1 && preserveOverflowUntilSuccessfulWrite)
+            {
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
@@ -1963,6 +2052,27 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
+        }
+
+        private static int GetMoveDestinationAddressErrorStackedProgramCounterOffset(
+            M68kOperandSize size,
+            int sourceMode,
+            int destinationMode,
+            int destinationRegister)
+        {
+            if (size != M68kOperandSize.Long)
+            {
+                return 0;
+            }
+
+            if (destinationMode is 2 or 3)
+            {
+                return 2;
+            }
+
+            return destinationMode == 7 && destinationRegister == 1 && sourceMode is not 0 and not 1
+                ? -2
+                : 0;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1988,7 +2098,7 @@ namespace Copper68k
             var destinationRegister = (opcode >> 9) & 7;
             var destinationAddress = State.A[destinationRegister];
             var value = State.D[sourceRegister];
-            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
             State.SetNegativeZero(value, M68kOperandSize.Long);
@@ -2009,7 +2119,8 @@ namespace Copper68k
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var immediate = FetchImmediate(size);
-            var destinationEa = ResolvePlannedEa(mode, register, size, write: true);
+            var isCompare = (opcode & 0xFF00) == 0x0C00;
+            var destinationEa = ResolvePlannedEa(mode, register, size, write: !isCompare);
             var destination = ReadPlannedEaValue(in destinationEa);
             switch (opcode & 0xFF00)
             {
@@ -2041,7 +2152,7 @@ namespace Copper68k
                     break;
             }
 
-            AddInstructionCycles((opcode & 0xFF00) == 0x0C00
+            AddInstructionCycles(isCompare
                 ? GetCmpiCycles(size, mode, register)
                 : size == M68kOperandSize.Long ? 16 : 8);
         }
@@ -2307,11 +2418,100 @@ namespace Copper68k
 
             var source = ResolvePlannedEa(plan.SourceMode, plan.SourceRegister, plan.Size);
             var value = ReadPlannedEaValue(in source);
-            var destination = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size, write: true);
-            WritePlannedEaValue(in destination, value);
+            var updateNegativeZeroBeforeWrite = plan.Size == M68kOperandSize.Long &&
+                (plan.SourceMode == 4 || (plan.SourceMode == 3 && plan.DestinationMode == 6) ||
+                    plan.DestinationMode == 4 || plan.DestinationMode == 6 ||
+                    (plan.SourceMode == 2 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 3 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 1 && plan.DestinationMode == 5) ||
+                    (plan.DestinationMode == 7 && plan.DestinationRegister <= 1 && plan.SourceMode != 3));
+            var updateZeroBeforeWrite = plan.Size == M68kOperandSize.Long && plan.SourceMode == 5 && plan.SourceRegister == 7;
+            var updateLowWordNegativeBeforeWrite = plan.Size == M68kOperandSize.Long &&
+                ((plan.SourceMode == 6 && plan.DestinationMode is 2 or 3) ||
+                    (plan.SourceMode == 2 && plan.DestinationMode == 3) ||
+                    (plan.SourceMode == 3 && (plan.DestinationMode is 2 or 3 ||
+                        (plan.DestinationMode == 7 && plan.DestinationRegister == 1))) ||
+                    (plan.SourceMode == 5 && plan.DestinationMode is 2 or 3) ||
+                    (plan.SourceMode == 7 && plan.SourceRegister == 2 && plan.DestinationMode == 3));
+            var clearNegativeZeroBeforeWrite = plan.Size == M68kOperandSize.Long &&
+                false;
+            var preserveOverflowUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
+                ((plan.DestinationMode == 6 && plan.SourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 1 && plan.DestinationMode == 5));
+            var preserveCarryUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
+                ((plan.DestinationMode == 6 && plan.DestinationRegister != 7 && plan.SourceMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (plan.SourceMode == 0 && plan.DestinationMode == 6) ||
+                    (plan.SourceMode == 1 && plan.DestinationMode == 6) ||
+                    (plan.SourceMode == 0 && plan.DestinationMode == 5) ||
+                    (plan.SourceMode == 1 && plan.DestinationMode == 5));
+            var deferConditionCodesUntilSuccessfulWrite = plan.Size == M68kOperandSize.Long &&
+                ((plan.SourceMode == 7 && plan.SourceRegister == 4 && plan.DestinationMode == 3) ||
+                    (plan.SourceMode is 0 or 1 && plan.DestinationMode is 2 or 3));
+            var addressErrorStackedProgramCounterOffset = GetMoveDestinationAddressErrorStackedProgramCounterOffset(
+                plan.Size,
+                plan.SourceMode,
+                plan.DestinationMode,
+                plan.DestinationRegister);
+            var destination = ResolvePlannedEa(
+                plan.DestinationMode,
+                plan.DestinationRegister,
+                plan.Size,
+                write: true,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
             if (plan.DestinationMode != 1)
             {
+                if (!preserveOverflowUntilSuccessfulWrite && !deferConditionCodesUntilSuccessfulWrite)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                }
+
+                if (!deferConditionCodesUntilSuccessfulWrite)
+                {
+                    if (!preserveCarryUntilSuccessfulWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Carry, false);
+                    }
+
+                    if (updateNegativeZeroBeforeWrite)
+                    {
+                        State.SetNegativeZero(value, plan.Size);
+                    }
+                    else if (updateZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Zero, (value & M68kCpuState.Mask(plan.Size)) == 0);
+                    }
+                    else if (updateLowWordNegativeBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, (value & 0x8000) != 0);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                    else if (clearNegativeZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, false);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                }
+            }
+
+            WritePlannedEaValue(in destination, value);
+            if (plan.DestinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
+            {
                 State.SetNegativeZero(value, plan.Size);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+            else if (plan.DestinationMode != 1 && (updateZeroBeforeWrite || updateLowWordNegativeBeforeWrite))
+            {
+                State.SetNegativeZero(value, plan.Size);
+            }
+            else if (plan.DestinationMode != 1 && !updateNegativeZeroBeforeWrite && !updateZeroBeforeWrite)
+            {
+                State.SetNegativeZero(value, plan.Size);
+            }
+            else if (plan.DestinationMode != 1 && preserveOverflowUntilSuccessfulWrite)
+            {
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
@@ -2340,7 +2540,7 @@ namespace Copper68k
             var destinationRegister = plan.DestinationRegister;
             var destinationAddress = State.A[destinationRegister];
             var value = State.D[plan.SourceRegister];
-            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
             State.SetNegativeZero(value, M68kOperandSize.Long);
@@ -2358,7 +2558,11 @@ namespace Copper68k
             }
 
             var immediate = FetchImmediate(plan.Size);
-            var destinationEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size, write: true);
+            var destinationEa = ResolvePlannedEa(
+                plan.DestinationMode,
+                plan.DestinationRegister,
+                plan.Size,
+                write: plan.Variant != 5);
             var destination = ReadPlannedEaValue(in destinationEa);
             switch (plan.Variant)
             {
@@ -2545,7 +2749,8 @@ namespace Copper68k
             int register,
             M68kOperandSize size,
             bool write = false,
-            bool completeWordPostIncrementBeforeRead = false)
+            bool completeWordPostIncrementBeforeRead = false,
+            int addressErrorStackedProgramCounterOffset = 0)
         {
             switch (mode)
             {
@@ -2554,7 +2759,11 @@ namespace Copper68k
                 case 1:
                     return PlannedEaOperand.AddressRegister(register, size);
                 case 2:
-                    return PlannedEaOperand.Memory(State.A[register], size, GetEaOperandCycles(mode, register, size), State.ProgramCounter);
+                    return PlannedEaOperand.Memory(
+                        State.A[register],
+                        size,
+                        GetEaOperandCycles(mode, register, size),
+                        unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)));
                 case 3:
                 {
                     var address = State.A[register];
@@ -2562,20 +2771,29 @@ namespace Copper68k
                         address,
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        State.ProgramCounter,
+                        unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)),
                         register,
                         AddressIncrement(register, size),
                         completePostIncrementOnRead: !write,
                         completePostIncrementBeforeRead: size == M68kOperandSize.Word);
                 }
                 case 4:
-                    SetAddressRegister(register, State.A[register] - AddressIncrement(register, size));
+                {
+                    var predecrementAddress = State.A[register] - AddressIncrement(register, size);
+                    if (!(write && size == M68kOperandSize.Long))
+                    {
+                        SetAddressRegister(register, predecrementAddress);
+                    }
+
                     return PlannedEaOperand.Memory(
-                        State.A[register],
+                        predecrementAddress,
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        GetPredecrementStackedProgramCounter(size),
-                        descendingLongWrite: true);
+                        GetPredecrementStackedProgramCounter(size) + (write && size == M68kOperandSize.Long ? 2u : 0u),
+                        descendingLongWrite: true,
+                        delayedPredecrementRegister: write && size == M68kOperandSize.Long ? register : -1,
+                        delayedPredecrementValue: predecrementAddress);
+                }
                 case 5:
                 {
                     var extensionAddress = State.ProgramCounter;
@@ -2584,7 +2802,7 @@ namespace Copper68k
                         unchecked((uint)(State.A[register] + displacement)),
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        extensionAddress);
+                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
                 }
                 case 6:
                 {
@@ -2594,23 +2812,35 @@ namespace Copper68k
                         M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[register], extension, State.D, State.A),
                         size,
                         GetEaOperandCycles(mode, register, size),
-                        extensionAddress);
+                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
                 }
                 case 7:
-                    return ResolvePlannedMode7(register, size);
+                    return ResolvePlannedMode7(register, size, write, addressErrorStackedProgramCounterOffset);
                 default:
                     throw new InvalidOperationException("Invalid planned effective address mode.");
             }
         }
 
-        private PlannedEaOperand ResolvePlannedMode7(int register, M68kOperandSize size)
+        private PlannedEaOperand ResolvePlannedMode7(
+            int register,
+            M68kOperandSize size,
+            bool write = false,
+            int addressErrorStackedProgramCounterOffset = 0)
         {
             switch (register)
             {
                 case 0:
                     return PlannedEaOperand.Memory(unchecked((uint)(short)FetchWord()), size, GetEaOperandCycles(7, register, size), State.ProgramCounter);
                 case 1:
-                    return PlannedEaOperand.Memory(FetchLong(), size, GetEaOperandCycles(7, register, size), State.ProgramCounter);
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var address = FetchLong();
+                    return PlannedEaOperand.Memory(
+                        address,
+                        size,
+                        GetEaOperandCycles(7, register, size),
+                        unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)));
+                }
                 case 2:
                 {
                     var extensionAddress = State.ProgramCounter;
@@ -2724,6 +2954,11 @@ namespace Copper68k
                     if (!operand.CompletePostIncrementBeforeRead)
                     {
                         CompletePlannedMemoryEaAccess(in operand);
+                    }
+
+                    if (operand.DelayedPredecrementRegister >= 0)
+                    {
+                        SetAddressRegister(operand.DelayedPredecrementRegister, operand.DelayedPredecrementValue);
                     }
 
                     return;
@@ -2891,14 +3126,98 @@ namespace Copper68k
 
             var src = ResolveEa((opcode >> 3) & 7, opcode & 7, size);
             var value = src.Read();
+            var srcMode = (opcode >> 3) & 7;
+            var srcReg = opcode & 7;
             var destMode = (opcode >> 6) & 7;
             var destReg = (opcode >> 9) & 7;
-            var dest = ResolveEa(destMode, destReg, size, write: true);
-            dest.Write(value);
+            var updateNegativeZeroBeforeWrite = size == M68kOperandSize.Long &&
+                (srcMode == 4 || (srcMode == 3 && destMode == 6) ||
+                    destMode == 4 || destMode == 6 ||
+                    (srcMode == 2 && destMode == 5) ||
+                    (srcMode == 7 && srcReg == 3 && destMode == 5) ||
+                    (srcMode == 0 && destMode == 5) ||
+                    (srcMode == 1 && destMode == 5) ||
+                    (destMode == 7 && destReg <= 1 && srcMode != 3));
+            var updateZeroBeforeWrite = size == M68kOperandSize.Long && srcMode == 5 && srcReg == 7;
+            var updateLowWordNegativeBeforeWrite = size == M68kOperandSize.Long &&
+                ((srcMode == 6 && destMode is 2 or 3) ||
+                    (srcMode == 2 && destMode == 3) ||
+                    (srcMode == 3 && (destMode is 2 or 3 || (destMode == 7 && destReg == 1))) ||
+                    (srcMode == 5 && destMode is 2 or 3) ||
+                    (srcMode == 7 && srcReg == 2 && destMode == 3));
+            var clearNegativeZeroBeforeWrite = false;
+            var preserveOverflowUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((destMode == 6 && srcMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (srcMode == 0 && destMode == 5) ||
+                    (srcMode == 1 && destMode == 5));
+            var preserveCarryUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((destMode == 6 && destReg != 7 && srcMode is not 3 and not 4 and not 5 and not 6 and not 7) ||
+                    (srcMode == 0 && destMode == 6) ||
+                    (srcMode == 1 && destMode == 6) ||
+                    (srcMode == 0 && destMode == 5) ||
+                    (srcMode == 1 && destMode == 5));
+            var deferConditionCodesUntilSuccessfulWrite = size == M68kOperandSize.Long &&
+                ((srcMode == 7 && srcReg == 4 && destMode == 3) ||
+                    (srcMode is 0 or 1 && destMode is 2 or 3));
+            var dest = ResolveEa(
+                destMode,
+                destReg,
+                size,
+                write: true,
+                addressErrorStackedProgramCounterOffset: GetMoveDestinationAddressErrorStackedProgramCounterOffset(size, srcMode, destMode, destReg));
             // MOVEA does not alter the condition codes.
             if (destMode != 1)
             {
+                if (!preserveOverflowUntilSuccessfulWrite && !deferConditionCodesUntilSuccessfulWrite)
+                {
+                    State.SetFlag(M68kCpuState.Overflow, false);
+                }
+
+                if (!deferConditionCodesUntilSuccessfulWrite)
+                {
+                    if (!preserveCarryUntilSuccessfulWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Carry, false);
+                    }
+
+                    if (updateNegativeZeroBeforeWrite)
+                    {
+                        State.SetNegativeZero(value, size);
+                    }
+                    else if (updateZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Zero, (value & M68kCpuState.Mask(size)) == 0);
+                    }
+                    else if (updateLowWordNegativeBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, (value & 0x8000) != 0);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                    else if (clearNegativeZeroBeforeWrite)
+                    {
+                        State.SetFlag(M68kCpuState.Negative, false);
+                        State.SetFlag(M68kCpuState.Zero, false);
+                    }
+                }
+            }
+
+            dest.Write(value);
+            if (destMode != 1 && deferConditionCodesUntilSuccessfulWrite)
+            {
                 State.SetNegativeZero(value, size);
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+            else if (destMode != 1 && (updateZeroBeforeWrite || updateLowWordNegativeBeforeWrite))
+            {
+                State.SetNegativeZero(value, size);
+            }
+            else if (destMode != 1 && !updateNegativeZeroBeforeWrite && !updateZeroBeforeWrite)
+            {
+                State.SetNegativeZero(value, size);
+            }
+            else if (destMode != 1 && preserveOverflowUntilSuccessfulWrite)
+            {
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
             }
@@ -3070,12 +3389,21 @@ namespace Copper68k
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
-                if (bitMode == 1 || (bitMode == 7 && bitReg == 4))
+                if (bitMode == 1 || (bitMode == 7 && bitReg == 4 && operation != 0))
                 {
                     return false;
                 }
 
                 var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
+                if (bitMode == 7 && bitReg == 4)
+                {
+                    var immediateValue = FetchWord();
+                    var immediateMask = 1u << (int)(bit & 7);
+                    State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
+                    AddInstructionCycles(8);
+                    return true;
+                }
+
                 if (bitMode == 7 && bitReg == 1)
                 {
                     var address = FetchLong();
@@ -3122,12 +3450,22 @@ namespace Copper68k
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
-                if (bitMode == 1 || (bitMode == 7 && bitReg == 4))
+                if (bitMode == 1 || (bitMode == 7 && bitReg == 4 && operation != 0))
                 {
                     return false;
                 }
 
                 var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
+                if (bitMode == 7 && bitReg == 4)
+                {
+                    var immediateValue = FetchWord();
+                    var immediateBit = State.D[bitRegister] & 7u;
+                    var immediateMask = 1u << (int)immediateBit;
+                    State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
+                    AddInstructionCycles(8);
+                    return true;
+                }
+
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();
                 var bit = State.D[bitRegister] & (bitMode == 0 ? 31u : 7u);
@@ -3509,8 +3847,7 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x4E90)
             {
                 var target = State.A[opcode & 7];
-                PushLong(State.ProgramCounter);
-                SetProgramCounterAndFlushPrefetch(target);
+                JumpToSubroutine(target, State.ProgramCounter);
                 AddInstructionCycles(16);
                 return true;
             }
@@ -3518,16 +3855,16 @@ namespace Copper68k
             if ((opcode & 0xFFC0) == 0x4E80)
             {
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
-                PushLong(State.ProgramCounter);
-                SetProgramCounterAndFlushPrefetch(ea.Address);
+                JumpToSubroutine(ea.Address, State.ProgramCounter);
                 AddInstructionCycles(18);
                 return true;
             }
 
             if ((opcode & 0xFFC0) == 0x4EC0)
             {
+                var targetStackedProgramCounter = State.ProgramCounter;
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
-                SetProgramCounterAndFlushPrefetch(ea.Address);
+                BranchTo(ea.Address, targetStackedProgramCounter);
                 AddInstructionCycles(12);
                 return true;
             }
@@ -3622,15 +3959,17 @@ namespace Copper68k
                 var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Word);
                 var upperBound = (short)(ushort)ea.Read();
                 var value = (short)(ushort)(State.D[dataRegister] & 0xFFFF);
+                var status = (ushort)(State.StatusRegister &
+                    unchecked((ushort)~(M68kCpuState.Negative | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry)));
+                State.StatusRegister = status;
                 if (value < 0)
                 {
-                    State.SetFlag(M68kCpuState.Negative, true);
-                    RaiseException(6, instructionPc, 40);
+                    State.StatusRegister = (ushort)(status | M68kCpuState.Negative);
+                    RaiseException(6, State.ProgramCounter, 40);
                 }
                 else if (value > upperBound)
                 {
-                    State.SetFlag(M68kCpuState.Negative, false);
-                    RaiseException(6, instructionPc, 40);
+                    RaiseException(6, State.ProgramCounter, 40);
                 }
                 else
                 {
@@ -3766,6 +4105,15 @@ namespace Copper68k
             }
 
             var bit = FetchWord() & 31;
+            if (mode == 7 && reg == 4)
+            {
+                var immediateValue = FetchWord();
+                var immediateBit = bit & 7;
+                State.SetFlag(M68kCpuState.Zero, (immediateValue & (1u << immediateBit)) == 0);
+                AddInstructionCycles(8);
+                return true;
+            }
+
             if (mode == 7 && reg == 1)
             {
                 var address = FetchLong();
@@ -3791,7 +4139,7 @@ namespace Copper68k
             {
                 0 => true,
                 2 or 3 or 4 or 5 or 6 => true,
-                7 => reg <= 3,
+                7 => reg <= 4,
                 _ => false
             };
         }
@@ -3932,7 +4280,10 @@ namespace Copper68k
                     remainder = dividend % divisor;
                     if ((quotient & 0xFFFF_0000) != 0)
                     {
+                        State.SetFlag(M68kCpuState.Negative, true);
+                        State.SetFlag(M68kCpuState.Zero, false);
                         State.SetFlag(M68kCpuState.Overflow, true);
+                        State.SetFlag(M68kCpuState.Carry, false);
                     }
                     else
                     {
@@ -3950,7 +4301,10 @@ namespace Copper68k
                     var signedRemainder = (long)signedDividend % signedDivisor;
                     if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
                     {
+                        State.SetFlag(M68kCpuState.Negative, true);
+                        State.SetFlag(M68kCpuState.Zero, false);
                         State.SetFlag(M68kCpuState.Overflow, true);
+                        State.SetFlag(M68kCpuState.Carry, false);
                     }
                     else
                     {
@@ -4010,12 +4364,13 @@ namespace Copper68k
                 registerToEa = true;
             }
 
+            var writesEffectiveAddress = registerToEa && (line != 0xB || opmode >= 4);
             var eaOperand = ResolveEa(
                 mode,
                 eaReg,
                 operandSize,
-                write: registerToEa && line != 0xB,
-                completeWordPostIncrementBeforeRead: registerToEa && line != 0xB);
+                write: writesEffectiveAddress,
+                completeWordPostIncrementBeforeRead: writesEffectiveAddress);
             var eaValue = eaOperand.Read();
             var regValue = State.D[reg] & M68kCpuState.Mask(operandSize);
             uint result;
@@ -4176,6 +4531,22 @@ namespace Copper68k
             var destinationRegister = (opcode >> 9) & 7;
             var sourceRegister = opcode & 7;
             var sourceAddress = State.A[sourceRegister];
+            _dataAccessStackedProgramCounter = size != M68kOperandSize.Byte
+                ? State.ProgramCounter + 2
+                : State.ProgramCounter;
+            if (size != M68kOperandSize.Byte && (sourceAddress & 1) != 0)
+            {
+                SetAddressRegister(sourceRegister, sourceAddress + 2);
+                if (size == M68kOperandSize.Word)
+                {
+                    _ = ReadWord(sourceAddress);
+                }
+                else
+                {
+                    _ = ReadLong(sourceAddress);
+                }
+            }
+
             var source = size switch
             {
                 M68kOperandSize.Byte => ReadByte(sourceAddress),
@@ -4449,7 +4820,8 @@ namespace Copper68k
             M68kOperandSize size,
             bool write = false,
             bool addressOnly = false,
-            bool completeWordPostIncrementBeforeRead = false)
+            bool completeWordPostIncrementBeforeRead = false,
+            int addressErrorStackedProgramCounterOffset = 0)
         {
             switch (mode)
             {
@@ -4458,18 +4830,28 @@ namespace Copper68k
                 case 1:
                     return EaOperand.AddressRegister(this, reg, size);
                 case 2:
-                    return EaOperand.Memory(this, State.A[reg], size, GetEaOperandCycles(mode, reg, size), State.ProgramCounter);
+                    return EaOperand.Memory(
+                        this,
+                        State.A[reg],
+                        size,
+                        GetEaOperandCycles(mode, reg, size),
+                        unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)));
                 case 3:
                 {
                     var address = State.A[reg];
                     return addressOnly
-                        ? EaOperand.Memory(this, address, size, GetEaOperandCycles(mode, reg, size), State.ProgramCounter)
+                        ? EaOperand.Memory(
+                            this,
+                            address,
+                            size,
+                            GetEaOperandCycles(mode, reg, size),
+                            unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)))
                         : EaOperand.Memory(
                             this,
                             address,
                             size,
                             GetEaOperandCycles(mode, reg, size),
-                            State.ProgramCounter,
+                            unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)),
                             reg,
                             AddressIncrement(reg, size),
                             completePostIncrementOnRead: !write,
@@ -4477,20 +4859,32 @@ namespace Copper68k
                 }
                 case 4:
                 {
-                    SetAddressRegister(reg, State.A[reg] - AddressIncrement(reg, size));
+                    var predecrementAddress = State.A[reg] - AddressIncrement(reg, size);
+                    if (!(write && size == M68kOperandSize.Long))
+                    {
+                        SetAddressRegister(reg, predecrementAddress);
+                    }
+
                     return EaOperand.Memory(
                         this,
-                        State.A[reg],
+                        predecrementAddress,
                         size,
                         GetEaOperandCycles(mode, reg, size),
-                        GetPredecrementStackedProgramCounter(size),
-                        descendingLongWrite: true);
+                        GetPredecrementStackedProgramCounter(size) + (write && size == M68kOperandSize.Long ? 2u : 0u),
+                        descendingLongWrite: true,
+                        delayedPredecrementRegister: write && size == M68kOperandSize.Long ? reg : -1,
+                        delayedPredecrementValue: predecrementAddress);
                 }
                 case 5:
                 {
                     var extensionAddress = State.ProgramCounter;
                     var displacement = unchecked((short)FetchWord());
-                    return EaOperand.Memory(this, (uint)(State.A[reg] + displacement), size, GetEaOperandCycles(mode, reg, size), extensionAddress);
+                    return EaOperand.Memory(
+                        this,
+                        (uint)(State.A[reg] + displacement),
+                        size,
+                        GetEaOperandCycles(mode, reg, size),
+                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
                 }
                 case 6:
                 {
@@ -4501,10 +4895,10 @@ namespace Copper68k
                         M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[reg], extension, State.D, State.A),
                         size,
                         GetEaOperandCycles(mode, reg, size),
-                        extensionAddress);
+                        extensionAddress + (write && size == M68kOperandSize.Long ? 2u : 0u));
                 }
                 case 7:
-                    return ResolveMode7(reg, size);
+                    return ResolveMode7(reg, size, write, addressErrorStackedProgramCounterOffset);
                 default:
                     throw new InvalidOperationException("Invalid effective address mode.");
             }
@@ -4513,17 +4907,39 @@ namespace Copper68k
         private uint GetPredecrementStackedProgramCounter(M68kOperandSize size)
             => size == M68kOperandSize.Word ? State.ProgramCounter + 2 : State.ProgramCounter;
 
-        private EaOperand ResolveMode7(int reg, M68kOperandSize size)
+        private EaOperand ResolveMode7(
+            int reg,
+            M68kOperandSize size,
+            bool write = false,
+            int addressErrorStackedProgramCounterOffset = 0)
         {
-            return reg switch
+            switch (reg)
             {
-                0 => EaOperand.Memory(this, (uint)(short)FetchWord(), size, GetEaOperandCycles(7, reg, size), State.ProgramCounter),
-                1 => EaOperand.Memory(this, FetchLong(), size, GetEaOperandCycles(7, reg, size), State.ProgramCounter),
-                2 => ResolvePcRelative(size),
-                3 => ResolvePcIndexed(size),
-                4 => EaOperand.Immediate(this, FetchImmediate(size), size),
-                _ => RaiseIllegalInstruction()
-            };
+                case 0:
+                {
+                    var address = (uint)(short)FetchWord();
+                    return EaOperand.Memory(this, address, size, GetEaOperandCycles(7, reg, size), State.ProgramCounter);
+                }
+                case 1:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var address = FetchLong();
+                    return EaOperand.Memory(
+                        this,
+                        address,
+                        size,
+                        GetEaOperandCycles(7, reg, size),
+                        unchecked((uint)(State.ProgramCounter + addressErrorStackedProgramCounterOffset)));
+                }
+                case 2:
+                    return ResolvePcRelative(size);
+                case 3:
+                    return ResolvePcIndexed(size);
+                case 4:
+                    return EaOperand.Immediate(this, FetchImmediate(size), size);
+                default:
+                    return RaiseIllegalInstruction();
+            }
         }
 
         private EaOperand RaiseIllegalInstruction()
@@ -4751,6 +5167,22 @@ namespace Copper68k
                     useDataAccessStackedProgramCounter: true);
             }
 
+            SetProgramCounterAndFlushPrefetch(target);
+        }
+
+        private void JumpToSubroutine(uint target, uint stackedProgramCounter)
+        {
+            if ((target & 1) != 0)
+            {
+                _dataAccessStackedProgramCounter = stackedProgramCounter;
+                ThrowOddAddressAccess(
+                    target,
+                    isWrite: false,
+                    M68kBusAccessKind.CpuInstructionFetch,
+                    useDataAccessStackedProgramCounter: true);
+            }
+
+            PushLong(State.ProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
         }
 
@@ -4983,11 +5415,6 @@ namespace Copper68k
 
         private void WriteLongDescending(uint address, uint value)
         {
-            if ((address & 1) != 0)
-            {
-                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
-            }
-
             WriteWord(address + 2, (ushort)value);
             WriteWord(address, (ushort)(value >> 16));
         }
@@ -5222,7 +5649,9 @@ namespace Copper68k
                 bool completePostIncrementOnRead,
                 M68kBusAccessKind readFaultAccessKind,
                 bool descendingLongWrite,
-                bool completePostIncrementBeforeRead)
+                bool completePostIncrementBeforeRead,
+                int delayedPredecrementRegister,
+                uint delayedPredecrementValue)
             {
                 Kind = kind;
                 Register = register;
@@ -5237,6 +5666,8 @@ namespace Copper68k
                 ReadFaultAccessKind = readFaultAccessKind;
                 DescendingLongWrite = descendingLongWrite;
                 CompletePostIncrementBeforeRead = completePostIncrementBeforeRead;
+                DelayedPredecrementRegister = delayedPredecrementRegister;
+                DelayedPredecrementValue = delayedPredecrementValue;
             }
 
             public int Kind { get; }
@@ -5265,6 +5696,10 @@ namespace Copper68k
 
             public bool CompletePostIncrementBeforeRead { get; }
 
+            public int DelayedPredecrementRegister { get; }
+
+            public uint DelayedPredecrementValue { get; }
+
             public bool IsRegister => Kind is 0 or 1;
 
             public static PlannedEaOperand DataRegister(int register, M68kOperandSize size)
@@ -5281,7 +5716,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
 
             public static PlannedEaOperand AddressRegister(int register, M68kOperandSize size)
                 => new PlannedEaOperand(
@@ -5297,7 +5734,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
 
             public static PlannedEaOperand Memory(
                 uint address,
@@ -5309,7 +5748,9 @@ namespace Copper68k
                 bool completePostIncrementOnRead = true,
                 M68kBusAccessKind readFaultAccessKind = M68kBusAccessKind.CpuDataRead,
                 bool descendingLongWrite = false,
-                bool completePostIncrementBeforeRead = false)
+                bool completePostIncrementBeforeRead = false,
+                int delayedPredecrementRegister = -1,
+                uint delayedPredecrementValue = 0)
                 => new PlannedEaOperand(
                     2,
                     0,
@@ -5323,7 +5764,9 @@ namespace Copper68k
                     completePostIncrementOnRead,
                     readFaultAccessKind,
                     descendingLongWrite,
-                    completePostIncrementBeforeRead);
+                    completePostIncrementBeforeRead,
+                    delayedPredecrementRegister,
+                    delayedPredecrementValue);
 
             public static PlannedEaOperand ImmediateValue(uint value, M68kOperandSize size)
                 => new PlannedEaOperand(
@@ -5339,7 +5782,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
         }
 
         private readonly struct EaOperand
@@ -5355,6 +5800,8 @@ namespace Copper68k
             private readonly M68kBusAccessKind _readFaultAccessKind;
             private readonly bool _descendingLongWrite;
             private readonly bool _completePostIncrementBeforeRead;
+            private readonly int _delayedPredecrementRegister;
+            private readonly uint _delayedPredecrementValue;
 
             private EaOperand(
                 M68kInterpreterCore<TBus, TCpuDataAccess> cpu,
@@ -5370,7 +5817,9 @@ namespace Copper68k
                 bool completePostIncrementOnRead,
                 M68kBusAccessKind readFaultAccessKind,
                 bool descendingLongWrite,
-                bool completePostIncrementBeforeRead)
+                bool completePostIncrementBeforeRead,
+                int delayedPredecrementRegister,
+                uint delayedPredecrementValue)
             {
                 _cpu = cpu;
                 _kind = kind;
@@ -5384,11 +5833,15 @@ namespace Copper68k
                 _readFaultAccessKind = readFaultAccessKind;
                 _descendingLongWrite = descendingLongWrite;
                 _completePostIncrementBeforeRead = completePostIncrementBeforeRead;
+                _delayedPredecrementRegister = delayedPredecrementRegister;
+                _delayedPredecrementValue = delayedPredecrementValue;
                 Size = size;
                 EaCycles = eaCycles;
             }
 
             public uint Address { get; }
+
+            public uint AddressErrorStackedProgramCounter => _addressErrorStackedProgramCounter;
 
             public M68kOperandSize Size { get; }
 
@@ -5412,7 +5865,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     readFaultAccessKind: M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
             }
 
             public static EaOperand AddressRegister(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, int reg, M68kOperandSize size)
@@ -5431,7 +5886,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     readFaultAccessKind: M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
             }
 
             public static EaOperand Memory(
@@ -5445,7 +5902,9 @@ namespace Copper68k
                 bool completePostIncrementOnRead = true,
                 M68kBusAccessKind readFaultAccessKind = M68kBusAccessKind.CpuDataRead,
                 bool descendingLongWrite = false,
-                bool completePostIncrementBeforeRead = false)
+                bool completePostIncrementBeforeRead = false,
+                int delayedPredecrementRegister = -1,
+                uint delayedPredecrementValue = 0)
             {
                 return new EaOperand(
                     cpu,
@@ -5461,7 +5920,9 @@ namespace Copper68k
                     completePostIncrementOnRead,
                     readFaultAccessKind,
                     descendingLongWrite,
-                    completePostIncrementBeforeRead);
+                    completePostIncrementBeforeRead,
+                    delayedPredecrementRegister,
+                    delayedPredecrementValue);
             }
 
             public static EaOperand Immediate(M68kInterpreterCore<TBus, TCpuDataAccess> cpu, uint value, M68kOperandSize size)
@@ -5480,7 +5941,9 @@ namespace Copper68k
                     completePostIncrementOnRead: true,
                     readFaultAccessKind: M68kBusAccessKind.CpuDataRead,
                     descendingLongWrite: false,
-                    completePostIncrementBeforeRead: false);
+                    completePostIncrementBeforeRead: false,
+                    delayedPredecrementRegister: -1,
+                    delayedPredecrementValue: 0);
             }
 
             public uint Read()
@@ -5583,19 +6046,24 @@ namespace Copper68k
                         }
                         else
                         {
-                            if (_descendingLongWrite)
-                            {
-                                _cpu.WriteLongDescending(Address, value);
-                            }
-                            else
-                            {
-                                _cpu.WriteLong(Address, value);
-                            }
+                        if (_descendingLongWrite)
+                        {
+                            _cpu.WriteLongDescending(Address, value);
+                        }
+                        else
+                        {
+                            _cpu.WriteLong(Address, value);
+                        }
                         }
 
                         if (!_completePostIncrementBeforeRead)
                         {
                             CompleteMemoryAccess();
+                        }
+
+                        if (_delayedPredecrementRegister >= 0)
+                        {
+                            _cpu.SetAddressRegister(_delayedPredecrementRegister, _delayedPredecrementValue);
                         }
 
                         break;
