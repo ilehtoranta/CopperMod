@@ -2168,7 +2168,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x0000_2001u, ReadLong(bus.Memory, 0x2FF4));
 		Assert.Equal(0x3080, ReadWord(bus.Memory, 0x2FF8));
 		Assert.Equal(M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
-		Assert.Equal(0x0000_1002u, ReadLong(bus.Memory, 0x2FFC));
+		Assert.Equal(0x0000_1004u, ReadLong(bus.Memory, 0x2FFC));
 		Assert.Equal(0x00, bus.Memory[0x2001]);
 	}
 
