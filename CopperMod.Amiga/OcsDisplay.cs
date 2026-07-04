@@ -1,6 +1,12 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace CopperMod.Amiga
 {
@@ -425,6 +431,21 @@ namespace CopperMod.Amiga
             {
                 EndLiveDmaCapture(savedAdvancingLiveDma);
             }
+        }
+
+        internal bool HasLiveDisplaySlotPreparationWorkBeforeHrmGrant(long requestedCycle)
+        {
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid)
+            {
+                return false;
+            }
+
+            var before = _bus.FindHrmDmaCandidate(requestedCycle);
+            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            return before > _liveCapturedThroughCycle &&
+                before < frameStopCycle &&
+                HasLiveSlotPreparationWorkThrough(before, includeCopper: !_advancingLiveDma);
         }
 
         private void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle, bool includeCopper)
@@ -3739,13 +3760,13 @@ namespace CopperMod.Amiga
                         }
 
                         var fetchHorizontal = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
-                        var cycle = state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
+                        var cycleOffset = fetchHorizontal * CopperHpCycles;
                         var rowPresent = (state.PlaneHasRowMask & (1 << plane)) != 0;
                         var address = rowPresent
                             ? unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2))
                             : 0u;
                         _rowDmaBitplaneEntries[bitplaneStart + bitplaneCount++] =
-                            new RowDmaBitplaneEntry(cycle, plane, word, slot, address, rowPresent);
+                            new RowDmaBitplaneEntry(cycleOffset, plane, word, slot, address, rowPresent);
                     }
                 }
             }
@@ -4069,7 +4090,7 @@ namespace CopperMod.Amiga
             for (var index = entryIndex; index < end; index++)
             {
                 var entry = _rowDmaBitplaneEntries[index];
-                if (entry.Cycle > stopCycle)
+                if (entry.GetCycle(state.LineStartCycle) > stopCycle)
                 {
                     _liveNextFetchRow = row;
                     _liveNextFetchWord = entry.Word;
@@ -4086,6 +4107,7 @@ namespace CopperMod.Amiga
             {
                 _bus.ReadRowBitplaneDmaFetchesForPresentation(
                     _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
+                    state.LineStartCycle,
                     _rowDmaBitplaneBatchValues.AsSpan(0, batchCount),
                     _rowDmaBitplaneBatchGranted.AsSpan(0, batchCount),
                     out var grantedCount,
@@ -4421,7 +4443,7 @@ namespace CopperMod.Amiga
                             out var entry) &&
                         entry.RowPresent)
                     {
-                        _ = _bus.TryReserveRowBitplaneDmaSlot(entry.Address, entry.Cycle, out _);
+                        _ = _bus.TryReserveRowBitplaneDmaSlot(entry.Address, entry.GetCycle(state.LineStartCycle), out _);
                     }
                     else
                     {
@@ -4535,9 +4557,10 @@ namespace CopperMod.Amiga
 
         private void CaptureLiveBitplaneFetch(int row, RowDmaBitplaneEntry entry)
         {
+            var cycle = entry.GetCycle(_liveLineStates[row].LineStartCycle);
             _bitplaneDmaReadLatch = entry.RowPresent
-                ? LoadLiveBitplaneDmaLatch(row, entry.Plane, entry.Word, entry.Address, entry.Cycle)
-                : BitplaneDmaReadLatch.Denied(row, entry.Plane, entry.Word, entry.Cycle);
+                ? LoadLiveBitplaneDmaLatch(row, entry.Plane, entry.Word, entry.Address, cycle)
+                : BitplaneDmaReadLatch.Denied(row, entry.Plane, entry.Word, cycle);
             ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
@@ -12971,7 +12994,7 @@ namespace CopperMod.Amiga
             public int Word { get; }
         }
 
-        private enum LiveRasterlinePlanEventKind
+        private enum LiveRasterlinePlanEventKind : byte
         {
             PendingWriteOrCopper,
             LineStateCapture,
@@ -12993,6 +13016,7 @@ namespace CopperMod.Amiga
             UnsupportedOverflow
         }
 
+        [StructLayout(LayoutKind.Explicit, Size = 33)]
         private readonly struct LiveRasterlinePlanEvent
         {
             public LiveRasterlinePlanEvent(
@@ -13004,28 +13028,49 @@ namespace CopperMod.Amiga
                 int cursorB,
                 int cursorC)
             {
-                Kind = kind;
-                Cycle = cycle;
-                Row = row;
-                BatchStopCycle = batchStopCycle;
-                CursorA = cursorA;
-                CursorB = cursorB;
-                CursorC = cursorC;
+                _cycle = cycle;
+                _batchStopCycle = batchStopCycle;
+                _row = row;
+                _cursorA = cursorA;
+                _cursorB = cursorB;
+                _cursorC = cursorC;
+                _kind = kind;
             }
 
-            public LiveRasterlinePlanEventKind Kind { get; }
+            [FieldOffset(0)]
+            private readonly long _cycle;
 
-            public long Cycle { get; }
+            [FieldOffset(8)]
+            private readonly long _batchStopCycle;
 
-            public int Row { get; }
+            [FieldOffset(16)]
+            private readonly int _row;
 
-            public long BatchStopCycle { get; }
+            [FieldOffset(20)]
+            private readonly int _cursorA;
 
-            public int CursorA { get; }
+            [FieldOffset(24)]
+            private readonly int _cursorB;
 
-            public int CursorB { get; }
+            [FieldOffset(28)]
+            private readonly int _cursorC;
 
-            public int CursorC { get; }
+            [FieldOffset(32)]
+            private readonly LiveRasterlinePlanEventKind _kind;
+
+            public LiveRasterlinePlanEventKind Kind => _kind;
+
+            public long Cycle => _cycle;
+
+            public int Row => _row;
+
+            public long BatchStopCycle => _batchStopCycle;
+
+            public int CursorA => _cursorA;
+
+            public int CursorB => _cursorB;
+
+            public int CursorC => _cursorC;
         }
 
         private readonly struct LiveRasterlineDmaDescriptor

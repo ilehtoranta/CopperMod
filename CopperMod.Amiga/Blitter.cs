@@ -33,6 +33,26 @@ namespace CopperMod.Amiga
 
     internal readonly struct BlitterKernelKey : IEquatable<BlitterKernelKey>
     {
+        private const int MintermShift = 0;
+        private const int ShiftAShift = 8;
+        private const int ShiftBShift = 12;
+        private const int FlagShift = 16;
+        private const uint NibbleMask = 0x0F;
+        private const uint ByteMask = 0xFF;
+        private const uint LineModeFlag = 1u << (FlagShift + 0);
+        private const uint UseAFlag = 1u << (FlagShift + 1);
+        private const uint UseBFlag = 1u << (FlagShift + 2);
+        private const uint UseCFlag = 1u << (FlagShift + 3);
+        private const uint UseDFlag = 1u << (FlagShift + 4);
+        private const uint DescendingFlag = 1u << (FlagShift + 5);
+        private const uint FillEnabledFlag = 1u << (FlagShift + 6);
+        private const uint FillExclusiveFlag = 1u << (FlagShift + 7);
+        private const uint LineSingleDotFlag = 1u << (FlagShift + 8);
+        private const uint LineSudFlag = 1u << (FlagShift + 9);
+        private const uint LineSulFlag = 1u << (FlagShift + 10);
+        private const uint LineAulFlag = 1u << (FlagShift + 11);
+        private const uint LineSignFlag = 1u << (FlagShift + 12);
+
         public BlitterKernelKey(
             bool lineMode,
             bool useA,
@@ -51,98 +71,67 @@ namespace CopperMod.Amiga
             bool lineAul,
             bool lineSign)
         {
-            LineMode = lineMode;
-            UseA = useA;
-            UseB = useB;
-            UseC = useC;
-            UseD = useD;
-            Minterm = minterm;
-            ShiftA = shiftA;
-            ShiftB = shiftB;
-            Descending = descending;
-            FillEnabled = fillEnabled;
-            FillExclusive = fillExclusive;
-            LineSingleDot = lineSingleDot;
-            LineSud = lineSud;
-            LineSul = lineSul;
-            LineAul = lineAul;
-            LineSign = lineSign;
+            _bits =
+                ((uint)minterm << MintermShift) |
+                (((uint)shiftA & NibbleMask) << ShiftAShift) |
+                (((uint)shiftB & NibbleMask) << ShiftBShift) |
+                (lineMode ? LineModeFlag : 0) |
+                (useA ? UseAFlag : 0) |
+                (useB ? UseBFlag : 0) |
+                (useC ? UseCFlag : 0) |
+                (useD ? UseDFlag : 0) |
+                (descending ? DescendingFlag : 0) |
+                (fillEnabled ? FillEnabledFlag : 0) |
+                (fillExclusive ? FillExclusiveFlag : 0) |
+                (lineSingleDot ? LineSingleDotFlag : 0) |
+                (lineSud ? LineSudFlag : 0) |
+                (lineSul ? LineSulFlag : 0) |
+                (lineAul ? LineAulFlag : 0) |
+                (lineSign ? LineSignFlag : 0);
         }
 
-        public bool LineMode { get; }
+        private readonly uint _bits;
 
-        public bool UseA { get; }
+        public bool LineMode => (_bits & LineModeFlag) != 0;
 
-        public bool UseB { get; }
+        public bool UseA => (_bits & UseAFlag) != 0;
 
-        public bool UseC { get; }
+        public bool UseB => (_bits & UseBFlag) != 0;
 
-        public bool UseD { get; }
+        public bool UseC => (_bits & UseCFlag) != 0;
 
-        public byte Minterm { get; }
+        public bool UseD => (_bits & UseDFlag) != 0;
 
-        public int ShiftA { get; }
+        public byte Minterm => (byte)((_bits >> MintermShift) & ByteMask);
 
-        public int ShiftB { get; }
+        public int ShiftA => (int)((_bits >> ShiftAShift) & NibbleMask);
 
-        public bool Descending { get; }
+        public int ShiftB => (int)((_bits >> ShiftBShift) & NibbleMask);
 
-        public bool FillEnabled { get; }
+        public bool Descending => (_bits & DescendingFlag) != 0;
 
-        public bool FillExclusive { get; }
+        public bool FillEnabled => (_bits & FillEnabledFlag) != 0;
 
-        public bool LineSingleDot { get; }
+        public bool FillExclusive => (_bits & FillExclusiveFlag) != 0;
 
-        public bool LineSud { get; }
+        public bool LineSingleDot => (_bits & LineSingleDotFlag) != 0;
 
-        public bool LineSul { get; }
+        public bool LineSud => (_bits & LineSudFlag) != 0;
 
-        public bool LineAul { get; }
+        public bool LineSul => (_bits & LineSulFlag) != 0;
 
-        public bool LineSign { get; }
+        public bool LineAul => (_bits & LineAulFlag) != 0;
+
+        public bool LineSign => (_bits & LineSignFlag) != 0;
 
         public bool Equals(BlitterKernelKey other)
-            => LineMode == other.LineMode &&
-                UseA == other.UseA &&
-                UseB == other.UseB &&
-                UseC == other.UseC &&
-                UseD == other.UseD &&
-                Minterm == other.Minterm &&
-                ShiftA == other.ShiftA &&
-                ShiftB == other.ShiftB &&
-                Descending == other.Descending &&
-                FillEnabled == other.FillEnabled &&
-                FillExclusive == other.FillExclusive &&
-                LineSingleDot == other.LineSingleDot &&
-                LineSud == other.LineSud &&
-                LineSul == other.LineSul &&
-                LineAul == other.LineAul &&
-                LineSign == other.LineSign;
+            => _bits == other._bits;
 
         public override bool Equals(object? obj)
             => obj is BlitterKernelKey other && Equals(other);
 
         public override int GetHashCode()
-        {
-            var hash = 17;
-            hash = (hash * 31) + (LineMode ? 1 : 0);
-            hash = (hash * 31) + (UseA ? 1 : 0);
-            hash = (hash * 31) + (UseB ? 1 : 0);
-            hash = (hash * 31) + (UseC ? 1 : 0);
-            hash = (hash * 31) + (UseD ? 1 : 0);
-            hash = (hash * 31) + Minterm;
-            hash = (hash * 31) + ShiftA;
-            hash = (hash * 31) + ShiftB;
-            hash = (hash * 31) + (Descending ? 1 : 0);
-            hash = (hash * 31) + (FillEnabled ? 1 : 0);
-            hash = (hash * 31) + (FillExclusive ? 1 : 0);
-            hash = (hash * 31) + (LineSingleDot ? 1 : 0);
-            hash = (hash * 31) + (LineSud ? 1 : 0);
-            hash = (hash * 31) + (LineSul ? 1 : 0);
-            hash = (hash * 31) + (LineAul ? 1 : 0);
-            hash = (hash * 31) + (LineSign ? 1 : 0);
-            return hash;
-        }
+            => (int)_bits;
     }
 
     internal struct BlitterAreaKernelState
@@ -533,6 +522,7 @@ namespace CopperMod.Amiga
         private int _completedMicroOps;
         private bool _completionPending;
         private ulong _wakeVersion;
+        private ulong _schedulerWakeVersion;
         private readonly List<DeferredRegisterWrite> _deferredRegisterWrites = new List<DeferredRegisterWrite>();
         private bool _deferredRestartPending;
         private ushort _deferredRestartBltsize;
@@ -674,39 +664,49 @@ namespace CopperMod.Amiga
 
         internal ulong WakeVersion => _wakeVersion;
 
+        internal ulong SchedulerWakeVersion => _schedulerWakeVersion;
+
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
+            var schedulerWake = CaptureSchedulerWakeSignature();
             AdvanceTo(cycle);
-            if (offset == 0x058)
+            try
             {
-                if (_busy)
+                if (offset == 0x058)
                 {
-                    _deferredRestartPending = true;
-                    _deferredRestartBltsize = value;
+                    if (_busy)
+                    {
+                        _deferredRestartPending = true;
+                        _deferredRestartBltsize = value;
+                        _wakeVersion++;
+                        return;
+                    }
+
+                    StartBlit(value, cycle);
                     _wakeVersion++;
                     return;
                 }
 
-                StartBlit(value, cycle);
+                if (_busy && ShouldDeferBusyRegisterWrite(offset))
+                {
+                    _deferredRegisterWrites.Add(new DeferredRegisterWrite(offset, value));
+                    _wakeVersion++;
+                    return;
+                }
+
+                ApplyRegisterWrite(offset, value);
+                if (offset == 0x040 && _busy && (value & 0x0100) == 0)
+                {
+                    _useD = false;
+                }
+
                 _wakeVersion++;
-                return;
             }
-
-            if (_busy && ShouldDeferBusyRegisterWrite(offset))
+            finally
             {
-                _deferredRegisterWrites.Add(new DeferredRegisterWrite(offset, value));
-                _wakeVersion++;
-                return;
+                UpdateSchedulerWakeVersionIfChanged(schedulerWake);
             }
-
-            ApplyRegisterWrite(offset, value);
-            if (offset == 0x040 && _busy && (value & 0x0100) == 0)
-            {
-                _useD = false;
-            }
-
-            _wakeVersion++;
         }
 
         private void ApplyRegisterWrite(ushort offset, ushort value)
@@ -789,6 +789,7 @@ namespace CopperMod.Amiga
             var previousCycle = _currentCycle;
             var previousBusy = _busy;
             var previousCompletionPending = _completionPending;
+            var schedulerWake = CaptureSchedulerWakeSignature();
             try
             {
                 if (!_busy)
@@ -840,6 +841,8 @@ namespace CopperMod.Amiga
                 {
                     _wakeVersion++;
                 }
+
+                UpdateSchedulerWakeVersionIfChanged(schedulerWake);
             }
         }
 
@@ -889,6 +892,19 @@ namespace CopperMod.Amiga
             }
 
             return completionCycle <= currentCycle ? currentCycle + 1 : completionCycle;
+        }
+
+        private SchedulerWakeSignature CaptureSchedulerWakeSignature()
+            => _busy
+                ? new SchedulerWakeSignature(_completionPending, GetPredictedCompletionCycle())
+                : SchedulerWakeSignature.Idle;
+
+        private void UpdateSchedulerWakeVersionIfChanged(SchedulerWakeSignature previous)
+        {
+            if (!CaptureSchedulerWakeSignature().Equals(previous))
+            {
+                _schedulerWakeVersion++;
+            }
         }
 
         public long AdvanceThroughCpuStall(long requestedCycle)
@@ -1450,7 +1466,7 @@ namespace CopperMod.Amiga
 
             var delay = 0L;
             var idleCycle = stepEnd - (2 * ChipSlotCycles);
-            while (_bus.IsFixedDmaSlotReserved(idleCycle + delay))
+            while (_bus.IsFixedDmaSlotReservedAfterPreparingLiveDisplay(idleCycle + delay))
             {
                 delay += ChipSlotCycles;
             }
@@ -1647,6 +1663,34 @@ namespace CopperMod.Amiga
             }
 
             public ushort Value { get; }
+        }
+
+        private readonly struct SchedulerWakeSignature : IEquatable<SchedulerWakeSignature>
+        {
+            public static readonly SchedulerWakeSignature Idle = new SchedulerWakeSignature(false, false, long.MaxValue);
+
+            private SchedulerWakeSignature(bool busy, bool completionPending, long completionCycle)
+            {
+                Busy = busy;
+                CompletionPending = completionPending;
+                CompletionCycle = completionCycle;
+            }
+
+            public SchedulerWakeSignature(bool completionPending, long completionCycle)
+                : this(true, completionPending, completionCycle)
+            {
+            }
+
+            public bool Busy { get; }
+
+            public bool CompletionPending { get; }
+
+            public long CompletionCycle { get; }
+
+            public bool Equals(SchedulerWakeSignature other)
+                => Busy == other.Busy &&
+                    CompletionPending == other.CompletionPending &&
+                    CompletionCycle == other.CompletionCycle;
         }
 
         private readonly struct DeferredRegisterWrite

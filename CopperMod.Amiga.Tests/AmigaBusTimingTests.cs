@@ -1314,9 +1314,10 @@ public sealed class AmigaBusTimingTests
 		var batchBus = new AmigaBus();
 		BigEndian.WriteUInt16(scalarBus.ChipRam, 0x2000, 0xA55A);
 		BigEndian.WriteUInt16(batchBus.ChipRam, 0x2000, 0xA55A);
+		var lineStartCycle = RowLineStartCycle(fetchCycle);
 		var entries = new[]
 		{
-			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true)
+			new RowDmaBitplaneEntry(RowCycleOffset(fetchCycle), plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true)
 		};
 		var values = new ushort[entries.Length];
 		var granted = new bool[entries.Length];
@@ -1324,6 +1325,7 @@ public sealed class AmigaBusTimingTests
 		Assert.True(scalarBus.TryReadLiveBitplaneDmaWord(0x2000, fetchCycle, out var scalarValue, out var scalarGrantedCycle));
 		batchBus.ReadRowBitplaneDmaFetchesForPresentation(
 			entries,
+			lineStartCycle,
 			values,
 			granted,
 			out var grantedCount,
@@ -1353,6 +1355,7 @@ public sealed class AmigaBusTimingTests
 		Assert.False(scalarBus.TryReadLiveBitplaneDmaWord(0x1000, 0, out var scalarValue, out var scalarGrantedCycle));
 		batchBus.ReadRowBitplaneDmaFetchesForPresentation(
 			entries,
+			lineStartCycle: 0,
 			values,
 			granted,
 			out var grantedCount,
@@ -1376,15 +1379,17 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus(captureBusAccesses: true);
 		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var lineStartCycle = RowLineStartCycle(fetchCycle);
 		var entries = new[]
 		{
-			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: false)
+			new RowDmaBitplaneEntry(RowCycleOffset(fetchCycle), plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: false)
 		};
 		var values = new ushort[entries.Length];
 		var granted = new bool[entries.Length];
 
 		bus.ReadRowBitplaneDmaFetchesForPresentation(
 			entries,
+			lineStartCycle,
 			values,
 			granted,
 			out var grantedCount,
@@ -1404,19 +1409,21 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus(captureBusAccesses: true);
 		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var lineStartCycle = RowLineStartCycle(fetchCycle);
 		BigEndian.WriteUInt16(bus.ChipRam, 0x2000, 0x1111);
 		BigEndian.WriteUInt16(bus.ChipRam, 0x2002, 0x2222);
 		var entries = new[]
 		{
-			new RowDmaBitplaneEntry(fetchCycle, plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true),
-			new RowDmaBitplaneEntry(fetchCycle + 2, plane: 1, word: 0, slot: 3, address: 0, rowPresent: false),
-			new RowDmaBitplaneEntry(fetchCycle + 4, plane: 2, word: 0, slot: 5, address: 0x2002, rowPresent: true)
+			new RowDmaBitplaneEntry(RowCycleOffset(fetchCycle), plane: 0, word: 0, slot: HrmLowResPlane1FetchSlot, address: 0x2000, rowPresent: true),
+			new RowDmaBitplaneEntry(RowCycleOffset(fetchCycle + 2), plane: 1, word: 0, slot: 3, address: 0, rowPresent: false),
+			new RowDmaBitplaneEntry(RowCycleOffset(fetchCycle + 4), plane: 2, word: 0, slot: 5, address: 0x2002, rowPresent: true)
 		};
 		var values = new ushort[entries.Length];
 		var granted = new bool[entries.Length];
 
 		bus.ReadRowBitplaneDmaFetchesForPresentation(
 			entries,
+			lineStartCycle,
 			values,
 			granted,
 			out var grantedCount,
@@ -1452,6 +1459,7 @@ public sealed class AmigaBusTimingTests
 
 		bus.ReadRowBitplaneDmaFetchesForPresentation(
 			entries,
+			lineStartCycle: 0,
 			values,
 			granted,
 			out var grantedCount,
@@ -2945,6 +2953,12 @@ public sealed class AmigaBusTimingTests
 		var line = (0x2C - AmigaConstants.PalLowResOverscanBorderY) + row;
 		return (long)line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 	}
+
+	private static long RowLineStartCycle(long cycle)
+		=> cycle - RowCycleOffset(cycle);
+
+	private static int RowCycleOffset(long cycle)
+		=> checked((int)(cycle % AmigaConstants.A500PalCpuCyclesPerRasterLine));
 
 	private static long LowResPlane1FetchCycle(int row)
 		=> OutputRowStartCycle(row) +

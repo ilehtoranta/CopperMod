@@ -1,33 +1,56 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 namespace CopperMod.Amiga
 {
+    using System.Runtime.InteropServices;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     internal readonly struct RowDmaBitplaneEntry
     {
         public RowDmaBitplaneEntry(
-            long cycle,
+            int cycleOffset,
             int plane,
             int word,
             int slot,
             uint address,
             bool rowPresent)
         {
-            Cycle = cycle;
-            Plane = plane;
-            Word = word;
-            Slot = slot;
-            Address = address;
-            RowPresent = rowPresent;
+            _address = address;
+            _cycleOffset = checked((ushort)cycleOffset);
+            _plane = checked((byte)plane);
+            _word = checked((byte)word);
+            _slot = checked((byte)slot);
+            _flags = rowPresent ? (byte)1 : (byte)0;
         }
 
-        public long Cycle { get; }
+        private readonly uint _address;
 
-        public int Plane { get; }
+        private readonly ushort _cycleOffset;
 
-        public int Word { get; }
+        private readonly byte _plane;
 
-        public int Slot { get; }
+        private readonly byte _word;
 
-        public uint Address { get; }
+        private readonly byte _slot;
 
-        public bool RowPresent { get; }
+        private readonly byte _flags;
+
+        public int CycleOffset => _cycleOffset;
+
+        public int Plane => _plane;
+
+        public int Word => _word;
+
+        public int Slot => _slot;
+
+        public uint Address => _address;
+
+        public bool RowPresent => (_flags & 1) != 0;
+
+        public long GetCycle(long lineStartCycle)
+            => lineStartCycle + _cycleOffset;
     }
 }

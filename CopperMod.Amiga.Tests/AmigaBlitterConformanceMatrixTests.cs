@@ -561,6 +561,52 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.True(finalWrite.GrantedCycle > fetchCycle);
 	}
 
+	[Fact]
+	public void BlitterFillIdlePhasePreparesLiveLowResBitplaneDmaSlots()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
+		var thirdPlaneSlot = HrmLowResFetchSlotByPlane[2];
+		var fetchCycle = frameCycles +
+			OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY) +
+			((0x38 + thirdPlaneSlot) * slotCycles);
+		var destination = 0x1900u;
+		WriteWord(bus, SourceA, 0xCAFE);
+		WriteWord(bus, destination, 0x1234);
+		ConfigureAreaBlit(bus, 0x09F0, bltcon1: 0x0012, destinationD: destination);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		WritePointer(bus, 0x00DFF0E0, 0x2000);
+		WritePointer(bus, 0x00DFF0E4, 0x3000);
+		WritePointer(bus, 0x00DFF0E8, 0x4000);
+		bus.WriteWord(0x00DFF100, 0x3000);
+		bus.WriteWord(0x00DFF096, 0x8740);
+
+		bus.AdvanceDmaTo(frameCycles);
+		bus.Blitter.WriteRegister(0x058, 0x0041, fetchCycle - (2 * slotCycles));
+		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+		Assert.Equal(fetchCycle - slotCycles, startCycle);
+
+		bus.AdvanceDmaTo(fetchCycle + (8 * slotCycles));
+
+		var finalWrite = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite &&
+				access.Request.Address == destination);
+		Assert.Equal(fetchCycle + (2 * slotCycles), finalWrite.RequestedCycle);
+		Assert.True(finalWrite.GrantedCycle > finalWrite.RequestedCycle);
+		Assert.Contains(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.GrantedCycle == fetchCycle);
+	}
+
 	[Theory]
 	[InlineData(1)]
 	[InlineData(3)]

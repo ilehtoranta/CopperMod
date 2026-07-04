@@ -189,7 +189,7 @@ namespace CopperMod.Amiga
             RealFastRamBase = NormalizeAddress(realFastRamBase);
             _expansionRam = new AmigaLinearRamBackend(expansionRamSize, ExpansionRamBase, CodeGenerationPageShift);
             _realFastRam = new AmigaLinearRamBackend(realFastRamSize, RealFastRamBase, CodeGenerationPageShift);
-            _hrmSlotEngine = new AgnusHrmSlotEngine();
+            _hrmSlotEngine = new AgnusHrmSlotEngine(captureBusAccesses);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
             _realTimeClock = realTimeClockEnabled ? new AmigaRealTimeClock(realTimeClockNowProvider) : null;
@@ -1966,6 +1966,15 @@ namespace CopperMod.Amiga
             if (accessKind == AmigaBusAccessKind.CpuInstructionFetch &&
                 TryReadHostTrapStubWord(address, out var hostTrapWord))
             {
+                var hostTrapAccess = Arbitrate(
+                    AmigaBusRequester.Cpu,
+                    accessKind,
+                    AmigaBusAccessTarget.HostTrap,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    cycle,
+                    isWrite: false);
+                cycle = hostTrapAccess.CompletedCycle;
                 return hostTrapWord;
             }
 
@@ -2618,6 +2627,7 @@ namespace CopperMod.Amiga
 
         internal void ReadRowBitplaneDmaFetchesForPresentation(
             ReadOnlySpan<RowDmaBitplaneEntry> entries,
+            long lineStartCycle,
             Span<ushort> values,
             Span<bool> granted,
             out int grantedCount,
@@ -2641,8 +2651,9 @@ namespace CopperMod.Amiga
                 }
 
                 var address = MaskChipDmaAddress(entry.Address);
-                Debug.Assert(entry.Cycle >= 0, "Row bitplane DMA request cycles must be non-negative.");
-                var reservation = ReserveLiveBitplaneDmaWord(address, entry.Cycle);
+                var entryCycle = entry.GetCycle(lineStartCycle);
+                Debug.Assert(entryCycle >= 0, "Row bitplane DMA request cycles must be non-negative.");
+                var reservation = ReserveLiveBitplaneDmaWord(address, entryCycle);
 
                 if (!reservation.Granted)
                 {
@@ -3694,6 +3705,24 @@ namespace CopperMod.Amiga
 
         internal bool IsFixedDmaSlotReserved(long cycle)
         {
+            return _hrmSlotEngine.IsFixedDmaReserved(cycle);
+        }
+
+        internal bool IsFixedDmaSlotReservedAfterPreparingLiveDisplay(long cycle)
+        {
+            if (_hrmSlotEngine.IsFixedDmaReserved(cycle))
+            {
+                return true;
+            }
+
+            if (!LiveAgnusDmaEnabled ||
+                !Display.HasLiveDisplayWork() ||
+                !Display.HasLiveDisplaySlotPreparationWorkBeforeHrmGrant(cycle))
+            {
+                return false;
+            }
+
+            Display.PrepareLiveDisplaySlotsBeforeHrmGrant(cycle);
             return _hrmSlotEngine.IsFixedDmaReserved(cycle);
         }
 

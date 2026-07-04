@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 
 namespace CopperMod.Amiga
@@ -107,7 +112,7 @@ namespace CopperMod.Amiga
 
             if (entry.PaulaWakeVersion != _bus.Paula.RegisterWakeVersion ||
                 entry.DiskWakeVersion != _bus.Disk.SchedulerWakeVersion ||
-                entry.BlitterWakeVersion != _bus.Blitter.WakeVersion)
+                entry.BlitterWakeVersion != _bus.Blitter.SchedulerWakeVersion)
             {
                 return false;
             }
@@ -139,7 +144,7 @@ namespace CopperMod.Amiga
             entry.SchedulerGeneration = _generation;
             entry.PaulaWakeVersion = _bus.Paula.RegisterWakeVersion;
             entry.DiskWakeVersion = _bus.Disk.SchedulerWakeVersion;
-            entry.BlitterWakeVersion = _bus.Blitter.WakeVersion;
+            entry.BlitterWakeVersion = _bus.Blitter.SchedulerWakeVersion;
 
             if (mask == SlotContendedMemoryAccessMask)
             {
