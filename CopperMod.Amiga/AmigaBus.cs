@@ -3941,12 +3941,6 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
 
-            if (_hostTrapStubs.Count != 0 &&
-                TryReadHostTrapStubByte(address, out var hostTrapByte))
-            {
-                return hostTrapByte;
-            }
-
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -4020,6 +4014,12 @@ namespace CopperMod.Amiga
             if (_mappedMemory.TryReadMappedByte(address, out var value))
             {
                 return value;
+            }
+
+            // Host traps (rare, checked last).
+            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
             }
 
             return 0;

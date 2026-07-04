@@ -220,14 +220,13 @@ namespace CopperMod.Amiga
 
             // Recompute the slot-contended clean-through horizon: the minimum drain
             // cycle across all sources in SlotContendedMemoryAccessMask.
-            var slotClean = Math.Min(_paulaDrainCycle, _paulaDmaDrainCycle);
-            slotClean = Math.Min(slotClean, _diskEventDrainCycle);
+            var slotClean = Math.Min(_paulaDmaDrainCycle, _diskEventDrainCycle);
             slotClean = Math.Min(slotClean, _agnusDrainCycle);
             slotClean = Math.Min(slotClean, _blitterDrainCycle);
             // The cache is only valid when no dirty work is pending and generation is clean.
             if (_earliestDirtyCycle == long.MaxValue && _generation == _lastCleanGeneration)
             {
-                _slotContendedCleanThroughCycle = Math.Max(_slotContendedCleanThroughCycle, slotClean);
+                _slotContendedCleanThroughCycle = slotClean;
             }
             else
             {
@@ -255,7 +254,6 @@ namespace CopperMod.Amiga
 
             var dirtyAffectsTarget = _earliestDirtyCycle <= targetCycle;
             return _hasDrained &&
-                _paulaDrainCycle >= targetCycle &&
                 _paulaDmaDrainCycle >= targetCycle &&
                 _diskEventDrainCycle >= targetCycle &&
                 _agnusDrainCycle >= targetCycle &&
@@ -517,7 +515,6 @@ namespace CopperMod.Amiga
         private long GetNextSlotContendedEventCycleUncached(long currentCycle, long targetCycle)
         {
             var candidate = long.MaxValue;
-            candidate = Min(candidate, GetNextPaulaEventCycle(currentCycle, targetCycle));
             candidate = Min(candidate, GetNextPaulaDmaEventCycle(currentCycle, targetCycle));
 
             candidate = Min(candidate, GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle));
@@ -610,12 +607,6 @@ namespace CopperMod.Amiga
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
-            if (_bus.Paula.HasRegisterObservableWorkThrough(cycle))
-            {
-                _bus.Paula.AdvanceRegisterObservableTo(cycle);
-                _paulaEvents++;
-            }
-
             if (_bus.Paula.HasDmaWorkThrough(cycle))
             {
                 _bus.Paula.AdvanceDmaObservableTo(cycle);
@@ -644,12 +635,6 @@ namespace CopperMod.Amiga
 
         private void ProcessSlotContendedTargetCatchUp(long targetCycle, bool blitterWasBusyAtDrainStart)
         {
-            if (_bus.Paula.HasRegisterObservableWorkThrough(targetCycle))
-            {
-                _bus.Paula.AdvanceRegisterObservableTo(targetCycle);
-                InvalidateWakeAgenda();
-            }
-
             if (_bus.Paula.HasDmaWorkThrough(targetCycle))
             {
                 _bus.Paula.AdvanceDmaObservableTo(targetCycle);
@@ -757,8 +742,7 @@ namespace CopperMod.Amiga
 
         private bool HasSlotContendedSameCycleWork(long cycle)
         {
-            return _bus.Paula.HasRegisterObservableWorkThrough(cycle) ||
-                _bus.Paula.HasDmaWorkThrough(cycle) ||
+            return _bus.Paula.HasDmaWorkThrough(cycle) ||
                 HasSlotContendedDiskWorkThrough(cycle);
         }
 

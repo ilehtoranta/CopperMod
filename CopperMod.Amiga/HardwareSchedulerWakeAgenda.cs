@@ -42,15 +42,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (mask == SlotContendedMemoryAccessMask)
-            {
-                ref var entry = ref _slotContendedWakeAgenda;
-                if (IsWakeAgendaEntryValid(in entry, mask, cursor, targetCycle))
-                {
-                    ExtendSlotContendedCleanThroughFromWakeAgenda(in entry);
-                }
-            }
-
             _wakeAgendaDrainSkips++;
             return true;
         }
@@ -116,7 +107,7 @@ namespace CopperMod.Amiga
 
             if (entry.PaulaWakeVersion != _bus.Paula.RegisterWakeVersion ||
                 entry.DiskWakeVersion != _bus.Disk.SchedulerWakeVersion ||
-                entry.BlitterWakeVersion != _bus.Blitter.SchedulerWakeVersion)
+                entry.BlitterWakeVersion != _bus.Blitter.WakeVersion)
             {
                 return false;
             }
@@ -148,7 +139,7 @@ namespace CopperMod.Amiga
             entry.SchedulerGeneration = _generation;
             entry.PaulaWakeVersion = _bus.Paula.RegisterWakeVersion;
             entry.DiskWakeVersion = _bus.Disk.SchedulerWakeVersion;
-            entry.BlitterWakeVersion = _bus.Blitter.SchedulerWakeVersion;
+            entry.BlitterWakeVersion = _bus.Blitter.WakeVersion;
 
             if (mask == SlotContendedMemoryAccessMask)
             {
@@ -178,17 +169,6 @@ namespace CopperMod.Amiga
 
         private static bool CanExtendWakeAgendaToLineEnd(AmigaHardwareEventMask mask)
             => mask == SlotContendedMemoryAccessMask || mask == InterruptPollReadMask;
-
-        private void ExtendSlotContendedCleanThroughFromWakeAgenda(in WakeAgendaEntry entry)
-        {
-            var cleanThroughCycle = entry.CandidateCycle == long.MaxValue
-                ? entry.ValidThroughCycle
-                : Math.Min(entry.ValidThroughCycle, entry.CandidateCycle - 1);
-            if (cleanThroughCycle > _slotContendedCleanThroughCycle)
-            {
-                _slotContendedCleanThroughCycle = cleanThroughCycle;
-            }
-        }
 
         private long GetLineEndCycle(long targetCycle)
         {

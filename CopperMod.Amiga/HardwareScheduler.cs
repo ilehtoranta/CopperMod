@@ -19,7 +19,6 @@ namespace CopperMod.Amiga
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Blitter;
         private const AmigaHardwareEventMask SlotContendedMemoryAccessMask =
-            AmigaHardwareEventMask.PaulaRegister |
             AmigaHardwareEventMask.PaulaDma |
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Agnus |
