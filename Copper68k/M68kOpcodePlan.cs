@@ -9,9 +9,7 @@ namespace Copper68k
     {
         Scalar = 0,
         KindTable,
-        ComputedKind,
-        PackedPlan,
-        DelegateTable
+        PackedPlan
     }
 
     internal enum M68kOpcodePlanKind : byte
@@ -171,9 +169,6 @@ namespace Copper68k
 
             return plans;
         }
-
-        internal static M68kOpcodePlanKind ComputeKind(ushort opcode)
-            => CreateKind(opcode);
 
         private static M68kOpcodePlanKind CreateKind(ushort opcode)
         {

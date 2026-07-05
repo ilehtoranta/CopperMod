@@ -1249,7 +1249,6 @@ namespace Copper68k
     {
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
-        private static readonly M68kPlannedInstructionHandler?[] s_plannedInstructionHandlers = CreatePlannedInstructionHandlers();
         private readonly IM68kBus _bus;
         private readonly TBus _typedBus;
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
@@ -1285,8 +1284,6 @@ namespace Copper68k
         private long _plannedImmediateInstructions;
         private long _plannedImmediateBtstInstructions;
         private long _plannedRegisterArithmeticInstructions;
-
-        private delegate bool M68kPlannedInstructionHandler(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc);
 
         public M68kInterpreterCore(
             TBus bus,
@@ -1373,9 +1370,6 @@ namespace Copper68k
             _plannedImmediateBtstInstructions = 0;
             _plannedRegisterArithmeticInstructions = 0;
         }
-
-        internal static bool HasDelegatePlanForOpcode(ushort opcode)
-            => s_plannedInstructionHandlers[opcode] != null;
 
         bool IM68kInstructionFrequencyProvider.InstructionFrequencyEnabled
         {
@@ -1729,15 +1723,10 @@ namespace Copper68k
                     opcode,
                     instructionPc,
                     M68kOpcodePlanTable.Kinds[opcode]),
-                M68kOpcodePlanDispatch.ComputedKind => TryExecutePlannedKind(
-                    opcode,
-                    instructionPc,
-                    M68kOpcodePlanTable.ComputeKind(opcode)),
                 M68kOpcodePlanDispatch.PackedPlan => TryExecutePackedPlan(
                     opcode,
                     instructionPc,
                     in M68kOpcodePlanTable.PackedPlans[opcode]),
-                M68kOpcodePlanDispatch.DelegateTable => TryExecuteDelegatePlan(opcode, instructionPc),
                 _ => false
             };
         }
@@ -1882,165 +1871,6 @@ namespace Copper68k
                 default:
                     return false;
             }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryExecuteDelegatePlan(ushort opcode, uint instructionPc)
-        {
-            var handler = s_plannedInstructionHandlers[opcode];
-            return handler != null && handler(this, opcode, instructionPc);
-        }
-
-        private static M68kPlannedInstructionHandler?[] CreatePlannedInstructionHandlers()
-        {
-            var handlers = new M68kPlannedInstructionHandler?[0x1_0000];
-            for (var opcode = 0; opcode <= 0xFFFF; opcode++)
-            {
-                handlers[opcode] = GetPlannedInstructionHandler(M68kOpcodePlanTable.Kinds[opcode]);
-            }
-
-            return handlers;
-        }
-
-        private static M68kPlannedInstructionHandler? GetPlannedInstructionHandler(M68kOpcodePlanKind kind)
-            => kind switch
-            {
-                M68kOpcodePlanKind.Nop => ExecuteNopDelegatePlan,
-                M68kOpcodePlanKind.Moveq => ExecuteMoveqDelegatePlan,
-                M68kOpcodePlanKind.Branch => ExecuteBranchDelegatePlan,
-                M68kOpcodePlanKind.Dbcc => ExecuteDbccDelegatePlan,
-                M68kOpcodePlanKind.QuickRegister => ExecuteQuickRegisterDelegatePlan,
-                M68kOpcodePlanKind.Move => ExecuteMoveDelegatePlan,
-                M68kOpcodePlanKind.MoveLongPostincrementToData => ExecuteMoveLongPostincrementToDataDelegatePlan,
-                M68kOpcodePlanKind.MoveLongDataToPostincrement => ExecuteMoveLongDataToPostincrementDelegatePlan,
-                M68kOpcodePlanKind.Immediate => ExecuteImmediateDelegatePlan,
-                M68kOpcodePlanKind.ImmediateBtst => ExecuteImmediateBtstDelegatePlan,
-                M68kOpcodePlanKind.RegisterArithmetic => ExecuteRegisterArithmeticDelegatePlan,
-                M68kOpcodePlanKind.DataRegisterLongOrToRegister => ExecuteOrLongToDataRegisterDelegatePlan,
-                M68kOpcodePlanKind.DataRegisterLongEorToDestination => ExecuteEorLongToDataRegisterDelegatePlan,
-                M68kOpcodePlanKind.DataRegisterLongAndToRegister => ExecuteAndLongToDataRegisterDelegatePlan,
-                M68kOpcodePlanKind.DataRegisterLongAddToRegister => ExecuteAddLongToDataRegisterDelegatePlan,
-                _ => null
-            };
-
-        private static bool ExecuteNopDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = opcode;
-            _ = instructionPc;
-            interpreter.AddInstructionCycles(4);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Nop);
-            return true;
-        }
-
-        private static bool ExecuteMoveqDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedMoveq(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Moveq);
-            return true;
-        }
-
-        private static bool ExecuteBranchDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            interpreter.ExecutePlannedBranch(opcode, instructionPc);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Branch);
-            return true;
-        }
-
-        private static bool ExecuteDbccDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedDbcc(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Dbcc);
-            return true;
-        }
-
-        private static bool ExecuteQuickRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedQuickRegister(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.QuickRegister);
-            return true;
-        }
-
-        private static bool ExecuteMoveDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedMove(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Move);
-            return true;
-        }
-
-        private static bool ExecuteMoveLongPostincrementToDataDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedMoveLongPostincrementToData(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.MoveLongPostincrementToData);
-            return true;
-        }
-
-        private static bool ExecuteMoveLongDataToPostincrementDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedMoveLongDataToPostincrement(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.MoveLongDataToPostincrement);
-            return true;
-        }
-
-        private static bool ExecuteImmediateDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedImmediate(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.Immediate);
-            return true;
-        }
-
-        private static bool ExecuteImmediateBtstDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedImmediateBtst(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.ImmediateBtst);
-            return true;
-        }
-
-        private static bool ExecuteRegisterArithmeticDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedRegisterArithmetic(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.RegisterArithmetic);
-            return true;
-        }
-
-        private static bool ExecuteOrLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedOrLongToDataRegister(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.DataRegisterLongOrToRegister);
-            return true;
-        }
-
-        private static bool ExecuteEorLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedEorLongToDataRegister(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.DataRegisterLongEorToDestination);
-            return true;
-        }
-
-        private static bool ExecuteAndLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedAndLongToDataRegister(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.DataRegisterLongAndToRegister);
-            return true;
-        }
-
-        private static bool ExecuteAddLongToDataRegisterDelegatePlan(M68kInterpreterCore<TBus, TCpuDataAccess> interpreter, ushort opcode, uint instructionPc)
-        {
-            _ = instructionPc;
-            interpreter.ExecutePlannedAddLongToDataRegister(opcode);
-            interpreter.RecordPlannedFast(M68kOpcodePlanKind.DataRegisterLongAddToRegister);
-            return true;
         }
 
         private void ExecutePlannedMoveq(ushort opcode)
@@ -7573,7 +7403,5 @@ namespace Copper68k
         {
         }
 
-        internal static new bool HasDelegatePlanForOpcode(ushort opcode)
-            => M68kInterpreterCore<IM68kBus, M68kNoExactCpuDataAccess<IM68kBus>>.HasDelegatePlanForOpcode(opcode);
     }
 }

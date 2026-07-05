@@ -8,9 +8,7 @@ public sealed class M68kInterpreterTests
 	public static IEnumerable<object[]> OpcodePlanDispatchVariants()
 	{
 		yield return new object[] { (int)M68kOpcodePlanDispatch.KindTable };
-		yield return new object[] { (int)M68kOpcodePlanDispatch.ComputedKind };
 		yield return new object[] { (int)M68kOpcodePlanDispatch.PackedPlan };
-		yield return new object[] { (int)M68kOpcodePlanDispatch.DelegateTable };
 	}
 
 	[Fact]
@@ -450,15 +448,13 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
-	public void PlannedDispatchTablesMatchKindTableForEveryOpcode()
+	public void PlannedPackedPlansMatchKindTableForEveryOpcode()
 	{
 		for (var opcode = 0; opcode <= 0xFFFF; opcode++)
 		{
 			var word = (ushort)opcode;
 			var kind = M68kOpcodePlanTable.Kinds[word];
-			Assert.Equal(kind, M68kOpcodePlanTable.ComputeKind(word));
 			Assert.Equal(kind, M68kOpcodePlanTable.PackedPlans[word].Kind);
-			Assert.Equal(kind != M68kOpcodePlanKind.Unsupported, M68kInterpreter.HasDelegatePlanForOpcode(word));
 		}
 	}
 
