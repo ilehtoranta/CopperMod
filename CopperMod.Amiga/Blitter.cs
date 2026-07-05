@@ -14,12 +14,22 @@ namespace CopperMod.Amiga
             long kernelHits,
             long kernelMisses,
             long generatedKernels,
-            long scalarFallbacks)
+            long scalarFallbacks,
+            long slotQueueAttempts = 0,
+            long slotQueueEnabledBlits = 0,
+            long slotQueueUnsupportedBlits = 0,
+            long slotQueueWords = 0,
+            long slotQueueCommittedOps = 0)
         {
             KernelHits = kernelHits;
             KernelMisses = kernelMisses;
             GeneratedKernels = generatedKernels;
             ScalarFallbacks = scalarFallbacks;
+            SlotQueueAttempts = slotQueueAttempts;
+            SlotQueueEnabledBlits = slotQueueEnabledBlits;
+            SlotQueueUnsupportedBlits = slotQueueUnsupportedBlits;
+            SlotQueueWords = slotQueueWords;
+            SlotQueueCommittedOps = slotQueueCommittedOps;
         }
 
         public long KernelHits { get; }
@@ -29,6 +39,192 @@ namespace CopperMod.Amiga
         public long GeneratedKernels { get; }
 
         public long ScalarFallbacks { get; }
+
+        public long SlotQueueAttempts { get; }
+
+        public long SlotQueueEnabledBlits { get; }
+
+        public long SlotQueueUnsupportedBlits { get; }
+
+        public long SlotQueueWords { get; }
+
+        public long SlotQueueCommittedOps { get; }
+    }
+
+    internal readonly struct BlitterPatternEntry
+    {
+        public BlitterPatternEntry(
+            ushort bltcon0,
+            ushort bltcon1,
+            byte minterm,
+            bool useA,
+            bool useB,
+            bool useC,
+            bool useD,
+            bool fillEnabled,
+            bool fillExclusive,
+            bool lineMode,
+            bool descending,
+            int widthWords,
+            int height,
+            long count)
+        {
+            Bltcon0 = bltcon0;
+            Bltcon1 = bltcon1;
+            Minterm = minterm;
+            UseA = useA;
+            UseB = useB;
+            UseC = useC;
+            UseD = useD;
+            FillEnabled = fillEnabled;
+            FillExclusive = fillExclusive;
+            LineMode = lineMode;
+            Descending = descending;
+            WidthWords = widthWords;
+            Height = height;
+            Count = count;
+        }
+
+        public ushort Bltcon0 { get; }
+
+        public ushort Bltcon1 { get; }
+
+        public byte Minterm { get; }
+
+        public bool UseA { get; }
+
+        public bool UseB { get; }
+
+        public bool UseC { get; }
+
+        public bool UseD { get; }
+
+        public bool FillEnabled { get; }
+
+        public bool FillExclusive { get; }
+
+        public bool LineMode { get; }
+
+        public bool Descending { get; }
+
+        public int WidthWords { get; }
+
+        public int Height { get; }
+
+        public long Count { get; }
+    }
+
+    internal readonly struct BlitterPatternKey : IEquatable<BlitterPatternKey>
+    {
+        public BlitterPatternKey(
+            ushort bltcon0,
+            ushort bltcon1,
+            byte minterm,
+            bool useA,
+            bool useB,
+            bool useC,
+            bool useD,
+            bool fillEnabled,
+            bool fillExclusive,
+            bool lineMode,
+            bool descending,
+            int widthWords,
+            int height)
+        {
+            Bltcon0 = bltcon0;
+            Bltcon1 = bltcon1;
+            Minterm = minterm;
+            UseA = useA;
+            UseB = useB;
+            UseC = useC;
+            UseD = useD;
+            FillEnabled = fillEnabled;
+            FillExclusive = fillExclusive;
+            LineMode = lineMode;
+            Descending = descending;
+            WidthWords = widthWords;
+            Height = height;
+        }
+
+        public ushort Bltcon0 { get; }
+
+        public ushort Bltcon1 { get; }
+
+        public byte Minterm { get; }
+
+        public bool UseA { get; }
+
+        public bool UseB { get; }
+
+        public bool UseC { get; }
+
+        public bool UseD { get; }
+
+        public bool FillEnabled { get; }
+
+        public bool FillExclusive { get; }
+
+        public bool LineMode { get; }
+
+        public bool Descending { get; }
+
+        public int WidthWords { get; }
+
+        public int Height { get; }
+
+        public bool Equals(BlitterPatternKey other)
+            => Bltcon0 == other.Bltcon0 &&
+                Bltcon1 == other.Bltcon1 &&
+                Minterm == other.Minterm &&
+                UseA == other.UseA &&
+                UseB == other.UseB &&
+                UseC == other.UseC &&
+                UseD == other.UseD &&
+                FillEnabled == other.FillEnabled &&
+                FillExclusive == other.FillExclusive &&
+                LineMode == other.LineMode &&
+                Descending == other.Descending &&
+                WidthWords == other.WidthWords &&
+                Height == other.Height;
+
+        public override bool Equals(object? obj)
+            => obj is BlitterPatternKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(Bltcon0);
+            hash.Add(Bltcon1);
+            hash.Add(Minterm);
+            hash.Add(UseA);
+            hash.Add(UseB);
+            hash.Add(UseC);
+            hash.Add(UseD);
+            hash.Add(FillEnabled);
+            hash.Add(FillExclusive);
+            hash.Add(LineMode);
+            hash.Add(Descending);
+            hash.Add(WidthWords);
+            hash.Add(Height);
+            return hash.ToHashCode();
+        }
+
+        public BlitterPatternEntry ToEntry(long count)
+            => new BlitterPatternEntry(
+                Bltcon0,
+                Bltcon1,
+                Minterm,
+                UseA,
+                UseB,
+                UseC,
+                UseD,
+                FillEnabled,
+                FillExclusive,
+                LineMode,
+                Descending,
+                WidthWords,
+                Height,
+                count);
     }
 
     internal readonly struct BlitterKernelKey : IEquatable<BlitterKernelKey>
@@ -288,7 +484,8 @@ namespace CopperMod.Amiga
             long nextDmaCycle,
             long lastDmaCycle,
             int completedMicroOps,
-            BlitterSpecializationCounters specializationCounters)
+            BlitterSpecializationCounters specializationCounters,
+            BlitterPatternEntry[] topPatterns)
         {
             Busy = busy;
             Zero = zero;
@@ -306,6 +503,7 @@ namespace CopperMod.Amiga
             LastDmaCycle = lastDmaCycle;
             CompletedMicroOps = completedMicroOps;
             SpecializationCounters = specializationCounters;
+            TopPatterns = topPatterns;
         }
 
         public bool Busy { get; }
@@ -339,6 +537,8 @@ namespace CopperMod.Amiga
         public int CompletedMicroOps { get; }
 
         public BlitterSpecializationCounters SpecializationCounters { get; }
+
+        public BlitterPatternEntry[] TopPatterns { get; }
     }
 
     internal readonly struct BlitterCompiledKernel
@@ -445,10 +645,13 @@ namespace CopperMod.Amiga
         private const ushort Bltcon1LineAul = 0x0004;
         private const ushort Bltcon1LineSign = 0x0040;
         private const int ChipSlotCycles = AgnusChipSlotScheduler.SlotCycles;
+        private const bool EnableBlitterPatternLogging = false;
 
         private readonly AmigaBus _bus;
         private readonly bool _specializationEnabled;
         private readonly BlitterKernelCache _kernelCache = new BlitterKernelCache();
+        private readonly Dictionary<BlitterPatternKey, long> _patternCounts = new Dictionary<BlitterPatternKey, long>();
+        private readonly BlitterSlotQueueOp[] _areaSlotQueueOps = new BlitterSlotQueueOp[4];
         private uint _sourceA;
         private uint _sourceB;
         private uint _sourceC;
@@ -532,6 +735,14 @@ namespace CopperMod.Amiga
         private BlitterDmaReadLatch _sourceBLatch;
         private BlitterDmaReadLatch _sourceCLatch;
         private BlitterDmaWriteLatch _destinationDLatch;
+        private bool _areaSlotQueueEnabled;
+        private int _areaSlotQueueOpCount;
+        private BlitterSlotQueueKind _areaSlotQueueKind;
+        private long _slotQueueAttempts;
+        private long _slotQueueEnabledBlits;
+        private long _slotQueueUnsupportedBlits;
+        private long _slotQueueWords;
+        private long _slotQueueCommittedOps;
 
         public AmigaBlitter(AmigaBus bus, bool enableSpecialization = false)
         {
@@ -637,6 +848,15 @@ namespace CopperMod.Amiga
             _sourceBLatch = default;
             _sourceCLatch = default;
             _destinationDLatch = default;
+            _areaSlotQueueEnabled = false;
+            _areaSlotQueueOpCount = 0;
+            _areaSlotQueueKind = BlitterSlotQueueKind.None;
+            _slotQueueAttempts = 0;
+            _slotQueueEnabledBlits = 0;
+            _slotQueueUnsupportedBlits = 0;
+            _slotQueueWords = 0;
+            _slotQueueCommittedOps = 0;
+            _patternCounts.Clear();
         }
 
         public AmigaBlitterSnapshot CaptureSnapshot()
@@ -657,7 +877,23 @@ namespace CopperMod.Amiga
                 _currentCycle,
                 _lastDmaCycle,
                 _completedMicroOps,
-                _kernelCache.CaptureCounters());
+                CaptureSpecializationCounters(),
+                CaptureTopPatterns(8));
+        }
+
+        private BlitterSpecializationCounters CaptureSpecializationCounters()
+        {
+            var kernelCounters = _kernelCache.CaptureCounters();
+            return new BlitterSpecializationCounters(
+                kernelCounters.KernelHits,
+                kernelCounters.KernelMisses,
+                kernelCounters.GeneratedKernels,
+                kernelCounters.ScalarFallbacks,
+                _slotQueueAttempts,
+                _slotQueueEnabledBlits,
+                _slotQueueUnsupportedBlits,
+                _slotQueueWords,
+                _slotQueueCommittedOps);
         }
 
         public bool Busy => _busy;
@@ -940,6 +1176,9 @@ namespace CopperMod.Amiga
             _completionPending = false;
             _lastDmaCycle = 0;
             _completedMicroOps = 0;
+            _areaSlotQueueEnabled = false;
+            _areaSlotQueueOpCount = 0;
+            _areaSlotQueueKind = BlitterSlotQueueKind.None;
             _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, cycle) + ChipSlotCycles);
             _previousA = 0;
             if (_useB)
@@ -953,6 +1192,7 @@ namespace CopperMod.Amiga
                 _activeKernel = _specializationEnabled
                     ? _kernelCache.GetOrCreate(CreateLineKernelKey())
                     : default;
+                RecordBlitterPattern();
                 return;
             }
 
@@ -1000,6 +1240,147 @@ namespace CopperMod.Amiga
             _activeKernel = _specializationEnabled
                 ? _kernelCache.GetOrCreate(CreateAreaKernelKey())
                 : default;
+            TryBuildAreaSlotQueue();
+            RecordBlitterPattern();
+        }
+
+        private void TryBuildAreaSlotQueue()
+        {
+            _areaSlotQueueEnabled = false;
+            _areaSlotQueueOpCount = 0;
+            _areaSlotQueueKind = BlitterSlotQueueKind.None;
+            if (!_specializationEnabled)
+            {
+                return;
+            }
+
+            _slotQueueAttempts++;
+            if (_lineMode ||
+                _fillEnabled ||
+                (!_useA && !_useB && !_useC && !_useD))
+            {
+                _slotQueueUnsupportedBlits++;
+                return;
+            }
+
+            if (_useA)
+            {
+                _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.ReadA;
+            }
+
+            if (_useB)
+            {
+                _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.ReadB;
+            }
+
+            if (_useC)
+            {
+                _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.ReadC;
+            }
+
+            if (_useD)
+            {
+                _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.WriteD;
+            }
+
+            _areaSlotQueueEnabled = true;
+            _areaSlotQueueKind = SelectAreaSlotQueueKind();
+            _slotQueueEnabledBlits++;
+        }
+
+        private BlitterSlotQueueKind SelectAreaSlotQueueKind()
+        {
+            if (!_useC && !_useB && !_useA && _useD)
+            {
+                return BlitterSlotQueueKind.WriteD;
+            }
+
+            if (!_useC && !_useB && _useA && _useD)
+            {
+                return BlitterSlotQueueKind.ReadAWriteD;
+            }
+
+            if (!_useC && _useB && _useA && _useD)
+            {
+                return BlitterSlotQueueKind.ReadAReadBWriteD;
+            }
+
+            return BlitterSlotQueueKind.Generic;
+        }
+
+        private void RecordBlitterPattern()
+        {
+            if (!EnableBlitterPatternLogging)
+            {
+                return;
+            }
+
+            var key = new BlitterPatternKey(
+                _bltcon0,
+                _bltcon1,
+                _minterm,
+                _useA,
+                _useB,
+                _useC,
+                _useD,
+                _lineMode ? false : _fillEnabled,
+                _lineMode ? false : _fillExclusive,
+                _lineMode,
+                _lineMode ? false : _descending,
+                _widthWords,
+                _height);
+            _patternCounts.TryGetValue(key, out var count);
+            _patternCounts[key] = count + 1;
+        }
+
+        private BlitterPatternEntry[] CaptureTopPatterns(int maxEntries)
+        {
+            if (!EnableBlitterPatternLogging)
+            {
+                return Array.Empty<BlitterPatternEntry>();
+            }
+
+            if (_patternCounts.Count == 0 || maxEntries <= 0)
+            {
+                return Array.Empty<BlitterPatternEntry>();
+            }
+
+            var entries = new List<KeyValuePair<BlitterPatternKey, long>>(_patternCounts);
+            entries.Sort(static (left, right) =>
+            {
+                var countComparison = right.Value.CompareTo(left.Value);
+                if (countComparison != 0)
+                {
+                    return countComparison;
+                }
+
+                var bltconComparison = left.Key.Bltcon0.CompareTo(right.Key.Bltcon0);
+                if (bltconComparison != 0)
+                {
+                    return bltconComparison;
+                }
+
+                bltconComparison = left.Key.Bltcon1.CompareTo(right.Key.Bltcon1);
+                if (bltconComparison != 0)
+                {
+                    return bltconComparison;
+                }
+
+                var widthComparison = left.Key.WidthWords.CompareTo(right.Key.WidthWords);
+                return widthComparison != 0
+                    ? widthComparison
+                    : left.Key.Height.CompareTo(right.Key.Height);
+            });
+
+            var resultCount = Math.Min(maxEntries, entries.Count);
+            var result = new BlitterPatternEntry[resultCount];
+            for (var index = 0; index < resultCount; index++)
+            {
+                var entry = entries[index];
+                result[index] = entry.Key.ToEntry(entry.Value);
+            }
+
+            return result;
         }
 
         private BlitterKernelKey CreateAreaKernelKey()
@@ -1089,6 +1470,12 @@ namespace CopperMod.Amiga
 
         private void StepAreaWord(long targetCycle)
         {
+            if (_areaSlotQueueEnabled)
+            {
+                StepAreaWordFromSlotQueue(targetCycle);
+                return;
+            }
+
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             stepEnd += GetAreaFillIdlePhaseDelay(stepStart, stepEnd);
@@ -1157,6 +1544,215 @@ namespace CopperMod.Amiga
                 ? internalCompletionCycle
                 : nextCycle;
             AdvanceAreaPosition(targetCycle);
+        }
+
+        private void StepAreaWordFromSlotQueue(long targetCycle)
+        {
+            switch (_areaSlotQueueKind)
+            {
+                case BlitterSlotQueueKind.WriteD:
+                    StepAreaWordQueuedWriteD(targetCycle);
+                    return;
+                case BlitterSlotQueueKind.ReadAWriteD:
+                    StepAreaWordQueuedReadAWriteD(targetCycle);
+                    return;
+                case BlitterSlotQueueKind.ReadAReadBWriteD:
+                    StepAreaWordQueuedReadAReadBWriteD(targetCycle);
+                    return;
+            }
+
+            var stepStart = _currentCycle;
+            var stepEnd = stepStart + GetAreaWordCycles();
+            var nextReadCycle = stepStart;
+            var nextCycle = stepEnd;
+            var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            var mask = GetCurrentAreaWordMask();
+            var rawA = _activeDataA;
+            var rawB = _activeDataB;
+            var rawC = _activeDataC;
+            var output = (ushort)0;
+            var outputReady = false;
+            var internalCompletionCycle = stepEnd;
+            for (var index = 0; index < _areaSlotQueueOpCount; index++)
+            {
+                switch (_areaSlotQueueOps[index])
+                {
+                    case BlitterSlotQueueOp.ReadA:
+                    {
+                        _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
+                        var access = _sourceALatch.BusAccess;
+                        rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+                        nextReadCycle = access.CompletedCycle;
+                        nextCycle = Math.Max(nextCycle, access.CompletedCycle);
+                        _slotQueueCommittedOps++;
+                        break;
+                    }
+
+                    case BlitterSlotQueueOp.ReadB:
+                    {
+                        _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
+                        var access = _sourceBLatch.BusAccess;
+                        rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                        nextReadCycle = access.CompletedCycle;
+                        nextCycle = Math.Max(nextCycle, access.CompletedCycle);
+                        _slotQueueCommittedOps++;
+                        break;
+                    }
+
+                    case BlitterSlotQueueOp.ReadC:
+                    {
+                        _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
+                        var access = _sourceCLatch.BusAccess;
+                        rawC = ConsumeSourceDmaLatch(ref _sourceCLatch);
+                        _activeDataC = rawC;
+                        nextReadCycle = access.CompletedCycle;
+                        nextCycle = Math.Max(nextCycle, access.CompletedCycle);
+                        _slotQueueCommittedOps++;
+                        break;
+                    }
+
+                    case BlitterSlotQueueOp.WriteD:
+                    {
+                        if (!outputReady)
+                        {
+                            output = ExecuteAreaFromSourceLatches(rawA, rawB, rawC, mask);
+                            if (output != 0)
+                            {
+                                _zeroFlag = false;
+                            }
+
+                            outputReady = true;
+                            internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
+                        }
+
+                        var writeCycle = Math.Max(nextReadCycle, stepEnd - ChipSlotCycles);
+                        _destinationDLatch = CreateDestinationDmaLatch(output);
+                        var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle);
+                        nextCycle = Math.Max(nextCycle, write.CompletedCycle);
+                        _slotQueueCommittedOps++;
+                        break;
+                    }
+                }
+            }
+
+            if (!outputReady)
+            {
+                output = ExecuteAreaFromSourceLatches(rawA, rawB, rawC, mask);
+                if (output != 0)
+                {
+                    _zeroFlag = false;
+                }
+
+                internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
+            }
+
+            _slotQueueWords++;
+            _currentCycle = isFinalWord && _useD
+                ? internalCompletionCycle
+                : nextCycle;
+            AdvanceAreaPosition(targetCycle);
+        }
+
+        private void StepAreaWordQueuedWriteD(long targetCycle)
+        {
+            var stepStart = _currentCycle;
+            var stepEnd = stepStart + GetAreaWordCycles();
+            var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            var output = ExecuteAreaFromSourceLatches(_activeDataA, _activeDataB, _activeDataC, GetCurrentAreaWordMask());
+            if (output != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            _destinationDLatch = CreateDestinationDmaLatch(output);
+            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, stepEnd - ChipSlotCycles);
+            _slotQueueWords++;
+            _slotQueueCommittedOps++;
+            _currentCycle = isFinalWord
+                ? stepEnd
+                : Math.Max(stepEnd, write.CompletedCycle);
+            AdvanceAreaPosition(targetCycle);
+        }
+
+        private void StepAreaWordQueuedReadAWriteD(long targetCycle)
+        {
+            var stepStart = _currentCycle;
+            var stepEnd = stepStart + GetAreaWordCycles();
+            var nextCycle = stepEnd;
+            var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, stepStart);
+            var sourceAAccess = _sourceALatch.BusAccess;
+            var rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+            var nextReadCycle = sourceAAccess.CompletedCycle;
+            nextCycle = Math.Max(nextCycle, nextReadCycle);
+            var output = ExecuteAreaFromSourceLatches(rawA, _activeDataB, _activeDataC, GetCurrentAreaWordMask());
+            if (output != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            var internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
+            _destinationDLatch = CreateDestinationDmaLatch(output);
+            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles));
+            nextCycle = Math.Max(nextCycle, write.CompletedCycle);
+            _slotQueueWords++;
+            _slotQueueCommittedOps += 2;
+            _currentCycle = isFinalWord
+                ? internalCompletionCycle
+                : nextCycle;
+            AdvanceAreaPosition(targetCycle);
+        }
+
+        private void StepAreaWordQueuedReadAReadBWriteD(long targetCycle)
+        {
+            var stepStart = _currentCycle;
+            var stepEnd = stepStart + GetAreaWordCycles();
+            var nextCycle = stepEnd;
+            var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, stepStart);
+            var sourceAAccess = _sourceALatch.BusAccess;
+            var rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+            var nextReadCycle = sourceAAccess.CompletedCycle;
+            nextCycle = Math.Max(nextCycle, nextReadCycle);
+
+            _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
+            var sourceBAccess = _sourceBLatch.BusAccess;
+            var rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+            nextReadCycle = sourceBAccess.CompletedCycle;
+            nextCycle = Math.Max(nextCycle, nextReadCycle);
+
+            var output = ExecuteAreaFromSourceLatches(rawA, rawB, _activeDataC, GetCurrentAreaWordMask());
+            if (output != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            var internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
+            _destinationDLatch = CreateDestinationDmaLatch(output);
+            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles));
+            nextCycle = Math.Max(nextCycle, write.CompletedCycle);
+            _slotQueueWords++;
+            _slotQueueCommittedOps += 3;
+            _currentCycle = isFinalWord
+                ? internalCompletionCycle
+                : nextCycle;
+            AdvanceAreaPosition(targetCycle);
+        }
+
+        private ushort GetCurrentAreaWordMask()
+        {
+            var mask = 0xFFFF;
+            if (_wordX == 0)
+            {
+                mask &= _activeFirstWordMask;
+            }
+
+            if (_wordX == _widthWords - 1)
+            {
+                mask &= _activeLastWordMask;
+            }
+
+            return (ushort)mask;
         }
 
         private void AdvanceAreaPosition(long targetCycle)
@@ -1643,6 +2239,23 @@ namespace CopperMod.Amiga
             A,
             B,
             C
+        }
+
+        private enum BlitterSlotQueueOp : byte
+        {
+            ReadA,
+            ReadB,
+            ReadC,
+            WriteD
+        }
+
+        private enum BlitterSlotQueueKind : byte
+        {
+            None,
+            Generic,
+            WriteD,
+            ReadAWriteD,
+            ReadAReadBWriteD
         }
 
         private readonly struct BlitterDmaReadLatch

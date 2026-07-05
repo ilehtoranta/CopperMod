@@ -318,6 +318,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 				startupOptions.DeferredCpuBusBatchVerify);
 		}
 
+		if (startupOptions.HardwareSpecialization)
+		{
+			machineOptions.WithHardwareSpecialization(true);
+		}
+
 		if (startupOptions.HardDrives.Count != 0)
 		{
 			machineOptions.WithHardfiles(startupOptions.HardDrives.Select(drive => new AmigaHardfileConfiguration(

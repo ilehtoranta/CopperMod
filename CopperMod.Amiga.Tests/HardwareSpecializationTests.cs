@@ -153,6 +153,10 @@ public sealed class HardwareSpecializationTests
         Assert.True(snapshot.SpecializationCounters.KernelMisses >= 1);
         Assert.True(snapshot.SpecializationCounters.GeneratedKernels >= 1);
         Assert.Equal(0, snapshot.SpecializationCounters.ScalarFallbacks);
+        Assert.True(snapshot.SpecializationCounters.SlotQueueAttempts >= 1);
+        Assert.True(snapshot.SpecializationCounters.SlotQueueEnabledBlits >= 1);
+        Assert.True(snapshot.SpecializationCounters.SlotQueueWords >= 1);
+        Assert.True(snapshot.SpecializationCounters.SlotQueueCommittedOps >= 2);
     }
 
     [Fact]
@@ -176,6 +180,10 @@ public sealed class HardwareSpecializationTests
         Assert.Equal(0, snapshot.SpecializationCounters.KernelMisses);
         Assert.Equal(0, snapshot.SpecializationCounters.GeneratedKernels);
         Assert.Equal(0, snapshot.SpecializationCounters.ScalarFallbacks);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueAttempts);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueEnabledBlits);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueWords);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueCommittedOps);
     }
 
     [Fact]

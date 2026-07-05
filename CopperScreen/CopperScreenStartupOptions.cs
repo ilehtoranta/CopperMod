@@ -17,6 +17,7 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentDiagnostics,
 		bool deferredCpuBusBatch,
 		bool deferredCpuBusBatchVerify,
+		bool hardwareSpecialization,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenInputOptions input,
 		string baseDirectory,
@@ -35,6 +36,7 @@ internal sealed class CopperScreenStartupOptions
 		CopperQuiescentDiagnostics = copperQuiescentDiagnostics;
 		DeferredCpuBusBatch = deferredCpuBusBatch;
 		DeferredCpuBusBatchVerify = deferredCpuBusBatchVerify;
+		HardwareSpecialization = hardwareSpecialization;
 		FloppyDriveAudio = floppyDriveAudio;
 		Input = input;
 		BaseDirectory = baseDirectory;
@@ -66,6 +68,8 @@ internal sealed class CopperScreenStartupOptions
 
 	public bool DeferredCpuBusBatchVerify { get; }
 
+	public bool HardwareSpecialization { get; }
+
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
 
 	public CopperScreenInputOptions Input { get; }
@@ -91,7 +95,8 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentFastPathVerify = false,
 		bool copperQuiescentDiagnostics = false,
 		bool deferredCpuBusBatch = false,
-		bool deferredCpuBusBatchVerify = false)
+		bool deferredCpuBusBatchVerify = false,
+		bool hardwareSpecialization = false)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
 		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
@@ -109,6 +114,7 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			hardwareSpecialization,
 			floppyDriveAudio,
 			input,
 			baseDirectory,
@@ -129,6 +135,7 @@ internal sealed class CopperScreenStartupOptions
 			hardDrives,
 			ResolveRomPath(profile.KickstartRomPath, baseDirectory),
 			null,
+			false,
 			false,
 			false,
 			false,
@@ -155,6 +162,7 @@ internal sealed class CopperScreenStartupOptions
 		var copperQuiescentDiagnostics = false;
 		var deferredCpuBusBatch = false;
 		var deferredCpuBusBatchVerify = false;
+		var hardwareSpecialization = false;
 		bool? floppySoundsEnabledOverride = null;
 		FloppyDriveAudioMode? floppySoundModeOverride = null;
 		string? floppySoundPackOverride = null;
@@ -240,6 +248,13 @@ internal sealed class CopperScreenStartupOptions
 			{
 				deferredCpuBusBatch = true;
 				deferredCpuBusBatchVerify = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--hardware-specialization") ||
+				IsOption(arg, "--hw-specialization"))
+			{
+				hardwareSpecialization = true;
 				continue;
 			}
 
@@ -436,6 +451,7 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			hardwareSpecialization,
 			floppyDriveAudio,
 			profile.Input,
 			baseDirectory,

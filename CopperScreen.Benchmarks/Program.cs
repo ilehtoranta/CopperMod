@@ -66,7 +66,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -1104,7 +1104,8 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
         (options.CopperQuiescenceFastPathVerify ? 1 : 0) +
         (copperQuiescenceDiagnostics ? 1 : 0) +
         (options.DeferredCpuBusBatch ? 1 : 0) +
-        (options.DeferredCpuBusBatchVerify ? 1 : 0);
+        (options.DeferredCpuBusBatchVerify ? 1 : 0) +
+        (options.HardwareSpecialization ? 1 : 0);
     if (count == 0)
     {
         return Array.Empty<string>();
@@ -1163,6 +1164,11 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
     if (options.DeferredCpuBusBatchVerify)
     {
         args[index++] = "--cpu-deferred-bus-batch-verify";
+    }
+
+    if (options.HardwareSpecialization)
+    {
+        args[index++] = "--hardware-specialization";
     }
 
     return args;
@@ -1416,13 +1422,20 @@ static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEm
     var machine = (AmigaMachine)typeof(CopperScreenEmulator)
         .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
         .GetValue(emulator)!;
-    var blitter = machine.Bus.Blitter.CaptureSnapshot().SpecializationCounters;
+    var blitterSnapshot = machine.Bus.Blitter.CaptureSnapshot();
+    var blitter = blitterSnapshot.SpecializationCounters;
     var disk = machine.Bus.Disk.CaptureSnapshot().SpecializationCounters;
     return new HardwareSpecializationSummary(
         blitter.KernelHits,
         blitter.KernelMisses,
         blitter.GeneratedKernels,
         blitter.ScalarFallbacks,
+        blitter.SlotQueueAttempts,
+        blitter.SlotQueueEnabledBlits,
+        blitter.SlotQueueUnsupportedBlits,
+        blitter.SlotQueueWords,
+        blitter.SlotQueueCommittedOps,
+        blitterSnapshot.TopPatterns,
         disk.PreparedTrackHits,
         disk.PreparedTrackMisses,
         disk.RollingWindowHits,
@@ -2079,6 +2092,8 @@ static string FormatDiskSchedulerDelta(DiskSummary before, DiskSummary after)
 static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
 {
     return $"blt={summary.BlitterKernelHits}/{summary.BlitterKernelMisses}/{summary.BlitterGeneratedKernels}/{summary.BlitterFallbacks}," +
+        $"bltQueue={summary.BlitterSlotQueueAttempts}/{summary.BlitterSlotQueueEnabledBlits}/{summary.BlitterSlotQueueUnsupportedBlits}/{summary.BlitterSlotQueueWords}/{summary.BlitterSlotQueueCommittedOps}," +
+        $"bltTop={FormatBlitterTopPatterns(summary.BlitterTopPatterns)}," +
         $"dskPrep={summary.DiskPreparedTrackHits}/{summary.DiskPreparedTrackMisses}," +
         $"dskWin={summary.DiskRollingWindowHits}/{summary.DiskRollingWindowMisses}," +
         $"dskSync={summary.DiskSyncIndexHits}/{summary.DiskSyncIndexMisses}," +
@@ -2088,6 +2103,28 @@ static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
         $"dskPlan={summary.DiskActiveDmaPredictionPasses}/{summary.DiskActiveDmaPredictedWordPlans}/{summary.DiskActiveDmaRuntimeWordPlans}," +
         $"dskReq={summary.DiskActiveDmaRequestsCreated}/{summary.DiskActiveDmaRequestsServed}/{summary.DiskActiveDmaRequestsBlocked}";
 }
+
+static string FormatBlitterTopPatterns(IReadOnlyList<BlitterPatternEntry> patterns)
+{
+    if (patterns.Count == 0)
+    {
+        return "none";
+    }
+
+    return string.Join(
+        ';',
+        patterns.Select(pattern =>
+            $"{pattern.Count}x[{(pattern.LineMode ? "line" : "area")},c0={pattern.Bltcon0:X4},c1={pattern.Bltcon1:X4},mt={pattern.Minterm:X2},use={FormatBlitterUse(pattern)},fill={(pattern.FillEnabled ? (pattern.FillExclusive ? "xor" : "inc") : "no")},desc={(pattern.Descending ? 1 : 0)},size={pattern.WidthWords}x{pattern.Height}]"));
+}
+
+static string FormatBlitterUse(BlitterPatternEntry pattern)
+    => string.Create(4, pattern, static (span, value) =>
+    {
+        span[0] = value.UseA ? 'A' : '-';
+        span[1] = value.UseB ? 'B' : '-';
+        span[2] = value.UseC ? 'C' : '-';
+        span[3] = value.UseD ? 'D' : '-';
+    });
 
 static string FormatLastDeniedFixedSlot(AgnusBeamDmaSnapshot agnus)
 {
@@ -2233,6 +2270,12 @@ internal readonly record struct HardwareSpecializationSummary(
     long BlitterKernelMisses,
     long BlitterGeneratedKernels,
     long BlitterFallbacks,
+    long BlitterSlotQueueAttempts,
+    long BlitterSlotQueueEnabledBlits,
+    long BlitterSlotQueueUnsupportedBlits,
+    long BlitterSlotQueueWords,
+    long BlitterSlotQueueCommittedOps,
+    BlitterPatternEntry[] BlitterTopPatterns,
     long DiskPreparedTrackHits,
     long DiskPreparedTrackMisses,
     long DiskRollingWindowHits,
@@ -2316,6 +2359,7 @@ internal readonly record struct BenchmarkOptions(
     bool CopperQuiescenceFastPathVerify,
     bool DeferredCpuBusBatch,
     bool DeferredCpuBusBatchVerify,
+    bool HardwareSpecialization,
     bool StopOnDebugSnapshot,
     int PauseBeforeMeasureMilliseconds,
     string? DumpDebugSnapshotPath,
@@ -2359,6 +2403,7 @@ internal readonly record struct BenchmarkOptions(
         var copperQuiescenceFastPathVerify = false;
         var deferredCpuBusBatch = false;
         var deferredCpuBusBatchVerify = false;
+        var hardwareSpecialization = false;
         var stopOnDebugSnapshot = false;
         var pauseBeforeMeasureMilliseconds = 0;
         string? dumpDebugSnapshotPath = null;
@@ -2583,6 +2628,11 @@ internal readonly record struct BenchmarkOptions(
                 deferredCpuBusBatch = true;
                 deferredCpuBusBatchVerify = true;
             }
+            else if (string.Equals(args[i], "--hardware-specialization", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[i], "--hw-specialization", StringComparison.OrdinalIgnoreCase))
+            {
+                hardwareSpecialization = true;
+            }
             else if (string.Equals(args[i], "--stop-on-debug-snapshot", StringComparison.OrdinalIgnoreCase))
             {
                 stopOnDebugSnapshot = true;
@@ -2645,6 +2695,7 @@ internal readonly record struct BenchmarkOptions(
             copperQuiescenceFastPathVerify,
             deferredCpuBusBatch,
             deferredCpuBusBatchVerify,
+            hardwareSpecialization,
             stopOnDebugSnapshot,
             Math.Max(0, pauseBeforeMeasureMilliseconds),
             dumpDebugSnapshotPath,
