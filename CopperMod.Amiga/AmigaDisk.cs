@@ -946,7 +946,7 @@ namespace CopperMod.Amiga
 
     internal sealed class AmigaDiskController
     {
-        private enum SchedulerWakeReason
+        public enum SchedulerWakeReason
         {
             None,
             PendingDma,
@@ -1127,6 +1127,8 @@ namespace CopperMod.Amiga
         public int TransferCount => _transferCount;
 
         public bool DivergenceTraceEnabled => _traceRecorder != null;
+
+        internal bool ActiveDma => _activeDma;
 
         internal ulong SchedulerWakeVersion
         {
@@ -1516,8 +1518,102 @@ namespace CopperMod.Amiga
                 targetCycle >= GetDriveReadyCycle(drive);
         }
 
-        public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)
+        private long? GetPendingDmaCpuVisibleWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
         {
+            var pendingCycle = GetPendingDmaWakeCandidateCycle(currentCycle);
+            if (!pendingCycle.HasValue || pendingCycle.Value > targetCycle)
+            {
+                return null;
+            }
+
+            return _bus.Paula.GetCpuVisibleInterruptRequestCycle(
+                DskBlkInterrupt,
+                pendingCycle.Value,
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask).HasValue
+                ? pendingCycle.Value
+                : null;
+        }
+
+        private long? GetActiveDmaCpuVisibleWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            if (_activeDmaCompletionCycle <= 0)
+            {
+                return null;
+            }
+
+            return _bus.Paula.GetCpuVisibleInterruptRequestCycle(
+                DskBlkInterrupt,
+                _activeDmaCompletionCycle,
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask);
+        }
+
+        public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)
+            => GetNextWakeCandidateCycle(currentCycle, targetCycle, out _);
+
+        internal long? GetNextCpuVisibleWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask,
+            out SchedulerWakeReason reason)
+        {
+            reason = SchedulerWakeReason.None;
+            _schedulerNextEventWakeCandidateQueries++;
+            if (targetCycle <= currentCycle)
+            {
+                return null;
+            }
+
+            RefreshNextIndexPulseCycle();
+            long? candidate = null;
+            AddWakeCandidate(
+                ref candidate,
+                ref reason,
+                GetPendingDmaCpuVisibleWakeCandidateCycle(currentCycle, targetCycle, cpuInterruptMask),
+                SchedulerWakeReason.PendingDma);
+
+            if (_activeDma && IsDiskDmaControlEnabled())
+            {
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    GetActiveDmaCpuVisibleWakeCandidateCycle(currentCycle, targetCycle, cpuInterruptMask),
+                    SchedulerWakeReason.ActiveDmaCompletion);
+            }
+
+            if ((_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 && AnyConnectedDriveMotorOn())
+            {
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    _nextIndexPulseCycle,
+                    SchedulerWakeReason.IndexPulse);
+            }
+
+            var clamped = ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            if (!clamped.HasValue)
+            {
+                reason = SchedulerWakeReason.None;
+            }
+
+            return clamped;
+        }
+
+        internal long? GetNextWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            out SchedulerWakeReason reason)
+        {
+            reason = SchedulerWakeReason.None;
             _schedulerNextWakeCandidateQueries++;
             if (targetCycle <= currentCycle)
             {
@@ -1526,25 +1622,50 @@ namespace CopperMod.Amiga
 
             RefreshNextIndexPulseCycle();
             long? candidate = null;
-            candidate = MinWakeCandidate(candidate, GetPendingDmaWakeCandidateCycle(currentCycle));
-            candidate = MinWakeCandidate(candidate, GetPassiveInputWakeCandidateCycle(currentCycle, targetCycle));
+            AddWakeCandidate(
+                ref candidate,
+                ref reason,
+                GetPendingDmaWakeCandidateCycle(currentCycle),
+                SchedulerWakeReason.PendingDma);
+            AddWakeCandidate(
+                ref candidate,
+                ref reason,
+                GetPassiveInputWakeCandidateCycle(currentCycle, targetCycle),
+                SchedulerWakeReason.PassiveByteReady);
 
             if (_nextDiskInputAdvanceCycle > 0)
             {
-                candidate = MinWakeCandidate(candidate, _nextDiskInputAdvanceCycle);
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    _nextDiskInputAdvanceCycle,
+                    SchedulerWakeReason.PassiveByteReady);
             }
 
             if (_activeDma && IsDiskDmaControlEnabled())
             {
-                candidate = MinWakeCandidate(candidate, GetActiveDmaWakeCycle(includeActiveDmaProgress: false));
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    GetActiveDmaWakeCycle(includeActiveDmaProgress: false),
+                    SchedulerWakeReason.ActiveDmaCompletion);
             }
 
             if ((_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 && AnyConnectedDriveMotorOn())
             {
-                candidate = MinWakeCandidate(candidate, _nextIndexPulseCycle);
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    _nextIndexPulseCycle,
+                    SchedulerWakeReason.IndexPulse);
             }
 
             var clamped = ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            if (!clamped.HasValue)
+            {
+                reason = SchedulerWakeReason.None;
+            }
+
             if (clamped.HasValue)
             {
                 AppendDivergenceTrace(
@@ -1625,7 +1746,19 @@ namespace CopperMod.Amiga
             long currentCycle,
             long targetCycle,
             bool includeActiveDmaProgress = false)
+            => GetNextEventWakeCandidateCycle(
+                currentCycle,
+                targetCycle,
+                includeActiveDmaProgress,
+                out _);
+
+        internal long? GetNextEventWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            bool includeActiveDmaProgress,
+            out SchedulerWakeReason reason)
         {
+            reason = SchedulerWakeReason.None;
             _schedulerNextEventWakeCandidateQueries++;
             if (targetCycle <= currentCycle)
             {
@@ -1634,27 +1767,50 @@ namespace CopperMod.Amiga
 
             RefreshNextIndexPulseCycle();
             long? candidate = null;
-            candidate = MinWakeCandidate(candidate, GetPendingDmaWakeCandidateCycle(currentCycle));
+            AddWakeCandidate(
+                ref candidate,
+                ref reason,
+                GetPendingDmaWakeCandidateCycle(currentCycle),
+                SchedulerWakeReason.PendingDma);
 
             if (_activeDma && IsDiskDmaControlEnabled())
             {
-                candidate = MinWakeCandidate(
-                    candidate,
-                    GetActiveDmaWakeCycle(includeActiveDmaProgress));
+                var activeDmaCycle = GetActiveDmaWakeCycle(includeActiveDmaProgress);
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    activeDmaCycle,
+                    !includeActiveDmaProgress || IsActiveDmaCompletionWakeCycle(activeDmaCycle)
+                        ? SchedulerWakeReason.ActiveDmaCompletion
+                        : SchedulerWakeReason.ActiveDmaProgress);
             }
 
             var syncCycle = GetNextSelectedSyncCompletionCycleCached(targetCycle);
             if (syncCycle <= targetCycle)
             {
-                candidate = MinWakeCandidate(candidate, syncCycle);
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    syncCycle,
+                    SchedulerWakeReason.SyncCandidate);
             }
 
             if ((_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 && AnyConnectedDriveMotorOn())
             {
-                candidate = MinWakeCandidate(candidate, _nextIndexPulseCycle);
+                AddWakeCandidate(
+                    ref candidate,
+                    ref reason,
+                    _nextIndexPulseCycle,
+                    SchedulerWakeReason.IndexPulse);
             }
 
-            return ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            var clamped = ClampWakeCandidate(candidate, currentCycle, targetCycle);
+            if (!clamped.HasValue)
+            {
+                reason = SchedulerWakeReason.None;
+            }
+
+            return clamped;
         }
 
         internal long? GetNextSlotDmaWakeCandidateCycle(long currentCycle, long targetCycle)
@@ -1962,6 +2118,24 @@ namespace CopperMod.Amiga
             return Math.Min(candidate.Value, eventCycle);
         }
 
+        private static void AddWakeCandidate(
+            ref long? candidate,
+            ref SchedulerWakeReason reason,
+            long? eventCycle,
+            SchedulerWakeReason eventReason)
+        {
+            if (!eventCycle.HasValue)
+            {
+                return;
+            }
+
+            if (!candidate.HasValue || eventCycle.Value < candidate.Value)
+            {
+                candidate = eventCycle.Value;
+                reason = eventReason;
+            }
+        }
+
         private static long? ClampWakeCandidate(long? candidate, long currentCycle, long targetCycle)
         {
             if (!candidate.HasValue || candidate.Value > targetCycle)
@@ -1974,6 +2148,11 @@ namespace CopperMod.Amiga
 
         public byte ReadCiaAPortA(byte latchedPortA)
         {
+            return ReadCiaAPortA(latchedPortA, _currentCycle);
+        }
+
+        public byte ReadCiaAPortA(byte latchedPortA, long sampleCycle)
+        {
             var value = (byte)(latchedPortA | 0xFC);
             var driveIndex = GetSelectedLineDriveIndex();
             if (driveIndex >= 0 && !IsDriveConnected(driveIndex))
@@ -1985,7 +2164,7 @@ namespace CopperMod.Amiga
             value = SetActiveLow(value, 2, drive.DiskChanged || drive.Disk == null);
             value = SetActiveLow(value, 3, drive.Disk != null && drive.WriteProtected);
             value = SetActiveLow(value, 4, drive.Disk != null && drive.Cylinder == 0);
-            value = SetActiveLow(value, 5, IsDriveReady(drive, _currentCycle));
+            value = SetActiveLow(value, 5, IsDriveReady(drive, sampleCycle));
             return value;
         }
 
@@ -2040,6 +2219,11 @@ namespace CopperMod.Amiga
         {
             _currentCycle = Math.Max(_currentCycle, cycle);
             offset = (ushort)(offset & 0x01FE);
+            if (CustomRegisterScheduleClassifier.IsDiskBusScheduleAffectingWrite(offset))
+            {
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+            }
+
             switch (offset)
             {
                 case DskDat:

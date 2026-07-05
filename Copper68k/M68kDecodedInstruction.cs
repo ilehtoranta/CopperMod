@@ -288,9 +288,9 @@ namespace Copper68k
             try
             {
                 programCounter = Normalize(programCounter);
-                if ((programCounter & 1) != 0 || codeReader.HasHostTrapStub(programCounter))
+                if ((programCounter & 1) != 0)
                 {
-                    reason = M68kJitBailoutReason.HostTrap;
+                    reason = M68kJitBailoutReason.UnsupportedOpcode;
                     return false;
                 }
 

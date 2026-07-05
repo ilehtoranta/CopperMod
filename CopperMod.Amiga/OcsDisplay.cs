@@ -245,6 +245,11 @@ namespace CopperMod.Amiga
         private int _liveFetchBatchWordCount;
         private long _liveFirstDisplayDmaCycle;
         private long _liveLastDisplayDmaCycle;
+        private long _copperQuiescentWindowCount;
+        private long _copperQuiescentTotalCycles;
+        private long _copperQuiescentMaxCycles;
+        private long _copperQuiescentActiveStartCycle = -1;
+        private long _copperQuiescentActiveEndCycle = -1;
         private CopperPresentationState _liveCopper;
         private bool _liveFrameInitialStateValid;
         private bool _liveFrameWriteOverflowed;
@@ -755,6 +760,11 @@ namespace CopperMod.Amiga
                 _lastRowDmaScalarFallbackRows,
                 _lastRowDmaPlanInvalidationRows,
                 _lastRowDmaPlanMismatchRows,
+                _copperQuiescentWindowCount,
+                _copperQuiescentTotalCycles,
+                _copperQuiescentMaxCycles,
+                _copperQuiescentActiveStartCycle,
+                _copperQuiescentActiveEndCycle,
                 _lastArchiveRejectFrameIncomplete,
                 _lastArchiveRejectTimelineInvalid,
                 _lastArchiveRejectUnsafeWrite,
@@ -846,6 +856,7 @@ namespace CopperMod.Amiga
             _liveCopperStepCount = 0;
             _livePendingWriteEventCount = 0;
             _liveFetchBatchWordCount = 0;
+            ResetCopperQuiescenceCounters();
             ResetLiveRasterlinePlan(resetDescriptorCounters: true);
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
@@ -917,6 +928,11 @@ namespace CopperMod.Amiga
             if (!IsDisplayRegisterWrite(offset))
             {
                 return;
+            }
+
+            if (CustomRegisterScheduleClassifier.IsDisplayBusScheduleAffectingWrite(offset))
+            {
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
             }
 
             if (_pendingWrites.Count >= MaxPendingWrites)
@@ -2941,6 +2957,181 @@ namespace CopperMod.Amiga
             return copperCycle <= currentCycle ? currentCycle + 1 : copperCycle;
         }
 
+        internal long? GetNextLiveCopperCpuBatchBarrierCycle(long currentCycle, long targetCycle)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle ||
+                !_liveDmaEnabled ||
+                !_liveFrameValid ||
+                !IsLiveCopperDmaEnabled())
+            {
+                return null;
+            }
+
+            var frameEndCycle = _liveFrameStartCycle + PalFrameCycles;
+            if (currentCycle >= frameEndCycle)
+            {
+                return null;
+            }
+
+            targetCycle = Math.Min(targetCycle, frameEndCycle - 1);
+            if (_liveCopper.PendingMove)
+            {
+                return NormalizeCopperBatchBarrier(currentCycle, targetCycle, _liveCopper.PendingMoveStopCycle);
+            }
+
+            if (_liveCopper.PendingSkip)
+            {
+                return NormalizeCopperBatchBarrier(currentCycle, targetCycle, _liveCopper.PendingSkipCycle);
+            }
+
+            if (_liveCopper.Stopped)
+            {
+                return null;
+            }
+
+            if (_liveCopper.PendingStart)
+            {
+                return _copperListPointer == 0
+                    ? null
+                    : NormalizeCopperBatchBarrier(
+                        currentCycle,
+                        targetCycle,
+                        Math.Max(_liveCopper.Cycle, _liveFrameStartCycle));
+            }
+
+            if (_liveCopper.Pc == 0 && _copperListPointer == 0)
+            {
+                return null;
+            }
+
+            if (_liveCopper.Waiting)
+            {
+                var blitterReadyCycle = GetCopperBlitterReadyCycle(_liveCopper.WaitSecond, _liveCopper.Cycle);
+                if (blitterReadyCycle > _liveCopper.Cycle)
+                {
+                    return NormalizeCopperBatchBarrier(currentCycle, targetCycle, blitterReadyCycle);
+                }
+
+                if (!TryGetCopperWaitCycle(
+                    _liveCopper.WaitFirst,
+                    _liveCopper.WaitSecond,
+                    _liveFrameStartCycle,
+                    _liveCopper.Cycle,
+                    targetCycle + 1,
+                    blitterFinished: true,
+                    out var waitCycle))
+                {
+                    return null;
+                }
+
+                // A WAIT has no CPU-visible effect while it is sleeping. Once it wakes,
+                // stop at the next copper-instruction boundary so the live copper can
+                // fetch the following instruction from memory that may have changed.
+                return NormalizeCopperBatchBarrier(
+                    currentCycle,
+                    targetCycle,
+                    waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits));
+            }
+
+            // Do not scan ahead through copper list memory here. The next copper
+            // instruction can be changed by DMA before it is fetched, so the only safe
+            // horizon is the current live copper execution point. Once the instruction
+            // is latched, PendingMove/PendingSkip/Waiting can provide a longer boundary.
+            var fetchCycle = Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
+            return NormalizeCopperBatchBarrier(currentCycle, targetCycle, fetchCycle);
+        }
+
+        private static long? NormalizeCopperBatchBarrier(long currentCycle, long targetCycle, long barrierCycle)
+        {
+            if (barrierCycle > targetCycle)
+            {
+                return null;
+            }
+
+            return Math.Max(currentCycle + 1, barrierCycle);
+        }
+
+        internal bool TryGetCopperQuiescentWindow(long cycle, out long startCycle, out long endCycle)
+        {
+            cycle = Math.Max(0, cycle);
+            startCycle = 0;
+            endCycle = 0;
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid ||
+                cycle < _liveFrameStartCycle)
+            {
+                EndCopperQuiescentWindow(cycle);
+                return false;
+            }
+
+            var frameEndCycle = _liveFrameStartCycle + PalFrameCycles;
+            if (cycle >= frameEndCycle)
+            {
+                EndCopperQuiescentWindow(cycle);
+                return false;
+            }
+
+            var copperCycle = GetNextLiveCopperCycle(frameEndCycle);
+            if (copperCycle != long.MaxValue && copperCycle < frameEndCycle)
+            {
+                EndCopperQuiescentWindow(cycle);
+                return false;
+            }
+
+            startCycle = cycle;
+            endCycle = frameEndCycle;
+            RecordCopperQuiescentWindow(cycle, frameEndCycle);
+            return true;
+        }
+
+        private void RecordCopperQuiescentWindow(long startCycle, long endCycle)
+        {
+            if (_copperQuiescentActiveStartCycle >= 0 &&
+                _copperQuiescentActiveEndCycle == endCycle &&
+                startCycle >= _copperQuiescentActiveStartCycle)
+            {
+                return;
+            }
+
+            EndCopperQuiescentWindow(startCycle);
+            if (endCycle <= startCycle)
+            {
+                return;
+            }
+
+            var cycles = endCycle - startCycle;
+            _copperQuiescentWindowCount++;
+            _copperQuiescentTotalCycles += cycles;
+            _copperQuiescentMaxCycles = Math.Max(_copperQuiescentMaxCycles, cycles);
+            _copperQuiescentActiveStartCycle = startCycle;
+            _copperQuiescentActiveEndCycle = endCycle;
+        }
+
+        private void EndCopperQuiescentWindow(long cycle)
+        {
+            if (_copperQuiescentActiveStartCycle < 0)
+            {
+                return;
+            }
+
+            if (cycle >= _copperQuiescentActiveEndCycle)
+            {
+                _copperQuiescentActiveStartCycle = -1;
+                _copperQuiescentActiveEndCycle = -1;
+            }
+        }
+
+        private void ResetCopperQuiescenceCounters()
+        {
+            _copperQuiescentWindowCount = 0;
+            _copperQuiescentTotalCycles = 0;
+            _copperQuiescentMaxCycles = 0;
+            _copperQuiescentActiveStartCycle = -1;
+            _copperQuiescentActiveEndCycle = -1;
+        }
+
         internal long? GetNextLiveDisplayWakeCandidateCycle(long currentCycle, long targetCycle)
         {
             currentCycle = Math.Max(0, currentCycle);
@@ -3389,6 +3580,7 @@ namespace CopperMod.Amiga
 
             if (!suppressMove && CanCopperWriteRegister(register))
             {
+                RecordCopperQuiescentCopperMove(dataCycle, register);
                 var affectsDisplay = IsDisplayRegisterWrite(register);
                 if (affectsDisplay)
                 {
@@ -3420,6 +3612,22 @@ namespace CopperMod.Amiga
             }
 
             _liveCopper.Cycle = instructionStopCycle;
+        }
+
+        private void RecordCopperQuiescentCopperMove(long cycle, ushort register)
+        {
+            if (_copperQuiescentActiveStartCycle < 0 ||
+                cycle < _copperQuiescentActiveStartCycle ||
+                cycle > _copperQuiescentActiveEndCycle)
+            {
+                return;
+            }
+
+            _bus.RecordCopperQuiescentCustomRegisterWrite(
+                AmigaBusRequester.Copper,
+                register,
+                cycle,
+                CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(register));
         }
 
         private long GetNextLiveLineStateCycle()
@@ -13289,6 +13497,11 @@ namespace CopperMod.Amiga
             int lastRowDmaScalarFallbackRows,
             int lastRowDmaPlanInvalidationRows,
             int lastRowDmaPlanMismatchRows,
+            long copperQuiescentWindowCount,
+            long copperQuiescentTotalCycles,
+            long copperQuiescentMaxCycles,
+            long copperQuiescentActiveStartCycle,
+            long copperQuiescentActiveEndCycle,
             int lastArchiveRejectFrameIncomplete,
             int lastArchiveRejectTimelineInvalid,
             int lastArchiveRejectUnsafeWrite,
@@ -13406,6 +13619,11 @@ namespace CopperMod.Amiga
             LastRowDmaScalarFallbackRows = lastRowDmaScalarFallbackRows;
             LastRowDmaPlanInvalidationRows = lastRowDmaPlanInvalidationRows;
             LastRowDmaPlanMismatchRows = lastRowDmaPlanMismatchRows;
+            CopperQuiescentWindowCount = copperQuiescentWindowCount;
+            CopperQuiescentTotalCycles = copperQuiescentTotalCycles;
+            CopperQuiescentMaxCycles = copperQuiescentMaxCycles;
+            CopperQuiescentActiveStartCycle = copperQuiescentActiveStartCycle;
+            CopperQuiescentActiveEndCycle = copperQuiescentActiveEndCycle;
             LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
             LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
             LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
@@ -13615,6 +13833,16 @@ namespace CopperMod.Amiga
         public int LastRowDmaPlanInvalidationRows { get; }
 
         public int LastRowDmaPlanMismatchRows { get; }
+
+        public long CopperQuiescentWindowCount { get; }
+
+        public long CopperQuiescentTotalCycles { get; }
+
+        public long CopperQuiescentMaxCycles { get; }
+
+        public long CopperQuiescentActiveStartCycle { get; }
+
+        public long CopperQuiescentActiveEndCycle { get; }
 
         public int LastArchiveRejectFrameIncomplete { get; }
 

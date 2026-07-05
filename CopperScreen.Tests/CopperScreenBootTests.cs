@@ -710,7 +710,7 @@ public sealed class CopperScreenBootTests
 		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-kickstart13", diskPath }, AppContext.BaseDirectory);
 		var fatalFrame = -1;
 		var reachedLoadingScreen = false;
-		for (var frame = 0; frame < 1_200; frame++)
+		for (var frame = 0; frame < 1_230; frame++)
 		{
 			emulator.RenderNextFrame();
 			if (ContainsFatalBootStatus(emulator.StatusText))

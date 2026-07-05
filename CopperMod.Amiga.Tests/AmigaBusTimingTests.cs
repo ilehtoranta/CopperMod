@@ -2801,22 +2801,22 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void StoppedCpuWakeCandidateIncludesPendingDiskReadDma()
+	public void StoppedCpuWakeCandidateIgnoresPendingDiskReadDmaWhenDskblkDisabled()
 	{
 		var bus = new AmigaBus();
 		const long readyCycle = 20;
 		bus.Disk.Drive0.Insert(CreateSingleWordDisk(0x1234));
 		bus.Disk.Drive0.SetSelected(true);
 		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
-		bus.Paula.ScheduleWrite(0, 0x096, 0x8210);
+		bus.WriteWord(0x00DFF096, 0x8210, 0);
 		bus.Paula.AdvanceTo(0);
 		bus.Disk.WriteRegister(0x024, 0x8001, 0);
 		bus.Disk.WriteRegister(0x024, 0x8001, 0);
 
 		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
 
-		Assert.Equal(readyCycle, candidate);
-		Assert.Equal(M68kTraceBatchWakeSource.Disk, wakeSource);
+		Assert.Equal(100, candidate);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, wakeSource);
 	}
 
 	[Fact]
@@ -2832,7 +2832,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void StoppedCpuWakeCandidateIncludesLiveCopperWork()
+	public void StoppedCpuWakeCandidateIncludesBenignLiveCopperControlBoundary()
 	{
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
@@ -2857,6 +2857,274 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void CopperQuiescentWindowStartsWhenCopperWaitsPastFrameEnd()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentDiagnostics: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		Assert.True(bus.Display.TryGetCopperQuiescentWindow(cycle, out var start, out var end));
+		Assert.Equal(cycle, start);
+		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerFrame, end);
+		var snapshot = bus.Display.CaptureSnapshot();
+		Assert.Equal(1, snapshot.CopperQuiescentWindowCount);
+		Assert.True(snapshot.CopperQuiescentTotalCycles > 0);
+	}
+
+	[Fact]
+	public void CustomRegisterScheduleClassifierTreatsKnownBusScheduleBenignWritesAsBenign()
+	{
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x180));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x1BE));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x181));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x120));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x146));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x0A8));
+		Assert.False(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x0D8));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x09A));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x09C));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x096));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x09E));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x092));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x100));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x088));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x0A4));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x0A6));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x0AA));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x024));
+		Assert.True(CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(0x058));
+	}
+
+	[Fact]
+	public void CopperQuiescentCpuScheduleAffectingCustomWriteIsCountedAsInvalidationRisk()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentDiagnostics: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		bus.WriteWord(0x00DFF09C, 0x8004, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentCustomRegisterWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentCpuBenignCustomWrites);
+		Assert.True(scheduler.CopperQuiescentSchedulerDrains >= 1);
+	}
+
+	[Fact]
+	public void CopperQuiescentCpuColorWriteIsCountedAsBenignCustomWrite()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		bus.WriteWord(0x00DFF180, 0x0F00, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentCustomRegisterWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentCpuBenignCustomWrites >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathRejectedInvalidated);
+	}
+
+	[Fact]
+	public void CopperQuiescentCpuSpriteWriteIsCountedAsBenignCustomWrite()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		bus.WriteWord(0x00DFF146, 0x1234, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentCustomRegisterWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentCpuBenignCustomWrites >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathRejectedInvalidated);
+	}
+
+	[Fact]
+	public void CopperQuiescentCpuAudioVolumeWriteIsCountedAsBenignCustomWrite()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		bus.WriteWord(0x00DFF0A8, 0x0040, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentCustomRegisterWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentCpuBenignCustomWrites >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathRejectedInvalidated);
+	}
+
+	[Fact]
+	public void CopperQuiescentShadowPredictorMatchesStaticCpuChipGrant()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentDiagnostics: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentSlotContendedAccesses >= 1);
+		Assert.True(scheduler.CopperQuiescentShadowPredictions >= 1);
+		Assert.Equal(scheduler.CopperQuiescentShadowPredictions, scheduler.CopperQuiescentShadowMatches);
+		Assert.Equal(0, scheduler.CopperQuiescentShadowMismatches);
+	}
+
+	[Fact]
+	public void CopperQuiescentShadowPredictorMatchesPreparedBitplaneSlotGrant()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentDiagnostics: true);
+		ConfigureLiveOneBitplaneDma(bus);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentShadowPredictions >= 1);
+		Assert.Equal(scheduler.CopperQuiescentShadowPredictions, scheduler.CopperQuiescentShadowMatches);
+		Assert.Equal(0, scheduler.CopperQuiescentShadowMismatches);
+	}
+
+	[Fact]
+	public void CopperQuiescentShadowPredictorReportsUnsupportedWhenPaulaDmaIsDue()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentDiagnostics: true);
+		StartCopperEndOfFrameWait(bus);
+		var lineStart = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		for (var i = 0; i < 64; i += 2)
+		{
+			BigEndian.WriteUInt16(bus.ChipRam, 0x7000 + i, (ushort)(0x4000 + i));
+		}
+
+		bus.Paula.ScheduleWrite(lineStart, 0x0A0, 0x0000);
+		bus.Paula.ScheduleWrite(lineStart, 0x0A2, 0x7000);
+		bus.Paula.ScheduleWrite(lineStart, 0x0A4, 0x0020);
+		bus.Paula.ScheduleWrite(lineStart, 0x0A6, 0x0002);
+		bus.Paula.ScheduleWrite(lineStart, 0x096, 0x8201);
+		bus.Paula.AdvanceTo(lineStart);
+		var cycle = lineStart + (AgnusHrmOcsSlotTable.FirstPaulaHorizontal * AgnusChipSlotScheduler.SlotCycles) - 2;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentShadowUnsupported >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentShadowMismatches);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathIsDisabledByDefault()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathAttempts);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathSkippedDrains);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathSkipsSupportedCpuChipDrainWithoutChangingGrant()
+	{
+		var baseline = new AmigaBus(enableLiveAgnusDma: true);
+		var fast = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(baseline);
+		StartCopperEndOfFrameWait(fast);
+		var baselineCycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var fastCycle = baselineCycle;
+
+		var baselineValue = baseline.ReadWord(0x00001000, ref baselineCycle, AmigaBusAccessKind.CpuDataRead);
+		var fastValue = fast.ReadWord(0x00001000, ref fastCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(baselineValue, fastValue);
+		Assert.Equal(baselineCycle, fastCycle);
+		var scheduler = fast.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentFastPathAttempts >= 1);
+		Assert.True(scheduler.CopperQuiescentFastPathUsed >= 1);
+		Assert.True(scheduler.CopperQuiescentFastPathSkippedDrains >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathVerificationMismatches);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathPreservesPreparedBitplaneContentionGrant()
+	{
+		var baseline = new AmigaBus(enableLiveAgnusDma: true);
+		var fast = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		ConfigureLiveOneBitplaneDma(baseline);
+		ConfigureLiveOneBitplaneDma(fast);
+		StartCopperEndOfFrameWait(baseline);
+		StartCopperEndOfFrameWait(fast);
+		var baselineCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var fastCycle = baselineCycle;
+
+		_ = baseline.ReadWord(0x00001000, ref baselineCycle, AmigaBusAccessKind.CpuDataRead);
+		_ = fast.ReadWord(0x00001000, ref fastCycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.Equal(baselineCycle, fastCycle);
+		Assert.True(fast.CaptureHardwareSchedulerSnapshot().CopperQuiescentFastPathSkippedDrains >= 1);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathCustomWriteInvalidatesRemainderOfFrame()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		bus.WriteWord(0x00DFF09C, 0x8004, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentCustomRegisterWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites >= 1);
+		Assert.True(scheduler.CopperQuiescentFastPathRejectedInvalidated >= 1);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathRejectsLongAccessAsUnsupported()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		_ = bus.ReadLong(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentFastPathRejectedUnsupported >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathVerificationMismatches);
+	}
+
+	[Fact]
+	public void CopperQuiescentFastPathDoesNotSkipAfterBlitterSetupInvalidatesWindow()
+	{
+		var bus = new AmigaBus(
+			enableLiveAgnusDma: false,
+			enableCopperQuiescentFastPath: true);
+		StartLongBlit(bus);
+		bus.EnableLiveAgnusDma();
+		StartCopperEndOfFrameWait(bus);
+		var cycle = 2L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CopperQuiescentFastPathRejectedInvalidated >= 1);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathSkippedDrains);
+		Assert.Equal(0, scheduler.CopperQuiescentFastPathVerificationMismatches);
+	}
+
+	[Fact]
 	public void CpuBatchWakeCandidateIgnoresDisabledPaulaAudioDmaEvent()
 	{
 		var bus = new AmigaBus();
@@ -2874,6 +3142,363 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(32, internalCandidate);
 		Assert.Equal(100, cpuCandidate);
 		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateStopsAtCopperWaitWake()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		StartCopperListAtFrameStart(
+			bus,
+			(0x0201, 0xFFFE),
+			(0x0180, 0x0F00),
+			(0xFFFF, 0xFFFE));
+		var currentCycle = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		bus.AdvanceDmaTo(currentCycle);
+
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(
+			currentCycle,
+			3 * AmigaConstants.A500PalCpuCyclesPerRasterLine,
+			out var wakeSource);
+
+		Assert.InRange(
+			candidate,
+			currentCycle + 1,
+			3 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		Assert.Equal(M68kTraceBatchWakeSource.Copper, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateStopsAtCopperSkipDecision()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		StartCopperListAtFrameStart(
+			bus,
+			(0x0001, 0x0001),
+			(0x0180, 0x0F00),
+			(0xFFFF, 0xFFFE));
+
+		var candidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 100, out var wakeSource);
+
+		Assert.InRange(candidate, 1, 100);
+		Assert.Equal(M68kTraceBatchWakeSource.Copper, wakeSource);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateStopsAtNextCopperInstructionWithoutScanningForHazardMove()
+	{
+		var immediateHazard = new AmigaBus(enableLiveAgnusDma: true);
+		StartCopperListAtFrameStart(
+			immediateHazard,
+			(0x009C, 0x8004),
+			(0xFFFF, 0xFFFE));
+		var immediateCandidate = immediateHazard.GetNextCpuBatchWakeCandidateCycle(0, 100, out var immediateWakeSource);
+
+		var delayedHazard = new AmigaBus(enableLiveAgnusDma: true);
+		StartCopperListAtFrameStart(
+			delayedHazard,
+			(0x0180, 0x0F00),
+			(0x009C, 0x8004),
+			(0xFFFF, 0xFFFE));
+		var delayedCandidate = delayedHazard.GetNextCpuBatchWakeCandidateCycle(0, 100, out var delayedWakeSource);
+
+		Assert.True(immediateCandidate > 0);
+		Assert.Equal(immediateCandidate, delayedCandidate);
+		Assert.Equal(M68kTraceBatchWakeSource.Copper, immediateWakeSource);
+		Assert.Equal(M68kTraceBatchWakeSource.Copper, delayedWakeSource);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchDisabledExecutesSingleRomInstruction()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false);
+		bus.MapReadOnlyMemory(romBase, CreateNopRom(64));
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(romBase + 2, cpu.State.ProgramCounter);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchUsed);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchRunsMultipleRomInstructionsWhenEnabled()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, CreateNopRom(1024));
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.True(cpu.State.ProgramCounter > romBase + 2);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchUsed >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchInstructions > 1);
+		Assert.Equal(scheduler.DeferredCpuBusBatchInstructions, scheduler.DeferredCpuBusBatchSkippedInstructionFlushes);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchIgnoresPassiveDiskByteReadiness()
+	{
+		const uint romBase = 0x00FC0000;
+		const long readyCycle = 20;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, CreateNopRom(1024));
+		bus.Disk.Drive0.Insert(CreateSingleWordDisk(0x1234));
+		bus.Disk.Drive0.SetSelected(true);
+		bus.Disk.Drive0.SetMotorOn(true, readyCycle - MotorReadyDelayCycles());
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchWakeDisk);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchDiskWakePassiveByteReady);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchDiskWakePendingDma);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchDiskWakeActiveDmaCompletion);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchDiskWakeUnknown);
+	}
+
+	[Fact]
+	public void CpuBatchWakeCandidateCachesNoEventTarget()
+	{
+		var bus = new AmigaBus();
+		const long targetCycle = 1000;
+
+		var first = bus.GetNextCpuBatchWakeCandidateCycle(0, targetCycle, 0, out var firstWakeSource);
+		var second = bus.GetNextCpuBatchWakeCandidateCycle(10, targetCycle, 0, out var secondWakeSource);
+
+		Assert.Equal(targetCycle, first);
+		Assert.Equal(targetCycle, second);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, firstWakeSource);
+		Assert.Equal(M68kTraceBatchWakeSource.TargetCycle, secondWakeSource);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CpuVisibleNoEventCacheHits >= 1);
+		Assert.True(scheduler.CpuVisibleNoEventCacheMisses >= 1);
+	}
+
+	[Fact]
+	public void CpuBatchNoEventCacheDoesNotHidePendingInterrupt()
+	{
+		var bus = new AmigaBus();
+		const long targetCycle = 1000;
+		_ = bus.GetNextCpuBatchWakeCandidateCycle(0, targetCycle, 0, out _);
+
+		bus.AbleCiaInterrupts(AmigaCiaId.A, 0x81, 0);
+		bus.SetCiaInterrupts(AmigaCiaId.A, 0x81, 0);
+		var wake = bus.GetNextCpuBatchWakeCandidateCycle(100, targetCycle, 0, out var wakeSource);
+
+		Assert.Equal(101, wake);
+		Assert.Equal(M68kTraceBatchWakeSource.PendingInterrupt, wakeSource);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.CpuVisibleNoEventCacheInvalidations >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchDoesNotAttemptChipFetchedCode()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x4E71);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x4E71);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1002u, cpu.State.ProgramCounter);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchUsed);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchExitsBeforeChipFetchedInstruction()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, new byte[]
+		{
+			0x4E, 0x71,
+			0x4E, 0xF9, 0x00, 0x00, 0x10, 0x00,
+			0x4E, 0x71
+		});
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(1, scheduler.DeferredCpuBusBatchExitPcLeftFastWindow);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchExitChipVisibleAccess);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchFlushesForChipDataAccess()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		});
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+		cpu.State.A[0] = 0x1000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFFu);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchExitChipVisibleAccess >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchInstructions >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchKeepsBatchForSideEffectFreeCiaRead()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var rom = CreateNopRom(1024);
+		rom[0] = 0x10;
+		rom[1] = 0x39;
+		rom[2] = 0x00;
+		rom[3] = 0xBF;
+		rom[4] = 0xE2;
+		rom[5] = 0x01; // MOVE.B $BFE201.L,D0 (CIAA DDRA)
+		bus.MapReadOnlyMemory(romBase, rom);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x03u, cpu.State.D[0] & 0xFFu);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchUsed >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchInstructions > 1);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchExitChipVisibleAccess);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchFlushesForSideEffectfulCiaRead()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, new byte[]
+		{
+			0x10, 0x39, 0x00, 0xBF, 0xED, 0x01,
+			0x4E, 0x71
+		}); // MOVE.B $BFED01.L,D0 (CIAA ICR), then NOP
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchUsed >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchExitChipVisibleAccess >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchChipsetCatchupSkipsDrainForChipRamWordRead()
+	{
+		const uint romBase = 0x00FC0000;
+		var baseline = new AmigaBus(captureBusAccesses: false);
+		var batched = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		var program = new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		};
+		baseline.MapReadOnlyMemory(romBase, program);
+		batched.MapReadOnlyMemory(romBase, program);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1234);
+		BigEndian.WriteUInt16(batched.ChipRam, 0x1000, 0x1234);
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(baseline, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var batchedCpu = M68kCoreFactory.CreateM68000Core(batched, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		batchedCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = 0x1000;
+		batchedCpu.State.A[0] = 0x1000;
+
+		baselineCpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		batchedCpu.ExecuteInstruction();
+
+		Assert.Equal(baselineCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.D[0], batchedCpu.State.D[0]);
+		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
+		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupUsed >= 1);
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupSkippedDrains >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupVerificationMismatches);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchChipsetCatchupRejectsLongAccess()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, new byte[]
+		{
+			0x4E, 0x71,
+			0x20, 0x10,
+			0x4E, 0x71
+		});
+		BigEndian.WriteUInt32(bus.ChipRam, 0x1000, 0x12345678);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+		cpu.State.A[0] = 0x1000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x12345678u, cpu.State.D[0]);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupUsed);
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupRejectedUnsupported >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchChipsetCatchupRejectsActiveBlitter()
+	{
+		const uint romBase = 0x00FC0000;
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		});
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
+		StartLongBlit(bus);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x3000);
+		cpu.State.A[0] = 0x1000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFFu);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupUsed);
+		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupRejectedDynamicDma >= 1);
 	}
 
 	[Fact]
@@ -3129,6 +3754,35 @@ public sealed class AmigaBusTimingTests
 		bus.WriteWord(highOffset + 2, (ushort)address);
 	}
 
+	private static void StartCopperEndOfFrameWait(AmigaBus bus)
+	{
+		const uint copperList = 0x2400;
+		WriteCopperList(bus, copperList, (0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8280);
+		bus.AdvanceDmaTo(AmigaConstants.A500PalCpuCyclesPerRasterLine);
+	}
+
+	private static void StartCopperEndOfFrameWaitAtFrameStart(AmigaBus bus)
+	{
+		const uint copperList = 0x2400;
+		WriteCopperList(bus, copperList, (0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8280);
+		bus.AdvanceDmaTo(0);
+	}
+
+	private static void StartCopperListAtFrameStart(
+		AmigaBus bus,
+		params (ushort First, ushort Second)[] instructions)
+	{
+		const uint copperList = 0x2400;
+		WriteCopperList(bus, copperList, instructions);
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8280);
+		bus.AdvanceDmaTo(0);
+	}
+
 	private static void StartLongBlit(AmigaBus bus)
 	{
 		bus.WriteWord(0x00DFF040, 0x09F0, 0);
@@ -3236,6 +3890,18 @@ public sealed class AmigaBusTimingTests
 		return remainder == 0
 			? cycle
 			: cycle + AmigaConstants.A500PalCpuCyclesPerCiaTick - remainder;
+	}
+
+	private static byte[] CreateNopRom(int bytes)
+	{
+		var rom = new byte[bytes];
+		for (var i = 0; i + 1 < rom.Length; i += 2)
+		{
+			rom[i] = 0x4E;
+			rom[i + 1] = 0x71;
+		}
+
+		return rom;
 	}
 
 	private static void StartNastyBlit(AmigaBus bus)

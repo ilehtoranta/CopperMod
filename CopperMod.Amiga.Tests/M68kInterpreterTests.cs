@@ -365,7 +365,7 @@ public sealed class M68kInterpreterTests
 
 		var cycles = cpu.ExecuteInstruction();
 
-		Assert.Equal(130, cycles);
+		Assert.Equal(134, cycles);
 		Assert.Equal(2u, cpu.State.D[0]);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
@@ -385,7 +385,7 @@ public sealed class M68kInterpreterTests
 
 		var cycles = cpu.ExecuteInstruction();
 
-		Assert.Equal(154, cycles);
+		Assert.Equal(158, cycles);
 		Assert.Equal(0xFFFF_FFFDu, cpu.State.D[0]);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
@@ -489,6 +489,287 @@ public sealed class M68kInterpreterTests
 
 		AssertParity(scalar, planned);
 		Assert.True(planned.Cpu.CapturePlannedInterpreterCounters().FastInstructions > 0);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMovePostincrementFastShapesMatchScalar(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var opcodes = new ushort[]
+		{
+			0x12D8, // MOVE.B (A0)+,(A1)+
+			0x32D8, // MOVE.W (A0)+,(A1)+
+			0x22D8, // MOVE.L (A0)+,(A1)+
+			0x1018, // MOVE.B (A0)+,D0
+			0x3018, // MOVE.W (A0)+,D0
+			0x2018, // MOVE.L (A0)+,D0
+			0x12C0, // MOVE.B D0,(A1)+
+			0x32C0, // MOVE.W D0,(A1)+
+			0x22C0  // MOVE.L D0,(A1)+
+		};
+
+		foreach (var opcode in opcodes)
+		{
+			var scalar = CreateParityCpu(Words(opcode), enableOpcodePlan: false);
+			var planned = CreateParityCpu(Words(opcode), enableOpcodePlan: true, dispatch);
+			SetupMoveFastShapeParityState(scalar.Cpu.State, scalar.Bus);
+			SetupMoveFastShapeParityState(planned.Cpu.State, planned.Bus);
+
+			ExecuteBoth(scalar.Cpu, planned.Cpu, 1);
+
+			AssertParity(scalar, planned);
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMovePostincrementFastShapesPreserveSpecialIncrements(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+
+		var a7Source = CreateParityCpu(Words(0x101F), enableOpcodePlan: true, dispatch); // MOVE.B (A7)+,D0
+		a7Source.Cpu.State.A[7] = 0x4000;
+		a7Source.Bus.Memory[0x4000] = 0x5A;
+		a7Source.Cpu.ExecuteInstruction();
+		Assert.Equal(0x4002u, a7Source.Cpu.State.A[7]);
+		Assert.Equal(0x0000_005Au, a7Source.Cpu.State.D[0]);
+
+		var sameRegister = CreateParityCpu(Words(0x20D8), enableOpcodePlan: true, dispatch); // MOVE.L (A0)+,(A0)+
+		sameRegister.Cpu.State.A[0] = 0x2000;
+		sameRegister.Bus.WriteLong(0x2000, 0x1122_3344);
+		sameRegister.Cpu.ExecuteInstruction();
+		Assert.Equal(0x2008u, sameRegister.Cpu.State.A[0]);
+		Assert.Equal(0x1122_3344u, ReadLong(sameRegister.Bus.Memory, 0x2004));
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMovePostincrementFastShapesPreserveAddressErrorOrdering(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+
+		var oddSource = CreateParityCpu(Words(0x3018), enableOpcodePlan: true, dispatch); // MOVE.W (A0)+,D0
+		oddSource.Bus.WriteLong(0x000C, 0x0000_4000);
+		oddSource.Cpu.State.A[0] = 0x2001;
+		oddSource.Cpu.State.D[0] = 0xAAAA_5555;
+		oddSource.Cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		oddSource.Cpu.ExecuteInstruction();
+
+		Assert.Equal(3, oddSource.Cpu.State.LastExceptionVector);
+		Assert.Equal(0x0000_4000u, oddSource.Cpu.State.ProgramCounter);
+		Assert.Equal(0x2003u, oddSource.Cpu.State.A[0]);
+		Assert.Equal(0xAAAA_5555u, oddSource.Cpu.State.D[0]);
+		Assert.Equal(0x1002u, oddSource.Cpu.State.LastExceptionStackedProgramCounter);
+		Assert.Equal(
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry,
+			oddSource.Cpu.State.LastExceptionStatusRegister);
+
+		var oddWordDestination = CreateParityCpu(Words(0x32C0), enableOpcodePlan: true, dispatch); // MOVE.W D0,(A1)+
+		oddWordDestination.Bus.WriteLong(0x000C, 0x0000_4000);
+		oddWordDestination.Cpu.State.A[1] = 0x3001;
+		oddWordDestination.Cpu.State.D[0] = 0x0000_8001;
+		oddWordDestination.Cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		oddWordDestination.Cpu.ExecuteInstruction();
+
+		Assert.Equal(3, oddWordDestination.Cpu.State.LastExceptionVector);
+		Assert.Equal(0x3001u, oddWordDestination.Cpu.State.A[1]);
+		Assert.Equal(0x1004u, oddWordDestination.Cpu.State.LastExceptionStackedProgramCounter);
+		Assert.Equal(
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Negative,
+			oddWordDestination.Cpu.State.LastExceptionStatusRegister);
+
+		var oddLongDestination = CreateParityCpu(Words(0x22D8), enableOpcodePlan: true, dispatch); // MOVE.L (A0)+,(A1)+
+		oddLongDestination.Bus.WriteLong(0x000C, 0x0000_4000);
+		oddLongDestination.Bus.WriteLong(0x2000, 0x0000_8000);
+		oddLongDestination.Cpu.State.A[0] = 0x2000;
+		oddLongDestination.Cpu.State.A[1] = 0x3001;
+		oddLongDestination.Cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		oddLongDestination.Cpu.ExecuteInstruction();
+
+		Assert.Equal(3, oddLongDestination.Cpu.State.LastExceptionVector);
+		Assert.Equal(0x2004u, oddLongDestination.Cpu.State.A[0]);
+		Assert.Equal(0x3001u, oddLongDestination.Cpu.State.A[1]);
+		Assert.Equal(0x1004u, oddLongDestination.Cpu.State.LastExceptionStackedProgramCounter);
+		Assert.Equal(
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Negative,
+			oddLongDestination.Cpu.State.LastExceptionStatusRegister);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMoveDisplacementToDataFastShapeMatchesScalar(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var programs = new[]
+		{
+			Words(0x1228, 0x0003), // MOVE.B 3(A0),D1
+			Words(0x3228, 0x0002), // MOVE.W 2(A0),D1
+			Words(0x2228, 0x0000), // MOVE.L 0(A0),D1
+			Words(0x322E, 0x0002)  // MOVE.W 2(A6),D1
+		};
+
+		foreach (var program in programs)
+		{
+			var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+			var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+			SetupMoveDisplacementToDataParityState(scalar.Cpu.State, scalar.Bus);
+			SetupMoveDisplacementToDataParityState(planned.Cpu.State, planned.Bus);
+
+			ExecuteBoth(scalar.Cpu, planned.Cpu, 1);
+
+			AssertParity(scalar, planned);
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMoveDisplacementToDataFastShapePreservesSourceAddressErrorOrdering(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var cpu = CreateParityCpu(Words(0x3028, 0x0001), enableOpcodePlan: true, dispatch); // MOVE.W 1(A0),D0
+		cpu.Bus.WriteLong(0x000C, 0x0000_4000);
+		cpu.Cpu.State.A[0] = 0x2000;
+		cpu.Cpu.State.D[0] = 0xAAAA_5555;
+		cpu.Cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.Cpu.ExecuteInstruction();
+
+		Assert.Equal(3, cpu.Cpu.State.LastExceptionVector);
+		Assert.Equal(0x0000_4000u, cpu.Cpu.State.ProgramCounter);
+		Assert.Equal(0x2000u, cpu.Cpu.State.A[0]);
+		Assert.Equal(0xAAAA_5555u, cpu.Cpu.State.D[0]);
+		Assert.Equal(0x1002u, cpu.Cpu.State.LastExceptionStackedProgramCounter);
+		Assert.Equal(
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry,
+			cpu.Cpu.State.LastExceptionStatusRegister);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedRegisterArithmeticEaToDataFastShapesMatchScalar(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var lines = new[] { 0x8, 0x9, 0xB, 0xC, 0xD };
+		var sourceModes = new[] { 2, 3, 5 };
+		for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+		{
+			for (var opmode = 0; opmode <= 2; opmode++)
+			{
+				foreach (var mode in sourceModes)
+				{
+					var opcode = RegisterArithmeticOpcode(lines[lineIndex], register: 1, opmode, mode, eaRegister: 0);
+					var program = mode == 5 ? Words(opcode, 0x0002) : Words(opcode);
+					var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+					var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+					SetupRegisterArithmeticEaParityState(scalar.Cpu.State, scalar.Bus);
+					SetupRegisterArithmeticEaParityState(planned.Cpu.State, planned.Bus);
+
+					ExecuteBoth(scalar.Cpu, planned.Cpu, 1);
+
+					AssertParity(scalar, planned);
+				}
+			}
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedRegisterArithmeticEaToDataFastShapesPreserveSourceAddressErrorOrdering(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var initialStatus = (ushort)(M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry);
+
+		var oddIndirectWord = CreateParityCpu(
+			Words(RegisterArithmeticOpcode(0xD, register: 0, opmode: 1, mode: 2, eaRegister: 0)),
+			enableOpcodePlan: true,
+			dispatch);
+		SetupFaultingArithmeticSource(oddIndirectWord, initialStatus, 0x2001);
+		oddIndirectWord.Cpu.ExecuteInstruction();
+		AssertFaultingArithmeticSource(oddIndirectWord, initialStatus, expectedA0: 0x2001, expectedStackedPc: 0x1002);
+
+		var oddIndirectLong = CreateParityCpu(
+			Words(RegisterArithmeticOpcode(0xD, register: 0, opmode: 2, mode: 2, eaRegister: 0)),
+			enableOpcodePlan: true,
+			dispatch);
+		SetupFaultingArithmeticSource(oddIndirectLong, initialStatus, 0x2001);
+		oddIndirectLong.Cpu.ExecuteInstruction();
+		AssertFaultingArithmeticSource(oddIndirectLong, initialStatus, expectedA0: 0x2001, expectedStackedPc: 0x1002);
+
+		var oddPostincrementWord = CreateParityCpu(
+			Words(RegisterArithmeticOpcode(0xD, register: 0, opmode: 1, mode: 3, eaRegister: 0)),
+			enableOpcodePlan: true,
+			dispatch);
+		SetupFaultingArithmeticSource(oddPostincrementWord, initialStatus, 0x2001);
+		oddPostincrementWord.Cpu.ExecuteInstruction();
+		AssertFaultingArithmeticSource(oddPostincrementWord, initialStatus, expectedA0: 0x2003, expectedStackedPc: 0x1002);
+
+		var oddPostincrementLong = CreateParityCpu(
+			Words(RegisterArithmeticOpcode(0xD, register: 0, opmode: 2, mode: 3, eaRegister: 0)),
+			enableOpcodePlan: true,
+			dispatch);
+		SetupFaultingArithmeticSource(oddPostincrementLong, initialStatus, 0x2001);
+		oddPostincrementLong.Cpu.ExecuteInstruction();
+		AssertFaultingArithmeticSource(oddPostincrementLong, initialStatus, expectedA0: 0x2001, expectedStackedPc: 0x1002);
+
+		var oddDisplacementWord = CreateParityCpu(
+			Words(RegisterArithmeticOpcode(0xD, register: 0, opmode: 1, mode: 5, eaRegister: 0), 0x0001),
+			enableOpcodePlan: true,
+			dispatch);
+		SetupFaultingArithmeticSource(oddDisplacementWord, initialStatus, 0x2000);
+		oddDisplacementWord.Cpu.ExecuteInstruction();
+		AssertFaultingArithmeticSource(oddDisplacementWord, initialStatus, expectedA0: 0x2000, expectedStackedPc: 0x1002);
+	}
+
+	[Fact]
+	public void LeaDisplacementToAddressUsesFastAddressOnlyPath()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(
+			0x43E8, 0x0008, // LEA 8(A0),A1
+			0x4FE8, 0xFFFC)); // LEA -4(A0),A7
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x8000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+		bus.Accesses.Clear();
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2008u, cpu.State.A[1]);
+		Assert.Equal(0x1FFCu, cpu.State.A[7]);
+		Assert.Equal(
+			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry,
+			cpu.State.StatusRegister);
+		Assert.DoesNotContain(bus.Accesses, access => access.Kind == M68kBusAccessKind.CpuDataRead);
 	}
 
 	[Fact]
@@ -867,7 +1148,7 @@ public sealed class M68kInterpreterTests
 
 		Assert.Equal(0x2001u, cpu.State.A[0]);
 		Assert.Equal(0x80, bus.Memory[0x2000]);
-		Assert.Equal(8, cycles);
+		Assert.Equal(12, cycles);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
@@ -887,7 +1168,7 @@ public sealed class M68kInterpreterTests
 		var cycles = cpu.ExecuteInstruction();
 
 		Assert.Equal(0x1234_56FEu, cpu.State.D[0]);
-		Assert.Equal(8, cycles);
+		Assert.Equal(4, cycles);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -908,7 +1189,7 @@ public sealed class M68kInterpreterTests
 		var cycles = cpu.ExecuteInstruction();
 
 		Assert.Equal(0u, cpu.State.D[0]);
-		Assert.Equal(8, cycles);
+		Assert.Equal(4, cycles);
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
@@ -1976,6 +2257,45 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(20L, cycle);
 	}
 
+	[Theory]
+	[InlineData(0x00BFE001u)]
+	[InlineData(0x00BFE201u)]
+	[InlineData(0x00BFEE01u)]
+	[InlineData(0x00BFD000u)]
+	[InlineData(0x00BFD300u)]
+	[InlineData(0x00BFDF00u)]
+	public void AmigaBusDeferredExactCpuDataHelpersDeferSideEffectFreeCiaByteReads(uint address)
+	{
+		var bus = CreateExactCpuDataAmigaBus();
+		var deferredTiming = (IM68kDeferredCpuInstructionTiming)bus;
+		var cycle = 21L;
+
+		deferredTiming.BeginDeferredCpuInstructionTiming(cycle);
+		Assert.True(bus.TryReadExactCpuDataByte(address, ref cycle, out _));
+		Assert.Equal(21L, cycle);
+
+		deferredTiming.FlushDeferredCpuInstructionTiming(ref cycle);
+
+		Assert.Equal(ExpectedCiaAccessCycle(21), cycle);
+	}
+
+	[Theory]
+	[InlineData(0x00BFE401u)]
+	[InlineData(0x00BFE801u)]
+	[InlineData(0x00BFEC01u)]
+	[InlineData(0x00BFED01u)]
+	public void AmigaBusDeferredExactCpuDataHelpersFallBackForSideEffectfulCiaByteReads(uint address)
+	{
+		var bus = CreateExactCpuDataAmigaBus();
+		var deferredTiming = (IM68kDeferredCpuInstructionTiming)bus;
+		var cycle = 21L;
+
+		deferredTiming.BeginDeferredCpuInstructionTiming(cycle);
+
+		Assert.False(bus.TryReadExactCpuDataByte(address, ref cycle, out _));
+		Assert.Equal(21L, cycle);
+	}
+
 	[Fact]
 	public void AmigaBusExactCpuDataHelpersFallBackForRom()
 	{
@@ -2185,6 +2505,75 @@ public sealed class M68kInterpreterTests
 		}
 	}
 
+	private static ushort RegisterArithmeticOpcode(int line, int register, int opmode, int mode, int eaRegister)
+		=> (ushort)((line << 12) | (register << 9) | (opmode << 6) | (mode << 3) | eaRegister);
+
+	private static void SetupRegisterArithmeticEaParityState(M68kCpuState state, TestBus bus)
+	{
+		state.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+		state.A[0] = 0x2000;
+		state.D[1] = 0x1234_5678;
+		bus.WriteLong(0x2000, 0x8000_1234);
+		bus.WriteLong(0x2004, 0x0102_0304);
+	}
+
+	private static void SetupFaultingArithmeticSource(ParityRun run, ushort initialStatus, uint a0)
+	{
+		run.Bus.WriteLong(0x000C, 0x0000_4000);
+		run.Cpu.State.A[0] = a0;
+		run.Cpu.State.D[0] = 0xAAAA_5555;
+		run.Cpu.State.StatusRegister = initialStatus;
+	}
+
+	private static void AssertFaultingArithmeticSource(
+		ParityRun run,
+		ushort initialStatus,
+		uint expectedA0,
+		uint expectedStackedPc)
+	{
+		Assert.Equal(0x0000_4000u, run.Cpu.State.ProgramCounter);
+		Assert.Equal(0x7FF2u, run.Cpu.State.A[7]);
+		Assert.Equal(0x0000_2001u, ReadLong(run.Bus.Memory, 0x7FF4));
+		Assert.Equal(initialStatus, ReadWord(run.Bus.Memory, 0x7FFA));
+		Assert.Equal(expectedStackedPc, ReadLong(run.Bus.Memory, 0x7FFC));
+		Assert.Equal(expectedA0, run.Cpu.State.A[0]);
+		Assert.Equal(0xAAAA_5555u, run.Cpu.State.D[0]);
+	}
+
+	private static void SetupMoveFastShapeParityState(M68kCpuState state, TestBus bus)
+	{
+		state.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+		state.A[0] = 0x2000;
+		state.A[1] = 0x3000;
+		state.D[0] = 0x89AB_CDEF;
+		bus.WriteLong(0x2000, 0x8000_1234);
+		bus.WriteLong(0x2004, 0x0000_0000);
+		bus.WriteLong(0x3000, 0x5555_5555);
+		bus.WriteLong(0x3004, 0x5555_5555);
+	}
+
+	private static void SetupMoveDisplacementToDataParityState(M68kCpuState state, TestBus bus)
+	{
+		state.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+		state.A[0] = 0x2000;
+		state.A[6] = 0x2000;
+		state.D[1] = 0x89AB_CDEF;
+		bus.WriteLong(0x2000, 0x8000_1234);
+		bus.WriteLong(0x2004, 0x0000_0000);
+	}
+
 	private static void SetupBranchParityState(M68kCpuState state, TestBus bus)
 	{
 		state.D[0] = 4;
@@ -2231,6 +2620,15 @@ public sealed class M68kInterpreterTests
 			((uint)memory[address + 1] << 16) |
 			((uint)memory[address + 2] << 8) |
 			memory[address + 3];
+
+	private static long ExpectedCiaAccessCycle(long requestedCycle)
+	{
+		var cycle = Math.Max(0, requestedCycle + 1);
+		var remainder = cycle % AmigaConstants.A500PalCpuCyclesPerCiaTick;
+		return remainder == 0
+			? cycle
+			: cycle + AmigaConstants.A500PalCpuCyclesPerCiaTick - remainder;
+	}
 
 	private static AmigaBus CreateRomProgramBus(ReadOnlySpan<byte> program)
 	{

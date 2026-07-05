@@ -195,6 +195,7 @@ namespace CopperMod.Amiga
             var hadValidEntry = _slotContendedWakeAgenda.Valid || _interruptPollWakeAgenda.Valid;
             _slotContendedWakeAgenda = default;
             _interruptPollWakeAgenda = default;
+            InvalidateCpuVisibleNoEventCache();
             if (hadValidEntry)
             {
                 _wakeAgendaInvalidations++;

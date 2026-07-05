@@ -208,6 +208,9 @@ namespace CopperMod.Amiga
             CompleteCleanMark(targetCycle);
         }
 
+        internal void MarkSlotContendedCleanThroughCpuBatchCatchup(long targetCycle)
+            => MarkClean(Math.Max(0, targetCycle), SlotContendedMemoryAccessMask);
+
         private void CompleteCleanMark(long targetCycle)
         {
             if (_earliestDirtyCycle <= targetCycle)

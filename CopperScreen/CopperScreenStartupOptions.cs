@@ -12,6 +12,11 @@ internal sealed class CopperScreenStartupOptions
 		IReadOnlyList<CopperScreenHardfileSettings> hardDrives,
 		string? kickstartRomPath,
 		M68kBackendKind? cpuBackendOverride,
+		bool copperQuiescentFastPath,
+		bool copperQuiescentFastPathVerify,
+		bool copperQuiescentDiagnostics,
+		bool deferredCpuBusBatch,
+		bool deferredCpuBusBatchVerify,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenInputOptions input,
 		string baseDirectory,
@@ -25,6 +30,11 @@ internal sealed class CopperScreenStartupOptions
 		HardDrives = hardDrives;
 		KickstartRomPath = kickstartRomPath;
 		CpuBackendOverride = cpuBackendOverride;
+		CopperQuiescentFastPath = copperQuiescentFastPath;
+		CopperQuiescentFastPathVerify = copperQuiescentFastPathVerify;
+		CopperQuiescentDiagnostics = copperQuiescentDiagnostics;
+		DeferredCpuBusBatch = deferredCpuBusBatch;
+		DeferredCpuBusBatchVerify = deferredCpuBusBatchVerify;
 		FloppyDriveAudio = floppyDriveAudio;
 		Input = input;
 		BaseDirectory = baseDirectory;
@@ -46,6 +56,16 @@ internal sealed class CopperScreenStartupOptions
 
 	public M68kBackendKind? CpuBackendOverride { get; }
 
+	public bool CopperQuiescentFastPath { get; }
+
+	public bool CopperQuiescentFastPathVerify { get; }
+
+	public bool CopperQuiescentDiagnostics { get; }
+
+	public bool DeferredCpuBusBatch { get; }
+
+	public bool DeferredCpuBusBatchVerify { get; }
+
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
 
 	public CopperScreenInputOptions Input { get; }
@@ -66,7 +86,12 @@ internal sealed class CopperScreenStartupOptions
 		CopperScreenInputOptions input,
 		string baseDirectory,
 		bool hasExplicitProfile = true,
-		string? error = null)
+		string? error = null,
+		bool copperQuiescentFastPath = false,
+		bool copperQuiescentFastPathVerify = false,
+		bool copperQuiescentDiagnostics = false,
+		bool deferredCpuBusBatch = false,
+		bool deferredCpuBusBatchVerify = false)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
 		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
@@ -79,6 +104,11 @@ internal sealed class CopperScreenStartupOptions
 			normalizedHardDrives,
 			ResolveRomPath(kickstartRomPath ?? profile.KickstartRomPath, baseDirectory),
 			cpuBackendOverride,
+			copperQuiescentFastPath,
+			copperQuiescentFastPathVerify,
+			copperQuiescentDiagnostics,
+			deferredCpuBusBatch,
+			deferredCpuBusBatchVerify,
 			floppyDriveAudio,
 			input,
 			baseDirectory,
@@ -99,6 +129,11 @@ internal sealed class CopperScreenStartupOptions
 			hardDrives,
 			ResolveRomPath(profile.KickstartRomPath, baseDirectory),
 			null,
+			false,
+			false,
+			false,
+			false,
+			false,
 			profile.FloppyDriveAudio,
 			profile.Input,
 			baseDirectory,
@@ -115,6 +150,11 @@ internal sealed class CopperScreenStartupOptions
 		string? diskPath = null;
 		string? kickstartRomPath = null;
 		M68kBackendKind? cpuBackendOverride = null;
+		var copperQuiescentFastPath = false;
+		var copperQuiescentFastPathVerify = false;
+		var copperQuiescentDiagnostics = false;
+		var deferredCpuBusBatch = false;
+		var deferredCpuBusBatchVerify = false;
 		bool? floppySoundsEnabledOverride = null;
 		FloppyDriveAudioMode? floppySoundModeOverride = null;
 		string? floppySoundPackOverride = null;
@@ -168,6 +208,38 @@ internal sealed class CopperScreenStartupOptions
 			if (IsOption(arg, "--jit"))
 			{
 				cpuBackendOverride = M68kBackendKind.JitM68000;
+				continue;
+			}
+
+			if (IsOption(arg, "--copper-quiescence-fastpath"))
+			{
+				copperQuiescentFastPath = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--copper-quiescence-fastpath-verify"))
+			{
+				copperQuiescentFastPath = true;
+				copperQuiescentFastPathVerify = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--copper-quiescence-diagnostics"))
+			{
+				copperQuiescentDiagnostics = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-bus-batch"))
+			{
+				deferredCpuBusBatch = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-bus-batch-verify"))
+			{
+				deferredCpuBusBatch = true;
+				deferredCpuBusBatchVerify = true;
 				continue;
 			}
 
@@ -359,6 +431,11 @@ internal sealed class CopperScreenStartupOptions
 			hardDrives,
 			resolvedKickstartRomPath,
 			cpuBackendOverride,
+			copperQuiescentFastPath,
+			copperQuiescentFastPathVerify,
+			copperQuiescentDiagnostics,
+			deferredCpuBusBatch,
+			deferredCpuBusBatchVerify,
 			floppyDriveAudio,
 			profile.Input,
 			baseDirectory,

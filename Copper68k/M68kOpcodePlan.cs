@@ -552,8 +552,7 @@ namespace Copper68k
             var eaReg = opcode & 7;
             _ = reg;
             _ = eaReg;
-            if (mode != 0 ||
-                (line == 0xC && (opmode == 3 || opmode == 7)) ||
+            if ((line == 0xC && (opmode == 3 || opmode == 7)) ||
                 (line == 0x8 && (opmode == 3 || opmode == 7)) ||
                 ((line == 0x9 || line == 0xD) && opmode is 4 or 5 or 6))
             {
@@ -589,6 +588,17 @@ namespace Copper68k
                 return false;
             }
 
+            if (mode != 0)
+            {
+                if (mode is not (2 or 3 or 5) || opmode > 2)
+                {
+                    return false;
+                }
+
+                kind = M68kOpcodePlanKind.RegisterArithmetic;
+                return true;
+            }
+
             if (size == M68kOperandSize.Long &&
                 TryCreateDataRegisterLongArithmeticKind(line, opmode, out kind))
             {
@@ -618,6 +628,7 @@ namespace Copper68k
                 kind,
                 size,
                 register: (byte)((opcode >> 9) & 7),
+                sourceMode: (byte)((opcode >> 3) & 7),
                 sourceRegister: (byte)(opcode & 7),
                 variant: (byte)(((opcode >> 12) << 4) | opmode));
             return true;

@@ -22,3 +22,5 @@ Useful environment variables:
 - `COPPER68K_M68000_SINGLESTEP_FILTER`: file-name substring such as `SWAP` or `ADD.w`.
 - `COPPER68K_M68000_SINGLESTEP_LIMIT`: maximum number of cases to run.
 - `COPPER68K_M68000_SINGLESTEP_INCLUDE_UNVERIFIED`: include corpus files the upstream README marks as caveated.
+- `COPPER68K_M68000_SINGLESTEP_VALIDATE_CYCLES`: assert fixture total cycle counts in addition to final CPU state and RAM.
+- `COPPER68K_M68000_SINGLESTEP_BACKEND`: `interpreter` by default, or `jit` to run the MC68000 JIT backend.

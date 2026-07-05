@@ -299,6 +299,25 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithCpu(AmigaM68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
 		}
 
+		if (startupOptions.CopperQuiescentFastPath || startupOptions.CopperQuiescentFastPathVerify)
+		{
+			machineOptions.WithCopperQuiescentFastPath(
+				startupOptions.CopperQuiescentFastPath,
+				startupOptions.CopperQuiescentFastPathVerify);
+		}
+
+		if (startupOptions.CopperQuiescentDiagnostics)
+		{
+			machineOptions.WithCopperQuiescentDiagnostics(true);
+		}
+
+		if (startupOptions.DeferredCpuBusBatch || startupOptions.DeferredCpuBusBatchVerify)
+		{
+			machineOptions.WithDeferredCpuBusBatch(
+				startupOptions.DeferredCpuBusBatch,
+				startupOptions.DeferredCpuBusBatchVerify);
+		}
+
 		if (startupOptions.HardDrives.Count != 0)
 		{
 			machineOptions.WithHardfiles(startupOptions.HardDrives.Select(drive => new AmigaHardfileConfiguration(

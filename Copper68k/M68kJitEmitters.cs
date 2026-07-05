@@ -588,7 +588,7 @@ namespace Copper68k
             EmitLoadDataRegister(il, context, instruction.Destination.Register, instruction.Size);
             il.Emit(OpCodes.Stloc, value);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Tst, instruction.Destination, instruction.Size));
         }
 
         private static void EmitCompareImmediateDataRegister(
@@ -604,7 +604,7 @@ namespace Copper68k
             EmitLoadUIntConstant(il, instruction.Source.Immediate);
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 16 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetCmpiCyclesForTiming(instruction.Destination, instruction.Size));
         }
 
         private static void EmitCompareDataRegisters(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -617,7 +617,7 @@ namespace Copper68k
             EmitLoadDataRegister(il, context, instruction.Source.Register, instruction.Size);
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetCompareCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitNotDataRegister(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -631,7 +631,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, value);
             EmitStoreDataRegister(il, context, instruction.Destination.Register, value, instruction.Size);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Not, instruction.Destination, instruction.Size));
         }
 
         private static void EmitNegDataRegister(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -645,7 +645,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: true);
             EmitStoreDataRegister(il, context, instruction.Destination.Register, result, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Neg, instruction.Destination, instruction.Size));
         }
 
         private static void EmitMove(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -713,7 +713,7 @@ namespace Copper68k
             EmitLoadEaValue(il, context, instruction.Destination, instruction.Size, applySideEffects: true);
             il.Emit(OpCodes.Stloc, value);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Tst, instruction.Destination, instruction.Size));
         }
 
         private static void EmitCompare(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -726,7 +726,7 @@ namespace Copper68k
             EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetCompareCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitCompareImmediate(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -739,7 +739,7 @@ namespace Copper68k
             EmitLoadUIntConstant(il, instruction.Source.Immediate);
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: false);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 16 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetCmpiCyclesForTiming(instruction.Destination, instruction.Size));
         }
 
         private static void EmitAddressArithmetic(
@@ -806,7 +806,7 @@ namespace Copper68k
                     emitSource: () => il.Emit(OpCodes.Ldloc, regValue),
                     add,
                     setExtend: true,
-                    instruction.Size == M68kOperandSize.Long ? 12 : 8);
+                    M68kJitCore.GetAluDataToEaCyclesForTiming(instruction.Destination, instruction.Size));
                 return;
             }
 
@@ -816,7 +816,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, source);
             EmitArithmeticFlagsAndResult(il, context, regValue, source, result, instruction.Size, add, setExtend: true);
             EmitStoreDataRegister(il, context, instruction.Register, result, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetAluEaToDataCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitImmediateArithmetic(
@@ -835,7 +835,7 @@ namespace Copper68k
                     instruction.Size,
                     emitSource: () => EmitLoadUIntConstant(il, instruction.Source.Immediate),
                     logicalOperation - 1,
-                    instruction.Size == M68kOperandSize.Long ? 16 : 8);
+                    M68kJitCore.GetImmediateAluCyclesForTiming(instruction.Destination, instruction.Size));
                 return;
             }
 
@@ -847,7 +847,7 @@ namespace Copper68k
                 emitSource: () => EmitLoadUIntConstant(il, instruction.Source.Immediate),
                 add,
                 setExtend: true,
-                instruction.Size == M68kOperandSize.Long ? 16 : 8);
+                M68kJitCore.GetImmediateAluCyclesForTiming(instruction.Destination, instruction.Size));
         }
 
         private static void EmitBinaryLogical(
@@ -868,7 +868,7 @@ namespace Copper68k
                     instruction.Size,
                     emitSource: () => il.Emit(OpCodes.Ldloc, regValue),
                     operation,
-                    instruction.Size == M68kOperandSize.Long ? 12 : 8);
+                    M68kJitCore.GetAluDataToEaCyclesForTiming(instruction.Destination, instruction.Size));
                 return;
             }
 
@@ -884,7 +884,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, result);
             EmitStoreDataRegister(il, context, instruction.Register, result, instruction.Size);
             EmitSetLogicFlags(il, context, result, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetAluEaToDataCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitNot(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -900,7 +900,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, result);
             EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
             EmitSetLogicFlags(il, context, result, instruction.Size);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Not, instruction.Destination, instruction.Size));
         }
 
         private static void EmitNeg(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -914,7 +914,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, destination);
             EmitArithmeticFlagsAndResult(il, context, destination, source, result, instruction.Size, add: false, setExtend: true);
             EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Neg, instruction.Destination, instruction.Size));
         }
 
         private static void EmitNegx(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -940,7 +940,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, status);
             EmitStoreStatus(il, context, status);
             EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 12 : 8);
+            EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Negx, instruction.Destination, instruction.Size));
         }
 
         private static void EmitExt(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, M68kOperandSize size)

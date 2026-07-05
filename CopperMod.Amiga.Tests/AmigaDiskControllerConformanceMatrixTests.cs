@@ -802,7 +802,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		cycle = MotorReadyCycle();
 		var ready = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.NotEqual(0, ready & 0x20);
+		Assert.Equal(0, ready & 0x20);
 
 		bus.AdvanceDmaTo(MotorReadyCycle());
 		cycle = MotorReadyCycle();
@@ -1262,10 +1262,233 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		var candidate = bus.Disk.GetNextWakeCandidateCycle(
 			seedCycle,
-			seedCycle + DiskByteCycleCount(trackBytes.Length, 3));
+			seedCycle + DiskByteCycleCount(trackBytes.Length, 3),
+			out var reason);
 
 		Assert.NotNull(candidate);
 		Assert.InRange(candidate.Value, seedCycle + 1, seedCycle + byteCycles);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.PassiveByteReady, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateExcludesPassiveByteReadiness()
+	{
+		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };
+		var bus = CreateBusWithTrackBytes(trackBytes);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		var seedCycle = readyCycle + 1;
+		bus.AdvanceDmaTo(seedCycle);
+
+		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			seedCycle,
+			seedCycle + DiskByteCycleCount(trackBytes.Length, 3),
+			cpuInterruptMask: 0,
+			out var reason);
+
+		Assert.Null(candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateReportsEnabledDskblkInterruptRelease()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		EnableDiskBlockInterrupt(bus);
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		var expectedReleaseCycle = completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		Assert.NotEqual(0, bus.Paula.Intena & AmigaConstants.IntreqDiskBlock);
+
+		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			Math.Max(0, completionCycle - 10),
+			expectedReleaseCycle + 10,
+			cpuInterruptMask: 0,
+			out var reason);
+
+		Assert.Equal(expectedReleaseCycle, candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.ActiveDmaCompletion, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateIgnoresDskblkWhenInterruptDisabled()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+
+		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			Math.Max(0, completionCycle - 10),
+			completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			cpuInterruptMask: 0,
+			out var reason);
+
+		Assert.Null(candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateIgnoresDskblkWhenCpuMaskBlocksLevel()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		EnableDiskBlockInterrupt(bus);
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+
+		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			Math.Max(0, completionCycle - 10),
+			completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			cpuInterruptMask: 1,
+			out var reason);
+
+		Assert.Null(candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateIgnoresWordSyncWithoutVisibleInterrupt()
+	{
+		var bus = CreateBusWithTrack(0x9999, SyncWord, 0xABCD, 0x2468);
+		bus.WriteWord(0x00DFF07E, SyncWord);
+		bus.WriteWord(0x00DFF09E, 0x8400);
+		bus.Paula.AdvanceTo(0);
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+
+		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			0,
+			completionCycle,
+			cpuInterruptMask: 0,
+			out var reason);
+
+		Assert.Null(candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateReportsIndexPulseOnlyWhenCiaFlagInterruptEnabled()
+	{
+		var disabled = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(disabled, drive: 0);
+		disabled.Disk.Drive0.SetSelected(false);
+		var indexCycle = ExpectedCiaAccessCycle(0) + DiskIndexPulseCycles();
+
+		var disabledCandidate = disabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			0,
+			indexCycle,
+			cpuInterruptMask: 0,
+			out var disabledReason);
+
+		var enabled = CreateBusWithTrack(0x1234);
+		enabled.AbleCiaInterrupts(AmigaCiaId.B, 0x80 | AmigaCia.FlagInterruptMask, 0);
+		SelectDriveAndStartMotor(enabled, drive: 0);
+		enabled.Disk.Drive0.SetSelected(false);
+		var enabledCandidate = enabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			0,
+			indexCycle,
+			cpuInterruptMask: 0,
+			out var enabledReason);
+
+		Assert.Null(disabledCandidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, disabledReason);
+		Assert.Equal(indexCycle, enabledCandidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.IndexPulse, enabledReason);
+	}
+
+	[Fact]
+	public void DiskWakeCandidateReportsNoReasonWhenNoCandidateExists()
+	{
+		var bus = CreateDiskComponentBus();
+
+		var candidate = bus.Disk.GetNextWakeCandidateCycle(0, 100, out var reason);
+
+		Assert.Null(candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+	}
+
+	[Fact]
+	public void DiskWakeCandidateReportsPendingDmaBeforePassiveInput()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		bus.WriteWord(0x00DFF096, 0x8210, 0);
+		bus.Paula.AdvanceTo(0);
+		SetDiskPointer(bus, DmaBase);
+		WriteDsklenStartSequence(bus, words: 1);
+		var readyCycle = MotorReadyCycle();
+
+		var candidate = bus.Disk.GetNextWakeCandidateCycle(0, readyCycle + 10, out var reason);
+
+		Assert.Equal(readyCycle, candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.PendingDma, reason);
+	}
+
+	[Fact]
+	public void CpuVisibleDiskWakeCandidateReportsPendingDmaOnlyWhenDskblkCanInterrupt()
+	{
+		var enabled = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(enabled, drive: 0);
+		EnableDiskBlockInterrupt(enabled);
+		enabled.WriteWord(0x00DFF096, 0x8210, 0);
+		enabled.Paula.AdvanceTo(0);
+		SetDiskPointer(enabled, DmaBase);
+		WriteDsklenStartSequence(enabled, words: 1);
+		var readyCycle = MotorReadyCycle();
+
+		var enabledCandidate = enabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			0,
+			readyCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			cpuInterruptMask: 0,
+			out var enabledReason);
+
+		var disabled = CreateBusWithTrack(0x1234);
+		SelectDriveAndStartMotor(disabled, drive: 0);
+		disabled.WriteWord(0x00DFF096, 0x8210, 0);
+		disabled.Paula.AdvanceTo(0);
+		SetDiskPointer(disabled, DmaBase);
+		WriteDsklenStartSequence(disabled, words: 1);
+		var disabledCandidate = disabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
+			0,
+			readyCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			cpuInterruptMask: 0,
+			out var disabledReason);
+
+		Assert.Equal(readyCycle, enabledCandidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.PendingDma, enabledReason);
+		Assert.Null(disabledCandidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, disabledReason);
+	}
+
+	[Fact]
+	public void DiskEventWakeCandidateReportsActiveDmaCompletionWhenItWins()
+	{
+		var bus = CreateBusWithTrack(0x1234, 0x5678);
+		StartDiskDma(bus, DmaBase, words: 2);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+
+		var candidate = bus.Disk.GetNextEventWakeCandidateCycle(
+			Math.Max(0, completionCycle - 10),
+			completionCycle,
+			includeActiveDmaProgress: false,
+			out var reason);
+
+		Assert.Equal(completionCycle, candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.ActiveDmaCompletion, reason);
+	}
+
+	[Fact]
+	public void DiskWakeCandidateReportsIndexPulseWhenItWins()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		bus.AbleCiaInterrupts(AmigaCiaId.B, 0x80 | AmigaCia.FlagInterruptMask, 0);
+		SelectDriveAndStartMotor(bus, drive: 0);
+		bus.Disk.Drive0.SetSelected(false);
+		var indexCycle = ExpectedCiaAccessCycle(0) + DiskIndexPulseCycles();
+
+		var candidate = bus.Disk.GetNextWakeCandidateCycle(0, indexCycle, out var reason);
+
+		Assert.Equal(indexCycle, candidate);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.IndexPulse, reason);
 	}
 
 	[Fact]
@@ -1432,6 +1655,15 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		WriteDsklenStartSequence(bus, words, cycle);
 	}
 
+	private static void EnableDiskBlockInterrupt(AmigaBus bus, long cycle = 0)
+	{
+		bus.Paula.ScheduleWrite(
+			cycle,
+			0x09A,
+			(ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqDiskBlock));
+		bus.Paula.AdvanceTo(cycle);
+	}
+
 	private static long PrepareDiskDma(AmigaBus bus, long cycle = 0, int drive = 0)
 	{
 		SelectDriveAndStartMotor(bus, drive, cycle);
@@ -1482,6 +1714,11 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	private static long MotorReadyDelayCycles()
 	{
 		return Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
+	}
+
+	private static long DiskIndexPulseCycles()
+	{
+		return Math.Max(1, (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 5.0));
 	}
 
 	private static long ExpectedCiaAccessCycle(long requestedCycle)

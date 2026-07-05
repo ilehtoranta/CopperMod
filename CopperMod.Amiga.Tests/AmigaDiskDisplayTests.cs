@@ -3643,6 +3643,22 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void CiaAPortAReadSamplesDiskReadyAtCpuReadCycle()
+    {
+        var bus = new AmigaBus();
+        bus.Disk.Drive0.Insert(AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize]));
+        bus.WriteByte(0x00BFD100, 0xFF, 0);
+        bus.WriteByte(0x00BFD300, 0xFF, 0);
+        bus.WriteByte(0x00BFD100, 0x77, 0);
+
+        var readyCycle = GetMotorReadyCycle(bus, 0);
+        var cycle = readyCycle;
+        var ready = bus.ReadByte(0x00BFE001, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+        Assert.Equal(0, ready & 0x20);
+    }
+
+    [Fact]
     public void CiaAPortAReportsGamePortFireBitsAsActiveLow()
     {
         var bus = new AmigaBus();

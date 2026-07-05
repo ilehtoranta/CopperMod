@@ -48,8 +48,10 @@ namespace CopperMod.Amiga
         private const int CpuBusBankSize = 1 << CpuBusBankShift;
         private const int CpuBusBankCount = 1 << (24 - CpuBusBankShift);
         private const int MaxDeferredCpuDataAccesses = 64;
+        private const long DeferredCpuBusBatchDefaultCycleWindow = 4096;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
+        private const int HostTrapStubPageCount = 1 << (24 - CodeGenerationPageShift);
         private const uint MinimumChipRamDecodeSize = 0x0020_0000;
         private const string ExactCpuChipSlotFastPathSwitch = "CopperMod.Amiga.ExactCpuChipSlotFastPath";
         private const string ExactCpuChipSlotFastPathEnvironmentVariable = "COPPER_AMIGA_EXACT_CPU_CHIP_SLOT_FAST";
@@ -68,6 +70,8 @@ namespace CopperMod.Amiga
         private readonly AmigaLinearRamBackend _realFastRam;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
         private readonly Dictionary<ushort, Action<M68kCpuState>> _relocatableHostTrapStubs = new Dictionary<ushort, Action<M68kCpuState>>();
+        private readonly List<uint> _hostTrapStubAddresses = new List<uint>();
+        private readonly bool[] _hostTrapStubPages = new bool[HostTrapStubPageCount];
         private readonly AmigaMappedMemoryBackend _mappedMemory = new AmigaMappedMemoryBackend();
         private readonly List<AmigaCiaInterruptEvent> _pendingCiaInterrupts = new List<AmigaCiaInterruptEvent>(16);
         private readonly AmigaCiaInterruptEvent[] _drainedCiaInterruptBuffer = new AmigaCiaInterruptEvent[MaxPendingInterruptEvents];
@@ -92,6 +96,8 @@ namespace CopperMod.Amiga
         /// </summary>
         private readonly bool _exactCpuChipSlotFastPathEnabled;
         private readonly bool _usePaulaDmaFixedSlotFastPath;
+        private readonly bool _deferredCpuBusBatchEnabled;
+        private readonly bool _deferredCpuBusBatchVerifyEnabled;
         private readonly bool _liveAgnusDmaDefault;
         private readonly AmigaRealTimeClock? _realTimeClock;
         private readonly byte[] _pendingCustomBytes = new byte[0x200];
@@ -99,6 +105,11 @@ namespace CopperMod.Amiga
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly long _palFrameCycles;
         private readonly long _palLineCycles;
+        private int _customRegisterWriteContextDepth;
+        private AmigaBusRequester _customRegisterWriteRequester;
+        private ushort _customRegisterWriteOffset;
+        private long _customRegisterWriteCycle;
+        private bool _customRegisterWriteAffectsSchedule;
         private bool _romOverlayEnabled = true;
         private long _nextVerticalBlankCycle;
         private long _nextHorizontalSyncIndex;
@@ -109,6 +120,47 @@ namespace CopperMod.Amiga
         private ulong _deferredCpuDataLongShapeBits;
         private ulong _deferredCpuDataCiaShapeBits;
         private long _deferredCpuDataReplayCycle;
+        private bool _deferredCpuBusBatchActive;
+        private bool _endingDeferredCpuBusBatch;
+        private long _deferredCpuBusBatchAttempts;
+        private long _deferredCpuBusBatchUsed;
+        private long _deferredCpuBusBatchInstructions;
+        private long _deferredCpuBusBatchSkippedInstructionFlushes;
+        private long _deferredCpuBusBatchFlushes;
+        private long _deferredCpuBusBatchExitTargetCycle;
+        private long _deferredCpuBusBatchExitMaxInstructions;
+        private long _deferredCpuBusBatchExitChipVisibleAccess;
+        private long _deferredCpuBusBatchExitPcLeftFastWindow;
+        private long _deferredCpuBusBatchExitException;
+        private long _deferredCpuBusBatchExitUnsupported;
+        private long _deferredCpuBusBatchVerificationMismatches;
+        private string _deferredCpuBusBatchFirstMismatch = string.Empty;
+        private long _deferredCpuBusBatchWakeTargetCycle;
+        private long _deferredCpuBusBatchWakePendingInterrupt;
+        private long _deferredCpuBusBatchWakeVerticalBlank;
+        private long _deferredCpuBusBatchWakeHorizontalSyncTod;
+        private long _deferredCpuBusBatchWakeCiaTimer;
+        private long _deferredCpuBusBatchWakeDisk;
+        private long _deferredCpuBusBatchWakePaula;
+        private long _deferredCpuBusBatchWakeCopper;
+        private long _deferredCpuBusBatchWakeBlitter;
+        private long _deferredCpuBusBatchDiskWakePendingDma;
+        private long _deferredCpuBusBatchDiskWakeActiveDmaProgress;
+        private long _deferredCpuBusBatchDiskWakeActiveDmaCompletion;
+        private long _deferredCpuBusBatchDiskWakeSyncCandidate;
+        private long _deferredCpuBusBatchDiskWakeIndexPulse;
+        private long _deferredCpuBusBatchDiskWakePassiveByteReady;
+        private long _deferredCpuBusBatchDiskWakeUnknown;
+        private long _deferredCpuBusBatchChipsetCatchupCycle = -1;
+        private bool _deferredCpuBusBatchChipsetCatchupDisabledByVerification;
+        private long _deferredCpuBusBatchChipsetCatchupAttempts;
+        private long _deferredCpuBusBatchChipsetCatchupUsed;
+        private long _deferredCpuBusBatchChipsetCatchupSkippedDrains;
+        private long _deferredCpuBusBatchChipsetCatchupRejectedUnsupported;
+        private long _deferredCpuBusBatchChipsetCatchupRejectedDynamicDma;
+        private long _deferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier;
+        private long _deferredCpuBusBatchChipsetCatchupVerificationMismatches;
+        private string _deferredCpuBusBatchChipsetCatchupFirstMismatch = string.Empty;
 
         private enum CpuBusBankKind : byte
         {
@@ -148,7 +200,12 @@ namespace CopperMod.Amiga
             bool enableHardwareSpecialization = false,
             bool realTimeClockEnabled = false,
             Func<DateTimeOffset>? realTimeClockNowProvider = null,
-            IEnumerable<AmigaHardfileConfiguration>? hardfiles = null)
+            IEnumerable<AmigaHardfileConfiguration>? hardfiles = null,
+            bool enableCopperQuiescentFastPath = false,
+            bool verifyCopperQuiescentFastPath = false,
+            bool enableDeferredCpuBusBatch = false,
+            bool verifyDeferredCpuBusBatch = false,
+            bool enableCopperQuiescentDiagnostics = false)
         {
             if (chipRamSize <= 0)
             {
@@ -205,6 +262,15 @@ namespace CopperMod.Amiga
                 _useFastZeroWaitAccesses &&
                 !captureBusAccesses;
             _usePaulaDmaFixedSlotFastPath = ResolvePaulaDmaFixedSlotFastPath();
+            CopperQuiescentFastPathEnabled = enableCopperQuiescentFastPath;
+            CopperQuiescentFastPathVerifyEnabled = verifyCopperQuiescentFastPath;
+            CopperQuiescentDiagnosticsEnabled = enableCopperQuiescentDiagnostics ||
+                enableCopperQuiescentFastPath ||
+                verifyCopperQuiescentFastPath;
+            CopperQuiescentShadowPredictionEnabled = enableCopperQuiescentDiagnostics ||
+                verifyCopperQuiescentFastPath;
+            _deferredCpuBusBatchEnabled = enableDeferredCpuBusBatch;
+            _deferredCpuBusBatchVerifyEnabled = verifyDeferredCpuBusBatch;
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
@@ -357,6 +423,88 @@ namespace CopperMod.Amiga
 
         internal bool LiveAgnusDmaEnabled { get; private set; }
 
+        internal bool CopperQuiescentFastPathEnabled { get; }
+
+        internal bool CopperQuiescentFastPathVerifyEnabled { get; }
+
+        internal bool CopperQuiescentDiagnosticsEnabled { get; }
+
+        internal bool CopperQuiescentShadowPredictionEnabled { get; }
+
+        internal long DeferredCpuBusBatchAttempts => _deferredCpuBusBatchAttempts;
+
+        internal long DeferredCpuBusBatchUsed => _deferredCpuBusBatchUsed;
+
+        internal long DeferredCpuBusBatchInstructions => _deferredCpuBusBatchInstructions;
+
+        internal long DeferredCpuBusBatchSkippedInstructionFlushes => _deferredCpuBusBatchSkippedInstructionFlushes;
+
+        internal long DeferredCpuBusBatchFlushes => _deferredCpuBusBatchFlushes;
+
+        internal long DeferredCpuBusBatchExitTargetCycle => _deferredCpuBusBatchExitTargetCycle;
+
+        internal long DeferredCpuBusBatchExitMaxInstructions => _deferredCpuBusBatchExitMaxInstructions;
+
+        internal long DeferredCpuBusBatchExitChipVisibleAccess => _deferredCpuBusBatchExitChipVisibleAccess;
+
+        internal long DeferredCpuBusBatchExitPcLeftFastWindow => _deferredCpuBusBatchExitPcLeftFastWindow;
+
+        internal long DeferredCpuBusBatchExitException => _deferredCpuBusBatchExitException;
+
+        internal long DeferredCpuBusBatchExitUnsupported => _deferredCpuBusBatchExitUnsupported;
+
+        internal long DeferredCpuBusBatchVerificationMismatches => _deferredCpuBusBatchVerificationMismatches;
+
+        internal string DeferredCpuBusBatchFirstMismatch => _deferredCpuBusBatchFirstMismatch;
+
+        internal long DeferredCpuBusBatchWakeTargetCycle => _deferredCpuBusBatchWakeTargetCycle;
+
+        internal long DeferredCpuBusBatchWakePendingInterrupt => _deferredCpuBusBatchWakePendingInterrupt;
+
+        internal long DeferredCpuBusBatchWakeVerticalBlank => _deferredCpuBusBatchWakeVerticalBlank;
+
+        internal long DeferredCpuBusBatchWakeHorizontalSyncTod => _deferredCpuBusBatchWakeHorizontalSyncTod;
+
+        internal long DeferredCpuBusBatchWakeCiaTimer => _deferredCpuBusBatchWakeCiaTimer;
+
+        internal long DeferredCpuBusBatchWakeDisk => _deferredCpuBusBatchWakeDisk;
+
+        internal long DeferredCpuBusBatchWakePaula => _deferredCpuBusBatchWakePaula;
+
+        internal long DeferredCpuBusBatchWakeCopper => _deferredCpuBusBatchWakeCopper;
+
+        internal long DeferredCpuBusBatchWakeBlitter => _deferredCpuBusBatchWakeBlitter;
+
+        internal long DeferredCpuBusBatchDiskWakePendingDma => _deferredCpuBusBatchDiskWakePendingDma;
+
+        internal long DeferredCpuBusBatchDiskWakeActiveDmaProgress => _deferredCpuBusBatchDiskWakeActiveDmaProgress;
+
+        internal long DeferredCpuBusBatchDiskWakeActiveDmaCompletion => _deferredCpuBusBatchDiskWakeActiveDmaCompletion;
+
+        internal long DeferredCpuBusBatchDiskWakeSyncCandidate => _deferredCpuBusBatchDiskWakeSyncCandidate;
+
+        internal long DeferredCpuBusBatchDiskWakeIndexPulse => _deferredCpuBusBatchDiskWakeIndexPulse;
+
+        internal long DeferredCpuBusBatchDiskWakePassiveByteReady => _deferredCpuBusBatchDiskWakePassiveByteReady;
+
+        internal long DeferredCpuBusBatchDiskWakeUnknown => _deferredCpuBusBatchDiskWakeUnknown;
+
+        internal long DeferredCpuBusBatchChipsetCatchupAttempts => _deferredCpuBusBatchChipsetCatchupAttempts;
+
+        internal long DeferredCpuBusBatchChipsetCatchupUsed => _deferredCpuBusBatchChipsetCatchupUsed;
+
+        internal long DeferredCpuBusBatchChipsetCatchupSkippedDrains => _deferredCpuBusBatchChipsetCatchupSkippedDrains;
+
+        internal long DeferredCpuBusBatchChipsetCatchupRejectedUnsupported => _deferredCpuBusBatchChipsetCatchupRejectedUnsupported;
+
+        internal long DeferredCpuBusBatchChipsetCatchupRejectedDynamicDma => _deferredCpuBusBatchChipsetCatchupRejectedDynamicDma;
+
+        internal long DeferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier => _deferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier;
+
+        internal long DeferredCpuBusBatchChipsetCatchupVerificationMismatches => _deferredCpuBusBatchChipsetCatchupVerificationMismatches;
+
+        internal string DeferredCpuBusBatchChipsetCatchupFirstMismatch => _deferredCpuBusBatchChipsetCatchupFirstMismatch;
+
         internal bool LiveDisplayDmaEnabled => Display.LiveDmaEnabled;
 
         internal int AudioDmaMinimumPeriod { get; }
@@ -409,6 +557,8 @@ namespace CopperMod.Amiga
             Array.Clear(_pendingCustomByteWritten);
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
+            _hostTrapStubAddresses.Clear();
+            Array.Clear(_hostTrapStubPages);
             _nextHostTrapId = 1;
             _mappedMemory.Clear();
             _romOverlayEnabled = true;
@@ -419,6 +569,7 @@ namespace CopperMod.Amiga
             _cpuBusPhases.Clear();
             _lastCpuBusAccess = null;
             _lastCpuBusGrantedSlot = null;
+            ResetDeferredCpuBusBatchState(resetCounters: true);
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             _realTimeClock?.ResetControlRegisters();
@@ -465,6 +616,8 @@ namespace CopperMod.Amiga
             address = NormalizeAddress(address);
             var trapId = AllocateHostTrapId();
             _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
+            AddHostTrapStubAddress(address);
+            MarkHostTrapStubPages(address);
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBankTable();
             TouchCodePages(address, 4);
@@ -531,6 +684,7 @@ namespace CopperMod.Amiga
             _cpuBusPhases.Clear();
             _lastCpuBusAccess = null;
             _lastCpuBusGrantedSlot = null;
+            ResetDeferredCpuBusBatchState(resetCounters: true);
             ClearChipSlots();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             ResetCiaAForHardwareReset();
@@ -608,6 +762,17 @@ namespace CopperMod.Amiga
 
         void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuInstructionTiming(long cycle)
         {
+            if (_deferredCpuBusBatchActive)
+            {
+                _deferredCpuInstructionTimingActive = !_captureBusAccesses;
+                if (_deferredCpuDataAccessCount == 0)
+                {
+                    _deferredCpuDataReplayCycle = cycle;
+                }
+
+                return;
+            }
+
             _deferredCpuInstructionTimingActive = !_captureBusAccesses;
             _deferredCpuDataAccessCount = 0;
             _deferredCpuDataLongShapeBits = 0;
@@ -618,7 +783,285 @@ namespace CopperMod.Amiga
         void IM68kDeferredCpuInstructionTiming.FlushDeferredCpuInstructionTiming(ref long cycle)
         {
             FlushDeferredCpuDataTiming(ref cycle);
+            if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+            {
+                EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                return;
+            }
+
             _deferredCpuInstructionTimingActive = false;
+        }
+
+        bool IM68kDeferredCpuInstructionTiming.IsDeferredCpuBusBatchActive => _deferredCpuBusBatchActive;
+
+        bool IM68kDeferredCpuInstructionTiming.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+            in M68kInstructionFetchWindow window)
+            => IsDeferredCpuBusBatchEligibleTarget((AmigaBusAccessTarget)window.BusTag);
+
+        bool IM68kDeferredCpuInstructionTiming.TryBeginDeferredCpuBusBatch(
+            M68kCpuState state,
+            long currentCycle,
+            long? targetCycle,
+            out long batchTargetCycle,
+            out M68kTraceBatchWakeSource wakeSource)
+        {
+            batchTargetCycle = currentCycle;
+            wakeSource = M68kTraceBatchWakeSource.TargetCycle;
+            if (!_deferredCpuBusBatchEnabled ||
+                _captureBusAccesses ||
+                _deferredCpuBusBatchActive)
+            {
+                return false;
+            }
+
+            _deferredCpuBusBatchAttempts++;
+            currentCycle = Math.Max(0, currentCycle);
+            var requestedTarget = targetCycle.HasValue
+                ? Math.Max(currentCycle + 1, targetCycle.Value)
+                : currentCycle + DeferredCpuBusBatchDefaultCycleWindow;
+            var interruptMask = (state.StatusRegister >> 8) & 0x07;
+            batchTargetCycle = GetNextCpuBatchWakeCandidateCycle(
+                currentCycle,
+                requestedTarget,
+                interruptMask,
+                out wakeSource,
+                out var diskWakeReason);
+            if (batchTargetCycle <= currentCycle)
+            {
+                return false;
+            }
+
+            _deferredCpuBusBatchActive = true;
+            _deferredCpuInstructionTimingActive = !_captureBusAccesses;
+            _deferredCpuDataAccessCount = 0;
+            _deferredCpuDataLongShapeBits = 0;
+            _deferredCpuDataCiaShapeBits = 0;
+            _deferredCpuDataReplayCycle = currentCycle;
+            _deferredCpuBusBatchUsed++;
+            RecordDeferredCpuBusBatchWakeSource(wakeSource);
+            if (wakeSource == M68kTraceBatchWakeSource.Disk)
+            {
+                RecordDeferredCpuBusBatchDiskWakeReason(diskWakeReason);
+            }
+
+            return true;
+        }
+
+        void IM68kDeferredCpuInstructionTiming.CompleteDeferredCpuBusBatchInstruction(long previousCycle, long currentCycle)
+        {
+            _ = previousCycle;
+            _ = currentCycle;
+            _deferredCpuBusBatchInstructions++;
+            if (_deferredCpuBusBatchActive)
+            {
+                _deferredCpuBusBatchSkippedInstructionFlushes++;
+            }
+        }
+
+        void IM68kDeferredCpuInstructionTiming.EndDeferredCpuBusBatch(ref long cycle, M68kDeferredCpuBusBatchExitReason reason)
+            => EndDeferredCpuBusBatchCore(ref cycle, reason);
+
+        private static bool IsDeferredCpuBusBatchEligibleTarget(AmigaBusAccessTarget target)
+            => target == AmigaBusAccessTarget.Rom ||
+                target == AmigaBusAccessTarget.RealFastRam ||
+                target == AmigaBusAccessTarget.ExpansionRam;
+
+        private bool CanKeepDeferredCpuBusBatchForAccess(
+            AmigaBusAccessTarget target,
+            AmigaBusAccessKind kind,
+            bool isWrite)
+        {
+            if (!_deferredCpuBusBatchActive)
+            {
+                return false;
+            }
+
+            if (isWrite)
+            {
+                return target == AmigaBusAccessTarget.RealFastRam ||
+                    target == AmigaBusAccessTarget.ExpansionRam;
+            }
+
+            return target == AmigaBusAccessTarget.Rom ||
+                target == AmigaBusAccessTarget.RealFastRam ||
+                target == AmigaBusAccessTarget.ExpansionRam ||
+                (kind == AmigaBusAccessKind.CpuInstructionFetch &&
+                    target == AmigaBusAccessTarget.HostTrap);
+        }
+
+        private void RecordDeferredCpuBusBatchWakeSource(M68kTraceBatchWakeSource wakeSource)
+        {
+            switch (wakeSource)
+            {
+                case M68kTraceBatchWakeSource.PendingInterrupt:
+                    _deferredCpuBusBatchWakePendingInterrupt++;
+                    break;
+                case M68kTraceBatchWakeSource.VerticalBlank:
+                    _deferredCpuBusBatchWakeVerticalBlank++;
+                    break;
+                case M68kTraceBatchWakeSource.HorizontalSyncTod:
+                    _deferredCpuBusBatchWakeHorizontalSyncTod++;
+                    break;
+                case M68kTraceBatchWakeSource.CiaTimer:
+                    _deferredCpuBusBatchWakeCiaTimer++;
+                    break;
+                case M68kTraceBatchWakeSource.Disk:
+                    _deferredCpuBusBatchWakeDisk++;
+                    break;
+                case M68kTraceBatchWakeSource.Paula:
+                    _deferredCpuBusBatchWakePaula++;
+                    break;
+                case M68kTraceBatchWakeSource.Copper:
+                    _deferredCpuBusBatchWakeCopper++;
+                    break;
+                case M68kTraceBatchWakeSource.Blitter:
+                    _deferredCpuBusBatchWakeBlitter++;
+                    break;
+                case M68kTraceBatchWakeSource.TargetCycle:
+                case M68kTraceBatchWakeSource.Unknown:
+                default:
+                    _deferredCpuBusBatchWakeTargetCycle++;
+                    break;
+            }
+        }
+
+        private void RecordDeferredCpuBusBatchDiskWakeReason(AmigaDiskController.SchedulerWakeReason reason)
+        {
+            switch (reason)
+            {
+                case AmigaDiskController.SchedulerWakeReason.PendingDma:
+                    _deferredCpuBusBatchDiskWakePendingDma++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.ActiveDmaProgress:
+                    _deferredCpuBusBatchDiskWakeActiveDmaProgress++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.ActiveDmaCompletion:
+                    _deferredCpuBusBatchDiskWakeActiveDmaCompletion++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.SyncCandidate:
+                    _deferredCpuBusBatchDiskWakeSyncCandidate++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.IndexPulse:
+                    _deferredCpuBusBatchDiskWakeIndexPulse++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.PassiveByteReady:
+                    _deferredCpuBusBatchDiskWakePassiveByteReady++;
+                    break;
+                case AmigaDiskController.SchedulerWakeReason.None:
+                default:
+                    _deferredCpuBusBatchDiskWakeUnknown++;
+                    break;
+            }
+        }
+
+        private void EndDeferredCpuBusBatchCore(ref long cycle, M68kDeferredCpuBusBatchExitReason reason)
+        {
+            if (!_deferredCpuBusBatchActive)
+            {
+                FlushDeferredCpuDataTiming(ref cycle);
+                _deferredCpuInstructionTimingActive = false;
+                return;
+            }
+
+            _endingDeferredCpuBusBatch = true;
+            try
+            {
+                if (_deferredCpuDataAccessCount != 0)
+                {
+                    FlushDeferredCpuDataTiming(ref cycle);
+                }
+            }
+            finally
+            {
+                _endingDeferredCpuBusBatch = false;
+            }
+
+            _deferredCpuBusBatchActive = false;
+            _deferredCpuInstructionTimingActive = false;
+            _deferredCpuBusBatchFlushes++;
+            _deferredCpuBusBatchChipsetCatchupCycle = reason == M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess
+                ? Math.Max(0, cycle)
+                : -1;
+            switch (reason)
+            {
+                case M68kDeferredCpuBusBatchExitReason.TargetCycle:
+                    _deferredCpuBusBatchExitTargetCycle++;
+                    break;
+                case M68kDeferredCpuBusBatchExitReason.MaxInstructions:
+                    _deferredCpuBusBatchExitMaxInstructions++;
+                    break;
+                case M68kDeferredCpuBusBatchExitReason.PcLeftFastWindow:
+                    _deferredCpuBusBatchExitPcLeftFastWindow++;
+                    break;
+                case M68kDeferredCpuBusBatchExitReason.Exception:
+                    _deferredCpuBusBatchExitException++;
+                    break;
+                case M68kDeferredCpuBusBatchExitReason.Unsupported:
+                    _deferredCpuBusBatchExitUnsupported++;
+                    break;
+                case M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess:
+                case M68kDeferredCpuBusBatchExitReason.HaltedOrStopped:
+                case M68kDeferredCpuBusBatchExitReason.Completed:
+                case M68kDeferredCpuBusBatchExitReason.None:
+                default:
+                    _deferredCpuBusBatchExitChipVisibleAccess++;
+                    break;
+            }
+        }
+
+        private void ResetDeferredCpuBusBatchState(bool resetCounters)
+        {
+            _deferredCpuInstructionTimingActive = false;
+            _deferredCpuDataAccessCount = 0;
+            _deferredCpuDataLongShapeBits = 0;
+            _deferredCpuDataCiaShapeBits = 0;
+            _deferredCpuDataReplayCycle = 0;
+            _deferredCpuBusBatchActive = false;
+            _endingDeferredCpuBusBatch = false;
+            _deferredCpuBusBatchChipsetCatchupCycle = -1;
+            _deferredCpuBusBatchChipsetCatchupDisabledByVerification = false;
+            if (!resetCounters)
+            {
+                return;
+            }
+
+            _deferredCpuBusBatchAttempts = 0;
+            _deferredCpuBusBatchUsed = 0;
+            _deferredCpuBusBatchInstructions = 0;
+            _deferredCpuBusBatchSkippedInstructionFlushes = 0;
+            _deferredCpuBusBatchFlushes = 0;
+            _deferredCpuBusBatchExitTargetCycle = 0;
+            _deferredCpuBusBatchExitMaxInstructions = 0;
+            _deferredCpuBusBatchExitChipVisibleAccess = 0;
+            _deferredCpuBusBatchExitPcLeftFastWindow = 0;
+            _deferredCpuBusBatchExitException = 0;
+            _deferredCpuBusBatchExitUnsupported = 0;
+            _deferredCpuBusBatchVerificationMismatches = 0;
+            _deferredCpuBusBatchFirstMismatch = string.Empty;
+            _deferredCpuBusBatchWakeTargetCycle = 0;
+            _deferredCpuBusBatchWakePendingInterrupt = 0;
+            _deferredCpuBusBatchWakeVerticalBlank = 0;
+            _deferredCpuBusBatchWakeHorizontalSyncTod = 0;
+            _deferredCpuBusBatchWakeCiaTimer = 0;
+            _deferredCpuBusBatchWakeDisk = 0;
+            _deferredCpuBusBatchWakePaula = 0;
+            _deferredCpuBusBatchWakeCopper = 0;
+            _deferredCpuBusBatchWakeBlitter = 0;
+            _deferredCpuBusBatchDiskWakePendingDma = 0;
+            _deferredCpuBusBatchDiskWakeActiveDmaProgress = 0;
+            _deferredCpuBusBatchDiskWakeActiveDmaCompletion = 0;
+            _deferredCpuBusBatchDiskWakeSyncCandidate = 0;
+            _deferredCpuBusBatchDiskWakeIndexPulse = 0;
+            _deferredCpuBusBatchDiskWakePassiveByteReady = 0;
+            _deferredCpuBusBatchDiskWakeUnknown = 0;
+            _deferredCpuBusBatchChipsetCatchupAttempts = 0;
+            _deferredCpuBusBatchChipsetCatchupUsed = 0;
+            _deferredCpuBusBatchChipsetCatchupSkippedDrains = 0;
+            _deferredCpuBusBatchChipsetCatchupRejectedUnsupported = 0;
+            _deferredCpuBusBatchChipsetCatchupRejectedDynamicDma = 0;
+            _deferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier = 0;
+            _deferredCpuBusBatchChipsetCatchupVerificationMismatches = 0;
+            _deferredCpuBusBatchChipsetCatchupFirstMismatch = string.Empty;
         }
 
         void IM68kCpuBusPhaseTrace.RecordCpuBusPhase(in M68kCpuBusPhase phase)
@@ -690,7 +1133,7 @@ namespace CopperMod.Amiga
                 CanDeferExactCpuCiaRead(ciaRegister) &&
                 TryDeferExactCpuCiaDataTiming(ref cycle))
             {
-                value = ReadCiaRegisterValue(cia, ciaRegister);
+                value = ReadCiaRegisterValue(cia, ciaRegister, cycle);
                 return true;
             }
 
@@ -988,7 +1431,7 @@ namespace CopperMod.Amiga
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool CanDeferExactCpuCiaRead(int ciaRegister)
-            => ciaRegister is 0 or 1;
+            => ciaRegister is 0 or 1 or 2 or 3 or 0x0E or 0x0F;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryDeferExactCpuCiaDataTiming(ref long cycle)
@@ -1021,6 +1464,11 @@ namespace CopperMod.Amiga
             var count = _deferredCpuDataAccessCount;
             if (count == 0)
             {
+                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                {
+                    EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                }
+
                 return;
             }
 
@@ -1058,6 +1506,10 @@ namespace CopperMod.Amiga
             }
 
             _deferredCpuDataReplayCycle = cycle;
+            if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+            {
+                EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1105,7 +1557,15 @@ namespace CopperMod.Amiga
             out long grantedCycle,
             out long secondWordCycle)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
+            if (!CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite))
+            {
+                FlushDeferredCpuDataTiming(ref cycle);
+                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                {
+                    EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                }
+            }
+
             var requestedCycle = cycle;
             if (TryCommitExactCpuChipDataAccessFast(
                 target,
@@ -1239,9 +1699,26 @@ namespace CopperMod.Amiga
 
             // #2: Check cached clean-through cycle before full drain.
             var grantRequestCycle = requestedCycle;
-            if (!_hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle))
+            var slotContendedClean = _hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle);
+            if (!slotContendedClean &&
+                TryCommitDeferredCpuBusBatchChipsetCatchup(
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    kind,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out completedCycle,
+                    synchronizeDmaAfterGrant))
             {
-                _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite);
+                return true;
+            }
+
+            if (!slotContendedClean)
+            {
+                _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite, size);
             }
 
             if (Blitter.Busy)
@@ -1288,6 +1765,19 @@ namespace CopperMod.Amiga
                 secondWordCycle = grantedCycle;
             }
 
+            if (CopperQuiescentShadowPredictionEnabled)
+            {
+                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    grantedCycle,
+                    completedCycle,
+                    isWrite);
+            }
+
             // #5: Skip diagnostic call when no wait occurred.
             if (grantedCycle > grantRequestCycle)
             {
@@ -1300,6 +1790,169 @@ namespace CopperMod.Amiga
             }
 
             return true;
+        }
+
+        private bool TryCommitDeferredCpuBusBatchChipsetCatchup(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            AmigaBusAccessKind kind,
+            out long grantedCycle,
+            out long secondWordCycle,
+            out long completedCycle,
+            bool synchronizeDmaAfterGrant)
+        {
+            grantedCycle = 0;
+            secondWordCycle = 0;
+            completedCycle = 0;
+            if (!_deferredCpuBusBatchEnabled ||
+                _deferredCpuBusBatchChipsetCatchupDisabledByVerification ||
+                _deferredCpuBusBatchChipsetCatchupCycle < 0)
+            {
+                return false;
+            }
+
+            if (requestedCycle != _deferredCpuBusBatchChipsetCatchupCycle)
+            {
+                if (requestedCycle > _deferredCpuBusBatchChipsetCatchupCycle)
+                {
+                    _deferredCpuBusBatchChipsetCatchupCycle = -1;
+                }
+
+                return false;
+            }
+
+            _deferredCpuBusBatchChipsetCatchupCycle = -1;
+            _deferredCpuBusBatchChipsetCatchupAttempts++;
+            if (_captureBusAccesses ||
+                size == AmigaBusAccessSize.Long ||
+                (target != AmigaBusAccessTarget.ChipRam &&
+                    target != AmigaBusAccessTarget.ExpansionRam))
+            {
+                _deferredCpuBusBatchChipsetCatchupRejectedUnsupported++;
+                return false;
+            }
+
+            if (Blitter.Busy ||
+                Disk.ActiveDma)
+            {
+                _deferredCpuBusBatchChipsetCatchupRejectedDynamicDma++;
+                return false;
+            }
+
+            var grantRequestCycle = Math.Max(0, requestedCycle);
+            if (LiveAgnusDmaEnabled &&
+                size == AmigaBusAccessSize.Word &&
+                Display.HasLiveDisplayWork())
+            {
+                Display.CaptureLiveDisplayDmaBeforeHrmGrant(grantRequestCycle);
+            }
+
+            if (!_hrmSlotEngine.TryPredictCpuDataSingleSlot(
+                kind,
+                target,
+                address,
+                size,
+                grantRequestCycle,
+                isWrite,
+                out var predictedGrant))
+            {
+                _deferredCpuBusBatchChipsetCatchupRejectedUnsupported++;
+                return false;
+            }
+
+            var predictedCompletion = predictedGrant + AgnusChipSlotScheduler.SlotCycles;
+            var wakeCandidate = GetNextCpuBatchWakeCandidateCycle(
+                requestedCycle,
+                predictedCompletion,
+                out var wakeSource);
+            if (wakeCandidate < predictedCompletion ||
+                Paula.HasDmaWorkThrough(predictedCompletion))
+            {
+                _deferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier++;
+                return false;
+            }
+
+            _hardwareScheduler.MarkSlotContendedCleanThroughCpuBatchCatchup(predictedCompletion);
+            _hrmSlotEngine.GrantCpuDataSingleSlot(
+                kind,
+                target,
+                address,
+                size,
+                grantRequestCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle);
+            secondWordCycle = grantedCycle;
+
+            if (_deferredCpuBusBatchVerifyEnabled &&
+                (grantedCycle != predictedGrant ||
+                    completedCycle != predictedCompletion))
+            {
+                RecordDeferredCpuBusBatchChipsetCatchupMismatch(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    isWrite,
+                    requestedCycle,
+                    predictedGrant,
+                    predictedCompletion,
+                    grantedCycle,
+                    completedCycle,
+                    wakeSource);
+            }
+
+            _deferredCpuBusBatchChipsetCatchupUsed++;
+            _deferredCpuBusBatchChipsetCatchupSkippedDrains++;
+            if (CopperQuiescentShadowPredictionEnabled)
+            {
+                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    grantedCycle,
+                    completedCycle,
+                    isWrite);
+            }
+
+            if (grantedCycle > grantRequestCycle)
+            {
+                Agnus.RecordCpuChipWaitCycles(grantedCycle - grantRequestCycle);
+            }
+
+            if (synchronizeDmaAfterGrant)
+            {
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+            }
+
+            return true;
+        }
+
+        private void RecordDeferredCpuBusBatchChipsetCatchupMismatch(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            bool isWrite,
+            long requestedCycle,
+            long predictedGrant,
+            long predictedCompletion,
+            long actualGrant,
+            long actualCompletion,
+            M68kTraceBatchWakeSource wakeSource)
+        {
+            _deferredCpuBusBatchChipsetCatchupVerificationMismatches++;
+            _deferredCpuBusBatchChipsetCatchupDisabledByVerification = true;
+            if (_deferredCpuBusBatchChipsetCatchupFirstMismatch.Length == 0)
+            {
+                _deferredCpuBusBatchChipsetCatchupFirstMismatch =
+                    $"{kind}/{target}/{size}/write={isWrite}/addr=0x{address:X6}/req={requestedCycle}/pred={predictedGrant}->{predictedCompletion}/actual={actualGrant}->{actualCompletion}/wake={wakeSource}";
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1602,17 +2255,33 @@ namespace CopperMod.Amiga
 
         private bool TrimInstructionFetchWindowForHostTrap(uint startAddress, ref uint endAddress)
         {
-            foreach (var entry in _hostTrapStubs.Values)
+            if (!HostTrapStubPageHasTrap(startAddress))
             {
-                var trapAddress = NormalizeAddress(entry.Address);
-                if (startAddress >= trapAddress && startAddress < trapAddress + 4u)
+                return true;
+            }
+
+            var index = _hostTrapStubAddresses.BinarySearch(startAddress);
+            if (index >= 0)
+            {
+                return false;
+            }
+
+            index = ~index;
+            if (index > 0)
+            {
+                var previousTrapAddress = _hostTrapStubAddresses[index - 1];
+                if (startAddress < previousTrapAddress + 4u)
                 {
                     return false;
                 }
+            }
 
-                if (trapAddress > startAddress && trapAddress < endAddress)
+            if (index < _hostTrapStubAddresses.Count)
+            {
+                var nextTrapAddress = _hostTrapStubAddresses[index];
+                if (nextTrapAddress < endAddress)
                 {
-                    endAddress = trapAddress;
+                    endAddress = nextTrapAddress;
                 }
             }
 
@@ -1690,6 +2359,7 @@ namespace CopperMod.Amiga
             ref long cycle,
             AmigaBusAccessKind accessKind)
         {
+            long sampleCycle;
             long completedCycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -1700,23 +2370,25 @@ namespace CopperMod.Amiga
                     cycle,
                     accessKind,
                     isWrite: false,
-                    out _,
+                    out sampleCycle,
                     out _,
                     out completedCycle);
             }
             else
             {
-                completedCycle = Arbitrate(
+                var access = Arbitrate(
                     AmigaBusRequester.Cpu,
                     accessKind,
                     AmigaBusAccessTarget.Cia,
                     address,
                     AmigaBusAccessSize.Byte,
                     cycle,
-                    isWrite: false).CompletedCycle;
+                    isWrite: false);
+                sampleCycle = access.GrantedCycle;
+                completedCycle = access.CompletedCycle;
             }
 
-            var value = ReadCiaRegisterValue(cia, ciaRegister);
+            var value = ReadCiaRegisterValue(cia, ciaRegister, sampleCycle);
             cycle = completedCycle;
             if (cia == CiaA && ciaRegister == 0x0C)
             {
@@ -2191,17 +2863,17 @@ namespace CopperMod.Amiga
 
         internal void WriteHostByte(uint address, byte value)
         {
-            WriteRawByte(address, value, 0);
+            WriteRawByte(address, value, 0, AmigaBusRequester.Host);
         }
 
         internal void WriteHostWord(uint address, ushort value)
         {
-            WriteRawWord(address, value, 0);
+            WriteRawWord(address, value, 0, AmigaBusRequester.Host);
         }
 
         internal void WriteHostLong(uint address, uint value)
         {
-            WriteRawLong(address, value, 0, 0);
+            WriteRawLong(address, value, 0, 0, AmigaBusRequester.Host);
         }
 
         public void CopyToMemory(uint address, ReadOnlySpan<byte> data)
@@ -2974,13 +3646,13 @@ namespace CopperMod.Amiga
             {
                 var grantedCycle = Math.Max(0, requestedCycle);
                 MarkCopperIntreqWriteIfNeeded(requester, address, value, grantedCycle);
-                WriteRawWord(address, value, grantedCycle);
+                WriteRawWord(address, value, grantedCycle, requester);
                 return;
             }
 
             var access = Arbitrate(requester, kind, target, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
             MarkCopperIntreqWriteIfNeeded(requester, address, value, access.GrantedCycle);
-            WriteRawWord(address, value, access.GrantedCycle);
+            WriteRawWord(address, value, access.GrantedCycle, requester);
         }
 
         private void MarkCopperIntreqWriteIfNeeded(AmigaBusRequester requester, uint address, ushort value, long cycle)
@@ -3115,6 +3787,17 @@ namespace CopperMod.Amiga
         public AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot()
             => _hardwareScheduler.CaptureSnapshot();
 
+        internal void RecordCopperQuiescentCustomRegisterWrite(
+            AmigaBusRequester requester,
+            ushort offset,
+            long cycle,
+            bool scheduleAffecting)
+            => _hardwareScheduler.RecordCopperQuiescentCustomRegisterWrite(
+                requester,
+                offset,
+                cycle,
+                scheduleAffecting);
+
         public void SetHardwareSchedulerHostProfilingEnabled(bool enabled)
             => _hardwareScheduler.HostProfilingEnabled = enabled;
 
@@ -3233,7 +3916,13 @@ namespace CopperMod.Amiga
             long grantedCycle,
             bool isWrite)
         {
-            _hardwareScheduler.DrainForCpuAccess(target, address, grantedCycle, isWrite);
+            _hardwareScheduler.DrainForCpuAccess(
+                target,
+                address,
+                grantedCycle,
+                isWrite,
+                AmigaBusAccessSize.Word,
+                allowCopperQuiescentFastPath: false);
         }
 
         private void AdvanceDmaAfterCpuGrantIfNeeded(
@@ -3303,11 +3992,25 @@ namespace CopperMod.Amiga
             long targetCycle,
             int cpuInterruptMask,
             out M68kTraceBatchWakeSource wakeSource)
+            => GetNextCpuBatchWakeCandidateCycle(
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask,
+                out wakeSource,
+                out _);
+
+        internal long GetNextCpuBatchWakeCandidateCycle(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask,
+            out M68kTraceBatchWakeSource wakeSource,
+            out AmigaDiskController.SchedulerWakeReason diskWakeReason)
             => _hardwareScheduler.GetNextCpuVisibleEventCycle(
                 currentCycle,
                 targetCycle,
                 cpuInterruptMask,
-                out wakeSource);
+                out wakeSource,
+                out diskWakeReason);
 
         private static long MinStoppedWakeCandidate(
             long candidate,
@@ -3407,7 +4110,7 @@ namespace CopperMod.Amiga
                 target == AmigaBusAccessTarget.CustomRegisters &&
                 !isWrite)
             {
-                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
+                    _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite, size);
                 if (Blitter.Busy)
                 {
                     requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
@@ -3419,7 +4122,7 @@ namespace CopperMod.Amiga
                     target == AmigaBusAccessTarget.RealTimeClock ||
                     target == AmigaBusAccessTarget.CustomRegisters))
             {
-                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite, size);
                 if (Blitter.Busy)
                 {
                     requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
@@ -3566,7 +4269,7 @@ namespace CopperMod.Amiga
                 target == AmigaBusAccessTarget.RealTimeClock ||
                 target == AmigaBusAccessTarget.CustomRegisters)
             {
-                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite);
+                _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite, size);
                 if (Blitter.Busy)
                 {
                     requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
@@ -3617,6 +4320,19 @@ namespace CopperMod.Amiga
                     out grantedCycle,
                     out completedCycle);
                 secondWordCycle = grantedCycle;
+            }
+
+            if (CopperQuiescentShadowPredictionEnabled)
+            {
+                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    grantedCycle,
+                    completedCycle,
+                    isWrite);
             }
 
             Agnus.RecordCpuChipWaitCycles(grantedCycle - requestedCycle);
@@ -3688,7 +4404,22 @@ namespace CopperMod.Amiga
                 }
             }
 
-            return _hrmSlotEngine.Arbitrate(request, baseResult);
+            var result = _hrmSlotEngine.Arbitrate(request, baseResult);
+            if (CopperQuiescentShadowPredictionEnabled &&
+                request.Requester == AmigaBusRequester.Cpu)
+            {
+                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
+                    request.Kind,
+                    request.Target,
+                    request.Address,
+                    request.Size,
+                    request.RequestedCycle,
+                    result.GrantedCycle,
+                    result.CompletedCycle,
+                    request.IsWrite);
+            }
+
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3867,23 +4598,21 @@ namespace CopperMod.Amiga
 
         private bool HasHostTrapInCpuBusBank(uint bankAddress)
         {
-            if (_hostTrapStubs.Count == 0)
+            if (_hostTrapStubAddresses.Count == 0)
             {
                 return false;
             }
 
             var bankEndExclusive = bankAddress + CpuBusBankSize;
-            foreach (var address in _hostTrapStubs.Keys)
+            var firstPossibleTrapStart = bankAddress >= 3u ? bankAddress - 3u : 0u;
+            var index = _hostTrapStubAddresses.BinarySearch(firstPossibleTrapStart);
+            if (index < 0)
             {
-                var trapStart = NormalizeAddress(address);
-                var trapEndExclusive = (ulong)trapStart + 4u;
-                if ((ulong)bankAddress < trapEndExclusive && trapStart < bankEndExclusive)
-                {
-                    return true;
-                }
+                index = ~index;
             }
 
-            return false;
+            return index < _hostTrapStubAddresses.Count &&
+                _hostTrapStubAddresses[index] < bankEndExclusive;
         }
 
         private static bool RangesOverlap(uint start, uint endExclusive, uint otherStart, uint otherEndExclusive)
@@ -3970,6 +4699,11 @@ namespace CopperMod.Amiga
         {
             address = NormalizeAddress(address);
 
+            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
+            }
+
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -4045,12 +4779,6 @@ namespace CopperMod.Amiga
                 return value;
             }
 
-            // Host traps (rare, checked last).
-            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
-            {
-                return hostTrapByte;
-            }
-
             return 0;
         }
 
@@ -4100,11 +4828,13 @@ namespace CopperMod.Amiga
                 TryGetCiaRegister(address, out _, out _);
         }
 
-        private byte ReadCiaRegisterValue(AmigaCia cia, int ciaRegister)
+        private byte ReadCiaRegisterValue(AmigaCia cia, int ciaRegister, long? sampleCycle = null)
         {
             if (cia == CiaA && ciaRegister == 0)
             {
-                var inputPins = Disk.ReadCiaAPortA(0xFF);
+                var inputPins = sampleCycle.HasValue
+                    ? Disk.ReadCiaAPortA(0xFF, sampleCycle.Value)
+                    : Disk.ReadCiaAPortA(0xFF);
                 inputPins = ApplyGamePortFireBits(inputPins);
                 return cia.ReadPortRegister(ciaRegister, inputPins);
             }
@@ -4115,6 +4845,12 @@ namespace CopperMod.Amiga
         private bool TryReadHostTrapStubByte(uint address, out byte value)
         {
             address = NormalizeAddress(address);
+            if (!HostTrapStubPageHasTrap(address))
+            {
+                value = 0;
+                return false;
+            }
+
             for (var offset = 0u; offset < 4; offset++)
             {
                 var baseAddress = NormalizeAddress(address - offset);
@@ -4137,6 +4873,35 @@ namespace CopperMod.Amiga
             value = 0;
             return false;
         }
+
+        private void MarkHostTrapStubPages(uint address)
+        {
+            address = NormalizeAddress(address);
+            for (var offset = 0u; offset < 4; offset++)
+            {
+                _hostTrapStubPages[GetHostTrapStubPageIndex(address + offset)] = true;
+            }
+        }
+
+        private void AddHostTrapStubAddress(uint address)
+        {
+            address = NormalizeAddress(address);
+            var index = _hostTrapStubAddresses.BinarySearch(address);
+            if (index >= 0)
+            {
+                return;
+            }
+
+            _hostTrapStubAddresses.Insert(~index, address);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HostTrapStubPageHasTrap(uint address)
+            => _hostTrapStubPages[GetHostTrapStubPageIndex(address)];
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetHostTrapStubPageIndex(uint address)
+            => (int)(NormalizeAddress(address) >> CodeGenerationPageShift);
 
         private bool TryReadRelocatableHostTrapId(uint address, out ushort trapId)
         {
@@ -4167,6 +4932,11 @@ namespace CopperMod.Amiga
         private ushort ReadRawWord(uint address)
         {
             address = NormalizeAddress(address);
+
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
 
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
@@ -4213,18 +4983,17 @@ namespace CopperMod.Amiga
                 return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
             }
 
-            // Host traps (rare, checked last).
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
-            {
-                return hostTrapWord;
-            }
-
             return (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
         }
 
         private ushort ReadRawWord(uint address, long sampleCycle)
         {
             address = NormalizeAddress(address);
+
+            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
+            {
+                return hostTrapWord;
+            }
 
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
@@ -4270,12 +5039,6 @@ namespace CopperMod.Amiga
             {
                 return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
                     ReadRawByte(address + 1, sampleCycle));
-            }
-
-            // Host traps (rare, checked last).
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
-            {
-                return hostTrapWord;
             }
 
             return (ushort)((ReadRawByte(address, sampleCycle) << 8) |
@@ -5104,7 +5867,11 @@ namespace CopperMod.Amiga
             return ((uint)ReadRawWord(address, firstWordCycle) << 16) | ReadRawWord(address + 2, secondWordCycle);
         }
 
-        private void WriteRawByte(uint address, byte value, long grantedCycle)
+        private void WriteRawByte(
+            uint address,
+            byte value,
+            long grantedCycle,
+            AmigaBusRequester requester = AmigaBusRequester.Cpu)
         {
             address = NormalizeAddress(address);
             if (TryGetChipRamOffset(address, out var chipOffset))
@@ -5137,7 +5904,7 @@ namespace CopperMod.Amiga
 
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
-                WriteCustomByte((ushort)(address - 0x00DFF000), value, grantedCycle);
+                WriteCustomByte(requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
                 return;
             }
 
@@ -5188,17 +5955,16 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void WriteRawWord(uint address, ushort value, long grantedCycle)
+        private void WriteRawWord(
+            uint address,
+            ushort value,
+            long grantedCycle,
+            AmigaBusRequester requester = AmigaBusRequester.Cpu)
         {
             address = NormalizeAddress(address);
             if (address >= 0x00DFF000 && address + 1 < 0x00DFF200)
             {
-                Paula.ScheduleWrite(grantedCycle, (ushort)(address - 0x00DFF000), value);
-                Paula.AdvanceRegisterWritesTo(grantedCycle);
-                Display.ScheduleWrite(grantedCycle, (ushort)(address - 0x00DFF000), value);
-                Blitter.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
-                Disk.WriteRegister((ushort)(address - 0x00DFF000), value, grantedCycle);
-                _hardwareScheduler.NotifyWorkScheduled(grantedCycle);
+                WriteCustomWord(requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
                 return;
             }
 
@@ -5244,10 +6010,15 @@ namespace CopperMod.Amiga
             WriteRawByte(address + 1, (byte)value, grantedCycle);
         }
 
-        private void WriteRawLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        private void WriteRawLong(
+            uint address,
+            uint value,
+            long firstWordCycle,
+            long secondWordCycle,
+            AmigaBusRequester requester = AmigaBusRequester.Cpu)
         {
-            WriteRawWord(address, (ushort)(value >> 16), firstWordCycle);
-            WriteRawWord(address + 2, (ushort)value, secondWordCycle);
+            WriteRawWord(address, (ushort)(value >> 16), firstWordCycle, requester);
+            WriteRawWord(address + 2, (ushort)value, secondWordCycle, requester);
         }
 
         private void NotifyJitEligibleMemoryWritten(uint address, int byteCount)
@@ -5294,7 +6065,77 @@ namespace CopperMod.Amiga
             return completedCycle >= nextSlotCycle ? nextSlotCycle : completedCycle;
         }
 
-        private void WriteCustomByte(ushort offset, byte value, long cycle)
+        private void WriteCustomWord(
+            AmigaBusRequester requester,
+            ushort offset,
+            ushort value,
+            long cycle)
+        {
+            offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            BeginCustomRegisterWrite(requester, offset, cycle);
+            try
+            {
+                Paula.ScheduleWrite(cycle, offset, value);
+                Paula.AdvanceRegisterWritesTo(cycle);
+                Display.ScheduleWrite(cycle, offset, value);
+                Blitter.WriteRegister(offset, value, cycle);
+                Disk.WriteRegister(offset, value, cycle);
+                _hardwareScheduler.NotifyWorkScheduled(cycle);
+            }
+            finally
+            {
+                EndCustomRegisterWrite();
+            }
+        }
+
+        private void BeginCustomRegisterWrite(AmigaBusRequester requester, ushort offset, long cycle)
+        {
+            if (_customRegisterWriteContextDepth == 0)
+            {
+                _customRegisterWriteRequester = requester;
+                _customRegisterWriteOffset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+                _customRegisterWriteCycle = Math.Max(0, cycle);
+                _customRegisterWriteAffectsSchedule = false;
+            }
+
+            _customRegisterWriteContextDepth++;
+        }
+
+        private void EndCustomRegisterWrite()
+        {
+            if (_customRegisterWriteContextDepth <= 0)
+            {
+                return;
+            }
+
+            _customRegisterWriteContextDepth--;
+            if (_customRegisterWriteContextDepth != 0)
+            {
+                return;
+            }
+
+            var affectsSchedule = _customRegisterWriteAffectsSchedule ||
+                !CustomRegisterScheduleClassifier.IsKnownBusScheduleBenignWrite(_customRegisterWriteOffset);
+            _hardwareScheduler.RecordCopperQuiescentCustomRegisterWrite(
+                _customRegisterWriteRequester,
+                _customRegisterWriteOffset,
+                _customRegisterWriteCycle,
+                affectsSchedule);
+            _customRegisterWriteAffectsSchedule = false;
+        }
+
+        internal void NotifyCustomRegisterScheduleChanged(ushort offset, long cycle)
+        {
+            offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            if (_customRegisterWriteContextDepth > 0 &&
+                offset == _customRegisterWriteOffset &&
+                Math.Max(0, cycle) == _customRegisterWriteCycle)
+            {
+                _customRegisterWriteAffectsSchedule = true;
+            }
+        }
+
+        private void WriteCustomByte(AmigaBusRequester requester, ushort offset, byte value, long cycle)
         {
             var wordOffset = (ushort)(offset & 0x01FE);
             _pendingCustomBytes[offset] = value;
@@ -5309,12 +6150,7 @@ namespace CopperMod.Amiga
                 ? _pendingCustomBytes[lowIndex]
                 : Paula.ReadByte((ushort)lowIndex);
             var wordValue = (ushort)((high << 8) | low);
-            Paula.ScheduleWrite(cycle, wordOffset, wordValue);
-            Paula.AdvanceRegisterWritesTo(cycle);
-            Display.ScheduleWrite(cycle, wordOffset, wordValue);
-            Blitter.WriteRegister(wordOffset, wordValue, cycle);
-            Disk.WriteRegister(wordOffset, wordValue, cycle);
-            _hardwareScheduler.NotifyWorkScheduled(cycle);
+            WriteCustomWord(requester, wordOffset, wordValue, cycle);
 
             _pendingCustomByteWritten[highIndex] = false;
             _pendingCustomByteWritten[lowIndex] = false;

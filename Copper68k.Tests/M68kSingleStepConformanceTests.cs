@@ -13,6 +13,8 @@ public sealed class M68kSingleStepConformanceTests
 	private const string FilterVariable = "COPPER68K_M68000_SINGLESTEP_FILTER";
 	private const string LimitVariable = "COPPER68K_M68000_SINGLESTEP_LIMIT";
 	private const string IncludeUnverifiedVariable = "COPPER68K_M68000_SINGLESTEP_INCLUDE_UNVERIFIED";
+	private const string ValidateCyclesVariable = "COPPER68K_M68000_SINGLESTEP_VALIDATE_CYCLES";
+	private const string BackendVariable = "COPPER68K_M68000_SINGLESTEP_BACKEND";
 	private const string DefaultCorpusRelativePath = "third_party/SingleStepTests.m68000/v1";
 	private readonly ITestOutputHelper _output;
 
@@ -40,7 +42,9 @@ public sealed class M68kSingleStepConformanceTests
 
 		var filter = Environment.GetEnvironmentVariable(FilterVariable);
 		var includeUnverified = IsTruthy(Environment.GetEnvironmentVariable(IncludeUnverifiedVariable));
+		var validateCycles = IsTruthy(Environment.GetEnvironmentVariable(ValidateCyclesVariable));
 		var limit = ParseLimit(Environment.GetEnvironmentVariable(LimitVariable));
+		var backend = ParseBackend(Environment.GetEnvironmentVariable(BackendVariable));
 		var files = Directory.EnumerateFiles(corpusPath, "*.json.bin", SearchOption.TopDirectoryOnly)
 			.Where(path => includeUnverified || IsVerifiedCorpusFile(path))
 			.Where(path => string.IsNullOrWhiteSpace(filter) ||
@@ -59,17 +63,17 @@ public sealed class M68kSingleStepConformanceTests
 			var reader = new SingleStepBinaryReader(File.ReadAllBytes(file));
 			foreach (var test in reader.ReadTests())
 			{
-				RunCase(file, test);
+				RunCase(file, test, validateCycles, backend);
 				executed++;
 				if (limit is > 0 && executed >= limit)
 				{
-					_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s).");
+					_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
 					return;
 				}
 			}
 		}
 
-		_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s).");
+		_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
 	}
 
 	private static bool IsEnabled()
@@ -86,6 +90,23 @@ public sealed class M68kSingleStepConformanceTests
 		return int.TryParse(value, out var limit) && limit > 0
 			? limit
 			: null;
+	}
+
+	private static SingleStepBackend ParseBackend(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value) ||
+			value.Equals("interpreter", StringComparison.OrdinalIgnoreCase))
+		{
+			return SingleStepBackend.Interpreter;
+		}
+
+		if (value.Equals("jit", StringComparison.OrdinalIgnoreCase))
+		{
+			return SingleStepBackend.Jit;
+		}
+
+		throw new XunitException(
+			$"Invalid {BackendVariable} value '{value}'. Expected 'interpreter' or 'jit'.");
 	}
 
 	private static bool IsVerifiedCorpusFile(string path)
@@ -141,7 +162,7 @@ public sealed class M68kSingleStepConformanceTests
 		return null;
 	}
 
-	private static void RunCase(string file, SingleStepCase test)
+	private static void RunCase(string file, SingleStepCase test, bool validateCycles, SingleStepBackend backend)
 	{
 		var bus = new CorpusBus();
 		foreach (var word in test.Initial.Ram)
@@ -149,22 +170,36 @@ public sealed class M68kSingleStepConformanceTests
 			bus.WriteWord(word.Address, word.Value);
 		}
 
-		var cpu = new M68kInterpreter(bus);
+		var cpu = CreateCore(bus, backend);
 		cpu.Reset(ToArchitecturalPc(test.Initial.Pc), test.Initial.Ssp);
 		ApplyState(cpu.State, test.Initial);
 
+		int cycles;
 		try
 		{
-			cpu.ExecuteInstruction();
+			cycles = cpu.ExecuteInstruction();
 		}
 		catch (Exception ex)
 		{
-			throw new XunitException($"{CasePrefix(file, test)} threw {ex.GetType().Name}: {ex.Message}");
+			throw new XunitException($"{CasePrefix(file, test, backend)} threw {ex.GetType().Name}: {ex.Message}");
 		}
 
-		AssertState(file, test, cpu.State);
-		AssertRam(file, test, bus);
+		if (validateCycles)
+		{
+			AssertEqual(file, test, backend, "cycles", test.Cycles, (uint)cycles);
+		}
+
+		AssertState(file, test, backend, cpu.State);
+		AssertRam(file, test, backend, bus);
 	}
+
+	private static IM68kCore CreateCore(IM68kBus bus, SingleStepBackend backend)
+		=> backend switch
+		{
+			SingleStepBackend.Interpreter => new M68kInterpreter(bus),
+			SingleStepBackend.Jit => M68kJitCore.CreateM68000(bus),
+			_ => throw new InvalidOperationException($"Invalid SingleStepTests/m68000 backend: {backend}.")
+		};
 
 	private static void ApplyState(M68kCpuState state, SingleStepState expected)
 	{
@@ -193,53 +228,71 @@ public sealed class M68kSingleStepConformanceTests
 		return ToArchitecturalPc(test.Final.Pc);
 	}
 
-	private static void AssertState(string file, SingleStepCase test, M68kCpuState actual)
+	private static void AssertState(string file, SingleStepCase test, SingleStepBackend backend, M68kCpuState actual)
 	{
 		for (var i = 0; i < 8; i++)
 		{
-			AssertEqual(file, test, $"D{i}", test.Final.D[i], actual.D[i]);
+			AssertEqual(file, test, backend, $"D{i}", test.Final.D[i], actual.D[i]);
 		}
 
 		for (var i = 0; i < 7; i++)
 		{
-			AssertEqual(file, test, $"A{i}", test.Final.A[i], actual.A[i]);
+			AssertEqual(file, test, backend, $"A{i}", test.Final.A[i], actual.A[i]);
 		}
 
-		AssertEqual(file, test, "USP", test.Final.Usp, actual.UserStackPointer);
-		AssertEqual(file, test, "SSP", test.Final.Ssp, actual.SupervisorStackPointer);
-		AssertEqual(file, test, "SR", test.Final.Sr, actual.StatusRegister);
-		AssertEqual(file, test, "PC", ToFinalArchitecturalPc(file, test), actual.ProgramCounter);
+		AssertEqual(file, test, backend, "USP", test.Final.Usp, actual.UserStackPointer);
+		AssertEqual(file, test, backend, "SSP", test.Final.Ssp, actual.SupervisorStackPointer);
+		AssertEqual(file, test, backend, "SR", test.Final.Sr, actual.StatusRegister);
+		AssertEqual(file, test, backend, "PC", ToFinalArchitecturalPc(file, test), actual.ProgramCounter);
 	}
 
-	private static void AssertRam(string file, SingleStepCase test, CorpusBus bus)
+	private static void AssertRam(string file, SingleStepCase test, SingleStepBackend backend, CorpusBus bus)
 	{
 		foreach (var expected in test.Final.Ram)
 		{
 			var actual = bus.ReadWord(expected.Address);
-			AssertEqual(file, test, $"RAM[{expected.Address:X6}]", expected.Value, actual);
+			AssertEqual(file, test, backend, $"RAM[{expected.Address:X6}]", expected.Value, actual);
 		}
 	}
 
-	private static void AssertEqual(string file, SingleStepCase test, string field, uint expected, uint actual)
+	private static void AssertEqual(
+		string file,
+		SingleStepCase test,
+		SingleStepBackend backend,
+		string field,
+		uint expected,
+		uint actual)
 	{
 		if (expected != actual)
 		{
 			throw new XunitException(
-				$"{CasePrefix(file, test)} mismatch in {field}: expected 0x{expected:X8}, actual 0x{actual:X8}.");
+				$"{CasePrefix(file, test, backend)} mismatch in {field}: expected 0x{expected:X8}, actual 0x{actual:X8}.");
 		}
 	}
 
-	private static void AssertEqual(string file, SingleStepCase test, string field, ushort expected, ushort actual)
+	private static void AssertEqual(
+		string file,
+		SingleStepCase test,
+		SingleStepBackend backend,
+		string field,
+		ushort expected,
+		ushort actual)
 	{
 		if (expected != actual)
 		{
 			throw new XunitException(
-				$"{CasePrefix(file, test)} mismatch in {field}: expected 0x{expected:X4}, actual 0x{actual:X4}.");
+				$"{CasePrefix(file, test, backend)} mismatch in {field}: expected 0x{expected:X4}, actual 0x{actual:X4}.");
 		}
 	}
 
-	private static string CasePrefix(string file, SingleStepCase test)
-		=> $"{Path.GetFileName(file)}::{test.Name}";
+	private static string CasePrefix(string file, SingleStepCase test, SingleStepBackend backend)
+		=> $"{backend}:{Path.GetFileName(file)}::{test.Name}";
+
+	private enum SingleStepBackend
+	{
+		Interpreter,
+		Jit
+	}
 
 	private sealed class CorpusBus : IM68kBus, IM68kCodeReader
 	{
@@ -356,8 +409,8 @@ public sealed class M68kSingleStepConformanceTests
 			var name = ReadName();
 			var initial = ReadState();
 			var final = ReadState();
-			SkipTransactions();
-			return new SingleStepCase(name, initial, final);
+			var cycles = ReadTransactions();
+			return new SingleStepCase(name, initial, final, cycles);
 		}
 
 		private string ReadName()
@@ -405,10 +458,10 @@ public sealed class M68kSingleStepConformanceTests
 				ram);
 		}
 
-		private void SkipTransactions()
+		private uint ReadTransactions()
 		{
 			ReadRecordHeader(0x456789AB, "transactions");
-			_ = ReadUInt32();
+			var cycles = ReadUInt32();
 			var count = ReadUInt32();
 			for (var i = 0; i < count; i++)
 			{
@@ -421,6 +474,8 @@ public sealed class M68kSingleStepConformanceTests
 
 				_offset += 20;
 			}
+
+			return cycles;
 		}
 
 		private void ReadRecordHeader(uint expectedMagic, string label)
@@ -457,7 +512,7 @@ public sealed class M68kSingleStepConformanceTests
 		}
 	}
 
-	private sealed record SingleStepCase(string Name, SingleStepState Initial, SingleStepState Final);
+	private sealed record SingleStepCase(string Name, SingleStepState Initial, SingleStepState Final, uint Cycles);
 
 	private sealed record SingleStepState(
 		uint[] D,

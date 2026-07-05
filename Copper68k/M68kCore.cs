@@ -167,6 +167,34 @@ namespace Copper68k
         void BeginDeferredCpuInstructionTiming(long cycle);
 
         void FlushDeferredCpuInstructionTiming(ref long cycle);
+
+        bool IsDeferredCpuBusBatchActive { get; }
+
+        bool IsDeferredCpuBusBatchEligibleInstructionFetchWindow(in M68kInstructionFetchWindow window);
+
+        bool TryBeginDeferredCpuBusBatch(
+            M68kCpuState state,
+            long currentCycle,
+            long? targetCycle,
+            out long batchTargetCycle,
+            out M68kTraceBatchWakeSource wakeSource);
+
+        void CompleteDeferredCpuBusBatchInstruction(long previousCycle, long currentCycle);
+
+        void EndDeferredCpuBusBatch(ref long cycle, M68kDeferredCpuBusBatchExitReason reason);
+    }
+
+    internal enum M68kDeferredCpuBusBatchExitReason
+    {
+        None = 0,
+        Completed = 1,
+        TargetCycle = 2,
+        MaxInstructions = 3,
+        PcLeftFastWindow = 4,
+        ChipVisibleAccess = 5,
+        Exception = 6,
+        HaltedOrStopped = 7,
+        Unsupported = 8
     }
 
     internal interface IM68kCpuDataAccess<TBus, TSelf>
@@ -1234,6 +1262,7 @@ namespace Copper68k
         private ushort _prefetchWord;
         private long _prefetchCompletedCycle;
         private bool _prefetchValid;
+        private bool _prefetchDeferredCpuBusBatchEligible;
         private long _cpuBusCycle;
         private long _cpuRetireBusCycle;
         private bool _instructionCycleFloorActive;
@@ -1385,13 +1414,23 @@ namespace Copper68k
                     continue;
                 }
 
+                if (TryExecuteDeferredCpuBusBatch(
+                    maxInstructions - instructions,
+                    targetCycle,
+                    boundary,
+                    out var batchInstructions))
+                {
+                    instructions += batchInstructions;
+                    continue;
+                }
+
                 if (!boundary.BeforeInstruction())
                 {
                     break;
                 }
 
                 var previousCycle = State.Cycles;
-                ExecuteInstruction();
+                ExecuteSingleInstruction();
                 boundary.AfterInstruction(previousCycle, State.Cycles);
                 instructions++;
             }
@@ -1403,6 +1442,32 @@ namespace Copper68k
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
 
         public int ExecuteInstruction()
+        {
+            var startCycles = State.Cycles;
+            if (TryExecuteDeferredCpuBusBatch(
+                DeferredCpuBusBatchNoTargetInstructionLimit,
+                targetCycle: null,
+                NoOpInstructionBoundary.Instance,
+                out _))
+            {
+                return (int)(State.Cycles - startCycles);
+            }
+
+            var elapsed = ExecuteSingleInstruction();
+            _ = elapsed;
+            if (TryExecuteDeferredCpuBusBatch(
+                DeferredCpuBusBatchNoTargetInstructionLimit - 1,
+                targetCycle: null,
+                NoOpInstructionBoundary.Instance,
+                out _))
+            {
+                return (int)(State.Cycles - startCycles);
+            }
+
+            return elapsed;
+        }
+
+        private int ExecuteSingleInstruction()
         {
             if (State.Halted || State.Stopped)
             {
@@ -1432,6 +1497,158 @@ namespace Copper68k
             {
                 _instructionCycleFloorActive = false;
                 return CompleteInstruction(startCycles);
+            }
+        }
+
+        private const int DeferredCpuBusBatchNoTargetInstructionLimit = 256;
+
+        private bool TryExecuteDeferredCpuBusBatch(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kInstructionBoundary boundary,
+            out int executedInstructions)
+        {
+            executedInstructions = 0;
+            if (_deferredCpuInstructionTiming == null ||
+                maxInstructions <= 1 ||
+                State.Halted ||
+                State.Stopped ||
+                !IsCurrentPrefetchDeferredCpuBusBatchEligible())
+            {
+                return false;
+            }
+
+            var currentCycle = State.Cycles;
+            if (!_deferredCpuInstructionTiming.TryBeginDeferredCpuBusBatch(
+                State,
+                currentCycle,
+                targetCycle,
+                out var batchTargetCycle,
+                out _))
+            {
+                return false;
+            }
+
+            var batchStartCycle = currentCycle;
+            var boundaryIsNoOp = ReferenceEquals(boundary, NoOpInstructionBoundary.Instance);
+            var batchBoundary = boundaryIsNoOp ? null : boundary as IM68kBusAccessTraceBatchBoundary;
+            var useBatchBoundary = false;
+            var reason = M68kDeferredCpuBusBatchExitReason.Completed;
+            var completedWithoutException = false;
+            try
+            {
+                if (batchBoundary != null)
+                {
+                    if (!batchBoundary.TryBeginBusAccessTraceBatch(State, batchTargetCycle, out var boundaryBatchTargetCycle))
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.Unsupported;
+                        completedWithoutException = true;
+                        return false;
+                    }
+
+                    batchTargetCycle = Math.Min(batchTargetCycle, boundaryBatchTargetCycle);
+                    useBatchBoundary = true;
+                }
+
+                while (executedInstructions < maxInstructions &&
+                    !State.Halted &&
+                    !State.Stopped &&
+                    State.Cycles < batchTargetCycle)
+                {
+                    if (!IsCurrentPrefetchDeferredCpuBusBatchEligible())
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.PcLeftFastWindow;
+                        break;
+                    }
+
+                    if (!boundaryIsNoOp &&
+                        !useBatchBoundary &&
+                        !boundary.BeforeInstruction())
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.Unsupported;
+                        break;
+                    }
+
+                    var previousCycle = State.Cycles;
+                    ExecuteSingleInstruction();
+                    if (!boundaryIsNoOp && !useBatchBoundary)
+                    {
+                        boundary.AfterInstruction(previousCycle, State.Cycles);
+                    }
+
+                    _deferredCpuInstructionTiming.CompleteDeferredCpuBusBatchInstruction(previousCycle, State.Cycles);
+                    executedInstructions++;
+
+                    if (!_deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess;
+                        break;
+                    }
+
+                    if (State.Halted || State.Stopped)
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.HaltedOrStopped;
+                        break;
+                    }
+
+                    if (State.Cycles >= batchTargetCycle)
+                    {
+                        reason = M68kDeferredCpuBusBatchExitReason.TargetCycle;
+                        break;
+                    }
+                }
+
+                if (executedInstructions >= maxInstructions)
+                {
+                    reason = M68kDeferredCpuBusBatchExitReason.MaxInstructions;
+                }
+
+                completedWithoutException = true;
+                return executedInstructions > 0;
+            }
+            catch
+            {
+                reason = M68kDeferredCpuBusBatchExitReason.Exception;
+                throw;
+            }
+            finally
+            {
+                if (_deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
+                {
+                    var cycle = State.Cycles;
+                    _deferredCpuInstructionTiming.EndDeferredCpuBusBatch(ref cycle, reason);
+                    if (State.Cycles < cycle)
+                    {
+                        State.Cycles = cycle;
+                    }
+                }
+
+                if (completedWithoutException &&
+                    useBatchBoundary &&
+                    executedInstructions > 0)
+                {
+                    batchBoundary!.AfterBusAccessTraceBatch(batchStartCycle, State.Cycles, executedInstructions);
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsCurrentPrefetchDeferredCpuBusBatchEligible()
+            => _prefetchValid &&
+                _prefetchAddress == State.ProgramCounter &&
+                _prefetchDeferredCpuBusBatchEligible;
+
+        private sealed class NoOpInstructionBoundary : IM68kInstructionBoundary
+        {
+            public static NoOpInstructionBoundary Instance { get; } = new NoOpInstructionBoundary();
+
+            public bool BeforeInstruction()
+                => true;
+
+            public void AfterInstruction(long previousCycle, long currentCycle)
+            {
+                _ = previousCycle;
+                _ = currentCycle;
             }
         }
 
@@ -1474,7 +1691,7 @@ namespace Copper68k
 
             if ((opcode & 0xF000) == 0xF000)
             {
-                if (opcode == 0xFF00 && _bus.HasHostTrapStub(instructionPc))
+                if (opcode == 0xFF00)
                 {
                     var trapId = FetchWord();
                     var returnProgramCounter = State.ProgramCounter;
@@ -1623,7 +1840,7 @@ namespace Copper68k
                     RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.Move:
-                    ExecutePackedMove(opcode, in plan);
+                    ExecutePackedMove(in plan);
                     RecordPlannedFast(kind);
                     return true;
                 case M68kOpcodePlanKind.MoveLongPostincrementToData:
@@ -1857,12 +2074,12 @@ namespace Copper68k
                         extensionDisplacement ? 4 : 2);
                 }
 
-                BranchTo(target, branchBase);
                 AddInstructionCycles(10);
+                BranchTo(target, branchBase);
                 return;
             }
 
-            AddInstructionCycles(8);
+            AddInstructionCycles(extensionDisplacement ? 12 : 8);
         }
 
         private void ExecutePlannedDbcc(ushort opcode)
@@ -1888,9 +2105,9 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                     }
 
+                    AddInstructionCycles(10);
                     BranchTo(target, State.ProgramCounter);
                     State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
-                    AddInstructionCycles(10);
                     return;
                 }
 
@@ -1917,9 +2134,9 @@ namespace Copper68k
                     _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                 }
 
+                AddInstructionCycles(10);
                 BranchTo(target, State.ProgramCounter);
                 State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
-                AddInstructionCycles(10);
                 return;
             }
 
@@ -1973,22 +2190,33 @@ namespace Copper68k
 
         private void ExecutePlannedMove(ushort opcode)
         {
-            if ((opcode & 0xF1FF) == 0x302E)
-            {
-                ExecutePlannedMoveWordDisplacementA6ToDataRegister(opcode);
-                return;
-            }
-
             var size = DecodePlannedMoveSize(opcode);
             var sourceMode = (opcode >> 3) & 7;
             var sourceRegister = opcode & 7;
             var destinationMode = (opcode >> 6) & 7;
             var destinationRegister = (opcode >> 9) & 7;
+            if ((sourceMode == 3 || destinationMode == 3) &&
+                TryExecuteMoveFast(sourceMode, sourceRegister, destinationMode, destinationRegister, size))
+            {
+                return;
+            }
+
+            if (sourceMode == 5 && destinationMode == 0)
+            {
+                ExecuteMoveDisplacementToData(sourceRegister, destinationRegister, size);
+                return;
+            }
+
             var source = ResolvePlannedEa(
                 sourceMode,
                 sourceRegister,
                 size,
                 completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+            if (size == M68kOperandSize.Word && !source.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
             var value = ReadPlannedEaValue(in source);
             var updateNegativeZeroBeforeWrite =
                 (size == M68kOperandSize.Word && destinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
@@ -2092,6 +2320,20 @@ namespace Copper68k
                 UsePrefetchedInstructionWordForAddressErrorFrame();
             }
 
+            if (size == M68kOperandSize.Word && destinationMode != 4 && !destination.IsRegister && (destination.Address & 1) != 0)
+            {
+                AddInstructionCycles(GetMoveWordDestinationWriteFaultCycles(source.EaCycles, destinationMode, destinationRegister));
+            }
+            else if (size == M68kOperandSize.Word && destinationMode == 4 && !destination.IsRegister && (destination.Address & 1) != 0)
+            {
+                AddInstructionCycles(EstimateMoveCycles(source.EaCycles, destinationMode, destinationRegister, size) + 4);
+            }
+            else if (size == M68kOperandSize.Long && !destination.IsRegister && (destination.Address & 1) != 0)
+            {
+                var cycles = EstimateMoveCycles(source.EaCycles, destinationMode, destinationRegister, size);
+                AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(cycles, destinationMode, destinationRegister));
+            }
+
             WritePlannedEaValue(in destination, value);
             if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
@@ -2113,23 +2355,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddInstructionCycles(EstimatePlannedMoveCycles(source.EaCycles, destination.IsRegister, size));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ExecutePlannedMoveWordDisplacementA6ToDataRegister(ushort opcode)
-        {
-            var extensionAddress = State.ProgramCounter;
-            var displacement = unchecked((short)FetchWord());
-            var address = unchecked(State.A[6] + (uint)displacement);
-            _dataAccessStackedProgramCounter = extensionAddress;
-            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
-            var value = ReadWord(address);
-            WriteDataRegister((opcode >> 9) & 7, value, M68kOperandSize.Word);
-            State.SetNegativeZero(value, M68kOperandSize.Word);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
-            AddInstructionCycles(12);
+            AddInstructionCycles(EstimateMoveCycles(source.EaCycles, destinationMode, destinationRegister, size));
         }
 
         private static int GetMoveDestinationAddressErrorStackedProgramCounterOffset(
@@ -2163,6 +2389,277 @@ namespace Copper68k
                 : 0;
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ExecuteMoveDisplacementToData(
+            int sourceRegister,
+            int destinationRegister,
+            M68kOperandSize size)
+        {
+            var value = ReadDisplacementMemory(sourceRegister, size);
+            WriteDataRegisterSized(destinationRegister, value, size);
+            SetLogicFlags(value, size);
+            AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(5, sourceRegister, size), 0, destinationRegister, size));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool TryExecuteMoveFast(
+            int sourceMode,
+            int sourceRegister,
+            int destinationMode,
+            int destinationRegister,
+            M68kOperandSize size)
+        {
+            if (sourceMode == 3)
+            {
+                if (destinationMode == 3)
+                {
+                    ExecuteMovePostincrementToPostincrement(sourceRegister, destinationRegister, size);
+                    return true;
+                }
+
+                if (destinationMode == 0)
+                {
+                    ExecuteMovePostincrementToData(sourceRegister, destinationRegister, size);
+                    return true;
+                }
+            }
+            else if (sourceMode == 0 && destinationMode == 3)
+            {
+                ExecuteMoveDataToPostincrement(sourceRegister, destinationRegister, size);
+                return true;
+            }
+
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMovePostincrementToPostincrement(
+            int sourceRegister,
+            int destinationRegister,
+            M68kOperandSize size)
+        {
+            var value = ReadPostincrement(sourceRegister, size);
+            if (size == M68kOperandSize.Word)
+            {
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+                State.SetNegativeZero(value, size);
+            }
+            else if (size == M68kOperandSize.Long)
+            {
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+                State.SetFlag(M68kCpuState.Negative, (value & 0x8000) != 0);
+                State.SetFlag(M68kCpuState.Zero, false);
+            }
+            else
+            {
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+            }
+
+            AddMovePostincrementWriteFaultFloor(GetEaOperandCycles(3, sourceRegister, size), destinationRegister, size);
+            WritePostincrement(destinationRegister, value, size);
+            State.SetNegativeZero(value, size);
+            AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 3, destinationRegister, size));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMovePostincrementToData(
+            int sourceRegister,
+            int destinationRegister,
+            M68kOperandSize size)
+        {
+            var value = ReadPostincrement(sourceRegister, size);
+            WriteDataRegisterSized(destinationRegister, value, size);
+            SetLogicFlags(value, size);
+            AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 0, destinationRegister, size));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMoveDataToPostincrement(
+            int sourceRegister,
+            int destinationRegister,
+            M68kOperandSize size)
+        {
+            var value = ReadDataRegisterSized(sourceRegister, size);
+            if (size == M68kOperandSize.Word)
+            {
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+                State.SetNegativeZero(value, size);
+                AddMovePostincrementWriteFaultFloor(0, destinationRegister, size);
+                WritePostincrement(destinationRegister, value, size);
+            }
+            else if (size == M68kOperandSize.Long)
+            {
+                WritePostincrement(destinationRegister, value, size);
+                SetLogicFlags(value, size);
+            }
+            else
+            {
+                State.SetFlag(M68kCpuState.Overflow, false);
+                State.SetFlag(M68kCpuState.Carry, false);
+                WritePostincrement(destinationRegister, value, size);
+                State.SetNegativeZero(value, size);
+            }
+
+            AddInstructionCycles(size == M68kOperandSize.Long ? 12 : 8);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadPostincrement(int register, M68kOperandSize size)
+        {
+            return size switch
+            {
+                M68kOperandSize.Byte => ReadPostincrementByte(register),
+                M68kOperandSize.Word => ReadPostincrementWord(register),
+                _ => ReadPostincrementLong(register)
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadPostincrementByte(int register)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            var value = ReadByte(address);
+            SetAddressRegister(register, unchecked(address + AddressIncrement(register, M68kOperandSize.Byte)));
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadPostincrementWord(int register)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            if ((address & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+            else if (_instructionCycleFloor < _instructionCycleStart + 4)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
+            SetAddressRegister(register, unchecked(address + 2));
+            return ReadWord(address);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadPostincrementLong(int register)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            if ((address & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+
+            var value = ReadLong(address);
+            SetAddressRegister(register, unchecked(address + 4));
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WritePostincrement(int register, uint value, M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                WritePostincrementByte(register, value);
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                WritePostincrementWord(register, value);
+            }
+            else
+            {
+                WritePostincrementLong(register, value);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AddMovePostincrementWriteFaultFloor(int sourceEaCycles, int destinationRegister, M68kOperandSize size)
+        {
+            if (size == M68kOperandSize.Word && (State.A[destinationRegister] & 1) != 0)
+            {
+                AddInstructionCycles(EstimateMoveCycles(sourceEaCycles, 3, destinationRegister, size));
+            }
+            else if (size == M68kOperandSize.Long && (State.A[destinationRegister] & 1) != 0)
+            {
+                AddInstructionCycles(EstimateMoveCycles(sourceEaCycles, 3, destinationRegister, size) - 4);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WritePostincrementByte(int register, uint value)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            WriteByte(address, (byte)value);
+            SetAddressRegister(register, unchecked(address + AddressIncrement(register, M68kOperandSize.Byte)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WritePostincrementWord(int register, uint value)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+            WriteWord(address, (ushort)value);
+            SetAddressRegister(register, unchecked(address + 2));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WritePostincrementLong(int register, uint value)
+        {
+            var address = State.A[register];
+            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+            WriteLong(address, value);
+            SetAddressRegister(register, unchecked(address + 4));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadDataRegisterSized(int register, M68kOperandSize size)
+            => State.D[register] & M68kCpuState.Mask(size);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteDataRegisterSized(int register, uint value, M68kOperandSize size)
+            => WriteDataRegister(register, value, size);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadDisplacementMemory(int register, M68kOperandSize size)
+        {
+            var extensionAddress = State.ProgramCounter;
+            var displacement = unchecked((short)FetchWord());
+            var address = unchecked((uint)(State.A[register] + displacement));
+            _dataAccessStackedProgramCounter = extensionAddress;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            if (size == M68kOperandSize.Word && (address & 1) != 0)
+            {
+                AddInstructionCycles(12);
+            }
+            else if (size == M68kOperandSize.Long && (address & 1) != 0)
+            {
+                AddInstructionCycles(12);
+            }
+
+            return ReadMemorySized(address, size);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadMemorySized(uint address, M68kOperandSize size)
+        {
+            return size switch
+            {
+                M68kOperandSize.Byte => ReadByte(address),
+                M68kOperandSize.Word => ReadWord(address),
+                _ => ReadLong(address)
+            };
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedMoveLongPostincrementToData(ushort opcode)
         {
@@ -2170,6 +2667,12 @@ namespace Copper68k
             var destinationRegister = (opcode >> 9) & 7;
             var sourceAddress = State.A[sourceRegister];
             _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            if ((sourceAddress & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+
             var value = ReadLong(sourceAddress);
             SetAddressRegister(sourceRegister, unchecked(sourceAddress + 4));
             State.D[destinationRegister] = value;
@@ -2187,6 +2690,11 @@ namespace Copper68k
             var destinationAddress = State.A[destinationRegister];
             var value = State.D[sourceRegister];
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+            if ((destinationAddress & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
             State.SetNegativeZeroLong(value);
@@ -2207,6 +2715,7 @@ namespace Copper68k
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var immediate = FetchImmediate(size);
+            AddInstructionCycles(GetImmediateFetchCycles(size));
             var isCompare = (opcode & 0xFF00) == 0x0C00;
             var writesEffectiveAddress = !isCompare;
             var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
@@ -2224,6 +2733,11 @@ namespace Copper68k
             if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
             {
                 SetAddressRegister(register, destinationEa.Address);
+            }
+
+            if (size != M68kOperandSize.Long && !destinationEa.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
             var destination = ReadPlannedEaValue(in destinationEa);
@@ -2259,7 +2773,7 @@ namespace Copper68k
 
             AddInstructionCycles(isCompare
                 ? GetCmpiCycles(size, mode, register)
-                : size == M68kOperandSize.Long ? 16 : 8);
+                : GetImmediateAluCycles(mode, register, size));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2305,15 +2819,33 @@ namespace Copper68k
         {
             var line = opcode >> 12;
             var opmode = (opcode >> 6) & 7;
+            var register = (opcode >> 9) & 7;
+            var sourceRegister = opcode & 7;
+            var sourceMode = (opcode >> 3) & 7;
+            var size = DecodePlannedRegisterArithmeticSize(opmode);
+            if (sourceMode != 0)
+            {
+                ExecuteRegisterArithmeticEaToData(line, opmode, sourceMode, sourceRegister, register, size);
+                return;
+            }
+
+            ExecuteDataRegisterArithmetic(line, opmode, sourceRegister, register, size);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteDataRegisterArithmetic(
+            int line,
+            int opmode,
+            int sourceRegister,
+            int register,
+            M68kOperandSize size)
+        {
             var registerToEa = opmode >= 4;
             if (line == 0xB)
             {
                 registerToEa = true;
             }
 
-            var register = (opcode >> 9) & 7;
-            var sourceRegister = opcode & 7;
-            var size = DecodePlannedRegisterArithmeticSize(opmode);
             var eaValue = State.D[sourceRegister] & M68kCpuState.Mask(size);
             var regValue = State.D[register] & M68kCpuState.Mask(size);
             uint result;
@@ -2368,7 +2900,83 @@ namespace Copper68k
                     break;
             }
 
-            AddInstructionCycles(size == M68kOperandSize.Long ? 12 : 8);
+            AddInstructionCycles(line == 0xB && opmode < 4
+                ? GetCompareCycles(0, sourceRegister, size)
+                : registerToEa
+                    ? GetAluDataToEaCycles(0, sourceRegister, size)
+                    : GetAluEaToDataCycles(0, sourceRegister, size));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ExecuteRegisterArithmeticEaToData(
+            int line,
+            int opmode,
+            int sourceMode,
+            int sourceRegister,
+            int register,
+            M68kOperandSize size)
+        {
+            var eaValue = ReadRegisterArithmeticSourceEa(sourceMode, sourceRegister, size);
+            var regValue = State.D[register] & M68kCpuState.Mask(size);
+            uint result;
+            switch (line)
+            {
+                case 0x8:
+                    result = regValue | eaValue;
+                    WriteDataRegister(register, result, size);
+                    SetLogicFlags(result, size);
+                    break;
+                case 0x9:
+                    result = Subtract(regValue, eaValue, size, setExtend: true);
+                    WriteDataRegister(register, result, size);
+                    break;
+                case 0xB:
+                    _ = Subtract(regValue, eaValue, size, setExtend: false, storeResult: false);
+                    break;
+                case 0xC:
+                    result = regValue & eaValue;
+                    WriteDataRegister(register, result, size);
+                    SetLogicFlags(result, size);
+                    break;
+                default:
+                    result = Add(regValue, eaValue, size, setExtend: true);
+                    WriteDataRegister(register, result, size);
+                    break;
+            }
+
+            AddInstructionCycles(line == 0xB && opmode < 4
+                ? GetCompareCycles(sourceMode, sourceRegister, size)
+                : GetAluEaToDataCycles(sourceMode, sourceRegister, size));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint ReadRegisterArithmeticSourceEa(int sourceMode, int sourceRegister, M68kOperandSize size)
+        {
+            if (sourceMode == 1)
+            {
+                return State.A[sourceRegister] & M68kCpuState.Mask(size);
+            }
+
+            if (size != M68kOperandSize.Long)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
+            AddInstructionCyclesFromBase(_instructionCycleFloor, GetEaOperandCycles(sourceMode, sourceRegister, size));
+            if (sourceMode == 2)
+            {
+                var address = State.A[sourceRegister];
+                _dataAccessStackedProgramCounter = State.ProgramCounter;
+                _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+                return ReadMemorySized(address, size);
+            }
+
+            if (sourceMode == 3)
+            {
+                return ReadPostincrement(sourceRegister, size);
+            }
+
+            return ReadDisplacementMemory(sourceRegister, size);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2378,7 +2986,7 @@ namespace Copper68k
             var result = State.D[opcode & 7] | State.D[register];
             State.D[register] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2388,7 +2996,7 @@ namespace Copper68k
             var result = State.D[sourceRegister] ^ State.D[(opcode >> 9) & 7];
             State.D[sourceRegister] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2398,7 +3006,7 @@ namespace Copper68k
             var result = State.D[opcode & 7] & State.D[register];
             State.D[register] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2410,7 +3018,7 @@ namespace Copper68k
                 State.D[opcode & 7],
                 M68kOperandSize.Long,
                 setExtend: true);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         private void ExecutePackedMoveq(in M68kPackedOpcodePlan plan)
@@ -2440,12 +3048,12 @@ namespace Copper68k
                         plan.ExtensionDisplacement ? 4 : 2);
                 }
 
-                BranchTo(target, branchBase);
                 AddInstructionCycles(10);
+                BranchTo(target, branchBase);
                 return;
             }
 
-            AddInstructionCycles(8);
+            AddInstructionCycles(plan.ExtensionDisplacement ? 12 : 8);
         }
 
         private void ExecutePackedDbcc(ushort opcode, in M68kPackedOpcodePlan plan)
@@ -2470,9 +3078,9 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, State.LastOpcode, target, 4);
                     }
 
+                    AddInstructionCycles(10);
                     BranchTo(target, State.ProgramCounter);
                     State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
-                    AddInstructionCycles(10);
                     return;
                 }
 
@@ -2513,11 +3121,22 @@ namespace Copper68k
             AddInstructionCycles(plan.Size == M68kOperandSize.Long ? 8 : 4);
         }
 
-        private void ExecutePackedMove(ushort opcode, in M68kPackedOpcodePlan plan)
+        private void ExecutePackedMove(in M68kPackedOpcodePlan plan)
         {
-            if ((opcode & 0xF1FF) == 0x302E)
+            if ((plan.SourceMode == 3 || plan.DestinationMode == 3) &&
+                TryExecuteMoveFast(
+                    plan.SourceMode,
+                    plan.SourceRegister,
+                    plan.DestinationMode,
+                    plan.DestinationRegister,
+                    plan.Size))
             {
-                ExecutePlannedMoveWordDisplacementA6ToDataRegister(opcode);
+                return;
+            }
+
+            if (plan.SourceMode == 5 && plan.DestinationMode == 0)
+            {
+                ExecuteMoveDisplacementToData(plan.SourceRegister, plan.DestinationRegister, plan.Size);
                 return;
             }
 
@@ -2526,6 +3145,11 @@ namespace Copper68k
                 plan.SourceRegister,
                 plan.Size,
                 completeWordPostIncrementBeforeRead: plan.Size == M68kOperandSize.Word);
+            if (plan.Size == M68kOperandSize.Word && !source.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
             var value = ReadPlannedEaValue(in source);
             var updateNegativeZeroBeforeWrite =
                 (plan.Size == M68kOperandSize.Word && plan.DestinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
@@ -2635,6 +3259,37 @@ namespace Copper68k
                 UsePrefetchedInstructionWordForAddressErrorFrame();
             }
 
+            if (plan.Size == M68kOperandSize.Word &&
+                plan.DestinationMode != 4 &&
+                !destination.IsRegister &&
+                (destination.Address & 1) != 0)
+            {
+                AddInstructionCycles(GetMoveWordDestinationWriteFaultCycles(
+                    source.EaCycles,
+                    plan.DestinationMode,
+                    plan.DestinationRegister));
+            }
+            else if (plan.Size == M68kOperandSize.Word &&
+                plan.DestinationMode == 4 &&
+                !destination.IsRegister &&
+                (destination.Address & 1) != 0)
+            {
+                AddInstructionCycles(
+                    EstimateMoveCycles(source.EaCycles, plan.DestinationMode, plan.DestinationRegister, plan.Size) + 4);
+            }
+            else if (plan.Size == M68kOperandSize.Long && !destination.IsRegister && (destination.Address & 1) != 0)
+            {
+                var cycles = EstimateMoveCycles(
+                    source.EaCycles,
+                    plan.DestinationMode,
+                    plan.DestinationRegister,
+                    plan.Size);
+                AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(
+                    cycles,
+                    plan.DestinationMode,
+                    plan.DestinationRegister));
+            }
+
             WritePlannedEaValue(in destination, value);
             if (plan.DestinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
@@ -2656,7 +3311,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddInstructionCycles(EstimatePlannedMoveCycles(source.EaCycles, destination.IsRegister, plan.Size));
+            AddInstructionCycles(EstimateMoveCycles(source.EaCycles, plan.DestinationMode, plan.DestinationRegister, plan.Size));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2665,6 +3320,12 @@ namespace Copper68k
             var sourceRegister = plan.SourceRegister;
             var sourceAddress = State.A[sourceRegister];
             _dataAccessStackedProgramCounter = State.ProgramCounter;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            if ((sourceAddress & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+
             var value = ReadLong(sourceAddress);
             SetAddressRegister(sourceRegister, unchecked(sourceAddress + 4));
             State.D[plan.DestinationRegister] = value;
@@ -2681,6 +3342,11 @@ namespace Copper68k
             var destinationAddress = State.A[destinationRegister];
             var value = State.D[plan.SourceRegister];
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+            if ((destinationAddress & 1) != 0)
+            {
+                AddInstructionCycles(8);
+            }
+
             WriteLong(destinationAddress, value);
             SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
             State.SetNegativeZeroLong(value);
@@ -2698,11 +3364,17 @@ namespace Copper68k
             }
 
             var immediate = FetchImmediate(plan.Size);
+            AddInstructionCycles(GetImmediateFetchCycles(plan.Size));
             var destinationEa = ResolvePlannedEa(
                 plan.DestinationMode,
                 plan.DestinationRegister,
                 plan.Size,
                 write: plan.Variant != 5);
+            if (plan.Size != M68kOperandSize.Long && !destinationEa.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
             var destination = ReadPlannedEaValue(in destinationEa);
             switch (plan.Variant)
             {
@@ -2736,7 +3408,7 @@ namespace Copper68k
 
             AddInstructionCycles(plan.Variant == 5
                 ? GetCmpiCycles(plan.Size, plan.DestinationMode, plan.DestinationRegister)
-                : plan.Size == M68kOperandSize.Long ? 16 : 8);
+                : GetImmediateAluCycles(plan.DestinationMode, plan.DestinationRegister, plan.Size));
         }
 
         private void ExecutePackedImmediateBtst(ushort opcode, in M68kPackedOpcodePlan plan)
@@ -2759,67 +3431,19 @@ namespace Copper68k
         {
             var line = plan.Variant >> 4;
             var opmode = plan.Variant & 7;
-            var registerToEa = opmode >= 4;
-            if (line == 0xB)
+            if (plan.SourceMode != 0)
             {
-                registerToEa = true;
+                ExecuteRegisterArithmeticEaToData(
+                    line,
+                    opmode,
+                    plan.SourceMode,
+                    plan.SourceRegister,
+                    plan.Register,
+                    plan.Size);
+                return;
             }
 
-            var eaValue = State.D[plan.SourceRegister] & M68kCpuState.Mask(plan.Size);
-            var regValue = State.D[plan.Register] & M68kCpuState.Mask(plan.Size);
-            uint result;
-            switch (line)
-            {
-                case 0x8:
-                    result = eaValue | regValue;
-                    if (registerToEa)
-                    {
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
-                    }
-                    else
-                    {
-                        WriteDataRegister(plan.Register, result, plan.Size);
-                    }
-
-                    SetLogicFlags(result, plan.Size);
-                    break;
-                case 0x9:
-                    result = Subtract(regValue, eaValue, plan.Size, setExtend: true);
-                    WriteDataRegister(plan.Register, result, plan.Size);
-                    break;
-                case 0xB:
-                    if (opmode >= 4)
-                    {
-                        result = eaValue ^ regValue;
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
-                        SetLogicFlags(result, plan.Size);
-                    }
-                    else
-                    {
-                        _ = Subtract(regValue, eaValue, plan.Size, setExtend: false, storeResult: false);
-                    }
-
-                    break;
-                case 0xC:
-                    result = eaValue & regValue;
-                    if (registerToEa)
-                    {
-                        WriteDataRegister(plan.SourceRegister, result, plan.Size);
-                    }
-                    else
-                    {
-                        WriteDataRegister(plan.Register, result, plan.Size);
-                    }
-
-                    SetLogicFlags(result, plan.Size);
-                    break;
-                default:
-                    result = Add(regValue, eaValue, plan.Size, setExtend: true);
-                    WriteDataRegister(plan.Register, result, plan.Size);
-                    break;
-            }
-
-            AddInstructionCycles(plan.Size == M68kOperandSize.Long ? 12 : 8);
+            ExecuteDataRegisterArithmetic(line, opmode, plan.SourceRegister, plan.Register, plan.Size);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2828,7 +3452,7 @@ namespace Copper68k
             var result = State.D[plan.SourceRegister] | State.D[plan.Register];
             State.D[plan.Register] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2837,7 +3461,7 @@ namespace Copper68k
             var result = State.D[plan.SourceRegister] ^ State.D[plan.Register];
             State.D[plan.SourceRegister] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2846,7 +3470,7 @@ namespace Copper68k
             var result = State.D[plan.SourceRegister] & State.D[plan.Register];
             State.D[plan.Register] = result;
             SetLogicFlags(result, M68kOperandSize.Long);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2857,7 +3481,7 @@ namespace Copper68k
                 State.D[plan.SourceRegister],
                 M68kOperandSize.Long,
                 setExtend: true);
-            AddInstructionCycles(12);
+            AddInstructionCycles(8);
         }
 
         private static M68kOperandSize DecodeQuickSize(ushort opcode)
@@ -3040,6 +3664,11 @@ namespace Copper68k
         {
             _dataAccessStackedProgramCounter = operand.AddressErrorStackedProgramCounter;
             _dataReadFaultAccessKind = operand.ReadFaultAccessKind;
+            if (operand.EaCycles > 0)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, operand.EaCycles);
+            }
+
             if (operand.CompletePostIncrementBeforeRead)
             {
                 CompletePlannedMemoryEaAccess(in operand);
@@ -3077,6 +3706,11 @@ namespace Copper68k
                     return;
                 case 2:
                     _dataAccessStackedProgramCounter = operand.AddressErrorStackedProgramCounter;
+                    if (operand.EaCycles > 0)
+                    {
+                        AddInstructionCycles(operand.EaCycles);
+                    }
+
                     if (operand.Size == M68kOperandSize.Byte)
                     {
                         WriteByte(operand.Address, (byte)value);
@@ -3124,16 +3758,90 @@ namespace Copper68k
             }
         }
 
-        private static int EstimatePlannedMoveCycles(int sourceEaCycles, bool destinationIsRegister, M68kOperandSize size)
+        private static int EstimateMoveCycles(int sourceEaCycles, int destinationMode, int destinationRegister, M68kOperandSize size)
         {
-            var baseCycles = size == M68kOperandSize.Long ? 12 : 8;
-            if (destinationIsRegister)
+            if (destinationMode is 0 or 1)
             {
-                baseCycles = Math.Max(baseCycles, 4 + sourceEaCycles);
+                return 4 + sourceEaCycles;
             }
 
-            return baseCycles;
+            var baseCycles = size == M68kOperandSize.Long ? 8 : 4;
+            return baseCycles + sourceEaCycles + GetMoveDestinationEaCycles(destinationMode, destinationRegister);
         }
+
+        private static int GetMoveDestinationEaCycles(int mode, int reg)
+            => mode switch
+            {
+                2 or 3 or 4 => 4,
+                5 => 8,
+                6 => 10,
+                7 => reg switch
+                {
+                    0 => 8,
+                    1 => 12,
+                    _ => throw new InvalidOperationException("Invalid MOVE destination effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid MOVE destination effective-address timing mode.")
+            };
+
+        private static int GetMoveWordDestinationWriteFaultCycles(int sourceEaCycles, int destinationMode, int destinationRegister)
+        {
+            if (destinationMode == 7 && destinationRegister == 1)
+            {
+                return Math.Max(16, sourceEaCycles + 12);
+            }
+
+            return EstimateMoveCycles(sourceEaCycles, destinationMode, destinationRegister, M68kOperandSize.Word);
+        }
+
+        private static int GetMoveLongDestinationWriteFaultCycles(int successfulCycles, int destinationMode, int destinationRegister)
+        {
+            if (destinationMode == 4)
+            {
+                return successfulCycles;
+            }
+
+            if (destinationMode == 7 && destinationRegister == 1)
+            {
+                return successfulCycles - 8;
+            }
+
+            return successfulCycles - 4;
+        }
+
+        private static int GetMoveFromSrCycles(int mode, int reg)
+            => mode switch
+            {
+                0 => 6,
+                2 or 3 => 12,
+                4 => 14,
+                5 => 16,
+                6 => 18,
+                7 => reg switch
+                {
+                    0 => 16,
+                    1 => 20,
+                    _ => throw new InvalidOperationException("Invalid MOVE from SR destination timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid MOVE from SR destination timing mode.")
+            };
+
+        private static int GetMoveFromSrWriteFaultCycles(int mode, int reg)
+            => mode switch
+            {
+                2 => 8,
+                4 => 10,
+                3 => 8,
+                5 => 12,
+                6 => 14,
+                7 => reg switch
+                {
+                    0 => 12,
+                    1 => 16,
+                    _ => throw new InvalidOperationException("Invalid MOVE from SR destination timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid MOVE from SR destination timing mode.")
+            };
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RecordPlannedScalarFallback()
@@ -3275,6 +3983,11 @@ namespace Copper68k
                 opcode & 7,
                 size,
                 completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+            if (size == M68kOperandSize.Word && !src.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
             var value = src.Read();
             var srcMode = (opcode >> 3) & 7;
             var srcReg = opcode & 7;
@@ -3378,6 +4091,20 @@ namespace Copper68k
                 UsePrefetchedInstructionWordForAddressErrorFrame();
             }
 
+            if (size == M68kOperandSize.Word && destMode != 4 && !dest.IsRegister && (dest.Address & 1) != 0)
+            {
+                AddInstructionCycles(GetMoveWordDestinationWriteFaultCycles(src.EaCycles, destMode, destReg));
+            }
+            else if (size == M68kOperandSize.Word && destMode == 4 && !dest.IsRegister && (dest.Address & 1) != 0)
+            {
+                AddInstructionCycles(EstimateMoveCycles(src.EaCycles, destMode, destReg, size) + 4);
+            }
+            else if (size == M68kOperandSize.Long && !dest.IsRegister && (dest.Address & 1) != 0)
+            {
+                var cycles = EstimateMoveCycles(src.EaCycles, destMode, destReg, size);
+                AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(cycles, destMode, destReg));
+            }
+
             dest.Write(value);
             if (destMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
@@ -3399,7 +4126,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddInstructionCycles(EstimateEaCycles(src, dest, size, write: true));
+            AddInstructionCycles(EstimateMoveCycles(src.EaCycles, destMode, destReg, size));
             return true;
         }
 
@@ -3444,6 +4171,7 @@ namespace Copper68k
                 var target = (uint)(branchBase + offset);
                 if ((target & 1) != 0)
                 {
+                    AddInstructionCycles(18);
                     PushLong(State.ProgramCounter);
                     BranchTo(target, target);
                     return true;
@@ -3466,13 +4194,13 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    BranchTo(target, branchBase);
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
+                    BranchTo(target, branchBase);
                 }
                 else
                 {
                     _ = instructionPc;
-                    AddInstructionCycles(8);
+                    AddInstructionCycles(displacement == 0 ? 12 : 8);
                 }
 
                 return true;
@@ -3488,13 +4216,13 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    BranchTo(target, branchBase);
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
+                    BranchTo(target, branchBase);
                 }
                 else
                 {
                     _ = instructionPc;
-                    AddInstructionCycles(8);
+                    AddInstructionCycles(displacement == 0 ? 12 : 8);
                 }
 
                 return true;
@@ -3510,13 +4238,13 @@ namespace Copper68k
                         _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                     }
 
-                    BranchTo(target, branchBase);
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
+                    BranchTo(target, branchBase);
                 }
                 else
                 {
                     _ = instructionPc;
-                    AddInstructionCycles(8);
+                    AddInstructionCycles(displacement == 0 ? 12 : 8);
                 }
 
                 return true;
@@ -3530,13 +4258,13 @@ namespace Copper68k
                     _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, displacement == 0 ? 4 : 2);
                 }
 
-                BranchTo(target, branchBase);
                 AddInstructionCycles(displacement == 0 ? 10 : 10);
+                BranchTo(target, branchBase);
             }
             else
             {
                 _ = instructionPc;
-                AddInstructionCycles(8);
+                AddInstructionCycles(displacement == 0 ? 12 : 8);
             }
 
             return true;
@@ -3598,7 +4326,7 @@ namespace Copper68k
                         WriteByte(address, (byte)absoluteValue);
                     }
 
-                    AddInstructionCycles(14);
+                    AddInstructionCycles(GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit));
                     return true;
                 }
 
@@ -3617,7 +4345,9 @@ namespace Copper68k
                     bitEa.Write(value);
                 }
 
-                AddInstructionCycles(bitMode == 0 ? 10 : 14);
+                AddInstructionCycles(operation == 0
+                    ? GetImmediateBtstCycles(bitMode, bitReg)
+                    : GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit));
                 return true;
             }
 
@@ -3639,7 +4369,7 @@ namespace Copper68k
                     var immediateBit = State.D[bitRegister] & 7u;
                     var immediateMask = 1u << (int)immediateBit;
                     State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
-                    AddInstructionCycles(8);
+                    AddInstructionCycles(10);
                     return true;
                 }
 
@@ -3659,7 +4389,9 @@ namespace Copper68k
                     bitEa.Write(value);
                 }
 
-                AddInstructionCycles(bitMode == 0 ? 8 : 14);
+                AddInstructionCycles(operation == 0
+                    ? GetDynamicBtstCycles(bitMode, bitReg)
+                    : GetDynamicBitChangeCycles(operation, bitMode, bitReg, bit));
                 return true;
             }
 
@@ -3687,6 +4419,7 @@ namespace Copper68k
             }
 
             var immediate = FetchImmediate(size);
+            AddInstructionCycles(GetImmediateFetchCycles(size));
             var mode = (opcode >> 3) & 7;
             var reg = opcode & 7;
             var writesEffectiveAddress = high != 0x0C00;
@@ -3705,6 +4438,11 @@ namespace Copper68k
             if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
             {
                 SetAddressRegister(reg, ea.Address);
+            }
+
+            if (size != M68kOperandSize.Long && !ea.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
             var destination = ea.Read();
@@ -3738,7 +4476,9 @@ namespace Copper68k
                     break;
             }
 
-            AddInstructionCycles(high == 0x0C00 ? GetCmpiCycles(size, mode, reg) : size == M68kOperandSize.Long ? 16 : 8);
+            AddInstructionCycles(high == 0x0C00
+                ? GetCmpiCycles(size, mode, reg)
+                : GetImmediateAluCycles(mode, reg, size));
             return true;
         }
 
@@ -3804,7 +4544,7 @@ namespace Copper68k
             if ((opcode & 0x0040) == 0)
             {
                 SetCcr((ushort)result);
-                AddInstructionCycles(8);
+                AddInstructionCycles(20);
                 return true;
             }
 
@@ -3825,7 +4565,7 @@ namespace Copper68k
             {
                 case 0x44FC:
                     SetCcr((ushort)(FetchWord() & 0x001F));
-                    AddInstructionCycles(12);
+                    AddInstructionCycles(16);
                     return true;
                 case 0x46FC:
                     if (!State.GetFlag(M68kCpuState.Supervisor))
@@ -3835,7 +4575,7 @@ namespace Copper68k
                     }
 
                     State.StatusRegister = FetchWord();
-                    AddInstructionCycles(12);
+                    AddInstructionCycles(16);
                     return true;
                 case 0x4E70:
                     if (!State.GetFlag(M68kCpuState.Supervisor))
@@ -3872,15 +4612,15 @@ namespace Copper68k
                     var statusRegister = PullWord();
                     var programCounter = PullLong();
                     State.StatusRegister = statusRegister;
-                    BranchTo(programCounter, State.ProgramCounter);
                     AddInstructionCycles(20);
+                    BranchTo(programCounter, State.ProgramCounter);
                     return true;
                 }
                 case 0x4E75:
                 {
                     var programCounter = PullLong();
-                    BranchTo(programCounter, State.ProgramCounter);
                     AddInstructionCycles(16);
+                    BranchTo(programCounter, State.ProgramCounter);
                     return true;
                 }
                 case 0x4E76:
@@ -3897,8 +4637,8 @@ namespace Copper68k
                 {
                     SetCcr(PullWord());
                     var programCounter = PullLong();
+                    AddInstructionCycles(20);
                     BranchTo(programCounter, State.ProgramCounter);
-                    AddInstructionCycles(12);
                     return true;
                 }
                 case 0x4AFC:
@@ -3945,8 +4685,13 @@ namespace Copper68k
                 }
 
                 _addressErrorIsWriteOverride = false;
+                if (!ea.IsRegister && (ea.Address & 1) != 0)
+                {
+                    AddInstructionCycles(GetMoveFromSrWriteFaultCycles(mode, reg));
+                }
+
                 ea.Write(State.StatusRegister);
-                AddInstructionCycles(12);
+                AddInstructionCycles(GetMoveFromSrCycles(mode, reg));
                 return true;
             }
 
@@ -3957,8 +4702,13 @@ namespace Copper68k
                     opcode & 7,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!ea.IsRegister && (ea.Address & 1) != 0)
+                {
+                    AddInstructionCycles(4);
+                }
+
                 SetCcr((ushort)ea.Read());
-                AddInstructionCycles(12);
+                AddInstructionCycles(12 + (ea.IsRegister ? 0 : ea.EaCycles));
                 return true;
             }
 
@@ -3975,8 +4725,13 @@ namespace Copper68k
                     opcode & 7,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!ea.IsRegister && (ea.Address & 1) != 0)
+                {
+                    AddInstructionCycles(4);
+                }
+
                 State.StatusRegister = (ushort)ea.Read();
-                AddInstructionCycles(12);
+                AddInstructionCycles(12 + (ea.IsRegister ? 0 : ea.EaCycles));
                 return true;
             }
 
@@ -4008,6 +4763,7 @@ namespace Copper68k
                 var reg = opcode & 7;
                 if ((State.A[reg] & 1) != 0)
                 {
+                    AddInstructionCycles(8);
                     _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
                     ThrowOddAddressAccess(
                         State.A[reg],
@@ -4042,9 +4798,11 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x4840)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
                 PushLong(ea.Address);
-                AddInstructionCycles(12);
+                AddInstructionCycles(GetPeaCycles(mode, reg));
                 return true;
             }
 
@@ -4075,15 +4833,18 @@ namespace Copper68k
             if ((opcode & 0xF1C0) == 0x41C0)
             {
                 var addressRegister = (opcode >> 9) & 7;
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                var ea = ResolveEa(mode, register, M68kOperandSize.Long, addressOnly: true);
                 SetAddressRegister(addressRegister, ea.Address);
-                AddInstructionCycles(8);
+                AddInstructionCycles(GetLeaCycles(mode, register));
                 return true;
             }
 
             if ((opcode & 0xFFF8) == 0x4E90)
             {
                 var target = State.A[opcode & 7];
+                AddInstructionCycles(GetJmpCycles(2, opcode & 7));
                 JumpToSubroutine(target, State.ProgramCounter);
                 AddInstructionCycles(16);
                 return true;
@@ -4091,18 +4852,23 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x4E80)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
+                AddInstructionCycles(GetJmpCycles(mode, reg));
                 JumpToSubroutine(ea.Address, State.ProgramCounter);
-                AddInstructionCycles(18);
+                AddInstructionCycles(GetJsrCycles(mode, reg));
                 return true;
             }
 
             if ((opcode & 0xFFC0) == 0x4EC0)
             {
                 var targetStackedProgramCounter = State.ProgramCounter;
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Long, addressOnly: true);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
+                AddInstructionCycles(GetJmpCycles(mode, reg));
                 BranchTo(ea.Address, targetStackedProgramCounter);
-                AddInstructionCycles(12);
                 return true;
             }
 
@@ -4126,7 +4892,7 @@ namespace Copper68k
                     out var overflow);
                 ea.Write(result);
                 SetBcdFlags(result, carry, overflow);
-                AddInstructionCycles(ea.IsRegister ? 6 : 8);
+                AddInstructionCycles(ea.IsRegister ? 6 : 8 + ea.EaCycles);
                 return true;
             }
 
@@ -4180,6 +4946,11 @@ namespace Copper68k
                     SetAddressRegister(reg, ea.Address);
                 }
 
+                if (size != M68kOperandSize.Long && !ea.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var value = ea.Read();
                 switch (unary)
                 {
@@ -4210,35 +4981,42 @@ namespace Copper68k
                         break;
                 }
 
-                AddInstructionCycles(size == M68kOperandSize.Long ? 12 : 8);
+                AddInstructionCycles(GetUnaryCycles(unary, mode, reg, size));
                 return true;
             }
 
             if ((opcode & 0xF1C0) == 0x4180)
             {
                 var dataRegister = (opcode >> 9) & 7;
+                var mode = (opcode >> 3) & 7;
                 var ea = ResolveEa(
-                    (opcode >> 3) & 7,
+                    mode,
                     opcode & 7,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!ea.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var upperBound = (short)(ushort)ea.Read();
                 var value = (short)(ushort)(State.D[dataRegister] & 0xFFFF);
                 var status = (ushort)(State.StatusRegister &
                     unchecked((ushort)~(M68kCpuState.Negative | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry)));
                 State.StatusRegister = status;
+                var trapCycles = 38 + (ea.IsRegister ? 0 : ea.EaCycles);
                 if (value < 0)
                 {
                     State.StatusRegister = (ushort)(status | M68kCpuState.Negative);
-                    RaiseException(6, State.ProgramCounter, 40);
+                    RaiseException(6, State.ProgramCounter, trapCycles + GetChkLowerBoundTrapExtraCycles(value, upperBound));
                 }
                 else if (value > upperBound)
                 {
-                    RaiseException(6, State.ProgramCounter, 40);
+                    RaiseException(6, State.ProgramCounter, trapCycles);
                 }
                 else
                 {
-                    AddInstructionCycles(10);
+                    AddInstructionCycles(10 + (ea.IsRegister ? 0 : ea.EaCycles));
                 }
 
                 return true;
@@ -4267,9 +5045,9 @@ namespace Copper68k
                             _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
                         }
 
+                        AddInstructionCycles(10);
                         BranchTo(target, State.ProgramCounter);
                         State.D[reg] = (State.D[reg] & 0xFFFF_0000) | counter;
-                        AddInstructionCycles(10);
                     }
                     else
                     {
@@ -4289,8 +5067,9 @@ namespace Copper68k
             {
                 var condition = (opcode >> 8) & 0x0F;
                 var conditionEa = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Byte, write: true);
-                conditionEa.Write(CheckCondition(condition) ? 0xFFu : 0u);
-                AddInstructionCycles(8);
+                var conditionTrue = CheckCondition(condition);
+                conditionEa.Write(conditionTrue ? 0xFFu : 0u);
+                AddInstructionCycles(conditionEa.IsRegister ? conditionTrue ? 6 : 4 : 8 + conditionEa.EaCycles);
                 return true;
             }
 
@@ -4347,12 +5126,17 @@ namespace Copper68k
                 SetAddressRegister(opcode & 7, ea.Address);
             }
 
+            if (mode != 0 && size != M68kOperandSize.Long)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
             var old = ea.Read();
             var result = subtract
                 ? Subtract(old, (uint)count, size, setExtend: true)
                 : Add(old, (uint)count, size, setExtend: true);
             ea.Write(result);
-            AddInstructionCycles(size == M68kOperandSize.Long ? 8 : 4);
+            AddInstructionCycles(GetAddqSubqCycles(mode, opcode & 7, size));
             return true;
         }
 
@@ -4424,15 +5208,226 @@ namespace Copper68k
             return mode == 0 ? 10 : 8 + GetByteWordEaOperandCycles(mode, reg);
         }
 
+        private static int GetImmediateBitChangeCycles(int operation, int mode, int reg, int bit)
+        {
+            if (mode != 0)
+            {
+                return 12 + GetByteWordEaOperandCycles(mode, reg);
+            }
+
+            var baseCycles = operation == 2 ? 12 : 10;
+            return bit >= 16 ? baseCycles + 2 : baseCycles;
+        }
+
+        private static int GetDynamicBtstCycles(int mode, int reg)
+        {
+            return mode == 0 ? 6 : 4 + GetByteWordEaOperandCycles(mode, reg);
+        }
+
+        private static int GetDynamicBitChangeCycles(int operation, int mode, int reg, uint bit)
+        {
+            if (mode != 0)
+            {
+                return 8 + GetByteWordEaOperandCycles(mode, reg);
+            }
+
+            var baseCycles = operation == 2 ? 8 : 6;
+            return bit >= 16 ? baseCycles + 2 : baseCycles;
+        }
+
         private static int GetCmpiCycles(M68kOperandSize size, int mode, int reg)
+        {
+            if (mode == 0)
+            {
+                return size == M68kOperandSize.Long ? 14 : 8;
+            }
+
+            var eaCycles = GetEaOperandCycles(mode, reg, size);
+            return (size == M68kOperandSize.Long ? 12 : 8) + eaCycles;
+        }
+
+        private static int GetImmediateAluCycles(int mode, int reg, M68kOperandSize size)
         {
             if (mode == 0)
             {
                 return size == M68kOperandSize.Long ? 16 : 8;
             }
 
-            var eaCycles = GetEaOperandCycles(mode, reg, size);
-            return (size == M68kOperandSize.Long ? 12 : 8) + eaCycles;
+            var baseCycles = size == M68kOperandSize.Long ? 20 : 12;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetAluEaToDataCycles(int mode, int reg, M68kOperandSize size)
+        {
+            if (mode == 0)
+            {
+                return size == M68kOperandSize.Long ? 8 : 4;
+            }
+
+            if (mode == 1)
+            {
+                return size == M68kOperandSize.Long ? 8 : 4;
+            }
+
+            if (mode == 7 && reg == 4 && size == M68kOperandSize.Long)
+            {
+                return 16;
+            }
+
+            var baseCycles = size == M68kOperandSize.Long ? 6 : 4;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetCompareCycles(int mode, int reg, M68kOperandSize size)
+        {
+            if (mode is 0 or 1)
+            {
+                return size == M68kOperandSize.Long ? 6 : 4;
+            }
+
+            var baseCycles = size == M68kOperandSize.Long ? 6 : 4;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetAluDataToEaCycles(int mode, int reg, M68kOperandSize size)
+        {
+            if (mode == 0)
+            {
+                return size == M68kOperandSize.Long ? 8 : 4;
+            }
+
+            var baseCycles = size == M68kOperandSize.Long ? 12 : 8;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetAddqSubqCycles(int mode, int reg, M68kOperandSize size)
+        {
+            if (mode == 0)
+            {
+                return size == M68kOperandSize.Long ? 8 : 4;
+            }
+
+            if (mode == 1)
+            {
+                return 8;
+            }
+
+            var baseCycles = size == M68kOperandSize.Long ? 12 : 8;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetAddressArithmeticCycles(
+            int sourceMode,
+            int sourceRegister,
+            bool sourceIsRegister,
+            int sourceEaCycles,
+            M68kOperandSize size)
+        {
+            if (sourceMode == 7 && sourceRegister == 4)
+            {
+                return size == M68kOperandSize.Long ? 16 : 12;
+            }
+
+            if (sourceIsRegister)
+            {
+                return 8;
+            }
+
+            return (size == M68kOperandSize.Long ? 6 : 8) + sourceEaCycles;
+        }
+
+        private static int GetCompareAddressCycles(
+            int sourceMode,
+            int sourceRegister,
+            bool sourceIsRegister,
+            int sourceEaCycles,
+            M68kOperandSize size)
+        {
+            if (sourceIsRegister)
+            {
+                return 6;
+            }
+
+            if (sourceMode == 7 && sourceRegister == 4)
+            {
+                return size == M68kOperandSize.Long ? 14 : 10;
+            }
+
+            return 6 + sourceEaCycles;
+        }
+
+        private static int GetUnaryCycles(int operation, int mode, int reg, M68kOperandSize size)
+        {
+            if (mode == 0)
+            {
+                return operation == 0x4A00 || size != M68kOperandSize.Long ? 4 : 6;
+            }
+
+            var baseCycles = operation == 0x4A00
+                ? 4
+                : size == M68kOperandSize.Long ? 12 : 8;
+            return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        private static int GetJmpCycles(int mode, int reg)
+            => mode switch
+            {
+                2 => 8,
+                5 => 10,
+                6 => 14,
+                7 => reg switch
+                {
+                    0 => 10,
+                    1 => 12,
+                    2 => 10,
+                    3 => 14,
+                    _ => throw new InvalidOperationException("Invalid JMP effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid JMP effective-address timing mode.")
+            };
+
+        private static int GetJsrCycles(int mode, int reg)
+            => mode == 2 ? 16 : GetJmpCycles(mode, reg) + 8;
+
+        private static int GetPeaCycles(int mode, int reg)
+            => mode switch
+            {
+                2 => 12,
+                5 => 16,
+                6 => 20,
+                7 => reg switch
+                {
+                    0 or 2 => 16,
+                    1 or 3 => 20,
+                    _ => throw new InvalidOperationException("Invalid PEA effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid PEA effective-address timing mode.")
+            };
+
+        private static int GetLeaCycles(int mode, int reg)
+            => mode switch
+            {
+                2 => 4,
+                5 => 8,
+                6 => 12,
+                7 => reg switch
+                {
+                    0 or 2 => 8,
+                    1 or 3 => 12,
+                    _ => throw new InvalidOperationException("Invalid LEA effective-address timing mode.")
+                },
+                _ => throw new InvalidOperationException("Invalid LEA effective-address timing mode.")
+            };
+
+        private static int GetChkLowerBoundTrapExtraCycles(short value, short upperBound)
+        {
+            if (value > upperBound)
+            {
+                return 0;
+            }
+
+            var compareResult = value - upperBound;
+            return compareResult is < short.MinValue or > short.MaxValue ? 0 : 2;
         }
 
         private static int GetEaOperandCycles(int mode, int reg, M68kOperandSize size)
@@ -4453,7 +5448,9 @@ namespace Copper68k
                 7 => reg switch
                 {
                     0 or 2 => 8,
-                    1 or 3 => 12,
+                    1 => 12,
+                    3 => 10,
+                    4 => 4,
                     _ => throw new InvalidOperationException("Invalid byte/word effective-address timing mode.")
                 },
                 _ => throw new InvalidOperationException("Invalid byte/word effective-address timing mode.")
@@ -4471,7 +5468,9 @@ namespace Copper68k
                 7 => reg switch
                 {
                     0 or 2 => 12,
-                    1 or 3 => 16,
+                    1 => 16,
+                    3 => 14,
+                    4 => 8,
                     _ => throw new InvalidOperationException("Invalid long effective-address timing mode.")
                 },
                 _ => throw new InvalidOperationException("Invalid long effective-address timing mode.")
@@ -4519,6 +5518,11 @@ namespace Copper68k
                     eaReg,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!sourceEa.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var source = sourceEa.Read();
                 State.D[reg] = (uint)((ushort)State.D[reg] * (ushort)source);
                 State.SetNegativeZeroLong(State.D[reg]);
@@ -4535,6 +5539,11 @@ namespace Copper68k
                     eaReg,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!sourceEa.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var source = unchecked((short)sourceEa.Read());
                 State.D[reg] = (uint)(unchecked((short)State.D[reg]) * source);
                 State.SetNegativeZeroLong(State.D[reg]);
@@ -4551,6 +5560,11 @@ namespace Copper68k
                     eaReg,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
+                if (!sourceEa.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var divisor = sourceEa.Read() & 0xFFFF;
                 if (divisor == 0)
                 {
@@ -4604,7 +5618,7 @@ namespace Copper68k
                     }
                 }
 
-                AddInstructionCycles(GetDivideCycles(sourceEa.EaCycles, dividend, (ushort)divisor, signed: opmode == 7));
+                AddInstructionCycles(4 + GetDivideCycles(sourceEa.EaCycles, dividend, (ushort)divisor, signed: opmode == 7));
                 return true;
             }
 
@@ -4616,6 +5630,11 @@ namespace Copper68k
                     eaReg,
                     size,
                     completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+                if (size != M68kOperandSize.Long && !ea.IsRegister)
+                {
+                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                }
+
                 var value = ea.Read();
                 if (line == 0xB)
                 {
@@ -4633,7 +5652,9 @@ namespace Copper68k
                     SetAddressRegister(reg, State.A[reg] + M68kCpuState.SignExtend(value, size));
                 }
 
-                AddInstructionCycles(size == M68kOperandSize.Long ? 8 : 6);
+                AddInstructionCycles(line == 0xB
+                    ? GetCompareAddressCycles(mode, eaReg, ea.IsRegister, ea.EaCycles, size)
+                    : GetAddressArithmeticCycles(mode, eaReg, ea.IsRegister, ea.EaCycles, size));
                 return true;
             }
 
@@ -4671,6 +5692,11 @@ namespace Copper68k
             if (writesEffectiveAddress && operandSize == M68kOperandSize.Long && mode == 4)
             {
                 SetAddressRegister(eaReg, eaOperand.Address);
+            }
+
+            if (operandSize != M68kOperandSize.Long && !eaOperand.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
             var eaValue = eaOperand.Read();
@@ -4758,7 +5784,11 @@ namespace Copper68k
                     break;
             }
 
-            AddInstructionCycles(operandSize == M68kOperandSize.Long ? 12 : 8);
+            AddInstructionCycles(line == 0xB && opmode < 4
+                ? GetCompareCycles(mode, eaReg, operandSize)
+                : registerToEa
+                    ? GetAluDataToEaCycles(mode, eaReg, operandSize)
+                    : GetAluEaToDataCycles(mode, eaReg, operandSize));
             return true;
         }
 
@@ -4852,6 +5882,7 @@ namespace Copper68k
             if (size != M68kOperandSize.Byte && (sourceAddress & 1) != 0)
             {
                 SetAddressRegister(sourceRegister, sourceAddress + 2);
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 8);
                 if (size == M68kOperandSize.Word)
                 {
                     _ = ReadWord(sourceAddress);
@@ -4871,6 +5902,11 @@ namespace Copper68k
             SetAddressRegister(sourceRegister, sourceAddress + AddressIncrement(sourceRegister, size));
 
             var destinationAddress = State.A[destinationRegister];
+            if (size != M68kOperandSize.Byte && (destinationAddress & 1) != 0)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, size == M68kOperandSize.Long ? 16 : 12);
+            }
+
             var destination = size switch
             {
                 M68kOperandSize.Byte => ReadByte(destinationAddress),
@@ -4943,6 +5979,8 @@ namespace Copper68k
                     SetAddressRegister(sourceRegister, sourceAddress);
                 }
 
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 10);
+
                 source = size switch
                 {
                     M68kOperandSize.Byte => ReadByte(sourceAddress),
@@ -4954,6 +5992,7 @@ namespace Copper68k
                     SetAddressRegister(sourceRegister, sourceAddress);
                 }
 
+                AddInstructionCyclesFromBase(_instructionCycleFloor, size == M68kOperandSize.Long ? 8 : 4);
                 destinationAddress = State.A[destinationRegister] - AddressIncrement(destinationRegister, size);
                 if (size != M68kOperandSize.Long)
                 {
@@ -4992,7 +6031,9 @@ namespace Copper68k
                 WriteLongDescending(destinationAddress, result);
             }
 
-            AddInstructionCycles(mode == 0 ? 4 : size == M68kOperandSize.Long ? 30 : 18);
+            AddInstructionCycles(mode == 0
+                ? size == M68kOperandSize.Long ? 8 : 4
+                : size == M68kOperandSize.Long ? 30 : 18);
         }
 
         private bool DecodeShiftRotate(ushort opcode)
@@ -5010,12 +6051,13 @@ namespace Copper68k
                     M68kOperandSize.Word,
                     write: true,
                     completeWordPostIncrementBeforeRead: true);
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
                 var value = ea.Read() & 0xFFFF;
                 var type = (opcode >> 9) & 3;
                 var left = (opcode & 0x0100) != 0;
                 var result = Shift(value, 1, M68kOperandSize.Word, type, left);
                 ea.Write(result);
-                AddInstructionCycles(8);
+                AddInstructionCycles(8 + ea.EaCycles);
                 return true;
             }
 
@@ -5047,7 +6089,7 @@ namespace Copper68k
             var valueRegister = State.D[reg] & M68kCpuState.Mask(size);
             var shifted = Shift(valueRegister, count, size, typeRegister, leftRegister);
             WriteDataRegister(reg, shifted, size);
-            AddInstructionCycles(6 + (count * 2));
+            AddInstructionCycles((size == M68kOperandSize.Long ? 8 : 6) + (count * 2));
             return true;
         }
 
@@ -5063,6 +6105,8 @@ namespace Copper68k
             {
                 var address = State.A[reg];
                 _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
+                var predecrementTransferCycles = size == M68kOperandSize.Long ? 8 : 4;
+                var predecrementTransferred = 0;
                 for (var bit = 0; bit < 16; bit++)
                 {
                     if ((registerMask & (1 << bit)) == 0)
@@ -5073,6 +6117,7 @@ namespace Copper68k
                     var register = 15 - bit;
                     address -= (uint)size;
                     var value = register < 8 ? State.D[register] : State.A[register - 8];
+                    AddInstructionCycles(12 + (predecrementTransferred * predecrementTransferCycles));
                     if (size == M68kOperandSize.Word)
                     {
                         WriteWord(address, (ushort)value);
@@ -5081,10 +6126,12 @@ namespace Copper68k
                     {
                         WriteLongDescending(address, value);
                     }
+
+                    predecrementTransferred++;
                 }
 
                 SetAddressRegister(reg, address);
-                AddInstructionCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
+                AddInstructionCycles(8 + CountBits(registerMask) * predecrementTransferCycles);
                 return;
             }
 
@@ -5092,6 +6139,8 @@ namespace Copper68k
             var current = ea.Address;
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             _dataReadFaultAccessKind = ea.ReadFaultAccessKind;
+            var transferCycles = size == M68kOperandSize.Long ? 8 : 4;
+            var transferred = 0;
             for (var register = 0; register < 16; register++)
             {
                 if ((registerMask & (1 << register)) == 0)
@@ -5101,6 +6150,8 @@ namespace Copper68k
 
                 if (directionMemoryToRegisters)
                 {
+                    var readFaultBaseCycles = size == M68kOperandSize.Word ? 8 : 4;
+                    AddInstructionCycles(readFaultBaseCycles + ea.EaCycles + (transferred * transferCycles));
                     var value = size == M68kOperandSize.Word
                         ? M68kCpuState.SignExtend(ReadWord(current), M68kOperandSize.Word)
                         : ReadLong(current);
@@ -5115,6 +6166,8 @@ namespace Copper68k
                 }
                 else
                 {
+                    var writeFaultBaseCycles = size == M68kOperandSize.Word ? 8 : 4;
+                    AddInstructionCycles(writeFaultBaseCycles + ea.EaCycles + (transferred * transferCycles));
                     var value = register < 8 ? State.D[register] : State.A[register - 8];
                     if (size == M68kOperandSize.Word)
                     {
@@ -5127,6 +6180,7 @@ namespace Copper68k
                 }
 
                 current += (uint)size;
+                transferred++;
             }
 
             if (directionMemoryToRegisters && mode == 3)
@@ -5134,7 +6188,10 @@ namespace Copper68k
                 SetAddressRegister(reg, current);
             }
 
-            AddInstructionCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
+            var baseCycles = directionMemoryToRegisters
+                ? (size == M68kOperandSize.Word ? 8 : 4) + ea.EaCycles
+                : size == M68kOperandSize.Word ? 4 + ea.EaCycles : ea.EaCycles;
+            AddInstructionCycles(baseCycles + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
         }
 
         private EaOperand ResolveEa(
@@ -5327,6 +6384,14 @@ namespace Copper68k
             State.A[reg] = value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteLeaDisplacementToAddress(int sourceRegister, int destinationRegister)
+        {
+            var displacement = unchecked((short)FetchWord());
+            SetAddressRegister(destinationRegister, unchecked((uint)(State.A[sourceRegister] + displacement)));
+            AddInstructionCycles(8);
+        }
+
         private uint Add(uint destination, uint source, M68kOperandSize size, bool setExtend)
         {
             var arithmetic = M68kIntegerSemantics.Add(destination, source, size);
@@ -5439,6 +6504,9 @@ namespace Copper68k
             };
         }
 
+        private static int GetImmediateFetchCycles(M68kOperandSize size)
+            => size == M68kOperandSize.Long ? 8 : 4;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort FetchWord()
         {
@@ -5476,6 +6544,7 @@ namespace Copper68k
         private void FlushPrefetch()
         {
             _prefetchValid = false;
+            _prefetchDeferredCpuBusBatchEligible = false;
         }
 
         private void SetProgramCounterAndFlushPrefetch(uint target)
@@ -5577,13 +6646,18 @@ namespace Copper68k
                     (!TryGetInstructionFetchWindow(bus, address, out _instructionFetchWindow) ||
                     !_instructionFetchWindow.ContainsWord(address)))
                 {
+                    _prefetchDeferredCpuBusBatchEligible = false;
                     return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
                 }
 
+                _prefetchDeferredCpuBusBatchEligible =
+                    _deferredCpuInstructionTiming?.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+                        in _instructionFetchWindow) == true;
                 bus.CommitInstructionFetchWindowWord(in _instructionFetchWindow, address, ref cycle);
                 return _instructionFetchWindow.ReadWord(address);
             }
 
+            _prefetchDeferredCpuBusBatchEligible = false;
             return _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
         }
 
@@ -5877,6 +6951,19 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AddInstructionCyclesFromBase(long baseCycle, int cycles)
+        {
+            System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
+            if (_instructionCycleFloorActive)
+            {
+                _instructionCycleFloor = Math.Max(_instructionCycleFloor, baseCycle + cycles);
+                return;
+            }
+
+            State.Cycles = Math.Max(State.Cycles, baseCycle) + cycles;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void BeginInstructionCycleFloor(long startCycle)
         {
             _instructionCycleFloorActive = true;
@@ -5890,7 +6977,14 @@ namespace Copper68k
         private int CompleteInstruction(long startCycle)
         {
             var completedCycle = Math.Max(_instructionCycleFloor, _cpuRetireBusCycle);
-            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref completedCycle);
+            if (_deferredCpuInstructionTiming is { IsDeferredCpuBusBatchActive: true })
+            {
+            }
+            else
+            {
+                _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref completedCycle);
+            }
+
             _cpuBusCycle = Math.Max(_cpuBusCycle, completedCycle);
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, completedCycle);
             if (State.Cycles < completedCycle)
@@ -5918,6 +7012,7 @@ namespace Copper68k
             M68kBusAccessKind accessKind,
             bool useDataAccessStackedProgramCounter = false)
         {
+            var exceptionCycleBase = Math.Max(Math.Max(State.Cycles, _cpuRetireBusCycle), _instructionCycleFloor);
             var savedStatusRegister = State.StatusRegister;
             var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
             var frameIsWrite = _addressErrorIsWriteOverride ?? isWrite;
@@ -5925,6 +7020,7 @@ namespace Copper68k
                 !useDataAccessStackedProgramCounter
                 ? State.ProgramCounter
                 : _dataAccessStackedProgramCounter;
+            State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
@@ -5932,7 +7028,7 @@ namespace Copper68k
             PushLong(faultAddress);
             PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, frameIsWrite, accessKind));
             SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
-            AddInstructionCycles(AddressErrorExceptionCycles);
+            AddInstructionCyclesFromBase(exceptionCycleBase, AddressErrorExceptionCycles);
         }
 
         private static ushort CreateBusErrorStatusWord(
@@ -6321,6 +7417,11 @@ namespace Copper68k
             {
                 _cpu._dataAccessStackedProgramCounter = _addressErrorStackedProgramCounter;
                 _cpu._dataReadFaultAccessKind = _readFaultAccessKind;
+                if (EaCycles > 0)
+                {
+                    _cpu.AddInstructionCyclesFromBase(_cpu._instructionCycleFloor, EaCycles);
+                }
+
                 CompleteBeforeReadMemoryAccess();
                 var value = _cpu.ReadByte(Address);
                 CompleteReadMemoryAccess();
@@ -6331,6 +7432,11 @@ namespace Copper68k
             {
                 _cpu._dataAccessStackedProgramCounter = _addressErrorStackedProgramCounter;
                 _cpu._dataReadFaultAccessKind = _readFaultAccessKind;
+                if (EaCycles > 0)
+                {
+                    _cpu.AddInstructionCyclesFromBase(_cpu._instructionCycleFloor, EaCycles);
+                }
+
                 CompleteBeforeReadMemoryAccess();
                 var value = _cpu.ReadWord(Address);
                 CompleteReadMemoryAccess();
@@ -6341,6 +7447,11 @@ namespace Copper68k
             {
                 _cpu._dataAccessStackedProgramCounter = _addressErrorStackedProgramCounter;
                 _cpu._dataReadFaultAccessKind = _readFaultAccessKind;
+                if (EaCycles > 0)
+                {
+                    _cpu.AddInstructionCyclesFromBase(_cpu._instructionCycleFloor, EaCycles);
+                }
+
                 CompleteBeforeReadMemoryAccess();
                 var value = _cpu.ReadLong(Address);
                 CompleteReadMemoryAccess();
@@ -6390,6 +7501,11 @@ namespace Copper68k
                         break;
                     case 2:
                         _cpu._dataAccessStackedProgramCounter = _addressErrorStackedProgramCounter;
+                        if (EaCycles > 0)
+                        {
+                            _cpu.AddInstructionCycles(EaCycles);
+                        }
+
                         if (Size == M68kOperandSize.Byte)
                         {
                             _cpu.WriteByte(Address, (byte)value);

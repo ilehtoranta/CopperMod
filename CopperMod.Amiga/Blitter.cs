@@ -669,6 +669,11 @@ namespace CopperMod.Amiga
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
+            if (CustomRegisterScheduleClassifier.IsBlitterBusScheduleAffectingWrite(offset))
+            {
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+            }
+
             var schedulerWake = CaptureSchedulerWakeSignature();
             AdvanceTo(cycle);
             try

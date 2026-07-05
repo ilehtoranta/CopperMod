@@ -229,7 +229,7 @@ namespace Copper68k
             {
                 BeginInstruction(opcode);
                 _ = FetchWord();
-                if (opcode == 0xFF00 && _bus.HasHostTrapStub(State.LastInstructionProgramCounter))
+                if (opcode == 0xFF00)
                 {
                     var trapId = FetchWord();
                     var returnProgramCounter = State.ProgramCounter;

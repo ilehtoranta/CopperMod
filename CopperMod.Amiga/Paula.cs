@@ -221,6 +221,11 @@ namespace CopperMod.Amiga
         public void ScheduleWrite(long cycle, ushort offset, ushort value)
         {
             offset = (ushort)(offset & 0x01FE);
+            if (CustomRegisterScheduleClassifier.IsPaulaBusScheduleAffectingWrite(offset))
+            {
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+            }
+
             var pending = new PendingWrite(cycle, offset, value);
             _writes.Add(new CustomRegisterWrite(cycle, offset, value));
             var insertIndex = _pendingWrites.Count;
@@ -393,6 +398,34 @@ namespace CopperMod.Amiga
             return candidate == long.MaxValue
                 ? null
                 : ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        internal long? GetCpuVisibleInterruptRequestCycle(
+            ushort bit,
+            long requestCycle,
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            bit = (ushort)(bit & 0x3FFF);
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            requestCycle = Math.Max(0, requestCycle);
+            if (bit == 0 ||
+                targetCycle <= currentCycle ||
+                !IsInterruptEnabled(bit))
+            {
+                return null;
+            }
+
+            var level = GetInterruptLevelForBit(bit);
+            if (level <= 0 || (cpuInterruptMask >= 0 && level <= (cpuInterruptMask & 0x07)))
+            {
+                return null;
+            }
+
+            var releaseCycle = Math.Max(currentCycle + 1, GetCpuInterruptReleaseCycle(bit, requestCycle));
+            return releaseCycle <= targetCycle ? releaseCycle : null;
         }
 
         internal bool HasCpuWakeWorkThrough(long targetCycle, int cpuInterruptMask)

@@ -741,6 +741,31 @@ namespace CopperMod.Amiga
             AdvanceTo(completedCycle);
         }
 
+        internal bool TryPredictCpuDataSingleSlot(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle)
+        {
+            grantedCycle = 0;
+            if (size == AmigaBusAccessSize.Long || requestedCycle < 0)
+            {
+                return false;
+            }
+
+            grantedCycle = FindFreeCpuSingleSlot(
+                requestedCycle,
+                kind,
+                target,
+                address,
+                size,
+                isWrite);
+            return true;
+        }
+
         [HotPath]
         public void GrantCpuDataLongSlots(
             AmigaBusAccessKind kind,

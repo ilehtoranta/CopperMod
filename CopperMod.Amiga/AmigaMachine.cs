@@ -45,6 +45,16 @@ namespace CopperMod.Amiga
 
         public bool HardwareSpecializationEnabled { get; private set; }
 
+        public bool CopperQuiescentFastPathEnabled { get; private set; }
+
+        public bool CopperQuiescentFastPathVerifyEnabled { get; private set; }
+
+        public bool CopperQuiescentDiagnosticsEnabled { get; private set; }
+
+        public bool DeferredCpuBusBatchEnabled { get; private set; }
+
+        public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
+
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
         public IM68kBackendCoreFactory CpuFactory { get; private set; } = AmigaM68kCoreFactory.Default;
@@ -120,6 +130,26 @@ namespace CopperMod.Amiga
         public AmigaMachineOptions WithHardwareSpecialization(bool enabled)
         {
             HardwareSpecializationEnabled = enabled;
+            return this;
+        }
+
+        public AmigaMachineOptions WithCopperQuiescentFastPath(bool enabled, bool verify)
+        {
+            CopperQuiescentFastPathEnabled = enabled;
+            CopperQuiescentFastPathVerifyEnabled = verify;
+            return this;
+        }
+
+        public AmigaMachineOptions WithCopperQuiescentDiagnostics(bool enabled)
+        {
+            CopperQuiescentDiagnosticsEnabled = enabled;
+            return this;
+        }
+
+        public AmigaMachineOptions WithDeferredCpuBusBatch(bool enabled, bool verify)
+        {
+            DeferredCpuBusBatchEnabled = enabled;
+            DeferredCpuBusBatchVerifyEnabled = verify;
             return this;
         }
 
@@ -228,7 +258,12 @@ namespace CopperMod.Amiga
                 options.HardwareSpecializationEnabled,
                 options.RealTimeClockEnabled,
                 null,
-                options.Hardfiles);
+                options.Hardfiles,
+                options.CopperQuiescentFastPathEnabled,
+                options.CopperQuiescentFastPathVerifyEnabled,
+                options.DeferredCpuBusBatchEnabled,
+                options.DeferredCpuBusBatchVerifyEnabled,
+                options.CopperQuiescentDiagnosticsEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {

@@ -26,9 +26,17 @@ var allWorkloads = new[]
     new BenchmarkWorkload("Full Contact original single-drive", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip", Profile: "expanded-kickstart13 - singledrive.json"),
     new BenchmarkWorkload("Arte sanity single-drive", "Arte (Sanity).zip", Profile: "expanded-kickstart13 - singledrive.json"),
     new BenchmarkWorkload("FC FLT intro", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip", FireFrame: 260),
+    new BenchmarkWorkload(
+        "Hired Guns",
+        "Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip",
+        Profile: "expanded-copperstart.json",
+        LaunchPath: "C/SystemTakeover|Hired Guns|Hired Guns.info"),
     new BenchmarkWorkload("North & South CP intro", "North & South (1989)(Infogrames)(M5)[cr CP].zip", FireFrame: 260),
     new BenchmarkWorkload("Shadow of the Beast IPF", "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip"),
     new BenchmarkWorkload("Workbench 1.3", "Workbench v1.3 rev 34.20 (1988)(Commodore)(A500-A2000)(Disk 1 of 2)(Workbench)[m].zip"),
+    new BenchmarkWorkload("Major Motion OK", "OK\\Major Motion (1988)(Microdeal).zip", LaunchPath: "major"),
+    new BenchmarkWorkload("Lotus 2", "Lotus Turbo Challenge 2 (Magnetic Fields + Gremlin).zip"),
+    new BenchmarkWorkload("Lotus 3 FLT", "Lotus III - The Ultimate Challenge (1992)(Gremlin)(Disk 1 of 2)[cr FLT - Crack Inc].zip"),
     new BenchmarkWorkload("Super Cars II Flashtro", "OK\\Super Cars II (1991)(Gremlin)(Disk 1 of 2)[cr Flashtro].zip"),
 };
 var workloads = options.Smoke
@@ -58,14 +66,16 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
 {
     for (var repeat = 0; repeat < options.RepeatCount; repeat++)
     {
-        WriteBenchmarkResult(RunBenchmark(workload, options), options);
+        var result = RunBenchmark(workload, options);
+        WriteBenchmarkResult(result, options);
+        WriteCopperQuiescenceAuditIfNeeded(result, options);
     }
 }
 
@@ -398,6 +408,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
             break;
         }
     }
+
+    LaunchWorkbenchPathIfNeeded(emulator, workload);
 
     if (options.InstructionMatrix)
     {
@@ -1068,9 +1080,12 @@ static CopperScreenEmulator? CreateEmulator(BenchmarkWorkload workload, Benchmar
         }
 
         var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
-        return diskPath == null
-            ? null
-            : CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options, workload.Profile), AppContext.BaseDirectory);
+        if (diskPath == null)
+        {
+            return null;
+        }
+
+        return CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options, workload.Profile), AppContext.BaseDirectory);
     }
     finally
     {
@@ -1081,11 +1096,17 @@ static CopperScreenEmulator? CreateEmulator(BenchmarkWorkload workload, Benchmar
 static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, string? workloadProfile)
 {
     var profile = options.Profile ?? workloadProfile;
+    var copperQuiescenceDiagnostics = !string.IsNullOrWhiteSpace(options.CopperQuiescenceAuditPath);
     var count = (diskPath == null ? 0 : 1) +
         (string.IsNullOrWhiteSpace(profile) ? 0 : 2) +
         (options.RealKickstart ? 1 : 0) +
         (string.IsNullOrWhiteSpace(options.KickstartRomPath) ? 0 : 2) +
-        (string.IsNullOrWhiteSpace(options.CpuBackend) ? 0 : 2);
+        (string.IsNullOrWhiteSpace(options.CpuBackend) ? 0 : 2) +
+        (options.CopperQuiescenceFastPath ? 1 : 0) +
+        (options.CopperQuiescenceFastPathVerify ? 1 : 0) +
+        (copperQuiescenceDiagnostics ? 1 : 0) +
+        (options.DeferredCpuBusBatch ? 1 : 0) +
+        (options.DeferredCpuBusBatchVerify ? 1 : 0);
     if (count == 0)
     {
         return Array.Empty<string>();
@@ -1119,6 +1140,31 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
     {
         args[index++] = "--cpu";
         args[index++] = options.CpuBackend;
+    }
+
+    if (options.CopperQuiescenceFastPath)
+    {
+        args[index++] = "--copper-quiescence-fastpath";
+    }
+
+    if (options.CopperQuiescenceFastPathVerify)
+    {
+        args[index++] = "--copper-quiescence-fastpath-verify";
+    }
+
+    if (copperQuiescenceDiagnostics)
+    {
+        args[index++] = "--copper-quiescence-diagnostics";
+    }
+
+    if (options.DeferredCpuBusBatch)
+    {
+        args[index++] = "--cpu-deferred-bus-batch";
+    }
+
+    if (options.DeferredCpuBusBatchVerify)
+    {
+        args[index++] = "--cpu-deferred-bus-batch-verify";
     }
 
     return args;
@@ -1744,6 +1790,9 @@ static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
         snapshot.LastRowDmaScalarFallbackRows,
         snapshot.LastRowDmaPlanInvalidationRows,
         snapshot.LastRowDmaPlanMismatchRows,
+        snapshot.CopperQuiescentWindowCount,
+        snapshot.CopperQuiescentTotalCycles,
+        snapshot.CopperQuiescentMaxCycles,
         display.BitplaneDataSpanCount);
 }
 
@@ -1756,14 +1805,100 @@ static string FormatAudioSummary(AudioSummary summary)
 static string FormatStatusWithScheduler(BenchmarkRunResult result)
 {
     var scheduler = result.Scheduler;
-    return $"{FormatCounterText(result.StatusText)} | scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+    return $"{FormatCounterText(result.StatusText)} | scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
 }
+
+static void LaunchWorkbenchPathIfNeeded(CopperScreenEmulator emulator, BenchmarkWorkload workload)
+{
+    if (string.IsNullOrWhiteSpace(workload.LaunchPath))
+    {
+        return;
+    }
+
+    foreach (var path in workload.LaunchPath.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (emulator.LaunchCopperBenchPath(path, out var message))
+        {
+            Console.WriteLine($"launch\t{workload.Name}\t{path}\t{message}");
+            return;
+        }
+
+        Console.WriteLine($"launch-candidate\t{workload.Name}\t{path}\t{message}");
+    }
+
+    Console.WriteLine($"launch\t{workload.Name}\tfailed\t{emulator.StatusText}");
+    WriteLaunchPathProbe(emulator, workload);
+}
+
+static void WriteLaunchPathProbe(CopperScreenEmulator emulator, BenchmarkWorkload workload)
+{
+    if (string.IsNullOrWhiteSpace(emulator.DiskPath))
+    {
+        return;
+    }
+
+    try
+    {
+        var disk = CopperScreenDiskImageArchive.LoadDiskImage(emulator.DiskPath);
+        var fileSystem = new AmigaDosFileSystem(disk);
+        WriteLaunchPathProbeDirectory(fileSystem, workload.Name, string.Empty, depth: 0);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
+    {
+        Console.WriteLine($"launch-probe\t{workload.Name}\tfailed\t{ex.Message}");
+    }
+}
+
+static void WriteLaunchPathProbeDirectory(AmigaDosFileSystem fileSystem, string workloadName, string path, int depth)
+{
+    if (depth > 2)
+    {
+        return;
+    }
+
+    foreach (var entry in fileSystem.ListDirectory(path))
+    {
+        var entryPath = AmigaDosFileSystem.CombinePath(path, entry.Name);
+        Console.WriteLine($"launch-probe\t{workloadName}\t{entryPath}\t{(entry.IsDirectory ? "dir" : "file")}\t{entry.Size}");
+        if (entry.IsDirectory)
+        {
+            WriteLaunchPathProbeDirectory(fileSystem, workloadName, entryPath, depth + 1);
+        }
+    }
+}
+
+static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot scheduler)
+    => $"{scheduler.DeferredCpuBusBatchAttempts}/{scheduler.DeferredCpuBusBatchUsed}/{scheduler.DeferredCpuBusBatchInstructions}/{scheduler.DeferredCpuBusBatchSkippedInstructionFlushes}/{scheduler.DeferredCpuBusBatchFlushes},exit={scheduler.DeferredCpuBusBatchExitTargetCycle}/{scheduler.DeferredCpuBusBatchExitMaxInstructions}/{scheduler.DeferredCpuBusBatchExitChipVisibleAccess}/{scheduler.DeferredCpuBusBatchExitPcLeftFastWindow}/{scheduler.DeferredCpuBusBatchExitException}/{scheduler.DeferredCpuBusBatchExitUnsupported},wake={scheduler.DeferredCpuBusBatchWakeTargetCycle}/{scheduler.DeferredCpuBusBatchWakePendingInterrupt}/{scheduler.DeferredCpuBusBatchWakeVerticalBlank}/{scheduler.DeferredCpuBusBatchWakeHorizontalSyncTod}/{scheduler.DeferredCpuBusBatchWakeCiaTimer}/{scheduler.DeferredCpuBusBatchWakeDisk}/{scheduler.DeferredCpuBusBatchWakePaula}/{scheduler.DeferredCpuBusBatchWakeCopper}/{scheduler.DeferredCpuBusBatchWakeBlitter},diskwake={scheduler.DeferredCpuBusBatchDiskWakePendingDma}/{scheduler.DeferredCpuBusBatchDiskWakeActiveDmaProgress}/{scheduler.DeferredCpuBusBatchDiskWakeActiveDmaCompletion}/{scheduler.DeferredCpuBusBatchDiskWakeSyncCandidate}/{scheduler.DeferredCpuBusBatchDiskWakeIndexPulse}/{scheduler.DeferredCpuBusBatchDiskWakePassiveByteReady}/{scheduler.DeferredCpuBusBatchDiskWakeUnknown},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},catchup={scheduler.DeferredCpuBusBatchChipsetCatchupAttempts}/{scheduler.DeferredCpuBusBatchChipsetCatchupUsed}/{scheduler.DeferredCpuBusBatchChipsetCatchupSkippedDrains}/{scheduler.DeferredCpuBusBatchChipsetCatchupRejectedUnsupported}/{scheduler.DeferredCpuBusBatchChipsetCatchupRejectedDynamicDma}/{scheduler.DeferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier}/{scheduler.DeferredCpuBusBatchChipsetCatchupVerificationMismatches}";
 
 static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
 {
+    var copperQuiescence = $"copperq:slot={scheduler.CopperQuiescentSlotContendedAccesses},customw={scheduler.CopperQuiescentCustomRegisterWrites},cpuw={scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw={scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain={scheduler.CopperQuiescentSchedulerDrains},pred={scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast={scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}";
+    var deferredCpuBatch = $"cpubatch:{FormatDeferredCpuBusBatchSummary(scheduler)}";
+    var hasCopperQuiescence =
+        scheduler.CopperQuiescentSlotContendedAccesses != 0 ||
+        scheduler.CopperQuiescentCustomRegisterWrites != 0 ||
+        scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites != 0 ||
+        scheduler.CopperQuiescentCpuBenignCustomWrites != 0 ||
+        scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves != 0 ||
+        scheduler.CopperQuiescentCopperBenignCustomMoves != 0 ||
+        scheduler.CopperQuiescentSchedulerDrains != 0 ||
+        scheduler.CopperQuiescentShadowPredictions != 0 ||
+        scheduler.CopperQuiescentShadowUnsupported != 0 ||
+        scheduler.CopperQuiescentShadowMismatches != 0 ||
+        scheduler.CopperQuiescentFastPathAttempts != 0 ||
+        scheduler.CopperQuiescentFastPathUsed != 0 ||
+        scheduler.CopperQuiescentFastPathVerificationMismatches != 0;
+    var hasDeferredCpuBatch =
+        scheduler.DeferredCpuBusBatchAttempts != 0 ||
+        scheduler.DeferredCpuBusBatchUsed != 0 ||
+        scheduler.DeferredCpuBusBatchInstructions != 0 ||
+        scheduler.DeferredCpuBusBatchVerificationMismatches != 0 ||
+        scheduler.DeferredCpuBusBatchChipsetCatchupAttempts != 0 ||
+        scheduler.DeferredCpuBusBatchChipsetCatchupUsed != 0 ||
+        scheduler.DeferredCpuBusBatchChipsetCatchupVerificationMismatches != 0;
     if (!scheduler.HostProfilingEnabled && scheduler.HostDrainTicks == 0)
     {
-        return string.Empty;
+        return string.Join(",", new[] { hasCopperQuiescence ? copperQuiescence : string.Empty, hasDeferredCpuBatch ? deferredCpuBatch : string.Empty }.Where(static value => value.Length != 0));
     }
 
     var accountedTicks =
@@ -1790,7 +1925,10 @@ static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
         FormatHostTicks("agnus", scheduler.HostAgnusTicks, scheduler.HostDrainTicks),
         FormatHostTicks("blit", scheduler.HostBlitterTicks, scheduler.HostDrainTicks),
         FormatHostTicks("other", otherTicks, scheduler.HostDrainTicks),
-        $"agenda:{scheduler.WakeAgendaCacheHits}/{scheduler.WakeAgendaCacheMisses}/{scheduler.WakeAgendaDrainSkips}/{scheduler.WakeAgendaInvalidations}");
+        $"agenda:{scheduler.WakeAgendaCacheHits}/{scheduler.WakeAgendaCacheMisses}/{scheduler.WakeAgendaDrainSkips}/{scheduler.WakeAgendaInvalidations}",
+        $"cpuevent:{scheduler.CpuVisibleNoEventCacheHits}/{scheduler.CpuVisibleNoEventCacheMisses}/{scheduler.CpuVisibleNoEventCacheInvalidations}",
+        copperQuiescence,
+        hasDeferredCpuBatch ? deferredCpuBatch : string.Empty);
 }
 
 static string FormatHostTicks(string name, long ticks, long totalTicks)
@@ -1810,7 +1948,102 @@ static string FormatDisplaySummary(DisplaySummary summary)
         $"desc={summary.DescriptorBuilds}/{summary.DescriptorReplayAttempts}/{summary.DescriptorReplayedRows}/{summary.DescriptorFallbackRows}," +
         $"descRows={summary.DescriptorBitplaneRows}/{summary.DescriptorSpriteRows},descMis={summary.DescriptorMismatches}," +
         $"rowPlan={summary.RowDmaPlansBuilt}/{summary.RowDmaPlannedRowsExecuted}/{summary.RowDmaBitplaneEntriesExecuted}/{summary.RowDmaSpriteEntriesExecuted}/{summary.RowDmaScalarFallbackRows}/{summary.RowDmaPlanInvalidationRows}/{summary.RowDmaPlanMismatchRows}," +
+        $"copperq={summary.CopperQuiescentWindowCount}/{summary.CopperQuiescentTotalCycles}/{summary.CopperQuiescentMaxCycles}," +
         $"bplcon={summary.Bplcon0:X4}/{summary.Bplcon1:X4}/{summary.Bplcon2:X4}";
+}
+
+static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, BenchmarkOptions options)
+{
+    if (string.IsNullOrWhiteSpace(options.CopperQuiescenceAuditPath))
+    {
+        return;
+    }
+
+    var path = Path.GetFullPath(options.CopperQuiescenceAuditPath);
+    var directory = Path.GetDirectoryName(path);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var writeHeader = !File.Exists(path) || new FileInfo(path).Length == 0;
+    using var writer = new StreamWriter(path, append: true);
+    if (writeHeader)
+    {
+        writer.WriteLine("workload\tbackend\tfps\tms_frame\tstatus\tq_windows\tq_cycles\tq_max_cycles\tq_slot_accesses\tq_custom_writes\tq_cpu_hazard_writes\tq_cpu_benign_writes\tq_copper_hazard_moves\tq_copper_benign_moves\tq_drains\tq_predictions\tq_matches\tq_unsupported\tq_mismatches\tq_fast_attempts\tq_fast_used\tq_fast_skipped_drains\tq_fast_reject_unsupported\tq_fast_reject_invalidated\tq_fast_reject_dynamic\tq_fast_verify_mismatches\tq_first_mismatch\tq_fast_first_mismatch\tcpu_event_cache_hits\tcpu_event_cache_misses\tcpu_event_cache_invalidations\tcpu_batch_attempts\tcpu_batch_used\tcpu_batch_instructions\tcpu_batch_skipped_flushes\tcpu_batch_flushes\tcpu_batch_exit_target\tcpu_batch_exit_max\tcpu_batch_exit_chip\tcpu_batch_exit_pc\tcpu_batch_exit_exception\tcpu_batch_exit_unsupported\tcpu_batch_verify_mismatches\tcpu_batch_first_mismatch\tcpu_batch_wake_target\tcpu_batch_wake_pending\tcpu_batch_wake_vblank\tcpu_batch_wake_hsync_tod\tcpu_batch_wake_cia_timer\tcpu_batch_wake_disk\tcpu_batch_wake_paula\tcpu_batch_wake_copper\tcpu_batch_wake_blitter\tcpu_batch_diskwake_pending_dma\tcpu_batch_diskwake_active_progress\tcpu_batch_diskwake_active_completion\tcpu_batch_diskwake_sync\tcpu_batch_diskwake_index\tcpu_batch_diskwake_passive_byte\tcpu_batch_diskwake_unknown\tcpu_batch_catchup_attempts\tcpu_batch_catchup_used\tcpu_batch_catchup_skipped_drains\tcpu_batch_catchup_reject_unsupported\tcpu_batch_catchup_reject_dynamic\tcpu_batch_catchup_reject_barrier\tcpu_batch_catchup_verify_mismatches\tcpu_batch_catchup_first_mismatch");
+    }
+
+    var scheduler = result.Scheduler;
+    writer.WriteLine(string.Join(
+        '\t',
+        SanitizeTsv(result.Workload.Name),
+        SanitizeTsv(result.CpuBackend),
+        result.FramesPerSecond.ToString("F1", CultureInfo.InvariantCulture),
+        result.MillisecondsPerFrame.ToString("F2", CultureInfo.InvariantCulture),
+        SanitizeTsv(result.StatusText),
+        result.Display.CopperQuiescentWindowCount.ToString(CultureInfo.InvariantCulture),
+        result.Display.CopperQuiescentTotalCycles.ToString(CultureInfo.InvariantCulture),
+        result.Display.CopperQuiescentMaxCycles.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentSlotContendedAccesses.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentCustomRegisterWrites.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentCpuBenignCustomWrites.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentCopperBenignCustomMoves.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentSchedulerDrains.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentShadowPredictions.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentShadowMatches.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentShadowUnsupported.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentShadowMismatches.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathAttempts.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathUsed.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathSkippedDrains.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathRejectedUnsupported.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathRejectedInvalidated.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathRejectedDynamicDma.ToString(CultureInfo.InvariantCulture),
+        scheduler.CopperQuiescentFastPathVerificationMismatches.ToString(CultureInfo.InvariantCulture),
+        SanitizeTsv(scheduler.CopperQuiescentFirstShadowMismatch),
+        SanitizeTsv(scheduler.CopperQuiescentFastPathFirstMismatch),
+        scheduler.CpuVisibleNoEventCacheHits.ToString(CultureInfo.InvariantCulture),
+        scheduler.CpuVisibleNoEventCacheMisses.ToString(CultureInfo.InvariantCulture),
+        scheduler.CpuVisibleNoEventCacheInvalidations.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchAttempts.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchUsed.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchInstructions.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchSkippedInstructionFlushes.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchFlushes.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitTargetCycle.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitMaxInstructions.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitChipVisibleAccess.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitPcLeftFastWindow.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitException.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchExitUnsupported.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchVerificationMismatches.ToString(CultureInfo.InvariantCulture),
+        SanitizeTsv(scheduler.DeferredCpuBusBatchFirstMismatch),
+        scheduler.DeferredCpuBusBatchWakeTargetCycle.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakePendingInterrupt.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeVerticalBlank.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeHorizontalSyncTod.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeCiaTimer.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeDisk.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakePaula.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeCopper.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchWakeBlitter.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakePendingDma.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakeActiveDmaProgress.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakeActiveDmaCompletion.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakeSyncCandidate.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakeIndexPulse.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakePassiveByteReady.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchDiskWakeUnknown.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupAttempts.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupUsed.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupSkippedDrains.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupRejectedUnsupported.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupRejectedDynamicDma.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupRejectedCrossedBarrier.ToString(CultureInfo.InvariantCulture),
+        scheduler.DeferredCpuBusBatchChipsetCatchupVerificationMismatches.ToString(CultureInfo.InvariantCulture),
+        SanitizeTsv(scheduler.DeferredCpuBusBatchChipsetCatchupFirstMismatch)));
 }
 
 static string FormatDiskSummary(DiskSummary summary)
@@ -1903,7 +2136,12 @@ static bool IsRelease()
 #endif
 }
 
-internal readonly record struct BenchmarkWorkload(string Name, string? FileName, int FireFrame = -1, string? Profile = null);
+internal readonly record struct BenchmarkWorkload(
+    string Name,
+    string? FileName,
+    int FireFrame = -1,
+    string? Profile = null,
+    string? LaunchPath = null);
 
 internal readonly record struct FrameProfile(
     double CpuPercent,
@@ -1961,6 +2199,9 @@ internal readonly record struct DisplaySummary(
     int RowDmaScalarFallbackRows,
     int RowDmaPlanInvalidationRows,
     int RowDmaPlanMismatchRows,
+    long CopperQuiescentWindowCount,
+    long CopperQuiescentTotalCycles,
+    long CopperQuiescentMaxCycles,
     int BitplaneDataSpans);
 
 internal readonly record struct DiskSummary(
@@ -2072,6 +2313,11 @@ internal readonly record struct BenchmarkOptions(
     int? StopCylinder,
     string? AudioAuditPath,
     int AudioAuditIntervalFrames,
+    string? CopperQuiescenceAuditPath,
+    bool CopperQuiescenceFastPath,
+    bool CopperQuiescenceFastPathVerify,
+    bool DeferredCpuBusBatch,
+    bool DeferredCpuBusBatchVerify,
     bool StopOnDebugSnapshot,
     int PauseBeforeMeasureMilliseconds,
     string? DumpDebugSnapshotPath,
@@ -2110,6 +2356,11 @@ internal readonly record struct BenchmarkOptions(
         int? stopCylinder = null;
         string? audioAuditPath = null;
         var audioAuditIntervalFrames = 500;
+        string? copperQuiescenceAuditPath = null;
+        var copperQuiescenceFastPath = false;
+        var copperQuiescenceFastPathVerify = false;
+        var deferredCpuBusBatch = false;
+        var deferredCpuBusBatchVerify = false;
         var stopOnDebugSnapshot = false;
         var pauseBeforeMeasureMilliseconds = 0;
         string? dumpDebugSnapshotPath = null;
@@ -2312,6 +2563,28 @@ internal readonly record struct BenchmarkOptions(
             {
                 _ = int.TryParse(args[++i], out audioAuditIntervalFrames);
             }
+            else if (string.Equals(args[i], "--copper-quiescence-audit", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                copperQuiescenceAuditPath = args[++i];
+            }
+            else if (string.Equals(args[i], "--copper-quiescence-fastpath", StringComparison.OrdinalIgnoreCase))
+            {
+                copperQuiescenceFastPath = true;
+            }
+            else if (string.Equals(args[i], "--copper-quiescence-fastpath-verify", StringComparison.OrdinalIgnoreCase))
+            {
+                copperQuiescenceFastPath = true;
+                copperQuiescenceFastPathVerify = true;
+            }
+            else if (string.Equals(args[i], "--cpu-deferred-bus-batch", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuBusBatch = true;
+            }
+            else if (string.Equals(args[i], "--cpu-deferred-bus-batch-verify", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuBusBatch = true;
+                deferredCpuBusBatchVerify = true;
+            }
             else if (string.Equals(args[i], "--stop-on-debug-snapshot", StringComparison.OrdinalIgnoreCase))
             {
                 stopOnDebugSnapshot = true;
@@ -2369,6 +2642,11 @@ internal readonly record struct BenchmarkOptions(
             stopCylinder,
             audioAuditPath,
             Math.Max(1, audioAuditIntervalFrames),
+            copperQuiescenceAuditPath,
+            copperQuiescenceFastPath,
+            copperQuiescenceFastPathVerify,
+            deferredCpuBusBatch,
+            deferredCpuBusBatchVerify,
             stopOnDebugSnapshot,
             Math.Max(0, pauseBeforeMeasureMilliseconds),
             dumpDebugSnapshotPath,
