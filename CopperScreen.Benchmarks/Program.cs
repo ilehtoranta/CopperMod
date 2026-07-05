@@ -87,9 +87,7 @@ static void RunOpcodeDispatchBenchmarks(BenchmarkOptions options)
         {
             M68kOpcodePlanDispatch.Scalar,
             M68kOpcodePlanDispatch.KindTable,
-            M68kOpcodePlanDispatch.ComputedKind,
-            M68kOpcodePlanDispatch.PackedPlan,
-            M68kOpcodePlanDispatch.DelegateTable
+            M68kOpcodePlanDispatch.PackedPlan
         };
     var workloads = CreateOpcodeDispatchWorkloads();
     Console.WriteLine(
@@ -2665,9 +2663,7 @@ internal readonly record struct BenchmarkOptions(
         {
             "scalar" or "off" or "none" => M68kOpcodePlanDispatch.Scalar,
             "kind" or "kindtable" or "table" => M68kOpcodePlanDispatch.KindTable,
-            "computed" or "computedkind" or "compute" => M68kOpcodePlanDispatch.ComputedKind,
             "packed" or "packedplan" => M68kOpcodePlanDispatch.PackedPlan,
-            "delegate" or "delegatetable" or "winuae" => M68kOpcodePlanDispatch.DelegateTable,
             _ => null
         };
 }
