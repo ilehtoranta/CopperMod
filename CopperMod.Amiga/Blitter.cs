@@ -19,7 +19,15 @@ namespace CopperMod.Amiga
             long slotQueueEnabledBlits = 0,
             long slotQueueUnsupportedBlits = 0,
             long slotQueueWords = 0,
-            long slotQueueCommittedOps = 0)
+            long slotQueueCommittedOps = 0,
+            long specializedReservations = 0,
+            long rowPipelineAttempts = 0,
+            long rowPipelineUsed = 0,
+            long rowPipelineWords = 0,
+            long rowPipelineCompletions = 0,
+            long dOnlyRowWords = 0,
+            long aToDRowWords = 0,
+            long rowPipelineFallbacks = 0)
         {
             KernelHits = kernelHits;
             KernelMisses = kernelMisses;
@@ -30,6 +38,14 @@ namespace CopperMod.Amiga
             SlotQueueUnsupportedBlits = slotQueueUnsupportedBlits;
             SlotQueueWords = slotQueueWords;
             SlotQueueCommittedOps = slotQueueCommittedOps;
+            SpecializedReservations = specializedReservations;
+            RowPipelineAttempts = rowPipelineAttempts;
+            RowPipelineUsed = rowPipelineUsed;
+            RowPipelineWords = rowPipelineWords;
+            RowPipelineCompletions = rowPipelineCompletions;
+            DOnlyRowWords = dOnlyRowWords;
+            AToDRowWords = aToDRowWords;
+            RowPipelineFallbacks = rowPipelineFallbacks;
         }
 
         public long KernelHits { get; }
@@ -49,6 +65,22 @@ namespace CopperMod.Amiga
         public long SlotQueueWords { get; }
 
         public long SlotQueueCommittedOps { get; }
+
+        public long SpecializedReservations { get; }
+
+        public long RowPipelineAttempts { get; }
+
+        public long RowPipelineUsed { get; }
+
+        public long RowPipelineWords { get; }
+
+        public long RowPipelineCompletions { get; }
+
+        public long DOnlyRowWords { get; }
+
+        public long AToDRowWords { get; }
+
+        public long RowPipelineFallbacks { get; }
     }
 
     internal readonly struct BlitterPatternEntry
@@ -645,10 +677,9 @@ namespace CopperMod.Amiga
         private const ushort Bltcon1LineAul = 0x0004;
         private const ushort Bltcon1LineSign = 0x0040;
         private const int ChipSlotCycles = AgnusChipSlotScheduler.SlotCycles;
-        private const bool EnableBlitterPatternLogging = false;
-
         private readonly AmigaBus _bus;
         private readonly bool _specializationEnabled;
+        private readonly bool _patternLoggingEnabled;
         private readonly BlitterKernelCache _kernelCache = new BlitterKernelCache();
         private readonly Dictionary<BlitterPatternKey, long> _patternCounts = new Dictionary<BlitterPatternKey, long>();
         private readonly BlitterSlotQueueOp[] _areaSlotQueueOps = new BlitterSlotQueueOp[4];
@@ -743,11 +774,20 @@ namespace CopperMod.Amiga
         private long _slotQueueUnsupportedBlits;
         private long _slotQueueWords;
         private long _slotQueueCommittedOps;
+        private long _specializedReservations;
+        private long _rowPipelineAttempts;
+        private long _rowPipelineUsed;
+        private long _rowPipelineWords;
+        private long _rowPipelineCompletions;
+        private long _dOnlyRowWords;
+        private long _aToDRowWords;
+        private long _rowPipelineFallbacks;
 
         public AmigaBlitter(AmigaBus bus, bool enableSpecialization = false)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _specializationEnabled = enableSpecialization;
+            _patternLoggingEnabled = false;
         }
 
         public ushort DmaconStatusBits
@@ -856,6 +896,14 @@ namespace CopperMod.Amiga
             _slotQueueUnsupportedBlits = 0;
             _slotQueueWords = 0;
             _slotQueueCommittedOps = 0;
+            _specializedReservations = 0;
+            _rowPipelineAttempts = 0;
+            _rowPipelineUsed = 0;
+            _rowPipelineWords = 0;
+            _rowPipelineCompletions = 0;
+            _dOnlyRowWords = 0;
+            _aToDRowWords = 0;
+            _rowPipelineFallbacks = 0;
             _patternCounts.Clear();
         }
 
@@ -893,7 +941,15 @@ namespace CopperMod.Amiga
                 _slotQueueEnabledBlits,
                 _slotQueueUnsupportedBlits,
                 _slotQueueWords,
-                _slotQueueCommittedOps);
+                _slotQueueCommittedOps,
+                _specializedReservations,
+                _rowPipelineAttempts,
+                _rowPipelineUsed,
+                _rowPipelineWords,
+                _rowPipelineCompletions,
+                _dOnlyRowWords,
+                _aToDRowWords,
+                _rowPipelineFallbacks);
         }
 
         public bool Busy => _busy;
@@ -1286,16 +1342,29 @@ namespace CopperMod.Amiga
             _areaSlotQueueEnabled = true;
             _areaSlotQueueKind = SelectAreaSlotQueueKind();
             _slotQueueEnabledBlits++;
+            if (!_descending)
+            {
+                _rowPipelineAttempts++;
+                if (_areaSlotQueueKind == BlitterSlotQueueKind.WriteD ||
+                    _areaSlotQueueKind == BlitterSlotQueueKind.ReadAWriteD)
+                {
+                    _rowPipelineUsed++;
+                }
+                else
+                {
+                    _rowPipelineFallbacks++;
+                }
+            }
         }
 
         private BlitterSlotQueueKind SelectAreaSlotQueueKind()
         {
-            if (!_useC && !_useB && !_useA && _useD)
+            if (!_descending && !_useC && !_useB && !_useA && _useD)
             {
                 return BlitterSlotQueueKind.WriteD;
             }
 
-            if (!_useC && !_useB && _useA && _useD)
+            if (!_descending && !_useC && !_useB && _useA && _useD)
             {
                 return BlitterSlotQueueKind.ReadAWriteD;
             }
@@ -1310,7 +1379,7 @@ namespace CopperMod.Amiga
 
         private void RecordBlitterPattern()
         {
-            if (!EnableBlitterPatternLogging)
+            if (!_patternLoggingEnabled)
             {
                 return;
             }
@@ -1335,7 +1404,7 @@ namespace CopperMod.Amiga
 
         private BlitterPatternEntry[] CaptureTopPatterns(int maxEntries)
         {
-            if (!EnableBlitterPatternLogging)
+            if (!_patternLoggingEnabled)
             {
                 return Array.Empty<BlitterPatternEntry>();
             }
@@ -1668,6 +1737,8 @@ namespace CopperMod.Amiga
             var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, stepEnd - ChipSlotCycles);
             _slotQueueWords++;
             _slotQueueCommittedOps++;
+            _rowPipelineWords++;
+            _dOnlyRowWords++;
             _currentCycle = isFinalWord
                 ? stepEnd
                 : Math.Max(stepEnd, write.CompletedCycle);
@@ -1697,6 +1768,8 @@ namespace CopperMod.Amiga
             nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             _slotQueueWords++;
             _slotQueueCommittedOps += 2;
+            _rowPipelineWords++;
+            _aToDRowWords++;
             _currentCycle = isFinalWord
                 ? internalCompletionCycle
                 : nextCycle;
@@ -1930,6 +2003,11 @@ namespace CopperMod.Amiga
 
         private void CompleteBlit(bool deferInterrupt = false)
         {
+            if (IsActiveRowPipeline())
+            {
+                _rowPipelineCompletions++;
+            }
+
             if (!_lineMode)
             {
                 if (_useA)
@@ -2003,6 +2081,11 @@ namespace CopperMod.Amiga
             _deferredRestartBltsize = 0;
             StartBlit(bltsize, _currentCycle);
         }
+
+        private bool IsActiveRowPipeline()
+            => _areaSlotQueueEnabled &&
+                (_areaSlotQueueKind == BlitterSlotQueueKind.WriteD ||
+                    _areaSlotQueueKind == BlitterSlotQueueKind.ReadAWriteD);
 
         private void ApplyDeferredRegisterWrites()
         {
@@ -2169,11 +2252,19 @@ namespace CopperMod.Amiga
 
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, uint address, long cycle)
         {
-            var reservation = _bus.ReserveChipWordForDevice(
-                AmigaBusRequester.Blitter,
-                AmigaBusAccessKind.Blitter,
-                GetEffectiveBlitterAddress(address),
-                cycle);
+            var effectiveAddress = GetEffectiveBlitterAddress(address);
+            var reservation = _specializationEnabled
+                ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: false)
+                : _bus.ReserveChipWordForDevice(
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    effectiveAddress,
+                    cycle);
+            if (_specializationEnabled)
+            {
+                _specializedReservations++;
+            }
+
             RecordBlitterDma(reservation.Access);
             return new BlitterDmaReadLatch(source, reservation);
         }
@@ -2198,11 +2289,19 @@ namespace CopperMod.Amiga
 
         private AmigaBusAccessResult CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
-            var reservation = _bus.ReserveChipWordWriteForDevice(
-                AmigaBusRequester.Blitter,
-                AmigaBusAccessKind.Blitter,
-                GetEffectiveBlitterAddress(address),
-                cycle);
+            var effectiveAddress = GetEffectiveBlitterAddress(address);
+            var reservation = _specializationEnabled
+                ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: true)
+                : _bus.ReserveChipWordWriteForDevice(
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    effectiveAddress,
+                    cycle);
+            if (_specializationEnabled)
+            {
+                _specializedReservations++;
+            }
+
             _bus.CommitDmaWordWrite(in reservation, latch.Value);
             RecordBlitterDma(reservation.Access);
             latch = default;

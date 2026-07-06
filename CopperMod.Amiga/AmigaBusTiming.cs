@@ -706,6 +706,35 @@ namespace CopperMod.Amiga
         }
 
         [HotPath]
+        public AmigaBusAccessResult ReserveBlitterDmaWordSlot(uint address, long requestedCycle, bool isWrite)
+        {
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0, "Blitter DMA request cycles must be non-negative.");
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            var granted = FindFreeSlot(
+                requestedCycle,
+                slotCount: 1,
+                AgnusChipSlotOwner.Blitter,
+                request);
+            CommitSlot(
+                granted,
+                request,
+                AgnusChipSlotOwner.Blitter,
+                AgnusChipSlotPriority.Blitter);
+            var result = new AmigaBusAccessResult(request, granted, granted + SlotCycles);
+            _lastReservation = result;
+            _lastGrantedSlot = new AgnusChipSlotSnapshot(AgnusChipSlotOwner.Blitter, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
+            AdvanceTo(result.CompletedCycle);
+            return result;
+        }
+
+        [HotPath]
         public void GrantCpuDataSingleSlot(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,

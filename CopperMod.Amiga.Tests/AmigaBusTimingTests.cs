@@ -100,6 +100,41 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void BlitterWordSlotHelperMatchesGenericGrant()
+	{
+		var genericEngine = new AgnusHrmSlotEngine();
+		var fastEngine = new AgnusHrmSlotEngine();
+		var readRequest = new AmigaBusAccessRequest(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			AmigaBusAccessTarget.ChipRam,
+			0x1000,
+			AmigaBusAccessSize.Word,
+			20,
+			isWrite: false);
+		var writeRequest = new AmigaBusAccessRequest(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			AmigaBusAccessTarget.ChipRam,
+			0x1002,
+			AmigaBusAccessSize.Word,
+			24,
+			isWrite: true);
+
+		var genericRead = genericEngine.Arbitrate(readRequest, new AmigaBusAccessResult(readRequest, 20, 20));
+		var fastRead = fastEngine.ReserveBlitterDmaWordSlot(0x1000, 20, isWrite: false);
+		var genericWrite = genericEngine.Arbitrate(writeRequest, new AmigaBusAccessResult(writeRequest, 24, 24));
+		var fastWrite = fastEngine.ReserveBlitterDmaWordSlot(0x1002, 24, isWrite: true);
+
+		Assert.Equal(genericRead.GrantedCycle, fastRead.GrantedCycle);
+		Assert.Equal(genericRead.CompletedCycle, fastRead.CompletedCycle);
+		Assert.Equal(genericWrite.GrantedCycle, fastWrite.GrantedCycle);
+		Assert.Equal(genericWrite.CompletedCycle, fastWrite.CompletedCycle);
+		Assert.Equal(genericEngine.GetSlotGrantCount(AgnusChipSlotOwner.Blitter), fastEngine.GetSlotGrantCount(AgnusChipSlotOwner.Blitter));
+		Assert.Equal(AgnusChipSlotOwner.Blitter, fastEngine.LastGrantedSlot?.Owner);
+	}
+
+	[Fact]
 	public void ExactCpuChipSlotFastHelperMatchesGenericSingleSlotGrant()
 	{
 		var genericEngine = new AgnusHrmSlotEngine();

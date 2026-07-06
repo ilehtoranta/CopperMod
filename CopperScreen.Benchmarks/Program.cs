@@ -1435,6 +1435,14 @@ static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEm
         blitter.SlotQueueUnsupportedBlits,
         blitter.SlotQueueWords,
         blitter.SlotQueueCommittedOps,
+        blitter.SpecializedReservations,
+        blitter.RowPipelineAttempts,
+        blitter.RowPipelineUsed,
+        blitter.RowPipelineWords,
+        blitter.RowPipelineCompletions,
+        blitter.DOnlyRowWords,
+        blitter.AToDRowWords,
+        blitter.RowPipelineFallbacks,
         blitterSnapshot.TopPatterns,
         disk.PreparedTrackHits,
         disk.PreparedTrackMisses,
@@ -2093,6 +2101,8 @@ static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
 {
     return $"blt={summary.BlitterKernelHits}/{summary.BlitterKernelMisses}/{summary.BlitterGeneratedKernels}/{summary.BlitterFallbacks}," +
         $"bltQueue={summary.BlitterSlotQueueAttempts}/{summary.BlitterSlotQueueEnabledBlits}/{summary.BlitterSlotQueueUnsupportedBlits}/{summary.BlitterSlotQueueWords}/{summary.BlitterSlotQueueCommittedOps}," +
+        $"bltRes={summary.BlitterSpecializedReservations}," +
+        $"bltRow={summary.BlitterRowPipelineAttempts}/{summary.BlitterRowPipelineUsed}/{summary.BlitterRowPipelineWords}/{summary.BlitterRowPipelineCompletions}/{summary.BlitterDOnlyRowWords}/{summary.BlitterAToDRowWords}/{summary.BlitterRowPipelineFallbacks}," +
         $"bltTop={FormatBlitterTopPatterns(summary.BlitterTopPatterns)}," +
         $"dskPrep={summary.DiskPreparedTrackHits}/{summary.DiskPreparedTrackMisses}," +
         $"dskWin={summary.DiskRollingWindowHits}/{summary.DiskRollingWindowMisses}," +
@@ -2275,6 +2285,14 @@ internal readonly record struct HardwareSpecializationSummary(
     long BlitterSlotQueueUnsupportedBlits,
     long BlitterSlotQueueWords,
     long BlitterSlotQueueCommittedOps,
+    long BlitterSpecializedReservations,
+    long BlitterRowPipelineAttempts,
+    long BlitterRowPipelineUsed,
+    long BlitterRowPipelineWords,
+    long BlitterRowPipelineCompletions,
+    long BlitterDOnlyRowWords,
+    long BlitterAToDRowWords,
+    long BlitterRowPipelineFallbacks,
     BlitterPatternEntry[] BlitterTopPatterns,
     long DiskPreparedTrackHits,
     long DiskPreparedTrackMisses,

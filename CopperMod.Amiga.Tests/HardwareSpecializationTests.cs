@@ -157,6 +157,12 @@ public sealed class HardwareSpecializationTests
         Assert.True(snapshot.SpecializationCounters.SlotQueueEnabledBlits >= 1);
         Assert.True(snapshot.SpecializationCounters.SlotQueueWords >= 1);
         Assert.True(snapshot.SpecializationCounters.SlotQueueCommittedOps >= 2);
+        Assert.True(snapshot.SpecializationCounters.SpecializedReservations >= 2);
+        Assert.True(snapshot.SpecializationCounters.RowPipelineAttempts >= 1);
+        Assert.True(snapshot.SpecializationCounters.RowPipelineUsed >= 1);
+        Assert.True(snapshot.SpecializationCounters.RowPipelineWords >= 1);
+        Assert.True(snapshot.SpecializationCounters.RowPipelineCompletions >= 1);
+        Assert.True(snapshot.SpecializationCounters.AToDRowWords >= 1);
     }
 
     [Fact]
@@ -184,6 +190,12 @@ public sealed class HardwareSpecializationTests
         Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueEnabledBlits);
         Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueWords);
         Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueCommittedOps);
+        Assert.Equal(0, snapshot.SpecializationCounters.SpecializedReservations);
+        Assert.Equal(0, snapshot.SpecializationCounters.RowPipelineAttempts);
+        Assert.Equal(0, snapshot.SpecializationCounters.RowPipelineUsed);
+        Assert.Equal(0, snapshot.SpecializationCounters.RowPipelineWords);
+        Assert.Equal(0, snapshot.SpecializationCounters.RowPipelineCompletions);
+        Assert.Equal(0, snapshot.SpecializationCounters.AToDRowWords);
     }
 
     [Fact]

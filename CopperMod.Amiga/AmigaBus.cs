@@ -3534,6 +3534,40 @@ namespace CopperMod.Amiga
             return new AmigaDmaWordReservation(address, granted: true, access);
         }
 
+        internal AmigaDmaWordReservation ReserveBlitterChipWord(uint address, long requestedCycle, bool isWrite)
+        {
+            address = MaskChipDmaAddress(address);
+            requestedCycle = Math.Max(0, requestedCycle);
+            AmigaBusAccessResult access;
+            if (!_useChipSlotScheduler || !ShouldUseChipSlotScheduler(AmigaBusAccessTarget.ChipRam))
+            {
+                var request = new AmigaBusAccessRequest(
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    AmigaBusAccessTarget.ChipRam,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    requestedCycle,
+                    isWrite);
+                access = new AmigaBusAccessResult(request, requestedCycle, requestedCycle);
+            }
+            else
+            {
+                _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
+                if (LiveAgnusDmaEnabled &&
+                    Display.HasLiveDisplayWork())
+                {
+                    Display.CaptureLiveDisplayDmaBeforeHrmGrant(requestedCycle);
+                }
+
+                access = _hrmSlotEngine.ReserveBlitterDmaWordSlot(address, requestedCycle, isWrite);
+            }
+
+            var reservation = new AmigaDmaWordReservation(address, granted: true, access);
+            CaptureDmaReservation(in reservation);
+            return reservation;
+        }
+
         internal long PredictDiskDmaCompletionCycle(long requestedCycle)
         {
             requestedCycle = Math.Max(0, requestedCycle);
