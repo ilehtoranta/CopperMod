@@ -294,6 +294,12 @@ namespace Copper68k
                     return false;
                 }
 
+                if (codeReader.HasHostTrapStub(programCounter))
+                {
+                    reason = M68kJitBailoutReason.HostTrap;
+                    return false;
+                }
+
                 var opcode = codeReader.ReadHostWord(programCounter);
                 if ((opcode & 0xF000) == 0xF000 && cpuModel == M68kJitCpuModel.M68040)
                 {

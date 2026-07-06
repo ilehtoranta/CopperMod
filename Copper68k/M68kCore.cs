@@ -4456,7 +4456,7 @@ namespace Copper68k
                 case 0x4E76:
                     if (State.GetFlag(M68kCpuState.Overflow))
                     {
-                        RaiseException(7, instructionPc, 34);
+                        RaiseException(7, State.ProgramCounter, 34);
                     }
                     else
                     {
@@ -4729,7 +4729,9 @@ namespace Copper68k
             var unary = opcode & 0xFF00;
             if ((opcode & 0xFFC0) == 0x4AC0)
             {
-                var ea = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Byte, write: true);
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                var ea = ResolveEa(mode, reg, M68kOperandSize.Byte, write: true);
                 var value = ea.Read();
                 State.SetNegativeZero(value, M68kOperandSize.Byte);
                 State.SetFlag(M68kCpuState.Overflow, false);
@@ -4741,9 +4743,13 @@ namespace Copper68k
                 else
                 {
                     WriteTasByte(ea.Address, (byte)(value | 0x80));
+                    if (mode == 3)
+                    {
+                        SetAddressRegister(reg, State.A[reg] + AddressIncrement(reg, M68kOperandSize.Byte));
+                    }
                 }
 
-                AddInstructionCycles(ea.IsRegister ? 4 : 14);
+                AddInstructionCycles(ea.IsRegister ? 4 : 10 + GetByteWordEaOperandCycles(mode, reg));
                 return true;
             }
 
