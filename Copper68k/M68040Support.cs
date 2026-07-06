@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using HotPathGuard;
 
 namespace Copper68k
 {
@@ -564,6 +565,7 @@ namespace Copper68k
         private readonly IM68kBus _physicalBus;
         private readonly IM68kCodeReader? _codeReader;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
+        private readonly Func<uint, uint> _readPhysicalLong;
         private readonly M68kCpuState _state;
 
         public M68040LogicalBus(IM68kBus physicalBus, M68kCpuState state)
@@ -572,6 +574,7 @@ namespace Copper68k
             _codeReader = physicalBus as IM68kCodeReader;
             _physicalAddressMap = physicalBus as IM68kPhysicalAddressMap;
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            _readPhysicalLong = ReadPhysicalLong;
         }
 
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
@@ -712,6 +715,7 @@ namespace Copper68k
                 M68020MemoryTarget.ExpansionRam or
                 M68020MemoryTarget.RealFastRam;
 
+        [HotPath]
         private uint Translate(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
         {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
@@ -720,7 +724,7 @@ namespace Copper68k
                 accessKind,
                 write,
                 supervisor,
-                ReadPhysicalLong,
+                _readPhysicalLong,
                 out var physical,
                 out var fault))
             {

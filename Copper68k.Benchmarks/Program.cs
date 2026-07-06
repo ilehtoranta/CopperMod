@@ -1,11 +1,19 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Copper68k;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
 var options = BenchmarkOptions.Parse(args);
+if (options.Dispatch)
+{
+    DispatchBenchmark.Run(options.Instructions, options.WarmupInstructions, options.Repeats);
+    return;
+}
+
 var workloads = CreateWorkloads()
     .Where(workload => options.Workload is null ||
         workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
@@ -44,7 +52,7 @@ foreach (var workload in workloads)
 static BenchmarkResult RunBenchmark(BenchmarkWorkload workload, BenchmarkBackend backend, BenchmarkOptions options)
 {
     using var run = CreateRun(workload, backend);
-    ExecuteMany(run.Cpu, options.WarmupInstructions);
+    WarmUp(run.Cpu, options.WarmupInstructions);
 
     GC.Collect();
     GC.WaitForPendingFinalizers();
@@ -87,6 +95,44 @@ static BenchmarkRun CreateRun(BenchmarkWorkload workload, BenchmarkBackend backe
     return new BenchmarkRun(cpu, bus);
 }
 
+static void WarmUp(IM68kCore cpu, int instructions)
+{
+    ExecuteMany(cpu, instructions);
+    if (cpu is M68kJitCore jit)
+    {
+        WarmUpJitUntilStable(jit);
+    }
+}
+
+static void WarmUpJitUntilStable(M68kJitCore jit)
+{
+    const int chunkInstructions = 1_000_000;
+    const int minInstructions = 10_000_000;
+    const int maxChunks = 32;
+    const int requiredStableChunks = 2;
+
+    var stableChunks = 0;
+    var executedInstructions = 0;
+    var previous = JitCompilationSnapshot.Capture(jit);
+    for (var chunk = 0;
+        chunk < maxChunks && (executedInstructions < minInstructions || stableChunks < requiredStableChunks);
+        chunk++)
+    {
+        ExecuteMany(jit, chunkInstructions);
+        executedInstructions += chunkInstructions;
+        var current = JitCompilationSnapshot.Capture(jit);
+        if (current.Equals(previous))
+        {
+            stableChunks++;
+        }
+        else
+        {
+            stableChunks = 0;
+            previous = current;
+        }
+    }
+}
+
 static void ExecuteMany(IM68kCore cpu, int instructions)
 {
     if (cpu is IM68kBatchCore batch)
@@ -127,6 +173,14 @@ static BenchmarkBackend[] CreateBackends()
 static BenchmarkWorkload[] CreateWorkloads()
     =>
     [
+        new BenchmarkWorkload(
+            "branch-self-loop",
+            [
+                0x60FE // BRA.S self
+            ],
+            SetupNone,
+            _ => { },
+            1 << 20),
         new BenchmarkWorkload(
             "register-hot-loop",
             [
@@ -210,7 +264,8 @@ internal sealed record BenchmarkOptions(
     int Instructions,
     int Repeats,
     string? Backend,
-    string? Workload)
+    string? Workload,
+    bool Dispatch)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -219,11 +274,15 @@ internal sealed record BenchmarkOptions(
         var repeats = 3;
         string? backend = null;
         string? workload = null;
+        var dispatch = false;
 
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
+                case "--dispatch":
+                    dispatch = true;
+                    break;
                 case "--warmup":
                     warmup = ParseInt(args, ref i);
                     break;
@@ -241,7 +300,7 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--help":
                 case "-h":
-                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
+                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -249,7 +308,7 @@ internal sealed record BenchmarkOptions(
             }
         }
 
-        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload);
+        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -271,6 +330,37 @@ internal sealed record BenchmarkOptions(
 }
 
 internal sealed record BenchmarkBackend(string Name, Func<BenchmarkBus, IM68kCore> Create);
+
+internal readonly record struct JitCompilationSnapshot(
+    long CompiledTraces,
+    long AsyncRequestsQueued,
+    long AsyncRequestsDeduped,
+    long AsyncPriorityBumps,
+    long AsyncWorkerCompilesCompleted,
+    long AsyncCompletedInstalled,
+    long AsyncCompletedDiscardedStale,
+    long AsyncCompletedDiscardedSuperseded,
+    long V2TierPromotions,
+    long V2TierPressurePromotions,
+    long V2TraceHandoffQueuedNotReady)
+{
+    public static JitCompilationSnapshot Capture(M68kJitCore jit)
+    {
+        var counters = jit.Counters;
+        return new JitCompilationSnapshot(
+            counters.CompiledTraces,
+            counters.AsyncRequestsQueued,
+            counters.AsyncRequestsDeduped,
+            counters.AsyncPriorityBumps,
+            counters.AsyncWorkerCompilesCompleted,
+            counters.AsyncCompletedInstalled,
+            counters.AsyncCompletedDiscardedStale,
+            counters.AsyncCompletedDiscardedSuperseded,
+            counters.V2TierPromotions,
+            counters.V2TierPressurePromotions,
+            counters.V2TraceHandoffQueuedNotReady);
+    }
+}
 
 internal sealed record BenchmarkWorkload(
     string Name,
@@ -678,4 +768,334 @@ internal sealed class BenchmarkBus :
             M68kOperandSize.Long => 4,
             _ => 1
         };
+}
+
+internal static unsafe class DispatchBenchmark
+{
+    private const int CaseCount = 4096;
+    private static readonly DispatchCase[] Cases = CreateCases();
+    private static readonly ManagedDispatchWrite[] ManagedDelegates =
+    [
+        RawDelegateWrite,
+        CustomDelegateWrite
+    ];
+
+    private static readonly delegate*<ref DispatchState, uint, ushort, long, void>[] ManagedFunctionPointers =
+    [
+        &RawManagedFunctionPointerWrite,
+        &CustomManagedFunctionPointerWrite
+    ];
+
+    private static readonly delegate* unmanaged<DispatchState*, uint, ushort, long, void>[] UnmanagedDelegates =
+    [
+        &RawUnmanagedWrite,
+        &CustomUnmanagedWrite
+    ];
+
+    public static void Run(int iterations, int warmupIterations, int repeats)
+    {
+        Console.WriteLine($"Dispatch benchmark, warmup={warmupIterations}, measured={iterations}, repeats={repeats}, Release={IsRelease()}");
+        Console.WriteLine("variant\trepeat\titerations\tms\tops/sec\tallocated bytes\tchecksum");
+
+        WarmUp(warmupIterations);
+
+        for (var repeat = 1; repeat <= repeats; repeat++)
+        {
+            RunVariant("if-else", repeat, iterations, RunIfElse);
+            RunVariant("managed-delegate", repeat, iterations, RunManagedDelegate);
+            RunVariant("managed-fnptr", repeat, iterations, RunManagedFunctionPointer);
+            RunVariant("route-fnptr", repeat, iterations, RunRouteFunctionPointer);
+            RunVariant("unmanaged-fnptr", repeat, iterations, RunUnmanagedFunctionPointer);
+            RunVariant("generic-struct", repeat, iterations, RunGenericStruct);
+        }
+    }
+
+    private static void WarmUp(int iterations)
+    {
+        _ = RunIfElse(iterations);
+        _ = RunManagedDelegate(iterations);
+        _ = RunManagedFunctionPointer(iterations);
+        _ = RunRouteFunctionPointer(iterations);
+        _ = RunUnmanagedFunctionPointer(iterations);
+        _ = RunGenericStruct(iterations);
+    }
+
+    private static void RunVariant(string name, int repeat, int iterations, Func<int, uint> run)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+        var start = Stopwatch.GetTimestamp();
+        var checksum = run(iterations);
+        var elapsed = Stopwatch.GetElapsedTime(start);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+        Console.WriteLine($"{name}\t{repeat}\t{iterations}\t{elapsed.TotalMilliseconds:F3}\t{iterations / elapsed.TotalSeconds:F0}\t{allocated}\t0x{checksum:X8}");
+    }
+
+    private static uint RunIfElse(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            if (item.Target == DispatchTarget.Custom)
+            {
+                CustomWrite(ref state, item.Address, item.Value, item.Cycle);
+            }
+            else
+            {
+                RawWrite(ref state, item.Address, item.Value, item.Cycle);
+            }
+        }
+
+        return state.Checksum;
+    }
+
+    private static uint RunManagedDelegate(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            ManagedDelegates[(int)item.Target](ref state, item.Address, item.Value, item.Cycle);
+        }
+
+        return state.Checksum;
+    }
+
+    private static uint RunManagedFunctionPointer(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            ManagedFunctionPointers[(int)item.Target](ref state, item.Address, item.Value, item.Cycle);
+        }
+
+        return state.Checksum;
+    }
+
+    private static uint RunRouteFunctionPointer(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            var write = ClassifyRouteFunctionPointer(item.Address);
+            write(ref state, item.Address, item.Value, item.Cycle);
+        }
+
+        return state.Checksum;
+    }
+
+    private static uint RunUnmanagedFunctionPointer(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            UnmanagedDelegates[(int)item.Target](&state, item.Address, item.Value, item.Cycle);
+        }
+
+        return state.Checksum;
+    }
+
+    private static uint RunGenericStruct(int iterations)
+    {
+        var state = new DispatchState();
+        for (var i = 0; i < iterations; i++)
+        {
+            ref readonly var item = ref Cases[i & (CaseCount - 1)];
+            if (item.Target == DispatchTarget.Custom)
+            {
+                WriteWithPolicy<CustomPolicy>(ref state, item.Address, item.Value, item.Cycle);
+            }
+            else
+            {
+                WriteWithPolicy<RawPolicy>(ref state, item.Address, item.Value, item.Cycle);
+            }
+        }
+
+        return state.Checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteWithPolicy<TPolicy>(ref DispatchState state, uint address, ushort value, long cycle)
+        where TPolicy : struct, IDispatchPolicy
+        => default(TPolicy).Write(ref state, address, value, cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RawWrite(ref DispatchState state, uint address, ushort value, long cycle)
+    {
+        state.RawWrites++;
+        state.Checksum = Mix(state.Checksum, address, value, cycle);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CustomWrite(ref DispatchState state, uint address, ushort value, long cycle)
+    {
+        if (address >= 0x00DFF000 && address < 0x00DFF1FF)
+        {
+            state.CustomWordWrites++;
+            state.Checksum = Mix(state.Checksum ^ 0x9E37_79B9u, address, value, cycle);
+            return;
+        }
+
+        if (address >= 0x00DFF000 && address < 0x00DFF200)
+        {
+            state.CustomByteWrites++;
+            state.Checksum = Mix(state.Checksum ^ 0x85EB_CA6Bu, address, (ushort)(value >> 8), cycle);
+        }
+
+        RawWrite(ref state, address + 1, (byte)value, cycle);
+    }
+
+    private static void RawDelegateWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => RawWrite(ref state, address, value, cycle);
+
+    private static void CustomDelegateWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => CustomWrite(ref state, address, value, cycle);
+
+    private static void RawManagedFunctionPointerWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => RawWrite(ref state, address, value, cycle);
+
+    private static void CustomManagedFunctionPointerWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => CustomWrite(ref state, address, value, cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static delegate*<ref DispatchState, uint, ushort, long, void> ClassifyRouteFunctionPointer(uint address)
+        => address >= 0x00DFF000 && address < 0x00DFF200
+            ? &RouteCustomWrite
+            : &RouteRawWrite;
+
+    private static void RouteRawWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => RawWrite(ref state, address, value, cycle);
+
+    private static void RouteCustomWrite(ref DispatchState state, uint address, ushort value, long cycle)
+        => CustomWrite(ref state, address, value, cycle);
+
+    [UnmanagedCallersOnly]
+    private static void RawUnmanagedWrite(DispatchState* state, uint address, ushort value, long cycle)
+        => RawWrite(ref *state, address, value, cycle);
+
+    [UnmanagedCallersOnly]
+    private static void CustomUnmanagedWrite(DispatchState* state, uint address, ushort value, long cycle)
+        => CustomWrite(ref *state, address, value, cycle);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint Mix(uint checksum, uint address, ushort value, long cycle)
+    {
+        checksum = unchecked((checksum * 16777619u) ^ address);
+        checksum = unchecked((checksum * 16777619u) ^ value);
+        checksum = unchecked((checksum * 16777619u) ^ (uint)cycle);
+        return checksum;
+    }
+
+    private static DispatchCase[] CreateCases()
+    {
+        var cases = new DispatchCase[CaseCount];
+        for (var i = 0; i < cases.Length; i++)
+        {
+            var cycle = i * 4L;
+            var value = (ushort)((i * 73) ^ (i >> 3));
+            if ((i & 63) == 0)
+            {
+                cases[i] = new DispatchCase(DispatchTarget.Custom, 0x00DFF1FF, value, cycle);
+            }
+            else if ((i & 15) == 0)
+            {
+                cases[i] = new DispatchCase(DispatchTarget.Custom, 0x00DFF180u + (uint)((i >> 4) & 0x3E), value, cycle);
+            }
+            else
+            {
+                cases[i] = new DispatchCase(DispatchTarget.Raw, (uint)((i * 131) & 0x000F_FFFE), value, cycle);
+            }
+        }
+
+        return cases;
+    }
+
+    private static bool IsRelease()
+    {
+#if DEBUG
+        return false;
+#else
+        return true;
+#endif
+    }
+}
+
+internal delegate void ManagedDispatchWrite(ref DispatchState state, uint address, ushort value, long cycle);
+
+internal interface IDispatchPolicy
+{
+    void Write(ref DispatchState state, uint address, ushort value, long cycle);
+}
+
+internal readonly struct RawPolicy : IDispatchPolicy
+{
+    public void Write(ref DispatchState state, uint address, ushort value, long cycle)
+        => DispatchPolicyHelpers.Raw(ref state, address, value, cycle);
+}
+
+internal readonly struct CustomPolicy : IDispatchPolicy
+{
+    public void Write(ref DispatchState state, uint address, ushort value, long cycle)
+        => DispatchPolicyHelpers.Custom(ref state, address, value, cycle);
+}
+
+internal static class DispatchPolicyHelpers
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void Raw(ref DispatchState state, uint address, ushort value, long cycle)
+    {
+        state.RawWrites++;
+        state.Checksum = Mix(state.Checksum, address, value, cycle);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void Custom(ref DispatchState state, uint address, ushort value, long cycle)
+    {
+        if (address >= 0x00DFF000 && address < 0x00DFF1FF)
+        {
+            state.CustomWordWrites++;
+            state.Checksum = Mix(state.Checksum ^ 0x9E37_79B9u, address, value, cycle);
+            return;
+        }
+
+        if (address >= 0x00DFF000 && address < 0x00DFF200)
+        {
+            state.CustomByteWrites++;
+            state.Checksum = Mix(state.Checksum ^ 0x85EB_CA6Bu, address, (ushort)(value >> 8), cycle);
+        }
+
+        Raw(ref state, address + 1, (byte)value, cycle);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint Mix(uint checksum, uint address, ushort value, long cycle)
+    {
+        checksum = unchecked((checksum * 16777619u) ^ address);
+        checksum = unchecked((checksum * 16777619u) ^ value);
+        checksum = unchecked((checksum * 16777619u) ^ (uint)cycle);
+        return checksum;
+    }
+}
+
+internal enum DispatchTarget
+{
+    Raw = 0,
+    Custom = 1
+}
+
+internal readonly record struct DispatchCase(DispatchTarget Target, uint Address, ushort Value, long Cycle);
+
+internal struct DispatchState
+{
+    public uint Checksum;
+    public uint RawWrites;
+    public uint CustomWordWrites;
+    public uint CustomByteWrites;
 }

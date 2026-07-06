@@ -1268,7 +1268,10 @@ namespace Copper68k
         private static int CalculateBranchCycles(M68kTimingDescriptor descriptor)
         {
             var size = RequireSize(descriptor);
-            if (descriptor.LegacyKey.ToString().StartsWith("Bsr", StringComparison.Ordinal))
+            if (descriptor.LegacyKey is
+                M68kInstructionTimingKey.BsrByte or
+                M68kInstructionTimingKey.BsrWord or
+                M68kInstructionTimingKey.BsrLong)
             {
                 return size == M68kOperandSize.Long ? 18 : 7;
             }

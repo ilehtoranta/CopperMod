@@ -573,9 +573,19 @@ namespace Copper68k
     internal static class M68020TimingModel
     {
         private static readonly M68kTimingDescriptor[] Descriptors = M68kTimingDescriptorCache.Create(useHeadTail: false);
+        private static readonly M68kInstructionPlan[] Plans = CreatePlans(Descriptors);
 
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
-            => M68kTimingFormula.CreatePlan(GetDescriptor(key));
+        {
+            var index = (int)key;
+            if ((uint)index < (uint)Plans.Length &&
+                Plans[index].Name is not null)
+            {
+                return Plans[index];
+            }
+
+            throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68020);
+        }
 
         internal static M68kTimingDescriptor GetDescriptor(M68kInstructionTimingKey key)
         {
@@ -594,14 +604,37 @@ namespace Copper68k
             throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68020);
         }
 
+        private static M68kInstructionPlan[] CreatePlans(M68kTimingDescriptor[] descriptors)
+        {
+            var plans = new M68kInstructionPlan[descriptors.Length];
+            for (var i = 0; i < descriptors.Length; i++)
+            {
+                if (descriptors[i].LegacyLabel is not null)
+                {
+                    plans[i] = M68kTimingFormula.CreatePlan(descriptors[i]);
+                }
+            }
+
+            return plans;
+        }
     }
 
     internal static class M68030TimingModel
     {
         private static readonly M68kTimingDescriptor[] Descriptors = M68kTimingDescriptorCache.Create(useHeadTail: true);
+        private static readonly M68kInstructionPlan[] Plans = CreatePlans(Descriptors);
 
         public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
-            => M68kTimingFormula.CreatePlan(GetDescriptor(key));
+        {
+            var index = (int)key;
+            if ((uint)index < (uint)Plans.Length &&
+                Plans[index].Name is not null)
+            {
+                return Plans[index];
+            }
+
+            throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68030);
+        }
 
         internal static M68kTimingDescriptor GetDescriptor(M68kInstructionTimingKey key)
         {
@@ -620,6 +653,19 @@ namespace Copper68k
             throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68030);
         }
 
+        private static M68kInstructionPlan[] CreatePlans(M68kTimingDescriptor[] descriptors)
+        {
+            var plans = new M68kInstructionPlan[descriptors.Length];
+            for (var i = 0; i < descriptors.Length; i++)
+            {
+                if (descriptors[i].LegacyLabel is not null)
+                {
+                    plans[i] = M68kTimingFormula.CreatePlan(descriptors[i]);
+                }
+            }
+
+            return plans;
+        }
     }
 
     internal sealed class M68kAcceleratorBusBridge
