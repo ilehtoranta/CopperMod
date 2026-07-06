@@ -8,6 +8,1255 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
+    internal enum M68020OpcodeKind : ushort
+    {
+        Unsupported = 0,
+        LineAException,
+        LineFException,
+        IllegalInstruction,
+        ImmediateLogicalToStatusRegister,
+        MoveFromCcr,
+        Movep,
+        Chk2Cmp2,
+        Moveq,
+        ClrDataLong,
+        ClrLongAddressIndirect,
+        ClrLongAddressDisplacement,
+        ClrLongAbsoluteLong,
+        NegxLongData,
+        NegLongData,
+        NotByteData,
+        ClrLongPostIncrement,
+        ClrDataWord,
+        ClrWordAddressDisplacement,
+        ClrByteAddressIndirect,
+        ClrByteAddressDisplacement,
+        LeaAbsoluteLong,
+        LeaAbsoluteWord,
+        LeaAddressDisplacement,
+        LeaPcDisplacement,
+        MoveImmediateToStatusRegister,
+        MoveByteImmediateToAbsoluteLong,
+        MoveByteImmediateToAddressIndirect,
+        MoveByteImmediateToAddressDisplacement,
+        MoveByteImmediateToBriefIndexed,
+        MoveWordImmediateToAddressDisplacement,
+        MoveWordImmediateToAbsoluteLong,
+        MoveLongImmediateToAbsoluteLong,
+        MoveLongImmediateToAbsoluteWord,
+        MoveLongImmediateToAddressIndirect,
+        MoveLongAbsoluteWordToAddressDisplacement,
+        MoveLongAbsoluteLongToAddressDisplacement,
+        MoveLongImmediateToAddressDisplacement,
+        MoveLongImmediateToBriefIndexed,
+        MoveLongImmediateToPostIncrement,
+        MoveLongImmediateToData,
+        MoveLongImmediateToAddress,
+        MoveWordImmediateToData,
+        MoveByteImmediateToData,
+        MoveLongDataToData,
+        MoveLongDataToAddress,
+        MoveLongDataToAddressIndirect,
+        MoveLongDataToAddressDisplacement,
+        MoveLongAddressToAddress,
+        MoveLongAddressToAddressIndirect,
+        MoveLongAddressToAddressDisplacement,
+        MoveLongAddressToPostIncrement,
+        MoveLongAddressToData,
+        MoveLongAddressIndirectToData,
+        MoveWordAddressIndirectToData,
+        MoveLongAddressIndirectToAddress,
+        MoveLongPostIncrementToData,
+        MoveLongPostIncrementToAddress,
+        MoveLongAddressDisplacementToData,
+        MoveLongAddressDisplacementToAddress,
+        MoveLongAddressDisplacementToPostIncrement,
+        MoveLongBriefIndexedToData,
+        MoveLongBriefIndexedToAddress,
+        MoveLongAddressIndirectToAddressIndirect,
+        MoveLongAbsoluteLongToData,
+        MoveLongDataToAbsoluteWord,
+        MoveLongDataToAbsoluteLong,
+        MoveLongAddressToAbsoluteWord,
+        MoveLongAddressToAbsoluteLong,
+        MoveByteDataToData,
+        MoveByteAddressIndirectToData,
+        MoveBytePostIncrementToData,
+        MoveByteAddressDisplacementToData,
+        MoveByteBriefIndexedToData,
+        MoveByteAbsoluteLongToData,
+        MoveWordAbsoluteLongToData,
+        MoveWordAddressDisplacementToData,
+        MoveWordDataToAbsoluteLong,
+        MoveWordDataToAddressDisplacement,
+        MoveWordAbsoluteLongToAbsoluteLong,
+        MoveWordAbsoluteLongToAddressDisplacement,
+        MoveByteDataToAbsoluteLong,
+        MoveByteDataToAddressIndirect,
+        MoveByteDataToAddressDisplacement,
+        MoveByteDataToBriefIndexed,
+        MoveByteBriefIndexedToPredecrement,
+        MoveByteDataToPostIncrement,
+        MoveByteDataToPredecrement,
+        MoveBytePostIncrementToPostIncrement,
+        MoveByteAddressIndirectToAbsoluteLong,
+        MoveByteAbsoluteLongToAbsoluteLong,
+        ImmediateLogicalByteToAbsoluteLong,
+        AddiByteImmediateToData,
+        AddiByteImmediateToAddressIndirect,
+        AddiByteImmediateToAddressDisplacement,
+        AddiWordImmediateToData,
+        AddiLongImmediateToData,
+        AddiLongImmediateToAbsoluteLong,
+        SubiByteImmediateToData,
+        SubiByteImmediateToAddressDisplacement,
+        SubiLongImmediateToData,
+        SubByteDataToData,
+        SubLongDataToData,
+        SubLongAddressToData,
+        SubLongAddressDisplacementToData,
+        AddWordDataToData,
+        AddLongDataToData,
+        AddxLongDataToData,
+        AddLongPostIncrementToData,
+        AddWordDataToAddressDisplacement,
+        AddLongDataToAddressDisplacement,
+        AddqLongData,
+        AddaLongImmediateToAddress,
+        AddaLongDataToAddress,
+        AddaLongAddressDisplacementToAddress,
+        SubaLongImmediateToAddress,
+        ChkWordImmediate,
+        LongMultiplyDivide,
+        Cas2,
+        Cas,
+        DivideWordUnsigned,
+        DivideWordSigned,
+        AndiWordImmediateToData,
+        AndLongImmediateToData,
+        EoriWordImmediateToData,
+        EoriLongImmediateToData,
+        MultiplyWordUnsigned,
+        MultiplyWordSigned,
+        AndByteDataToData,
+        BcdByteAdd,
+        BcdByteSubtract,
+        OriByteImmediateToData,
+        BtstByteImmediateAbsoluteLong,
+        BchgByteImmediateAbsoluteLong,
+        BclrByteImmediateAbsoluteLong,
+        BsetByteImmediateAbsoluteLong,
+        BsetByteImmediateAddressDisplacement,
+        BtstImmediateData,
+        BtstDynamicData,
+        BsetImmediateData,
+        BclrImmediateData,
+        BclrDynamicData,
+        SwapData,
+        ExtWordData,
+        TstWordData,
+        BitField,
+        LsrWordImmediateData,
+        AsrLongImmediateData,
+        AsrWordImmediateData,
+        LsrLongImmediateData,
+        AslLongImmediateData,
+        AslWordImmediateData,
+        RorByteImmediateData,
+        RorWordImmediateData,
+        RolWordImmediateData,
+        CmpiByteImmediateToData,
+        CmpiByteImmediateToAddressIndirect,
+        CmpiByteImmediateToAddressDisplacement,
+        CmpiWordImmediateToData,
+        CmpiWordImmediateToAddressDisplacement,
+        CmpiWordImmediateToAbsoluteLong,
+        CmpiLongImmediateToData,
+        CmpiLongImmediateToPostIncrement,
+        CmpiLongImmediateToAddressDisplacement,
+        CmpaLongImmediateToAddress,
+        CmpaLongDataToAddress,
+        CmpaLongAddressToAddress,
+        CmpaLongAddressIndirectToAddress,
+        CmpLongDataToData,
+        CmpLongAddressToData,
+        CmpLongAddressIndirectToData,
+        CmpLongPostIncrementToData,
+        CmpByteDataToData,
+        CmpByteAddressIndirectToData,
+        CmpByteAddressDisplacementToData,
+        CmpByteAbsoluteLongToData,
+        CmpWordDataToData,
+        CmpWordAddressDisplacementToData,
+        CmpiLongImmediateToAbsoluteLong,
+        Nop,
+        Movec,
+        Trap,
+        Rte,
+        Rtd,
+        Rts,
+        JmpAddressIndirect,
+        JsrAbsoluteLong,
+        JsrPcDisplacement,
+        JmpAbsoluteLong,
+        LinkLong,
+        NbcdByte,
+        ExtbLong,
+        MovemLongRegistersToPredecrement,
+        MovemLongPostIncrementToRegisters,
+        LongBranch,
+        ByteBranch,
+        WordBranch,
+        Trapcc,
+        SccAbsoluteLong,
+        Dbcc,
+    }
+
+    internal static class M68020OpcodeDispatchTable
+    {
+        // Model-specific legality is baked into these tables so the hot path stays lookup + switch.
+        internal static readonly M68020OpcodeKind[] M68020Kinds = CreateKinds();
+        internal static readonly M68020OpcodeKind[] M68010Kinds = CreateM68010Kinds(M68020Kinds);
+        internal static readonly M68020OpcodeKind[] M68030Kinds = M68020Kinds;
+        internal static readonly M68020OpcodeKind[] M68040Kinds = M68020Kinds;
+
+        private static M68020OpcodeKind[] CreateKinds()
+        {
+            var kinds = new M68020OpcodeKind[0x10000];
+            for (var opcode = 0; opcode < kinds.Length; opcode++)
+            {
+                kinds[opcode] = ClassifyBaseOpcode((ushort)opcode);
+            }
+
+            return kinds;
+        }
+
+        private static M68020OpcodeKind[] CreateM68010Kinds(M68020OpcodeKind[] m68020Kinds)
+        {
+            var kinds = (M68020OpcodeKind[])m68020Kinds.Clone();
+            for (var opcode = 0; opcode < kinds.Length; opcode++)
+            {
+                if (IsM68020Only(kinds[opcode]))
+                {
+                    kinds[opcode] = M68020OpcodeKind.IllegalInstruction;
+                }
+            }
+
+            return kinds;
+        }
+
+        private static bool IsM68020Only(M68020OpcodeKind kind)
+            => kind is M68020OpcodeKind.Chk2Cmp2
+                or M68020OpcodeKind.LongMultiplyDivide
+                or M68020OpcodeKind.Cas2
+                or M68020OpcodeKind.Cas
+                or M68020OpcodeKind.BitField
+                or M68020OpcodeKind.LinkLong
+                or M68020OpcodeKind.ExtbLong
+                or M68020OpcodeKind.LongBranch
+                or M68020OpcodeKind.Trapcc;
+
+        private static M68020OpcodeKind ClassifyBaseOpcode(ushort opcode)
+        {
+            if ((opcode & 0xF000) == 0xA000)
+            {
+                return M68020OpcodeKind.LineAException;
+            }
+
+            if ((opcode & 0xF000) == 0xF000)
+            {
+                return M68020OpcodeKind.LineFException;
+            }
+
+            if (opcode == 0x4AFC)
+            {
+                return M68020OpcodeKind.IllegalInstruction;
+            }
+
+            if (opcode is 0x003C or 0x007C or 0x023C or 0x027C or 0x0A3C or 0x0A7C)
+            {
+                return M68020OpcodeKind.ImmediateLogicalToStatusRegister;
+            }
+
+            if ((opcode & 0xFFC0) == 0x42C0)
+            {
+                return M68020OpcodeKind.MoveFromCcr;
+            }
+
+            if ((opcode & 0xF138) == 0x0108)
+            {
+                return M68020OpcodeKind.Movep;
+            }
+
+            if ((opcode & 0xF9C0) is 0x00C0 or 0x02C0 or 0x04C0)
+            {
+                return M68020OpcodeKind.Chk2Cmp2;
+            }
+
+            if ((opcode & 0xF100) == 0x7000)
+            {
+                return M68020OpcodeKind.Moveq;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4280)
+            {
+                return M68020OpcodeKind.ClrDataLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4290)
+            {
+                return M68020OpcodeKind.ClrLongAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x42A8)
+            {
+                return M68020OpcodeKind.ClrLongAddressDisplacement;
+            }
+
+            if (opcode == 0x42B9)
+            {
+                return M68020OpcodeKind.ClrLongAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4080)
+            {
+                return M68020OpcodeKind.NegxLongData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4480)
+            {
+                return M68020OpcodeKind.NegLongData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4600)
+            {
+                return M68020OpcodeKind.NotByteData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4298)
+            {
+                return M68020OpcodeKind.ClrLongPostIncrement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4240)
+            {
+                return M68020OpcodeKind.ClrDataWord;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4268)
+            {
+                return M68020OpcodeKind.ClrWordAddressDisplacement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4210)
+            {
+                return M68020OpcodeKind.ClrByteAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4228)
+            {
+                return M68020OpcodeKind.ClrByteAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x41F9)
+            {
+                return M68020OpcodeKind.LeaAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0x41F8)
+            {
+                return M68020OpcodeKind.LeaAbsoluteWord;
+            }
+
+            if ((opcode & 0xF1F8) == 0x41E8)
+            {
+                return M68020OpcodeKind.LeaAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x41FA)
+            {
+                return M68020OpcodeKind.LeaPcDisplacement;
+            }
+
+            if (opcode == 0x46FC)
+            {
+                return M68020OpcodeKind.MoveImmediateToStatusRegister;
+            }
+
+            if (opcode == 0x13FC)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0x10BC)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1FF) == 0x117C)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x11BC)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToBriefIndexed;
+            }
+
+            if ((opcode & 0xF1FF) == 0x317C)
+            {
+                return M68020OpcodeKind.MoveWordImmediateToAddressDisplacement;
+            }
+
+            if (opcode == 0x33FC)
+            {
+                return M68020OpcodeKind.MoveWordImmediateToAbsoluteLong;
+            }
+
+            if (opcode == 0x23FC)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToAbsoluteLong;
+            }
+
+            if (opcode == 0x21FC)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToAbsoluteWord;
+            }
+
+            if ((opcode & 0xF1F8) == 0x20B8)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1FF) == 0x2178)
+            {
+                return M68020OpcodeKind.MoveLongAbsoluteWordToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x2179)
+            {
+                return M68020OpcodeKind.MoveLongAbsoluteLongToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x217C)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x21BC)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToBriefIndexed;
+            }
+
+            if ((opcode & 0xF1FF) == 0x20FC)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToPostIncrement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x203C)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x207C)
+            {
+                return M68020OpcodeKind.MoveLongImmediateToAddress;
+            }
+
+            if ((opcode & 0xF1FF) == 0x303C)
+            {
+                return M68020OpcodeKind.MoveWordImmediateToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x103C)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2000)
+            {
+                return M68020OpcodeKind.MoveLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2040)
+            {
+                return M68020OpcodeKind.MoveLongDataToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2080)
+            {
+                return M68020OpcodeKind.MoveLongDataToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2140)
+            {
+                return M68020OpcodeKind.MoveLongDataToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2048)
+            {
+                return M68020OpcodeKind.MoveLongAddressToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2088)
+            {
+                return M68020OpcodeKind.MoveLongAddressToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2148)
+            {
+                return M68020OpcodeKind.MoveLongAddressToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x20C8)
+            {
+                return M68020OpcodeKind.MoveLongAddressToPostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2008)
+            {
+                return M68020OpcodeKind.MoveLongAddressToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2010)
+            {
+                return M68020OpcodeKind.MoveLongAddressIndirectToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x3010)
+            {
+                return M68020OpcodeKind.MoveWordAddressIndirectToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2050)
+            {
+                return M68020OpcodeKind.MoveLongAddressIndirectToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2018)
+            {
+                return M68020OpcodeKind.MoveLongPostIncrementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2058)
+            {
+                return M68020OpcodeKind.MoveLongPostIncrementToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2028)
+            {
+                return M68020OpcodeKind.MoveLongAddressDisplacementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2068)
+            {
+                return M68020OpcodeKind.MoveLongAddressDisplacementToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x20E8)
+            {
+                return M68020OpcodeKind.MoveLongAddressDisplacementToPostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2030)
+            {
+                return M68020OpcodeKind.MoveLongBriefIndexedToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2070)
+            {
+                return M68020OpcodeKind.MoveLongBriefIndexedToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0x2090)
+            {
+                return M68020OpcodeKind.MoveLongAddressIndirectToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1FF) == 0x2039)
+            {
+                return M68020OpcodeKind.MoveLongAbsoluteLongToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x21C0)
+            {
+                return M68020OpcodeKind.MoveLongDataToAbsoluteWord;
+            }
+
+            if ((opcode & 0xFFF8) == 0x23C0)
+            {
+                return M68020OpcodeKind.MoveLongDataToAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x21C8)
+            {
+                return M68020OpcodeKind.MoveLongAddressToAbsoluteWord;
+            }
+
+            if ((opcode & 0xFFF8) == 0x23C8)
+            {
+                return M68020OpcodeKind.MoveLongAddressToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1000)
+            {
+                return M68020OpcodeKind.MoveByteDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1010)
+            {
+                return M68020OpcodeKind.MoveByteAddressIndirectToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1018)
+            {
+                return M68020OpcodeKind.MoveBytePostIncrementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1028)
+            {
+                return M68020OpcodeKind.MoveByteAddressDisplacementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1030)
+            {
+                return M68020OpcodeKind.MoveByteBriefIndexedToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x1039)
+            {
+                return M68020OpcodeKind.MoveByteAbsoluteLongToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x3039)
+            {
+                return M68020OpcodeKind.MoveWordAbsoluteLongToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x3028)
+            {
+                return M68020OpcodeKind.MoveWordAddressDisplacementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x31C0)
+            {
+                return M68020OpcodeKind.MoveWordDataToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1F8) == 0x3140)
+            {
+                return M68020OpcodeKind.MoveWordDataToAddressDisplacement;
+            }
+
+            if (opcode == 0x33F9)
+            {
+                return M68020OpcodeKind.MoveWordAbsoluteLongToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0x3179)
+            {
+                return M68020OpcodeKind.MoveWordAbsoluteLongToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x11C0)
+            {
+                return M68020OpcodeKind.MoveByteDataToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1080)
+            {
+                return M68020OpcodeKind.MoveByteDataToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1140)
+            {
+                return M68020OpcodeKind.MoveByteDataToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1180)
+            {
+                return M68020OpcodeKind.MoveByteDataToBriefIndexed;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1130)
+            {
+                return M68020OpcodeKind.MoveByteBriefIndexedToPredecrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x10C0)
+            {
+                return M68020OpcodeKind.MoveByteDataToPostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x1100)
+            {
+                return M68020OpcodeKind.MoveByteDataToPredecrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x10D8)
+            {
+                return M68020OpcodeKind.MoveBytePostIncrementToPostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x11D0)
+            {
+                return M68020OpcodeKind.MoveByteAddressIndirectToAbsoluteLong;
+            }
+
+            if (opcode == 0x13F9)
+            {
+                return M68020OpcodeKind.MoveByteAbsoluteLongToAbsoluteLong;
+            }
+
+            if (opcode is 0x0039 or 0x0239)
+            {
+                return M68020OpcodeKind.ImmediateLogicalByteToAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0600)
+            {
+                return M68020OpcodeKind.AddiByteImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0610)
+            {
+                return M68020OpcodeKind.AddiByteImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0628)
+            {
+                return M68020OpcodeKind.AddiByteImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0640)
+            {
+                return M68020OpcodeKind.AddiWordImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0680)
+            {
+                return M68020OpcodeKind.AddiLongImmediateToData;
+            }
+
+            if (opcode == 0x06B9)
+            {
+                return M68020OpcodeKind.AddiLongImmediateToAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0400)
+            {
+                return M68020OpcodeKind.SubiByteImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0428)
+            {
+                return M68020OpcodeKind.SubiByteImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0480)
+            {
+                return M68020OpcodeKind.SubiLongImmediateToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x9000)
+            {
+                return M68020OpcodeKind.SubByteDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x9080)
+            {
+                return M68020OpcodeKind.SubLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x9088)
+            {
+                return M68020OpcodeKind.SubLongAddressToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x90A8)
+            {
+                return M68020OpcodeKind.SubLongAddressDisplacementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD040)
+            {
+                return M68020OpcodeKind.AddWordDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD080)
+            {
+                return M68020OpcodeKind.AddLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD180)
+            {
+                return M68020OpcodeKind.AddxLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD098)
+            {
+                return M68020OpcodeKind.AddLongPostIncrementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD168)
+            {
+                return M68020OpcodeKind.AddWordDataToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD1A8)
+            {
+                return M68020OpcodeKind.AddLongDataToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x5080)
+            {
+                return M68020OpcodeKind.AddqLongData;
+            }
+
+            if ((opcode & 0xF1FF) == 0xD1FC)
+            {
+                return M68020OpcodeKind.AddaLongImmediateToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD1C0)
+            {
+                return M68020OpcodeKind.AddaLongDataToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xD1E8)
+            {
+                return M68020OpcodeKind.AddaLongAddressDisplacementToAddress;
+            }
+
+            if ((opcode & 0xF1FF) == 0x91FC)
+            {
+                return M68020OpcodeKind.SubaLongImmediateToAddress;
+            }
+
+            if ((opcode & 0xF1FF) == 0x41BC)
+            {
+                return M68020OpcodeKind.ChkWordImmediate;
+            }
+
+            if ((opcode & 0xFFC0) is 0x4C00 or 0x4C40)
+            {
+                return M68020OpcodeKind.LongMultiplyDivide;
+            }
+
+            if (opcode is 0x0CFC or 0x0EFC)
+            {
+                return M68020OpcodeKind.Cas2;
+            }
+
+            if ((opcode & 0xFFC0) is 0x0AC0 or 0x0CC0 or 0x0EC0)
+            {
+                return M68020OpcodeKind.Cas;
+            }
+
+            if ((opcode & 0xF1C0) == 0x80C0)
+            {
+                return M68020OpcodeKind.DivideWordUnsigned;
+            }
+
+            if ((opcode & 0xF1C0) == 0x81C0)
+            {
+                return M68020OpcodeKind.DivideWordSigned;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0240)
+            {
+                return M68020OpcodeKind.AndiWordImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0280)
+            {
+                return M68020OpcodeKind.AndLongImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0A40)
+            {
+                return M68020OpcodeKind.EoriWordImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0A80)
+            {
+                return M68020OpcodeKind.EoriLongImmediateToData;
+            }
+
+            if ((opcode & 0xF1C0) == 0xC0C0)
+            {
+                return M68020OpcodeKind.MultiplyWordUnsigned;
+            }
+
+            if ((opcode & 0xF1C0) == 0xC1C0)
+            {
+                return M68020OpcodeKind.MultiplyWordSigned;
+            }
+
+            if ((opcode & 0xF1F8) == 0xC000)
+            {
+                return M68020OpcodeKind.AndByteDataToData;
+            }
+
+            if ((opcode & 0xF1F0) == 0xC100)
+            {
+                return M68020OpcodeKind.BcdByteAdd;
+            }
+
+            if ((opcode & 0xF1F0) == 0x8100)
+            {
+                return M68020OpcodeKind.BcdByteSubtract;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0000)
+            {
+                return M68020OpcodeKind.OriByteImmediateToData;
+            }
+
+            if (opcode == 0x0839)
+            {
+                return M68020OpcodeKind.BtstByteImmediateAbsoluteLong;
+            }
+
+            if (opcode == 0x0879)
+            {
+                return M68020OpcodeKind.BchgByteImmediateAbsoluteLong;
+            }
+
+            if (opcode == 0x08B9)
+            {
+                return M68020OpcodeKind.BclrByteImmediateAbsoluteLong;
+            }
+
+            if (opcode == 0x08F9)
+            {
+                return M68020OpcodeKind.BsetByteImmediateAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x08E8)
+            {
+                return M68020OpcodeKind.BsetByteImmediateAddressDisplacement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0800)
+            {
+                return M68020OpcodeKind.BtstImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x0100)
+            {
+                return M68020OpcodeKind.BtstDynamicData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x08C0)
+            {
+                return M68020OpcodeKind.BsetImmediateData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0880)
+            {
+                return M68020OpcodeKind.BclrImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x0180)
+            {
+                return M68020OpcodeKind.BclrDynamicData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4840)
+            {
+                return M68020OpcodeKind.SwapData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x48C0)
+            {
+                return M68020OpcodeKind.ExtWordData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4A40)
+            {
+                return M68020OpcodeKind.TstWordData;
+            }
+
+            if ((opcode & 0xF8C0) == 0xE8C0)
+            {
+                return M68020OpcodeKind.BitField;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE048)
+            {
+                return M68020OpcodeKind.LsrWordImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE080)
+            {
+                return M68020OpcodeKind.AsrLongImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE040)
+            {
+                return M68020OpcodeKind.AsrWordImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE088)
+            {
+                return M68020OpcodeKind.LsrLongImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE180)
+            {
+                return M68020OpcodeKind.AslLongImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE140)
+            {
+                return M68020OpcodeKind.AslWordImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE018)
+            {
+                return M68020OpcodeKind.RorByteImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE058)
+            {
+                return M68020OpcodeKind.RorWordImmediateData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xE158)
+            {
+                return M68020OpcodeKind.RolWordImmediateData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C00)
+            {
+                return M68020OpcodeKind.CmpiByteImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C10)
+            {
+                return M68020OpcodeKind.CmpiByteImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C28)
+            {
+                return M68020OpcodeKind.CmpiByteImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C40)
+            {
+                return M68020OpcodeKind.CmpiWordImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C68)
+            {
+                return M68020OpcodeKind.CmpiWordImmediateToAddressDisplacement;
+            }
+
+            if (opcode == 0x0C79)
+            {
+                return M68020OpcodeKind.CmpiWordImmediateToAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C80)
+            {
+                return M68020OpcodeKind.CmpiLongImmediateToData;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0C98)
+            {
+                return M68020OpcodeKind.CmpiLongImmediateToPostIncrement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0CA8)
+            {
+                return M68020OpcodeKind.CmpiLongImmediateToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1FF) == 0xB1FC)
+            {
+                return M68020OpcodeKind.CmpaLongImmediateToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB1C0)
+            {
+                return M68020OpcodeKind.CmpaLongDataToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB1C8)
+            {
+                return M68020OpcodeKind.CmpaLongAddressToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB1D0)
+            {
+                return M68020OpcodeKind.CmpaLongAddressIndirectToAddress;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB080)
+            {
+                return M68020OpcodeKind.CmpLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB088)
+            {
+                return M68020OpcodeKind.CmpLongAddressToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB090)
+            {
+                return M68020OpcodeKind.CmpLongAddressIndirectToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB098)
+            {
+                return M68020OpcodeKind.CmpLongPostIncrementToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB000)
+            {
+                return M68020OpcodeKind.CmpByteDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB010)
+            {
+                return M68020OpcodeKind.CmpByteAddressIndirectToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB028)
+            {
+                return M68020OpcodeKind.CmpByteAddressDisplacementToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0xB039)
+            {
+                return M68020OpcodeKind.CmpByteAbsoluteLongToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB040)
+            {
+                return M68020OpcodeKind.CmpWordDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB068)
+            {
+                return M68020OpcodeKind.CmpWordAddressDisplacementToData;
+            }
+
+            if (opcode == 0x0CB9)
+            {
+                return M68020OpcodeKind.CmpiLongImmediateToAbsoluteLong;
+            }
+
+            if (opcode == 0x4E71)
+            {
+                return M68020OpcodeKind.Nop;
+            }
+
+            if (opcode is 0x4E7A or 0x4E7B)
+            {
+                return M68020OpcodeKind.Movec;
+            }
+
+            if ((opcode & 0xFFF0) == 0x4E40)
+            {
+                return M68020OpcodeKind.Trap;
+            }
+
+            if (opcode == 0x4E73)
+            {
+                return M68020OpcodeKind.Rte;
+            }
+
+            if (opcode == 0x4E74)
+            {
+                return M68020OpcodeKind.Rtd;
+            }
+
+            if (opcode == 0x4E75)
+            {
+                return M68020OpcodeKind.Rts;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4ED0)
+            {
+                return M68020OpcodeKind.JmpAddressIndirect;
+            }
+
+            if (opcode == 0x4EB9)
+            {
+                return M68020OpcodeKind.JsrAbsoluteLong;
+            }
+
+            if (opcode == 0x4EBA)
+            {
+                return M68020OpcodeKind.JsrPcDisplacement;
+            }
+
+            if (opcode == 0x4EF9)
+            {
+                return M68020OpcodeKind.JmpAbsoluteLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4808)
+            {
+                return M68020OpcodeKind.LinkLong;
+            }
+
+            if ((opcode & 0xFFC0) == 0x4800)
+            {
+                return M68020OpcodeKind.NbcdByte;
+            }
+
+            if ((opcode & 0xFFF8) == 0x49C0)
+            {
+                return M68020OpcodeKind.ExtbLong;
+            }
+
+            if ((opcode & 0xFFF8) == 0x48E0)
+            {
+                return M68020OpcodeKind.MovemLongRegistersToPredecrement;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4CD8)
+            {
+                return M68020OpcodeKind.MovemLongPostIncrementToRegisters;
+            }
+
+            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) == 0x00FF)
+            {
+                return M68020OpcodeKind.LongBranch;
+            }
+
+            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) != 0x0000)
+            {
+                return M68020OpcodeKind.ByteBranch;
+            }
+
+            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) == 0x0000)
+            {
+                return M68020OpcodeKind.WordBranch;
+            }
+
+            if ((opcode & 0xF0FF) is 0x50FA or 0x50FB or 0x50FC)
+            {
+                return M68020OpcodeKind.Trapcc;
+            }
+
+            if ((opcode & 0xF0FF) == 0x50F9)
+            {
+                return M68020OpcodeKind.SccAbsoluteLong;
+            }
+
+            if ((opcode & 0xF0F8) == 0x50C8)
+            {
+                return M68020OpcodeKind.Dbcc;
+            }
+
+            return M68020OpcodeKind.Unsupported;
+        }
+    }
+
     internal class M68020Interpreter : IM68kBatchCore, IM68kInstructionFrequencyProvider
     {
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
@@ -17,6 +1266,9 @@ namespace Copper68k
         internal readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         internal readonly M68kTimingEngine _timing;
         internal readonly M68kAcceleratorBusBridge _busBridge;
+        private readonly M68020OpcodeKind[] _opcodeKinds;
+        private readonly bool _hasModelSpecificInstructions;
+        private readonly bool _enableM68020StackMode;
 
         public M68020Interpreter(IM68kBus bus)
             : this(bus, M68020CpuProfile.OcsAccelerator14Mhz)
@@ -32,12 +1284,22 @@ namespace Copper68k
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,
-            M68kInstructionFrequencyMatrix? instructionFrequency = null)
+            M68kInstructionFrequencyMatrix? instructionFrequency = null,
+            bool enableM68020StackMode = true,
+            M68020OpcodeKind[]? opcodeKinds = null,
+            bool hasModelSpecificInstructions = false)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             State = state ?? throw new ArgumentNullException(nameof(state));
-            State.EnableM68020StackMode();
+            _opcodeKinds = opcodeKinds ?? M68020OpcodeDispatchTable.M68020Kinds;
+            _hasModelSpecificInstructions = hasModelSpecificInstructions;
+            _enableM68020StackMode = enableM68020StackMode;
+            if (_enableM68020StackMode)
+            {
+                State.EnableM68020StackMode();
+            }
+
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
             _timing = new M68kTimingEngine(_profile, State);
             _busBridge = new M68kAcceleratorBusBridge(_bus, _profile, State, _timing);
@@ -157,8 +1419,16 @@ namespace Copper68k
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
+            if (_enableM68020StackMode)
+            {
+                State.EnableM68020StackMode();
+            }
+            else
+            {
+                State.DisableM68020StackMode();
+            }
+
             State.StatusRegister = M68kCpuState.ResetStatusRegister;
-            State.EnableM68020StackMode();
             State.VectorBaseRegister = 0;
             State.SourceFunctionCode = 0;
             State.DestinationFunctionCode = 0;
@@ -248,1194 +1518,843 @@ namespace Copper68k
 
         protected virtual bool TryExecuteM68020Instruction(ushort opcode)
         {
-            if (TryExecuteModelSpecificInstruction(opcode))
+            if (_hasModelSpecificInstructions && TryExecuteModelSpecificInstruction(opcode))
             {
                 return true;
             }
 
-            if ((opcode & 0xF000) == 0xA000)
-            {
-                BeginInstruction(opcode);
-                _ = FetchWord();
-                RaiseFormat0Exception(10, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineAException);
-                return true;
-            }
+            return ExecuteDispatchedInstruction(opcode, _opcodeKinds[opcode]);
+        }
 
-            if ((opcode & 0xF000) == 0xF000)
+        private bool ExecuteDispatchedInstruction(ushort opcode, M68020OpcodeKind kind)
+        {
+            switch (kind)
             {
-                BeginInstruction(opcode);
-                _ = FetchWord();
-                if (opcode == 0xFF00)
-                {
-                    var trapId = FetchWord();
-                    var returnProgramCounter = State.ProgramCounter;
-                    if (_bus.TryInvokeHostTrap(State.LastInstructionProgramCounter, trapId, State))
+                case M68020OpcodeKind.Unsupported:
+                    return false;
+
+                case M68020OpcodeKind.LineAException:
+                    BeginInstruction(opcode);
+                    _ = FetchWord();
+                    RaiseFormat0Exception(10, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineAException);
+                    return true;
+
+                case M68020OpcodeKind.LineFException:
+                    BeginInstruction(opcode);
+                    _ = FetchWord();
+                    if (opcode == 0xFF00)
                     {
-                        if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                        var trapId = FetchWord();
+                        var returnProgramCounter = State.ProgramCounter;
+                        if (_bus.TryInvokeHostTrap(State.LastInstructionProgramCounter, trapId, State))
                         {
-                            State.ProgramCounter = PullLong();
+                            if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                            {
+                                State.ProgramCounter = PullLong();
+                            }
+
+                            CompleteTiming(M68kInstructionTimingKey.Nop);
+                            return true;
                         }
 
-                        CompleteTiming(M68kInstructionTimingKey.Nop);
-                        return true;
+                        State.ProgramCounter = returnProgramCounter;
                     }
 
-                    State.ProgramCounter = returnProgramCounter;
-                }
-
-                RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
-                return true;
-            }
-
-            if (opcode == 0x4AFC)
-            {
-                BeginInstruction(opcode);
-                _ = FetchWord();
-                RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
-                return true;
-            }
-
-            if (TryExecuteImmediateLogicalToStatusRegister(opcode))
-            {
-                return true;
-            }
-
-            if ((opcode & 0xFFC0) == 0x42C0)
-            {
-                ExecuteMoveFromCcr(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF138) == 0x0108)
-            {
-                ExecuteMovep(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF9C0) is 0x00C0 or 0x02C0 or 0x04C0)
-            {
-                ExecuteChk2Cmp2(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF100) == 0x7000)
-            {
-                ExecuteMoveq(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4280)
-            {
-                ExecuteClrDataLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4290)
-            {
-                ExecuteClrLongAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x42A8)
-            {
-                ExecuteClrLongAddressDisplacement(opcode);
-                return true;
-            }
-
-            if (opcode == 0x42B9)
-            {
-                ExecuteClrLongAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4080)
-            {
-                ExecuteNegxLongData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4480)
-            {
-                ExecuteNegLongData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4600)
-            {
-                ExecuteNotByteData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4298)
-            {
-                ExecuteClrLongPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4240)
-            {
-                ExecuteClrDataWord(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4268)
-            {
-                ExecuteClrWordAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4210)
-            {
-                ExecuteClrByteAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4228)
-            {
-                ExecuteClrByteAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x41F9)
-            {
-                ExecuteLeaAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x41F8)
-            {
-                ExecuteLeaAbsoluteWord(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x41E8)
-            {
-                ExecuteLeaAddressDisplacement(opcode);
-                return true;
-            }
-
-            if (opcode == 0x13FC)
-            {
-                ExecuteMoveByteImmediateToAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x10BC)
-            {
-                ExecuteMoveByteImmediateToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x117C)
-            {
-                ExecuteMoveByteImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x11BC)
-            {
-                ExecuteMoveByteImmediateToBriefIndexed(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x317C)
-            {
-                ExecuteMoveWordImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if (opcode == 0x33FC)
-            {
-                ExecuteMoveWordImmediateToAbsoluteLong();
-                return true;
-            }
-
-            if (opcode == 0x23FC)
-            {
-                ExecuteMoveLongImmediateToAbsoluteLong();
-                return true;
-            }
-
-            if (opcode == 0x21FC)
-            {
-                ExecuteMoveLongImmediateToAbsoluteWord();
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x20B8)
-            {
-                ExecuteMoveLongImmediateToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x2178)
-            {
-                ExecuteMoveLongAbsoluteWordToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x2179)
-            {
-                ExecuteMoveLongAbsoluteLongToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x217C)
-            {
-                ExecuteMoveLongImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x21BC)
-            {
-                ExecuteMoveLongImmediateToBriefIndexed(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x20FC)
-            {
-                ExecuteMoveLongImmediateToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x203C)
-            {
-                ExecuteMoveLongImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x207C)
-            {
-                ExecuteMoveLongImmediateToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x303C)
-            {
-                ExecuteMoveWordImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x103C)
-            {
-                ExecuteMoveByteImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2000)
-            {
-                ExecuteMoveLongDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2040)
-            {
-                ExecuteMoveLongDataToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2080)
-            {
-                ExecuteMoveLongDataToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2140)
-            {
-                ExecuteMoveLongDataToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2048)
-            {
-                ExecuteMoveLongAddressToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2088)
-            {
-                ExecuteMoveLongAddressToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2148)
-            {
-                ExecuteMoveLongAddressToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x20C8)
-            {
-                ExecuteMoveLongAddressToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2008)
-            {
-                ExecuteMoveLongAddressToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2010)
-            {
-                ExecuteMoveLongAddressIndirectToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2050)
-            {
-                ExecuteMoveLongAddressIndirectToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2018)
-            {
-                ExecuteMoveLongPostIncrementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2058)
-            {
-                ExecuteMoveLongPostIncrementToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2028)
-            {
-                ExecuteMoveLongAddressDisplacementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2068)
-            {
-                ExecuteMoveLongAddressDisplacementToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x20E8)
-            {
-                ExecuteMoveLongAddressDisplacementToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2030)
-            {
-                ExecuteMoveLongBriefIndexedToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2070)
-            {
-                ExecuteMoveLongBriefIndexedToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x2090)
-            {
-                ExecuteMoveLongAddressIndirectToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x2039)
-            {
-                ExecuteMoveLongAbsoluteLongToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x21C0)
-            {
-                ExecuteMoveLongDataToAbsoluteWord(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x23C0)
-            {
-                ExecuteMoveLongDataToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x21C8)
-            {
-                ExecuteMoveLongAddressToAbsoluteWord(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x23C8)
-            {
-                ExecuteMoveLongAddressToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1000)
-            {
-                ExecuteMoveByteDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1010)
-            {
-                ExecuteMoveByteAddressIndirectToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1018)
-            {
-                ExecuteMoveBytePostIncrementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1028)
-            {
-                ExecuteMoveByteAddressDisplacementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1030)
-            {
-                ExecuteMoveByteBriefIndexedToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x1039)
-            {
-                ExecuteMoveByteAbsoluteLongToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x3039)
-            {
-                ExecuteMoveWordAbsoluteLongToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x3028)
-            {
-                ExecuteMoveWordAddressDisplacementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x31C0)
-            {
-                ExecuteMoveWordDataToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x3140)
-            {
-                ExecuteMoveWordDataToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if (opcode == 0x33F9)
-            {
-                ExecuteMoveWordAbsoluteLongToAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x3179)
-            {
-                ExecuteMoveWordAbsoluteLongToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x11C0)
-            {
-                ExecuteMoveByteDataToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1080)
-            {
-                ExecuteMoveByteDataToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1140)
-            {
-                ExecuteMoveByteDataToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1180)
-            {
-                ExecuteMoveByteDataToBriefIndexed(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1130)
-            {
-                ExecuteMoveByteBriefIndexedToPredecrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x10C0)
-            {
-                ExecuteMoveByteDataToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x1100)
-            {
-                ExecuteMoveByteDataToPredecrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x10D8)
-            {
-                ExecuteMoveBytePostIncrementToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x11D0)
-            {
-                ExecuteMoveByteAddressIndirectToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if (opcode == 0x13F9)
-            {
-                ExecuteMoveByteAbsoluteLongToAbsoluteLong();
-                return true;
-            }
-
-            if (opcode is 0x0039 or 0x0239)
-            {
-                ExecuteImmediateLogicalByteToAbsoluteLong(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0600)
-            {
-                ExecuteAddiByteImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0610)
-            {
-                ExecuteAddiByteImmediateToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0628)
-            {
-                ExecuteAddiByteImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0640)
-            {
-                ExecuteAddiWordImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0680)
-            {
-                ExecuteAddiLongImmediateToData(opcode);
-                return true;
-            }
-
-            if (opcode == 0x06B9)
-            {
-                ExecuteAddiLongImmediateToAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0400)
-            {
-                ExecuteSubiByteImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0428)
-            {
-                ExecuteSubiByteImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0480)
-            {
-                ExecuteSubiLongImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x9000)
-            {
-                ExecuteSubByteDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x9080)
-            {
-                ExecuteSubLongDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x9088)
-            {
-                ExecuteSubLongAddressToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x90A8)
-            {
-                ExecuteSubLongAddressDisplacementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD040)
-            {
-                ExecuteAddWordDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD080)
-            {
-                ExecuteAddLongDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD180)
-            {
-                ExecuteAddxLongDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD098)
-            {
-                ExecuteAddLongPostIncrementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD168)
-            {
-                ExecuteAddWordDataToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD1A8)
-            {
-                ExecuteAddLongDataToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0xD1FC)
-            {
-                ExecuteAddaLongImmediateToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD1C0)
-            {
-                ExecuteAddaLongDataToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xD1E8)
-            {
-                ExecuteAddaLongAddressDisplacementToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0x91FC)
-            {
-                ExecuteSubaLongImmediateToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFC0) is 0x4C00 or 0x4C40)
-            {
-                ExecuteLongMultiplyDivide(opcode);
-                return true;
-            }
-
-            if (opcode is 0x0CFC or 0x0EFC)
-            {
-                ExecuteCas2(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFC0) is 0x0AC0 or 0x0CC0 or 0x0EC0)
-            {
-                ExecuteCas(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1C0) == 0x80C0)
-            {
-                ExecuteDivideWord(opcode, signed: false);
-                return true;
-            }
-
-            if ((opcode & 0xF1C0) == 0x81C0)
-            {
-                ExecuteDivideWord(opcode, signed: true);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0240)
-            {
-                ExecuteAndiWordImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0280)
-            {
-                ExecuteAndLongImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0A40)
-            {
-                ExecuteEoriWordImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0A80)
-            {
-                ExecuteEoriLongImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1C0) == 0xC0C0)
-            {
-                ExecuteMultiplyWord(opcode, signed: false);
-                return true;
-            }
-
-            if ((opcode & 0xF1C0) == 0xC1C0)
-            {
-                ExecuteMultiplyWord(opcode, signed: true);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xC000)
-            {
-                ExecuteAndByteDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F0) == 0xC100)
-            {
-                ExecuteBcdByte(opcode, subtract: false);
-                return true;
-            }
-
-            if ((opcode & 0xF1F0) == 0x8100)
-            {
-                ExecuteBcdByte(opcode, subtract: true);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0000)
-            {
-                ExecuteOriByteImmediateToData(opcode);
-                return true;
-            }
-
-            if (opcode == 0x0839)
-            {
-                ExecuteBtstByteImmediateAbsoluteLong();
-                return true;
-            }
-
-            if (opcode == 0x0879)
-            {
-                ExecuteBchgByteImmediateAbsoluteLong();
-                return true;
-            }
-
-            if (opcode == 0x08B9)
-            {
-                ExecuteBclrByteImmediateAbsoluteLong();
-                return true;
-            }
-
-            if (opcode == 0x08F9)
-            {
-                ExecuteBsetByteImmediateAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x08E8)
-            {
-                ExecuteBsetByteImmediateAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0800)
-            {
-                ExecuteBtstImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0x0100)
-            {
-                ExecuteBtstDynamicData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x08C0)
-            {
-                ExecuteBsetImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0880)
-            {
-                ExecuteBclrImmediateData(opcode);
-                return true;
-            }
+                    RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                    return true;
+
+                case M68020OpcodeKind.IllegalInstruction:
+                    BeginInstruction(opcode);
+                    _ = FetchWord();
+                    RaiseFormat0Exception(4, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                    return true;
 
-            if ((opcode & 0xF1F8) == 0x0180)
-            {
-                ExecuteBclrDynamicData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4840)
-            {
-                ExecuteSwapData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x48C0)
-            {
-                ExecuteExtWordData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x4A40)
-            {
-                ExecuteTstWordData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF8C0) == 0xE8C0)
-            {
-                ExecuteBitField(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE080)
-            {
-                ExecuteAsrLongImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE040)
-            {
-                ExecuteAsrWordImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE088)
-            {
-                ExecuteLsrLongImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE180)
-            {
-                ExecuteAslLongImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE140)
-            {
-                ExecuteAslWordImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE018)
-            {
-                ExecuteRorByteImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE058)
-            {
-                ExecuteRorWordImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xE158)
-            {
-                ExecuteRolWordImmediateData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C00)
-            {
-                ExecuteCmpiByteImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C10)
-            {
-                ExecuteCmpiByteImmediateToAddressIndirect(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C28)
-            {
-                ExecuteCmpiByteImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C40)
-            {
-                ExecuteCmpiWordImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C68)
-            {
-                ExecuteCmpiWordImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if (opcode == 0x0C79)
-            {
-                ExecuteCmpiWordImmediateToAbsoluteLong();
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C80)
-            {
-                ExecuteCmpiLongImmediateToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0C98)
-            {
-                ExecuteCmpiLongImmediateToPostIncrement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xFFF8) == 0x0CA8)
-            {
-                ExecuteCmpiLongImmediateToAddressDisplacement(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0xB1FC)
-            {
-                ExecuteCmpaLongImmediateToAddress(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.ImmediateLogicalToStatusRegister:
+                    return TryExecuteImmediateLogicalToStatusRegister(opcode);
+
+                case M68020OpcodeKind.MoveFromCcr:
+                    ExecuteMoveFromCcr(opcode);
+                    return true;
+
+                case M68020OpcodeKind.Movep:
+                    ExecuteMovep(opcode);
+                    return true;
+
+                case M68020OpcodeKind.Chk2Cmp2:
+                    ExecuteChk2Cmp2(opcode);
+                    return true;
+
+                case M68020OpcodeKind.Moveq:
+                    ExecuteMoveq(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrDataLong:
+                    ExecuteClrDataLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrLongAddressIndirect:
+                    ExecuteClrLongAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrLongAddressDisplacement:
+                    ExecuteClrLongAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrLongAbsoluteLong:
+                    ExecuteClrLongAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.NegxLongData:
+                    ExecuteNegxLongData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.NegLongData:
+                    ExecuteNegLongData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.NotByteData:
+                    ExecuteNotByteData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrLongPostIncrement:
+                    ExecuteClrLongPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrDataWord:
+                    ExecuteClrDataWord(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrWordAddressDisplacement:
+                    ExecuteClrWordAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrByteAddressIndirect:
+                    ExecuteClrByteAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrByteAddressDisplacement:
+                    ExecuteClrByteAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LeaAbsoluteLong:
+                    ExecuteLeaAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LeaAbsoluteWord:
+                    ExecuteLeaAbsoluteWord(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LeaAddressDisplacement:
+                    ExecuteLeaAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LeaPcDisplacement:
+                    ExecuteLeaPcDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveImmediateToStatusRegister:
+                    ExecuteMoveImmediateToStatusRegister();
+                    return true;
+
+                case M68020OpcodeKind.MoveByteImmediateToAbsoluteLong:
+                    ExecuteMoveByteImmediateToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.MoveByteImmediateToAddressIndirect:
+                    ExecuteMoveByteImmediateToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteImmediateToAddressDisplacement:
+                    ExecuteMoveByteImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteImmediateToBriefIndexed:
+                    ExecuteMoveByteImmediateToBriefIndexed(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordImmediateToAddressDisplacement:
+                    ExecuteMoveWordImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordImmediateToAbsoluteLong:
+                    ExecuteMoveWordImmediateToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToAbsoluteLong:
+                    ExecuteMoveLongImmediateToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToAbsoluteWord:
+                    ExecuteMoveLongImmediateToAbsoluteWord();
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToAddressIndirect:
+                    ExecuteMoveLongImmediateToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAbsoluteWordToAddressDisplacement:
+                    ExecuteMoveLongAbsoluteWordToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAbsoluteLongToAddressDisplacement:
+                    ExecuteMoveLongAbsoluteLongToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToAddressDisplacement:
+                    ExecuteMoveLongImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToBriefIndexed:
+                    ExecuteMoveLongImmediateToBriefIndexed(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToPostIncrement:
+                    ExecuteMoveLongImmediateToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToData:
+                    ExecuteMoveLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongImmediateToAddress:
+                    ExecuteMoveLongImmediateToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordImmediateToData:
+                    ExecuteMoveWordImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteImmediateToData:
+                    ExecuteMoveByteImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToData:
+                    ExecuteMoveLongDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToAddress:
+                    ExecuteMoveLongDataToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToAddressIndirect:
+                    ExecuteMoveLongDataToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToAddressDisplacement:
+                    ExecuteMoveLongDataToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToAddress:
+                    ExecuteMoveLongAddressToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToAddressIndirect:
+                    ExecuteMoveLongAddressToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToAddressDisplacement:
+                    ExecuteMoveLongAddressToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToPostIncrement:
+                    ExecuteMoveLongAddressToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToData:
+                    ExecuteMoveLongAddressToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressIndirectToData:
+                    ExecuteMoveLongAddressIndirectToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAddressIndirectToData:
+                    ExecuteMoveWordAddressIndirectToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressIndirectToAddress:
+                    ExecuteMoveLongAddressIndirectToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongPostIncrementToData:
+                    ExecuteMoveLongPostIncrementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongPostIncrementToAddress:
+                    ExecuteMoveLongPostIncrementToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressDisplacementToData:
+                    ExecuteMoveLongAddressDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressDisplacementToAddress:
+                    ExecuteMoveLongAddressDisplacementToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressDisplacementToPostIncrement:
+                    ExecuteMoveLongAddressDisplacementToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongBriefIndexedToData:
+                    ExecuteMoveLongBriefIndexedToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongBriefIndexedToAddress:
+                    ExecuteMoveLongBriefIndexedToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressIndirectToAddressIndirect:
+                    ExecuteMoveLongAddressIndirectToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAbsoluteLongToData:
+                    ExecuteMoveLongAbsoluteLongToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToAbsoluteWord:
+                    ExecuteMoveLongDataToAbsoluteWord(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongDataToAbsoluteLong:
+                    ExecuteMoveLongDataToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToAbsoluteWord:
+                    ExecuteMoveLongAddressToAbsoluteWord(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAddressToAbsoluteLong:
+                    ExecuteMoveLongAddressToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToData:
+                    ExecuteMoveByteDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteAddressIndirectToData:
+                    ExecuteMoveByteAddressIndirectToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveBytePostIncrementToData:
+                    ExecuteMoveBytePostIncrementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteAddressDisplacementToData:
+                    ExecuteMoveByteAddressDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteBriefIndexedToData:
+                    ExecuteMoveByteBriefIndexedToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteAbsoluteLongToData:
+                    ExecuteMoveByteAbsoluteLongToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAbsoluteLongToData:
+                    ExecuteMoveWordAbsoluteLongToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAddressDisplacementToData:
+                    ExecuteMoveWordAddressDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordDataToAbsoluteLong:
+                    ExecuteMoveWordDataToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordDataToAddressDisplacement:
+                    ExecuteMoveWordDataToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAbsoluteLongToAbsoluteLong:
+                    ExecuteMoveWordAbsoluteLongToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAbsoluteLongToAddressDisplacement:
+                    ExecuteMoveWordAbsoluteLongToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToAbsoluteLong:
+                    ExecuteMoveByteDataToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToAddressIndirect:
+                    ExecuteMoveByteDataToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToAddressDisplacement:
+                    ExecuteMoveByteDataToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToBriefIndexed:
+                    ExecuteMoveByteDataToBriefIndexed(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteBriefIndexedToPredecrement:
+                    ExecuteMoveByteBriefIndexedToPredecrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToPostIncrement:
+                    ExecuteMoveByteDataToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteDataToPredecrement:
+                    ExecuteMoveByteDataToPredecrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveBytePostIncrementToPostIncrement:
+                    ExecuteMoveBytePostIncrementToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteAddressIndirectToAbsoluteLong:
+                    ExecuteMoveByteAddressIndirectToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveByteAbsoluteLongToAbsoluteLong:
+                    ExecuteMoveByteAbsoluteLongToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.ImmediateLogicalByteToAbsoluteLong:
+                    ExecuteImmediateLogicalByteToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiByteImmediateToData:
+                    ExecuteAddiByteImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiByteImmediateToAddressIndirect:
+                    ExecuteAddiByteImmediateToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiByteImmediateToAddressDisplacement:
+                    ExecuteAddiByteImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiWordImmediateToData:
+                    ExecuteAddiWordImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiLongImmediateToData:
+                    ExecuteAddiLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiLongImmediateToAbsoluteLong:
+                    ExecuteAddiLongImmediateToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.SubiByteImmediateToData:
+                    ExecuteSubiByteImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubiByteImmediateToAddressDisplacement:
+                    ExecuteSubiByteImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubiLongImmediateToData:
+                    ExecuteSubiLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubByteDataToData:
+                    ExecuteSubByteDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubLongDataToData:
+                    ExecuteSubLongDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubLongAddressToData:
+                    ExecuteSubLongAddressToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubLongAddressDisplacementToData:
+                    ExecuteSubLongAddressDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddWordDataToData:
+                    ExecuteAddWordDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddLongDataToData:
+                    ExecuteAddLongDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddxLongDataToData:
+                    ExecuteAddxLongDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddLongPostIncrementToData:
+                    ExecuteAddLongPostIncrementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddWordDataToAddressDisplacement:
+                    ExecuteAddWordDataToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddLongDataToAddressDisplacement:
+                    ExecuteAddLongDataToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddqLongData:
+                    ExecuteAddqLongData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddaLongImmediateToAddress:
+                    ExecuteAddaLongImmediateToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddaLongDataToAddress:
+                    ExecuteAddaLongDataToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddaLongAddressDisplacementToAddress:
+                    ExecuteAddaLongAddressDisplacementToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SubaLongImmediateToAddress:
+                    ExecuteSubaLongImmediateToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ChkWordImmediate:
+                    ExecuteChkWordImmediate(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LongMultiplyDivide:
+                    ExecuteLongMultiplyDivide(opcode);
+                    return true;
+
+                case M68020OpcodeKind.Cas2:
+                    ExecuteCas2(opcode);
+                    return true;
+
+                case M68020OpcodeKind.Cas:
+                    ExecuteCas(opcode);
+                    return true;
+
+                case M68020OpcodeKind.DivideWordUnsigned:
+                    ExecuteDivideWord(opcode, signed: false);
+                    return true;
+
+                case M68020OpcodeKind.DivideWordSigned:
+                    ExecuteDivideWord(opcode, signed: true);
+                    return true;
+
+                case M68020OpcodeKind.AndiWordImmediateToData:
+                    ExecuteAndiWordImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AndLongImmediateToData:
+                    ExecuteAndLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.EoriWordImmediateToData:
+                    ExecuteEoriWordImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.EoriLongImmediateToData:
+                    ExecuteEoriLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MultiplyWordUnsigned:
+                    ExecuteMultiplyWord(opcode, signed: false);
+                    return true;
+
+                case M68020OpcodeKind.MultiplyWordSigned:
+                    ExecuteMultiplyWord(opcode, signed: true);
+                    return true;
+
+                case M68020OpcodeKind.AndByteDataToData:
+                    ExecuteAndByteDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BcdByteAdd:
+                    ExecuteBcdByte(opcode, subtract: false);
+                    return true;
+
+                case M68020OpcodeKind.BcdByteSubtract:
+                    ExecuteBcdByte(opcode, subtract: true);
+                    return true;
+
+                case M68020OpcodeKind.OriByteImmediateToData:
+                    ExecuteOriByteImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BtstByteImmediateAbsoluteLong:
+                    ExecuteBtstByteImmediateAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.BchgByteImmediateAbsoluteLong:
+                    ExecuteBchgByteImmediateAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.BclrByteImmediateAbsoluteLong:
+                    ExecuteBclrByteImmediateAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.BsetByteImmediateAbsoluteLong:
+                    ExecuteBsetByteImmediateAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.BsetByteImmediateAddressDisplacement:
+                    ExecuteBsetByteImmediateAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BtstImmediateData:
+                    ExecuteBtstImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BtstDynamicData:
+                    ExecuteBtstDynamicData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BsetImmediateData:
+                    ExecuteBsetImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BclrImmediateData:
+                    ExecuteBclrImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BclrDynamicData:
+                    ExecuteBclrDynamicData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.SwapData:
+                    ExecuteSwapData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ExtWordData:
+                    ExecuteExtWordData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.TstWordData:
+                    ExecuteTstWordData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BitField:
+                    ExecuteBitField(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LsrWordImmediateData:
+                    ExecuteLsrWordImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AsrLongImmediateData:
+                    ExecuteAsrLongImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AsrWordImmediateData:
+                    ExecuteAsrWordImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.LsrLongImmediateData:
+                    ExecuteLsrLongImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AslLongImmediateData:
+                    ExecuteAslLongImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AslWordImmediateData:
+                    ExecuteAslWordImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.RorByteImmediateData:
+                    ExecuteRorByteImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.RorWordImmediateData:
+                    ExecuteRorWordImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.RolWordImmediateData:
+                    ExecuteRolWordImmediateData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiByteImmediateToData:
+                    ExecuteCmpiByteImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiByteImmediateToAddressIndirect:
+                    ExecuteCmpiByteImmediateToAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiByteImmediateToAddressDisplacement:
+                    ExecuteCmpiByteImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiWordImmediateToData:
+                    ExecuteCmpiWordImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiWordImmediateToAddressDisplacement:
+                    ExecuteCmpiWordImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiWordImmediateToAbsoluteLong:
+                    ExecuteCmpiWordImmediateToAbsoluteLong();
+                    return true;
+
+                case M68020OpcodeKind.CmpiLongImmediateToData:
+                    ExecuteCmpiLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiLongImmediateToPostIncrement:
+                    ExecuteCmpiLongImmediateToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpiLongImmediateToAddressDisplacement:
+                    ExecuteCmpiLongImmediateToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpaLongImmediateToAddress:
+                    ExecuteCmpaLongImmediateToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpaLongDataToAddress:
+                    ExecuteCmpaLongDataToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpaLongAddressToAddress:
+                    ExecuteCmpaLongAddressToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpaLongAddressIndirectToAddress:
+                    ExecuteCmpaLongAddressIndirectToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpLongDataToData:
+                    ExecuteCmpLongDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpLongAddressToData:
+                    ExecuteCmpLongAddressToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpLongAddressIndirectToData:
+                    ExecuteCmpLongAddressIndirectToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpLongPostIncrementToData:
+                    ExecuteCmpLongPostIncrementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpByteDataToData:
+                    ExecuteCmpByteDataToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpByteAddressIndirectToData:
+                    ExecuteCmpByteAddressIndirectToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpByteAddressDisplacementToData:
+                    ExecuteCmpByteAddressDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpByteAbsoluteLongToData:
+                    ExecuteCmpByteAbsoluteLongToData(opcode);
+                    return true;
 
-            if ((opcode & 0xF1F8) == 0xB1C0)
-            {
-                ExecuteCmpaLongDataToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB1C8)
-            {
-                ExecuteCmpaLongAddressToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB1D0)
-            {
-                ExecuteCmpaLongAddressIndirectToAddress(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB080)
-            {
-                ExecuteCmpLongDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB088)
-            {
-                ExecuteCmpLongAddressToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB090)
-            {
-                ExecuteCmpLongAddressIndirectToData(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.CmpWordDataToData:
+                    ExecuteCmpWordDataToData(opcode);
+                    return true;
 
-            if ((opcode & 0xF1F8) == 0xB098)
-            {
-                ExecuteCmpLongPostIncrementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB000)
-            {
-                ExecuteCmpByteDataToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB010)
-            {
-                ExecuteCmpByteAddressIndirectToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB028)
-            {
-                ExecuteCmpByteAddressDisplacementToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1FF) == 0xB039)
-            {
-                ExecuteCmpByteAbsoluteLongToData(opcode);
-                return true;
-            }
-
-            if ((opcode & 0xF1F8) == 0xB040)
-            {
-                ExecuteCmpWordDataToData(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.CmpWordAddressDisplacementToData:
+                    ExecuteCmpWordAddressDisplacementToData(opcode);
+                    return true;
 
-            if ((opcode & 0xF1F8) == 0xB068)
-            {
-                ExecuteCmpWordAddressDisplacementToData(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.CmpiLongImmediateToAbsoluteLong:
+                    ExecuteCmpiLongImmediateToAbsoluteLong();
+                    return true;
 
-            if (opcode == 0x0CB9)
-            {
-                ExecuteCmpiLongImmediateToAbsoluteLong();
-                return true;
-            }
+                case M68020OpcodeKind.Nop:
+                    ExecuteNop();
+                    return true;
 
-            if (opcode == 0x4E71)
-            {
-                ExecuteNop();
-                return true;
-            }
+                case M68020OpcodeKind.Movec:
+                    ExecuteMovec(opcode);
+                    return true;
 
-            if (opcode is 0x4E7A or 0x4E7B)
-            {
-                ExecuteMovec(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.Trap:
+                    ExecuteTrap(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF0) == 0x4E40)
-            {
-                ExecuteTrap(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.Rte:
+                    ExecuteRte();
+                    return true;
 
-            if (opcode == 0x4E73)
-            {
-                ExecuteRte();
-                return true;
-            }
+                case M68020OpcodeKind.Rtd:
+                    ExecuteRtd();
+                    return true;
 
-            if (opcode == 0x4E74)
-            {
-                ExecuteRtd();
-                return true;
-            }
+                case M68020OpcodeKind.Rts:
+                    ExecuteRts();
+                    return true;
 
-            if (opcode == 0x4E75)
-            {
-                ExecuteRts();
-                return true;
-            }
+                case M68020OpcodeKind.JmpAddressIndirect:
+                    ExecuteJmpAddressIndirect(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF8) == 0x4ED0)
-            {
-                ExecuteJmpAddressIndirect(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.JsrAbsoluteLong:
+                    ExecuteJsrAbsoluteLong();
+                    return true;
 
-            if (opcode == 0x4EB9)
-            {
-                ExecuteJsrAbsoluteLong();
-                return true;
-            }
+                case M68020OpcodeKind.JsrPcDisplacement:
+                    ExecuteJsrPcDisplacement();
+                    return true;
 
-            if (opcode == 0x4EBA)
-            {
-                ExecuteJsrPcDisplacement();
-                return true;
-            }
+                case M68020OpcodeKind.JmpAbsoluteLong:
+                    ExecuteJmpAbsoluteLong();
+                    return true;
 
-            if (opcode == 0x4EF9)
-            {
-                ExecuteJmpAbsoluteLong();
-                return true;
-            }
+                case M68020OpcodeKind.LinkLong:
+                    ExecuteLinkLong(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF8) == 0x4808)
-            {
-                ExecuteLinkLong(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.NbcdByte:
+                    ExecuteNbcdByte(opcode);
+                    return true;
 
-            if ((opcode & 0xFFC0) == 0x4800)
-            {
-                ExecuteNbcdByte(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.ExtbLong:
+                    ExecuteExtbLong(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF8) == 0x49C0)
-            {
-                ExecuteExtbLong(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.MovemLongRegistersToPredecrement:
+                    ExecuteMovemLongRegistersToPredecrement(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF8) == 0x48E0)
-            {
-                ExecuteMovemLongRegistersToPredecrement(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.MovemLongPostIncrementToRegisters:
+                    ExecuteMovemLongPostIncrementToRegisters(opcode);
+                    return true;
 
-            if ((opcode & 0xFFF8) == 0x4CD8)
-            {
-                ExecuteMovemLongPostIncrementToRegisters(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.LongBranch:
+                    ExecuteLongBranch(opcode);
+                    return true;
 
-            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) == 0x00FF)
-            {
-                ExecuteLongBranch(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.ByteBranch:
+                    ExecuteByteBranch(opcode);
+                    return true;
 
-            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) != 0x0000)
-            {
-                ExecuteByteBranch(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.WordBranch:
+                    ExecuteWordBranch(opcode);
+                    return true;
 
-            if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) == 0x0000)
-            {
-                ExecuteWordBranch(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.Trapcc:
+                    ExecuteTrapcc(opcode);
+                    return true;
 
-            var trapccSelector = opcode & 0xF0FF;
-            if (trapccSelector is 0x50FA or 0x50FB or 0x50FC)
-            {
-                ExecuteTrapcc(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.SccAbsoluteLong:
+                    ExecuteSccAbsoluteLong(opcode);
+                    return true;
 
-            if ((opcode & 0xF0FF) == 0x50F9)
-            {
-                ExecuteSccAbsoluteLong(opcode);
-                return true;
-            }
+                case M68020OpcodeKind.Dbcc:
+                    ExecuteDbcc(opcode);
+                    return true;
 
-            if ((opcode & 0xF0F8) == 0x50C8)
-            {
-                ExecuteDbcc(opcode);
-                return true;
+                default:
+                    throw new InvalidOperationException($"Unknown MC68020 opcode dispatch kind {kind}.");
             }
-
-            return false;
         }
 
         protected virtual bool TryExecuteApproximateInstruction(ushort opcode)
@@ -1956,6 +2875,33 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.LeaAddressDisplacement);
         }
 
+        private void ExecuteLeaPcDisplacement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var extensionAddress = State.ProgramCounter;
+            var displacement = unchecked((int)(short)FetchWord());
+            WriteGeneralRegister(true, destination, unchecked((uint)(extensionAddress + displacement)));
+            CompleteTiming(M68kInstructionTimingKey.LeaAddressDisplacement);
+        }
+
+        private void ExecuteMoveImmediateToStatusRegister()
+        {
+            BeginInstruction(0x46FC);
+            var instructionPc = State.ProgramCounter;
+            _ = FetchWord();
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            {
+                _ = FetchWord();
+                RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
+                return;
+            }
+
+            State.StatusRegister = FetchWord();
+            CompleteTiming(M68kInstructionTimingKey.ImmediateWordToStatusRegister);
+        }
+
         private void ExecuteMoveByteImmediateToAbsoluteLong()
         {
             BeginInstruction(0x13FC);
@@ -2289,6 +3235,25 @@ namespace Copper68k
             var value = ReadLong(State.A[source]);
             State.D[destination] = value;
             SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressIndirectToData);
+        }
+
+        private void ExecuteMoveWordAddressIndirectToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var source = opcode & 7;
+            var address = State.A[source];
+            if ((address & 1) != 0 &&
+                TryRaiseMisalignedWordDataRead(address, State.LastInstructionProgramCounter))
+            {
+                return;
+            }
+
+            var value = ReadWord(address);
+            WriteDataRegisterWord(destination, value);
+            SetMoveFlags(value, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.MoveLongAddressIndirectToData);
         }
 
@@ -2960,6 +3925,24 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.AddLongDataToData);
         }
 
+        private void ExecuteAddqLongData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destinationRegister = opcode & 7;
+            var source = (uint)((opcode >> 9) & 7);
+            if (source == 0)
+            {
+                source = 8;
+            }
+
+            var destination = State.D[destinationRegister];
+            var result = destination + source;
+            State.D[destinationRegister] = result;
+            SetAddFlags(destination, source, result, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.AddLongDataToData);
+        }
+
         private void ExecuteAddWordDataToData(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -3258,6 +4241,24 @@ namespace Copper68k
                     ? M68kInstructionTimingKey.MulsWordEffectiveAddressToData
                     : M68kInstructionTimingKey.MuluWordEffectiveAddressToData,
                 signed ? "MULS.W <ea>,Dn" : "MULU.W <ea>,Dn");
+        }
+
+        private void ExecuteChkWordImmediate(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var register = (opcode >> 9) & 7;
+            var upperBound = unchecked((short)FetchWord());
+            var value = unchecked((short)State.D[register]);
+            if (value < 0 || value > upperBound)
+            {
+                State.SetFlag(M68kCpuState.Negative, value < 0);
+                RaiseFormat0Exception(6, State.ProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
+
+            State.SetFlag(M68kCpuState.Negative, false);
+            CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
         private void ExecuteDivideWord(ushort opcode, bool signed)
@@ -3676,6 +4677,28 @@ namespace Copper68k
                 default:
                     throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile);
             }
+        }
+
+        private void ExecuteLsrWordImmediateData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var register = opcode & 7;
+            var count = (opcode >> 9) & 7;
+            if (count == 0)
+            {
+                count = 8;
+            }
+
+            var value = (ushort)State.D[register];
+            var result = (ushort)(value >> count);
+            WriteDataRegisterWord(register, result);
+            var carry = ((value >> (count - 1)) & 1) != 0;
+            State.SetNegativeZero(result, M68kOperandSize.Word);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, carry);
+            State.SetFlag(M68kCpuState.Extend, carry);
+            CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
         private uint CalculateBitFieldBaseAddress(int mode, int register, ushort opcode)
@@ -4821,6 +5844,13 @@ namespace Copper68k
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
             CompleteTiming(timingKey);
+        }
+
+        protected virtual bool TryRaiseMisalignedWordDataRead(uint address, uint instructionPc)
+        {
+            _ = address;
+            _ = instructionPc;
+            return false;
         }
 
         protected virtual bool TryReadControlRegister(int register, uint instructionPc, out uint value)

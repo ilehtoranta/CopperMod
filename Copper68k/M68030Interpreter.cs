@@ -15,7 +15,7 @@ namespace Copper68k
         }
 
         internal M68030Interpreter(IM68kBus bus, M68020CpuProfile profile)
-            : base(bus, profile)
+            : base(bus, profile, new M68kCpuState(), opcodeKinds: M68020OpcodeDispatchTable.M68030Kinds)
         {
             if (profile.Model != M68kAcceleratorModel.M68030)
             {
@@ -28,7 +28,7 @@ namespace Copper68k
             M68020CpuProfile profile,
             M68kCpuState state,
             M68kInstructionFrequencyMatrix? instructionFrequency = null)
-            : base(bus, profile, state, instructionFrequency)
+            : base(bus, profile, state, instructionFrequency, opcodeKinds: M68020OpcodeDispatchTable.M68030Kinds)
         {
             if (profile.Model != M68kAcceleratorModel.M68030)
             {

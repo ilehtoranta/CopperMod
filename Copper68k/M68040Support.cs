@@ -926,7 +926,13 @@ namespace Copper68k
             M68020CpuProfile profile,
             M68kCpuState state,
             M68kInstructionFrequencyMatrix? instructionFrequency = null)
-            : base(new M68040LogicalBus(bus, state), profile, state, instructionFrequency)
+            : base(
+                new M68040LogicalBus(bus, state),
+                profile,
+                state,
+                instructionFrequency,
+                opcodeKinds: M68020OpcodeDispatchTable.M68040Kinds,
+                hasModelSpecificInstructions: true)
         {
             _physicalBus = bus ?? throw new ArgumentNullException(nameof(bus));
             if (profile.Model != M68kAcceleratorModel.M68040)

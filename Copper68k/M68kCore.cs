@@ -41,6 +41,11 @@ namespace Copper68k
         M68000 = 0,
 
         /// <summary>
+        /// Motorola MC68010-compatible execution.
+        /// </summary>
+        M68010 = 10,
+
+        /// <summary>
         /// Motorola MC68020-compatible execution.
         /// </summary>
         M68020 = 1,
@@ -535,6 +540,7 @@ namespace Copper68k
             return model switch
             {
                 M68kCpuModel.M68000 => new M68kInterpreter(bus, opcodePlanDispatch: M68000OpcodePlanDispatch),
+                M68kCpuModel.M68010 => new M68010Interpreter(bus),
                 M68kCpuModel.M68020 => new M68020Interpreter(bus),
                 M68kCpuModel.M68030 => new M68030Interpreter(bus),
                 M68kCpuModel.M68040 => new M68040Interpreter(bus),
@@ -870,6 +876,21 @@ namespace Copper68k
         {
             M68020StackModeEnabled = true;
             SetStatusRegister(_statusRegister);
+        }
+
+        internal void DisableM68020StackMode()
+        {
+            if (!M68020StackModeEnabled)
+            {
+                return;
+            }
+
+            SaveActiveM68020StackPointer(_statusRegister);
+            _statusRegister &= M68000StatusRegisterMask;
+            M68020StackModeEnabled = false;
+            A[7] = (_statusRegister & Supervisor) != 0
+                ? SupervisorStackPointer
+                : UserStackPointer;
         }
 
         /// <summary>

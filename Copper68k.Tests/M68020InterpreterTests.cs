@@ -11,6 +11,13 @@ public sealed class M68020InterpreterTests
 		Assert.True(interpreter.State.M68020StackModeEnabled);
 	}
 	[Fact]
+	public void FactoryCreatesM68010CoreWithoutM68020StackMode()
+	{
+		using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68010, new Copper68kTestBus());
+		var interpreter = Assert.IsType<M68010Interpreter>(cpu);
+		Assert.False(interpreter.State.M68020StackModeEnabled);
+	}
+	[Fact]
 	public void FactoryCreatesAccurateM68030Backend()
 	{
 		using var cpu = M68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68030, new Copper68kTestBus());
@@ -36,6 +43,72 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x0000_0400u, cpu.State.D[1]);
 		Assert.Equal(24, cpu.State.NativeCycles);
 		Assert.Equal(12, cpu.State.Cycles);
+	}
+	[Fact]
+	public void M68010MovecTransfersVectorBaseRegister()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x4E7B, 0x0801, // MOVEC D0,VBR
+			0x4E7A, 0x1801); // MOVEC VBR,D1
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0400;
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x0000_0400u, cpu.State.VectorBaseRegister);
+		Assert.Equal(0x0000_0400u, cpu.State.D[1]);
+		Assert.False(cpu.State.M68020StackModeEnabled);
+	}
+	[Fact]
+	public void M68010OddWordReadRaisesFormat8AddressErrorFrame()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x3211); // MOVE.W (A1),D1
+		bus.WriteLong(3u * 4u, 0x0000_2000);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[1] = 1;
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FF8));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(0x800Cu, bus.ReadWord(0x2FFE));
+	}
+	[Fact]
+	public void M68010RejectsM68020OnlyExtbLong()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
+		bus.WriteLong(4u * 4u, 0x0000_2000);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0080;
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x0000_0080u, cpu.State.D[0]);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(4 * 4, bus.ReadWord(0x2FFE));
+	}
+	[Fact]
+	public void M68020ExecutesM68020OnlyExtbLong()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0080;
+		cpu.ExecuteInstruction();
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFF_FF80u, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 	}
 	[Fact]
 	public void MovecUnsupportedControlRegisterRaisesIllegalWithoutClobberingDestination()
