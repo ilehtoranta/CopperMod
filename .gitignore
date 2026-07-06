@@ -489,6 +489,7 @@ CopperMod.Sid/ReferenceLinks
 CopperMod.Sid/References
 CopperMod.Sid.Compare/
 CopperMod.Sid.Compare.Tests/
+third_party
 !scripts/nuget/*.ps1
 !scripts/release/
 !scripts/release/*.ps1

@@ -202,12 +202,48 @@ namespace Copper68k
             var savedStatusRegister = State.StatusRegister;
             var vectorTarget = ReadLong(State.VectorBaseRegister + vectorAddress);
             State.RecordException((int)(vectorAddress / 4), State.ProgramCounter, savedStatusRegister);
+            if (State.M68020StackModeEnabled &&
+                (savedStatusRegister & (M68kCpuState.Supervisor | M68kCpuState.Master)) ==
+                (M68kCpuState.Supervisor | M68kCpuState.Master))
+            {
+                var interruptStackPointer = State.InterruptStackPointer;
+                PushFrameAt(
+                    ref interruptStackPointer,
+                    savedStatusRegister,
+                    State.ProgramCounter,
+                    (ushort)(0x1000 | ((int)vectorAddress & 0x0FFF)));
+                State.SetInterruptStackPointer(interruptStackPointer);
+
+                var masterStackPointer = State.MasterStackPointer;
+                PushFrameAt(
+                    ref masterStackPointer,
+                    savedStatusRegister,
+                    State.ProgramCounter,
+                    (ushort)(Format0ExceptionFrame | ((int)vectorAddress & 0x0FFF)));
+                State.SetMasterStackPointer(masterStackPointer);
+
+                State.StatusRegister = (ushort)((savedStatusRegister & 0xF8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
+                State.ProgramCounter = vectorTarget;
+                CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
+                return;
+            }
+
             State.StatusRegister = (ushort)((State.StatusRegister & 0xE8FF) | ((level & 7) << 8) | M68kCpuState.Supervisor);
             PushWord((ushort)(Format0ExceptionFrame | ((int)vectorAddress & 0x0FFF)));
             PushLong(State.ProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = vectorTarget;
             CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
+        }
+
+        private void PushFrameAt(ref uint stackPointer, ushort statusRegister, uint programCounter, ushort formatWord)
+        {
+            stackPointer -= 2;
+            WriteWord(stackPointer, formatWord);
+            stackPointer -= 4;
+            WriteLong(stackPointer, programCounter);
+            stackPointer -= 2;
+            WriteWord(stackPointer, statusRegister);
         }
 
         protected virtual bool TryExecuteM68020Instruction(ushort opcode)
@@ -264,9 +300,21 @@ namespace Copper68k
                 return true;
             }
 
+            if ((opcode & 0xFFC0) == 0x42C0)
+            {
+                ExecuteMoveFromCcr(opcode);
+                return true;
+            }
+
             if ((opcode & 0xF138) == 0x0108)
             {
                 ExecuteMovep(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xF9C0) is 0x00C0 or 0x02C0 or 0x04C0)
+            {
+                ExecuteChk2Cmp2(opcode);
                 return true;
             }
 
@@ -408,6 +456,12 @@ namespace Copper68k
                 return true;
             }
 
+            if (opcode == 0x21FC)
+            {
+                ExecuteMoveLongImmediateToAbsoluteWord();
+                return true;
+            }
+
             if ((opcode & 0xF1F8) == 0x20B8)
             {
                 ExecuteMoveLongImmediateToAddressIndirect(opcode);
@@ -429,6 +483,12 @@ namespace Copper68k
             if ((opcode & 0xF1FF) == 0x217C)
             {
                 ExecuteMoveLongImmediateToAddressDisplacement(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xF1FF) == 0x21BC)
+            {
+                ExecuteMoveLongImmediateToBriefIndexed(opcode);
                 return true;
             }
 
@@ -888,6 +948,18 @@ namespace Copper68k
                 return true;
             }
 
+            if (opcode is 0x0CFC or 0x0EFC)
+            {
+                ExecuteCas2(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) is 0x0AC0 or 0x0CC0 or 0x0EC0)
+            {
+                ExecuteCas(opcode);
+                return true;
+            }
+
             if ((opcode & 0xF1C0) == 0x80C0)
             {
                 ExecuteDivideWord(opcode, signed: false);
@@ -1035,6 +1107,12 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x4A40)
             {
                 ExecuteTstWordData(opcode);
+                return true;
+            }
+
+            if ((opcode & 0xF8C0) == 0xE8C0)
+            {
+                ExecuteBitField(opcode);
                 return true;
             }
 
@@ -1242,6 +1320,12 @@ namespace Copper68k
                 return true;
             }
 
+            if ((opcode & 0xFFF0) == 0x4E40)
+            {
+                ExecuteTrap(opcode);
+                return true;
+            }
+
             if (opcode == 0x4E73)
             {
                 ExecuteRte();
@@ -1269,6 +1353,12 @@ namespace Copper68k
             if (opcode == 0x4EB9)
             {
                 ExecuteJsrAbsoluteLong();
+                return true;
+            }
+
+            if (opcode == 0x4EBA)
+            {
+                ExecuteJsrPcDisplacement();
                 return true;
             }
 
@@ -1323,6 +1413,13 @@ namespace Copper68k
             if ((opcode & 0xF000) == 0x6000 && (opcode & 0x00FF) == 0x0000)
             {
                 ExecuteWordBranch(opcode);
+                return true;
+            }
+
+            var trapccSelector = opcode & 0xF0FF;
+            if (trapccSelector is 0x50FA or 0x50FB or 0x50FC)
+            {
+                ExecuteTrapcc(opcode);
                 return true;
             }
 
@@ -1507,6 +1604,13 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.Rte);
         }
 
+        private void ExecuteTrap(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            RaiseFormat0Exception(32 + (opcode & 0x0F), State.ProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+        }
+
         private void ExecuteRtd()
         {
             BeginInstruction(0x4E74);
@@ -1547,6 +1651,17 @@ namespace Copper68k
             BeginInstruction(0x4EB9);
             _ = FetchWord();
             var target = FetchLong();
+            PushLong(State.ProgramCounter);
+            State.ProgramCounter = target;
+            CompleteTiming(M68kInstructionTimingKey.JsrAbsoluteLong);
+        }
+
+        private void ExecuteJsrPcDisplacement()
+        {
+            BeginInstruction(0x4EBA);
+            _ = FetchWord();
+            var extensionAddress = State.ProgramCounter;
+            var target = unchecked((uint)(extensionAddress + unchecked((int)(short)FetchWord())));
             PushLong(State.ProgramCounter);
             State.ProgramCounter = target;
             CompleteTiming(M68kInstructionTimingKey.JsrAbsoluteLong);
@@ -1891,6 +2006,17 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAbsoluteLong);
         }
 
+        private void ExecuteMoveLongImmediateToAbsoluteWord()
+        {
+            BeginInstruction(0x21FC);
+            _ = FetchWord();
+            var value = FetchLong();
+            var address = unchecked((uint)(int)(short)FetchWord());
+            WriteLong(address, value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAbsoluteLong);
+        }
+
         private void ExecuteMoveLongImmediateToAddressIndirect(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -1912,6 +2038,18 @@ namespace Copper68k
             WriteLong(unchecked((uint)(State.A[destination] + displacement)), value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAddressDisplacement);
+        }
+
+        private void ExecuteMoveLongImmediateToBriefIndexed(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var value = FetchLong();
+            var extension = FetchWord();
+            WriteLong(CalculateBriefIndexedAddress(destination, extension, opcode), value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
         private void ExecuteMoveLongAbsoluteWordToAddressDisplacement(ushort opcode)
@@ -3184,6 +3322,482 @@ namespace Copper68k
                 signed ? "DIVS.W <ea>,Dn" : "DIVU.W <ea>,Dn");
         }
 
+        private void ExecuteBitField(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extension = FetchWord();
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            var operation = (opcode >> 8) & 7;
+            var operandRegister = (extension >> 12) & 7;
+            var offset = DecodeBitFieldOffset(extension);
+            var width = DecodeBitFieldWidth(extension);
+
+            if (mode == 0)
+            {
+                ExecuteDataRegisterBitField(operation, register, operandRegister, offset, width);
+            }
+            else
+            {
+                var baseAddress = CalculateBitFieldBaseAddress(mode, register, opcode);
+                ExecuteMemoryBitField(operation, baseAddress, operandRegister, offset, width);
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
+        private int DecodeBitFieldOffset(ushort extension)
+        {
+            if ((extension & 0x0800) != 0)
+            {
+                return unchecked((int)State.D[(extension >> 6) & 7]);
+            }
+
+            return (extension >> 6) & 0x1F;
+        }
+
+        private int DecodeBitFieldWidth(ushort extension)
+        {
+            if ((extension & 0x0020) != 0)
+            {
+                var registerWidth = (int)(State.D[extension & 7] & 0x1F);
+                return registerWidth == 0 ? 32 : registerWidth;
+            }
+
+            var immediateWidth = extension & 0x1F;
+            return immediateWidth == 0 ? 32 : immediateWidth;
+        }
+
+        private void ExecuteCas(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extension = FetchWord();
+            var size = DecodeCasSize(opcode);
+            var address = CalculateBitFieldBaseAddress((opcode >> 3) & 7, opcode & 7, opcode);
+            var compareRegister = extension & 7;
+            var updateRegister = (extension >> 6) & 7;
+            var destination = ReadSized(address, size);
+            var compare = State.D[compareRegister] & M68kCpuState.Mask(size);
+            SetCompareFlagsPreserveExtend(destination, compare, size);
+
+            if ((destination & M68kCpuState.Mask(size)) == compare)
+            {
+                WriteSized(address, State.D[updateRegister], size);
+            }
+            else
+            {
+                WriteDataRegisterSized(compareRegister, destination, size);
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
+        private void ExecuteCas2(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extension1 = FetchWord();
+            var extension2 = FetchWord();
+            var size = opcode == 0x0CFC ? M68kOperandSize.Word : M68kOperandSize.Long;
+            var address1 = ReadCas2Address(extension1);
+            var address2 = ReadCas2Address(extension2);
+            var destination1 = ReadSized(address1, size);
+            var destination2 = ReadSized(address2, size);
+            var compareRegister1 = extension1 & 7;
+            var compareRegister2 = extension2 & 7;
+            var updateRegister1 = (extension1 >> 6) & 7;
+            var updateRegister2 = (extension2 >> 6) & 7;
+            var compare1 = State.D[compareRegister1] & M68kCpuState.Mask(size);
+            var compare2 = State.D[compareRegister2] & M68kCpuState.Mask(size);
+
+            if (destination1 == compare1 && destination2 == compare2)
+            {
+                SetCompareFlagsPreserveExtend(destination2, compare2, size);
+                WriteSized(address1, State.D[updateRegister1], size);
+                WriteSized(address2, State.D[updateRegister2], size);
+            }
+            else
+            {
+                SetCompareFlagsPreserveExtend(
+                    destination1 == compare1 ? destination2 : destination1,
+                    destination1 == compare1 ? compare2 : compare1,
+                    size);
+                WriteDataRegisterSized(compareRegister1, destination1, size);
+                WriteDataRegisterSized(compareRegister2, destination2, size);
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
+        private static M68kOperandSize DecodeCasSize(ushort opcode)
+            => (opcode & 0x0E00) switch
+            {
+                0x0A00 => M68kOperandSize.Byte,
+                0x0C00 => M68kOperandSize.Word,
+                0x0E00 => M68kOperandSize.Long,
+                _ => throw new InvalidOperationException($"Invalid CAS opcode 0x{opcode:X4}.")
+            };
+
+        private uint ReadCas2Address(ushort extension)
+        {
+            var register = (extension >> 12) & 7;
+            return (extension & 0x8000) != 0
+                ? State.A[register]
+                : State.D[register];
+        }
+
+        private uint ReadSized(uint address, M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => ReadByte(address),
+                M68kOperandSize.Word => ReadWord(address),
+                M68kOperandSize.Long => ReadLong(address),
+                _ => throw new ArgumentOutOfRangeException(nameof(size), size, null)
+            };
+
+        private void WriteSized(uint address, uint value, M68kOperandSize size)
+        {
+            switch (size)
+            {
+                case M68kOperandSize.Byte:
+                    WriteByte(address, (byte)value);
+                    return;
+                case M68kOperandSize.Word:
+                    WriteWord(address, (ushort)value);
+                    return;
+                case M68kOperandSize.Long:
+                    WriteLong(address, value);
+                    return;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(size), size, null);
+            }
+        }
+
+        private void WriteDataRegisterSized(int register, uint value, M68kOperandSize size)
+        {
+            switch (size)
+            {
+                case M68kOperandSize.Byte:
+                    WriteDataRegisterByte(register, (byte)value);
+                    return;
+                case M68kOperandSize.Word:
+                    WriteDataRegisterWord(register, (ushort)value);
+                    return;
+                case M68kOperandSize.Long:
+                    State.D[register] = value;
+                    return;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(size), size, null);
+            }
+        }
+
+        private void SetCompareFlagsPreserveExtend(uint destination, uint source, M68kOperandSize size)
+        {
+            var extend = State.GetFlag(M68kCpuState.Extend);
+            SetSubtractFlags(destination, source, destination - source, size);
+            State.SetFlag(M68kCpuState.Extend, extend);
+        }
+
+        private void ExecuteChk2Cmp2(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extension = FetchWord();
+            var size = DecodeChk2Cmp2Size(opcode);
+            var address = CalculateBitFieldBaseAddress((opcode >> 3) & 7, opcode & 7, opcode);
+            var register = (extension >> 12) & 7;
+            var useAddressRegister = (extension & 0x8000) != 0;
+            var trapOnOutOfRange = (extension & 0x0800) != 0;
+            var lower = ReadSignedSized(address, size);
+            var upper = ReadSignedSized(address + (uint)size, size);
+            var value = SignExtendForSize(
+                useAddressRegister ? State.A[register] : State.D[register],
+                size);
+            var outOfRange = lower <= upper
+                ? value < lower || value > upper
+                : value > upper && value < lower;
+
+            State.SetFlag(M68kCpuState.Carry, outOfRange);
+            if (trapOnOutOfRange && outOfRange)
+            {
+                RaiseFormat0Exception(6, State.ProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
+        private static M68kOperandSize DecodeChk2Cmp2Size(ushort opcode)
+            => (opcode & 0x0600) switch
+            {
+                0x0000 => M68kOperandSize.Byte,
+                0x0200 => M68kOperandSize.Word,
+                0x0400 => M68kOperandSize.Long,
+                _ => throw new InvalidOperationException($"Invalid CHK2/CMP2 opcode 0x{opcode:X4}.")
+            };
+
+        private long ReadSignedSized(uint address, M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => unchecked((sbyte)ReadByte(address)),
+                M68kOperandSize.Word => unchecked((short)ReadWord(address)),
+                M68kOperandSize.Long => unchecked((int)ReadLong(address)),
+                _ => throw new ArgumentOutOfRangeException(nameof(size), size, null)
+            };
+
+        private static long SignExtendForSize(uint value, M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => unchecked((sbyte)(byte)value),
+                M68kOperandSize.Word => unchecked((short)(ushort)value),
+                M68kOperandSize.Long => unchecked((int)value),
+                _ => throw new ArgumentOutOfRangeException(nameof(size), size, null)
+            };
+
+        private void ExecuteDataRegisterBitField(
+            int operation,
+            int targetRegister,
+            int operandRegister,
+            int offset,
+            int width)
+        {
+            var normalizedOffset = offset & 31;
+            var field = ExtractRegisterBitField(State.D[targetRegister], normalizedOffset, width);
+            SetBitFieldFlags(field, width);
+
+            switch (operation)
+            {
+                case 0:
+                    return;
+                case 1:
+                    State.D[operandRegister] = field;
+                    return;
+                case 2:
+                    State.D[targetRegister] = InsertRegisterBitField(
+                        State.D[targetRegister],
+                        field ^ BitFieldMask(width),
+                        normalizedOffset,
+                        width);
+                    return;
+                case 3:
+                    State.D[operandRegister] = SignExtendBitField(field, width);
+                    return;
+                case 4:
+                    State.D[targetRegister] = InsertRegisterBitField(
+                        State.D[targetRegister],
+                        0,
+                        normalizedOffset,
+                        width);
+                    return;
+                case 5:
+                    State.D[operandRegister] = unchecked((uint)(offset + FindFirstSetBitOffset(field, width)));
+                    return;
+                case 6:
+                    State.D[targetRegister] = InsertRegisterBitField(
+                        State.D[targetRegister],
+                        BitFieldMask(width),
+                        normalizedOffset,
+                        width);
+                    return;
+                case 7:
+                {
+                    var source = State.D[operandRegister] & BitFieldMask(width);
+                    SetBitFieldFlags(source, width);
+                    State.D[targetRegister] = InsertRegisterBitField(
+                        State.D[targetRegister],
+                        source,
+                        normalizedOffset,
+                        width);
+                    return;
+                }
+                default:
+                    throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile);
+            }
+        }
+
+        private void ExecuteMemoryBitField(
+            int operation,
+            uint baseAddress,
+            int operandRegister,
+            int offset,
+            int width)
+        {
+            var byteOffset = FloorDivideBy8(offset);
+            var bitOffset = offset - (byteOffset * 8);
+            var address = unchecked((uint)(baseAddress + byteOffset));
+            var byteCount = (bitOffset + width + 7) / 8;
+            var value = ReadBitFieldBytes(address, byteCount);
+            var field = ExtractMemoryBitField(value, bitOffset, width, byteCount);
+            SetBitFieldFlags(field, width);
+
+            switch (operation)
+            {
+                case 0:
+                    return;
+                case 1:
+                    State.D[operandRegister] = field;
+                    return;
+                case 2:
+                    WriteBitFieldBytes(
+                        address,
+                        byteCount,
+                        InsertMemoryBitField(value, field ^ BitFieldMask(width), bitOffset, width, byteCount));
+                    return;
+                case 3:
+                    State.D[operandRegister] = SignExtendBitField(field, width);
+                    return;
+                case 4:
+                    WriteBitFieldBytes(
+                        address,
+                        byteCount,
+                        InsertMemoryBitField(value, 0, bitOffset, width, byteCount));
+                    return;
+                case 5:
+                    State.D[operandRegister] = unchecked((uint)(offset + FindFirstSetBitOffset(field, width)));
+                    return;
+                case 6:
+                    WriteBitFieldBytes(
+                        address,
+                        byteCount,
+                        InsertMemoryBitField(value, BitFieldMask(width), bitOffset, width, byteCount));
+                    return;
+                case 7:
+                {
+                    var source = State.D[operandRegister] & BitFieldMask(width);
+                    SetBitFieldFlags(source, width);
+                    WriteBitFieldBytes(
+                        address,
+                        byteCount,
+                        InsertMemoryBitField(value, source, bitOffset, width, byteCount));
+                    return;
+                }
+                default:
+                    throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile);
+            }
+        }
+
+        private uint CalculateBitFieldBaseAddress(int mode, int register, ushort opcode)
+        {
+            switch (mode)
+            {
+                case 2:
+                    return State.A[register];
+                case 5:
+                    return unchecked((uint)(State.A[register] + unchecked((int)(short)FetchWord())));
+                case 6:
+                    return CalculateBriefIndexedAddress(register, FetchWord(), opcode);
+                case 7 when register == 0:
+                    return unchecked((uint)(int)(short)FetchWord());
+                case 7 when register == 1:
+                    return FetchLong();
+                case 7 when register == 2:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var displacement = unchecked((int)(short)FetchWord());
+                    return unchecked((uint)(extensionAddress + displacement));
+                }
+                case 7 when register == 3:
+                {
+                    var extensionAddress = State.ProgramCounter;
+                    var extension = FetchWord();
+                    return CalculateBriefIndexedAddress(extensionAddress, extension, opcode);
+                }
+                default:
+                    throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
+            }
+        }
+
+        private static int FloorDivideBy8(int value)
+            => value >= 0 ? value / 8 : -((7 - value) / 8);
+
+        private static uint BitFieldMask(int width)
+            => width == 32 ? 0xFFFF_FFFFu : (1u << width) - 1u;
+
+        private static uint ExtractRegisterBitField(uint value, int offset, int width)
+        {
+            var result = 0u;
+            for (var bit = 0; bit < width; bit++)
+            {
+                var sourceBit = 31 - ((offset + bit) & 31);
+                result = (result << 1) | ((value >> sourceBit) & 1u);
+            }
+
+            return result;
+        }
+
+        private static uint InsertRegisterBitField(uint current, uint field, int offset, int width)
+        {
+            for (var bit = 0; bit < width; bit++)
+            {
+                var targetBit = 31 - ((offset + bit) & 31);
+                var fieldBit = (field >> (width - 1 - bit)) & 1u;
+                current = fieldBit == 0
+                    ? current & ~(1u << targetBit)
+                    : current | (1u << targetBit);
+            }
+
+            return current;
+        }
+
+        private static uint ExtractMemoryBitField(ulong value, int bitOffset, int width, int byteCount)
+        {
+            var shift = (byteCount * 8) - bitOffset - width;
+            return (uint)((value >> shift) & BitFieldMask(width));
+        }
+
+        private static ulong InsertMemoryBitField(ulong current, uint field, int bitOffset, int width, int byteCount)
+        {
+            var shift = (byteCount * 8) - bitOffset - width;
+            var mask = (ulong)BitFieldMask(width) << shift;
+            return (current & ~mask) | (((ulong)field << shift) & mask);
+        }
+
+        private ulong ReadBitFieldBytes(uint address, int byteCount)
+        {
+            var value = 0ul;
+            for (var index = 0; index < byteCount; index++)
+            {
+                value = (value << 8) | ReadByte(address + (uint)index);
+            }
+
+            return value;
+        }
+
+        private void WriteBitFieldBytes(uint address, int byteCount, ulong value)
+        {
+            for (var index = byteCount - 1; index >= 0; index--)
+            {
+                WriteByte(address + (uint)index, (byte)value);
+                value >>= 8;
+            }
+        }
+
+        private static uint SignExtendBitField(uint field, int width)
+            => width == 32 || (field & (1u << (width - 1))) == 0
+                ? field
+                : field | ~BitFieldMask(width);
+
+        private void SetBitFieldFlags(uint field, int width)
+        {
+            State.SetFlag(M68kCpuState.Negative, (field & (1u << (width - 1))) != 0);
+            State.SetFlag(M68kCpuState.Zero, field == 0);
+        }
+
+        private static int FindFirstSetBitOffset(uint field, int width)
+        {
+            for (var bit = 0; bit < width; bit++)
+            {
+                if ((field & (1u << (width - 1 - bit))) != 0)
+                {
+                    return bit;
+                }
+            }
+
+            return width;
+        }
+
         private void ExecuteAndLongImmediateToData(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -3210,6 +3824,53 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             CompleteTiming(M68kInstructionTimingKey.AndWordImmediateToData);
+        }
+
+        private void ExecuteMoveFromCcr(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var value = (ushort)(State.StatusRegister & 0x001F);
+            WriteWordDestination((opcode >> 3) & 7, opcode & 7, value, opcode);
+            CompleteTiming(M68kInstructionTimingKey.Nop);
+        }
+
+        private void WriteWordDestination(int mode, int register, ushort value, ushort opcode)
+        {
+            switch (mode)
+            {
+                case 0:
+                    WriteDataRegisterWord(register, value);
+                    return;
+                case 2:
+                    WriteWord(State.A[register], value);
+                    return;
+                case 3:
+                    WriteWord(State.A[register], value);
+                    WriteGeneralRegister(true, register, State.A[register] + M68kIntegerSemantics.AddressIncrement(register, M68kOperandSize.Word));
+                    return;
+                case 4:
+                {
+                    var address = State.A[register] - M68kIntegerSemantics.AddressIncrement(register, M68kOperandSize.Word);
+                    WriteGeneralRegister(true, register, address);
+                    WriteWord(address, value);
+                    return;
+                }
+                case 5:
+                    WriteWord(unchecked((uint)(State.A[register] + unchecked((int)(short)FetchWord()))), value);
+                    return;
+                case 6:
+                    WriteWord(CalculateBriefIndexedAddress(register, FetchWord(), opcode), value);
+                    return;
+                case 7 when register == 0:
+                    WriteWord(unchecked((uint)(int)(short)FetchWord()), value);
+                    return;
+                case 7 when register == 1:
+                    WriteWord(FetchLong(), value);
+                    return;
+                default:
+                    throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
+            }
         }
 
         private void ExecuteEoriLongImmediateToData(ushort opcode)
@@ -4118,6 +4779,29 @@ namespace Copper68k
             }
 
             CompleteTiming(M68kInstructionTimingKey.DbccExpired);
+        }
+
+        private void ExecuteTrapcc(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            switch (opcode & 0x0003)
+            {
+                case 0x0002:
+                    _ = FetchWord();
+                    break;
+                case 0x0003:
+                    _ = FetchLong();
+                    break;
+            }
+
+            if (CheckCondition((opcode >> 8) & 0x0F))
+            {
+                RaiseFormat0Exception(7, State.ProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
+
+            CompleteTiming(M68kInstructionTimingKey.Nop);
         }
 
         protected void BeginInstruction(ushort opcode)

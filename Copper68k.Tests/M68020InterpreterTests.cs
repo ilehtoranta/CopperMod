@@ -640,6 +640,27 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(5, cpu.State.Cycles);
 	}
 	[Fact]
+	public void MoveLongImmediateToAbsoluteWordWritesMemoryAndFlags()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x21FC, 0x89AB, 0xCDEF, 0x0800); // MOVE.L #$89ABCDEF,$0800.W
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x89AB_CDEFu, bus.ReadLong(0x0000_0800));
+		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+	[Fact]
 	public void MoveLongImmediateToAddressIndirectWritesMemoryAndFlags()
 	{
 		var bus = new ZeroWaitCodeBus();
@@ -4560,6 +4581,18 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(CodeBase + 6u, bus.ReadLong(0x0000_2FFC));
 		Assert.Equal(7, cpu.State.NativeCycles);
 		Assert.Equal(4, cpu.State.Cycles);
+	}
+	[Fact]
+	public void JsrPcDisplacementPushesReturnAddressAndLoadsProgramCounter()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4EBA, 0x0010); // JSR $10(PC)
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.ExecuteInstruction();
+		Assert.Equal(CodeBase + 0x12u, cpu.State.ProgramCounter);
+		Assert.Equal(0x0000_2FFCu, cpu.State.A[7]);
+		Assert.Equal(CodeBase + 4u, bus.ReadLong(0x0000_2FFC));
 	}
 	[Fact]
 	public void MovemLongRegistersToPredecrementUsesReversedMaskOrder()
