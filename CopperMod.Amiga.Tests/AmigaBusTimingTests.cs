@@ -2362,6 +2362,32 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void LastAlignedCustomWordAddressRoutesAsSingleCustomRegisterWrite()
+	{
+		var bus = new AmigaBus();
+
+		bus.WriteWord(0x00DFF1FE, 0x1234, 10);
+
+		var write = Assert.Single(bus.CustomRegisterWrites);
+		Assert.Equal(0x1FE, write.Address);
+		Assert.Equal(0x1234, write.Value);
+		Assert.Equal(16, write.Cycle);
+	}
+
+	[Fact]
+	public void UnalignedCustomSpaceEndWordWriteFallsBackToByteSplit()
+	{
+		var bus = new AmigaBus();
+
+		bus.WriteWord(0x00DFF1FF, 0x1234, 10);
+
+		var write = Assert.Single(bus.CustomRegisterWrites);
+		Assert.Equal(0x1FE, write.Address);
+		Assert.Equal(0x0012, write.Value);
+		Assert.Equal(16, write.Cycle);
+	}
+
+	[Fact]
 	public void AmigaBusClassifiesCpuAccessTargetsForArbitration()
 	{
 		var bus = new AmigaBus();

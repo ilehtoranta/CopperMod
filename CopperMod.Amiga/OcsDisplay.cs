@@ -93,7 +93,9 @@ namespace CopperMod.Amiga
         private readonly byte[] _timelineFastPathPriorityMasks = new byte[AmigaConstants.PalLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
         private readonly SavedDisplayState _liveFrameInitialState = new SavedDisplayState();
+        private readonly SavedDisplayState _archivedFrameInitialState = new SavedDisplayState();
         private readonly List<PendingCustomWrite> _liveFrameWrites = new List<PendingCustomWrite>(MaxPendingWrites);
+        private readonly List<PendingCustomWrite> _archivedFrameWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private int _pendingIndex;
         private uint _copperListPointer;
         private uint _copperListPointer2;
@@ -196,6 +198,9 @@ namespace CopperMod.Amiga
         private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
         private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _archivedPaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
+        private long _archivedFrameWritesStartCycle = long.MinValue;
+        private long _archivedFrameWritesStopCycle = long.MinValue;
+        private bool _archivedFrameWritesValid;
         private bool _renderingLiveCapture;
         private bool _advancingLiveDma;
         private long _previousLiveSpriteFrameStartCycle = long.MinValue;
@@ -1078,6 +1083,7 @@ namespace CopperMod.Amiga
         {
             ArchiveLiveSpriteFrameBeforeStarting(frameStartCycle);
             ArchiveCompletedTimelineBeforeStarting(frameStartCycle);
+            ArchiveLiveFrameWritesBeforeStarting(frameStartCycle);
             ClearLiveFrameCapture(frameStartCycle);
             _liveFrameStartCycle = frameStartCycle;
             _liveCycle = frameStartCycle;
@@ -1167,6 +1173,55 @@ namespace CopperMod.Amiga
                 _archivedPaletteSnapshotConvertedColors,
                 0,
                 _livePaletteSnapshotCount * PaletteColorCount);
+        }
+
+        private void ArchiveLiveFrameWritesBeforeStarting(long nextFrameStartCycle)
+        {
+            _archivedFrameWritesValid = false;
+            _archivedFrameWritesStartCycle = long.MinValue;
+            _archivedFrameWritesStopCycle = long.MinValue;
+            _archivedFrameWrites.Clear();
+
+            if (!_liveFrameValid ||
+                _liveFrameStartCycle >= nextFrameStartCycle)
+            {
+                return;
+            }
+
+            var frameStopCycle = Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles);
+            if (_liveCapturedThroughCycle < frameStopCycle - 1 ||
+                !_liveFrameInitialStateValid ||
+                _liveFrameWriteOverflowed ||
+                _liveTimelineUnsafeRequiresCapturedRows ||
+                _liveFrameHasLateDisplayWindowWrites ||
+                _liveFrameWrites.Count == 0)
+            {
+                return;
+            }
+
+            CopyDisplayState(_liveFrameInitialState, _archivedFrameInitialState);
+            for (var i = 0; i < _liveFrameWrites.Count; i++)
+            {
+                var write = _liveFrameWrites[i];
+                if (write.Cycle >= frameStopCycle)
+                {
+                    break;
+                }
+
+                if (write.Cycle >= _liveFrameStartCycle)
+                {
+                    _archivedFrameWrites.Add(write);
+                }
+            }
+
+            if (_archivedFrameWrites.Count == 0)
+            {
+                return;
+            }
+
+            _archivedFrameWritesValid = true;
+            _archivedFrameWritesStartCycle = _liveFrameStartCycle;
+            _archivedFrameWritesStopCycle = frameStopCycle;
         }
 
         private void ArchiveLiveSpriteFrameBeforeStarting(long nextFrameStartCycle)
@@ -4977,6 +5032,11 @@ namespace CopperMod.Amiga
                 {
                     return;
                 }
+
+                if (TryRenderArchivedFrameWriteReplay(bgra, frameStartCycle, frameStopCycle))
+                {
+                    return;
+                }
             }
 
             ApplyPendingWrites(useTimedWrites ? frameStartCycle : long.MaxValue);
@@ -6508,48 +6568,12 @@ namespace CopperMod.Amiga
                         _liveFrameInitialStateValid &&
                         !_liveFrameWriteOverflowed)
                     {
-                        RestoreDisplayState(_liveFrameInitialState);
-                        ResetDisplayWindowStateTracking();
-                        _renderingCopperFrame = true;
-                        _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
-                        var renderCursorCycle = frameStartCycle;
-                        var renderCursorPixelDelay = 0;
-                        for (var i = 0; i < _liveFrameWrites.Count; i++)
-                        {
-                            var write = _liveFrameWrites[i];
-                            if (write.Cycle >= frameStopCycle)
-                            {
-                                break;
-                            }
-
-                            if (write.Cycle <= frameStartCycle)
-                            {
-                                continue;
-                            }
-
-                            var writePixelDelay = GetPresentationWritePixelDelay(write);
-                            RenderPresentationSpan(
-                                bgra,
-                                frameStartCycle,
-                                renderCursorCycle,
-                                write.Cycle,
-                                useTimedWrites: true,
-                                renderCursorPixelDelay,
-                                writePixelDelay);
-                            renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
-                            renderCursorPixelDelay = writePixelDelay;
-                            ApplyLivePresentationReplayWrite(write, frameStartCycle);
-                        }
-
-                        RenderPresentationSpan(
+                        RenderTimedWriteReplayFrame(
                             bgra,
                             frameStartCycle,
-                            renderCursorCycle,
                             frameStopCycle,
-                            useTimedWrites: true,
-                            renderCursorPixelDelay,
-                            toPixelDelay: 0);
-                        RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
+                            _liveFrameInitialState,
+                            _liveFrameWrites);
                         _renderingCopperFrame = savedRenderingCopperFrame;
                     }
                     else
@@ -6591,6 +6615,123 @@ namespace CopperMod.Amiga
                 _lastAppliedLivePaletteSnapshotIndex = -1;
                 _bus.ClearPresentationWriteHistory();
             }
+        }
+
+        private bool TryRenderArchivedFrameWriteReplay(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
+        {
+            if (!_archivedFrameWritesValid ||
+                _archivedFrameWritesStartCycle != frameStartCycle ||
+                _archivedFrameWritesStopCycle < frameStopCycle)
+            {
+                return false;
+            }
+
+            var saved = SaveDisplayState();
+            ResetFrameCounters();
+            ResetPlayfieldPriorityMasks();
+            _bitplaneDataSpans.Clear();
+            _paletteFrameSpans.Clear();
+            _renderInterlaceField = InterlaceEnabled
+                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                : 0;
+            _renderFrameStartCycle = frameStartCycle;
+            _renderingLiveCapture = false;
+            _useTimedPresentationReads = true;
+            _enforceDmaForFrame = true;
+            _captureSpriteFrameCommands = false;
+            _lastAppliedLivePaletteSnapshotIndex = -1;
+            var savedTrackDisplayWindowState = _trackDisplayWindowState;
+            var savedDisplayWindowVerticallyOpen = _displayWindowVerticallyOpen;
+            var savedDisplayWindowStateLine = _displayWindowStateLine;
+            var savedRenderingCopperFrame = _renderingCopperFrame;
+            _trackDisplayWindowState = true;
+            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
+            var rendered = false;
+
+            try
+            {
+                RenderTimedWriteReplayFrame(
+                    bgra,
+                    frameStartCycle,
+                    frameStopCycle,
+                    _archivedFrameInitialState,
+                    _archivedFrameWrites);
+                RestoreDisplayState(saved);
+                _trackDisplayWindowState = savedTrackDisplayWindowState;
+                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
+                _displayWindowStateLine = savedDisplayWindowStateLine;
+                _renderingCopperFrame = savedRenderingCopperFrame;
+                RenderSprites(bgra);
+                rendered = true;
+                return true;
+            }
+            finally
+            {
+                RestoreDisplayState(saved);
+                _renderingLiveCapture = false;
+                _useTimedPresentationReads = false;
+                _enforceDmaForFrame = false;
+                _renderingCopperFrame = savedRenderingCopperFrame;
+                _trackDisplayWindowState = savedTrackDisplayWindowState;
+                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
+                _displayWindowStateLine = savedDisplayWindowStateLine;
+                _lastAppliedLivePaletteSnapshotIndex = -1;
+                if (rendered)
+                {
+                    _bus.ClearPresentationWriteHistory();
+                }
+            }
+        }
+
+        private void RenderTimedWriteReplayFrame(
+            Span<uint> bgra,
+            long frameStartCycle,
+            long frameStopCycle,
+            SavedDisplayState initialState,
+            List<PendingCustomWrite> writes)
+        {
+            RestoreDisplayState(initialState);
+            ResetDisplayWindowStateTracking();
+            _renderingCopperFrame = true;
+            _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
+            var renderCursorCycle = frameStartCycle;
+            var renderCursorPixelDelay = 0;
+            for (var i = 0; i < writes.Count; i++)
+            {
+                var write = writes[i];
+                if (write.Cycle >= frameStopCycle)
+                {
+                    break;
+                }
+
+                if (write.Cycle <= frameStartCycle)
+                {
+                    continue;
+                }
+
+                var writePixelDelay = GetPresentationWritePixelDelay(write);
+                RenderPresentationSpan(
+                    bgra,
+                    frameStartCycle,
+                    renderCursorCycle,
+                    write.Cycle,
+                    useTimedWrites: true,
+                    renderCursorPixelDelay,
+                    writePixelDelay);
+                renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
+                renderCursorPixelDelay = writePixelDelay;
+                ApplyLivePresentationReplayWrite(write, frameStartCycle);
+            }
+
+            RenderPresentationSpan(
+                bgra,
+                frameStartCycle,
+                renderCursorCycle,
+                frameStopCycle,
+                useTimedWrites: true,
+                renderCursorPixelDelay,
+                toPixelDelay: 0);
+            RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
         }
 
         private void ApplyLivePresentationReplayWrite(PendingCustomWrite write, long frameStartCycle)
@@ -11742,6 +11883,29 @@ namespace CopperMod.Amiga
             Array.Copy(_bitplaneBaseRows, saved.BitplaneBaseRows, _bitplaneBaseRows.Length);
             Array.Copy(_bitplaneDataRegisters, saved.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
             Array.Copy(_bitplaneDataRegisterWritten, saved.BitplaneDataRegisterWritten, _bitplaneDataRegisterWritten.Length);
+        }
+
+        private static void CopyDisplayState(SavedDisplayState source, SavedDisplayState destination)
+        {
+            destination.CopperListPointer = source.CopperListPointer;
+            destination.CopperListPointer2 = source.CopperListPointer2;
+            destination.Copcon = source.Copcon;
+            destination.DiwStart = source.DiwStart;
+            destination.DiwStop = source.DiwStop;
+            destination.DdfStart = source.DdfStart;
+            destination.DdfStop = source.DdfStop;
+            destination.Bplcon0 = source.Bplcon0;
+            destination.Bplcon1 = source.Bplcon1;
+            destination.Bplcon2 = source.Bplcon2;
+            destination.Dmacon = source.Dmacon;
+            destination.Bpl1Mod = source.Bpl1Mod;
+            destination.Bpl2Mod = source.Bpl2Mod;
+            Array.Copy(source.Colors, destination.Colors, source.Colors.Length);
+            Array.Copy(source.ConvertedColors, destination.ConvertedColors, source.ConvertedColors.Length);
+            Array.Copy(source.BitplanePointers, destination.BitplanePointers, source.BitplanePointers.Length);
+            Array.Copy(source.BitplaneBaseRows, destination.BitplaneBaseRows, source.BitplaneBaseRows.Length);
+            Array.Copy(source.BitplaneDataRegisters, destination.BitplaneDataRegisters, source.BitplaneDataRegisters.Length);
+            Array.Copy(source.BitplaneDataRegisterWritten, destination.BitplaneDataRegisterWritten, source.BitplaneDataRegisterWritten.Length);
         }
 
         private void RestoreDisplayState(SavedDisplayState saved)

@@ -63,6 +63,127 @@ namespace CopperMod.Amiga
         private const byte CiaAPortAResetDataDirection = 0x03;
         private const byte CiaAPortAOverlayBit = 0x01;
         private const byte CiaAPortAAudioFilterBit = 0x02;
+
+        private interface IBusWritePolicy
+        {
+            AmigaBusRequester Requester { get; }
+        }
+
+        private readonly struct CpuWritePolicy : IBusWritePolicy
+        {
+            public AmigaBusRequester Requester
+            {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => AmigaBusRequester.Cpu;
+            }
+        }
+
+        private readonly struct HostWritePolicy : IBusWritePolicy
+        {
+            public AmigaBusRequester Requester
+            {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => AmigaBusRequester.Host;
+            }
+        }
+
+        private readonly struct RequesterWritePolicy : IBusWritePolicy
+        {
+            private readonly AmigaBusRequester _requester;
+
+            public RequesterWritePolicy(AmigaBusRequester requester)
+            {
+                _requester = requester;
+            }
+
+            public AmigaBusRequester Requester
+            {
+                [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                get => _requester;
+            }
+        }
+
+        private interface ICpuWriteTarget
+        {
+            void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle);
+
+            void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle);
+
+            void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle);
+        }
+
+        private readonly struct CustomRegisterCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuCustomRegisterByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteCpuCustomRegisterWord(address, value, grantedCycle);
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteCpuCustomRegisterLong(address, value, firstWordCycle, secondWordCycle);
+        }
+
+        private readonly struct ChipRamCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuChipRamByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteCpuChipRamWord(address, value, grantedCycle);
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteCpuChipRamLong(address, value, firstWordCycle, secondWordCycle);
+        }
+
+        private readonly struct ExpansionRamCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuExpansionRamByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteCpuExpansionRamWord(address, value, grantedCycle);
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteCpuExpansionRamLong(address, value, firstWordCycle, secondWordCycle);
+        }
+
+        private readonly struct RealFastRamCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuRealFastRamByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteCpuRealFastRamWord(address, value, grantedCycle);
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteCpuRealFastRamLong(address, value, firstWordCycle, secondWordCycle);
+        }
+
+        private readonly struct CiaCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuCiaByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteRawLong(address, value, firstWordCycle, secondWordCycle, default(CpuWritePolicy));
+        }
+
+        private readonly struct FallbackCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteRawLong(address, value, firstWordCycle, secondWordCycle, default(CpuWritePolicy));
+        }
+
         private readonly AmigaChipRamBackend _chipRam;
         private readonly byte[] _chipRamData;
         private readonly int _chipRamMask;
@@ -2522,26 +2643,11 @@ namespace CopperMod.Amiga
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
-                GrantFastCpuAccessCycles(
-                    target,
-                    address,
-                    AmigaBusAccessSize.Byte,
-                    cycle,
-                    accessKind,
-                    isWrite: true,
-                    out var grantedCycle,
-                    out _,
-                    out var completedCycle);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
-                WriteRawByte(address, value, grantedCycle);
-                cycle = completedCycle;
+                WriteCpuByteFast(target, address, value, ref cycle, accessKind, requestedCycle);
                 return;
             }
 
-            var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Byte, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
-            WriteRawByte(address, value, access.GrantedCycle);
-            cycle = access.CompletedCycle;
+            WriteCpuByteArbitrated(target, address, value, ref cycle, accessKind, requestedCycle);
         }
 
         internal void WriteTasCpuDataByte(uint address, byte value, ref long cycle)
@@ -2565,7 +2671,7 @@ namespace CopperMod.Amiga
                 AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
                 if (target != AmigaBusAccessTarget.ChipRam)
                 {
-                    WriteRawByte(address, value, grantedCycle);
+                    WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
                 }
 
                 cycle = completedCycle;
@@ -2576,7 +2682,7 @@ namespace CopperMod.Amiga
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
             if (target != AmigaBusAccessTarget.ChipRam)
             {
-                WriteRawByte(address, value, access.GrantedCycle);
+                WriteRawByte(address, value, access.GrantedCycle, default(CpuWritePolicy));
             }
 
             cycle = access.CompletedCycle;
@@ -2595,26 +2701,11 @@ namespace CopperMod.Amiga
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
-                GrantFastCpuAccessCycles(
-                    target,
-                    address,
-                    AmigaBusAccessSize.Word,
-                    cycle,
-                    accessKind,
-                    isWrite: true,
-                    out var grantedCycle,
-                    out _,
-                    out var completedCycle);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
-                WriteRawWord(address, value, grantedCycle);
-                cycle = completedCycle;
+                WriteCpuWordFast(target, address, value, ref cycle, accessKind, requestedCycle);
                 return;
             }
 
-            var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
-            WriteRawWord(address, value, access.GrantedCycle);
-            cycle = access.CompletedCycle;
+            WriteCpuWordArbitrated(target, address, value, ref cycle, accessKind, requestedCycle);
         }
 
         public ushort ReadWord(uint address)
@@ -2763,26 +2854,11 @@ namespace CopperMod.Amiga
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
-                GrantFastCpuAccessCycles(
-                    target,
-                    address,
-                    AmigaBusAccessSize.Long,
-                    cycle,
-                    accessKind,
-                    isWrite: true,
-                    out var grantedCycle,
-                    out var secondWordCycle,
-                    out var completedCycle);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
-                WriteRawLong(address, value, grantedCycle, secondWordCycle);
-                cycle = completedCycle;
+                WriteCpuLongFast(target, address, value, ref cycle, accessKind, requestedCycle);
                 return;
             }
 
-            var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Long, cycle, isWrite: true);
-            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
-            WriteRawLong(address, value, access.GrantedCycle, GetSecondWordCycle(access));
-            cycle = access.CompletedCycle;
+            WriteCpuLongArbitrated(target, address, value, ref cycle, accessKind, requestedCycle);
         }
 
         public void CopyToChipRam(uint address, ReadOnlySpan<byte> data)
@@ -2863,17 +2939,17 @@ namespace CopperMod.Amiga
 
         internal void WriteHostByte(uint address, byte value)
         {
-            WriteRawByte(address, value, 0, AmigaBusRequester.Host);
+            WriteRawByte(address, value, 0, default(HostWritePolicy));
         }
 
         internal void WriteHostWord(uint address, ushort value)
         {
-            WriteRawWord(address, value, 0, AmigaBusRequester.Host);
+            WriteRawWord(address, value, 0, default(HostWritePolicy));
         }
 
         internal void WriteHostLong(uint address, uint value)
         {
-            WriteRawLong(address, value, 0, 0, AmigaBusRequester.Host);
+            WriteRawLong(address, value, 0, 0, default(HostWritePolicy));
         }
 
         public void CopyToMemory(uint address, ReadOnlySpan<byte> data)
@@ -3680,13 +3756,13 @@ namespace CopperMod.Amiga
             {
                 var grantedCycle = Math.Max(0, requestedCycle);
                 MarkCopperIntreqWriteIfNeeded(requester, address, value, grantedCycle);
-                WriteRawWord(address, value, grantedCycle, requester);
+                WriteCustomSpaceWord(new RequesterWritePolicy(requester), address, value, grantedCycle);
                 return;
             }
 
             var access = Arbitrate(requester, kind, target, address, AmigaBusAccessSize.Word, requestedCycle, isWrite: true);
             MarkCopperIntreqWriteIfNeeded(requester, address, value, access.GrantedCycle);
-            WriteRawWord(address, value, access.GrantedCycle, requester);
+            WriteRawWord(address, value, access.GrantedCycle, new RequesterWritePolicy(requester));
         }
 
         private void MarkCopperIntreqWriteIfNeeded(AmigaBusRequester requester, uint address, ushort value, long cycle)
@@ -5085,6 +5161,34 @@ namespace CopperMod.Amiga
         private static bool IsCustomRegisterByteAddress(uint address)
             => address >= 0x00DFF000 && address < 0x00DFF200;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetCustomRegisterByteOffset(uint address, out ushort offset)
+        {
+            address = NormalizeAddress(address);
+            if (address >= 0x00DFF000 && address < 0x00DFF200)
+            {
+                offset = (ushort)(address - 0x00DFF000);
+                return true;
+            }
+
+            offset = 0;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetCustomRegisterWordOffset(uint address, out ushort offset)
+        {
+            address = NormalizeAddress(address);
+            if (address >= 0x00DFF000 && address < 0x00DFF1FF)
+            {
+                offset = (ushort)(address - 0x00DFF000);
+                return true;
+            }
+
+            offset = 0;
+            return false;
+        }
+
         private byte ReadCustomByte(ushort offset, long sampleCycle)
         {
             if (TryReadBeamPositionByte(offset, sampleCycle, out var beamPositionValue))
@@ -5301,7 +5405,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            WriteRawWord(address, (ushort)value, cycle);
+            WriteCustomSpaceWord(default(CpuWritePolicy), address, (ushort)value, cycle);
             return true;
         }
 
@@ -5694,21 +5798,7 @@ namespace CopperMod.Amiga
             }
 
             AdvanceDmaBeforeCpuChipAccess(target, address, grantedCycle, isWrite: true);
-            if (!TryWriteJitMappedMemory(target, address, value, size))
-            {
-                if (size == M68kOperandSize.Byte)
-                {
-                    WriteRawByte(address, (byte)value, grantedCycle);
-                }
-                else if (size == M68kOperandSize.Word)
-                {
-                    WriteRawWord(address, (ushort)value, grantedCycle);
-                }
-                else
-                {
-                    WriteRawLong(address, value, grantedCycle, secondWordCycle);
-                }
-            }
+            WriteJitCpuDataTarget(target, address, value, size, grantedCycle, secondWordCycle);
 
             cycle = completedCycle;
         }
@@ -5869,43 +5959,561 @@ namespace CopperMod.Amiga
             return false;
         }
 
-        private bool TryWriteJitMappedMemory(
-            AmigaBusAccessTarget target,
-            uint address,
-            uint value,
-            M68kOperandSize size)
-        {
-            if (target == AmigaBusAccessTarget.ExpansionRam &&
-                _expansionRam.TryWriteValue(address, value, size))
-            {
-                var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
-                TouchCodePages(address, byteCount);
-                NotifyJitEligibleMemoryWritten(address, byteCount);
-                return true;
-            }
-
-            if (target == AmigaBusAccessTarget.RealFastRam &&
-                _realFastRam.TryWriteValue(address, value, size))
-            {
-                var byteCount = size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
-                TouchCodePages(address, byteCount);
-                NotifyJitEligibleMemoryWritten(address, byteCount);
-                return true;
-            }
-
-            return false;
-        }
-
         private uint ReadRawLong(uint address, long firstWordCycle, long secondWordCycle)
         {
             return ((uint)ReadRawWord(address, firstWordCycle) << 16) | ReadRawWord(address + 2, secondWordCycle);
         }
 
-        private void WriteRawByte(
+        private void WriteCpuByteFast(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuByteFast<CustomRegisterCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuByteFast<ChipRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuByteFast<ExpansionRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuByteFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.Cia:
+                    WriteCpuByteFast<CiaCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                default:
+                    WriteCpuByteFast<FallbackCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+            }
+        }
+
+        private void WriteCpuByteArbitrated(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, requestedCycle);
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuByteArbitrated<CustomRegisterCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuByteArbitrated<ChipRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuByteArbitrated<ExpansionRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuByteArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.Cia:
+                    WriteCpuByteArbitrated<CiaCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                default:
+                    WriteCpuByteArbitrated<FallbackCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+            }
+
+            cycle = access.CompletedCycle;
+        }
+
+        private void WriteCpuWordFast(
+            AmigaBusAccessTarget target,
+            uint address,
+            ushort value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuWordFast<CustomRegisterCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuWordFast<ChipRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuWordFast<ExpansionRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuWordFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                default:
+                    WriteCpuWordFast<FallbackCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+            }
+        }
+
+        private void WriteCpuWordArbitrated(
+            AmigaBusAccessTarget target,
+            uint address,
+            ushort value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Word, cycle, accessKind, requestedCycle);
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuWordArbitrated<CustomRegisterCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuWordArbitrated<ChipRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuWordArbitrated<ExpansionRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuWordArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                default:
+                    WriteCpuWordArbitrated<FallbackCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+            }
+
+            cycle = access.CompletedCycle;
+        }
+
+        private void WriteCpuLongFast(
+            AmigaBusAccessTarget target,
+            uint address,
+            uint value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuLongFast<CustomRegisterCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuLongFast<ChipRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuLongFast<ExpansionRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuLongFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                default:
+                    WriteCpuLongFast<FallbackCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+            }
+        }
+
+        private void WriteCpuLongArbitrated(
+            AmigaBusAccessTarget target,
+            uint address,
+            uint value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Long, cycle, accessKind, requestedCycle);
+            var secondWordCycle = GetSecondWordCycle(access);
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteCpuLongArbitrated<CustomRegisterCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteCpuLongArbitrated<ChipRamCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteCpuLongArbitrated<ExpansionRamCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteCpuLongArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+                default:
+                    WriteCpuLongArbitrated<FallbackCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+            }
+
+            cycle = access.CompletedCycle;
+        }
+
+        private void WriteCpuByteFast<TTarget>(
+            AmigaBusAccessTarget target,
+            uint address,
+            byte value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            GrantFastCpuAccessCycles(
+                target,
+                address,
+                AmigaBusAccessSize.Byte,
+                cycle,
+                accessKind,
+                isWrite: true,
+                out var grantedCycle,
+                out _,
+                out var completedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
+            default(TTarget).WriteByte(this, address, value, grantedCycle);
+            cycle = completedCycle;
+        }
+
+        private void WriteCpuByteArbitrated<TTarget>(
+            uint address,
+            byte value,
+            long grantedCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            default(TTarget).WriteByte(this, address, value, grantedCycle);
+        }
+
+        private void WriteCpuWordFast<TTarget>(
+            AmigaBusAccessTarget target,
+            uint address,
+            ushort value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            GrantFastCpuAccessCycles(
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                cycle,
+                accessKind,
+                isWrite: true,
+                out var grantedCycle,
+                out _,
+                out var completedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
+            default(TTarget).WriteWord(this, address, value, grantedCycle);
+            cycle = completedCycle;
+        }
+
+        private void WriteCpuWordArbitrated<TTarget>(
+            uint address,
+            ushort value,
+            long grantedCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            default(TTarget).WriteWord(this, address, value, grantedCycle);
+        }
+
+        private void WriteCpuLongFast<TTarget>(
+            AmigaBusAccessTarget target,
+            uint address,
+            uint value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            GrantFastCpuAccessCycles(
+                target,
+                address,
+                AmigaBusAccessSize.Long,
+                cycle,
+                accessKind,
+                isWrite: true,
+                out var grantedCycle,
+                out var secondWordCycle,
+                out var completedCycle);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
+            default(TTarget).WriteLong(this, address, value, grantedCycle, secondWordCycle);
+            cycle = completedCycle;
+        }
+
+        private void WriteCpuLongArbitrated<TTarget>(
+            uint address,
+            uint value,
+            long firstWordCycle,
+            long secondWordCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            default(TTarget).WriteLong(this, address, value, firstWordCycle, secondWordCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private AmigaBusAccessResult ArbitrateCpuWriteAndAdvance(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long cycle,
+            AmigaBusAccessKind accessKind,
+            long requestedCycle)
+        {
+            var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, size, cycle, isWrite: true);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: true);
+            return access;
+        }
+
+        private void WriteJitCpuDataTarget(
+            AmigaBusAccessTarget target,
+            uint address,
+            uint value,
+            M68kOperandSize size,
+            long grantedCycle,
+            long secondWordCycle)
+        {
+            switch (target)
+            {
+                case AmigaBusAccessTarget.CustomRegisters:
+                    WriteJitCpuDataTarget<CustomRegisterCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.ChipRam:
+                    WriteJitCpuDataTarget<ChipRamCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.ExpansionRam:
+                    WriteJitCpuDataTarget<ExpansionRamCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.RealFastRam:
+                    WriteJitCpuDataTarget<RealFastRamCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.Cia when size == M68kOperandSize.Byte:
+                    WriteJitCpuDataTarget<CiaCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                default:
+                    WriteJitCpuDataTarget<FallbackCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+            }
+        }
+
+        private void WriteJitCpuDataTarget<TTarget>(
+            uint address,
+            uint value,
+            M68kOperandSize size,
+            long grantedCycle,
+            long secondWordCycle)
+            where TTarget : struct, ICpuWriteTarget
+        {
+            if (size == M68kOperandSize.Byte)
+            {
+                default(TTarget).WriteByte(this, address, (byte)value, grantedCycle);
+                return;
+            }
+
+            if (size == M68kOperandSize.Word)
+            {
+                default(TTarget).WriteWord(this, address, (ushort)value, grantedCycle);
+                return;
+            }
+
+            default(TTarget).WriteLong(this, address, value, grantedCycle, secondWordCycle);
+        }
+
+        private void WriteCpuCustomRegisterByte(uint address, byte value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (TryGetCustomRegisterByteOffset(address, out var offset))
+            {
+                WriteCustomByte(AmigaBusRequester.Cpu, offset, value, grantedCycle);
+                return;
+            }
+
+            WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+        }
+
+        private void WriteCpuCustomRegisterWord(uint address, ushort value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (TryGetCustomRegisterWordOffset(address, out var offset))
+            {
+                WriteCustomWord(AmigaBusRequester.Cpu, offset, value, grantedCycle);
+                return;
+            }
+
+            if (TryGetCustomRegisterByteOffset(address, out offset))
+            {
+                WriteCustomByte(AmigaBusRequester.Cpu, offset, (byte)(value >> 8), grantedCycle);
+                WriteRawByte(address + 1, (byte)value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+        }
+
+        private void WriteCpuCustomRegisterLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        {
+            WriteCpuCustomRegisterWord(address, (ushort)(value >> 16), firstWordCycle);
+            WriteRawWord(address + 2, (ushort)value, secondWordCycle, default(CpuWritePolicy));
+        }
+
+        private void WriteCpuCiaByte(uint address, byte value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetCiaRegister(address, out var cia, out var ciaRegister))
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            cia.WriteRegister(ciaRegister, value, grantedCycle, _pendingCiaInterrupts);
+            _hardwareScheduler.NotifyWorkScheduled(grantedCycle);
+            if (cia == CiaA && ciaRegister == 0)
+            {
+                UpdateCiaAPortAOutputSideEffects();
+            }
+
+            if (cia == CiaA && ciaRegister == 2)
+            {
+                UpdateCiaAPortAOutputSideEffects();
+            }
+
+            if (cia == CiaB && ciaRegister is 1 or 3)
+            {
+                Disk.WriteCiaBRegister(1, cia.ReadPortRegister(1, 0xFF), grantedCycle);
+            }
+        }
+
+        private void WriteCpuChipRamByte(uint address, byte value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetChipRamOffset(address, out var chipOffset))
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _chipRam.WriteByteAtOffset(chipOffset, value, grantedCycle);
+            TouchCodePage(address);
+        }
+
+        private void WriteCpuChipRamWord(uint address, ushort value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetChipRamOffset(address, out var chipOffset))
+            {
+                WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _chipRam.WriteWordAtOffset(chipOffset, value, grantedCycle);
+            TouchCodePage(address);
+            TouchCodePage(address + 1);
+        }
+
+        private void WriteCpuChipRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        {
+            WriteCpuChipRamWord(address, (ushort)(value >> 16), firstWordCycle);
+            WriteCpuChipRamWord(address + 2, (ushort)value, secondWordCycle);
+        }
+
+        private void WriteCpuExpansionRamByte(uint address, byte value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetExpansionRamOffset(address, out var expansionOffset))
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _expansionRam[expansionOffset] = value;
+            TouchCodePage(address);
+            NotifyJitEligibleMemoryWritten(address, 1);
+        }
+
+        private void WriteCpuExpansionRamWord(uint address, ushort value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetExpansionRamOffset(address, out var expansionOffset) ||
+                expansionOffset + 1 >= _expansionRam.Length)
+            {
+                WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _expansionRam[expansionOffset] = (byte)(value >> 8);
+            _expansionRam[expansionOffset + 1] = (byte)value;
+            TouchCodePage(address);
+            TouchCodePage(address + 1);
+            NotifyJitEligibleMemoryWritten(address, 2);
+        }
+
+        private void WriteCpuExpansionRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        {
+            WriteCpuExpansionRamWord(address, (ushort)(value >> 16), firstWordCycle);
+            WriteCpuExpansionRamWord(address + 2, (ushort)value, secondWordCycle);
+        }
+
+        private void WriteCpuRealFastRamByte(uint address, byte value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetRealFastRamOffset(address, out var realFastOffset))
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _realFastRam[realFastOffset] = value;
+            TouchCodePage(address);
+            NotifyJitEligibleMemoryWritten(address, 1);
+        }
+
+        private void WriteCpuRealFastRamWord(uint address, ushort value, long grantedCycle)
+        {
+            address = NormalizeAddress(address);
+            if (!TryGetRealFastRamOffset(address, out var realFastOffset) ||
+                realFastOffset + 1 >= _realFastRam.Length)
+            {
+                WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _realFastRam[realFastOffset] = (byte)(value >> 8);
+            _realFastRam[realFastOffset + 1] = (byte)value;
+            TouchCodePage(address);
+            TouchCodePage(address + 1);
+            NotifyJitEligibleMemoryWritten(address, 2);
+        }
+
+        private void WriteCpuRealFastRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        {
+            WriteCpuRealFastRamWord(address, (ushort)(value >> 16), firstWordCycle);
+            WriteCpuRealFastRamWord(address + 2, (ushort)value, secondWordCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteRawByte(uint address, byte value, long grantedCycle)
+            => WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+
+        private void WriteRawByte(uint address, byte value, long grantedCycle, AmigaBusRequester requester)
+        {
+            if (requester == AmigaBusRequester.Cpu)
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            if (requester == AmigaBusRequester.Host)
+            {
+                WriteRawByte(address, value, grantedCycle, default(HostWritePolicy));
+                return;
+            }
+
+            WriteRawByte(address, value, grantedCycle, new RequesterWritePolicy(requester));
+        }
+
+        private void WriteRawByte<TPolicy>(
             uint address,
             byte value,
             long grantedCycle,
-            AmigaBusRequester requester = AmigaBusRequester.Cpu)
+            TPolicy policy)
+            where TPolicy : struct, IBusWritePolicy
         {
             address = NormalizeAddress(address);
             if (TryGetChipRamOffset(address, out var chipOffset))
@@ -5938,7 +6546,7 @@ namespace CopperMod.Amiga
 
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
-                WriteCustomByte(requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
+                WriteCustomByte(policy.Requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
                 return;
             }
 
@@ -5989,16 +6597,38 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void WriteRawWord(
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteRawWord(uint address, ushort value, long grantedCycle)
+            => WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+
+        private void WriteRawWord(uint address, ushort value, long grantedCycle, AmigaBusRequester requester)
+        {
+            if (requester == AmigaBusRequester.Cpu)
+            {
+                WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            if (requester == AmigaBusRequester.Host)
+            {
+                WriteRawWord(address, value, grantedCycle, default(HostWritePolicy));
+                return;
+            }
+
+            WriteRawWord(address, value, grantedCycle, new RequesterWritePolicy(requester));
+        }
+
+        private void WriteRawWord<TPolicy>(
             uint address,
             ushort value,
             long grantedCycle,
-            AmigaBusRequester requester = AmigaBusRequester.Cpu)
+            TPolicy policy)
+            where TPolicy : struct, IBusWritePolicy
         {
             address = NormalizeAddress(address);
             if (address >= 0x00DFF000 && address + 1 < 0x00DFF200)
             {
-                WriteCustomWord(requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
+                WriteCustomWord(policy.Requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
                 return;
             }
 
@@ -6013,8 +6643,8 @@ namespace CopperMod.Amiga
             if (_realTimeClock != null &&
                 (AmigaRealTimeClock.ContainsAddress(address) || AmigaRealTimeClock.ContainsAddress(address + 1)))
             {
-                WriteRawByte(address, (byte)(value >> 8), grantedCycle);
-                WriteRawByte(address + 1, (byte)value, grantedCycle);
+                WriteRawByte(address, (byte)(value >> 8), grantedCycle, policy);
+                WriteRawByte(address + 1, (byte)value, grantedCycle, policy);
                 return;
             }
 
@@ -6040,19 +6670,63 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            WriteRawByte(address, (byte)(value >> 8), grantedCycle);
-            WriteRawByte(address + 1, (byte)value, grantedCycle);
+            WriteRawByte(address, (byte)(value >> 8), grantedCycle, policy);
+            WriteRawByte(address + 1, (byte)value, grantedCycle, policy);
         }
 
-        private void WriteRawLong(
+        private void WriteCustomSpaceWord<TPolicy>(
+            TPolicy policy,
+            uint address,
+            ushort value,
+            long grantedCycle)
+            where TPolicy : struct, IBusWritePolicy
+        {
+            address = NormalizeAddress(address);
+            if (TryGetCustomRegisterWordOffset(address, out var offset))
+            {
+                WriteCustomWord(policy.Requester, offset, value, grantedCycle);
+                return;
+            }
+
+            if (TryGetCustomRegisterByteOffset(address, out offset))
+            {
+                WriteCustomByte(policy.Requester, offset, (byte)(value >> 8), grantedCycle);
+            }
+
+            WriteRawByte(address + 1, (byte)value, grantedCycle, policy);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteRawLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+            => WriteRawLong(address, value, firstWordCycle, secondWordCycle, default(CpuWritePolicy));
+
+        private void WriteRawLong(uint address, uint value, long firstWordCycle, long secondWordCycle, AmigaBusRequester requester)
+        {
+            if (requester == AmigaBusRequester.Cpu)
+            {
+                WriteRawLong(address, value, firstWordCycle, secondWordCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            if (requester == AmigaBusRequester.Host)
+            {
+                WriteRawLong(address, value, firstWordCycle, secondWordCycle, default(HostWritePolicy));
+                return;
+            }
+
+            WriteRawLong(address, value, firstWordCycle, secondWordCycle, new RequesterWritePolicy(requester));
+        }
+
+        private void WriteRawLong<TPolicy>(
             uint address,
             uint value,
             long firstWordCycle,
             long secondWordCycle,
-            AmigaBusRequester requester = AmigaBusRequester.Cpu)
+            TPolicy policy)
+            where TPolicy : struct, IBusWritePolicy
         {
-            WriteRawWord(address, (ushort)(value >> 16), firstWordCycle, requester);
-            WriteRawWord(address + 2, (ushort)value, secondWordCycle, requester);
+            WriteRawWord(address, (ushort)(value >> 16), firstWordCycle, policy);
+            WriteRawWord(address + 2, (ushort)value, secondWordCycle, policy);
         }
 
         private void NotifyJitEligibleMemoryWritten(uint address, int byteCount)
@@ -6106,15 +6780,11 @@ namespace CopperMod.Amiga
             long cycle)
         {
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
-            BeginCustomRegisterWrite(requester, offset, cycle);
+            var write = new CustomRegisterWriteContext(requester, offset, value, cycle);
+            BeginCustomRegisterWrite(in write);
             try
             {
-                Paula.ScheduleWrite(cycle, offset, value);
-                Paula.AdvanceRegisterWritesTo(cycle);
-                Display.ScheduleWrite(cycle, offset, value);
-                Blitter.WriteRegister(offset, value, cycle);
-                Disk.WriteRegister(offset, value, cycle);
-                _hardwareScheduler.NotifyWorkScheduled(cycle);
+                DispatchCustomRegisterWrite(in write);
             }
             finally
             {
@@ -6122,13 +6792,23 @@ namespace CopperMod.Amiga
             }
         }
 
-        private void BeginCustomRegisterWrite(AmigaBusRequester requester, ushort offset, long cycle)
+        private void DispatchCustomRegisterWrite(in CustomRegisterWriteContext write)
+        {
+            Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
+            Paula.AdvanceRegisterWritesTo(write.Cycle);
+            Display.ScheduleWrite(write.Cycle, write.Offset, write.Value);
+            Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
+            Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
+            _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
+        }
+
+        private void BeginCustomRegisterWrite(in CustomRegisterWriteContext write)
         {
             if (_customRegisterWriteContextDepth == 0)
             {
-                _customRegisterWriteRequester = requester;
-                _customRegisterWriteOffset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
-                _customRegisterWriteCycle = Math.Max(0, cycle);
+                _customRegisterWriteRequester = write.Requester;
+                _customRegisterWriteOffset = write.Offset;
+                _customRegisterWriteCycle = Math.Max(0, write.Cycle);
                 _customRegisterWriteAffectsSchedule = false;
             }
 
@@ -6188,6 +6868,25 @@ namespace CopperMod.Amiga
 
             _pendingCustomByteWritten[highIndex] = false;
             _pendingCustomByteWritten[lowIndex] = false;
+        }
+
+        private readonly struct CustomRegisterWriteContext
+        {
+            public CustomRegisterWriteContext(AmigaBusRequester requester, ushort offset, ushort value, long cycle)
+            {
+                Requester = requester;
+                Offset = offset;
+                Value = value;
+                Cycle = cycle;
+            }
+
+            public AmigaBusRequester Requester { get; }
+
+            public ushort Offset { get; }
+
+            public ushort Value { get; }
+
+            public long Cycle { get; }
         }
 
         private static uint NormalizeAddress(uint address)

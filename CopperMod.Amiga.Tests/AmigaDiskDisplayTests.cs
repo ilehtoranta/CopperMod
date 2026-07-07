@@ -1471,6 +1471,54 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void LiveCaptureArchivesCpuPaletteWritesForPreviousFrameRender()
+    {
+        var archivedBus = new AmigaBus();
+        var referenceBus = new AmigaBus();
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var redCycle = CycleForOutputRowHorizontal(0, 0x48, lineCycles);
+        var blackCycle = CycleForOutputRow(1, lineCycles);
+        ConfigureCpuBackgroundPaletteWrites(archivedBus, redCycle, blackCycle);
+        ConfigureCpuBackgroundPaletteWrites(referenceBus, redCycle, blackCycle);
+        var archivedFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var referenceFrame = new uint[archivedFrame.Length];
+
+        referenceBus.AdvanceDmaTo(frameCycles - 1);
+        referenceBus.Display.RenderFrame(referenceFrame, 0, frameCycles);
+        archivedBus.AdvanceDmaTo((frameCycles * 2) - 1);
+        archivedBus.Display.RenderFrame(archivedFrame, 0, frameCycles);
+
+        Assert.Equal(referenceFrame, archivedFrame);
+        Assert.Equal(0xFFFF0000u, Pixel(archivedFrame, StandardX, 0));
+        Assert.Equal(0xFF000000u, Pixel(archivedFrame, StandardX, 1));
+    }
+
+    [Fact]
+    public void LiveCaptureArchivesCpuDisplayStateWritesForPreviousFrameRender()
+    {
+        var archivedBus = new AmigaBus();
+        var referenceBus = new AmigaBus();
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var enableCycle = CycleForOutputRow(StandardY, lineCycles);
+        var disableCycle = CycleForOutputRow(StandardY + 1, lineCycles);
+        ConfigureCpuBplcon0Writes(archivedBus, enableCycle, disableCycle);
+        ConfigureCpuBplcon0Writes(referenceBus, enableCycle, disableCycle);
+        var archivedFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        var referenceFrame = new uint[archivedFrame.Length];
+
+        referenceBus.AdvanceDmaTo(frameCycles - 1);
+        referenceBus.Display.RenderFrame(referenceFrame, 0, frameCycles);
+        archivedBus.AdvanceDmaTo((frameCycles * 2) - 1);
+        archivedBus.Display.RenderFrame(archivedFrame, 0, frameCycles);
+
+        Assert.Equal(referenceFrame, archivedFrame);
+        Assert.Equal(0xFFFF0000u, Pixel(archivedFrame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(archivedFrame, StandardX, StandardY + 1));
+    }
+
+    [Fact]
     public void LiveCaptureRecordsCopperMovesAdvancedByCpuHrmPreGrant()
     {
         var liveBus = new AmigaBus();
@@ -3861,6 +3909,36 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF080, 0x0000);
         bus.WriteWord(0x00DFF082, 0x2400);
         bus.WriteWord(0x00DFF096, 0x8380);
+    }
+
+    private static void ConfigureCpuBackgroundPaletteWrites(AmigaBus bus, long redCycle, long blackCycle)
+    {
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        bus.WriteWord(0x00DFF080, 0x0000);
+        bus.WriteWord(0x00DFF082, 0x2400);
+        bus.WriteWord(0x00DFF096, 0x8280);
+        bus.WriteWord(0x00DFF180, 0x0F00, redCycle);
+        bus.WriteWord(0x00DFF180, 0x0000, blackCycle);
+    }
+
+    private static void ConfigureCpuBplcon0Writes(AmigaBus bus, long enableCycle, long disableCycle)
+    {
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x8000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
+        bus.WriteWord(0x00DFF180, 0x0000, 0);
+        bus.WriteWord(0x00DFF182, 0x0F00, 0);
+        bus.WriteWord(0x00DFF092, 0x0038, 0);
+        bus.WriteWord(0x00DFF094, 0x0038, 0);
+        bus.WriteWord(0x00DFF0E0, 0x0000, 0);
+        bus.WriteWord(0x00DFF0E2, 0x1000, 0);
+        bus.WriteWord(0x00DFF080, 0x0000, 0);
+        bus.WriteWord(0x00DFF082, 0x2400, 0);
+        bus.WriteWord(0x00DFF096, 0x8380, 0);
+        bus.WriteWord(0x00DFF100, 0x1000, enableCycle);
+        bus.WriteWord(0x00DFF100, 0x0000, disableCycle);
     }
 
     private static void ConfigurePreGrantCopperBackgroundColor(AmigaBus bus)
