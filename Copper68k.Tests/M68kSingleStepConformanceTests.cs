@@ -43,7 +43,7 @@ public sealed class M68kSingleStepConformanceTests
 		var filter = Environment.GetEnvironmentVariable(FilterVariable);
 		var includeUnverified = IsTruthy(Environment.GetEnvironmentVariable(IncludeUnverifiedVariable));
 		var validateCycles = IsTruthy(Environment.GetEnvironmentVariable(ValidateCyclesVariable));
-		var limit = ParseLimit(Environment.GetEnvironmentVariable(LimitVariable));
+		var limit = ParseLimit(Environment.GetEnvironmentVariable(LimitVariable)) ?? int.MaxValue;
 		var backend = ParseBackend(Environment.GetEnvironmentVariable(BackendVariable));
 		var files = Directory.EnumerateFiles(corpusPath, "*.json.bin", SearchOption.TopDirectoryOnly)
 			.Where(path => includeUnverified || IsVerifiedCorpusFile(path))
