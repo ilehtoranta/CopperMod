@@ -47,6 +47,7 @@ namespace CopperMod.Amiga
         private const int CpuBusBankShift = 16;
         private const int CpuBusBankSize = 1 << CpuBusBankShift;
         private const int CpuBusBankCount = 1 << (24 - CpuBusBankShift);
+        private const uint CustomRegisterBaseAddress = 0x00DFF000;
         private const int MaxDeferredCpuDataAccesses = 64;
         private const long DeferredCpuBusBatchDefaultCycleWindow = 4096;
         private const int CodeGenerationPageShift = 8;
@@ -221,10 +222,8 @@ namespace CopperMod.Amiga
         private readonly bool _deferredCpuBusBatchVerifyEnabled;
         private readonly bool _liveAgnusDmaDefault;
         private readonly AmigaRealTimeClock? _realTimeClock;
-        private readonly byte[] _pendingCustomBytes = new byte[0x200];
-        private readonly bool[] _pendingCustomByteWritten = new bool[0x200];
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
-        private readonly long _palFrameCycles;
+        private readonly AgnusPalBeamClock _palBeamClock = new();
         private readonly long _palLineCycles;
         private int _customRegisterWriteContextDepth;
         private AmigaBusRequester _customRegisterWriteRequester;
@@ -363,8 +362,8 @@ namespace CopperMod.Amiga
             _chipRam = new AmigaChipRamBackend(chipRamSize, chipRamDecodeSize, chipDmaAddressMask, CodeGenerationPageShift);
             _chipRamData = _chipRam.Data;
             _chipRamMask = _chipRam.Length - 1;
-            ExpansionRamBase = NormalizeAddress(expansionRamBase);
-            RealFastRamBase = NormalizeAddress(realFastRamBase);
+            ExpansionRamBase = expansionRamBase;
+            RealFastRamBase = realFastRamBase;
             _expansionRam = new AmigaLinearRamBackend(expansionRamSize, ExpansionRamBase, CodeGenerationPageShift);
             _realFastRam = new AmigaLinearRamBackend(realFastRamSize, RealFastRamBase, CodeGenerationPageShift);
             _hrmSlotEngine = new AgnusHrmSlotEngine(captureBusAccesses);
@@ -404,9 +403,10 @@ namespace CopperMod.Amiga
             Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
             _rasterlineScheduleCache = new AmigaRasterlineScheduleCache(this);
             _hardwareScheduler = new AmigaHardwareScheduler(this);
-            _palFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+            _hrmSlotEngine.BeamPositionProvider = GetPalBeamPosition;
             _palLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-            _nextVerticalBlankCycle = _palFrameCycles;
+            _palBeamClock.Reset();
+            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             ResetCiaAForHardwareReset();
@@ -674,8 +674,6 @@ namespace CopperMod.Amiga
             _chipRam.ClearData();
             _expansionRam.ClearData();
             _realFastRam.ClearData();
-            Array.Clear(_pendingCustomBytes);
-            Array.Clear(_pendingCustomByteWritten);
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
             _hostTrapStubAddresses.Clear();
@@ -708,7 +706,8 @@ namespace CopperMod.Amiga
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _nextVerticalBlankCycle = _palFrameCycles;
+            _palBeamClock.Reset();
+            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
@@ -734,7 +733,6 @@ namespace CopperMod.Amiga
 
         public ushort RegisterHostTrapStub(uint address, Action<M68kCpuState> callback)
         {
-            address = NormalizeAddress(address);
             var trapId = AllocateHostTrapId();
             _hostTrapStubs[address] = new HostTrapStub(address, trapId, callback ?? throw new ArgumentNullException(nameof(callback)));
             AddHostTrapStubAddress(address);
@@ -755,7 +753,6 @@ namespace CopperMod.Amiga
 
         public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
         {
-            instructionProgramCounter = NormalizeAddress(instructionProgramCounter);
             if (_hostTrapStubs.TryGetValue(instructionProgramCounter, out var stub) &&
                 stub.TrapId == trapId)
             {
@@ -776,7 +773,6 @@ namespace CopperMod.Amiga
 
         public bool HasHostTrapStub(uint address)
         {
-            address = NormalizeAddress(address);
             return _hostTrapStubs.ContainsKey(address) ||
                 TryReadRelocatableHostTrapId(address, out _);
         }
@@ -798,8 +794,6 @@ namespace CopperMod.Amiga
         public void ResetExternalDevices(long cycle)
         {
             _ = cycle;
-            Array.Clear(_pendingCustomBytes);
-            Array.Clear(_pendingCustomByteWritten);
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             _cpuBusPhases.Clear();
@@ -819,7 +813,8 @@ namespace CopperMod.Amiga
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _nextVerticalBlankCycle = _palFrameCycles;
+            _palBeamClock.Reset();
+            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
@@ -851,7 +846,6 @@ namespace CopperMod.Amiga
 
         public byte ReadByte(uint address)
         {
-            address = NormalizeAddress(address);
             var value = ReadRawByte(address);
             if (TryGetCiaRegister(address, out var cia, out var ciaRegister) && cia == CiaA && ciaRegister == 0x0C)
             {
@@ -1249,7 +1243,7 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryReadExactCpuDataByte(uint address, ref long cycle, out byte value)
         {
-            var normalizedAddress = NormalizeAddress(address);
+            var normalizedAddress = address;
             if (TryGetCiaRegister(normalizedAddress, out var cia, out var ciaRegister) &&
                 CanDeferExactCpuCiaRead(ciaRegister) &&
                 TryDeferExactCpuCiaDataTiming(ref cycle))
@@ -1454,10 +1448,11 @@ namespace CopperMod.Amiga
             int byteCount,
             out AmigaExactCpuDataRamRegion region)
         {
-            var normalizedAddress = NormalizeAddress(address);
+            var normalizedAddress = address;
             region = default;
             if (!_useFastZeroWaitAccesses ||
                 byteCount <= 0 ||
+                normalizedAddress > CpuAddressMask ||
                 (ulong)normalizedAddress + (ulong)byteCount > 0x0100_0000UL)
             {
                 return false;
@@ -2188,7 +2183,6 @@ namespace CopperMod.Amiga
         internal bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
         {
             window = default;
-            address = NormalizeAddress(address);
             if ((address & 1) != 0)
             {
                 return false;
@@ -2224,7 +2218,6 @@ namespace CopperMod.Amiga
             uint address,
             ref long cycle)
         {
-            address = NormalizeAddress(address);
             var target = (AmigaBusAccessTarget)window.BusTag;
             CommitExactCpuDataTiming(
                 target,
@@ -2421,7 +2414,6 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
                 return ReadCpuCustomByte(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
@@ -2638,7 +2630,6 @@ namespace CopperMod.Amiga
         public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -2653,7 +2644,6 @@ namespace CopperMod.Amiga
         internal void WriteTasCpuDataByte(uint address, byte value, ref long cycle)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -2696,7 +2686,6 @@ namespace CopperMod.Amiga
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -2725,28 +2714,14 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
-            if (accessKind == AmigaBusAccessKind.CpuInstructionFetch &&
-                TryReadHostTrapStubWord(address, out var hostTrapWord))
-            {
-                var hostTrapAccess = Arbitrate(
-                    AmigaBusRequester.Cpu,
-                    accessKind,
-                    AmigaBusAccessTarget.HostTrap,
-                    address,
-                    AmigaBusAccessSize.Word,
-                    cycle,
-                    isWrite: false);
-                cycle = hostTrapAccess.CompletedCycle;
-                return hostTrapWord;
-            }
-
             if (IsCustomRegisterWordAddress(address))
             {
                 return ReadCpuCustomWord(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
             }
 
-            var target = ClassifyTarget(address);
+            var target = accessKind == AmigaBusAccessKind.CpuInstructionFetch
+                ? ClassifyInstructionFetchTarget(address)
+                : ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -2761,20 +2736,35 @@ namespace CopperMod.Amiga
                     out _,
                     out var completedCycle);
                 AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: false);
-                var fastValue = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
-                    ? ReadRawWord(address, grantedCycle)
-                    : ReadRawWord(address);
+                var fastValue = ReadCpuWordValue(target, address, grantedCycle, accessKind, sampleCustomAtGrantedCycle);
                 cycle = completedCycle;
                 return fastValue;
             }
 
             var access = Arbitrate(AmigaBusRequester.Cpu, accessKind, target, address, AmigaBusAccessSize.Word, cycle, isWrite: false);
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, access.GrantedCycle, isWrite: false);
-            var value = sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
-                ? ReadRawWord(address, access.GrantedCycle)
-                : ReadRawWord(address);
+            var value = ReadCpuWordValue(target, address, access.GrantedCycle, accessKind, sampleCustomAtGrantedCycle);
             cycle = access.CompletedCycle;
             return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadCpuWordValue(
+            AmigaBusAccessTarget target,
+            uint address,
+            long grantedCycle,
+            AmigaBusAccessKind accessKind,
+            bool sampleCustomAtGrantedCycle)
+        {
+            if (target == AmigaBusAccessTarget.HostTrap &&
+                accessKind == AmigaBusAccessKind.CpuInstructionFetch)
+            {
+                return ReadHostWord(address);
+            }
+
+            return sampleCustomAtGrantedCycle && target == AmigaBusAccessTarget.CustomRegisters
+                ? ReadRawWord(address, grantedCycle)
+                : ReadRawWord(address);
         }
 
         public uint ReadLong(uint address)
@@ -2794,7 +2784,6 @@ namespace CopperMod.Amiga
             bool sampleCustomAtGrantedCycle)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             if (IsCustomRegisterByteAddress(address))
             {
                 return ReadCpuCustomLong(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
@@ -2849,7 +2838,6 @@ namespace CopperMod.Amiga
         public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
         {
             FlushDeferredCpuDataTiming(ref cycle);
-            address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
@@ -2874,6 +2862,11 @@ namespace CopperMod.Amiga
 
         internal byte ReadHostByte(uint address)
         {
+            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
+            {
+                return hostTrapByte;
+            }
+
             return ReadRawByte(address);
         }
 
@@ -2893,8 +2886,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            physicalAddress = NormalizeAddress(physicalAddress);
-            var lastAddress = NormalizeAddress(physicalAddress + (uint)(byteCount - 1));
+            var lastAddress = physicalAddress + (uint)(byteCount - 1);
             return IsJitSnapshotReadableAddress(physicalAddress) &&
                 IsJitSnapshotReadableAddress(lastAddress);
         }
@@ -2907,8 +2899,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            physicalAddress = NormalizeAddress(physicalAddress);
-            var lastAddress = NormalizeAddress(physicalAddress + (uint)(byteCount - 1));
+            var lastAddress = physicalAddress + (uint)(byteCount - 1);
             return ClassifyTarget(physicalAddress) == AmigaBusAccessTarget.Rom &&
                 ClassifyTarget(lastAddress) == AmigaBusAccessTarget.Rom;
         }
@@ -2959,7 +2950,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            address = NormalizeAddress(address);
             if (TryGetContiguousWritableSpan(address, data.Length, out var destination))
             {
                 data.CopyTo(destination);
@@ -2981,7 +2971,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            address = NormalizeAddress(address);
             if (TryGetContiguousReadableSpan(address, destination.Length, out var source))
             {
                 source.CopyTo(destination);
@@ -3001,7 +2990,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            address = NormalizeAddress(address);
             if (TryGetContiguousWritableSpan(address, byteCount, out var destination))
             {
                 destination.Clear();
@@ -3028,7 +3016,6 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            address = NormalizeAddress(address);
             return IsChipRamRange(address, byteCount) ||
                 IsExpansionRamRange(address, byteCount) ||
                 IsRealFastRamRange(address, byteCount);
@@ -3046,10 +3033,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if ((StrictCpuPhysicalDataMapping ||
-                    accessKind == AmigaBusAccessKind.CpuInstructionFetch) &&
-                (address > 0x00FF_FFFFu ||
-                    (uint)(byteCount - 1) > 0x00FF_FFFFu - address))
+            if ((uint)(byteCount - 1) > uint.MaxValue - address)
             {
                 return false;
             }
@@ -3061,7 +3045,7 @@ namespace CopperMod.Amiga
 
             for (var offset = 0; offset < byteCount; offset++)
             {
-                var byteAddress = NormalizeAddress(address + (uint)offset);
+                var byteAddress = address + (uint)offset;
                 if (!IsCpuPhysicalByteMapped(byteAddress, accessKind))
                 {
                     return false;
@@ -3750,7 +3734,6 @@ namespace CopperMod.Amiga
 
         public void WriteDeviceWord(AmigaBusRequester requester, AmigaBusAccessKind kind, uint address, ushort value, long requestedCycle)
         {
-            address = NormalizeAddress(address);
             var target = ClassifyTarget(address);
             if (target == AmigaBusAccessTarget.CustomRegisters && requester != AmigaBusRequester.Cpu)
             {
@@ -3818,18 +3801,16 @@ namespace CopperMod.Amiga
             {
                 CiaA.IncrementTod(_nextVerticalBlankCycle, _pendingCiaInterrupts);
                 RequestHardwareInterrupt(AmigaConstants.IntreqVerticalBlank, _nextVerticalBlankCycle);
-                _nextVerticalBlankCycle += _palFrameCycles;
+                _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(_nextVerticalBlankCycle);
             }
         }
 
         private void UpdateBeamPosition(long targetCycle)
         {
-            var cycleInFrame = Math.Max(0, targetCycle) % _palFrameCycles;
-            var line = Math.Clamp((int)(cycleInFrame / _palLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
-            var lineCycle = cycleInFrame - (line * _palLineCycles);
-            var horizontal = Math.Clamp((int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock), 0, 0xE2);
-            var frame = Math.Max(0, targetCycle) / _palFrameCycles;
-            Paula.SetBeamPosition(line, horizontal, (frame & 1) != 0);
+            var beam = _palBeamClock.GetPosition(targetCycle);
+            var physicalHorizontal = Math.Clamp(beam.BeamHorizontal, 0, 0xE2);
+            var horizontal = (physicalHorizontal + 4) % AmigaConstants.A500PalColorClocksPerRasterLine;
+            Paula.SetBeamPosition(beam.BeamLine, horizontal, beam.IsLongFrame);
         }
 
         private void ResetHorizontalSyncCounter()
@@ -3837,6 +3818,15 @@ namespace CopperMod.Amiga
             _nextHorizontalSyncIndex = 1;
             _nextHorizontalSyncCycle = Math.Max(1, _palLineCycles);
         }
+
+        internal AgnusPalBeamPosition GetPalBeamPosition(long cycle)
+            => _palBeamClock.GetPosition(cycle);
+
+        internal long GetPalFrameStopCycle(long frameStartCycle)
+            => _palBeamClock.GetFrameStopCycle(frameStartCycle);
+
+        internal long GetNextPalFrameStartCycle(long cycle)
+            => _palBeamClock.GetNextFrameStartCycle(cycle);
 
         public void AdvanceCiasTo(long targetCycle)
             => _hardwareScheduler.DrainTo(
@@ -4730,7 +4720,11 @@ namespace CopperMod.Amiga
 
         private AmigaBusAccessTarget ClassifyTarget(uint address)
         {
-            address = NormalizeAddress(address);
+            if (address > CpuAddressMask)
+            {
+                return ClassifyTargetDetailed(address);
+            }
+
             var bankKind = _cpuBusBankKinds[(int)(address >> CpuBusBankShift)];
             return bankKind switch
             {
@@ -4742,6 +4736,34 @@ namespace CopperMod.Amiga
                 CpuBusBankKind.Unmapped => AmigaBusAccessTarget.Unmapped,
                 _ => ClassifyTargetDetailed(address)
             };
+        }
+
+        private AmigaBusAccessTarget ClassifyInstructionFetchTarget(uint address)
+        {
+            if (address <= CpuAddressMask)
+            {
+                var bankKind = _cpuBusBankKinds[(int)(address >> CpuBusBankShift)];
+                if (bankKind != CpuBusBankKind.Special)
+                {
+                    return bankKind switch
+                    {
+                        CpuBusBankKind.ChipRam => AmigaBusAccessTarget.ChipRam,
+                        CpuBusBankKind.ExpansionRam => AmigaBusAccessTarget.ExpansionRam,
+                        CpuBusBankKind.RealFastRam => AmigaBusAccessTarget.RealFastRam,
+                        CpuBusBankKind.RomOverlay => AmigaBusAccessTarget.Rom,
+                        CpuBusBankKind.MappedRom => AmigaBusAccessTarget.Rom,
+                        CpuBusBankKind.Unmapped => AmigaBusAccessTarget.Unmapped,
+                        _ => ClassifyTargetDetailed(address)
+                    };
+                }
+            }
+
+            if (TryReadHostTrapStubByte(address, out _))
+            {
+                return AmigaBusAccessTarget.HostTrap;
+            }
+
+            return ClassifyTarget(address);
         }
 
         private AmigaBusAccessTarget ClassifyTargetDetailed(uint address)
@@ -4807,13 +4829,6 @@ namespace CopperMod.Amiga
 
         private byte ReadRawByte(uint address, long sampleCycle)
         {
-            address = NormalizeAddress(address);
-
-            if (TryReadHostTrapStubByte(address, out var hostTrapByte))
-            {
-                return hostTrapByte;
-            }
-
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -4894,11 +4909,6 @@ namespace CopperMod.Amiga
 
         private bool IsCpuPhysicalByteMapped(uint address, AmigaBusAccessKind accessKind)
         {
-            if (address > 0x00FF_FFFFu)
-            {
-                return false;
-            }
-
             if (IsRomOverlayAddress(address))
             {
                 return true;
@@ -4954,7 +4964,6 @@ namespace CopperMod.Amiga
 
         private bool TryReadHostTrapStubByte(uint address, out byte value)
         {
-            address = NormalizeAddress(address);
             if (!HostTrapStubPageHasTrap(address))
             {
                 value = 0;
@@ -4963,9 +4972,9 @@ namespace CopperMod.Amiga
 
             for (var offset = 0u; offset < 4; offset++)
             {
-                var baseAddress = NormalizeAddress(address - offset);
+                var baseAddress = address - offset;
                 if (!_hostTrapStubs.TryGetValue(baseAddress, out var entry) ||
-                    NormalizeAddress(entry.Address + offset) != address)
+                    entry.Address + offset != address)
                 {
                     continue;
                 }
@@ -4986,7 +4995,11 @@ namespace CopperMod.Amiga
 
         private void MarkHostTrapStubPages(uint address)
         {
-            address = NormalizeAddress(address);
+            if (address > CpuAddressMask || CpuAddressMask - address < 3)
+            {
+                return;
+            }
+
             for (var offset = 0u; offset < 4; offset++)
             {
                 _hostTrapStubPages[GetHostTrapStubPageIndex(address + offset)] = true;
@@ -4995,7 +5008,6 @@ namespace CopperMod.Amiga
 
         private void AddHostTrapStubAddress(uint address)
         {
-            address = NormalizeAddress(address);
             var index = _hostTrapStubAddresses.BinarySearch(address);
             if (index >= 0)
             {
@@ -5007,15 +5019,14 @@ namespace CopperMod.Amiga
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool HostTrapStubPageHasTrap(uint address)
-            => _hostTrapStubPages[GetHostTrapStubPageIndex(address)];
+            => address > CpuAddressMask || _hostTrapStubPages[GetHostTrapStubPageIndex(address)];
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int GetHostTrapStubPageIndex(uint address)
-            => (int)(NormalizeAddress(address) >> CodeGenerationPageShift);
+            => (int)((address & CpuAddressMask) >> CodeGenerationPageShift);
 
         private bool TryReadRelocatableHostTrapId(uint address, out ushort trapId)
         {
-            address = NormalizeAddress(address);
             var opcode = (ushort)((ReadRawByte(address) << 8) | ReadRawByte(address + 1));
             if (opcode != HostTrapOpcode)
             {
@@ -5041,13 +5052,6 @@ namespace CopperMod.Amiga
 
         private ushort ReadRawWord(uint address)
         {
-            address = NormalizeAddress(address);
-
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
-            {
-                return hostTrapWord;
-            }
-
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -5098,13 +5102,6 @@ namespace CopperMod.Amiga
 
         private ushort ReadRawWord(uint address, long sampleCycle)
         {
-            address = NormalizeAddress(address);
-
-            if (TryReadHostTrapStubWord(address, out var hostTrapWord))
-            {
-                return hostTrapWord;
-            }
-
             // Hot path: chip RAM (most common case).
             if (address < _chipRam.DecodeSize && !_romOverlayEnabled)
             {
@@ -5156,18 +5153,31 @@ namespace CopperMod.Amiga
         }
 
         private static bool IsCustomRegisterWordAddress(uint address)
-            => address >= 0x00DFF000 && address < 0x00DFF1FF;
+        {
+            var offset = GetCustomRegisterOffset(address);
+            return offset < 0x1FF && (offset & 1) == 0;
+        }
 
         private static bool IsCustomRegisterByteAddress(uint address)
-            => address >= 0x00DFF000 && address < 0x00DFF200;
+        {
+            return GetCustomRegisterOffset(address) < 0x200;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetCustomRegisterByteOffset(uint address, out ushort offset)
+        private static uint GetCustomRegisterOffset(uint address)
         {
-            address = NormalizeAddress(address);
-            if (address >= 0x00DFF000 && address < 0x00DFF200)
+            return (address & CpuAddressMask) - CustomRegisterBaseAddress;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryGetCustomRegisterByteOffset(uint address, out ushort offset)
+        {
+            // A byte write may address the final odd byte; WriteCustomByte clears A0
+            // before dispatching the effective 16-bit custom register write.
+            var registerOffset = GetCustomRegisterOffset(address);
+            if (registerOffset < 0x200)
             {
-                offset = (ushort)(address - 0x00DFF000);
+                offset = (ushort)registerOffset;
                 return true;
             }
 
@@ -5176,12 +5186,12 @@ namespace CopperMod.Amiga
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetCustomRegisterWordOffset(uint address, out ushort offset)
+        private bool TryGetCustomRegisterWordOffset(uint address, out ushort offset)
         {
-            address = NormalizeAddress(address);
-            if (address >= 0x00DFF000 && address < 0x00DFF1FF)
+            var registerOffset = GetCustomRegisterOffset(address);
+            if (registerOffset < 0x1FF && (registerOffset & 1) == 0)
             {
-                offset = (ushort)(address - 0x00DFF000);
+                offset = (ushort)registerOffset;
                 return true;
             }
 
@@ -5212,19 +5222,29 @@ namespace CopperMod.Amiga
         private ushort ReadCustomWord(ushort offset, long sampleCycle)
         {
             offset = (ushort)(offset & 0x01FE);
-            if (TryReadBeamPositionWord(offset, sampleCycle, out var beamPositionValue))
-            {
-                return beamPositionValue;
-            }
-
             switch (offset)
             {
                 case 0x002:
                     return (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
+                case 0x004:
+                    CalculateBeamPosition(sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle, out var vposr, out _);
+                    return vposr;
+                case 0x006:
+                    CalculateBeamPosition(sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle, out _, out var vhposr);
+                    return vhposr;
+                case 0x008:
+                case 0x01A:
+                case 0x020:
+                case 0x022:
+                case 0x024:
+                case 0x07E:
+                    return Disk.ReadWord(offset);
                 case 0x00A:
                     return ReadGamePortData(0);
                 case 0x00C:
                     return ReadGamePortData(1);
+                case 0x00E:
+                    return 0x8000;
                 case 0x010:
                     return Paula.Adkcon;
                 case 0x016:
@@ -5233,26 +5253,9 @@ namespace CopperMod.Amiga
                     return Paula.Intena;
                 case 0x01E:
                     return Paula.Intreq;
+                default:
+                    return (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)));
             }
-
-            if (Disk.TryReadWord(offset, out var diskValue))
-            {
-                return diskValue;
-            }
-
-            if (TryReadGamePortCustomByte(offset, out var highGamePortValue) ||
-                Display.TryReadByte(offset, out highGamePortValue))
-            {
-                var lowOffset = (ushort)(offset + 1);
-                var low = TryReadGamePortCustomByte(lowOffset, out var lowGamePortValue)
-                    ? lowGamePortValue
-                    : Display.TryReadByte(lowOffset, out var lowDisplayValue)
-                        ? lowDisplayValue
-                        : Paula.ReadByte(lowOffset);
-                return (ushort)((highGamePortValue << 8) | low);
-            }
-
-            return (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)));
         }
 
         private bool TryReadBeamPositionByte(ushort offset, long sampleCycle, out byte value)
@@ -5284,13 +5287,12 @@ namespace CopperMod.Amiga
 
         private void CalculateBeamPosition(long targetCycle, out ushort vposr, out ushort vhposr)
         {
-            var cycleInFrame = Math.Max(0, targetCycle) % _palFrameCycles;
-            var line = Math.Clamp((int)(cycleInFrame / _palLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
-            var lineCycle = cycleInFrame - (line * _palLineCycles);
-            var horizontal = Math.Clamp((int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock), 0, 0xE2);
-            var frame = Math.Max(0, targetCycle) / _palFrameCycles;
-            vposr = (ushort)((((frame & 1) != 0 ? 1 : 0) << 15) | ((line >> 8) & 0x0001));
-            vhposr = (ushort)(((line & 0x00FF) << 8) | horizontal);
+            var beam = _palBeamClock.GetPosition(targetCycle);
+            var physicalHorizontal = Math.Clamp(beam.BeamHorizontal, 0, 0xE2);
+            var horizontal = (physicalHorizontal + 4) % AmigaConstants.A500PalColorClocksPerRasterLine;
+            var registerLine = beam.BeamLine;
+            vposr = (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((registerLine >> 8) & 0x0001));
+            vhposr = (ushort)(((registerLine & 0x00FF) << 8) | horizontal);
         }
 
         private uint ReadCustomLong(uint address, long firstWordCycle, long secondWordCycle)
@@ -5318,7 +5320,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            address = NormalizeAddress(address);
             var byteCount = GetJitMemoryByteCount(size);
             var target = ClassifyTarget(address);
             if (target == AmigaBusAccessTarget.RealFastRam)
@@ -5330,7 +5331,7 @@ namespace CopperMod.Amiga
             }
             else if (target == AmigaBusAccessTarget.Rom)
             {
-                var lastAddress = NormalizeAddress(address + (uint)(byteCount - 1));
+                var lastAddress = address + (uint)(byteCount - 1);
                 if (ClassifyTarget(lastAddress) != AmigaBusAccessTarget.Rom)
                 {
                     return false;
@@ -5360,7 +5361,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            address = NormalizeAddress(address);
             var byteCount = GetJitMemoryByteCount(size);
             if (!IsRealFastRamRange(address, byteCount))
             {
@@ -5399,7 +5399,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            address = NormalizeAddress(address);
             if (address < 0x00DFF180 || address > 0x00DFF1BE || (address & 1) != 0)
             {
                 return false;
@@ -5417,7 +5416,7 @@ namespace CopperMod.Amiga
             value = 0;
             if (!_useChipSlotScheduler ||
                 size != M68kOperandSize.Byte ||
-                (NormalizeAddress(physicalAddress) & 0x00FF_FFFFu) != 0x00BF_E001u)
+                (physicalAddress & CpuAddressMask) != 0x00BF_E001u)
             {
                 return false;
             }
@@ -5432,7 +5431,6 @@ namespace CopperMod.Amiga
             M68kOperandSize size,
             long cycle)
         {
-            physicalAddress = NormalizeAddress(physicalAddress);
             if (size == M68kOperandSize.Byte && physicalAddress == 0x00BF_E001u)
             {
                 WriteHostByte(physicalAddress, (byte)value);
@@ -5450,7 +5448,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            root = NormalizeAddress(root);
             if (!IsJitSnapshotReadableAddress(root))
             {
                 return false;
@@ -5464,7 +5461,7 @@ namespace CopperMod.Amiga
             var bytes = new byte[byteCount];
             for (var i = 0; i < bytes.Length; i++)
             {
-                var address = NormalizeAddress(root + (uint)i);
+                var address = root + (uint)i;
                 if (!IsJitSnapshotReadableAddress(address))
                 {
                     return false;
@@ -5486,7 +5483,7 @@ namespace CopperMod.Amiga
             var hostTrapStubs = new List<uint>();
             for (var offset = 0; offset + 1 < byteCount; offset += 2)
             {
-                var address = NormalizeAddress(root + (uint)offset);
+                var address = root + (uint)offset;
                 if (HasHostTrapStub(address))
                 {
                     hostTrapStubs.Add(address);
@@ -5509,10 +5506,10 @@ namespace CopperMod.Amiga
                 AmigaBusAccessTarget.Rom;
         }
 
-        private static int GetJitSnapshotPageCount(uint root, int byteCount)
+        private int GetJitSnapshotPageCount(uint root, int byteCount)
         {
-            var startPage = NormalizeAddress(root) >> CodeGenerationPageShift;
-            var endPage = NormalizeAddress(root + (uint)Math.Max(0, byteCount - 1)) >> CodeGenerationPageShift;
+            var startPage = root >> CodeGenerationPageShift;
+            var endPage = (root + (uint)Math.Max(0, byteCount - 1)) >> CodeGenerationPageShift;
             if (endPage < startPage)
             {
                 return 1;
@@ -5523,10 +5520,10 @@ namespace CopperMod.Amiga
 
         private void FillJitSnapshotGenerations(uint root, int byteCount, uint[] pages, uint[] generations)
         {
-            var startPage = NormalizeAddress(root) >> CodeGenerationPageShift;
+            var startPage = root >> CodeGenerationPageShift;
             for (var i = 0; i < pages.Length; i++)
             {
-                var pageAddress = NormalizeAddress((startPage + (uint)i) << CodeGenerationPageShift);
+                var pageAddress = (startPage + (uint)i) << CodeGenerationPageShift;
                 pages[i] = pageAddress;
                 generations[i] = GetCodePageGeneration(pageAddress);
             }
@@ -5550,7 +5547,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            address = NormalizeAddress(address);
             if (TryGetRealFastRamOffset(address, out var realFastOffset) &&
                 realFastOffset + byteCount <= _realFastRam.Length)
             {
@@ -5603,7 +5599,6 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            address = NormalizeAddress(address);
             if (!TryGetRealFastRamOffset(address, out var realFastOffset) ||
                 realFastOffset + byteCount > _realFastRam.Length)
             {
@@ -5626,7 +5621,6 @@ namespace CopperMod.Amiga
 
         internal void CompleteJitZeroWaitWrite(uint address, int byteCount)
         {
-            address = NormalizeAddress(address);
             TouchCodePages(address, byteCount);
             NotifyJitEligibleMemoryWritten(address, byteCount);
         }
@@ -5706,7 +5700,6 @@ namespace CopperMod.Amiga
 
         private uint ReadJitSlotAwareMemoryUnchecked(ref long cycle, uint address, M68kOperandSize size)
         {
-            address = NormalizeAddress(address);
             if (TryReadJitExactCpuDataMemory(address, ref cycle, size, out var exactValue))
             {
                 return exactValue;
@@ -5765,7 +5758,6 @@ namespace CopperMod.Amiga
 
         private void WriteJitSlotAwareMemoryUnchecked(ref long cycle, uint address, uint value, M68kOperandSize size)
         {
-            address = NormalizeAddress(address);
             if (TryWriteJitExactCpuDataMemory(address, ref cycle, value, size))
             {
                 return;
@@ -5939,19 +5931,6 @@ namespace CopperMod.Amiga
             if (target == AmigaBusAccessTarget.RealFastRam &&
                 _realFastRam.TryReadValue(address, size, out value))
             {
-                return true;
-            }
-
-            value = 0;
-            return false;
-        }
-
-        private bool TryReadHostTrapStubWord(uint address, out ushort value)
-        {
-            if (TryReadHostTrapStubByte(address, out var high) &&
-                TryReadHostTrapStubByte(address + 1, out var low))
-            {
-                value = (ushort)((high << 8) | low);
                 return true;
             }
 
@@ -6318,7 +6297,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuCustomRegisterByte(uint address, byte value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (TryGetCustomRegisterByteOffset(address, out var offset))
             {
                 WriteCustomByte(AmigaBusRequester.Cpu, offset, value, grantedCycle);
@@ -6330,7 +6308,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuCustomRegisterWord(uint address, ushort value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (TryGetCustomRegisterWordOffset(address, out var offset))
             {
                 WriteCustomWord(AmigaBusRequester.Cpu, offset, value, grantedCycle);
@@ -6355,7 +6332,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuCiaByte(uint address, byte value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetCiaRegister(address, out var cia, out var ciaRegister))
             {
                 WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
@@ -6382,7 +6358,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuChipRamByte(uint address, byte value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetChipRamOffset(address, out var chipOffset))
             {
                 WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
@@ -6395,7 +6370,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuChipRamWord(uint address, ushort value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetChipRamOffset(address, out var chipOffset))
             {
                 WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
@@ -6415,7 +6389,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuExpansionRamByte(uint address, byte value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetExpansionRamOffset(address, out var expansionOffset))
             {
                 WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
@@ -6429,7 +6402,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuExpansionRamWord(uint address, ushort value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetExpansionRamOffset(address, out var expansionOffset) ||
                 expansionOffset + 1 >= _expansionRam.Length)
             {
@@ -6452,7 +6424,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuRealFastRamByte(uint address, byte value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetRealFastRamOffset(address, out var realFastOffset))
             {
                 WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
@@ -6466,7 +6437,6 @@ namespace CopperMod.Amiga
 
         private void WriteCpuRealFastRamWord(uint address, ushort value, long grantedCycle)
         {
-            address = NormalizeAddress(address);
             if (!TryGetRealFastRamOffset(address, out var realFastOffset) ||
                 realFastOffset + 1 >= _realFastRam.Length)
             {
@@ -6515,7 +6485,6 @@ namespace CopperMod.Amiga
             TPolicy policy)
             where TPolicy : struct, IBusWritePolicy
         {
-            address = NormalizeAddress(address);
             if (TryGetChipRamOffset(address, out var chipOffset))
             {
                 _chipRam.WriteByteAtOffset(chipOffset, value, grantedCycle);
@@ -6625,7 +6594,6 @@ namespace CopperMod.Amiga
             TPolicy policy)
             where TPolicy : struct, IBusWritePolicy
         {
-            address = NormalizeAddress(address);
             if (address >= 0x00DFF000 && address + 1 < 0x00DFF200)
             {
                 WriteCustomWord(policy.Requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
@@ -6681,7 +6649,6 @@ namespace CopperMod.Amiga
             long grantedCycle)
             where TPolicy : struct, IBusWritePolicy
         {
-            address = NormalizeAddress(address);
             if (TryGetCustomRegisterWordOffset(address, out var offset))
             {
                 WriteCustomWord(policy.Requester, offset, value, grantedCycle);
@@ -6737,7 +6704,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            address = NormalizeAddress(address);
             if (IsExpansionRamRange(address, byteCount) || IsRealFastRamRange(address, byteCount))
             {
                 handler(address, byteCount);
@@ -6794,12 +6760,28 @@ namespace CopperMod.Amiga
 
         private void DispatchCustomRegisterWrite(in CustomRegisterWriteContext write)
         {
+            ApplyBeamControlWrite(write.Offset, write.Value, write.Cycle);
             Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
             Paula.AdvanceRegisterWritesTo(write.Cycle);
             Display.ScheduleWrite(write.Cycle, write.Offset, write.Value);
             Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
             Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
             _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
+        }
+
+        private void ApplyBeamControlWrite(ushort offset, ushort value, long cycle)
+        {
+            if (offset != 0x02A)
+            {
+                return;
+            }
+
+            var writeCycle = Math.Max(0, cycle);
+            AdvanceRasterCoreTo(writeCycle);
+            _palBeamClock.ApplyVposw(value, writeCycle);
+            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(writeCycle);
+            _hardwareScheduler.NotifyWorkScheduled(_nextVerticalBlankCycle);
+            NotifyCustomRegisterScheduleChanged(offset, writeCycle);
         }
 
         private void BeginCustomRegisterWrite(in CustomRegisterWriteContext write)
@@ -6852,22 +6834,8 @@ namespace CopperMod.Amiga
         private void WriteCustomByte(AmigaBusRequester requester, ushort offset, byte value, long cycle)
         {
             var wordOffset = (ushort)(offset & 0x01FE);
-            _pendingCustomBytes[offset] = value;
-            _pendingCustomByteWritten[offset] = true;
-
-            var highIndex = wordOffset;
-            var lowIndex = wordOffset + 1;
-            var high = _pendingCustomByteWritten[highIndex]
-                ? _pendingCustomBytes[highIndex]
-                : Paula.ReadByte((ushort)highIndex);
-            var low = _pendingCustomByteWritten[lowIndex]
-                ? _pendingCustomBytes[lowIndex]
-                : Paula.ReadByte((ushort)lowIndex);
-            var wordValue = (ushort)((high << 8) | low);
+            var wordValue = (ushort)((value << 8) | value);
             WriteCustomWord(requester, wordOffset, wordValue, cycle);
-
-            _pendingCustomByteWritten[highIndex] = false;
-            _pendingCustomByteWritten[lowIndex] = false;
         }
 
         private readonly struct CustomRegisterWriteContext
@@ -6888,12 +6856,6 @@ namespace CopperMod.Amiga
 
             public long Cycle { get; }
         }
-
-        private static uint NormalizeAddress(uint address)
-        {
-            return address & 0x00FF_FFFF;
-        }
-
         private static bool IsPowerOfTwo(int value)
         {
             return value > 0 && (value & (value - 1)) == 0;
@@ -6901,7 +6863,6 @@ namespace CopperMod.Amiga
 
         internal uint GetCodePageGeneration(uint address)
         {
-            address = NormalizeAddress(address);
             if (TryGetChipRamOffset(address, out var chipOffset))
             {
                 return _chipRam.GetCodePageGeneration(chipOffset);
@@ -6927,8 +6888,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            address = NormalizeAddress(address);
-            var endAddress = NormalizeAddress(address + (uint)(byteCount - 1));
+            var endAddress = address + (uint)(byteCount - 1);
             return GetCodePageGeneration(address) == startGeneration &&
                 GetCodePageGeneration(endAddress) == endGeneration;
         }
@@ -6940,7 +6900,6 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            address = NormalizeAddress(address);
             var remaining = byteCount;
             var current = address;
             while (remaining > 0)
@@ -6949,13 +6908,12 @@ namespace CopperMod.Amiga
                 var bytesToNextPage = CodeGenerationPageSize - ((int)current & (CodeGenerationPageSize - 1));
                 var step = Math.Min(remaining, bytesToNextPage);
                 remaining -= step;
-                current = NormalizeAddress(current + (uint)step);
+                current += (uint)step;
             }
         }
 
         private void TouchCodePage(uint address)
         {
-            address = NormalizeAddress(address);
             var generation = NextCodeGeneration();
             if (TryGetChipRamOffset(address, out var chipOffset))
             {

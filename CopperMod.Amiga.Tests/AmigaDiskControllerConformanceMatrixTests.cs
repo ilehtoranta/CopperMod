@@ -1297,7 +1297,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		EnableDiskBlockInterrupt(bus);
 		StartDiskDma(bus, DmaBase, words: 2);
 		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
-		var expectedReleaseCycle = completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		var expectedReleaseCycle = completionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
 		Assert.NotEqual(0, bus.Paula.Intena & AmigaConstants.IntreqDiskBlock);
 
 		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
@@ -1319,7 +1319,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
 			Math.Max(0, completionCycle - 10),
-			completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			completionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles + 10,
 			cpuInterruptMask: 0,
 			out var reason);
 
@@ -1337,7 +1337,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		var candidate = bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
 			Math.Max(0, completionCycle - 10),
-			completionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			completionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles + 10,
 			cpuInterruptMask: 1,
 			out var reason);
 
@@ -1437,7 +1437,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 
 		var enabledCandidate = enabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
 			0,
-			readyCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			readyCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles + 10,
 			cpuInterruptMask: 0,
 			out var enabledReason);
 
@@ -1449,7 +1449,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		WriteDsklenStartSequence(disabled, words: 1);
 		var disabledCandidate = disabled.Disk.GetNextCpuVisibleWakeCandidateCycle(
 			0,
-			readyCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles + 10,
+			readyCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles + 10,
 			cpuInterruptMask: 0,
 			out var disabledReason);
 

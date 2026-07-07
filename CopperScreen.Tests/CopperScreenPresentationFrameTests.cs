@@ -6,6 +6,20 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenPresentationFrameTests
 {
 	[Fact]
+	public void PresentationFrameStopUsesVposwForcedShortPalCadence()
+	{
+		using var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var machine = GetPrivateField<AmigaMachine>(emulator, "_machine");
+		var cycle = 0L;
+		machine.Bus.WriteWord(0x00DFF02A, 0x0001, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var expectedShortFrameCycles =
+			(long)AmigaConstants.A500PalShortRasterLines * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		Assert.Equal(expectedShortFrameCycles, emulator.GetPresentationFrameStopCycle(0));
+	}
+
+	[Fact]
 	public void EmulatorUsesHighResolutionPresentationFramebuffer()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
@@ -77,5 +91,14 @@ public sealed class CopperScreenPresentationFrameTests
 			dimInactive, dimInactive, dimInactive, dimInactive,
 			active, active, active, active
 		}, output);
+	}
+
+	private static T GetPrivateField<T>(object instance, string fieldName)
+	{
+		var field = instance.GetType().GetField(
+			fieldName,
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		return Assert.IsType<T>(field.GetValue(instance));
 	}
 }

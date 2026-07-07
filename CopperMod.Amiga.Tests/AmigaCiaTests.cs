@@ -301,7 +301,7 @@ public sealed class AmigaCiaTests
 		machine.Bus.Keyboard.KeyDown(AmigaRawKey.Digit1, 100);
 
 		Assert.False(machine.DispatchPendingHardwareInterrupt());
-		var releaseCycle = 100 + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+		var releaseCycle = 100 + AmigaConstants.A500IntreqToIplDelayCpuCycles;
 		machine.Cpu.State.Cycles = releaseCycle;
 		machine.Bus.Paula.AdvanceTo(releaseCycle);
 		Assert.True(machine.DispatchPendingHardwareInterrupt());

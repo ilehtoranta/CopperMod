@@ -40,10 +40,9 @@ namespace CopperMod.Amiga
         private const int CopperSkipHpUnits = 6;
         // WAIT is a 3-memory-cycle instruction total; after the fetched WAIT is parked,
         // only the extra wake memory cycle remains.
-        private const int CopperWaitWakeHpUnits = 2;
+        private const int CopperWaitWakeHpUnits = 6;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
         private const ushort CopconCopperDanger = 0x0002;
-        private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
         private const int PalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
@@ -265,6 +264,7 @@ namespace CopperMod.Amiga
         private bool _liveTimelineUnsafeIsCopper;
         private int _lastTimelineSegmentCount;
         private int _lastTimelineFallbackCount;
+        private int _lastTimelineMissingBitplaneFallbackCount;
         private int _lastTimelineSpriteCommandCount;
         private int _lastActiveTimelineFrameCount;
         private int _lastArchivedTimelineFrameCount;
@@ -452,7 +452,7 @@ namespace CopperMod.Amiga
             }
 
             var before = _bus.FindHrmDmaCandidate(requestedCycle);
-            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameStopCycle = GetLiveFrameStopCycle();
             return before > _liveCapturedThroughCycle &&
                 before < frameStopCycle &&
                 HasLiveSlotPreparationWorkThrough(before, includeCopper: !_advancingLiveDma);
@@ -463,7 +463,7 @@ namespace CopperMod.Amiga
             for (var attempt = 0; attempt < 32; attempt++)
             {
                 var before = _bus.FindHrmDmaCandidate(requestedCycle);
-                var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+                var frameStopCycle = GetLiveFrameStopCycle();
                 if (before <= _liveCapturedThroughCycle ||
                     before >= frameStopCycle ||
                     !HasLivePreGrantWorkThrough(before, includeCopper))
@@ -493,7 +493,7 @@ namespace CopperMod.Amiga
             for (var attempt = 0; attempt < 32; attempt++)
             {
                 var before = _bus.FindHrmDmaCandidate(requestedCycle);
-                var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+                var frameStopCycle = GetLiveFrameStopCycle();
                 if (before <= _liveCapturedThroughCycle ||
                     before >= frameStopCycle ||
                     !HasLiveSlotPreparationWorkThrough(before, includeCopper))
@@ -596,7 +596,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameStopCycle = GetLiveFrameStopCycle();
             while (candidate < frameStopCycle)
             {
                 if (candidate < nextFetchCycle)
@@ -629,7 +629,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameStopCycle = GetLiveFrameStopCycle();
             while (true)
             {
                 var candidate = _bus.FindHrmDmaCandidate(requestedCycle);
@@ -720,6 +720,7 @@ namespace CopperMod.Amiga
                 colorCounts,
                 _lastTimelineSegmentCount,
                 _lastTimelineFallbackCount,
+                _lastTimelineMissingBitplaneFallbackCount,
                 _lastTimelineSpriteCommandCount,
                 _lastActiveTimelineFrameCount,
                 _lastArchivedTimelineFrameCount,
@@ -896,10 +897,12 @@ namespace CopperMod.Amiga
             var savedAdvancingLiveDma = BeginLiveDmaCapture();
             try
             {
-                while (targetCycle >= _liveFrameStartCycle + PalFrameCycles)
+                var frameStopCycle = GetLiveFrameStopCycle();
+                while (targetCycle >= frameStopCycle)
                 {
-                    AdvanceLiveDmaWithinFrame((_liveFrameStartCycle + PalFrameCycles) - 1);
-                    StartLiveFrame(_liveFrameStartCycle + PalFrameCycles);
+                    AdvanceLiveDmaWithinFrame(frameStopCycle - 1);
+                    StartLiveFrame(frameStopCycle);
+                    frameStopCycle = GetLiveFrameStopCycle();
                 }
 
                 AdvanceLiveDmaWithinFrame(targetCycle);
@@ -921,6 +924,15 @@ namespace CopperMod.Amiga
         {
             _advancingLiveDma = savedAdvancingLiveDma;
         }
+
+        private long GetFrameStopCycle(long frameStartCycle)
+            => _bus.GetPalFrameStopCycle(frameStartCycle);
+
+        private long GetLiveFrameStopCycle()
+            => GetFrameStopCycle(_liveFrameStartCycle);
+
+        private long GetNextFrameStartCycle(long cycle)
+            => _bus.GetNextPalFrameStartCycle(cycle);
 
         public void ScheduleWrite(long cycle, ushort offset, ushort value)
         {
@@ -958,7 +970,7 @@ namespace CopperMod.Amiga
             InvalidateLiveDisplayEventCycle();
             if (!_advancingLiveDma && _liveFrameValid && cycle <= _liveCapturedThroughCycle)
             {
-                InvalidateLiveCaptureFrom(cycle);
+                InvalidateLiveCaptureFrom(cycle, offset);
             }
         }
 
@@ -977,9 +989,11 @@ namespace CopperMod.Amiga
 
         private void AdvanceIdleLiveDmaTo(long targetCycle)
         {
-            while (targetCycle >= _liveFrameStartCycle + PalFrameCycles)
+            var frameStopCycle = GetLiveFrameStopCycle();
+            while (targetCycle >= frameStopCycle)
             {
-                StartLiveFrame(_liveFrameStartCycle + PalFrameCycles);
+                StartLiveFrame(frameStopCycle);
+                frameStopCycle = GetLiveFrameStopCycle();
             }
 
             _liveCycle = Math.Max(_liveCycle, targetCycle);
@@ -998,15 +1012,15 @@ namespace CopperMod.Amiga
                 (offset >= 0x180 && offset < 0x1C0);
         }
 
-        private void InvalidateLiveCaptureFrom(long cycle)
+        private void InvalidateLiveCaptureFrom(long cycle, ushort offset)
         {
-            if (!_liveFrameValid || cycle < _liveFrameStartCycle || cycle > _liveFrameStartCycle + PalFrameCycles)
+            if (!_liveFrameValid || cycle < _liveFrameStartCycle || cycle > GetLiveFrameStopCycle())
             {
                 return;
             }
 
             var row = Math.Clamp(GetOutputRowForCycle(_liveFrameStartCycle, cycle), 0, LowResOutputHeight - 1);
-            var invalidateRow = ShouldPreserveCompletedLiveRowForInvalidation(row)
+            var invalidateRow = ShouldPreserveCompletedLiveRowForInvalidation(row, offset)
                 ? Math.Min(row + 1, LowResOutputHeight)
                 : row;
             for (var y = invalidateRow; y < LowResOutputHeight; y++)
@@ -1047,11 +1061,17 @@ namespace CopperMod.Amiga
             InvalidateLiveWorkCycle();
         }
 
-        private bool ShouldPreserveCompletedLiveRowForInvalidation(int row)
+        private bool ShouldPreserveCompletedLiveRowForInvalidation(int row, ushort offset)
         {
             if (!IsLiveLineValid(row))
             {
                 return false;
+            }
+
+            offset = (ushort)(offset & 0x01FE);
+            if (offset >= 0x180 && offset < 0x1C0)
+            {
+                return true;
             }
 
             var state = _liveLineStates[row];
@@ -1133,13 +1153,13 @@ namespace CopperMod.Amiga
 
             if (!_liveFrameValid ||
                 _liveFrameStartCycle >= nextFrameStartCycle ||
-                _liveCapturedThroughCycle < Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles) - 1)
+                _liveCapturedThroughCycle < Math.Min(nextFrameStartCycle, GetLiveFrameStopCycle()) - 1)
             {
                 RecordArchiveReject(TimelineRejectReason.FrameIncomplete);
                 return;
             }
 
-            var frameStopCycle = Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles);
+            var frameStopCycle = Math.Min(nextFrameStartCycle, GetLiveFrameStopCycle());
             if (!_displayTimeline.IsValidForFrame(_liveFrameStartCycle))
             {
                 RecordArchiveReject(TimelineRejectReason.TimelineInvalid);
@@ -1188,7 +1208,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var frameStopCycle = Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles);
+            var frameStopCycle = Math.Min(nextFrameStartCycle, GetLiveFrameStopCycle());
             if (_liveCapturedThroughCycle < frameStopCycle - 1 ||
                 !_liveFrameInitialStateValid ||
                 _liveFrameWriteOverflowed ||
@@ -1227,7 +1247,7 @@ namespace CopperMod.Amiga
         private void ArchiveLiveSpriteFrameBeforeStarting(long nextFrameStartCycle)
         {
             var frameStopCycle = _liveFrameValid
-                ? Math.Min(nextFrameStartCycle, _liveFrameStartCycle + PalFrameCycles)
+                ? Math.Min(nextFrameStartCycle, GetLiveFrameStopCycle())
                 : nextFrameStartCycle;
             var hasCarryCandidate = SavePreviousLiveSpriteArchiveForCarry();
             if (!_liveFrameValid ||
@@ -1279,7 +1299,7 @@ namespace CopperMod.Amiga
         {
             _carryLiveSpriteFrameCommands.Clear();
             if (!_liveFrameValid ||
-                _previousLiveSpriteFrameStartCycle != _liveFrameStartCycle - PalFrameCycles ||
+                GetFrameStopCycle(_previousLiveSpriteFrameStartCycle) != _liveFrameStartCycle ||
                 _previousLiveSpriteFrameCommands.Count == 0)
             {
                 return false;
@@ -1679,7 +1699,7 @@ namespace CopperMod.Amiga
         {
             if (!_advancingLiveDma ||
                 !_liveFrameValid ||
-                cycle >= _liveFrameStartCycle + PalFrameCycles)
+                cycle >= GetLiveFrameStopCycle())
             {
                 return;
             }
@@ -1849,7 +1869,7 @@ namespace CopperMod.Amiga
             }
 
             var pendingCycle = TryPeekPendingWrite(out var pending) ? pending.Cycle : long.MaxValue;
-            var copperCycle = GetNextLiveCopperCycle(_liveFrameStartCycle + PalFrameCycles);
+            var copperCycle = GetNextLiveCopperCycle(GetLiveFrameStopCycle());
             _liveNextDisplayEventCycle = Math.Min(pendingCycle, copperCycle);
             _liveNextDisplayEventValid = true;
             return _liveNextDisplayEventCycle;
@@ -1978,7 +1998,7 @@ namespace CopperMod.Amiga
             row = -1;
             if (!_liveFrameValid ||
                 cycle < _liveFrameStartCycle ||
-                cycle >= _liveFrameStartCycle + PalFrameCycles)
+                cycle >= GetLiveFrameStopCycle())
             {
                 return false;
             }
@@ -2989,7 +3009,7 @@ namespace CopperMod.Amiga
 
         private long GetNextLiveCopperBarrierCycle()
         {
-            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameStopCycle = GetLiveFrameStopCycle();
             var copperCycle = GetNextLiveCopperCycle(frameStopCycle);
             return copperCycle < frameStopCycle ? copperCycle : long.MaxValue;
         }
@@ -3003,7 +3023,7 @@ namespace CopperMod.Amiga
                 return null;
             }
 
-            var copperCycle = GetNextLiveCopperCycle(Math.Min(targetCycle + 1, _liveFrameStartCycle + PalFrameCycles));
+            var copperCycle = GetNextLiveCopperCycle(Math.Min(targetCycle + 1, GetLiveFrameStopCycle()));
             if (copperCycle == long.MaxValue || copperCycle > targetCycle)
             {
                 return null;
@@ -3024,7 +3044,7 @@ namespace CopperMod.Amiga
                 return null;
             }
 
-            var frameEndCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameEndCycle = GetLiveFrameStopCycle();
             if (currentCycle >= frameEndCycle)
             {
                 return null;
@@ -3121,7 +3141,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var frameEndCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameEndCycle = GetLiveFrameStopCycle();
             if (cycle >= frameEndCycle)
             {
                 EndCopperQuiescentWindow(cycle);
@@ -3294,31 +3314,11 @@ namespace CopperMod.Amiga
             {
                 ApplyPendingWrites(cycle);
                 RefreshLiveLineStateAfterDisplayStateChange(cycle);
-                RecordTimelineFrameWritesAtCycle(cycle);
             }
             finally
             {
                 _currentRenderRow = previousRow;
                 _currentCopperRow = previousCopperRow;
-            }
-        }
-
-        private void RecordTimelineFrameWritesAtCycle(long cycle)
-        {
-            for (var i = _liveFrameWrites.Count - 1; i >= 0; i--)
-            {
-                var write = _liveFrameWrites[i];
-                if (write.Cycle < cycle)
-                {
-                    break;
-                }
-
-                if (write.Cycle != cycle || write.IsCopper)
-                {
-                    continue;
-                }
-
-                RecordTimelineDisplayWrite(write.Cycle, write.Offset, isCopper: false);
             }
         }
 
@@ -3393,7 +3393,7 @@ namespace CopperMod.Amiga
                 return _liveCopperWaitCycle;
             }
 
-            var frameStopCycle = _liveFrameStartCycle + PalFrameCycles;
+            var frameStopCycle = GetLiveFrameStopCycle();
             _liveCopperWaitFirst = _liveCopper.WaitFirst;
             _liveCopperWaitSecond = _liveCopper.WaitSecond;
             _liveCopperWaitStartCycle = _liveCopper.Cycle;
@@ -5042,7 +5042,7 @@ namespace CopperMod.Amiga
             ApplyPendingWrites(useTimedWrites ? frameStartCycle : long.MaxValue);
             var savedPresentationState = useTimedWrites ? SaveDisplayState() : null;
             _renderInterlaceField = useTimedWrites && InterlaceEnabled
-                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                ? GetInterlaceField(frameStartCycle)
                 : 0;
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
@@ -5066,7 +5066,7 @@ namespace CopperMod.Amiga
                 }
                 else if (_copperListPointer != 0 && IsCopperDmaEnabled())
                 {
-                    RenderCopperFrame(bgra, frameStartCycle, frameStartCycle + PalFrameCycles, useTimedWrites);
+                    RenderCopperFrame(bgra, frameStartCycle, GetFrameStopCycle(frameStartCycle), useTimedWrites);
                 }
                 else
                 {
@@ -5112,9 +5112,9 @@ namespace CopperMod.Amiga
             }
         }
 
-        private static long GetPresentationFrameStopCycle(long frameStartCycle, long frameEndCycle)
+        private long GetPresentationFrameStopCycle(long frameStartCycle, long frameEndCycle)
         {
-            var naturalFrameStop = frameStartCycle + PalFrameCycles;
+            var naturalFrameStop = GetFrameStopCycle(frameStartCycle);
             if (frameEndCycle <= frameStartCycle)
             {
                 return naturalFrameStop;
@@ -5122,6 +5122,9 @@ namespace CopperMod.Amiga
 
             return Math.Min(frameEndCycle, naturalFrameStop);
         }
+
+        private int GetInterlaceField(long frameStartCycle)
+            => _bus.GetPalBeamPosition(frameStartCycle).FrameNumber & 1;
 
         private bool TryRenderTimelineFrame(
             Span<uint> bgra,
@@ -5189,13 +5192,11 @@ namespace CopperMod.Amiga
                         FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
                         if (!TryRenderTimelineCachedBitplanes(bgra, row, segment, state, timeline))
                         {
-                            if (!allowStatefulFallback)
+                            _lastTimelineMissingBitplaneFallbackCount++;
+                            if (allowStatefulFallback)
                             {
-                                _lastTimelineFallbackCount++;
-                                return false;
+                                RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
                             }
-
-                            RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
                         }
                     }
                 }
@@ -5228,10 +5229,10 @@ namespace CopperMod.Amiga
             }
         }
 
-        private static int GetTimelineRowStop(long frameStartCycle, long frameStopCycle)
+        private int GetTimelineRowStop(long frameStartCycle, long frameStopCycle)
         {
             var rowStop = LowResOutputHeight;
-            if (frameStopCycle < frameStartCycle + PalFrameCycles)
+            if (frameStopCycle < GetFrameStopCycle(frameStartCycle))
             {
                 rowStop = Math.Clamp(GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1, 0, LowResOutputHeight);
             }
@@ -5265,7 +5266,7 @@ namespace CopperMod.Amiga
             }
 
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
+            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
             for (var row = 0; row < rowStop; row++)
             {
                 if (checkFrameStop &&
@@ -5284,15 +5285,6 @@ namespace CopperMod.Amiga
                 {
                     return TimelineRejectReason.UnsafeLine;
                 }
-
-                for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
-                {
-                    var state = timeline.GetState(line.Segments[segmentIndex].StateIndex);
-                    if (!IsTimelineSegmentFetchComplete(row, state, timeline))
-                    {
-                        return TimelineRejectReason.MissingBitplaneFetch;
-                    }
-                }
             }
 
             if (!IsTimelineSpriteCompleteForRendering(timeline, frameStartCycle, frameStopCycle))
@@ -5306,7 +5298,7 @@ namespace CopperMod.Amiga
         private bool IsTimelineSpriteCompleteForRendering(DisplayFrameTimeline timeline, long frameStartCycle, long frameStopCycle)
         {
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
+            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
             for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
             {
                 var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
@@ -5389,7 +5381,7 @@ namespace CopperMod.Amiga
             bool allowExactCompletionReads)
         {
             var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < frameStartCycle + PalFrameCycles;
+            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
             for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
             {
                 var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
@@ -6477,7 +6469,7 @@ namespace CopperMod.Amiga
             _bitplaneDataSpans.Clear();
             _paletteFrameSpans.Clear();
             _renderInterlaceField = InterlaceEnabled
-                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                ? GetInterlaceField(frameStartCycle)
                 : 0;
             _renderFrameStartCycle = frameStartCycle;
             _renderingLiveCapture = false;
@@ -6535,7 +6527,7 @@ namespace CopperMod.Amiga
             _bitplaneDataSpans.Clear();
             _paletteFrameSpans.Clear();
             _renderInterlaceField = InterlaceEnabled
-                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                ? GetInterlaceField(frameStartCycle)
                 : 0;
             _renderFrameStartCycle = frameStartCycle;
             _renderingLiveCapture = true;
@@ -6632,7 +6624,7 @@ namespace CopperMod.Amiga
             _bitplaneDataSpans.Clear();
             _paletteFrameSpans.Clear();
             _renderInterlaceField = InterlaceEnabled
-                ? (int)((frameStartCycle / PalFrameCycles) & 1)
+                ? GetInterlaceField(frameStartCycle)
                 : 0;
             _renderFrameStartCycle = frameStartCycle;
             _renderingLiveCapture = false;
@@ -6754,10 +6746,10 @@ namespace CopperMod.Amiga
 
         private static int GetCopperWritePixelDelay(ushort offset)
         {
-            // Copper palette writes reach Denise one low-res pixel after the bus event;
+            // Copper palette writes reach Denise two low-res pixels after the bus event;
             // the Copper cycle itself still remains at the data-word grant.
             return offset >= 0x180 && offset < 0x1C0
-                ? 1
+                ? 2
                 : 0;
         }
 
@@ -7538,10 +7530,7 @@ namespace CopperMod.Amiga
 
         private static int GetCopperOutputX(int horizontal, int pixelDelay)
         {
-            var expandedHorizontal = horizontal >= 0xE0
-                ? horizontal + 0x100
-                : horizontal;
-            return Math.Clamp(((expandedHorizontal - DefaultDdfStart) * 2) + pixelDelay, 0, AmigaConstants.PalLowResWidth);
+            return Math.Clamp(((horizontal - DefaultDdfStart) * 2) + pixelDelay, 0, AmigaConstants.PalLowResWidth);
         }
 
         private bool IsCopperBlitterFinishedForWait(ushort second)
@@ -8293,7 +8282,7 @@ namespace CopperMod.Amiga
             row = 0;
             spriteIndex = 0;
             word = 0;
-            if (slotCycle < _liveFrameStartCycle || slotCycle >= _liveFrameStartCycle + PalFrameCycles)
+            if (slotCycle < _liveFrameStartCycle || slotCycle >= GetLiveFrameStopCycle())
             {
                 return false;
             }
@@ -8693,7 +8682,7 @@ namespace CopperMod.Amiga
                 !_liveFrameValid ||
                 _liveTimelineUnsafeForFrame ||
                 cycle < _liveFrameStartCycle ||
-                cycle >= _liveFrameStartCycle + PalFrameCycles)
+                cycle >= GetLiveFrameStopCycle())
             {
                 return;
             }
@@ -8719,7 +8708,7 @@ namespace CopperMod.Amiga
             if (!_advancingLiveDma ||
                 !_liveFrameValid ||
                 cycle < _liveFrameStartCycle ||
-                cycle >= _liveFrameStartCycle + PalFrameCycles)
+                cycle >= GetLiveFrameStopCycle())
             {
                 return;
             }
@@ -9218,7 +9207,7 @@ namespace CopperMod.Amiga
                 _liveFrameValid &&
                 !_liveTimelineUnsafeForFrame &&
                 cycle >= _liveFrameStartCycle &&
-                cycle < _liveFrameStartCycle + PalFrameCycles)
+                cycle < GetLiveFrameStopCycle())
             {
                 _displayTimeline.RecordBitplaneDataSpan(span);
             }
@@ -9588,6 +9577,7 @@ namespace CopperMod.Amiga
             _lastLastDisplayDmaCycle = -1;
             _lastTimelineSegmentCount = 0;
             _lastTimelineFallbackCount = 0;
+            _lastTimelineMissingBitplaneFallbackCount = 0;
             _lastTimelineSpriteCommandCount = 0;
             _lastActiveTimelineFrameCount = 0;
             _lastArchivedTimelineFrameCount = 0;
@@ -13616,6 +13606,7 @@ namespace CopperMod.Amiga
             int[] bitplaneColorCounts,
             int lastTimelineSegmentCount,
             int lastTimelineFallbackCount,
+            int lastTimelineMissingBitplaneFallbackCount,
             int lastTimelineSpriteCommandCount,
             int lastActiveTimelineFrameCount,
             int lastArchivedTimelineFrameCount,
@@ -13738,6 +13729,7 @@ namespace CopperMod.Amiga
             BitplaneColorCounts = bitplaneColorCounts;
             LastTimelineSegmentCount = lastTimelineSegmentCount;
             LastTimelineFallbackCount = lastTimelineFallbackCount;
+            LastTimelineMissingBitplaneFallbackCount = lastTimelineMissingBitplaneFallbackCount;
             LastTimelineSpriteCommandCount = lastTimelineSpriteCommandCount;
             LastActiveTimelineFrameCount = lastActiveTimelineFrameCount;
             LastArchivedTimelineFrameCount = lastArchivedTimelineFrameCount;
@@ -13907,6 +13899,8 @@ namespace CopperMod.Amiga
         public int LastTimelineSegmentCount { get; }
 
         public int LastTimelineFallbackCount { get; }
+
+        public int LastTimelineMissingBitplaneFallbackCount { get; }
 
         public int LastTimelineSpriteCommandCount { get; }
 

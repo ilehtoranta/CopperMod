@@ -1120,7 +1120,9 @@ public sealed class AmigaBootMemoryTests
 		addGListState.A[1] = gadget;
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -438), addGListState));
 
-		boot.SetSyntheticMousePresentationPosition((AmigaConstants.PalLowResOverscanBorderX * 2) + 520, 32 + (184 * 2));
+		boot.SetSyntheticMousePresentationPosition(
+			(AmigaConstants.PalLowResOverscanBorderX * 2) + 520,
+			(AmigaConstants.PalLowResOverscanBorderY * 2) + (184 * 2));
 		boot.SetSyntheticMouseButtons(primaryPressed: true, secondPressed: false);
 		boot.SetSyntheticMouseButtons(primaryPressed: false, secondPressed: false);
 		var getMsgState = new M68kCpuState();

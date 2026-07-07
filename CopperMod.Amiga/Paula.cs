@@ -913,11 +913,6 @@ namespace CopperMod.Amiga
                     break;
                 case 0x08:
                     var volume = value & 0x7F;
-                    if (volume == 0 && (value & 0x7F00) != 0)
-                    {
-                        volume = (value >> 8) & 0x7F;
-                    }
-
                     channel.Volume = Math.Min(64, volume);
                     break;
                 case 0x0A:
@@ -1074,7 +1069,7 @@ namespace CopperMod.Amiga
                 recognitionCycle = _copperInterruptRecognitionCycle;
             }
 
-            return recognitionCycle + AmigaConstants.A500InterruptRecognitionDelayCpuCycles;
+            return recognitionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
         }
 
         private void ApplyModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)

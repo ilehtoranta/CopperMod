@@ -256,12 +256,14 @@ namespace CopperMod.Amiga
         private bool _startupSequenceActive;
         private int _startupSequenceFailAt = 10;
         private bool _kickstartRomBootActive;
+        private readonly RuntimeInstructionBoundary _runtimeInstructionBoundary;
 
         public AmigaBootController(AmigaMachine machine, IAmigaDiskDmaEngine? diskDma = null)
         {
             _machine = machine ?? throw new ArgumentNullException(nameof(machine));
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
             _instructionBoundary = new BootInstructionBoundary(this);
+            _runtimeInstructionBoundary = new RuntimeInstructionBoundary(this);
         }
 
         public AmigaFloppyDrive Drive0 => _machine.Bus.Disk.Drive0;
@@ -279,6 +281,26 @@ namespace CopperMod.Amiga
         public bool AutoRunStartupSequence { get; set; }
 
         public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
+
+        public bool IsCopperStartRuntimeHandoffReady =>
+            !_kickstartRomBootActive &&
+            _bootDiskReadCompleted &&
+            !AutoRunStartupSequence &&
+            !AutoStartWorkbenchDefaultTool &&
+            !_dosBootContinuationStarted &&
+            !_startupSequenceActive &&
+            PendingWorkbenchLaunchRequest == null &&
+            HasEnteredLoadedProgram;
+
+        private bool HasEnteredLoadedProgram
+        {
+            get
+            {
+                var pc = _machine.Cpu.State.ProgramCounter;
+                return pc != 0 &&
+                    (pc < BootBlockAddress || pc >= BootBlockAddress + 1024);
+            }
+        }
 
         public AmigaBootResult BootFromDisk(
             AmigaDiskImage disk,
@@ -524,6 +546,17 @@ namespace CopperMod.Amiga
                 AmigaBootRunMode.ContinueAfterBootDiskRead,
                 targetCycle,
                 reportOverrun: false,
+                beforeDeviceAdvance);
+        }
+
+        public AmigaBootResult ContinueCopperStartRuntimeUntilCycle(
+            long targetCycle,
+            int maxInstructions = 100_000,
+            Action<long, long>? beforeDeviceAdvance = null)
+        {
+            return ExecuteRuntime(
+                maxInstructions,
+                targetCycle,
                 beforeDeviceAdvance);
         }
 
@@ -887,6 +920,54 @@ namespace CopperMod.Amiga
                 _diagnostics);
         }
 
+        private AmigaBootResult ExecuteRuntime(
+            int maxInstructions,
+            long targetCycle,
+            Action<long, long>? beforeDeviceAdvance)
+        {
+            var instructions = 0;
+            var boundary = _runtimeInstructionBoundary;
+            boundary.Reset(beforeDeviceAdvance);
+            try
+            {
+                if (_machine.Cpu is IM68kBatchCore batchCore)
+                {
+                    instructions = batchCore.ExecuteInstructions(maxInstructions, targetCycle, boundary);
+                }
+                else
+                {
+                    while (!_machine.Cpu.State.Halted &&
+                        instructions < maxInstructions &&
+                        _machine.Cpu.State.Cycles < targetCycle &&
+                        boundary.BeforeInstruction())
+                    {
+                        var previousCycle = _machine.Cpu.State.Cycles;
+                        _machine.Cpu.ExecuteInstruction();
+                        boundary.AfterInstruction(previousCycle, _machine.Cpu.State.Cycles);
+                        instructions++;
+                    }
+                }
+            }
+            catch (UnsupportedM68kOpcodeException ex)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_UNSUPPORTED_OPCODE", DescribeCpuFault(ex.Message)));
+                _machine.Cpu.State.Halted = true;
+            }
+            catch (AmigaEmulationException ex)
+            {
+                _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_BOOT_FAULT", DescribeCpuFault(ex.Message)));
+                _machine.Cpu.State.Halted = true;
+            }
+
+            return new AmigaBootResult(
+                BootBlockAddress,
+                BootEntryAddress,
+                _machine.Cpu.State.ProgramCounter,
+                instructions,
+                completedBootBlock: false,
+                _diagnostics);
+        }
+
         private sealed class BootInstructionBoundary :
             IM68kTraceBatchDiagnosticsBoundary,
             IM68kStoppedCpuFastForwardBoundary,
@@ -1048,6 +1129,105 @@ namespace CopperMod.Amiga
                     return false;
                 }
 
+                var previousCycle = state.Cycles;
+                if (targetCycle <= previousCycle)
+                {
+                    return false;
+                }
+
+                var interruptMask = (state.StatusRegister >> 8) & 0x07;
+                var wakeCycle = _owner._machine.Bus.GetNextStoppedCpuWakeCandidateCycle(
+                    previousCycle,
+                    targetCycle,
+                    interruptMask);
+                wakeCycle = Math.Clamp(wakeCycle, previousCycle + 1, targetCycle);
+                advancedCycles = wakeCycle - previousCycle;
+                state.Cycles = wakeCycle;
+                AfterInstruction(previousCycle, wakeCycle);
+                return true;
+            }
+        }
+
+        private sealed class RuntimeInstructionBoundary :
+            IM68kTraceBatchDiagnosticsBoundary,
+            IM68kStoppedCpuFastForwardBoundary,
+            IM68kPureCpuTraceBatchBoundary,
+            IM68kBusAccessTraceBatchBoundary
+        {
+            private readonly AmigaBootController _owner;
+            private Action<long, long>? _beforeDeviceAdvance;
+
+            public RuntimeInstructionBoundary(AmigaBootController owner)
+            {
+                _owner = owner;
+            }
+
+            public void Reset(Action<long, long>? beforeDeviceAdvance)
+            {
+                _beforeDeviceAdvance = beforeDeviceAdvance;
+            }
+
+            public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
+
+            public bool BeforeInstruction() => true;
+
+            public void AfterInstruction(long previousCycle, long currentCycle)
+                => AfterInstructionBatch(previousCycle, currentCycle, 1);
+
+            public bool TryBeginPureCpuTraceBatch(
+                M68kCpuState state,
+                long targetCycle,
+                out long batchTargetCycle)
+            {
+                batchTargetCycle = targetCycle;
+                if (targetCycle <= state.Cycles)
+                {
+                    return false;
+                }
+
+                var interruptMask = (state.StatusRegister >> 8) & 0x07;
+                batchTargetCycle = _owner._machine.Bus.GetNextCpuBatchWakeCandidateCycle(
+                    state.Cycles,
+                    targetCycle,
+                    interruptMask,
+                    out var wakeSource);
+                LastTraceBatchWakeSource = wakeSource;
+                batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle);
+                return batchTargetCycle > state.Cycles;
+            }
+
+            public void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
+
+            public bool TryBeginBusAccessTraceBatch(
+                M68kCpuState state,
+                long targetCycle,
+                out long batchTargetCycle)
+                => TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+
+            public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
+
+            private void AfterInstructionBatch(long previousCycle, long currentCycle, int instructionCount)
+            {
+                if (instructionCount <= 0)
+                {
+                    return;
+                }
+
+                _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
+                _owner.AdvanceSyntheticVBlankInterruptServers(previousCycle, currentCycle);
+                var interruptMask = (_owner._machine.Cpu.State.StatusRegister >> 8) & 0x07;
+                _owner._machine.Bus.AdvanceHardwareEventsTo(currentCycle, interruptMask);
+                _owner._machine.DispatchPendingHardwareInterrupt();
+            }
+
+            public bool TryFastForwardStoppedInstruction(
+                M68kCpuState state,
+                long targetCycle,
+                out long advancedCycles)
+            {
+                advancedCycles = 0;
                 var previousCycle = state.Cycles;
                 if (targetCycle <= previousCycle)
                 {

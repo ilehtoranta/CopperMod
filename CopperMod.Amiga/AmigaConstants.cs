@@ -21,8 +21,8 @@ namespace CopperMod.Amiga
         public const int A500PalCpuCyclesPerRasterLine = A500PalCpuCyclesPerColorClock * A500PalColorClocksPerRasterLine;
         public const int A500PalCpuCyclesPerFrame = A500PalCpuCyclesPerRasterLine * A500PalRasterLines;
         public const double A500PalVBlankHz = A500PalCpuClockHz / A500PalCpuCyclesPerFrame;
-        public const int A500InterruptRecognitionDelayColorClocks = 65;
-        public const int A500InterruptRecognitionDelayCpuCycles = A500InterruptRecognitionDelayColorClocks * A500PalCpuCyclesPerColorClock;
+        public const int A500IntreqToIplDelayDmaCycles = 4;
+        public const int A500IntreqToIplDelayCpuCycles = A500IntreqToIplDelayDmaCycles * A500PalCpuCyclesPerColorClock;
         public const int A500CopperIntreqDelayColorClocks = 2;
         public const int A500CopperIntreqDelayCpuCycles = A500CopperIntreqDelayColorClocks * A500PalCpuCyclesPerColorClock;
         public const ushort IntreqDiskBlock = 0x0002;
@@ -46,7 +46,7 @@ namespace CopperMod.Amiga
         // Deep PAL overscan is asymmetric horizontally: the standard display
         // starts 32 low-res pixels into a 358-pixel capture field.
         public const int PalLowResOverscanBorderX = 32;
-        public const int PalLowResOverscanBorderY = 16;
+        public const int PalLowResOverscanBorderY = 18;
         public const int PalLowResWidth = 358;
         public const int PalLowResHeight = 285;
         public const int PalHighResWidth = 716;

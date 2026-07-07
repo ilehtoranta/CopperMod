@@ -89,13 +89,11 @@ namespace CopperMod.Amiga
 
         private bool TryGetChipRamOffset(uint address, out int offset)
         {
-            address = NormalizeAddress(address);
             return _chipRam.TryGetOffset(address, out offset);
         }
 
         private int GetChipRamOffset(uint address)
         {
-            address = NormalizeAddress(address);
             return _chipRam.GetOffset(address);
         }
 
@@ -131,19 +129,16 @@ namespace CopperMod.Amiga
 
         private bool IsRomOverlayAddress(uint address)
         {
-            address = NormalizeAddress(address);
             return _mappedMemory.IsRomOverlayAddress(address, _romOverlayEnabled);
         }
 
         private bool TryReadRomOverlayByte(uint address, out byte value)
         {
-            address = NormalizeAddress(address);
             return _mappedMemory.TryReadRomOverlayByte(address, _romOverlayEnabled, out value);
         }
 
         private bool TryReadRomOverlayWord(uint address, out ushort value)
         {
-            address = NormalizeAddress(address);
             return _mappedMemory.TryReadRomOverlayWord(address, _romOverlayEnabled, out value);
         }
     }

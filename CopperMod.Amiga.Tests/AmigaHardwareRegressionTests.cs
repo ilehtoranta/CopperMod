@@ -54,20 +54,41 @@ public sealed class AmigaHardwareRegressionTests
 	}
 
 	[Fact]
-	public void AmigaBusUsesTwentyFourBitAddressAliasesForCustomRegisters()
+	public void PaulaWordVolumeWritesUseLowByteOnly()
 	{
 		var bus = CreateComponentBus();
-		bus.ChipRam[0x1000] = 0x7F;
-		bus.ChipRam[0x1001] = 0x7F;
-		bus.WriteWord(0x6CDFF0A0, 0x0000, 0);
-		bus.WriteWord(0x6CDFF0A2, 0x1000, 0);
-		bus.WriteWord(0x6CDFF0A4, 0x0001, 0);
-		bus.WriteWord(0x6CDFF0A6, 0x0001, 0);
-		bus.WriteWord(0x6CDFF0A8, 0x0020, 0);
-		bus.WriteWord(0x6CDFF096, 0x8201, 0);
-		var buffer = new float[2];
+
+		bus.WriteWord(0x00DFF0A8, 0x2000, 0);
 
 		bus.Paula.AdvanceTo(0);
+		var channel = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(0, channel.Volume);
+	}
+
+	[Fact]
+	public void M68000CpuUsesTwentyFourBitAddressAliasesForCustomRegisters()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: false, realFastRamSize: 0x10000);
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x7F;
+		var pc = AmigaConstants.A500RealFastRamBase;
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x0000, 0x6CDFF0A0);
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x1000, 0x6CDFF0A2);
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x0001, 0x6CDFF0A4);
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x0001, 0x6CDFF0A6);
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x0020, 0x6CDFF0A8);
+		WriteMoveWordImmediateAbsoluteLong(bus, ref pc, 0x8201, 0x6CDFF096);
+		bus.WriteHostWord(pc, 0x4E71);
+		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(AmigaConstants.A500RealFastRamBase, 0x00003000);
+
+		for (var i = 0; i < 6; i++)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		bus.Paula.AdvanceTo(cpu.State.Cycles);
 		var channel = bus.Paula.GetChannelSnapshot(0);
 
 		Assert.Equal(0x1000u, channel.Location);
@@ -77,11 +98,6 @@ public sealed class AmigaHardwareRegressionTests
 		Assert.True(channel.DmaEnabled);
 		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x0A0);
 		Assert.Contains(bus.CustomRegisterWrites, write => write.Address == 0x096);
-
-		bus.Paula.RenderSample(38, buffer, 0, 2);
-
-		Assert.True(buffer[0] > 0.01f);
-		Assert.Equal(0.0f, buffer[1]);
 	}
 
 	[Fact]
@@ -132,5 +148,18 @@ public sealed class AmigaHardwareRegressionTests
 	private static AmigaBus CreateComponentBus()
 	{
 		return new AmigaBus(enableLiveAgnusDma: false);
+	}
+
+	private static void WriteMoveWordImmediateAbsoluteLong(
+		AmigaBus bus,
+		ref uint pc,
+		ushort value,
+		uint address)
+	{
+		bus.WriteHostWord(pc, 0x33FC); // MOVE.W #imm,(xxx).L
+		bus.WriteHostWord(pc + 2, value);
+		bus.WriteHostWord(pc + 4, (ushort)(address >> 16));
+		bus.WriteHostWord(pc + 6, (ushort)address);
+		pc += 8;
 	}
 }

@@ -22,6 +22,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private const long JitM68040BootRunAheadCyclesPerFrame = 250_000_000;
 	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 	private const string RunningStatusText = "boot program running:";
+	private const string TraceBusAccessesEnvironmentVariable = "COPPER_AMIGA_TRACE_BUS_ACCESSES";
+	private const string VAmigaTsTraceWritesEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_WRITES";
 	private readonly AmigaMachine _machine;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
@@ -40,6 +42,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private CopperScreenPresentationOptions _presentationOptions;
 	private bool _workbenchHandoffPending;
 	private bool _copperBenchRequestPending;
+	private bool _copperStartRuntimeHandoff;
 	private AmigaDiskImage? _pendingDiskImage;
 	private AmigaDiskImage? _initialDiskImageOverride;
 	private string? _pendingDiskPath;
@@ -323,6 +326,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithHardwareSpecialization(true);
 		}
 
+		if (IsEnvironmentSwitchEnabled(TraceBusAccessesEnvironmentVariable) ||
+			IsEnvironmentSwitchEnabled(VAmigaTsTraceWritesEnvironmentVariable))
+		{
+			machineOptions.WithBusAccessLogging(true);
+		}
+
 		if (startupOptions.HardDrives.Count != 0)
 		{
 			machineOptions.WithHardfiles(startupOptions.HardDrives.Select(drive => new AmigaHardfileConfiguration(
@@ -358,6 +367,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		return machineOptions;
+	}
+
+	private static bool IsEnvironmentSwitchEnabled(string name)
+	{
+		var value = Environment.GetEnvironmentVariable(name);
+		return value != null &&
+			(value == "1" ||
+				value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+				value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+				value.Equals("on", StringComparison.OrdinalIgnoreCase));
 	}
 
 	private static int GetStartupFloppyDriveCount(CopperScreenStartupOptions startupOptions)
@@ -512,6 +531,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(fullPath);
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
+		_copperStartRuntimeHandoff = false;
 		DiskPath = fullPath;
 		_diskName = CopperScreenDiskImageArchive.GetDisplayName(fullPath);
 		if (_bootAttempted && markChanged)
@@ -825,6 +845,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		InvalidateInterlacePresentationHistory();
 		_workbenchHandoffPending = false;
 		_copperBenchRequestPending = false;
+		_copperStartRuntimeHandoff = false;
 		_debugSnapshot = null;
 		_firePulseFrames = 0;
 		_pendingDiskImage = null;
@@ -1178,6 +1199,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 					_boot.StartBootFromDisk(disk ?? throw new InvalidOperationException("A disk image is required to boot this profile."));
 				}
 
+				_copperStartRuntimeHandoff = false;
 				ApplyConfiguredBootDriveWriteProtection();
 				InsertConfiguredExternalDisks(DiskPath);
 
@@ -1204,15 +1226,28 @@ internal sealed class CopperScreenEmulator : IDisposable
 			}
 		}
 
-		_targetCycle += PalFrameCycles;
-		var executionTargetCycle = GetBootExecutionTargetCycle(_targetCycle);
-		BeginFrameAudio(_targetCycle);
+		var frameStartCycle = _targetCycle;
+		var frameTargetCycle = GetPresentationFrameStopCycle(frameStartCycle);
+		_targetCycle = frameTargetCycle;
+		var executionTargetCycle = GetBootExecutionTargetCycle(frameTargetCycle);
+		BeginFrameAudio(frameTargetCycle);
 		AmigaBootResult result;
 		var cpuStart = Stopwatch.GetTimestamp();
-		result = _boot.ContinueExecutionUntilCycle(
-			executionTargetCycle,
-			GetBootMaxInstructionsPerFrame(),
-			_renderFrameAudioUntil);
+		if (_copperStartRuntimeHandoff)
+		{
+			result = _boot.ContinueCopperStartRuntimeUntilCycle(
+				executionTargetCycle,
+				GetBootMaxInstructionsPerFrame(),
+				_renderFrameAudioUntil);
+		}
+		else
+		{
+			result = _boot.ContinueExecutionUntilCycle(
+				executionTargetCycle,
+				GetBootMaxInstructionsPerFrame(),
+				_renderFrameAudioUntil);
+		}
+
 		LastFrameTiming = LastFrameTiming with
 		{
 			CpuMilliseconds = Stopwatch.GetElapsedTime(cpuStart).TotalMilliseconds
@@ -1235,17 +1270,26 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return;
 		}
 
+		if (!_copperStartRuntimeHandoff &&
+			!_profile.UsesKickstartRom &&
+			_boot.IsCopperStartRuntimeHandoffReady)
+		{
+			_copperStartRuntimeHandoff = true;
+		}
+
 		var hardwareStart = Stopwatch.GetTimestamp();
-		_machine.Bus.AdvanceHardwareTo(_targetCycle);
+		_machine.Bus.AdvanceHardwareTo(frameTargetCycle);
 		LastFrameTiming = LastFrameTiming with
 		{
 			HardwareMilliseconds = Stopwatch.GetElapsedTime(hardwareStart).TotalMilliseconds
 		};
 
+		var presentationFrameStopCycle = GetCompletedPresentationFrameStopCycle(frameStartCycle, frameTargetCycle);
+		_targetCycle = presentationFrameStopCycle;
 		if (renderPresentation)
 		{
 			var displayStart = Stopwatch.GetTimestamp();
-			RenderPresentationFrame(_targetCycle - PalFrameCycles, _targetCycle, presentationFramebuffer);
+			RenderPresentationFrame(frameStartCycle, presentationFrameStopCycle, presentationFramebuffer);
 			LastFrameTiming = LastFrameTiming with
 			{
 				DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
@@ -1268,6 +1312,23 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		return Math.Max(frameTargetCycle, _machine.Cpu.State.Cycles + JitM68040BootRunAheadCyclesPerFrame);
+	}
+
+	internal long GetPresentationFrameStopCycle(long frameStartCycle)
+		=> _machine.Bus.GetPalFrameStopCycle(frameStartCycle);
+
+	private int GetPresentationFrameNumber(long frameStartCycle)
+		=> _machine.Bus.GetPalBeamPosition(frameStartCycle).FrameNumber;
+
+	private int GetCompletedPresentationFrameNumber(long frameStopCycle)
+		=> _machine.Bus.GetPalBeamPosition(Math.Max(0, frameStopCycle - 1)).FrameNumber;
+
+	private long GetCompletedPresentationFrameStopCycle(long frameStartCycle, long predictedFrameStopCycle)
+	{
+		var actualFrameStopCycle = GetPresentationFrameStopCycle(frameStartCycle);
+		return actualFrameStopCycle <= predictedFrameStopCycle
+			? actualFrameStopCycle
+			: predictedFrameStopCycle;
 	}
 
 	[HotPath]
@@ -1485,7 +1546,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			MemoryMarshal.Cast<int, uint>(_interlacePresentationFrame.AsSpan()),
 			frameStartCycle,
 			frameEndCycle);
-		var interlaceField = (int)((frameStartCycle / PalFrameCycles) & 1);
+		var interlaceField = GetPresentationFrameNumber(frameStartCycle) & 1;
 		if (!_interlacePresentationFrameValid)
 		{
 			SeedMissingInterlaceFieldRows(
@@ -1530,7 +1591,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		Framebuffer.AsSpan().CopyTo(_interlacePresentationFrame);
-		var interlaceField = (int)(((_targetCycle - PalFrameCycles) / PalFrameCycles) & 1);
+		var interlaceField = GetCompletedPresentationFrameNumber(_targetCycle) & 1;
 		if (!_interlacePresentationFrameValid)
 		{
 			SeedMissingInterlaceFieldRows(
