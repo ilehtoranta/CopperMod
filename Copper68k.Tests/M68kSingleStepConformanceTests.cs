@@ -65,7 +65,7 @@ public sealed class M68kSingleStepConformanceTests
 			{
 				RunCase(file, test, validateCycles, backend);
 				executed++;
-				if (limit is > 0 && executed >= limit)
+				if (executed >= limit)
 				{
 					_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
 					return;
