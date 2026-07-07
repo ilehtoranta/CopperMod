@@ -2008,11 +2008,12 @@ namespace Copper68k
                 : State.Cycles;
             State.Cycles = previousCycle;
             _compiledInstructionCycleFloorActive = false;
+            var faultStatus = ResolveM68040CompiledFaultStatus(fault);
             var bypass = State.M68040Mmu.BypassTranslation;
             State.M68040Mmu.BypassTranslation = true;
             try
             {
-                State.M68040Mmu.Status = fault.Status;
+                State.M68040Mmu.Status = faultStatus;
                 RaiseM68040Format0Exception(2, stackedProgramCounter, 34);
             }
             finally
@@ -2024,6 +2025,41 @@ namespace Copper68k
             _counters.SideExits++;
             RemoveTrace(instructionPc);
             return true;
+        }
+
+        private uint ResolveM68040CompiledFaultStatus(M68040MmuFault fault)
+        {
+            if (fault.Status != 0)
+            {
+                return fault.Status;
+            }
+
+            var supervisor = (State.StatusRegister & M68kCpuState.Supervisor) != 0;
+            try
+            {
+                if (!State.M68040Mmu.TryTranslate(
+                    fault.LogicalAddress,
+                    fault.AccessKind,
+                    fault.Write,
+                    supervisor,
+                    ReadPhysicalLongForM68040Mmu,
+                    out _,
+                    out var refreshedFault) &&
+                    refreshedFault.Status != 0)
+                {
+                    return refreshedFault.Status;
+                }
+            }
+            catch (M68kEmulationException)
+            {
+            }
+            catch (IndexOutOfRangeException)
+            {
+            }
+
+            return 0x0000_0010u |
+                (fault.Write ? 0x0000_0100u : 0) |
+                (supervisor ? 0x0000_0200u : 0);
         }
 
         private void RaiseM68040Format0Exception(int vector, uint stackedProgramCounter, int cycles)
@@ -2683,7 +2719,8 @@ namespace Copper68k
                 v2Trace,
                 SelectTraceDelegatePolicy(compilationOptions, reason, v2Trace),
                 _v2BusGraphEnabled,
-                _cpuModel == M68kJitCpuModel.M68040);
+                compilationOptions.ForceTranslatedMemoryAccesses,
+                compilationOptions.M68040MmuGeneration);
             return true;
         }
 
@@ -3008,7 +3045,8 @@ namespace Copper68k
                 v2Trace,
                 SelectTraceDelegatePolicy(input.Options, input.Reason, v2Trace),
                 input.Options.V2BusGraphEnabled,
-                input.Options.ForceTranslatedMemoryAccesses);
+                input.Options.ForceTranslatedMemoryAccesses,
+                input.Options.M68040MmuGeneration);
             return true;
         }
 
@@ -3051,7 +3089,8 @@ namespace Copper68k
                 codeWords,
                 v2Trace,
                 input.Options.V2BusGraphEnabled,
-                input.Options.ForceTranslatedMemoryAccesses);
+                input.Options.ForceTranslatedMemoryAccesses,
+                input.Options.M68040MmuGeneration);
             return true;
         }
 
@@ -11075,7 +11114,8 @@ namespace Copper68k
                 _v2BusGraphEnabled || _v2BusAccessEnabled,
                 workerGraphExpansionEnabled,
                 _cpuModel == M68kJitCpuModel.M68040,
-                _cpuModel);
+                _cpuModel,
+                GetCurrentM68040MmuGeneration());
 
         private int CalculateAsyncCompilePriority(
             uint root,
@@ -11246,6 +11286,12 @@ namespace Copper68k
                 return;
             }
 
+            if (plan.M68040MmuGeneration != GetCurrentM68040MmuGeneration())
+            {
+                _counters.AsyncCompletedDiscardedStale++;
+                return;
+            }
+
             AddTrace(result.Trace.Value.Trace);
             _counters.AsyncCompletedInstalled++;
             _counters.CompiledTraces++;
@@ -11301,6 +11347,12 @@ namespace Copper68k
             }
 
             if (!TracePlanGenerationMatches(plan.CodeStart, plan.ByteLength, plan.StartGeneration, plan.EndGeneration, plan.CodeWords))
+            {
+                _counters.AsyncCompletedDiscardedStale++;
+                return;
+            }
+
+            if (plan.M68040MmuGeneration != GetCurrentM68040MmuGeneration())
             {
                 _counters.AsyncCompletedDiscardedStale++;
                 return;
@@ -11455,6 +11507,9 @@ namespace Copper68k
             var baseCycles = size == M68kOperandSize.Long ? 8 : 4;
             return baseCycles + GetEaOperandCyclesForTiming(source, size) + GetMoveDestinationEaCyclesForTiming(destination);
         }
+
+        private uint GetCurrentM68040MmuGeneration()
+            => _cpuModel == M68kJitCpuModel.M68040 ? State.M68040Mmu.Generation : 0;
 
         internal static int GetEaOperandCyclesForTiming(M68kDecodedEa ea, M68kOperandSize size)
         {
@@ -12583,7 +12638,8 @@ namespace Copper68k
                 V2TracePlan v2Trace,
                 M68kTraceDelegatePolicy delegatePolicy,
                 bool v2BusGraphEnabled,
-                bool forceTranslatedMemoryAccesses)
+                bool forceTranslatedMemoryAccesses,
+                uint m68040MmuGeneration)
             {
                 Root = root;
                 RequestedTier = requestedTier;
@@ -12600,6 +12656,7 @@ namespace Copper68k
                 DelegatePolicy = delegatePolicy;
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                M68040MmuGeneration = m68040MmuGeneration;
             }
 
             public uint Root { get; }
@@ -12631,6 +12688,8 @@ namespace Copper68k
             public bool V2BusGraphEnabled { get; }
 
             public bool ForceTranslatedMemoryAccesses { get; }
+
+            public uint M68040MmuGeneration { get; }
         }
 
         private readonly struct M68kTraceCompilationOptions
@@ -12644,7 +12703,8 @@ namespace Copper68k
                 bool v2BusGraphEnabled,
                 bool workerGraphExpansionEnabled,
                 bool forceTranslatedMemoryAccesses,
-                M68kJitCpuModel cpuModel)
+                M68kJitCpuModel cpuModel,
+                uint m68040MmuGeneration)
             {
                 V2Enabled = v2Enabled;
                 V2Tier3Enabled = v2Tier3Enabled;
@@ -12655,6 +12715,7 @@ namespace Copper68k
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
                 ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
                 CpuModel = cpuModel;
+                M68040MmuGeneration = m68040MmuGeneration;
             }
 
             public bool V2Enabled { get; }
@@ -12674,6 +12735,8 @@ namespace Copper68k
             public bool ForceTranslatedMemoryAccesses { get; }
 
             public M68kJitCpuModel CpuModel { get; }
+
+            public uint M68040MmuGeneration { get; }
         }
 
         private readonly struct M68kTraceCompilationInput
@@ -12746,7 +12809,8 @@ namespace Copper68k
                 ushort[] codeWords,
                 V2TracePlan v2Trace,
                 bool v2BusGraphEnabled,
-                bool forceTranslatedMemoryAccesses)
+                bool forceTranslatedMemoryAccesses,
+                uint m68040MmuGeneration)
             {
                 Root = root;
                 Tier = tier;
@@ -12758,6 +12822,7 @@ namespace Copper68k
                 V2Trace = v2Trace;
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                M68040MmuGeneration = m68040MmuGeneration;
             }
 
             public uint Root { get; }
@@ -12779,6 +12844,8 @@ namespace Copper68k
             public bool V2BusGraphEnabled { get; }
 
             public bool ForceTranslatedMemoryAccesses { get; }
+
+            public uint M68040MmuGeneration { get; }
         }
 
         private readonly struct M68kTraceCompileSuccess

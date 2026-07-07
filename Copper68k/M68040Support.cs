@@ -336,6 +336,8 @@ namespace Copper68k
 
         public bool BypassTranslation { get; set; }
 
+        public uint Generation { get; private set; }
+
         public bool Enabled => (TranslationControl & TranslationEnable) != 0;
 
         public void Reset()
@@ -349,6 +351,7 @@ namespace Copper68k
             DataTransparentTranslation1 = 0;
             Status = 0;
             BypassTranslation = false;
+            Generation = 0;
             _atc.Clear();
         }
 
@@ -363,6 +366,7 @@ namespace Copper68k
             }
 
             register = value;
+            Generation++;
             Flush();
         }
 
@@ -445,22 +449,9 @@ namespace Copper68k
             out uint physicalAddress,
             out M68040MmuFault fault)
         {
-            if (candidate <= 0x00FF_FFFFu)
-            {
-                physicalAddress = candidate;
-                fault = default;
-                return true;
-            }
-
-            if (accessKind != M68kBusAccessKind.CpuInstructionFetch)
-            {
-                physicalAddress = candidate & 0x00FF_FFFFu;
-                fault = default;
-                return true;
-            }
-
-            physicalAddress = 0;
-            return Fault(candidate, accessKind, write, supervisor: true, 0x0000_0010, out fault);
+            physicalAddress = candidate;
+            fault = default;
+            return true;
         }
 
         private bool Fault(

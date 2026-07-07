@@ -107,20 +107,6 @@ namespace Copper68k
                 return true;
             }
 
-            var trapStubs = _snapshot.HostTrapStubAddresses;
-            if (trapStubs == null)
-            {
-                return false;
-            }
-
-            for (var i = 0; i < trapStubs.Length; i++)
-            {
-                if (trapStubs[i] == address)
-                {
-                    return true;
-                }
-            }
-
             return false;
         }
 
@@ -129,6 +115,11 @@ namespace Copper68k
             if (!TryGetOffset(address, 2, out var offset))
             {
                 throw M68kCodeReadException.Instance;
+            }
+
+            if (IsCapturedHostTrapStub(address))
+            {
+                return 0x4AFC;
             }
 
             var bytes = _snapshot.Bytes;
@@ -147,6 +138,13 @@ namespace Copper68k
             words = new ushort[wordCount];
             for (var i = 0; i < words.Length; i++)
             {
+                var wordAddress = NormalizeAddress(address + (uint)(i * 2));
+                if (IsCapturedHostTrapStub(wordAddress))
+                {
+                    words[i] = 0x4AFC;
+                    continue;
+                }
+
                 var byteOffset = offset + (i * 2);
                 var high = byteOffset < _snapshot.Bytes.Length ? _snapshot.Bytes[byteOffset] : 0;
                 var low = byteOffset + 1 < _snapshot.Bytes.Length ? _snapshot.Bytes[byteOffset + 1] : 0;
@@ -201,6 +199,26 @@ namespace Copper68k
 
             offset = (int)distance;
             return offset >= 0 && offset + byteLength <= _snapshot.Bytes.Length;
+        }
+
+        private bool IsCapturedHostTrapStub(uint address)
+        {
+            var trapStubs = _snapshot.HostTrapStubAddresses;
+            if (trapStubs == null)
+            {
+                return false;
+            }
+
+            address = NormalizeAddress(address);
+            for (var i = 0; i < trapStubs.Length; i++)
+            {
+                if (NormalizeAddress(trapStubs[i]) == address)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static uint NormalizeAddress(uint address)
