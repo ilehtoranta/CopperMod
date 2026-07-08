@@ -1314,6 +1314,7 @@ namespace Copper68k
         private M68kBusAccessKind _dataReadFaultAccessKind;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
+        private int _nextCpuDataAccessDelayCycles;
         private bool _deferredCpuBusBatchExecutionActive;
         private bool _deferredCpuInstructionTimingStarted;
         private bool _plannedInterpreterCountersEnabled;
@@ -2415,7 +2416,14 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
                 State.SetNegativeZero(value, size);
                 AddMovePostincrementWriteFaultFloor(0, destinationRegister, size);
+                AddInstructionCycles(8);
+                if ((State.A[destinationRegister] & 1) == 0)
+                {
+                    DelayNextCpuDataAccess(4);
+                }
+
                 WritePostincrement(destinationRegister, value, size);
+                return;
             }
             else if (size == M68kOperandSize.Long)
             {
@@ -3959,14 +3967,24 @@ namespace Copper68k
             }
 
             State.Stopped = false;
+            var interruptStartCycle = Math.Max(State.Cycles, _cpuRetireBusCycle);
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((savedStatusRegister & ~M68kCpuState.Trace & 0xF8FF) |
                 ((level & 7) << 8) |
                 M68kCpuState.Supervisor);
             PushLong(State.ProgramCounter);
             PushWord(savedStatusRegister);
-            SetProgramCounterAndFlushPrefetch(ReadLong(vectorAddress));
-            AddCycles(44);
+            var target = ReadLong(vectorAddress);
+            SetProgramCounterAndFlushPrefetch(target);
+            FullPrefetch(target);
+            var completedCycle = interruptStartCycle + 44;
+            if (State.Cycles < completedCycle)
+            {
+                State.Cycles = completedCycle;
+            }
+
+            _cpuBusCycle = Math.Max(_cpuBusCycle, State.Cycles);
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
         }
 
         private bool DecodeMove(ushort opcode)
@@ -7140,8 +7158,18 @@ namespace Copper68k
                 State.Cycles = cycle;
             }
 
+            if (_nextCpuDataAccessDelayCycles != 0)
+            {
+                cycle += _nextCpuDataAccessDelayCycles;
+                _nextCpuDataAccessDelayCycles = 0;
+            }
+
             return cycle;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void DelayNextCpuDataAccess(int cycles)
+            => _nextCpuDataAccessDelayCycles = cycles;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long BeginPrefetchBusAccessCycle()
@@ -7319,6 +7347,7 @@ namespace Copper68k
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, startCycle);
             _pendingInternalCycles = 0;
             _consumeWithoutPrefetch = false;
+            _nextCpuDataAccessDelayCycles = 0;
             _deferredCpuInstructionTimingStarted = _deferredCpuBusBatchExecutionActive;
             if (_deferredCpuInstructionTimingStarted)
             {
