@@ -4142,6 +4142,16 @@ namespace Copper68k
                 AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(cycles, destMode, destReg));
             }
 
+            if (size == M68kOperandSize.Word &&
+                srcMode == 0 &&
+                destMode == 3 &&
+                !dest.IsRegister &&
+                (dest.Address & 1) == 0)
+            {
+                AddInstructionCycles(8);
+                DelayNextCpuDataAccess(4);
+            }
+
             dest.Write(value);
             if (moveWritesMemory && !dest.IsRegister)
             {
