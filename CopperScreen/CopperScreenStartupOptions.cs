@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using CopperMod.Amiga;
 
 namespace CopperScreen;
@@ -17,6 +22,7 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentDiagnostics,
 		bool deferredCpuBusBatch,
 		bool deferredCpuBusBatchVerify,
+		bool cpuWaitSlotReference,
 		bool hardwareSpecialization,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenInputOptions input,
@@ -36,6 +42,7 @@ internal sealed class CopperScreenStartupOptions
 		CopperQuiescentDiagnostics = copperQuiescentDiagnostics;
 		DeferredCpuBusBatch = deferredCpuBusBatch;
 		DeferredCpuBusBatchVerify = deferredCpuBusBatchVerify;
+		CpuWaitSlotReference = cpuWaitSlotReference;
 		HardwareSpecialization = hardwareSpecialization;
 		FloppyDriveAudio = floppyDriveAudio;
 		Input = input;
@@ -68,6 +75,8 @@ internal sealed class CopperScreenStartupOptions
 
 	public bool DeferredCpuBusBatchVerify { get; }
 
+	public bool CpuWaitSlotReference { get; }
+
 	public bool HardwareSpecialization { get; }
 
 	public FloppyDriveAudioOptions FloppyDriveAudio { get; }
@@ -96,6 +105,7 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentDiagnostics = false,
 		bool deferredCpuBusBatch = false,
 		bool deferredCpuBusBatchVerify = false,
+		bool cpuWaitSlotReference = false,
 		bool hardwareSpecialization = false)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
@@ -114,6 +124,7 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			cpuWaitSlotReference,
 			hardwareSpecialization,
 			floppyDriveAudio,
 			input,
@@ -141,6 +152,7 @@ internal sealed class CopperScreenStartupOptions
 			false,
 			false,
 			false,
+			false,
 			profile.FloppyDriveAudio,
 			profile.Input,
 			baseDirectory,
@@ -162,6 +174,7 @@ internal sealed class CopperScreenStartupOptions
 		var copperQuiescentDiagnostics = false;
 		var deferredCpuBusBatch = false;
 		var deferredCpuBusBatchVerify = false;
+		var cpuWaitSlotReference = false;
 		var hardwareSpecialization = false;
 		bool? floppySoundsEnabledOverride = null;
 		FloppyDriveAudioMode? floppySoundModeOverride = null;
@@ -248,6 +261,12 @@ internal sealed class CopperScreenStartupOptions
 			{
 				deferredCpuBusBatch = true;
 				deferredCpuBusBatchVerify = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-wait-slot-reference"))
+			{
+				cpuWaitSlotReference = true;
 				continue;
 			}
 
@@ -451,6 +470,7 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			cpuWaitSlotReference,
 			hardwareSpecialization,
 			floppyDriveAudio,
 			profile.Input,

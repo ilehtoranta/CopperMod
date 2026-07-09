@@ -208,7 +208,7 @@ namespace CopperMod.Amiga
             CompleteCleanMark(targetCycle);
         }
 
-        internal void MarkSlotContendedCleanThroughCpuBatchCatchup(long targetCycle)
+        internal void MarkSlotContendedCleanThroughCpuGrant(long targetCycle)
             => MarkClean(Math.Max(0, targetCycle), SlotContendedMemoryAccessMask);
 
         private void CompleteCleanMark(long targetCycle)
@@ -290,7 +290,7 @@ namespace CopperMod.Amiga
         // unpredictable overhead and an extra branch per iteration that defeats branch
         // prediction. Profiling data for slot-contended drains is still collected at the
         // outer DrainTo level via the profiling partial class.
-        private void DrainSlotContendedAccess(long targetCycle)
+        internal void DrainSlotContendedAccess(long targetCycle)
         {
             if (CanSkipSlotContendedDrain(targetCycle))
             {
@@ -607,6 +607,9 @@ namespace CopperMod.Amiga
         }
 
         private void ProcessSlotContendedEventsAt(long cycle)
+            => ProcessSlotContendedEventsAt(cycle, useCpuWaitBlitterMicroOps: false);
+
+        private void ProcessSlotContendedEventsAt(long cycle, bool useCpuWaitBlitterMicroOps)
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
@@ -629,7 +632,14 @@ namespace CopperMod.Amiga
                 _agnusEvents++;
             }
 
-            if (_bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
+            if (useCpuWaitBlitterMicroOps && _bus.Blitter.CanUseCpuWaitAreaMicroOps)
+            {
+                if (_bus.Blitter.AdvanceCpuWaitAreaMicroOpTo(cycle))
+                {
+                    _blitterEvents++;
+                }
+            }
+            else if (_bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
             {
                 _bus.Blitter.AdvanceTo(cycle);
                 _blitterEvents++;

@@ -85,6 +85,41 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, ReadVposrAt(bus, 0) & 0x8000);
 	}
 
+	[Fact(Skip = "Diagnostic hypothesis only: a naive VPOSR bit-8 latch breaks synccpu and worsens vprobe2 raw output.")]
+	public void VposrHighBitCrossingMatchesVAmigaTsVprobe2SampleWindow()
+	{
+		var bus = new AmigaBus();
+		var lineStart = 0x102L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var sampleHorizontals = new[]
+		{
+			0x0F, 0x1B, 0x27, 0x33,
+			0x3F, 0x4B, 0x57, 0x63,
+			0x6F, 0x7B, 0x87, 0x93,
+			0x9F, 0xAB, 0xB7, 0xC3
+		};
+		var expected = new ushort[]
+		{
+			0x8000, 0x8000, 0x8000, 0x8000,
+			0x8000, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001
+		};
+
+		var actual = sampleHorizontals
+			.Select(horizontal => ReadVposrAt(bus, lineStart + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock)))
+			.ToArray();
+		var diagnostic = string.Join(
+			"; ",
+			sampleHorizontals.Select((horizontal, index) =>
+			{
+				var cycle = lineStart + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
+				var beam = bus.GetPalBeamPosition(cycle);
+				return $"{index}:h={horizontal:X2}/v{beam.BeamLine:X3}h{beam.BeamHorizontal:X2} actual=0x{actual[index]:X4} expected=0x{expected[index]:X4}";
+			}));
+
+		Assert.True(expected.SequenceEqual(actual), diagnostic);
+	}
+
 	[Fact]
 	public void VposwForcedShortPalFrameRequestsVerticalBlankAfterLine312()
 	{
@@ -758,11 +793,11 @@ public sealed class AmigaBusTimingTests
 
 		bus.WriteLong(0x00001000, 0x12345678, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 
-		Assert.Equal(20 + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(20 + (4 * AgnusChipSlotScheduler.SlotCycles), cycle);
 		Assert.Equal(cycle, bus.Agnus.CaptureSnapshot().CurrentCycle);
 		Assert.Equal(0x12345678u, BigEndian.ReadUInt32(bus.ChipRam, 0x1000, "long chip write"));
-		Assert.Equal(0x0000, bus.ReadChipWordForPresentation(0x1002, 23));
-		Assert.Equal(0x5678, bus.ReadChipWordForPresentation(0x1002, 24));
+		Assert.Equal(0x0000, bus.ReadChipWordForPresentation(0x1002, 25));
+		Assert.Equal(0x5678, bus.ReadChipWordForPresentation(0x1002, 26));
 	}
 
 	[Fact]
@@ -775,18 +810,18 @@ public sealed class AmigaBusTimingTests
 
 		bus.WriteLong(0x00DFF180, 0x0F00000F, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 
-		Assert.Equal(20 + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(20 + (4 * AgnusChipSlotScheduler.SlotCycles), cycle);
 		Assert.Collection(
 			bus.CustomRegisterWrites,
 			write =>
 			{
-				Assert.Equal(20, write.Cycle);
+				Assert.Equal(22, write.Cycle);
 				Assert.Equal(0x180, write.Address);
 				Assert.Equal(0x0F00, write.Value);
 			},
 			write =>
 			{
-				Assert.Equal(24, write.Cycle);
+				Assert.Equal(26, write.Cycle);
 				Assert.Equal(0x182, write.Address);
 				Assert.Equal(0x000F, write.Value);
 			});
@@ -804,7 +839,7 @@ public sealed class AmigaBusTimingTests
 		var vhposr = bus.ReadWord(0x00DFF006, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.Equal(5, (vhposr >> 8) & 0x00FF);
-		Assert.Equal(15, vhposr & 0x00FF);
+		Assert.Equal(19, vhposr & 0x00FF);
 		Assert.Equal(requestedCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
 	}
 
@@ -823,10 +858,10 @@ public sealed class AmigaBusTimingTests
 		Assert.DoesNotContain(6, observed);
 		Assert.DoesNotContain(8, observed);
 		Assert.DoesNotContain(10, observed);
-		Assert.Contains(5, observed);
-		Assert.Contains(7, observed);
 		Assert.Contains(9, observed);
 		Assert.Contains(11, observed);
+		Assert.Contains(13, observed);
+		Assert.Contains(15, observed);
 
 		static int ReadTimedVhposrHorizontal(int physicalHorizontal)
 		{
@@ -863,8 +898,108 @@ public sealed class AmigaBusTimingTests
 		var beam = bus.ReadLong(0x00DFF004, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.Equal(5u, (beam >> 8) & 0x01FF);
-		Assert.Equal(17u, beam & 0x00FF);
+		Assert.Equal(21u, beam & 0x00FF);
 		Assert.Equal(requestedCycle + (4 * AgnusChipSlotScheduler.SlotCycles), cycle);
+	}
+
+	[Fact]
+	public void TimedCpuBeamRegisterReadsEncodeGrantedBeamPosition()
+	{
+		var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var longFrameCycles = AmigaConstants.A500PalLongRasterLines * lineCycles;
+		var requestedCycles = new[]
+		{
+			0L,
+			1L,
+			(5L * lineCycles) + (222L * AgnusChipSlotScheduler.SlotCycles),
+			(5L * lineCycles) + (223L * AgnusChipSlotScheduler.SlotCycles),
+			(5L * lineCycles) + (226L * AgnusChipSlotScheduler.SlotCycles),
+			longFrameCycles - 4,
+			longFrameCycles - 2,
+		};
+
+		foreach (var requestedCycle in requestedCycles)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			var cycle = requestedCycle;
+
+			var vhposr = bus.ReadWord(0x00DFF006, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+			var read = Assert.Single(bus.CustomRegisterReads);
+			var expected = EncodeVhposr(bus.GetPalBeamPosition(read.GrantedCycle));
+			Assert.Equal(0x006, read.Address);
+			Assert.Equal(read.GrantedCycle, read.SampleCycle);
+			Assert.Equal(expected, vhposr);
+			Assert.Equal(expected, read.Value);
+		}
+	}
+
+	[Fact]
+	public void TimedCpuVhposrReadbackMatchesProbe10WrapSamples()
+	{
+		var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var longFrameCycles = AmigaConstants.A500PalLongRasterLines * lineCycles;
+		var line312Start = 312L * lineCycles;
+		var samples = new[]
+		{
+			(Line: 312, RequestedH: 190, Expected: (ushort)0x38C2),
+			(Line: 312, RequestedH: 200, Expected: (ushort)0x38CC),
+			(Line: 312, RequestedH: 210, Expected: (ushort)0x38D6),
+			(Line: 312, RequestedH: 220, Expected: (ushort)0x38E0),
+			(Line: 0, RequestedH: 4, Expected: (ushort)0x000D),
+			(Line: 0, RequestedH: 14, Expected: (ushort)0x0017),
+			(Line: 0, RequestedH: 24, Expected: (ushort)0x0021)
+		};
+
+		foreach (var sample in samples)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			var requestedCycle = sample.Line == 312
+				? line312Start + (sample.RequestedH * AgnusChipSlotScheduler.SlotCycles)
+				: longFrameCycles + (sample.RequestedH * AgnusChipSlotScheduler.SlotCycles);
+			var cycle = requestedCycle;
+
+			var vhposr = bus.ReadWord(0x00DFF006, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+			var read = Assert.Single(bus.CustomRegisterReads);
+			var beam = bus.GetPalBeamPosition(read.SampleCycle);
+			var diagnostic =
+				$"requested={requestedCycle}/line={sample.Line}/h={sample.RequestedH}, " +
+				$"sample={read.SampleCycle}/v{beam.BeamLine}h{beam.BeamHorizontal}, " +
+				$"actual=0x{vhposr:X4}, expected=0x{sample.Expected:X4}";
+			Assert.Equal(sample.Expected, vhposr);
+			Assert.Equal(sample.Expected, read.Value);
+			Assert.True(read.SampleCycle == read.GrantedCycle, diagnostic);
+		}
+	}
+
+	[Fact]
+	public void TimedCpuVposrReadEncodesGrantedFrameLengthAndLineHighBit()
+	{
+		var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var cases = new[]
+		{
+			(ForcedVposw: (ushort)0x8001, RequestedCycle: 0L),
+			(ForcedVposw: (ushort)0x8001, RequestedCycle: 0x100L * lineCycles),
+			(ForcedVposw: (ushort)0x0001, RequestedCycle: 0L),
+			(ForcedVposw: (ushort)0x0001, RequestedCycle: 0x100L * lineCycles),
+		};
+
+		foreach (var testCase in cases)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			bus.WriteWord(0x00DFF02A, testCase.ForcedVposw);
+			var cycle = testCase.RequestedCycle;
+
+			var vposr = bus.ReadWord(0x00DFF004, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+			var read = Assert.Single(bus.CustomRegisterReads);
+			var expected = EncodeVposr(bus.GetPalBeamPosition(read.GrantedCycle));
+			Assert.Equal(0x004, read.Address);
+			Assert.Equal(read.GrantedCycle, read.SampleCycle);
+			Assert.Equal(expected, vposr);
+			Assert.Equal(expected, read.Value);
+		}
 	}
 
 	[Fact]
@@ -964,6 +1099,165 @@ public sealed class AmigaBusTimingTests
 		var candidate = bus.Display.GetNextLiveDisplayWakeCandidateCycle(fetchCycle - 2, fetchCycle);
 
 		Assert.Equal(fetchCycle, candidate);
+	}
+
+	[Fact]
+	public void DmaconBitplaneDisableBeforeFirstFetchSuppressesSameLineDmaSlots()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var firstFetchCycle = LowResPlane1FetchCycle(row);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		var disableRequestCycle = firstFetchCycle - (4 * AgnusChipSlotScheduler.SlotCycles);
+		bus.WriteWord(0x00DFF096, 0x0100, disableRequestCycle);
+		bus.AdvanceDmaTo(lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var bitplaneFetches = bus.BusAccesses
+			.Where(access =>
+				access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.GrantedCycle >= firstFetchCycle &&
+				access.GrantedCycle < lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine)
+			.ToArray();
+		var dmaconWrites = bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x096)
+			.ToArray();
+		var diagnostic = string.Join(
+			"; ",
+			bitplaneFetches.Select(access =>
+			$"fetch 0x{access.Request.Address:X6}@{access.Request.RequestedCycle}->{access.GrantedCycle}")) +
+			$" | firstFetch={firstFetchCycle}, disableRequest={disableRequestCycle}, " +
+			$"dmacon=[{string.Join(",", dmaconWrites.Select(write => $"0x{write.Value:X4}@{write.Cycle}"))}]";
+
+		Assert.True(bitplaneFetches.Length == 0, diagnostic);
+	}
+
+	[Fact]
+	public void CpuLongDmaconHighWordDisablesBitplaneDmaBeforeSecondWordCompletes()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var firstFetchCycle = LowResPlane1FetchCycle(row);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		var disableRequestCycle = firstFetchCycle - (2 * AgnusChipSlotScheduler.SlotCycles);
+		bus.WriteLong(0x00DFF096, 0x01000000, disableRequestCycle);
+		bus.AdvanceDmaTo(lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var dmaconDisable = Assert.Single(
+			bus.CustomRegisterWrites,
+			write => write.Address == 0x096 && write.Value == 0x0100);
+		var bitplaneFetches = bus.BusAccesses
+			.Where(access =>
+				access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.GrantedCycle >= firstFetchCycle &&
+				access.GrantedCycle < lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine)
+			.ToArray();
+		var diagnostic =
+			$"firstFetch={firstFetchCycle}, disableRequest={disableRequestCycle}, " +
+			$"disableLanded={dmaconDisable.Cycle}, " +
+			$"fetches=[{string.Join(",", bitplaneFetches.Select(access => $"{access.Request.RequestedCycle}->{access.GrantedCycle}"))}]";
+
+		Assert.True(dmaconDisable.Cycle < firstFetchCycle, diagnostic);
+		Assert.True(bitplaneFetches.Length == 0, diagnostic);
+	}
+
+	[Fact]
+	public void LiveDmaScratchCustomLongDmaconHighWordSuppressesBitplaneFetchBeforeSecondWord()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var firstFetchCycle = LowResPlane1FetchCycle(row);
+		ConfigureLiveOneBitplaneDma(bus);
+		var scratchSlots = new AgnusHrmSlotEngine(captureSlotDebug: true);
+		var requestCycle = firstFetchCycle - (2 * AgnusChipSlotScheduler.SlotCycles);
+
+		var supported = bus.Display.TryRunCpuWaitLiveDmaScratch(
+			scratchSlots,
+			AmigaBusAccessKind.CpuDataWrite,
+			AmigaBusAccessTarget.CustomRegisters,
+			0x00DFF096,
+			AmigaBusAccessSize.Long,
+			requestCycle,
+			isWrite: true,
+			OcsLiveDmaScratchCpuWrite.Long(
+				AmigaBusAccessTarget.CustomRegisters,
+				0x00DFF096,
+				0x01000000),
+			out var result);
+
+		var diagnostic =
+			$"{result.ToDetailString()}, firstFetch={firstFetchCycle}, request={requestCycle}, " +
+			$"grant={result.GrantedCycle}, second={result.SecondWordCycle}, completion={result.CompletedCycle}";
+		Assert.True(supported, diagnostic);
+		Assert.True(result.GrantedCycle < firstFetchCycle, diagnostic);
+		Assert.True(result.SecondWordCycle >= firstFetchCycle, diagnostic);
+		Assert.Equal(0, result.BitplaneFetches);
+	}
+
+	[Fact]
+	public void LiveDmaScratchCanGrantCpuBetweenCopperInstructionWords()
+	{
+		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x0180);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0x0F00);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0xFFFF);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2406, 0xFFFE);
+		bus.WriteWord(0x00DFF080, 0x0000);
+		bus.WriteWord(0x00DFF082, 0x2400);
+		bus.WriteWord(0x00DFF096, 0x8280);
+		bus.EnableLiveAgnusDma();
+		bus.AdvanceDmaTo(0);
+		var scratchSlots = new AgnusHrmSlotEngine(captureSlotDebug: true);
+		var requestCycle = Assert.IsType<long>(
+			bus.Display.GetNextLiveDisplayWakeCandidateCycle(0, 32));
+
+		var supported = bus.Display.TryRunCpuWaitLiveDmaScratch(
+			scratchSlots,
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x00001000,
+			AmigaBusAccessSize.Word,
+			requestedCycle: requestCycle,
+			isWrite: false,
+			OcsLiveDmaScratchCpuWrite.None,
+			out var result);
+
+		var diagnostic = result.ToDetailString();
+		Assert.True(supported, diagnostic);
+		Assert.Equal(requestCycle + AgnusChipSlotScheduler.SlotCycles, result.GrantedCycle);
+		Assert.Equal(2, result.CopperSteps);
+	}
+
+	[Fact]
+	public void CpuDmaconBitplaneDisableRequestedBeforeFetchLandsAfterContendedFetch()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var firstFetchCycle = LowResPlane1FetchCycle(row);
+		ConfigureLiveOneBitplaneDma(bus);
+
+		var disableRequestCycle = firstFetchCycle - AgnusChipSlotScheduler.SlotCycles;
+		bus.WriteWord(0x00DFF096, 0x0100, disableRequestCycle);
+		bus.AdvanceDmaTo(firstFetchCycle + 16);
+
+		var dmaconDisable = Assert.Single(
+			bus.CustomRegisterWrites,
+			write => write.Address == 0x096 && write.Value == 0x0100);
+		var firstFetch = Assert.Single(
+			bus.BusAccesses,
+			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
+				access.GrantedCycle == firstFetchCycle);
+		var diagnostic =
+			$"disableRequest={disableRequestCycle}, disableLanded={dmaconDisable.Cycle}, " +
+			$"fetch={firstFetch.Request.RequestedCycle}->{firstFetch.GrantedCycle}";
+
+		Assert.True(dmaconDisable.Cycle > firstFetch.GrantedCycle, diagnostic);
 	}
 
 	[Fact]
@@ -1340,6 +1634,1013 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
 		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
 		Assert.Equal(3, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
+	}
+
+	[Fact]
+	public void CopperWaitFf81Level1IntreqWriteDocumentsBeamPosition()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		const uint copperList = 0x2400;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0xFFFE),
+			(0x09C, 0x8008),
+			(0x4001, 0xFFFE),
+			(0x100, 0x2200),
+			(0xFF81, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		bus.AdvanceDmaTo(line256Start + AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var beam = bus.GetPalBeamPosition(intreqWrite.Cycle);
+		var copperAccesses = bus.BusAccesses
+			.Where(access =>
+				access.Request.Requester == AmigaBusRequester.Copper &&
+				access.GrantedCycle >= intreqWrite.Cycle - 64 &&
+				access.GrantedCycle <= intreqWrite.Cycle + 32)
+			.ToArray();
+		var accessText = string.Join(
+			"; ",
+			copperAccesses.Select(access =>
+			{
+				var grant = bus.GetPalBeamPosition(access.GrantedCycle);
+				return $"{access.Request.Kind}/0x{access.Request.Address:X6} " +
+					$"req={access.Request.RequestedCycle - line256Start},grant={access.GrantedCycle - line256Start}/" +
+					$"v{grant.BeamLine:X3}h{grant.BeamHorizontal:X2}";
+			}));
+		var diagnostic =
+			$"intreq={intreqWrite.Cycle}/deltaToLine256={intreqWrite.Cycle - line256Start}/" +
+			$"v{beam.BeamLine:X3}h{beam.BeamHorizontal:X2}, " +
+			$"accesses=[{accessText}]";
+
+		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
+		Assert.Equal(0x0FF, beam.BeamLine);
+		Assert.Equal(0x88, beam.BeamHorizontal);
+		Assert.Equal(4, copperAccesses.Length);
+		Assert.Equal(new long[] { -186, -182, -178, -174 }, copperAccesses
+			.Select(access => access.GrantedCycle - line256Start)
+			.ToArray());
+		Assert.Contains("0x002416", diagnostic);
+	}
+
+	[Fact]
+	public void CopperWaitFf81Level1IntreqBecomesCpuVisibleAfterGenericPaulaDelay()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true);
+		const uint copperList = 0x2400;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0xFFFE),
+			(0x09C, 0x8008),
+			(0x4001, 0xFFFE),
+			(0x100, 0x2200),
+			(0xFF81, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		bus.AdvanceDmaTo(line256Start + AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		var intreqBeam = bus.GetPalBeamPosition(intreqWrite.Cycle);
+		var visibleBeam = bus.GetPalBeamPosition(cpuVisibleCycle);
+		var diagnostic =
+			$"intreq={intreqWrite.Cycle}/delta={intreqWrite.Cycle - line256Start}/" +
+			$"v{intreqBeam.BeamLine:X3}h{intreqBeam.BeamHorizontal:X2}, " +
+			$"visible={cpuVisibleCycle}/delta={cpuVisibleCycle - line256Start}/" +
+			$"v{visibleBeam.BeamLine:X3}h{visibleBeam.BeamHorizontal:X2}, " +
+			$"delay={cpuVisibleCycle - intreqWrite.Cycle}";
+
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & intreqLevel1);
+		Assert.Equal(1, bus.Paula.GetHighestPendingInterruptLevel());
+		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 174, cpuVisibleCycle);
+		Assert.Equal(AmigaConstants.A500IntreqToIplDelayCpuCycles, cpuVisibleCycle - intreqWrite.Cycle);
+		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
+		Assert.Equal(1, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
+		Assert.Equal(0x0FF, intreqBeam.BeamLine);
+		Assert.Equal(0x88, intreqBeam.BeamHorizontal);
+		Assert.Equal(0x0FF, visibleBeam.BeamLine);
+		Assert.Equal(0x8C, visibleBeam.BeamHorizontal);
+		Assert.Contains("delay=8", diagnostic);
+	}
+
+	[Fact]
+	public void LiveCopperIntreqDispatchesAtCpuBoundaryAfterRecognitionDelay()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x0001, 0x00FE),
+			(0x009C, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		bus.WriteLong((24u + 3u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3000);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqCopper));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		bus.AdvanceDmaTo(AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			(write.Value & AmigaConstants.IntreqCopper) != 0);
+		var cpuVisibleCycle = intreqWrite.Cycle +
+			AmigaConstants.A500CopperIntreqDelayCpuCycles +
+			AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		machine.Cpu.State.Cycles = cpuVisibleCycle - 1;
+		Assert.False(machine.DispatchPendingHardwareInterrupt());
+		Assert.Equal(0x1000u, machine.Cpu.State.ProgramCounter);
+
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+
+		Assert.Equal(3, (machine.Cpu.State.StatusRegister >> 8) & 7);
+		Assert.Equal(handlerAddress, machine.Cpu.State.ProgramCounter);
+		Assert.Equal(cpuVisibleCycle + 44, machine.Cpu.State.Cycles);
+		Assert.Equal(3, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
+		var interruptPhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle)
+			.ToArray();
+		var timeline = BuildCpuBusPhaseTimeline(interruptPhases, cpuVisibleCycle);
+		var expected =
+			"pc=0x0000,CpuDataWrite,0x002FFE,r+0..+4,g+2 | " +
+			"pc=0x0000,CpuDataWrite,0x002FFC,r+4..+8,g+6 | " +
+			"pc=0x0000,CpuDataWrite,0x002FFA,r+8..+12,g+10 | " +
+			"pc=0x0000,CpuDataRead,0x00006C,r+12..+20,g+14 | " +
+			"pc=0x0000,CpuInstructionFetch,0x002000,r+20..+24,g+22 | " +
+			"pc=0x0000,CpuInstructionFetch,0x002002,r+24..+28,g+26";
+		Assert.Equal(expected, timeline);
+	}
+
+	[Fact]
+	public void VAmigaTsProbe10Irq1PrologueDocumentsCurrentVhposrCadence()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x0001, 0x00FE),
+			(0x009C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsProbe10Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.A[3] = 0x00DFF006;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		bus.AdvanceDmaTo(AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+
+		for (var i = 0; i < 40; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(16)
+			.ToArray();
+		var actual = reads.Select(read => read.Value).ToArray();
+		var deltas = reads.Skip(1)
+			.Zip(reads, (current, previous) => current.SampleCycle - previous.SampleCycle)
+			.ToArray();
+		var colorWrites = bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x180)
+			.ToArray();
+		var intreqClears = bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x09C && write.Value == 0x3FFF)
+			.ToArray();
+		var phaseOrigin = cpuVisibleCycle;
+		var phases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= phaseOrigin &&
+				phase.CpuPhase.RequestedCycle <= (reads.Length == 0 ? phaseOrigin + 200 : reads[0].CompletedCycle + 80))
+			.ToArray();
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}, visible={cpuVisibleCycle}, " +
+			$"colorWrites=[{string.Join(",", colorWrites.Select(write => $"0x{write.Value:X4}@{write.Cycle}"))}], " +
+			$"intreqClears=[{string.Join(",", intreqClears.Select(write => $"0x{write.Value:X4}@{write.Cycle}"))}], " +
+			$"values=[{string.Join(",", actual.Select(value => $"0x{value:X4}"))}], " +
+			$"deltas=[{string.Join(",", deltas)}], " +
+			$"phases={BuildCpuBusPhaseTimeline(phases, phaseOrigin)}";
+
+		Assert.Equal(16, reads.Length);
+		Assert.Equal(
+			new ushort[]
+			{
+				0x004F, 0x0057, 0x005F, 0x0067,
+				0x006F, 0x0077, 0x007F, 0x0087,
+				0x008F, 0x0097, 0x009F, 0x00A7,
+				0x00AF, 0x00B7, 0x00BF, 0x00C2
+			},
+			actual);
+		Assert.Equal(Enumerable.Repeat(16L, 15).ToArray(), deltas);
+		Assert.True(colorWrites.Any(write => write.Value == 0x0300), diagnostic);
+		Assert.True(intreqClears.Length >= 1, diagnostic);
+	}
+
+	[Fact]
+	public void VAmigaTsProbe10Irq1AtRasterLine38DocumentsDisplayDmaCadence()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const ushort intreqLevel1 = 0x0004;
+		var slotAudit = new List<AgnusSlotScheduleAuditEntry>();
+		bus.SetSlotScheduleAuditSink(slotAudit.Add);
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0x00FE),
+			(0x02A, 0x8001),
+			(0x4001, 0x00FE),
+			(0x100, 0x2200),
+			(0x3885, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsProbe10Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.A[3] = 0x00DFF006;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8380);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x4000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x5000);
+
+		var targetLineCycle = AmigaConstants.A500PalCpuCyclesPerFrame +
+			(0x39L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		bus.AdvanceDmaTo(targetLineCycle);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+
+		for (var i = 0; i < 40; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(16)
+			.ToArray();
+		var actual = reads.Select(read => read.Value).ToArray();
+		var deltas = reads.Skip(1)
+			.Zip(reads, (current, previous) => current.SampleCycle - previous.SampleCycle)
+			.ToArray();
+		var bitplaneSlots = bus.BusAccesses.Count(access =>
+			access.Request.Requester == AmigaBusRequester.Bitplane &&
+			access.GrantedCycle >= intreqWrite.Cycle - 128 &&
+			(reads.Length == 0 || access.GrantedCycle <= reads[^1].CompletedCycle + 64));
+		var bitplaneGrants = bus.BusAccesses
+			.Where(access =>
+				access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.GrantedCycle >= cpuVisibleCycle &&
+				access.GrantedCycle <= cpuVisibleCycle + 220)
+			.Select(access => AgnusHrmOcsSlotTable.GetHorizontal(access.GrantedCycle))
+			.Take(48)
+			.ToArray();
+		var auditSlots = slotAudit
+			.Where(entry =>
+				entry.SlotCycle >= cpuVisibleCycle &&
+				entry.SlotCycle <= cpuVisibleCycle + 180)
+			.Select(entry =>
+				$"+{entry.SlotCycle - cpuVisibleCycle}/0x{AgnusHrmOcsSlotTable.GetHorizontal(entry.SlotCycle):X2}:{entry.Owner}/{entry.Requester}" +
+				(entry.ReplacedExisting ? $"> {entry.ReplacedOwner}" : string.Empty))
+			.ToArray();
+		var phaseOrigin = cpuVisibleCycle;
+		var phases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= phaseOrigin &&
+				phase.CpuPhase.RequestedCycle <= (reads.Length == 0 ? phaseOrigin + 240 : reads[1].CompletedCycle + 80))
+			.ToArray();
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}, visible={cpuVisibleCycle}, bitplaneSlots={bitplaneSlots}, " +
+			$"bitplaneH=[{string.Join(",", bitplaneGrants.Select(horizontal => $"0x{horizontal:X2}"))}], " +
+			$"audit=[{string.Join(",", auditSlots)}], " +
+			$"values=[{string.Join(",", actual.Select(value => $"0x{value:X4}"))}], " +
+			$"deltas=[{string.Join(",", deltas)}], " +
+			$"phases={BuildCpuBusPhaseTimeline(phases, phaseOrigin)}";
+
+		Assert.Equal(16, reads.Length);
+		Assert.True(bitplaneSlots == 70, diagnostic);
+		Assert.True(
+			actual.SequenceEqual(
+				new ushort[]
+				{
+					0x38DC, 0x3802, 0x390F, 0x3917,
+					0x391F, 0x3927, 0x392F, 0x3937,
+					0x393F, 0x394D, 0x395D, 0x396D,
+					0x397D, 0x398D, 0x399D, 0x39AD
+				}),
+			diagnostic);
+		Assert.True(
+			deltas.SequenceEqual(new long[] { 16, 18, 16, 16, 16, 16, 16, 16, 28, 32, 32, 32, 32, 32, 32 }),
+			diagnostic);
+		Assert.Contains(auditSlots, slot => slot.Contains("0x9D:Cpu/Cpu", StringComparison.Ordinal));
+		Assert.DoesNotContain("> Cpu", diagnostic);
+	}
+
+	[Fact]
+	public void VAmigaTsProbe10Irq1AtRasterLine38StoresVhposrResultBuffer()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0x00FE),
+			(0x02A, 0x8001),
+			(0x4001, 0x00FE),
+			(0x100, 0x2200),
+			(0x3885, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsProbe10Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.A[3] = 0x00DFF006;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8380);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x4000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x5000);
+
+		var targetLineCycle = AmigaConstants.A500PalCpuCyclesPerFrame +
+			(0x39L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		bus.AdvanceDmaTo(targetLineCycle);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			(write.Value & intreqLevel1) != 0);
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+
+		for (var i = 0; i < 40; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var expected = CurrentVAmigaTsProbe10Irq1ExpectedValues();
+		var vAmigaTsExpected = VAmigaTsProbe10ExpectedValues();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, expected.Length);
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(expected.Length)
+			.ToArray();
+		var readValues = reads.Select(read => read.Value).ToArray();
+		var storeWrites = bus.CpuBusPhases
+			.Where(phase =>
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.Address >= valuesAddress &&
+				phase.CpuPhase.Address < valuesAddress + (expected.Length * 2))
+			.ToArray();
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}, visible={cpuVisibleCycle}, " +
+			$"vAmigaTS=[{string.Join(",", vAmigaTsExpected.Select(value => $"0x{value:X4}"))}], " +
+			$"expected=[{string.Join(",", expected.Select(value => $"0x{value:X4}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
+			$"reads=[{string.Join(",", readValues.Select(value => $"0x{value:X4}"))}], " +
+			$"stores={BuildCpuBusPhaseTimeline(storeWrites, cpuVisibleCycle)}";
+
+		Assert.Equal(expected.Length, reads.Length);
+		Assert.False(vAmigaTsExpected.SequenceEqual(stored), diagnostic);
+		Assert.True(expected.SequenceEqual(readValues), diagnostic);
+		Assert.True(expected.SequenceEqual(stored), diagnostic);
+		Assert.Equal(expected.Length, storeWrites.Length);
+	}
+
+	[Fact]
+	public void VAmigaTsProbe10SourceCopperIrq1StoresVhposrResultBuffer()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		var slotAudit = new List<AgnusSlotScheduleAuditEntry>();
+		bus.SetSlotScheduleAuditSink(slotAudit.Add);
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0xFFFE),
+			(0x09C, 0x8008),
+			(0x4001, 0xFFFE),
+			(0x100, 0x2200),
+			(0xFFDF, 0xFFFE),
+			(0x1001, 0xFFFE),
+			(0x02A, 0x8001),
+			(0x3885, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0x100, 0x0200),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsProbe10Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.A[3] = 0x00DFF006;
+		bus.WriteWord(0x00DFF09A, 0xC004);
+		bus.WriteWord(0x00DFF096, 0x8080);
+		bus.WriteWord(0x00DFF096, 0x8100);
+		bus.WriteWord(0x00DFF096, 0x8200);
+		bus.WriteWord(0x00DFF096, 0x8400);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF08E, 0x2C81);
+		bus.WriteWord(0x00DFF090, 0xF4C1);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x4000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x5000);
+
+		var targetCycle = AmigaConstants.A500PalCpuCyclesPerFrame +
+			(0x39L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		bus.AdvanceDmaTo(targetCycle - 512);
+		machine.Cpu.State.Cycles = targetCycle - 512;
+
+		var executed = 0;
+		while (executed < 400 &&
+			ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value == 0))
+		{
+			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+			_ = machine.DispatchPendingHardwareInterrupt();
+			machine.Cpu.ExecuteInstruction();
+			executed++;
+		}
+		for (var i = 0; i < 40; i++)
+		{
+			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+			_ = machine.DispatchPendingHardwareInterrupt();
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+
+		var current = CurrentVAmigaTsProbe10SourceCopperExpectedValues();
+		var reference = VAmigaTsProbe10ExpectedValues();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, current.Length);
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(current.Length)
+			.ToArray();
+		var bitplaneGrants = bus.BusAccesses
+			.Where(access =>
+				access.Request.Requester == AmigaBusRequester.Bitplane &&
+				access.GrantedCycle >= cpuVisibleCycle &&
+				access.GrantedCycle <= cpuVisibleCycle + 260)
+			.Select(access => AgnusHrmOcsSlotTable.GetHorizontal(access.GrantedCycle))
+			.ToArray();
+		var auditSlots = slotAudit
+			.Where(entry =>
+				entry.SlotCycle >= cpuVisibleCycle &&
+				entry.SlotCycle <= cpuVisibleCycle + 220)
+			.Select(entry =>
+				$"+{entry.SlotCycle - cpuVisibleCycle}/0x{AgnusHrmOcsSlotTable.GetHorizontal(entry.SlotCycle):X2}:{entry.Owner}/{entry.Requester}/{entry.Target}/{entry.Size}" +
+				(entry.ReplacedExisting ? $"> {entry.ReplacedOwner}" : string.Empty))
+			.ToArray();
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}, visible={cpuVisibleCycle}, " +
+			$"reference=[{string.Join(",", reference.Select(value => $"0x{value:X4}"))}], " +
+			$"current=[{string.Join(",", current.Select(value => $"0x{value:X4}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
+			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle}"))}], " +
+			$"bitplaneH=[{string.Join(",", bitplaneGrants.Select(horizontal => $"0x{horizontal:X2}"))}], " +
+			$"audit=[{string.Join(",", auditSlots)}], " +
+			$"phases={BuildCpuBusPhaseTimeline(bus.CpuBusPhases.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle && phase.CpuPhase.RequestedCycle <= reads[1].CompletedCycle + 12).ToArray(), cpuVisibleCycle)}";
+
+		Assert.True(current.Length == reads.Length, diagnostic);
+		Assert.False(reference.SequenceEqual(stored), diagnostic);
+		Assert.True(current.SequenceEqual(stored), diagnostic);
+	}
+
+	[Fact]
+	public void VAmigaTsStyleCopperBplconEnableDocumentsCurrentBitplaneOrigin()
+	{
+		var bounds = RenderVAmigaTsStyleCopperEnabledBitplaneBounds();
+		var diagnostic =
+			$"bounds=({bounds.MinX},{bounds.FirstLowResRow})-({bounds.MaxX},{bounds.LastLowResRow})";
+
+		Assert.True(bounds.FirstLowResRow >= 0, diagnostic);
+		Assert.Equal(38, bounds.FirstLowResRow);
+	}
+
+	[Fact]
+	public void CopperColor00BandsDocumentCurrentRawOrigin()
+	{
+		var bands = RenderCopperColor00BandRows(
+			(0x20, 0x0F00),
+			(0x40, 0x00F0),
+			(0x60, 0x000F));
+		var diagnostic = string.Join(
+			"; ",
+			bands.Select(band => $"line=0x{band.Line:X2}/color=0x{band.Color:X4}/row={band.FirstLowResRow}"));
+
+		Assert.Equal(6, bands.Single(band => band.Line == 0x20).FirstLowResRow);
+		Assert.Equal(38, bands.Single(band => band.Line == 0x40).FirstLowResRow);
+		Assert.Equal(70, bands.Single(band => band.Line == 0x60).FirstLowResRow);
+		Assert.DoesNotContain("row=-1", diagnostic);
+	}
+
+	[Fact]
+	public void CopperBplconEnableLineSweepDocumentsCurrentBitplaneOrigin()
+	{
+		var samples = new[]
+		{
+			(Line: 0x2C, ExpectedRow: 18),
+			(Line: 0x30, ExpectedRow: 22),
+			(Line: 0x38, ExpectedRow: 30),
+			(Line: 0x40, ExpectedRow: 38),
+			(Line: 0x48, ExpectedRow: 46)
+		};
+		var actual = samples
+			.Select(sample => (sample.Line, Bounds: RenderVAmigaTsStyleCopperEnabledBitplaneBounds(sample.Line)))
+			.ToArray();
+		var diagnostic = string.Join(
+			"; ",
+			actual.Select(sample =>
+				$"line=0x{sample.Line:X2}/bounds=({sample.Bounds.MinX},{sample.Bounds.FirstLowResRow})-({sample.Bounds.MaxX},{sample.Bounds.LastLowResRow})"));
+
+		foreach (var sample in samples)
+		{
+			var bounds = actual.Single(entry => entry.Line == sample.Line).Bounds;
+			Assert.Equal(sample.ExpectedRow, bounds.FirstLowResRow);
+		}
+
+		Assert.DoesNotContain(",-1", diagnostic);
+	}
+
+	[Fact]
+	public void CopperBplconEnableDocumentsFirstBitplaneFetchAndRenderRow()
+	{
+		var probe = RenderVAmigaTsStyleCopperEnabledBitplaneProbe(0x40);
+		var diagnostic =
+			$"firstFetch=0x{probe.FirstFetchAddress:X6}@{probe.FirstFetchCycle}/" +
+			$"v{probe.FirstFetchLine:X3}h{probe.FirstFetchHorizontal:X2}, " +
+			$"bounds=({probe.Bounds.MinX},{probe.Bounds.FirstLowResRow})-({probe.Bounds.MaxX},{probe.Bounds.LastLowResRow})";
+
+		Assert.Equal(0x40, probe.FirstFetchLine);
+		Assert.Equal(0x3F, probe.FirstFetchHorizontal);
+		Assert.Equal(38, probe.Bounds.FirstLowResRow);
+		Assert.Equal(0x4000u, probe.FirstFetchAddress);
+		Assert.DoesNotContain("-1", diagnostic);
+	}
+
+	[Fact(Skip = "vAmigaTS probe10 raw reference contract; current display renderer places this playfield row at low-res row 38.")]
+	public void VAmigaTsStyleCopperBplconEnableShouldMapBitplaneRowZeroToRawRow24()
+	{
+		var bounds = RenderVAmigaTsStyleCopperEnabledBitplaneBounds();
+		var diagnostic =
+			$"bounds=({bounds.MinX},{bounds.FirstLowResRow})-({bounds.MaxX},{bounds.LastLowResRow})";
+
+		Assert.True(bounds.FirstLowResRow >= 0, diagnostic);
+		Assert.Equal(24, bounds.FirstLowResRow);
+	}
+
+	[Fact(Skip = "Hardware reference contract from vAmigaTS probe10; current IRQ1 result buffer is late relative to expected values.")]
+	public void VAmigaTsProbe10Irq1AtRasterLine38ResultBufferMatchesReference()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0x00FE),
+			(0x02A, 0x8001),
+			(0x4001, 0x00FE),
+			(0x100, 0x2200),
+			(0x3885, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsProbe10Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.A[3] = 0x00DFF006;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8380);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x4000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x5000);
+
+		var targetLineCycle = AmigaConstants.A500PalCpuCyclesPerFrame +
+			(0x39L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		bus.AdvanceDmaTo(targetLineCycle);
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			(write.Value & intreqLevel1) != 0);
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+		Assert.True(machine.DispatchPendingHardwareInterrupt());
+
+		for (var i = 0; i < 40; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var expected = VAmigaTsProbe10ExpectedValues();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, expected.Length);
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}, visible={cpuVisibleCycle}, " +
+			$"expected=[{string.Join(",", expected.Select(value => $"0x{value:X4}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}]";
+
+		Assert.True(expected.SequenceEqual(stored), diagnostic);
+	}
+
+	private static ushort[] VAmigaTsProbe10ExpectedValues()
+		=>
+		[
+			0x38C2, 0x38CC, 0x38D6, 0x38E0,
+			0x000D, 0x0017, 0x0021, 0x002B,
+			0x0035, 0x003F, 0x0049, 0x0053,
+			0x005D, 0x0067, 0x0071, 0x007B
+		];
+
+	private static ushort[] CurrentVAmigaTsProbe10Irq1ExpectedValues()
+		=>
+		[
+			0x38DC, 0x3802, 0x390F, 0x3917,
+			0x391F, 0x3927, 0x392F, 0x3937,
+			0x393F, 0x394D, 0x395D, 0x396D,
+			0x397D, 0x398D, 0x399D, 0x39AD
+		];
+
+	private static ushort[] CurrentVAmigaTsProbe10SourceCopperExpectedValues()
+		=>
+		[
+			0x3819, 0x3821, 0x3829, 0x3831,
+			0x3839, 0x3841, 0x3849, 0x3851,
+			0x3859, 0x3861, 0x3869, 0x3871,
+			0x3879, 0x3881, 0x3889, 0x3891
+		];
+
+	private static (int FirstLowResRow, int LastLowResRow, int MinX, int MaxX) RenderVAmigaTsStyleCopperEnabledBitplaneBounds()
+		=> RenderVAmigaTsStyleCopperEnabledBitplaneBounds(0x40);
+
+	private static (int FirstLowResRow, int LastLowResRow, int MinX, int MaxX) RenderVAmigaTsStyleCopperEnabledBitplaneBounds(int enableLine)
+		=> RenderVAmigaTsStyleCopperEnabledBitplaneProbe(enableLine).Bounds;
+
+	private static (
+		(int FirstLowResRow, int LastLowResRow, int MinX, int MaxX) Bounds,
+		long FirstFetchCycle,
+		int FirstFetchLine,
+		int FirstFetchHorizontal,
+		uint FirstFetchAddress) RenderVAmigaTsStyleCopperEnabledBitplaneProbe(int enableLine)
+	{
+		var bus = new AmigaBus(enableLiveDisplayDma: true);
+		const uint copperList = 0x2400;
+		const uint bitplane = 0x4000;
+
+		BigEndian.WriteUInt16(bus.ChipRam, (int)bitplane, 0xFFFF);
+		bus.WriteWord(0x00DFF180, 0x0000);
+		bus.WriteWord(0x00DFF182, 0x0F00);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF08E, 0x2C81);
+		bus.WriteWord(0x00DFF090, 0xF4C1);
+		bus.WriteWord(0x00DFF0E0, (ushort)(bitplane >> 16));
+		bus.WriteWord(0x00DFF0E2, (ushort)bitplane);
+		bus.WriteWord(0x00DFF108, 0x0000);
+		bus.WriteWord(0x00DFF10A, 0x0000);
+		WriteCopperList(
+			bus,
+			copperList,
+			((ushort)((enableLine << 8) | 0x0001), 0xFFFE),
+			(0x0100, 0x1200),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8380);
+
+		var frameStop = bus.GetPalFrameStopCycle(0);
+		bus.AdvanceDmaTo(frameStop);
+		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
+		bus.Display.RenderFrame(framebuffer, 0, frameStop);
+
+		var bounds = FindNonBackgroundLowResBounds(framebuffer, bus.Display.Width, bus.Display.Height, framebuffer[0]);
+		var firstFetch = bus.BusAccesses.First(access =>
+			access.Request.Requester == AmigaBusRequester.Bitplane &&
+			access.Request.Kind == AmigaBusAccessKind.Bitplane);
+		var firstFetchBeam = bus.GetPalBeamPosition(firstFetch.GrantedCycle);
+		return (
+			bounds,
+			firstFetch.GrantedCycle,
+			firstFetchBeam.BeamLine,
+			firstFetchBeam.BeamHorizontal,
+			firstFetch.Request.Address);
+	}
+
+	private static (int Line, ushort Color, int FirstLowResRow)[] RenderCopperColor00BandRows(
+		params (int Line, ushort Color)[] writes)
+	{
+		var bus = new AmigaBus(enableLiveDisplayDma: true);
+		const uint copperList = 0x2400;
+		var instructions = new List<(ushort First, ushort Second)>(writes.Length * 2 + 1);
+		foreach (var write in writes)
+		{
+			instructions.Add(((ushort)((write.Line << 8) | 0x0001), 0xFFFE));
+			instructions.Add((0x0180, write.Color));
+		}
+
+		instructions.Add((0xFFFF, 0xFFFE));
+		WriteCopperList(bus, copperList, instructions.ToArray());
+		SetCopperPointer(bus, list: 1, copperList);
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		var frameStop = bus.GetPalFrameStopCycle(0);
+		bus.AdvanceDmaTo(frameStop);
+		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
+		bus.Display.RenderFrame(framebuffer, 0, frameStop);
+
+		return writes
+			.Zip(FindColorTransitionRows(framebuffer, bus.Display.Width, bus.Display.Height), (write, row) =>
+				(write.Line, write.Color, row))
+			.ToArray();
+	}
+
+	private static int[] FindColorTransitionRows(
+		uint[] framebuffer,
+		int width,
+		int height)
+	{
+		var rows = new List<int>();
+		var previous = SampleLowResRowPixel(framebuffer, width, 0);
+		for (var lowY = 1; lowY < height / 2; lowY++)
+		{
+			var current = SampleLowResRowPixel(framebuffer, width, lowY);
+			if (current == previous)
+			{
+				continue;
+			}
+
+			rows.Add(lowY);
+			previous = current;
+		}
+
+		return rows.ToArray();
+	}
+
+	private static uint SampleLowResRowPixel(uint[] framebuffer, int width, int lowY)
+		=> framebuffer[(lowY * 2 * width) + (width / 2)];
+
+	private static (int FirstLowResRow, int LastLowResRow, int MinX, int MaxX) FindNonBackgroundLowResBounds(
+		uint[] framebuffer,
+		int width,
+		int height,
+		uint background)
+	{
+		var firstRow = -1;
+		var lastRow = -1;
+		var minX = width;
+		var maxX = -1;
+		var lowHeight = height / 2;
+
+		for (var lowY = 0; lowY < lowHeight; lowY++)
+		{
+			var rowHasPixel = false;
+			for (var highY = lowY * 2; highY < Math.Min(height, (lowY * 2) + 2); highY++)
+			{
+				var rowOffset = highY * width;
+				for (var x = 0; x < width; x++)
+				{
+					if (framebuffer[rowOffset + x] == background)
+					{
+						continue;
+					}
+
+					rowHasPixel = true;
+					minX = Math.Min(minX, x);
+					maxX = Math.Max(maxX, x);
+				}
+			}
+
+			if (!rowHasPixel)
+			{
+				continue;
+			}
+
+			if (firstRow < 0)
+			{
+				firstRow = lowY;
+			}
+
+			lastRow = lowY;
+		}
+
+		return (firstRow, lastRow, minX == width ? -1 : minX, maxX);
+	}
+
+	[Fact]
+	public void CpuLongReadCanUseGappedSlotsBetweenTwoPlaneLowResDma()
+	{
+		AssertCpuLongReadCanUseGappedSlotsBetweenTwoPlaneLowResDma(lineStart: 0);
+		AssertCpuLongReadCanUseGappedSlotsBetweenTwoPlaneLowResDma(lineStart: 167526);
+	}
+
+	private static void AssertCpuLongReadCanUseGappedSlotsBetweenTwoPlaneLowResDma(long lineStart)
+	{
+		var engine = new AgnusHrmSlotEngine();
+		long Cycle(int hpos) => lineStart + (hpos * AgnusChipSlotScheduler.SlotCycles);
+		for (var hpos = 0x93; hpos <= 0xD7; hpos += 4)
+		{
+			_ = engine.ReserveBitplaneDmaSlot(0x4000, Cycle(hpos));
+		}
+
+		engine.GrantCpuDataSingleSlot(
+			AmigaBusAccessKind.CpuDataWrite,
+			AmigaBusAccessTarget.ChipRam,
+			0x3EFE,
+			AmigaBusAccessSize.Word,
+			Cycle(0x90),
+			isWrite: true,
+			out _,
+			out _);
+		engine.GrantCpuDataSingleSlot(
+			AmigaBusAccessKind.CpuDataWrite,
+			AmigaBusAccessTarget.ChipRam,
+			0x3EFC,
+			AmigaBusAccessSize.Word,
+			Cycle(0x92),
+			isWrite: true,
+			out _,
+			out _);
+		engine.GrantCpuDataSingleSlot(
+			AmigaBusAccessKind.CpuDataWrite,
+			AmigaBusAccessTarget.ChipRam,
+			0x3EFA,
+			AmigaBusAccessSize.Word,
+			Cycle(0x96),
+			isWrite: true,
+			out _,
+			out _);
+
+		engine.GrantCpuDataLongSlots(
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x64,
+			Cycle(0x9A),
+			isWrite: false,
+			out var firstWordCycle,
+			out var secondWordCycle,
+			out var completedCycle);
+
+		Assert.Equal(Cycle(0x9D), firstWordCycle);
+		Assert.Equal(Cycle(0xA1), secondWordCycle);
+		Assert.Equal(Cycle(0xA2), completedCycle);
+	}
+
+	[Fact]
+	public void AmigaBusCpuLongReadCanUseGappedSlotsBetweenTwoPlaneLowResDma()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		bus.WriteByte(0x00BFE001, 0x00, 0);
+		const long lineStart = 167526;
+		long Cycle(int hpos) => lineStart + (hpos * AgnusChipSlotScheduler.SlotCycles);
+		var slotAudit = new List<AgnusSlotScheduleAuditEntry>();
+		bus.SetSlotScheduleAuditSink(slotAudit.Add);
+		for (var hpos = 0x93; hpos <= 0xD7; hpos += 4)
+		{
+			Assert.True(bus.TryReserveRowBitplaneDmaSlot(0x4000, Cycle(hpos), out var grantedCycle));
+			Assert.Equal(Cycle(hpos), grantedCycle);
+		}
+
+		Write(bus.ChipRam, 0x64, 0x00, 0x00, 0x20, 0x00);
+		var writeCycle = Cycle(0x90);
+		bus.WriteWord(0x3EFE, 0x1000, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteWord(0x3EFC, 0x0000, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.WriteWord(0x3EFA, 0x2000, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+		var readCycle = Cycle(0x9A);
+		var engine = GetPrivateField<AgnusHrmSlotEngine>(bus, "_hrmSlotEngine");
+		Assert.True(engine.TryPredictCpuDataLongSlots(
+			AmigaBusAccessKind.CpuDataRead,
+			AmigaBusAccessTarget.ChipRam,
+			0x64,
+			readCycle,
+			isWrite: false,
+			out var predictedFirst,
+			out var predictedSecond,
+			out var predictedCompleted));
+		Assert.Equal(Cycle(0x9D), predictedFirst);
+		Assert.Equal(Cycle(0xA1), predictedSecond);
+		Assert.Equal(Cycle(0xA2), predictedCompleted);
+
+		var value = bus.ReadLong(0x64, ref readCycle, AmigaBusAccessKind.CpuDataRead);
+
+		var auditSlots = slotAudit
+			.Where(entry => entry.SlotCycle >= Cycle(0x90) && entry.SlotCycle <= Cycle(0xE2))
+			.Select(entry =>
+				$"0x{AgnusHrmOcsSlotTable.GetHorizontal(entry.SlotCycle):X2}:{entry.Owner}/{entry.Requester}/{entry.Target}/{entry.Size}")
+			.ToArray();
+		var diagnostic = string.Join(",", auditSlots);
+		Assert.Equal(0x00002000u, value);
+		Assert.True(readCycle == Cycle(0xA2), diagnostic);
+		Assert.Contains("0x9D:Cpu/Cpu/ChipRam/Long", auditSlots);
+		Assert.Contains("0xA1:Cpu/Cpu/ChipRam/Long", auditSlots);
+		Assert.DoesNotContain("0xD9:Cpu/Cpu/ChipRam/Long", diagnostic);
 	}
 
 	[Fact]
@@ -2329,6 +3630,122 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void AccurateM68000DbraDelayLoopChipRamDocumentsInstructionFetchSlotCadence()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(
+			bus.ChipRam,
+			0x1000,
+			0x36, 0x3C, 0x00, 0x1F, // MOVE.W #31,D3
+			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
+			0x4E, 0x71);            // NOP
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 64;
+
+		_ = cpu.ExecuteInstruction();
+		var loopStart = cpu.State.Cycles;
+		var retired = new List<int>();
+		while (cpu.State.ProgramCounter == 0x1004)
+		{
+			retired.Add(cpu.ExecuteInstruction());
+		}
+
+		var phases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1004)
+			.ToArray();
+		var fetches = phases
+			.Where(phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.ToArray();
+		var requests = GetTraceDeltas(fetches, phase => phase.CpuPhase.RequestedCycle);
+		var grants = GetTraceDeltas(fetches, phase => phase.BusAccess.GetValueOrDefault().GrantedCycle);
+		var completions = GetTraceDeltas(fetches, phase => phase.CpuPhase.CompletedCycle);
+		var diagnostic =
+			$"loopStart={loopStart}, total={cpu.State.Cycles - loopStart}, " +
+			$"retired={string.Join(",", retired.Take(16))}, " +
+			$"requestDeltas={string.Join(",", requests.Take(24))}, " +
+			$"grantDeltas={string.Join(",", grants.Take(24))}, " +
+			$"completedDeltas={string.Join(",", completions.Take(24))}, " +
+			$"phases=[{BuildCpuBusPhaseTimeline(phases.Take(40).ToArray(), loopStart)}]";
+
+		Assert.Equal(31, retired.Count(cycles => cycles == 10));
+		Assert.Single(retired, cycles => cycles == 14);
+		Assert.Equal(324, cpu.State.Cycles - loopStart);
+		Assert.Equal(
+			new long[] { 6, 2, 6, 2, 8, 4, 6, 2 },
+			requests.Take(8).ToArray());
+		Assert.Equal(
+			new long[] { 4, 4, 4, 4, 8, 4, 4, 4 },
+			grants.Take(8).ToArray());
+		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
+		Assert.True(fetches.All(phase => phase.BusAccess.HasValue), diagnostic);
+
+		static long[] GetTraceDeltas(
+			IReadOnlyList<AmigaCpuBusPhaseTrace> traces,
+			Func<AmigaCpuBusPhaseTrace, long> selector)
+		{
+			var deltas = new long[Math.Max(0, traces.Count - 1)];
+			for (var i = 1; i < traces.Count; i++)
+			{
+				deltas[i - 1] = selector(traces[i]) - selector(traces[i - 1]);
+			}
+
+			return deltas;
+		}
+	}
+
+	[Fact]
+	public void AccurateM68000DbraTargetPrefetchAtRefreshPhaseUsesFollowingCpuSlotWithoutRetireDrift()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(
+			bus.ChipRam,
+			0x1000,
+			0x36, 0x3C, 0x00, 0x1F, // MOVE.W #31,D3
+			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
+			0x4E, 0x71);            // NOP
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = AmigaConstants.A500PalCpuCyclesPerRasterLine - 24;
+
+		_ = cpu.ExecuteInstruction();
+		var iterations = new List<(long Start, long Stop, int Cycles)>();
+		while (cpu.State.ProgramCounter == 0x1004)
+		{
+			var start = cpu.State.Cycles;
+			var cycles = cpu.ExecuteInstruction();
+			iterations.Add((start, cpu.State.Cycles, cycles));
+		}
+
+		var refreshPhaseTargetFetches = bus.CpuBusPhases
+			.Where(phase =>
+				phase.CpuPhase.InstructionProgramCounter == 0x1004 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+				phase.CpuPhase.Address == 0x1004 &&
+				AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(
+					AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle)))
+			.ToArray();
+		var diagnostic =
+			$"retired={string.Join(',', iterations.Select(iteration => iteration.Cycles))}, " +
+			$"refreshFetches=[{BuildCpuBusPhaseTimeline(refreshPhaseTargetFetches, iterations[0].Start)}]";
+
+		Assert.NotEmpty(refreshPhaseTargetFetches);
+		Assert.All(refreshPhaseTargetFetches, phase =>
+		{
+			var access = phase.BusAccess.GetValueOrDefault();
+			var requestedSlot = AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle);
+			Assert.True(AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(requestedSlot));
+			Assert.False(AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(requestedSlot));
+			Assert.True(AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(access.GrantedCycle));
+			var iteration = iterations.Single(item =>
+				item.Start <= phase.CpuPhase.RequestedCycle && phase.CpuPhase.RequestedCycle < item.Stop);
+			Assert.True(access.CompletedCycle <= iteration.Stop, diagnostic);
+		});
+		Assert.Equal(31, iterations.Count(iteration => iteration.Cycles == 10));
+		Assert.Single(iterations, iteration => iteration.Cycles == 14);
+	}
+
+	[Fact]
 	public void InstructionFetchWindowMatchesGenericChipFetchTimingAndValue()
 	{
 		var genericBus = new AmigaBus(arbiter: new FixedDelayArbiter(waitCycles: 5, accessCycles: 3));
@@ -2452,7 +3869,7 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus();
 		Write(bus.ChipRam, 0x1000, 0x21, 0xFC, 0x70, 0x05, 0x4E, 0x71, 0x10, 0x08); // MOVE.L #$70054E71,$1008.W
-		Write(bus.ChipRam, 0x1008, 0x70, 0x01); // MOVEQ #1,D0, already queued before the write
+		Write(bus.ChipRam, 0x1008, 0x70, 0x01); // MOVEQ #1,D0 before MOVE's post-write class-1 fetch.
 		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
 		cpu.Reset(0x1000, 0x3000);
 
@@ -2460,7 +3877,7 @@ public sealed class AmigaBusTimingTests
 		cpu.ExecuteInstruction();
 
 		Assert.Equal(0x7005, BigEndian.ReadUInt16(bus.ChipRam, 0x1008, "self-modified word"));
-		Assert.Equal(1u, cpu.State.D[0]);
+		Assert.Equal(5u, cpu.State.D[0]);
 		Assert.Contains(
 			bus.CpuBusPhases,
 			phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
@@ -2550,6 +3967,1770 @@ public sealed class AmigaBusTimingTests
 		Assert.True(purpleBeam.BeamLine is >= 240 and <= 256, diagnostic);
 		Assert.True(grayBeam.BeamLine is >= 240 and <= 256, diagnostic);
 		Assert.True(blackBeam.BeamLine is >= 240 and <= 256, diagnostic);
+	}
+
+	[Fact]
+	public void AccurateM68000SynccpuBeamPollingDocumentsCurrentTransition()
+	{
+		const int programAddress = 0x1000;
+		var program = CreateSynccpuBeamPollingProgram();
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, programAddress, program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(programAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
+		var stopCycle = cpu.State.Cycles + (24L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		while (cpu.State.Cycles < stopCycle &&
+			bus.CustomRegisterWrites.Count(write => write.Address == 0x180) < 8)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var markers = bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x180)
+			.ToArray();
+		var phaseStartCycle = markers.Length == 0
+			? cpu.State.Cycles - 256
+			: markers[0].Cycle - 96;
+		var phaseEndCycle = markers.Length < 3
+			? cpu.State.Cycles
+			: markers[2].Cycle + 96;
+		var phases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= phaseStartCycle &&
+				phase.CpuPhase.RequestedCycle <= phaseEndCycle)
+			.ToArray();
+		var markerBeams = markers
+			.Select(write =>
+			{
+				var beam = bus.GetPalBeamPosition(write.Cycle);
+				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
+			})
+			.ToArray();
+		var markerText = string.Join(
+			"; ",
+			markerBeams.Select(marker => $"0x{marker.Value:X4}@v{marker.BeamLine}h{marker.BeamHorizontal}"));
+		var phaseText = string.Join(
+			"; ",
+			phases.Select(phase =>
+			{
+				var request = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
+				var grantCycle = phase.BusAccess.HasValue
+					? phase.BusAccess.GetValueOrDefault().GrantedCycle
+					: phase.CpuPhase.CompletedCycle;
+				var grant = bus.GetPalBeamPosition(grantCycle);
+				var complete = bus.GetPalBeamPosition(phase.CpuPhase.CompletedCycle);
+				return $"pc=0x{phase.CpuPhase.InstructionProgramCounter:X4} {phase.CpuPhase.AccessKind} " +
+					$"{(phase.CpuPhase.IsWrite ? "W" : "R")} 0x{phase.CpuPhase.Address:X6} " +
+					$"req={phase.CpuPhase.RequestedCycle}/v{request.BeamLine}h{request.BeamHorizontal} " +
+					$"grant={grantCycle}/v{grant.BeamLine}h{grant.BeamHorizontal} " +
+					$"done={phase.CpuPhase.CompletedCycle}/v{complete.BeamLine}h{complete.BeamHorizontal}";
+			}));
+
+		var diagnostic = $"pc=0x{cpu.State.ProgramCounter:X6} cycle={cpu.State.Cycles} markers={markerText} | phases={phaseText}";
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 43),
+				((ushort)0x0606, 241, 7),
+				((ushort)0x0A0A, 242, 7),
+				((ushort)0x0404, 243, 75),
+				((ushort)0x0F0F, 244, 55),
+				((ushort)0x0404, 244, 77),
+				((ushort)0x0F0F, 245, 55),
+				((ushort)0x0404, 245, 77),
+			},
+			markerBeams.Take(8).ToArray());
+		Assert.Contains(
+			phases,
+			phase => phase.CpuPhase.InstructionProgramCounter == 0x1014 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.Address == 0x00DFF180 &&
+				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamLine == 240 &&
+				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamHorizontal == 43);
+		Assert.Contains(
+			phases,
+			phase => phase.CpuPhase.InstructionProgramCounter == 0x1020 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.Address == 0x00DFF180 &&
+				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamLine == 241 &&
+				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamHorizontal == 7);
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000SynccpuBeamPollingDocumentsFourCckEntryPhaseSensitivity()
+	{
+		var aligned = RunSynccpuBeamPollingMarkers(startOffset: 64, markerCount: 4);
+		var early = RunSynccpuBeamPollingMarkers(startOffset: 56, markerCount: 4);
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 43),
+				((ushort)0x0606, 241, 7),
+				((ushort)0x0A0A, 242, 7),
+				((ushort)0x0404, 243, 75),
+			},
+			aligned);
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 39),
+				((ushort)0x0606, 242, 9),
+				((ushort)0x0A0A, 248, 7),
+				((ushort)0x0404, 249, 75),
+			},
+			early);
+	}
+
+	[Fact]
+	public void AccurateM68000JsrSynccpuBeamPollingDocumentsEntryPhase()
+	{
+		var absoluteLong = RunJsrSynccpuBeamPollingMarkers(
+			new byte[] { 0x4E, 0xB9, 0x00, 0x00, 0x11, 0x00 },
+			startOffset: 64,
+			markerCount: 4);
+		var pcRelativeWord = RunJsrSynccpuBeamPollingMarkers(
+			new byte[] { 0x4E, 0xBA, 0x00, 0xFE },
+			startOffset: 64,
+			markerCount: 4);
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 37),
+				((ushort)0x0606, 242, 7),
+				((ushort)0x0A0A, 243, 7),
+				((ushort)0x0404, 244, 75),
+			},
+			absoluteLong);
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 35),
+				((ushort)0x0606, 241, 217),
+				((ushort)0x0A0A, 245, 7),
+				((ushort)0x0404, 246, 75),
+			},
+			pcRelativeWord);
+	}
+
+	[Fact]
+	public void AccurateM68000JsrSynccpuEntryPhaseDocumentsCurrentDirectDelta()
+	{
+		var direct = RunSynccpuBeamPollingMarkers(startOffset: 64, markerCount: 2);
+		var viaJsr = RunJsrSynccpuBeamPollingMarkers(
+			new byte[] { 0x4E, 0xB9, 0x00, 0x00, 0x11, 0x00 },
+			startOffset: 64,
+			markerCount: 2);
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 43),
+				((ushort)0x0606, 241, 7),
+			},
+			direct);
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 240, 37),
+				((ushort)0x0606, 242, 7),
+			},
+			viaJsr);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vDelayLoopDocumentsFirstStripePhase()
+	{
+		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8);
+		var diagnostic =
+			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
+			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
+			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}, " +
+			$"accesses={BuildCycle01vAccessDiagnostic(result.Bus, result.Boundaries)}";
+		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
+		Assert.Contains(result.Boundaries, boundary => boundary.Name == "afterSynccpu");
+		var boundaryMap = result.Boundaries
+			.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - result.Boundaries[0].Cycle}")
+			.ToArray();
+		Assert.Equal(
+			new[]
+			{
+				"start=+0",
+				"afterSynccpu=+149486",
+				"afterProbeNops=+149758",
+				"afterVposrRead=+149770",
+				"delayLoopStart=+149778",
+				"afterDelayLoop=+269792",
+				"afterMove300=+269800",
+				"afterMoveF0f=+269808",
+				"afterMoveZero=+269816",
+				"loop2Entry=+269828"
+			},
+			boundaryMap);
+		var loopWrites = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.Take(8)
+			.Select(write =>
+			{
+				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
+				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 207, 107),
+			},
+			loopWrites.Take(1).ToArray());
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000CycleProbeVposrSampleDocumentsCycle01vAndCycleD9vDifference()
+	{
+		var cycle01v = RunCycleVposrProbeSample(probeNops: 68);
+		var cycleD9v = RunCycleVposrProbeSample(probeNops: 66);
+		var diagnostic = BuildCycleVposrProbeSampleDiagnostic(cycle01v, cycleD9v);
+
+		Assert.Equal(0x8001, cycle01v.Read.Value);
+		Assert.Equal(0x8001u, cycle01v.D0);
+		Assert.Equal(0x8000, cycleD9v.Read.Value);
+		Assert.Equal(0x8000u, cycleD9v.D0);
+		Assert.Equal(10, cycle01v.Read.SampleCycle - cycleD9v.Read.SampleCycle);
+		Assert.Equal((256, 1), (cycle01v.SampleBeam.BeamLine, cycle01v.SampleBeam.BeamHorizontal));
+		Assert.Equal((255, 223), (cycleD9v.SampleBeam.BeamLine, cycleD9v.SampleBeam.BeamHorizontal));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Synccpu4FinalIterationHandsDocumentedPhaseToCycle01vProbe()
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		const int probeNops = 68;
+		var afterProbeReadPc = (uint)(mainAddress + 6 + (probeNops * 2) + 4);
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, mainAddress, CreateCycleVposrProbeMainProgram(synccpuAddress, probeNops));
+		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
+		EmitWord(synccpu, 0x4E75); // RTS
+		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
+
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 56;
+		var stopCycle = cpu.State.Cycles + (2000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		var instructions = new List<(uint Pc, long Start, long Stop, int Cycles)>();
+
+		while (cpu.State.Cycles < stopCycle && cpu.State.ProgramCounter != afterProbeReadPc)
+		{
+			var pc = cpu.State.ProgramCounter;
+			var start = cpu.State.Cycles;
+			var cycles = cpu.ExecuteInstruction();
+			instructions.Add((pc, start, cpu.State.Cycles, cycles));
+		}
+
+		Assert.Equal(afterProbeReadPc, cpu.State.ProgramCounter);
+		var finalVhposrRead = bus.CustomRegisterReads.Last(read =>
+			read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead);
+		var probeVposrRead = bus.CustomRegisterReads.Last(read =>
+			read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead);
+		var finalVhposrPhase = bus.CpuBusPhases.Last(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
+			phase.CpuPhase.Address == 0x00DFF006 &&
+			phase.CpuPhase.RequestedCycle == finalVhposrRead.RequestedCycle);
+		var probeVposrPhase = bus.CpuBusPhases.Last(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
+			phase.CpuPhase.Address == 0x00DFF004 &&
+			phase.CpuPhase.RequestedCycle == probeVposrRead.RequestedCycle);
+		var firstTailInstruction = instructions.FindIndex(instruction =>
+			instruction.Pc == finalVhposrPhase.CpuPhase.InstructionProgramCounter &&
+			instruction.Start <= finalVhposrRead.RequestedCycle &&
+			finalVhposrRead.RequestedCycle < instruction.Stop);
+		var probeInstruction = instructions.FindIndex(instruction =>
+			instruction.Pc == probeVposrPhase.CpuPhase.InstructionProgramCounter &&
+			instruction.Start <= probeVposrRead.RequestedCycle &&
+			probeVposrRead.RequestedCycle < instruction.Stop);
+		Assert.True(firstTailInstruction >= 0 && probeInstruction >= firstTailInstruction);
+		var tail = instructions
+			.Skip(firstTailInstruction)
+			.Take(probeInstruction - firstTailInstruction + 1)
+			.ToArray();
+		var opcodes = tail
+			.Select(instruction => BigEndian.ReadUInt16(
+				bus.ChipRam,
+				checked((int)instruction.Pc),
+				$"opcode at 0x{instruction.Pc:X6}"))
+			.ToArray();
+		var expectedOpcodes = new List<ushort>
+		{
+			0x3413, // MOVE.W (A3),D2
+			0x337C, // MOVE.W #$0F0F,COLOR00(A1)
+			0x0242, // ANDI.W #$FF00,D2
+			0x0C42, // CMPI.W #$FF00,D2
+			0x6600, // BNE.W, not taken
+			0x337C, // MOVE.W #$0000,COLOR00(A1)
+			0x4E75  // RTS
+		};
+		expectedOpcodes.AddRange(Enumerable.Repeat((ushort)0x4E71, probeNops));
+		expectedOpcodes.Add(0x3029); // MOVE.W VPOSR(A1),D0
+		var expectedCycles = new List<int> { 8, 16, 8, 8, 12, 16, 16 };
+		expectedCycles.AddRange(Enumerable.Repeat(4, probeNops));
+		expectedCycles.Add(12);
+		var finalBeam = bus.GetPalBeamPosition(finalVhposrRead.SampleCycle);
+		var probeBeam = bus.GetPalBeamPosition(probeVposrRead.SampleCycle);
+		var diagnostic =
+			$"final=0x{finalVhposrRead.Value:X4}@v{finalBeam.BeamLine}h{finalBeam.BeamHorizontal}, " +
+			$"probe=0x{probeVposrRead.Value:X4}@v{probeBeam.BeamLine}h{probeBeam.BeamHorizontal}, " +
+			$"sampleDelta={probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle}, " +
+			$"tail=[{string.Join(',', tail.Select((instruction, index) => $"0x{opcodes[index]:X4}:{instruction.Cycles}"))}]";
+
+		Assert.Equal(expectedOpcodes, opcodes);
+		Assert.Equal(expectedCycles, tail.Select(instruction => instruction.Cycles));
+		Assert.Equal(0xFF, finalVhposrRead.Value >> 8);
+		Assert.Equal((255, 49), (finalBeam.BeamLine, finalBeam.BeamHorizontal));
+		Assert.Equal((256, 1), (probeBeam.BeamLine, probeBeam.BeamHorizontal));
+		Assert.Equal(358, probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle);
+		var rawInferredFinalReadCycle =
+			((258L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
+				(181L * AmigaConstants.A500PalCpuCyclesPerColorClock)) -
+			(probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle);
+		var rawInferredFinalReadLine = rawInferredFinalReadCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var rawInferredFinalReadHorizontal =
+			(rawInferredFinalReadCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) /
+			AmigaConstants.A500PalCpuCyclesPerColorClock;
+		Assert.Equal((258L, 2L), (rawInferredFinalReadLine, rawInferredFinalReadHorizontal));
+		Assert.NotEqual(0xFF, rawInferredFinalReadLine & 0xFF);
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000CycleD9vRepeatedMainLoopKeepsProbeSamplePhase()
+	{
+		var result = RunRepeatedCycleVposrProbeSamples(probeNops: 66, sampleCount: 2);
+		var diagnostic = string.Join(
+			"; ",
+			result.Reads.Select((read, index) =>
+			{
+				var request = result.Bus.GetPalBeamPosition(read.RequestedCycle);
+				var grant = result.Bus.GetPalBeamPosition(read.GrantedCycle);
+				var sample = result.Bus.GetPalBeamPosition(read.SampleCycle);
+				return $"#{index}:value=0x{read.Value:X4}," +
+					$"request=v{request.BeamLine}h{request.BeamHorizontal}," +
+					$"grant=v{grant.BeamLine}h{grant.BeamHorizontal}," +
+					$"sample=v{sample.BeamLine}h{sample.BeamHorizontal}";
+			}));
+
+		Assert.Equal(2, result.Reads.Length);
+		Assert.All(result.Reads, read => Assert.Equal((ushort)0x8000, read.Value));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000CycleD9vRepeatedMainLoopDocumentsStartupConvergenceAcrossVblankIrq()
+	{
+		var dmaAdvanceOnly = RunRepeatedCycleVposrProbeSamples(
+			probeNops: 66,
+			sampleCount: 2,
+			advanceDmaPerInstruction: true);
+		var copperOnly = RunRepeatedCycleVposrProbeSamples(
+			probeNops: 66,
+			sampleCount: 2,
+			enableCycleCopper: true,
+			advanceDmaPerInstruction: true);
+		var irqOnly = RunRepeatedCycleVposrProbeSamples(
+			probeNops: 66,
+			sampleCount: 8,
+			enableVblankIrq: true);
+		var copperAndIrq = RunRepeatedCycleVposrProbeSamples(
+			probeNops: 66,
+			sampleCount: 8,
+			enableCycleCopper: true,
+			enableVblankIrq: true);
+		var firstIrqPhases = BuildCpuBusPhaseTimeline(
+			copperAndIrq.FirstInterruptPhases,
+			copperAndIrq.FirstInterruptPhases.Length == 0
+				? 0
+				: copperAndIrq.FirstInterruptPhases[0].CpuPhase.RequestedCycle);
+		var diagnostic = string.Join(
+			" | ",
+			new[]
+			{
+				FormatRepeatedCycleVposrProbeSamples("dma", dmaAdvanceOnly),
+				FormatRepeatedCycleVposrProbeSamples("copper", copperOnly),
+				FormatRepeatedCycleVposrProbeSamples("irq", irqOnly),
+				FormatRepeatedCycleVposrProbeSamples("both", copperAndIrq),
+			}) + $" | firstIrqPhases={firstIrqPhases}";
+
+		Assert.True(irqOnly.InterruptDispatches > 0, diagnostic);
+		Assert.True(copperAndIrq.InterruptDispatches > 0, diagnostic);
+		Assert.Equal(new ushort[] { 0x8000, 0x8000 }, dmaAdvanceOnly.Reads.Select(read => read.Value));
+		Assert.Equal(new ushort[] { 0x8000, 0x8000 }, copperOnly.Reads.Select(read => read.Value));
+		var expectedIrqValues = new ushort[] { 0x8001, 0x8001, 0x8000, 0x8000, 0x8000, 0x8000, 0x8000, 0x8000 };
+		Assert.Equal(expectedIrqValues, irqOnly.Reads.Select(read => read.Value));
+		Assert.Equal(expectedIrqValues, copperAndIrq.Reads.Select(read => read.Value));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vDelayLoopWithCopperDmaDocumentsFirstStripePhase()
+	{
+		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8, enableCycleCopper: true);
+		var diagnostic =
+			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
+			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
+			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}";
+		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
+		var loopWrites = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.Take(8)
+			.Select(write =>
+			{
+				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
+				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				((ushort)0x0F0F, 207, 107),
+			},
+			loopWrites.Take(1).ToArray());
+		Assert.Equal("v207h107/irq0/cu276/cw54347/ws109664", BuildCycle01vProbeSummary(result));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vFullIrqDelayPathMatchesHardwareSpecializationAndDeferredBatching()
+	{
+		var scalar = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var specialized = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			enableHardwareSpecialization: true);
+		var deferred = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			enableDeferredCpuBusBatch: true);
+		var specializedDeferred = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			enableHardwareSpecialization: true,
+			enableDeferredCpuBusBatch: true);
+		var runs = new[]
+		{
+			(Name: "scalar", Result: scalar),
+			(Name: "specialized", Result: specialized),
+			(Name: "deferred", Result: deferred),
+			(Name: "specializedDeferred", Result: specializedDeferred)
+		};
+		var names = new[]
+		{
+			"afterVposrRead",
+			"irqEntry",
+			"irqRteComplete",
+			"afterDelayLoop",
+			"loop2Entry"
+		};
+		var expected = GetCycle01vBoundaryCycles(scalar.Boundaries, names);
+		var diagnostic = string.Join(
+			" | ",
+			runs.Select(run =>
+			{
+				var scheduler = run.Result.Bus.CaptureHardwareSchedulerSnapshot();
+				return $"{run.Name}:boundaries={FormatCycle01vBoundaryCycles(run.Result.Boundaries, names)}, " +
+					$"loop2={run.Result.Loop2EntryCycle}, irq={run.Result.InterruptDispatches}, " +
+					$"batch={scheduler.DeferredCpuBusBatchAttempts}/{scheduler.DeferredCpuBusBatchUsed}/" +
+					$"{scheduler.DeferredCpuBusBatchInstructions}, wakeVblank={scheduler.DeferredCpuBusBatchWakeVerticalBlank}";
+			}));
+
+		Assert.Equal(1, scalar.InterruptDispatches);
+		Assert.True(expected.All(cycle => cycle >= 0), diagnostic);
+		Assert.All(runs, run => Assert.Equal(expected, GetCycle01vBoundaryCycles(run.Result.Boundaries, names)));
+		Assert.All(runs, run => Assert.Equal(scalar.Loop2EntryCycle, run.Result.Loop2EntryCycle));
+		Assert.Equal(0, deferred.Bus.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchUsed);
+		Assert.Equal(0, specializedDeferred.Bus.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchUsed);
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vFullIrqDelayPathPartitionsDbraAndInterruptTiming()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var copperResult = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var names = new[]
+		{
+			"delayLoopStart",
+			"irqAccept",
+			"irqEntry",
+			"irqRteComplete",
+			"afterDelayLoop",
+			"loop2Entry"
+		};
+		var boundaries = names
+			.Select(name => result.Boundaries.Single(boundary => boundary.Name == name))
+			.ToArray();
+		var firstStripe = result.Writes
+			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= result.Loop2EntryCycle);
+		var diagnostic = string.Join(
+			",",
+			boundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - boundaries[0].Cycle}/d3={boundary.D3}")) +
+			$",firstStripe=+{firstStripe.Cycle - boundaries[0].Cycle}";
+		var copperBoundaries = names
+			.Select(name => copperResult.Boundaries.Single(boundary => boundary.Name == name))
+			.ToArray();
+		var copperFirstStripe = copperResult.Writes
+			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= copperResult.Loop2EntryCycle);
+		var copperDiagnostic = string.Join(
+			",",
+			copperBoundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - copperBoundaries[0].Cycle}/d3={boundary.D3}")) +
+			$",firstStripe=+{copperFirstStripe.Cycle - copperBoundaries[0].Cycle}";
+
+		Assert.Equal(boundaries[1].D3, boundaries[2].D3);
+		Assert.Equal(boundaries[1].D3, boundaries[3].D3);
+		Assert.Equal(9412, boundaries[1].D3);
+		Assert.Equal(0xFFFF, boundaries[4].D3);
+		Assert.Equal((12000 - boundaries[1].D3) * 10, boundaries[1].Cycle - boundaries[0].Cycle);
+		Assert.Equal(44, boundaries[2].Cycle - boundaries[1].Cycle);
+		Assert.Equal(956, boundaries[3].Cycle - boundaries[2].Cycle);
+		Assert.Equal((boundaries[3].D3 * 10) + 14, boundaries[4].Cycle - boundaries[3].Cycle);
+		Assert.Equal(24, boundaries[5].Cycle - boundaries[4].Cycle);
+		Assert.Equal(2, firstStripe.Cycle - boundaries[5].Cycle);
+		Assert.Equal(boundaries, copperBoundaries);
+		Assert.Equal(firstStripe.Cycle - boundaries[0].Cycle, copperFirstStripe.Cycle - copperBoundaries[0].Cycle);
+		_ = diagnostic;
+		_ = copperDiagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vSourceTimingMatchesRuntimePath()
+	{
+		const int probeCyclesAfterVposrSample = 4;
+		const int loadDelayCounterCycles = 8; // MOVE.W #12000,D3
+		const int delayLoopCycles = (12000 * 10) + 14;
+		const int interruptPathCycles = 1000;
+		const int postDelayToStripeCycles = 26;
+		const int sourceSampleToStripeCycles =
+			probeCyclesAfterVposrSample +
+			loadDelayCounterCycles +
+			delayLoopCycles +
+			interruptPathCycles +
+			postDelayToStripeCycles;
+
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var afterVposrRead = result.Boundaries.Single(boundary => boundary.Name == "afterVposrRead");
+		var firstStripe = result.Writes
+			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= result.Loop2EntryCycle);
+		var runtimeAfterVposrReadToStripe = firstStripe.Cycle - afterVposrRead.Cycle;
+		var documentedAfterVposrReadToStripe =
+			loadDelayCounterCycles + delayLoopCycles + interruptPathCycles + postDelayToStripeCycles;
+
+		Assert.Equal(121048, documentedAfterVposrReadToStripe);
+		Assert.Equal(documentedAfterVposrReadToStripe, runtimeAfterVposrReadToStripe);
+		Assert.Equal(121052, sourceSampleToStripeCycles);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vInlineDelayLoopDocumentsFallthroughPrefetchPhase()
+	{
+		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8, inlineLoop2: true);
+		var diagnostic =
+			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
+			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
+			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}";
+		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
+		var firstLoopWrite = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.First(write => write.Value == 0x0F0F);
+		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+
+		Assert.Equal((207, 99), (beam.BeamLine, beam.BeamHorizontal));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vInlineMainLoopDocumentsRepeatedBurstPhase()
+	{
+		var result = RunCycle01vInlineMainLoopProbe(startOffset: 56, burstCount: 2);
+		var phases = result.BurstWrites
+			.Select(write =>
+			{
+				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
+				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"0x0F0F@v207h99",
+				"0x0F0F@v207h99",
+			},
+			phases);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vStartLineSearchDocumentsWaitLoopPrefetchPhase()
+	{
+		var candidates = Enumerable.Range(228, 13)
+			.Select(line =>
+			{
+				var result = RunCycle01vDelayLoopProbe(
+					startLine: line,
+					startOffset: 56,
+					markerCount: 1,
+					inlineLoop2: true);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
+				return $"v{beam.BeamLine}h{beam.BeamHorizontal}:score={score}";
+			})
+			.Distinct()
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"v207h99:score=546"
+			},
+			candidates);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vVblankIrqDelaySearchDocumentsInterruptCostPhase()
+	{
+		var candidates = Enumerable.Range(245, 16)
+			.Select(nops =>
+			{
+				var result = RunCycle01vDelayLoopProbe(
+					startLine: 232,
+					startOffset: 56,
+					markerCount: 1,
+					inlineLoop2: true,
+					enableSyntheticVblankIrq: true,
+					syntheticIrqNops: nops);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
+				return $"nops={nops}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}:score={score}";
+			})
+			.OrderBy(entry => int.Parse(entry[(entry.LastIndexOf('=') + 1)..]))
+			.Take(1)
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"nops=253:v209h191:irq=1:score=0"
+			},
+			candidates);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vRealIrq3HandlerDocumentsFirstStripePhase()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var firstLoopWrite = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.First(write => write.Value == 0x0F0F);
+		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+
+		Assert.Equal("v209h145:irq=1", $"v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}");
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vRealIrq3HandlerD0SetBitsExplainConditionalPathCost()
+	{
+		var candidates = new[] { 0x8001u, 0xFFFFu }
+			.Select(d0 =>
+			{
+				var result = RunCycle01vDelayLoopProbe(
+					startLine: 232,
+					startOffset: 56,
+					markerCount: 1,
+					inlineLoop2: true,
+					enableSyntheticVblankIrq: true,
+					useCycle01vIrq3Handler: true,
+					cycle01vIrq3InitialD0: d0);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				return $"d0=0x{d0:X4}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}";
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"d0=0x8001:v209h145:irq=1",
+				"d0=0xFFFF:v209h145:irq=1"
+			},
+			candidates);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vRealIrq3HandlerDocumentsInterruptAckAndLoopPhase()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var intreqWrites = result.Bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x09C)
+			.Select(write =>
+			{
+				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
+				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
+			})
+			.ToArray();
+		var firstLoopWrite = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.First(write => write.Value == 0x0F0F);
+		var firstLoopBeam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+		var boundaries = string.Join(
+			",",
+			result.Boundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - result.Boundaries[0].Cycle}"));
+
+		var actual =
+			$"irq={result.InterruptDispatches}; intreq={string.Join(",", intreqWrites)}; firstLoop=v{firstLoopBeam.BeamLine}h{firstLoopBeam.BeamHorizontal}; boundaries={boundaries}";
+		Assert.StartsWith("irq=1; intreq=0x0020@v0h97; firstLoop=v209h145; ", actual, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vRealIrq3HandlerVblankRequestOffsetDocumentsPhaseSensitivity()
+	{
+		var targets = new[]
+		{
+			(Name: "adfActual", Line: 209, Horizontal: 191)
+		};
+		var candidates = Enumerable.Range(-500, 1001)
+			.Select(index => index * 2)
+			.Select(offset =>
+			{
+				var result = RunCycle01vDelayLoopProbe(
+					startLine: 232,
+					startOffset: 56,
+					markerCount: 1,
+					inlineLoop2: true,
+					enableSyntheticVblankIrq: true,
+					useCycle01vIrq3Handler: true,
+					syntheticVblankIrqOffset: offset,
+					advanceLiveAgnusForInterruptPolling: false);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				var absolute = (beam.BeamLine * 227) + beam.BeamHorizontal;
+				var scores = targets
+					.Select(target => $"{target.Name}={Math.Abs(absolute - ((target.Line * 227) + target.Horizontal))}")
+					.ToArray();
+				return (Offset: offset, Phase: $"v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}", Scores: string.Join(",", scores));
+			})
+			.ToArray();
+		var bestActual = candidates
+			.OrderBy(entry => ExtractNamedScore(entry.Scores, "adfActual"))
+			.First();
+		var distinctPhases = candidates
+			.GroupBy(entry => entry.Phase)
+			.Select(group => $"phase={group.Key}:offsets={group.Min(entry => entry.Offset)}..{group.Max(entry => entry.Offset)}:count={group.Count()}")
+			.Take(24)
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"bestActual=offset=-1000:v209h145:irq=1:adfActual=46",
+				"phase=v209h145:irq=1:offsets=-1000..1000:count=1001"
+			},
+			new[]
+			{
+				$"bestActual=offset={bestActual.Offset}:{bestActual.Phase}:{bestActual.Scores}"
+			}.Concat(distinctPhases).ToArray());
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vRealIrq3HandlerPaddingDocumentsPhaseSensitivity()
+	{
+		var targets = new[]
+		{
+			(Name: "adfActual", Line: 209, Horizontal: 191)
+		};
+		var candidates = Enumerable.Range(0, 351)
+			.Select(nops =>
+			{
+				var result = RunCycle01vDelayLoopProbe(
+					startLine: 232,
+					startOffset: 56,
+					markerCount: 1,
+					inlineLoop2: true,
+					enableSyntheticVblankIrq: true,
+					useCycle01vIrq3Handler: true,
+					cycle01vIrq3PaddingNops: nops);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				var absolute = (beam.BeamLine * 227) + beam.BeamHorizontal;
+				var scores = targets
+					.Select(target => $"{target.Name}={Math.Abs(absolute - ((target.Line * 227) + target.Horizontal))}")
+					.ToArray();
+				return $"nops={nops}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}:{string.Join(",", scores)}";
+			})
+			.ToArray();
+		var bestActual = candidates
+			.OrderBy(entry => ExtractNamedScore(entry, "adfActual"))
+			.First();
+		Assert.Equal(
+			"nops=23:v209h191:irq=1:adfActual=0",
+			bestActual);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vSyntheticFirstStripeDocumentsAdfTraceDistance()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true);
+		var firstLoopWrite = result.Writes
+			.Where(write => write.Cycle >= result.Loop2EntryCycle)
+			.First(write => write.Value == 0x0F0F);
+		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+		var actualCck = (beam.BeamLine * 227) + beam.BeamHorizontal;
+		var adfTraceCck = (209 * 227) + 191;
+		var diagnostic =
+			$"firstLoop=v{beam.BeamLine}h{beam.BeamHorizontal}, " +
+			$"adfDeltaCck={adfTraceCck - actualCck}, " +
+			$"irq={result.InterruptDispatches}";
+
+		Assert.Equal("firstLoop=v209h145, adfDeltaCck=46, irq=1", diagnostic);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vIrq3HandlerSequenceDocumentsCurrentTiming()
+	{
+		const int interruptedAddress = 0x1000;
+		const int handlerAddress = 0x1500;
+		var handler = CreateCycle01vIrq3Handler(handlerAddress);
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, interruptedAddress, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, handlerAddress, handler.Program);
+		bus.WriteLong((24u + 3u) * 4u, handlerAddress);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(interruptedAddress, 0x3F00);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.D[0] = 0x8001;
+		cpu.State.Cycles = 1000;
+
+		cpu.RequestInterrupt(3, (uint)((24 + 3) * 4));
+
+		var boundaries = new Dictionary<string, long>(StringComparer.Ordinal)
+		{
+			["afterEntry"] = cpu.State.Cycles
+		};
+		for (var i = 0; i < 256 && cpu.State.ProgramCounter != interruptedAddress; i++)
+		{
+			RecordCycle01vIrq3Boundary(cpu, handler, boundaries);
+			cpu.ExecuteInstruction();
+		}
+
+		boundaries["afterRte"] = cpu.State.Cycles;
+		var origin = 1000L;
+		var actual = string.Join(",", boundaries.Select(pair => $"{pair.Key}:{pair.Value - origin}"));
+		var writes = bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x09C)
+			.Select(write => $"0x{write.Value:X4}@+{write.Cycle - origin}")
+			.ToArray();
+		var diagnostic = $"boundaries={actual}, intreq=[{string.Join(",", writes)}]";
+
+		var boundaryDeltas = new[]
+		{
+			"afterEntry",
+			"movemSave",
+			"ack",
+			"moveD5",
+			"firstTest",
+			"restore",
+			"rte",
+			"afterRte"
+		}
+			.Select(name => boundaries.TryGetValue(name, out var cycle) ? cycle - origin : -1)
+			.ToArray();
+		Assert.Equal("44,44,172,188,196,848,980,1000", string.Join(",", boundaryDeltas));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vIrq3HandlerExpectedCostMatchesCurrentTiming()
+	{
+		const int registerCount = 15; // D0-A6
+		const int testedBits = 16;
+		const int setBitsInD0 = 2; // D0=$8001 in cycle01v, so bit 0 and bit 15 are set.
+		const int clearBitsInD0 = testedBits - setBitsInD0;
+
+		var interruptEntry = 44;
+		var movemSave = 8 + (8 * registerCount);
+		var acknowledge = 16; // MOVE.W #$0020,INTREQ(A1)
+		var loadMarker = 8; // MOVE.W #$0CCC,D5
+		var clearBitPath =
+			8 +  // LEA bitN+2(PC),A0
+			12 + // MOVE.W #$0333,(A0)
+			10 + // BTST #n,D0
+			10;  // BEQ.S taken
+		var setBitPath =
+			8 +  // LEA bitN+2(PC),A0
+			12 + // MOVE.W #$0333,(A0)
+			10 + // BTST #n,D0
+			8 +  // BEQ.S not taken
+			8;   // MOVE.W D5,(A0)
+		var bitVisualization = (clearBitsInD0 * clearBitPath) + (setBitsInD0 * setBitPath);
+		var movemRestore = 12 + (8 * registerCount);
+		var rte = 20;
+		var expectedTotal =
+			interruptEntry +
+			movemSave +
+			acknowledge +
+			loadMarker +
+			bitVisualization +
+			movemRestore +
+			rte;
+		var expectedBoundaries = new[]
+		{
+			interruptEntry,
+			interruptEntry,
+			interruptEntry + movemSave,
+			interruptEntry + movemSave + acknowledge,
+			interruptEntry + movemSave + acknowledge + loadMarker,
+			interruptEntry + movemSave + acknowledge + loadMarker + bitVisualization,
+			interruptEntry + movemSave + acknowledge + loadMarker + bitVisualization + movemRestore,
+			expectedTotal
+		};
+
+		Assert.Equal("44,44,172,188,196,848,980,1000", string.Join(",", expectedBoundaries));
+		Assert.Equal(1000, expectedTotal);
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vIrq3HandlerPatchesVisualizationTableFromD0()
+	{
+		var clearLowBit = RunCycle01vIrq3HandlerPatchProbe(0x8000);
+		var setLowBit = RunCycle01vIrq3HandlerPatchProbe(0x8001);
+		var diagnostic =
+			$"clear=[{string.Join(",", clearLowBit.Values.Select(value => $"0x{value:X4}"))}], " +
+			$"set=[{string.Join(",", setLowBit.Values.Select(value => $"0x{value:X4}"))}]";
+
+		Assert.Equal(0x0333, clearLowBit.Bit0Value);
+		Assert.True(clearLowBit.Bit15Value == 0x0CCC, diagnostic);
+		Assert.Equal(0x0CCC, setLowBit.Bit0Value);
+		Assert.True(setLowBit.Bit15Value == 0x0CCC, diagnostic);
+		Assert.Equal(0x0180, clearLowBit.Bit0Register);
+		Assert.Equal(0x0180, clearLowBit.Bit15Register);
+		Assert.Equal(clearLowBit.RtePc, clearLowBit.EndPc);
+		Assert.Equal(setLowBit.RtePc, setLowBit.EndPc);
+	}
+
+	[Fact]
+	public void AccurateM68000CycleD9vIrq3HandlerPatchesOnlyBit15ForD0HighBit()
+	{
+		var result = RunCycle01vIrq3HandlerPatchProbe(0x8000);
+		var diagnostic = string.Join(",", result.Values.Select((value, bit) => $"b{bit}=0x{value:X4}"));
+
+		Assert.Equal(0x0333, result.Values[14]);
+		Assert.Equal(0x0CCC, result.Values[15]);
+		Assert.Equal(15, result.Values.Count(value => value == 0x0333));
+		Assert.Equal(1, result.Values.Count(value => value == 0x0CCC));
+		_ = diagnostic;
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vDelayLoopStartOffsetSearchDocumentsAdfTracePhase()
+	{
+		var candidates = Enumerable.Range(0, 57)
+			.Select(index => index * 8)
+			.Select(offset =>
+			{
+				var result = RunCycle01vDelayLoopProbe(offset, markerCount: 1);
+				var firstLoopWrite = result.Writes
+					.Where(write => write.Cycle >= result.Loop2EntryCycle)
+					.First(write => write.Value == 0x0F0F);
+				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
+				return (Offset: offset, beam.BeamLine, beam.BeamHorizontal, Score: score);
+			})
+			.OrderBy(candidate => candidate.Score)
+			.Take(8)
+			.Select(candidate => $"offset={candidate.Offset}:v{candidate.BeamLine}h{candidate.BeamHorizontal}:score={candidate.Score}")
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"offset=0:v207h107:score=538",
+				"offset=8:v207h107:score=538",
+				"offset=16:v207h107:score=538",
+				"offset=24:v207h107:score=538",
+				"offset=32:v207h107:score=538",
+				"offset=40:v207h107:score=538",
+				"offset=48:v207h107:score=538",
+				"offset=56:v207h107:score=538"
+			},
+			candidates);
+	}
+
+	[Fact]
+	public void WaitLineLoopTakenBranchCadenceDocumentsVhposrSamples()
+	{
+		var result = RunWaitLineLoopProbe(
+			CreateWaitLineLoopProgram(vposrMask: 0x0001, appendRts: false),
+			startLine: 239,
+			startOffset: 64,
+			stopOnColorWrite: true);
+
+		var diagnostic = BuildWaitLineLoopDiagnostic(result.Bus, result.Reads, result.ColorWrites, result.Cpu.State.Cycles);
+		Assert.Equal(
+			new ushort[]
+			{
+				0xEF2D, 0xEF3B, 0xEF4D, 0xEF5D,
+				0xEF6F, 0xEF7F, 0xEF91, 0xEFA1,
+				0xEFB3, 0xEFC3, 0xEFD0, 0xEFE0,
+				0xF013, 0x8000
+			},
+			result.Reads.Select(read => read.Value).ToArray());
+		Assert.Equal(
+			new long[] { 28, 36, 32, 36, 32, 36, 32, 36, 32, 36, 32, 34, 44 },
+			result.Reads.Skip(1)
+				.Zip(result.Reads, (current, previous) => current.SampleCycle - previous.SampleCycle)
+				.ToArray());
+		var color = Assert.Single(result.ColorWrites);
+		var beam = result.Bus.GetPalBeamPosition(color.Cycle);
+		Assert.True(color.Value == 0x0F0F && beam.BeamLine == 240 && beam.BeamHorizontal == 43, diagnostic);
+	}
+
+	[Fact]
+	public void WaitLineLoopFirstBneNotTakenPreservesFallthroughPrefetch()
+	{
+		var result = RunWaitLineLoopProbe(
+			CreateFirstBneNotTakenProbeProgram(),
+			startLine: 240,
+			startOffset: 4,
+			stopOnColorWrite: true);
+
+		var diagnostic = BuildWaitLineLoopDiagnostic(result.Bus, result.Reads, result.ColorWrites, result.Cpu.State.Cycles);
+		var read = Assert.Single(result.Reads);
+		var color = Assert.Single(result.ColorWrites);
+		var colorBeam = result.Bus.GetPalBeamPosition(color.Cycle);
+		Assert.Equal((ushort)0xF00F, read.Value);
+		Assert.True(color.Value == 0x1111 && colorBeam.BeamLine == 240 && colorBeam.BeamHorizontal == 23, diagnostic);
+		Assert.Contains(
+			result.Bus.CpuBusPhases,
+			phase => phase.CpuPhase.InstructionProgramCounter == 0x100A &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+				phase.CpuPhase.Address == 0x00100E);
+	}
+
+	[Fact]
+	public void WaitLineLoopSecondBneTakenFlushesToLoopStart()
+	{
+		var result = RunWaitLineLoopProbe(
+			CreateWaitLineLoopProgram(vposrMask: 0x8000, appendRts: false),
+			startLine: 240,
+			startOffset: 4,
+			stopOnColorWrite: false,
+			maxInstructions: 24);
+
+		var diagnostic = BuildWaitLineLoopDiagnostic(result.Bus, result.Reads, result.ColorWrites, result.Cpu.State.Cycles);
+		Assert.Empty(result.ColorWrites);
+		Assert.Equal(
+			new ushort[] { 0xF00F, 0x8000, 0xF02B, 0x8000, 0xF04B, 0x8000, 0xF069, 0x8000 },
+			result.Reads.Select(read => read.Value).ToArray());
+		Assert.True(
+			result.Bus.CpuBusPhases.Count(phase =>
+				phase.CpuPhase.InstructionProgramCounter == 0x1012 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+				phase.CpuPhase.Address == 0x001000) >= 4,
+			diagnostic);
+	}
+
+	[Fact]
+	public void WaitLineLoopSecondBneNotTakenHandsExpectedPhaseToColorWrite()
+	{
+		var result = RunWaitLineLoopProbe(
+			CreateWaitLineLoopProgram(vposrMask: 0x0001, appendRts: true),
+			startLine: 240,
+			startOffset: 4,
+			stopOnColorWrite: true);
+
+		var diagnostic = BuildWaitLineLoopDiagnostic(result.Bus, result.Reads, result.ColorWrites, result.Cpu.State.Cycles);
+		Assert.Equal(
+			new ushort[] { 0xF00F, 0x8000 },
+			result.Reads.Select(read => read.Value).ToArray());
+		var color = Assert.Single(result.ColorWrites);
+		var beam = result.Bus.GetPalBeamPosition(color.Cycle);
+		Assert.True(color.Value == 0x0F0F && beam.BeamLine == 240 && beam.BeamHorizontal == 37, diagnostic);
+		Assert.Contains(
+			result.Bus.CpuBusPhases,
+			phase => phase.CpuPhase.InstructionProgramCounter == 0x1014 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.Address == 0x00DFF180);
+	}
+
+	[Fact]
+	public void AccurateM68000SynccpuPrefixSamplesBeamRegistersAtGrantCycles()
+	{
+		const int programAddress = 0x1000;
+		var program = CreateSynccpuBeamPollingProgram();
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, programAddress, program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(programAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (240L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
+		var stopCycle = cpu.State.Cycles + AmigaConstants.A500PalCpuCyclesPerRasterLine;
+
+		while (bus.CustomRegisterWrites.All(write => write.Address != 0x180 || write.Value != 0x0F0F) &&
+			cpu.State.Cycles < stopCycle)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var colorWrite = Assert.Single(bus.CustomRegisterWrites.Where(write =>
+			write.Address == 0x180 &&
+			write.Value == 0x0F0F));
+		var beamReads = bus.CustomRegisterReads
+			.Where(read => read.Address is 0x004 or 0x006)
+			.ToArray();
+		var diagnostic = BuildBeamReadDiagnostic(bus, beamReads, colorWrite.Cycle);
+
+		Assert.True(beamReads.Length >= 2, diagnostic);
+		Assert.All(beamReads, read =>
+		{
+			var beam = bus.GetPalBeamPosition(read.GrantedCycle);
+			var expected = read.Address == 0x004 ? EncodeVposr(beam) : EncodeVhposr(beam);
+			Assert.Equal(read.GrantedCycle, read.SampleCycle);
+			Assert.Equal(expected, read.Value);
+		});
+		Assert.Equal(0x006, beamReads[0].Address);
+		Assert.Equal(0xF0, beamReads[0].Value >> 8);
+		Assert.Equal(0x004, beamReads[1].Address);
+		Assert.Equal(0, beamReads[1].Value & 0x0001);
+		Assert.True(colorWrite.Cycle > beamReads[1].CompletedCycle, diagnostic);
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsProbe10VhposrReadMacroKeepsExpectedCadence()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var expected = new ushort[]
+		{
+			0x38C2, 0x38CC, 0x38D6, 0x38E0,
+			0x000D, 0x0017, 0x0021, 0x002B,
+			0x0035, 0x003F, 0x0049, 0x0053,
+			0x005D, 0x0067, 0x0071, 0x007B
+		};
+
+		// Current model cannot align the first read to the hardware-observed 0x38C2.
+		// Anchor on the current first value so the failing contract prints the full bus timeline.
+		var result = RunVAmigaTsProbe10VhposrReadMacro(programAddress, valuesAddress, 0x38C1);
+		var actual = result.Reads.Select(read => read.Value).ToArray();
+		var diagnostic = BuildVhposrProbeDiagnostic(result.StartCycle, result.Bus, result.Reads, actual, expected);
+
+		Assert.Equal(16, actual.Length);
+		for (var i = 1; i < result.Reads.Length; i++)
+		{
+			var deltaCycles = result.Reads[i].SampleCycle - result.Reads[i - 1].SampleCycle;
+			var expectedDelta = result.Reads[i - 1].Value == 0x3802
+				? 22
+				: 20;
+			Assert.Equal(expectedDelta, deltaCycles);
+		}
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsProbe10VhposrReadMacroDocumentsCurrentCadence()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var expected = new ushort[]
+		{
+			0x38C1, 0x38C6, 0x38D0, 0x38DA,
+			0x3802, 0x0011, 0x001B, 0x0025,
+			0x002F, 0x0039, 0x0043, 0x004D,
+			0x0057, 0x0061, 0x006B, 0x0075
+		};
+
+		var result = RunVAmigaTsProbe10VhposrReadMacro(programAddress, valuesAddress, 0x38C1);
+		var actual = result.Reads.Select(read => read.Value).ToArray();
+		var expectedDeltas = new[]
+		{
+			20L, 20L, 20L, 20L,
+			22L, 20L, 20L, 20L,
+			20L, 20L, 20L, 20L,
+			20L, 20L, 20L
+		};
+		var diagnostic = BuildVhposrProbeDiagnostic(result.StartCycle, result.Reads, actual, expected);
+
+		Assert.True(expected.SequenceEqual(actual), diagnostic);
+		for (var i = 1; i < result.Reads.Length; i++)
+		{
+			var deltaCycles = result.Reads[i].SampleCycle - result.Reads[i - 1].SampleCycle;
+			Assert.Equal(expectedDeltas[i - 1], deltaCycles);
+		}
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsProbe10VhposrReadMacroDocumentsCurrentBusTimeline()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var result = RunVAmigaTsProbe10VhposrReadMacro(programAddress, valuesAddress, 0x38C1);
+		var phases = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= result.StartCycle &&
+				phase.CpuPhase.RequestedCycle <= result.Reads[1].CompletedCycle + 12)
+			.ToArray();
+		var actual = BuildCpuBusPhaseTimeline(phases, result.StartCycle);
+		var expected =
+			"pc=0x1000,CpuInstructionFetch,0x001000,r+0..+5,g+3 | " +
+			"pc=0x1000,CpuInstructionFetch,0x001002,r+5..+9,g+7 | " +
+			"pc=0x1000,CpuDataRead,0xDFF006,r+9..+13,g+11 | " +
+			"pc=0x1000,CpuInstructionFetch,0x001004,r+13..+17,g+15 | " +
+			"pc=0x1002,CpuDataWrite,0x002000,r+21..+25,g+23 | " +
+			"pc=0x1002,CpuInstructionFetch,0x001006,r+25..+29,g+27 | " +
+			"pc=0x1004,CpuDataRead,0xDFF006,r+29..+33,g+31 | " +
+			"pc=0x1004,CpuInstructionFetch,0x001008,r+33..+37,g+35 | " +
+			"pc=0x1006,CpuDataWrite,0x002002,r+41..+45,g+43 | " +
+			"pc=0x1006,CpuInstructionFetch,0x00100A,r+45..+49,g+47";
+
+		Assert.Equal(expected, actual);
+	}
+
+	[Fact]
+	public void AccurateM68000NoExtensionVposrReadMacroKeepsExpectedVerticalTransition()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var expected = new ushort[]
+		{
+			0x8000, 0x8000, 0x8000, 0x8000,
+			0x8000, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001
+		};
+
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var result = RunVAmigaTsVprobeVposrReadMacro(programAddress, valuesAddress, line256Start - 111);
+		var actual = result.Reads.Select(read => read.Value).ToArray();
+		var stored = ReadChipWords(result.Bus.ChipRam, valuesAddress, 16);
+		var diagnostic = BuildVhposrProbeDiagnostic(result.StartCycle, result.Bus, result.Reads, actual, expected);
+
+		Assert.Equal(16, actual.Length);
+		Assert.True(expected.SequenceEqual(actual), diagnostic);
+		Assert.True(expected.SequenceEqual(stored), diagnostic);
+		Assert.Equal(line256Start - 100, result.Reads[0].SampleCycle);
+		Assert.Equal(line256Start + 2, result.Reads[5].SampleCycle);
+		Assert.Equal(22, result.Reads[5].SampleCycle - result.Reads[4].SampleCycle);
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsVprobe2SourceVposrMacroDocumentsInterruptEntryBusAllocation()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const int stackPointer = 0x3F00;
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var interruptStartCycle = line256Start - 220;
+		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, stackPointer);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.Cycles = interruptStartCycle;
+
+		machine.Cpu.RequestInterrupt(1, (24u + 1u) * 4u);
+		for (var i = 0; i < 48; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+			if (ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value != 0))
+			{
+				break;
+			}
+		}
+
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(16)
+			.ToArray();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, 16);
+		var entryPhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= interruptStartCycle &&
+				(reads.Length == 0 || phase.CpuPhase.RequestedCycle <= reads[0].CompletedCycle + 48))
+			.ToArray();
+		var diagnostic =
+			$"interruptStart={interruptStartCycle}/line256StartDelta={interruptStartCycle - line256Start}, " +
+			$"cpuAfterInterrupt={machine.Cpu.State.Cycles}, " +
+			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
+			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, interruptStartCycle)}]";
+
+		Assert.Equal(16, reads.Length);
+		Assert.Equal(
+			new ushort[]
+			{
+				0x8000, 0x8000, 0x8000, 0x8000,
+				0x8000, 0x8000, 0x8000, 0x8001,
+				0x8001, 0x8001, 0x8001, 0x8001,
+				0x8001, 0x8001, 0x8001, 0x8001
+			},
+			reads.Select(read => read.Value).ToArray());
+		Assert.Equal(reads.Select(read => read.Value).ToArray(), stored);
+		Assert.Equal(line256Start - 160, reads[0].SampleCycle);
+		Assert.Equal(line256Start + 10, reads[7].SampleCycle);
+		Assert.Equal(24, reads[1].SampleCycle - reads[0].SampleCycle);
+		Assert.Equal(26, reads[7].SampleCycle - reads[6].SampleCycle);
+		Assert.True(entryPhases.Length >= 6, diagnostic);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[1].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 4), entryPhases[1].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[2].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 6), entryPhases[2].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataRead, entryPhases[3].CpuPhase.AccessKind);
+		Assert.Equal(0x000064u, entryPhases[3].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[4].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress, entryPhases[4].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[5].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress + 2, entryPhases[5].CpuPhase.Address);
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsVprobe2CpuVisibleIrqEntryMatchesSourceCopperPhase()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const int stackPointer = 0x3F00;
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var cpuVisibleCycle = line256Start - 174;
+		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, stackPointer);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+
+		machine.Cpu.RequestInterrupt(1, (24u + 1u) * 4u);
+		for (var i = 0; i < 48; i++)
+		{
+			machine.Cpu.ExecuteInstruction();
+			if (ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value != 0))
+			{
+				break;
+			}
+		}
+
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(16)
+			.ToArray();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, 16);
+		var entryPhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle &&
+				(reads.Length == 0 || phase.CpuPhase.RequestedCycle <= reads[0].CompletedCycle + 48))
+			.ToArray();
+		var diagnostic =
+			$"visible={cpuVisibleCycle}/line256StartDelta={cpuVisibleCycle - line256Start}, " +
+			$"cpuAfterInterrupt={machine.Cpu.State.Cycles}, " +
+			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
+			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, cpuVisibleCycle)}]";
+		var current = new ushort[]
+		{
+			0x8000, 0x8000, 0x8000, 0x8000,
+			0x8000, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001
+		};
+
+		Assert.Equal(16, reads.Length);
+		Assert.Equal(current, reads.Select(read => read.Value).ToArray());
+		Assert.Equal(current, stored);
+		Assert.Equal(line256Start - 112, reads[0].SampleCycle);
+		Assert.Equal(line256Start + 10, reads[5].SampleCycle);
+		Assert.Equal(24, reads[1].SampleCycle - reads[0].SampleCycle);
+		Assert.Equal(26, reads[5].SampleCycle - reads[4].SampleCycle);
+		Assert.True(entryPhases.Length >= 6, diagnostic);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[1].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 4), entryPhases[1].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[2].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 6), entryPhases[2].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataRead, entryPhases[3].CpuPhase.AccessKind);
+		Assert.Equal(0x000064u, entryPhases[3].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[4].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress, entryPhases[4].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[5].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress + 2, entryPhases[5].CpuPhase.Address);
+	}
+
+	[Fact]
+	public void AccurateM68000VAmigaTsVprobe2HandlerPrologueDocumentsFirstVposrReadPhase()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const int stackPointer = 0x3F00;
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var cpuVisibleCycle = line256Start - 174;
+		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, stackPointer);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.Cycles = cpuVisibleCycle;
+
+		machine.Cpu.RequestInterrupt(1, (24u + 1u) * 4u);
+		while (bus.CustomRegisterReads.All(read => read.Address != 0x004))
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var firstRead = Assert.Single(bus.CustomRegisterReads.Where(read => read.Address == 0x004));
+		var prologuePhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle + 44 &&
+				phase.CpuPhase.RequestedCycle <= firstRead.RequestedCycle)
+			.ToArray();
+		var actual = BuildCpuBusPhaseTimeline(prologuePhases, cpuVisibleCycle);
+		var expected =
+			"pc=0x2000,CpuInstructionFetch,0x002004,r+44..+48,g+46 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002006,r+48..+52,g+50 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002008,r+52..+56,g+54 | " +
+			"pc=0x2006,CpuInstructionFetch,0x00200A,r+56..+60,g+58 | " +
+			"pc=0x2006,CpuDataRead,0xDFF004,r+60..+64,g+62";
+		var diagnostic =
+			$"firstRead=0x{firstRead.Value:X4}@{firstRead.SampleCycle - line256Start}/" +
+			$"v{bus.GetPalBeamPosition(firstRead.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(firstRead.SampleCycle).BeamHorizontal:X2}, " +
+			$"timeline=[{actual}]";
+
+		Assert.Equal(line256Start - 112, firstRead.SampleCycle);
+		Assert.Equal(0x8000, firstRead.Value);
+		Assert.Equal(expected, actual);
+		Assert.Contains("CpuDataRead,0xDFF004,r+60..+64", diagnostic);
+	}
+
+	[Fact]
+	public void AccurateM68000LeaAbsoluteLongBeforeVposrReadDocumentsPrefetchPhase()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint programAddress = 0x2000;
+		const int stackPointer = 0x3F00;
+		const long startCycle = 1000;
+		Write(
+			bus.ChipRam,
+			(int)programAddress,
+			0x45, 0xF9, 0x00, 0x00, 0x30, 0x00, // LEA $00003000.L,A2
+			0x3A, 0x29, 0x00, 0x04,             // MOVE.W VPOSR(A1),D5
+			0x34, 0xC5,                         // MOVE.W D5,(A2)+
+			0x4E, 0x71);                        // NOP
+		machine.Cpu.Reset(programAddress, stackPointer);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		machine.Cpu.State.Cycles = startCycle;
+
+		while (bus.CustomRegisterReads.All(read => read.Address != 0x004))
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var firstRead = Assert.Single(bus.CustomRegisterReads.Where(read => read.Address == 0x004));
+		var phases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= startCycle &&
+				phase.CpuPhase.RequestedCycle <= firstRead.RequestedCycle)
+			.ToArray();
+		var actual = BuildCpuBusPhaseTimeline(phases, startCycle);
+		var current =
+			"pc=0x2000,CpuInstructionFetch,0x002000,r+0..+4,g+2 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002002,r+4..+8,g+6 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002004,r+8..+12,g+10 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002006,r+12..+16,g+14 | " +
+			"pc=0x2000,CpuInstructionFetch,0x002008,r+16..+20,g+18 | " +
+			"pc=0x2006,CpuInstructionFetch,0x00200A,r+20..+24,g+22 | " +
+			"pc=0x2006,CpuDataRead,0xDFF004,r+24..+28,g+26";
+
+		Assert.Equal(current, actual);
+		Assert.Equal(startCycle + 26, firstRead.SampleCycle);
+	}
+
+	[Fact]
+	public void VAmigaTsVprobe2SourceCopperIrq1DocumentsInterruptEntryBusAllocation()
+	{
+		using var machine = new AmigaMachine(AmigaMachineOptions
+			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint handlerAddress = 0x2000;
+		const int valuesAddress = 0x3000;
+		const int stackPointer = 0x3F00;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x1001, 0xFFFE),
+			(0x09C, 0x8008),
+			(0x4001, 0xFFFE),
+			(0x100, 0x2200),
+			(0xFF81, 0xFFFE),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71, 0x4E, 0x71);
+		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
+		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
+		machine.Cpu.Reset(0x1000, stackPointer);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		machine.Cpu.State.A[1] = 0x00DFF000;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var startCycle = line256Start - 1024;
+		bus.AdvanceDmaTo(startCycle);
+		machine.Cpu.State.Cycles = startCycle;
+
+		for (var i = 0; i < 512 && ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value == 0); i++)
+		{
+			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+			_ = machine.DispatchPendingHardwareInterrupt();
+			machine.Cpu.ExecuteInstruction();
+		}
+		for (var i = 0; i < 48; i++)
+		{
+			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+			_ = machine.DispatchPendingHardwareInterrupt();
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
+			write.Address == 0x09C &&
+			write.Value == (0x8000 | intreqLevel1));
+		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.Take(16)
+			.ToArray();
+		var stored = ReadChipWords(bus.ChipRam, valuesAddress, 16);
+		var entryPhases = bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle &&
+				(reads.Length == 0 || phase.CpuPhase.RequestedCycle <= reads[0].CompletedCycle + 48))
+			.ToArray();
+		var diagnostic =
+			$"intreqWrite={intreqWrite.Cycle}/deltaToLine256={intreqWrite.Cycle - line256Start}, " +
+			$"visible={cpuVisibleCycle}/deltaToLine256={cpuVisibleCycle - line256Start}, " +
+			$"cpu={machine.Cpu.State.Cycles}, " +
+			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
+			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
+			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, cpuVisibleCycle)}]";
+
+		var reference = new ushort[]
+		{
+			0x8000, 0x8000, 0x8000, 0x8000,
+			0x8000, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001,
+			0x8001, 0x8001, 0x8001, 0x8001
+		};
+		var actual = reads.Select(read => read.Value).ToArray();
+
+		Assert.Equal(16, reads.Length);
+		Assert.Equal(reference, actual);
+		Assert.Equal(reference, stored);
+		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 174, cpuVisibleCycle);
+		Assert.Equal(line256Start - 112, reads[0].SampleCycle);
+		Assert.Equal(line256Start + 10, reads[5].SampleCycle);
+		Assert.Equal(24, reads[1].SampleCycle - reads[0].SampleCycle);
+		Assert.Equal(26, reads[5].SampleCycle - reads[4].SampleCycle);
+		Assert.True(entryPhases.Length >= 6, diagnostic);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[1].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 4), entryPhases[1].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[2].CpuPhase.AccessKind);
+		Assert.Equal((uint)(stackPointer - 6), entryPhases[2].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuDataRead, entryPhases[3].CpuPhase.AccessKind);
+		Assert.Equal(0x000064u, entryPhases[3].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[4].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress, entryPhases[4].CpuPhase.Address);
+		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[5].CpuPhase.AccessKind);
+		Assert.Equal(handlerAddress + 2, entryPhases[5].CpuPhase.Address);
+	}
+
+	[Fact]
+	public void AccurateM68000NoExtensionMoveReadStorePairKeepsHardwareObservedReadCadence()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var result = RunVAmigaTsProbe10VhposrReadMacro(programAddress, valuesAddress, 0x38C1);
+		var firstRead = result.Reads[0];
+		var secondRead = result.Reads[1];
+		var phases = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= firstRead.RequestedCycle &&
+				phase.CpuPhase.RequestedCycle <= secondRead.CompletedCycle)
+			.ToArray();
+		var diagnostic =
+			$"read0=0x{firstRead.Value:X4}@+{firstRead.SampleCycle - result.StartCycle}, " +
+			$"read1=0x{secondRead.Value:X4}@+{secondRead.SampleCycle - result.StartCycle}, " +
+			$"delta={secondRead.SampleCycle - firstRead.SampleCycle}, " +
+			$"expectedDelta=20, phases=[{BuildCpuBusPhaseTimeline(phases, result.StartCycle)}], " +
+			$"classification={ClassifyMoveReadStorePairEarlyPhase(firstRead, secondRead, phases)}";
+
+		Assert.True(secondRead.SampleCycle - firstRead.SampleCycle == 20, diagnostic);
+		Assert.Contains(
+			phases,
+			phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+				phase.CpuPhase.RequestedCycle >= firstRead.CompletedCycle &&
+				phase.CpuPhase.CompletedCycle <= secondRead.RequestedCycle);
+	}
+
+	[Fact(Skip = "Hardware contract from vAmigaTS probe10. The source-shaped MOVE.W $0006(A1),D5 / MOVE.W D5,(A2)+ sequence currently diverges after its first VHPOSR sample.")]
+	public void AccurateM68000VAmigaTsProbe10SourceReadStoreMacroMatchesHardwareResultBuffer()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var expected = new ushort[]
+		{
+			0x38C2, 0x38CC, 0x38D6, 0x38E0,
+			0x000D, 0x0017, 0x0021, 0x002B,
+			0x0035, 0x003F, 0x0049, 0x0053,
+			0x005D, 0x0067, 0x0071, 0x007B
+		};
+
+		var result = RunVAmigaTsProbe10SourceVhposrReadMacro(programAddress, valuesAddress, expected[0]);
+		var actual = result.Reads.Select(read => read.Value).ToArray();
+		var stored = ReadChipWords(result.Bus.ChipRam, valuesAddress, expected.Length);
+		var diagnostic = BuildVhposrProbeDiagnostic(result.StartCycle, result.Bus, result.Reads, actual, expected);
+
+		Assert.True(expected.SequenceEqual(actual), diagnostic);
+		Assert.True(expected.SequenceEqual(stored), diagnostic);
+		for (var i = 1; i < result.Reads.Length; i++)
+		{
+			Assert.Equal(20, result.Reads[i].SampleCycle - result.Reads[i - 1].SampleCycle);
+		}
+	}
+
+	[Fact]
+	public void AccurateM68000VhposrReadStorePairDocumentsAmigaBusTiming()
+	{
+		const int programAddress = 0x1000;
+		const int valuesAddress = 0x2000;
+		var result = RunVhposrReadStorePair(programAddress, valuesAddress, firstExpectedValue: 0x38C1);
+		var read = Assert.Single(result.Reads);
+		var phases = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.RequestedCycle >= result.StartCycle &&
+				phase.CpuPhase.RequestedCycle <= read.CompletedCycle + 16)
+			.ToArray();
+		var actual = BuildCpuBusPhaseTimeline(phases, result.StartCycle);
+		var expected =
+			"pc=0x1000,CpuInstructionFetch,0x001000,r+0..+5,g+3 | " +
+			"pc=0x1000,CpuInstructionFetch,0x001002,r+5..+9,g+7 | " +
+			"pc=0x1000,CpuDataRead,0xDFF006,r+9..+13,g+11 | " +
+			"pc=0x1000,CpuInstructionFetch,0x001004,r+13..+17,g+15 | " +
+			"pc=0x1002,CpuDataWrite,0x002000,r+21..+25,g+23 | " +
+			"pc=0x1002,CpuInstructionFetch,0x001006,r+25..+29,g+27";
+		var stored = (ushort)((result.Bus.ChipRam[valuesAddress] << 8) | result.Bus.ChipRam[valuesAddress + 1]);
+
+		Assert.Equal(0x006, read.Address);
+		Assert.Equal(0x38C1, read.Value);
+		Assert.Equal(read.GrantedCycle, read.SampleCycle);
+		Assert.Equal(0x38C1, stored);
+		Assert.Equal(0x38C1, EncodeVhposr(result.Bus.GetPalBeamPosition(read.SampleCycle)));
+		Assert.Equal(expected, actual);
 	}
 
 	[Fact]
@@ -3598,7 +6779,10 @@ public sealed class AmigaBusTimingTests
 	public void DeferredCpuBusBatchRunsMultipleRomInstructionsWhenEnabled()
 	{
 		const uint romBase = 0x00FC0000;
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
 		bus.MapReadOnlyMemory(romBase, CreateNopRom(1024));
 		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
 		cpu.Reset(romBase, 0x3000);
@@ -3611,6 +6795,77 @@ public sealed class AmigaBusTimingTests
 		Assert.True(scheduler.DeferredCpuBusBatchUsed >= 1);
 		Assert.True(scheduler.DeferredCpuBusBatchInstructions > 1);
 		Assert.Equal(scheduler.DeferredCpuBusBatchInstructions, scheduler.DeferredCpuBusBatchSkippedInstructionFlushes);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchMatchesScalarMoveWordReadStorePairInExpansionRam()
+	{
+		const uint romBase = 0x00FC0000;
+		const int pairs = 16;
+		const int sourceOffset = 0x0000;
+		const int destinationOffset = 0x0200;
+		var program = CreateMoveWordReadStorePairProgram(pairs);
+		var baseline = new AmigaBus(
+			expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
+			captureBusAccesses: false);
+		var batched = new AmigaBus(
+			expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		baseline.MapReadOnlyMemory(romBase, program);
+		batched.MapReadOnlyMemory(romBase, program);
+		for (var i = 0; i < pairs; i++)
+		{
+			var value = (ushort)(0x4000 + i);
+			BigEndian.WriteUInt16(baseline.ExpansionRam, sourceOffset + (i * 2), value);
+			BigEndian.WriteUInt16(batched.ExpansionRam, sourceOffset + (i * 2), value);
+		}
+
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(
+			baseline,
+			default(AmigaCpuDataAccess),
+			enableCpuBusPhaseTrace: false);
+		var batchedCpu = M68kCoreFactory.CreateM68000Core(
+			batched,
+			default(AmigaCpuDataAccess),
+			enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		batchedCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = AmigaConstants.A500BootPseudoFastRamBase + sourceOffset;
+		baselineCpu.State.A[1] = AmigaConstants.A500BootPseudoFastRamBase + destinationOffset;
+		batchedCpu.State.A[0] = AmigaConstants.A500BootPseudoFastRamBase + sourceOffset;
+		batchedCpu.State.A[1] = AmigaConstants.A500BootPseudoFastRamBase + destinationOffset;
+
+		var baselineExecuted = baselineCpu.ExecuteInstructions(pairs * 2, null, NoOpBoundary.Instance);
+		var batchedExecuted = batchedCpu.ExecuteInstructions(pairs * 2, null, NoOpBoundary.Instance);
+
+		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
+		var baselineDestination = baseline.ExpansionRam
+			.Skip(destinationOffset)
+			.Take(pairs * 2)
+			.ToArray();
+		var batchedDestination = batched.ExpansionRam
+			.Skip(destinationOffset)
+			.Take(pairs * 2)
+			.ToArray();
+		var diagnostic =
+			$"baseline cycles={baselineCpu.State.Cycles}, batched cycles={batchedCpu.State.Cycles}, " +
+			$"baseline pc=0x{baselineCpu.State.ProgramCounter:X8}, batched pc=0x{batchedCpu.State.ProgramCounter:X8}, " +
+			$"batch used={scheduler.DeferredCpuBusBatchUsed}, instructions={scheduler.DeferredCpuBusBatchInstructions}, " +
+			$"verification={scheduler.DeferredCpuBusBatchVerificationMismatches}, firstMismatch={scheduler.DeferredCpuBusBatchFirstMismatch}";
+
+		Assert.Equal(pairs * 2, baselineExecuted);
+		Assert.Equal(pairs * 2, batchedExecuted);
+		Assert.Equal(baselineCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
+		Assert.Equal(baselineCpu.State.A[0], batchedCpu.State.A[0]);
+		Assert.Equal(baselineCpu.State.A[1], batchedCpu.State.A[1]);
+		Assert.Equal(baselineCpu.State.D[5], batchedCpu.State.D[5]);
+		Assert.True(baselineDestination.SequenceEqual(batchedDestination), diagnostic);
+		Assert.True(scheduler.DeferredCpuBusBatchUsed >= 1, diagnostic);
+		Assert.True(scheduler.DeferredCpuBusBatchInstructions >= pairs, diagnostic);
+		Assert.Equal(0, scheduler.DeferredCpuBusBatchVerificationMismatches);
 	}
 
 	[Fact]
@@ -3686,6 +6941,159 @@ public sealed class AmigaBusTimingTests
 		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
 		Assert.Equal(0, scheduler.DeferredCpuBusBatchAttempts);
 		Assert.Equal(0, scheduler.DeferredCpuBusBatchUsed);
+	}
+
+	[Fact]
+	public void DeferredCpuWaitWindowDisabledIsInert()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		var cycle = 20L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+		_ = bus.ReadWord(0x00001002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowEligible);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowTotalCycles);
+	}
+
+	[Fact]
+	public void DeferredCpuWaitWindowNormalModeSkipsDiagnosticsWithoutBatchExit()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true);
+		var cycle = 20L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathAttempts);
+	}
+
+	[Fact]
+	public void DeferredCpuWaitWindowRecordsChipFetchReadAndWrite()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		var cycle = 20L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+		_ = bus.ReadWord(0x00001002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		bus.WriteWord(0x00001004, 0x1234, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(3, scheduler.DeferredCpuWaitWindowAttempts);
+		Assert.True(scheduler.DeferredCpuWaitWindowEligible > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowTotalCycles > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowMaxCycles > 0);
+		Assert.Equal(1, scheduler.DeferredCpuWaitWindowInstructionFetch);
+		Assert.Equal(1, scheduler.DeferredCpuWaitWindowDataRead);
+		Assert.Equal(1, scheduler.DeferredCpuWaitWindowDataWrite);
+		Assert.Equal(3, scheduler.DeferredCpuWaitWindowChipRam);
+		Assert.Equal(3, scheduler.DeferredCpuWaitWindowWord);
+		Assert.Equal(2, scheduler.DeferredCpuWaitWindowRead);
+		Assert.Equal(1, scheduler.DeferredCpuWaitWindowWrite);
+		Assert.Equal(3, scheduler.DeferredCpuWaitWindowSingleSlot);
+	}
+
+	[Fact]
+	public void DeferredCpuWaitWindowRecordsExpansionCustomZeroWaitAndLongAccesses()
+	{
+		var bus = new AmigaBus(
+			expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		var cycle = 22L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		var afterZeroWait = bus.CaptureHardwareSchedulerSnapshot();
+		_ = bus.ReadLong(0x00001002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		_ = bus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		_ = bus.ReadWord(0x00DFF002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(1, afterZeroWait.DeferredCpuWaitWindowAttempts);
+		Assert.Equal(0, afterZeroWait.DeferredCpuWaitWindowEligible);
+		Assert.Equal(4, scheduler.DeferredCpuWaitWindowAttempts);
+		Assert.True(scheduler.DeferredCpuWaitWindowEligible > afterZeroWait.DeferredCpuWaitWindowEligible);
+		Assert.True(scheduler.DeferredCpuWaitWindowLong > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowLongSlot > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowExpansionRam > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowCustom > 0);
+		Assert.True(scheduler.DeferredCpuWaitWindowCustomRegisters > 0);
+	}
+
+	[Fact]
+	public void DeferredCpuInternalNoBusWindowDisabledIsInertForChipFetchedMultiply()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xC0C1); // MULU.W D1,D0
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x4E71);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 7;
+		cpu.State.D[1] = 9;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(63u, cpu.State.D[0]);
+		Assert.Equal(0x1002u, cpu.State.ProgramCounter);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowUsed);
+	}
+
+	[Fact]
+	public void DeferredCpuInternalNoBusWindowRecordsChipFetchedMultiplyAndDivide()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xC0D0); // MULU.W (A0),D0
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x80C1); // DIVU.W D1,D0
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1004, 0x4E71);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x2000, 6);
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 7;
+		cpu.State.D[1] = 3;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_000Eu, cpu.State.D[0]);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuInternalNoBusWindowAttempts >= 2);
+		Assert.True(scheduler.DeferredCpuInternalNoBusWindowUsed >= 2);
+		Assert.True(scheduler.DeferredCpuInternalNoBusWindowTotalCycles > 0);
+		Assert.True(scheduler.DeferredCpuInternalNoBusWindowAdvancedCycles > 0);
+		Assert.Equal(1, scheduler.DeferredCpuInternalNoBusWindowMultiply);
+		Assert.Equal(1, scheduler.DeferredCpuInternalNoBusWindowDivide);
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowVerificationMismatches);
+	}
+
+	[Fact]
+	public void DeferredCpuInternalNoBusWindowDoesNotRecordDivideByZero()
+	{
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x80C1); // DIVU.W D1,D0
+		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 42;
+		cpu.State.D[1] = 0;
+
+		cpu.ExecuteInstruction();
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowUsed);
+		Assert.Equal(0, scheduler.DeferredCpuInternalNoBusWindowDivide);
 	}
 
 	[Fact]
@@ -3780,7 +7188,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void DeferredCpuBusBatchChipsetCatchupSkipsDrainForChipRamWordRead()
+	public void DeferredCpuBusBatchAdvanceUntilCpuGrantHandlesChipRamWordRead()
 	{
 		const uint romBase = 0x00FC0000;
 		var baseline = new AmigaBus(captureBusAccesses: false);
@@ -3813,17 +7221,21 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(baselineCpu.State.D[0], batchedCpu.State.D[0]);
 		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
 		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupUsed >= 1);
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupSkippedDrains >= 1);
-		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupVerificationMismatches);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathUsed >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowMatches >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitSlotShadowMismatches);
 	}
 
 	[Fact]
-	public void DeferredCpuBusBatchChipsetCatchupRejectsLongAccess()
+	public void DeferredCpuBusBatchAdvanceUntilCpuGrantHandlesLongAccess()
 	{
 		const uint romBase = 0x00FC0000;
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
 		bus.MapReadOnlyMemory(romBase, new byte[]
 		{
 			0x4E, 0x71,
@@ -3839,35 +7251,185 @@ public sealed class AmigaBusTimingTests
 
 		Assert.Equal(0x12345678u, cpu.State.D[0]);
 		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
-		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupUsed);
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupRejectedUnsupported >= 1);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathAttempts >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathUsed);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathRejectedUnsupported >= 1);
+		Assert.True(scheduler.DeferredCpuWaitWindowLongSlot >= 1);
 	}
 
 	[Fact]
-	public void DeferredCpuBusBatchChipsetCatchupRejectsActiveBlitter()
+	public void DeferredCpuBusBatchReferencePathBypassesWaitSlotExecutor()
 	{
 		const uint romBase = 0x00FC0000;
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
-		bus.MapReadOnlyMemory(romBase, new byte[]
+		var baseline = new AmigaBus(captureBusAccesses: false);
+		var reference = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true,
+			forceCpuWaitSlotReference: true);
+		var program = new byte[]
 		{
 			0x4E, 0x71,
 			0x30, 0x10,
 			0x4E, 0x71
-		});
-		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
-		StartLongBlit(bus);
-		var cpu = M68kCoreFactory.CreateM68000Core(bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
-		cpu.Reset(romBase, 0x3000);
-		cpu.State.A[0] = 0x1000;
+		};
+		baseline.MapReadOnlyMemory(romBase, program);
+		reference.MapReadOnlyMemory(romBase, program);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x5678);
+		BigEndian.WriteUInt16(reference.ChipRam, 0x1000, 0x5678);
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(baseline, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var referenceCpu = M68kCoreFactory.CreateM68000Core(reference, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		referenceCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = 0x1000;
+		referenceCpu.State.A[0] = 0x1000;
 
-		cpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		referenceCpu.ExecuteInstruction();
 
-		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFFu);
-		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupAttempts >= 1);
-		Assert.Equal(0, scheduler.DeferredCpuBusBatchChipsetCatchupUsed);
-		Assert.True(scheduler.DeferredCpuBusBatchChipsetCatchupRejectedDynamicDma >= 1);
+		Assert.Equal(baselineCpu.State.ProgramCounter, referenceCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.D[0], referenceCpu.State.D[0]);
+		Assert.Equal(baselineCpu.State.Cycles, referenceCpu.State.Cycles);
+		var scheduler = reference.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathUsed);
+		Assert.Equal(0, scheduler.DeferredCpuWaitSlotShadowAttempts);
+		Assert.True(scheduler.DeferredCpuWaitWindowAttempts >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchAdvanceUntilCpuGrantHandlesActiveBlitter()
+	{
+		const uint romBase = 0x00FC0000;
+		var program = new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		};
+		var baseline = new AmigaBus(captureBusAccesses: false);
+		var batched = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		baseline.MapReadOnlyMemory(romBase, program);
+		batched.MapReadOnlyMemory(romBase, program);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1234);
+		BigEndian.WriteUInt16(batched.ChipRam, 0x1000, 0x1234);
+		StartLongBlit(baseline);
+		StartLongBlit(batched);
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(baseline, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var batchedCpu = M68kCoreFactory.CreateM68000Core(batched, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		batchedCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = 0x1000;
+		batchedCpu.State.A[0] = 0x1000;
+
+		baselineCpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		batchedCpu.ExecuteInstruction();
+
+		Assert.Equal(baselineCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.D[0], batchedCpu.State.D[0]);
+		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
+		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathAttempts >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathUsed);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathRejectedDynamicDma >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathRejectedUnstable);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterStateMismatches >= 1 ||
+			scheduler.DeferredCpuWaitSlotShadowMatches >= 1 ||
+			scheduler.DeferredCpuWaitSlotShadowUnsupported >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterScratchAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterScratchSupported >= 1 ||
+			scheduler.DeferredCpuWaitSlotShadowBlitterScratchUnsupported >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchBlitterScratchHandlesPartialAreaMicroOp()
+	{
+		const uint romBase = 0x00FC0000;
+		var program = new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		};
+		var baseline = new AmigaBus(captureBusAccesses: false);
+		var batched = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		baseline.MapReadOnlyMemory(romBase, program);
+		batched.MapReadOnlyMemory(romBase, program);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1234);
+		BigEndian.WriteUInt16(batched.ChipRam, 0x1000, 0x1234);
+		StartLongBlit(baseline);
+		StartLongBlit(batched);
+		Assert.True(baseline.Blitter.AdvanceCpuWaitAreaMicroOpTo(baseline.Blitter.CaptureSnapshot().CurrentCycle));
+		Assert.True(batched.Blitter.AdvanceCpuWaitAreaMicroOpTo(batched.Blitter.CaptureSnapshot().CurrentCycle));
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(baseline, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var batchedCpu = M68kCoreFactory.CreateM68000Core(batched, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		batchedCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = 0x1000;
+		batchedCpu.State.A[0] = 0x1000;
+
+		baselineCpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		batchedCpu.ExecuteInstruction();
+
+		Assert.Equal(baselineCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.D[0], batchedCpu.State.D[0]);
+		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
+		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterScratchAttempts >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterScratchSupported >= 1);
+		Assert.True(scheduler.DeferredCpuWaitSlotShadowBlitterScratchPartial >= 1);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchAdvanceUntilCpuGrantHandlesNastyBlitter()
+	{
+		const uint romBase = 0x00FC0000;
+		var program = new byte[]
+		{
+			0x4E, 0x71,
+			0x30, 0x10,
+			0x4E, 0x71
+		};
+		var baseline = new AmigaBus(captureBusAccesses: false);
+		var batched = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		baseline.MapReadOnlyMemory(romBase, program);
+		batched.MapReadOnlyMemory(romBase, program);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1234);
+		BigEndian.WriteUInt16(batched.ChipRam, 0x1000, 0x1234);
+		StartNastyBlit(baseline);
+		StartNastyBlit(batched);
+		var baselineCpu = M68kCoreFactory.CreateM68000Core(baseline, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var batchedCpu = M68kCoreFactory.CreateM68000Core(batched, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		baselineCpu.Reset(romBase, 0x3000);
+		batchedCpu.Reset(romBase, 0x3000);
+		baselineCpu.State.A[0] = 0x1000;
+		batchedCpu.State.A[0] = 0x1000;
+
+		baselineCpu.ExecuteInstruction();
+		baselineCpu.ExecuteInstruction();
+		batchedCpu.ExecuteInstruction();
+
+		Assert.Equal(baselineCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
+		Assert.Equal(baselineCpu.State.D[0], batchedCpu.State.D[0]);
+		Assert.Equal(baselineCpu.State.Cycles, batchedCpu.State.Cycles);
+		var scheduler = batched.CaptureHardwareSchedulerSnapshot();
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathAttempts >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathUsed);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathRejectedDynamicDma >= 1);
+		Assert.Equal(0, scheduler.DeferredCpuWaitWindowFastPathRejectedUnstable);
 	}
 
 	[Fact]
@@ -4023,6 +7585,1019 @@ public sealed class AmigaBusTimingTests
 		return program.ToArray();
 	}
 
+	private static (ushort Value, int BeamLine, int BeamHorizontal)[] RunSynccpuBeamPollingMarkers(
+		int startOffset,
+		int markerCount)
+	{
+		const int programAddress = 0x1000;
+		var program = CreateSynccpuBeamPollingProgram();
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, programAddress, program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(programAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + startOffset;
+		var stopCycle = cpu.State.Cycles + (24L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		while (cpu.State.Cycles < stopCycle &&
+			bus.CustomRegisterWrites.Count(write => write.Address == 0x180) < markerCount)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		return bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x180)
+			.Take(markerCount)
+			.Select(write =>
+			{
+				var beam = bus.GetPalBeamPosition(write.Cycle);
+				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
+			})
+			.ToArray();
+	}
+
+	private static int ExtractNamedScore(string entry, string name)
+	{
+		var prefix = name + "=";
+		var start = entry.IndexOf(prefix, StringComparison.Ordinal);
+		Assert.True(start >= 0, entry);
+		start += prefix.Length;
+		var end = entry.IndexOf(',', start);
+		if (end < 0)
+		{
+			end = entry.Length;
+		}
+
+		return int.Parse(entry[start..end]);
+	}
+
+	private static (ushort Value, int BeamLine, int BeamHorizontal)[] RunJsrSynccpuBeamPollingMarkers(
+		byte[] jsrInstruction,
+		int startOffset,
+		int markerCount)
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, mainAddress, jsrInstruction);
+		Write(bus.ChipRam, synccpuAddress, CreateSynccpuBeamPollingProgram());
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + startOffset;
+		var stopCycle = cpu.State.Cycles + (24L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		while (cpu.State.Cycles < stopCycle &&
+			bus.CustomRegisterWrites.Count(write => write.Address == 0x180) < markerCount)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		return bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x180)
+			.Take(markerCount)
+			.Select(write =>
+			{
+				var beam = bus.GetPalBeamPosition(write.Cycle);
+				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
+			})
+			.ToArray();
+	}
+
+	private static (AmigaBus Bus, long Loop2EntryCycle, uint ProgramCounter, long Cycle, int InterruptDispatches, Cycle01vBoundary[] Boundaries, CustomRegisterWrite[] Writes) RunCycle01vDelayLoopProbe(
+		int startLine,
+		int startOffset,
+		int markerCount,
+		bool enableCycleCopper = false,
+		bool inlineLoop2 = false,
+		bool enableSyntheticVblankIrq = false,
+		int syntheticIrqNops = 0,
+		bool useCycle01vIrq3Handler = false,
+		uint cycle01vIrq3InitialD0 = 0x8001,
+		long syntheticVblankIrqOffset = 0,
+		bool advanceLiveAgnusForInterruptPolling = true,
+		int cycle01vIrq3PaddingNops = 0,
+		bool enableHardwareSpecialization = false,
+		bool enableDeferredCpuBusBatch = false)
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		const int irq3Address = 0x1500;
+		var loop2Address = inlineLoop2 ? 0x10A6 : 0x1400;
+
+		var bus = new AmigaBus(
+			captureBusAccesses: true,
+			enableLiveAgnusDma: true,
+			enableHardwareSpecialization: enableHardwareSpecialization,
+			enableDeferredCpuBusBatch: enableDeferredCpuBusBatch);
+		if (enableCycleCopper)
+		{
+			StartCopperListAtFrameStart(bus, CreateCycle01vCopperList());
+		}
+
+		Write(
+			bus.ChipRam,
+			mainAddress,
+			inlineLoop2
+				? CreateCycle01vInlineDelayLoopMainProgram(synccpuAddress, branchBackToMain: false)
+				: CreateCycle01vDelayLoopMainProgram(synccpuAddress, loop2Address));
+		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
+		EmitWord(synccpu, 0x4E75); // RTS
+		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
+		if (!inlineLoop2)
+		{
+			Write(bus.ChipRam, loop2Address, CreateCycle01vLoop2Program());
+		}
+		Cycle01vIrq3HandlerLayout? irq3Handler = null;
+		if (enableSyntheticVblankIrq)
+		{
+			irq3Handler = useCycle01vIrq3Handler
+				? CreateCycle01vIrq3Handler(irq3Address, cycle01vIrq3PaddingNops)
+				: null;
+			var irq3Program = irq3Handler?.Program ?? CreateSyntheticVblankIrq3Handler(syntheticIrqNops);
+			Write(bus.ChipRam, irq3Address, irq3Program);
+			bus.WriteLong((24u + 3u) * 4u, irq3Address);
+			bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqVerticalBlank));
+		}
+
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		if (enableSyntheticVblankIrq)
+		{
+			cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		}
+
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		if (useCycle01vIrq3Handler)
+		{
+			cpu.State.D[0] = cycle01vIrq3InitialD0;
+		}
+
+		cpu.State.Cycles = (startLine * (long)AmigaConstants.A500PalCpuCyclesPerRasterLine) + startOffset;
+		if (enableSyntheticVblankIrq)
+		{
+			bus.RequestHardwareInterrupt(
+				AmigaConstants.IntreqVerticalBlank,
+				bus.GetNextPalFrameStartCycle(cpu.State.Cycles) + syntheticVblankIrqOffset);
+		}
+
+		var stopCycle = cpu.State.Cycles + (2000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		var loop2EntryCycle = -1L;
+		var interruptDispatches = 0;
+		var boundaryCycles = new Dictionary<string, long>(StringComparer.Ordinal)
+		{
+			["start"] = cpu.State.Cycles
+		};
+		var boundaryD3 = new Dictionary<string, ushort>(StringComparer.Ordinal)
+		{
+			["start"] = (ushort)cpu.State.D[3]
+		};
+
+		while (cpu.State.Cycles < stopCycle &&
+			(loop2EntryCycle < 0 ||
+				bus.CustomRegisterWrites.Count(write => write.Address == 0x180 && write.Cycle >= loop2EntryCycle) < markerCount))
+		{
+			var interruptAcceptCycle = cpu.State.Cycles;
+			var interruptAcceptD3 = (ushort)cpu.State.D[3];
+			if (DispatchPendingHardwareInterruptIfNeeded(bus, cpu, advanceLiveAgnusForInterruptPolling))
+			{
+				interruptDispatches++;
+				if (irq3Handler != null)
+				{
+					boundaryCycles.TryAdd("irqAccept", interruptAcceptCycle);
+					boundaryD3.TryAdd("irqAccept", interruptAcceptD3);
+					boundaryCycles.TryAdd("irqEntry", cpu.State.Cycles);
+					boundaryD3.TryAdd("irqEntry", (ushort)cpu.State.D[3]);
+				}
+			}
+
+			RecordCycle01vDelayLoopBoundary(cpu, boundaryCycles, boundaryD3);
+			if (irq3Handler != null)
+			{
+				RecordCycle01vIrq3Boundary(cpu, irq3Handler, boundaryCycles, boundaryD3);
+			}
+
+			var instructionPc = cpu.State.ProgramCounter;
+			if (loop2EntryCycle < 0 && cpu.State.ProgramCounter == loop2Address)
+			{
+				loop2EntryCycle = cpu.State.Cycles;
+				boundaryCycles.TryAdd("loop2Entry", loop2EntryCycle);
+				boundaryD3.TryAdd("loop2Entry", (ushort)cpu.State.D[3]);
+			}
+
+			cpu.ExecuteInstruction();
+			if (irq3Handler != null && instructionPc == irq3Handler.RtePc)
+			{
+				boundaryCycles.TryAdd("irqRteComplete", cpu.State.Cycles);
+				boundaryD3.TryAdd("irqRteComplete", (ushort)cpu.State.D[3]);
+			}
+		}
+		RecordCycle01vDelayLoopBoundary(cpu, boundaryCycles, boundaryD3);
+
+		return (
+			bus,
+			loop2EntryCycle,
+			cpu.State.ProgramCounter,
+			cpu.State.Cycles,
+			interruptDispatches,
+			boundaryCycles
+				.Select(pair => new Cycle01vBoundary(pair.Key, pair.Value, boundaryD3.GetValueOrDefault(pair.Key)))
+				.ToArray(),
+			bus.CustomRegisterWrites
+				.Where(write => write.Address == 0x180)
+				.ToArray());
+	}
+
+	private static bool DispatchPendingHardwareInterruptIfNeeded(AmigaBus bus, IM68kCore cpu, bool advanceLiveAgnus = true)
+	{
+		bus.AdvanceDmaTo(cpu.State.Cycles, advanceLiveAgnus);
+		var level = bus.Paula.GetHighestCpuVisibleInterruptLevel(cpu.State.Cycles);
+		if (level > 0)
+		{
+			var interruptMask = (cpu.State.StatusRegister >> 8) & 0x07;
+			if (level <= interruptMask)
+			{
+				return false;
+			}
+
+			cpu.RequestInterrupt(level, (uint)((24 + level) * 4));
+			return true;
+		}
+
+		return false;
+	}
+
+	private static (AmigaBus Bus, long Loop2EntryCycle, uint ProgramCounter, long Cycle, int InterruptDispatches, Cycle01vBoundary[] Boundaries, CustomRegisterWrite[] Writes) RunCycle01vDelayLoopProbe(
+		int startOffset,
+		int markerCount,
+		bool enableCycleCopper = false,
+		bool inlineLoop2 = false)
+		=> RunCycle01vDelayLoopProbe(
+			startLine: 239,
+			startOffset,
+			markerCount,
+			enableCycleCopper,
+			inlineLoop2);
+
+	private static (AmigaBus Bus, CustomRegisterWrite[] BurstWrites) RunCycle01vInlineMainLoopProbe(
+		int startOffset,
+		int burstCount)
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		const int loop2Address = 0x10A6;
+
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, mainAddress, CreateCycle01vInlineDelayLoopMainProgram(synccpuAddress, branchBackToMain: true));
+		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
+		EmitWord(synccpu, 0x4E75); // RTS
+		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
+
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + startOffset;
+		var stopCycle = cpu.State.Cycles + (4000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		var burstWrites = new List<CustomRegisterWrite>(burstCount);
+		var pendingBurstWriteIndex = -1;
+		var armedForBurst = true;
+
+		while (cpu.State.Cycles < stopCycle && burstWrites.Count < burstCount)
+		{
+			if (!armedForBurst && cpu.State.ProgramCounter == mainAddress)
+			{
+				armedForBurst = true;
+			}
+
+			if (armedForBurst &&
+				pendingBurstWriteIndex < 0 &&
+				cpu.State.ProgramCounter == loop2Address &&
+				(ushort)cpu.State.D[3] == 300)
+			{
+				pendingBurstWriteIndex = bus.CustomRegisterWrites.Count;
+				armedForBurst = false;
+			}
+
+			cpu.ExecuteInstruction();
+			if (pendingBurstWriteIndex >= 0)
+			{
+				var burstWrite = bus.CustomRegisterWrites
+					.Skip(pendingBurstWriteIndex)
+					.FirstOrDefault(write => write.Address == 0x180 && write.Value == 0x0F0F);
+				if (burstWrite.Address == 0x180)
+				{
+					burstWrites.Add(burstWrite);
+					pendingBurstWriteIndex = -1;
+				}
+			}
+		}
+
+		return (bus, burstWrites.ToArray());
+	}
+
+	private static CycleVposrProbeSample RunCycleVposrProbeSample(int probeNops)
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		var afterProbeReadPc = (uint)(mainAddress + 6 + (probeNops * 2) + 4);
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, mainAddress, CreateCycleVposrProbeMainProgram(synccpuAddress, probeNops));
+		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
+		EmitWord(synccpu, 0x4E75); // RTS
+		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
+
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 56;
+		var startCycle = cpu.State.Cycles;
+		var stopCycle = cpu.State.Cycles + (2000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		var afterSynccpuCycle = -1L;
+		var beforeProbeReadCycle = -1L;
+
+		while (cpu.State.Cycles < stopCycle && cpu.State.ProgramCounter != afterProbeReadPc)
+		{
+			if (cpu.State.ProgramCounter == mainAddress + 6 && afterSynccpuCycle < 0)
+			{
+				afterSynccpuCycle = cpu.State.Cycles;
+			}
+
+			if (cpu.State.ProgramCounter == afterProbeReadPc - 4 && beforeProbeReadCycle < 0)
+			{
+				beforeProbeReadCycle = cpu.State.Cycles;
+			}
+
+			cpu.ExecuteInstruction();
+		}
+
+		Assert.Equal(afterProbeReadPc, cpu.State.ProgramCounter);
+		var read = bus.CustomRegisterReads.Last(customRead =>
+			customRead.Address == 0x004 &&
+			customRead.Kind == AmigaBusAccessKind.CpuDataRead);
+		var sampleBeam = bus.GetPalBeamPosition(read.SampleCycle);
+		var requestBeam = bus.GetPalBeamPosition(read.RequestedCycle);
+		var grantBeam = bus.GetPalBeamPosition(read.GrantedCycle);
+		return new CycleVposrProbeSample(
+			probeNops,
+			startCycle,
+			afterSynccpuCycle,
+			beforeProbeReadCycle,
+			read,
+			requestBeam,
+			grantBeam,
+			sampleBeam,
+			cpu.State.D[0],
+			cpu.State.Cycles);
+	}
+
+	private static (AmigaBus Bus, CustomRegisterRead[] Reads, int InterruptDispatches, AmigaCpuBusPhaseTrace[] FirstInterruptPhases) RunRepeatedCycleVposrProbeSamples(
+		int probeNops,
+		int sampleCount,
+		bool enableCycleCopper = false,
+		bool enableVblankIrq = false,
+		bool advanceDmaPerInstruction = false)
+	{
+		const int mainAddress = 0x1000;
+		const int synccpuAddress = 0x1100;
+		const int irq3Address = 0x1500;
+		var afterProbeReadPc = (uint)(mainAddress + 6 + (probeNops * 2) + 4);
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		if (enableCycleCopper)
+		{
+			StartCopperListAtFrameStart(bus, CreateCycle01vCopperList());
+		}
+
+		Write(
+			bus.ChipRam,
+			mainAddress,
+			CreateCycle01vInlineDelayLoopMainProgram(
+				synccpuAddress,
+				branchBackToMain: true,
+				probeNops));
+		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
+		EmitWord(synccpu, 0x4E75); // RTS
+		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
+		if (enableVblankIrq)
+		{
+			var handler = CreateCycle01vIrq3Handler(irq3Address);
+			Write(bus.ChipRam, irq3Address, handler.Program);
+			bus.WriteLong((24u + 3u) * 4u, irq3Address);
+			bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqVerticalBlank));
+		}
+
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(mainAddress, 0x3000);
+		if (enableVblankIrq)
+		{
+			cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		}
+
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 56;
+		var stopCycle = cpu.State.Cycles + (4000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+		var reads = new List<CustomRegisterRead>(sampleCount);
+		var interruptDispatches = 0;
+		var firstInterruptPhases = Array.Empty<AmigaCpuBusPhaseTrace>();
+
+		while (cpu.State.Cycles < stopCycle && reads.Count < sampleCount)
+		{
+			var interruptStartCycle = cpu.State.Cycles;
+			if (enableVblankIrq && DispatchPendingHardwareInterruptIfNeeded(bus, cpu))
+			{
+				interruptDispatches++;
+				if (firstInterruptPhases.Length == 0)
+				{
+					firstInterruptPhases = bus.CpuBusPhases.Where(phase =>
+						phase.CpuPhase.RequestedCycle >= interruptStartCycle &&
+						phase.CpuPhase.RequestedCycle <= cpu.State.Cycles).ToArray();
+				}
+			}
+			else if (advanceDmaPerInstruction)
+			{
+				bus.AdvanceDmaTo(cpu.State.Cycles);
+			}
+
+			cpu.ExecuteInstruction();
+			if (cpu.State.ProgramCounter == afterProbeReadPc)
+			{
+				reads.Add(bus.CustomRegisterReads.Last(read =>
+					read.Address == 0x004 &&
+					read.Kind == AmigaBusAccessKind.CpuDataRead));
+			}
+		}
+
+		return (bus, reads.ToArray(), interruptDispatches, firstInterruptPhases);
+	}
+
+	private static string FormatRepeatedCycleVposrProbeSamples(
+		string name,
+		(AmigaBus Bus, CustomRegisterRead[] Reads, int InterruptDispatches, AmigaCpuBusPhaseTrace[] FirstInterruptPhases) result)
+		=> $"{name}/irq={result.InterruptDispatches}:" + string.Join(
+			",",
+			result.Reads.Select(read =>
+			{
+				var sample = result.Bus.GetPalBeamPosition(read.SampleCycle);
+				return $"0x{read.Value:X4}@{read.SampleCycle}/v{sample.BeamLine}h{sample.BeamHorizontal}";
+			}));
+
+	private static byte[] CreateCycleVposrProbeMainProgram(int synccpuAddress, int probeNops)
+	{
+		var program = new List<byte>(16 + (probeNops * 2));
+		EmitWord(program, 0x4EB9); // JSR synccpu
+		EmitWord(program, (ushort)(synccpuAddress >> 16));
+		EmitWord(program, (ushort)synccpuAddress);
+		for (var i = 0; i < probeNops; i++)
+		{
+			EmitWord(program, 0x4E71);
+		}
+
+		EmitWord(program, 0x3029); // MOVE.W VPOSR(A1),D0
+		EmitWord(program, 0x0004);
+		EmitWord(program, 0x4E75); // RTS, not reached by the probe
+		return program.ToArray();
+	}
+
+	private static void RecordCycle01vDelayLoopBoundary(
+		IM68kCore cpu,
+		IDictionary<string, long> boundaries,
+		IDictionary<string, ushort>? boundaryD3 = null)
+	{
+		var name = cpu.State.ProgramCounter switch
+		{
+			0x1006 => "afterSynccpu",
+			0x108E => "afterProbeNops",
+			0x1092 => "afterVposrRead",
+			0x1096 => "delayLoopStart",
+			0x109A => "afterDelayLoop",
+			0x109E => "afterMove300",
+			0x10A2 => "afterMoveF0f",
+			0x10A6 => "afterMoveZero",
+			0x1400 => "loop2Entry",
+			_ => null
+		};
+		if (name != null && boundaries.TryAdd(name, cpu.State.Cycles))
+		{
+			boundaryD3?.TryAdd(name, (ushort)cpu.State.D[3]);
+		}
+	}
+
+	private static byte[] CreateCycle01vDelayLoopMainProgram(int synccpuAddress, int loop2Address)
+	{
+		var program = new List<byte>(170);
+		EmitWord(program, 0x4EB9); // JSR synccpu
+		EmitWord(program, (ushort)(synccpuAddress >> 16));
+		EmitWord(program, (ushort)synccpuAddress);
+		for (var i = 0; i < 68; i++)
+		{
+			EmitWord(program, 0x4E71);
+		}
+
+		EmitWord(program, 0x3029); // MOVE.W VPOSR(A1),D0
+		EmitWord(program, 0x0004);
+		EmitWord(program, 0x363C); // MOVE.W #12000,D3
+		EmitWord(program, 0x2EE0);
+		var delayLoop = program.Count;
+		EmitWord(program, 0x51CB); // DBRA D3,.loop1
+		EmitBranchDisplacement(program, delayLoop);
+		EmitWord(program, 0x363C); // MOVE.W #300,D3
+		EmitWord(program, 0x012C);
+		EmitWord(program, 0x383C); // MOVE.W #$0F0F,D4
+		EmitWord(program, 0x0F0F);
+		EmitWord(program, 0x3A3C); // MOVE.W #$0000,D5
+		EmitWord(program, 0x0000);
+		EmitWord(program, 0x4EF9); // JMP loop2
+		EmitWord(program, (ushort)(loop2Address >> 16));
+		EmitWord(program, (ushort)loop2Address);
+		return program.ToArray();
+	}
+
+	private static byte[] CreateCycle01vInlineDelayLoopMainProgram(
+		int synccpuAddress,
+		bool branchBackToMain,
+		int probeNops = 68)
+	{
+		var program = new List<byte>(180);
+		EmitWord(program, 0x4EB9); // JSR synccpu
+		EmitWord(program, (ushort)(synccpuAddress >> 16));
+		EmitWord(program, (ushort)synccpuAddress);
+		for (var i = 0; i < probeNops; i++)
+		{
+			EmitWord(program, 0x4E71);
+		}
+
+		EmitWord(program, 0x3029); // MOVE.W VPOSR(A1),D0
+		EmitWord(program, 0x0004);
+		EmitWord(program, 0x363C); // MOVE.W #12000,D3
+		EmitWord(program, 0x2EE0);
+		var delayLoop = program.Count;
+		EmitWord(program, 0x51CB); // DBRA D3,.loop1
+		EmitBranchDisplacement(program, delayLoop);
+		EmitWord(program, 0x363C); // MOVE.W #300,D3
+		EmitWord(program, 0x012C);
+		EmitWord(program, 0x383C); // MOVE.W #$0F0F,D4
+		EmitWord(program, 0x0F0F);
+		EmitWord(program, 0x3A3C); // MOVE.W #$0000,D5
+		EmitWord(program, 0x0000);
+		var loop2 = program.Count;
+		EmitWord(program, 0x3344); // MOVE.W D4,COLOR00(A1)
+		EmitWord(program, 0x0180);
+		EmitWord(program, 0x3345); // MOVE.W D5,COLOR00(A1)
+		EmitWord(program, 0x0180);
+		EmitWord(program, 0x51CB); // DBRA D3,.loop2
+		EmitBranchDisplacement(program, loop2);
+		if (branchBackToMain)
+		{
+			EmitWord(program, 0x6000); // BRA.W mainloop
+			EmitBranchDisplacement(program, 0);
+		}
+		else
+		{
+			EmitWord(program, 0x4E75);
+		}
+
+		return program.ToArray();
+	}
+
+	private static byte[] CreateCycle01vLoop2Program()
+	{
+		var program = new List<byte>(12);
+		var loop = program.Count;
+		EmitWord(program, 0x3344); // MOVE.W D4,COLOR00(A1)
+		EmitWord(program, 0x0180);
+		EmitWord(program, 0x3345); // MOVE.W D5,COLOR00(A1)
+		EmitWord(program, 0x0180);
+		EmitWord(program, 0x51CB); // DBRA D3,.loop2
+		EmitBranchDisplacement(program, loop);
+		EmitWord(program, 0x4E75);
+		return program.ToArray();
+	}
+
+	private static byte[] CreateSyntheticVblankIrq3Handler(int nopCount)
+	{
+		var program = new List<byte>(8 + (nopCount * 2));
+		EmitWord(program, 0x337C); // MOVE.W #$0020,INTREQ(A1)
+		EmitWord(program, AmigaConstants.IntreqVerticalBlank);
+		EmitWord(program, 0x009C);
+		for (var i = 0; i < nopCount; i++)
+		{
+			EmitWord(program, 0x4E71);
+		}
+
+		EmitWord(program, 0x4E73); // RTE
+		return program.ToArray();
+	}
+
+	private static Cycle01vIrq3HandlerLayout CreateCycle01vIrq3Handler(int handlerAddress, int paddingNops = 0)
+	{
+		var program = new List<byte>(256);
+		var leaPatches = new List<(int ExtensionOffset, int Bit)>(16);
+		var movemSaveOffset = program.Count;
+		EmitWord(program, 0x48E7); // MOVEM.L D0-A6,-(SP)
+		EmitWord(program, 0xFFFE);
+		var ackOffset = program.Count;
+		EmitWord(program, 0x337C); // MOVE.W #$0020,INTREQ(A1)
+		EmitWord(program, AmigaConstants.IntreqVerticalBlank);
+		EmitWord(program, 0x009C);
+		var moveD5Offset = program.Count;
+		EmitWord(program, 0x3A3C); // MOVE.W #$0CCC,D5
+		EmitWord(program, 0x0CCC);
+		var firstTestOffset = program.Count;
+
+		for (var bit = 0; bit < 16; bit++)
+		{
+			EmitWord(program, 0x41FA); // LEA (bitN+2)(PC),A0
+			var extensionOffset = program.Count;
+			EmitWord(program, 0);
+			leaPatches.Add((extensionOffset, bit));
+			EmitWord(program, 0x30BC); // MOVE.W #$0333,(A0)
+			EmitWord(program, 0x0333);
+			EmitWord(program, 0x0800); // BTST #bit,D0
+			EmitWord(program, (ushort)bit);
+			var branchOffset = program.Count;
+			EmitWord(program, 0x6700); // BEQ.S next
+			EmitWord(program, 0x3085); // MOVE.W D5,(A0)
+			PatchShortBranch(program, branchOffset, program.Count);
+		}
+
+		for (var i = 0; i < paddingNops; i++)
+		{
+			EmitWord(program, 0x4E71);
+		}
+
+		var restoreOffset = program.Count;
+		EmitWord(program, 0x4CDF); // MOVEM.L (SP)+,D0-A6
+		EmitWord(program, 0x7FFF);
+		var rteOffset = program.Count;
+		EmitWord(program, 0x4E73); // RTE
+		var dataOffset = program.Count;
+		for (var bit = 0; bit < 16; bit++)
+		{
+			EmitWord(program, 0x0180);
+			EmitWord(program, 0x0000);
+		}
+
+		foreach (var patch in leaPatches)
+		{
+			var targetOffset = dataOffset + (patch.Bit * 4) + 2;
+			var displacement = (handlerAddress + targetOffset) - (handlerAddress + patch.ExtensionOffset);
+			var displacementWord = unchecked((ushort)displacement);
+			program[patch.ExtensionOffset] = (byte)(displacementWord >> 8);
+			program[patch.ExtensionOffset + 1] = (byte)displacementWord;
+		}
+
+		return new Cycle01vIrq3HandlerLayout(
+			program.ToArray(),
+			(uint)(handlerAddress + movemSaveOffset),
+			(uint)(handlerAddress + ackOffset),
+			(uint)(handlerAddress + moveD5Offset),
+			(uint)(handlerAddress + firstTestOffset),
+			(uint)(handlerAddress + restoreOffset),
+			(uint)(handlerAddress + rteOffset),
+			(uint)(handlerAddress + dataOffset));
+	}
+
+	private static Cycle01vIrq3HandlerPatchProbeResult RunCycle01vIrq3HandlerPatchProbe(uint d0)
+	{
+		const int handlerAddress = 0x1500;
+		var handler = CreateCycle01vIrq3Handler(handlerAddress);
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, handlerAddress, handler.Program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(handlerAddress, 0x3F00);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.D[0] = d0;
+
+		for (var i = 0; i < 512 && cpu.State.ProgramCounter != handler.RtePc; i++)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var dataOffset = checked((int)handler.DataPc);
+		var bit0Offset = dataOffset + 2;
+		var bit15Offset = dataOffset + (15 * 4) + 2;
+		var values = Enumerable.Range(0, 16)
+			.Select(bit => BigEndian.ReadUInt16(bus.ChipRam, dataOffset + (bit * 4) + 2, $"bit{bit} value"))
+			.ToArray();
+		return new Cycle01vIrq3HandlerPatchProbeResult(
+			BigEndian.ReadUInt16(bus.ChipRam, dataOffset, "bit0 register"),
+			BigEndian.ReadUInt16(bus.ChipRam, bit0Offset, "bit0 value"),
+			BigEndian.ReadUInt16(bus.ChipRam, dataOffset + (15 * 4), "bit15 register"),
+			BigEndian.ReadUInt16(bus.ChipRam, bit15Offset, "bit15 value"),
+			handler.RtePc,
+			cpu.State.ProgramCounter,
+			values);
+	}
+
+	private static void RecordCycle01vIrq3Boundary(
+		IM68kCore cpu,
+		Cycle01vIrq3HandlerLayout handler,
+		IDictionary<string, long> boundaries,
+		IDictionary<string, ushort>? boundaryD3 = null)
+	{
+		var name = cpu.State.ProgramCounter switch
+		{
+			var pc when pc == handler.MovemSavePc => "movemSave",
+			var pc when pc == handler.AckPc => "ack",
+			var pc when pc == handler.MoveD5Pc => "moveD5",
+			var pc when pc == handler.FirstTestPc => "firstTest",
+			var pc when pc == handler.RestorePc => "restore",
+			var pc when pc == handler.RtePc => "rte",
+			_ => null
+		};
+		if (name != null && boundaries.TryAdd(name, cpu.State.Cycles))
+		{
+			boundaryD3?.TryAdd(name, (ushort)cpu.State.D[3]);
+		}
+	}
+
+	private static void PatchShortBranch(List<byte> program, int branchOffset, int targetOffset)
+	{
+		var displacement = targetOffset - (branchOffset + 2);
+		if (displacement < sbyte.MinValue || displacement > sbyte.MaxValue)
+		{
+			throw new InvalidOperationException($"Short branch displacement out of range: {displacement}.");
+		}
+
+		program[branchOffset + 1] = unchecked((byte)(sbyte)displacement);
+	}
+
+	private sealed record Cycle01vIrq3HandlerLayout(
+		byte[] Program,
+		uint MovemSavePc,
+		uint AckPc,
+		uint MoveD5Pc,
+		uint FirstTestPc,
+		uint RestorePc,
+		uint RtePc,
+		uint DataPc);
+
+	private sealed record Cycle01vIrq3HandlerPatchProbeResult(
+		ushort Bit0Register,
+		ushort Bit0Value,
+		ushort Bit15Register,
+		ushort Bit15Value,
+		uint RtePc,
+		uint EndPc,
+		ushort[] Values);
+
+	private static (ushort First, ushort Second)[] CreateCycle01vCopperList()
+	{
+		var instructions = new List<(ushort First, ushort Second)>();
+		for (var line = 0x40; line <= 0xC0; line += 0x08)
+		{
+			instructions.Add(((ushort)((line << 8) | 0x01), 0xFFFE));
+			instructions.Add((0x0180, 0x0F00));
+			instructions.Add(((ushort)((line << 8) | 0xD9), 0xFFFE));
+			instructions.Add((0x0180, 0x0000));
+		}
+
+		instructions.Add((0xFFFF, 0xFFFE));
+		return instructions.ToArray();
+	}
+
+	private static string BuildColorWriteBeamDiagnostic(AmigaBus bus, IReadOnlyList<CustomRegisterWrite> writes)
+		=> string.Join(
+			"; ",
+			writes
+				.Where(write => write.Address == 0x180)
+				.Take(16)
+				.Select(write =>
+				{
+					var beam = bus.GetPalBeamPosition(write.Cycle);
+					return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}/c{write.Cycle}";
+				}));
+
+	private static string BuildCycle01vBoundaryDiagnostic(AmigaBus bus, IReadOnlyList<Cycle01vBoundary> boundaries)
+	{
+		var origin = boundaries.First(boundary => boundary.Name == "start").Cycle;
+		return string.Join(
+			"; ",
+			boundaries.Select(boundary =>
+			{
+				var beam = bus.GetPalBeamPosition(boundary.Cycle);
+				return $"{boundary.Name}=+{boundary.Cycle - origin}/v{beam.BeamLine}h{beam.BeamHorizontal}";
+			}));
+	}
+
+	private static long[] GetCycle01vBoundaryCycles(
+		IReadOnlyList<Cycle01vBoundary> boundaries,
+		IReadOnlyList<string> names)
+	{
+		var map = boundaries.ToDictionary(boundary => boundary.Name, boundary => boundary.Cycle, StringComparer.Ordinal);
+		return names.Select(name => map.TryGetValue(name, out var cycle) ? cycle : -1L).ToArray();
+	}
+
+	private static string FormatCycle01vBoundaryCycles(
+		IReadOnlyList<Cycle01vBoundary> boundaries,
+		IReadOnlyList<string> names)
+		=> string.Join(
+			",",
+			names.Zip(GetCycle01vBoundaryCycles(boundaries, names), (name, cycle) => $"{name}={cycle}"));
+
+	private static string BuildCycle01vAccessDiagnostic(AmigaBus bus, IReadOnlyList<Cycle01vBoundary> boundaries)
+	{
+		var start = boundaries.First(boundary => boundary.Name == "start").Cycle;
+		var end = boundaries.FirstOrDefault(boundary => boundary.Name == "loop2Entry")?.Cycle ?? long.MaxValue;
+		var window = bus.BusAccesses
+			.Where(access => access.Request.RequestedCycle >= start && access.Request.RequestedCycle <= end)
+			.ToArray();
+		var copper = window
+			.Where(access => access.Request.Requester == AmigaBusRequester.Copper)
+			.ToArray();
+		var cpuWait = window
+			.Where(access => access.Request.Requester == AmigaBusRequester.Cpu && access.WaitCycles > 0)
+			.ToArray();
+		var firstCopper = copper.FirstOrDefault();
+		var firstCpuWait = cpuWait.FirstOrDefault();
+		return
+			$"all={window.Length},copper={copper.Length},cpuWait={cpuWait.Length}," +
+			$"firstCopper={FormatAccess(bus, firstCopper)}," +
+			$"firstCpuWait={FormatAccess(bus, firstCpuWait)}";
+	}
+
+	private static string BuildCycle01vProbeSummary(
+		(AmigaBus Bus, long Loop2EntryCycle, uint ProgramCounter, long Cycle, int InterruptDispatches, Cycle01vBoundary[] Boundaries, CustomRegisterWrite[] Writes) result)
+	{
+		var firstLoopWrite = result.Writes.First(write => write.Cycle >= result.Loop2EntryCycle && write.Value == 0x0F0F);
+		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+		var start = result.Boundaries.First(boundary => boundary.Name == "start").Cycle;
+		var end = result.Boundaries.First(boundary => boundary.Name == "loop2Entry").Cycle;
+		var window = result.Bus.BusAccesses
+			.Where(access => access.Request.RequestedCycle >= start && access.Request.RequestedCycle <= end)
+			.ToArray();
+		var copperCount = window.Count(access => access.Request.Requester == AmigaBusRequester.Copper);
+		var cpuWaitCount = window.Count(access => access.Request.Requester == AmigaBusRequester.Cpu && access.WaitCycles > 0);
+		var cpuWaitCycles = window
+			.Where(access => access.Request.Requester == AmigaBusRequester.Cpu)
+			.Sum(access => access.WaitCycles);
+		return $"v{beam.BeamLine}h{beam.BeamHorizontal}/irq{result.InterruptDispatches}/cu{copperCount}/cw{cpuWaitCount}/ws{cpuWaitCycles}";
+	}
+
+	private static string BuildCycleVposrProbeSampleDiagnostic(params CycleVposrProbeSample[] samples)
+		=> string.Join(
+			" | ",
+			samples.Select(sample =>
+				$"nops={sample.ProbeNops},value=0x{sample.Read.Value:X4},d0=0x{sample.D0:X4}," +
+				$"bit0={sample.Read.Value & 1},start=+0," +
+				$"afterSynccpu=+{sample.AfterSynccpuCycle - sample.StartCycle}," +
+				$"beforeRead=+{sample.BeforeProbeReadCycle - sample.StartCycle}," +
+				$"read=req+{sample.Read.RequestedCycle - sample.StartCycle}/v{sample.RequestBeam.BeamLine}h{sample.RequestBeam.BeamHorizontal}," +
+				$"grant+{sample.Read.GrantedCycle - sample.StartCycle}/v{sample.GrantBeam.BeamLine}h{sample.GrantBeam.BeamHorizontal}," +
+				$"sample+{sample.Read.SampleCycle - sample.StartCycle}/v{sample.SampleBeam.BeamLine}h{sample.SampleBeam.BeamHorizontal}," +
+				$"done+{sample.Read.CompletedCycle - sample.StartCycle}," +
+				$"cpu+{sample.CompletedCycle - sample.StartCycle}"));
+
+	private static string FormatAccess(AmigaBus bus, AmigaBusAccessResult access)
+	{
+		if (access.Request.RequestedCycle == 0 &&
+			access.GrantedCycle == 0 &&
+			access.CompletedCycle == 0)
+		{
+			return "none";
+		}
+
+		var beam = bus.GetPalBeamPosition(access.GrantedCycle);
+		return
+			$"{access.Request.Requester}/{access.Request.Kind}/0x{access.Request.Address:X6}" +
+			$"@r{access.Request.RequestedCycle}/g{access.GrantedCycle}/w{access.WaitCycles}/v{beam.BeamLine}h{beam.BeamHorizontal}";
+	}
+
+	private sealed record Cycle01vBoundary(string Name, long Cycle, ushort D3 = 0);
+
+	private sealed record CycleVposrProbeSample(
+		int ProbeNops,
+		long StartCycle,
+		long AfterSynccpuCycle,
+		long BeforeProbeReadCycle,
+		CustomRegisterRead Read,
+		AgnusPalBeamPosition RequestBeam,
+		AgnusPalBeamPosition GrantBeam,
+		AgnusPalBeamPosition SampleBeam,
+		uint D0,
+		long CompletedCycle);
+
+	private static (AmigaBus Bus, IM68kCore Cpu, CustomRegisterRead[] Reads, CustomRegisterWrite[] ColorWrites)
+		RunWaitLineLoopProbe(
+			byte[] program,
+			int startLine,
+			int startOffset,
+			bool stopOnColorWrite,
+			int maxInstructions = 256)
+	{
+		const int programAddress = 0x1000;
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, programAddress, program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(programAddress, 0x3000);
+		cpu.State.A[1] = 0x00DFF000;
+		cpu.State.A[3] = 0x00DFF006;
+		cpu.State.Cycles = (startLine * (long)AmigaConstants.A500PalCpuCyclesPerRasterLine) + startOffset;
+		var stopCycle = cpu.State.Cycles + (4L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+		for (var i = 0; i < maxInstructions && cpu.State.Cycles < stopCycle; i++)
+		{
+			cpu.ExecuteInstruction();
+			if (stopOnColorWrite && bus.CustomRegisterWrites.Any(write => write.Address == 0x180))
+			{
+				break;
+			}
+		}
+
+		return (
+			bus,
+			cpu,
+			bus.CustomRegisterReads
+				.Where(read => read.Address is 0x004 or 0x006)
+				.ToArray(),
+			bus.CustomRegisterWrites
+				.Where(write => write.Address == 0x180)
+				.ToArray());
+	}
+
+	private static byte[] CreateFirstBneNotTakenProbeProgram()
+	{
+		var program = new List<byte>(16);
+		var loop = program.Count;
+		EmitWord(program, 0x3413); // MOVE.W (A3),D2
+		EmitWord(program, 0x0242); // ANDI.W #$FF00,D2
+		EmitWord(program, 0xFF00);
+		EmitWord(program, 0x0C42); // CMPI.W #$F000,D2
+		EmitWord(program, 0xF000);
+		EmitBneShort(program, loop);
+		EmitMoveColor00(program, 0x1111);
+		EmitWord(program, 0x4E75);
+		return program.ToArray();
+	}
+
+	private static byte[] CreateWaitLineLoopProgram(ushort vposrMask, bool appendRts)
+	{
+		var program = new List<byte>(32);
+		var waitLineLoop = program.Count;
+		EmitWord(program, 0x3413); // MOVE.W (A3),D2
+		EmitWord(program, 0x0242); // ANDI.W #$FF00,D2
+		EmitWord(program, 0xFF00);
+		EmitWord(program, 0x0C42); // CMPI.W #$F000,D2
+		EmitWord(program, 0xF000);
+		EmitBneShort(program, waitLineLoop);
+		EmitWord(program, 0x0269); // ANDI.W #mask,$0004(A1)
+		EmitWord(program, vposrMask);
+		EmitWord(program, 0x0004);
+		EmitBneShort(program, waitLineLoop);
+		EmitMoveColor00(program, 0x0F0F);
+		if (appendRts)
+		{
+			EmitWord(program, 0x4E75);
+		}
+
+		return program.ToArray();
+	}
+
+	private static string BuildWaitLineLoopDiagnostic(
+		AmigaBus bus,
+		IReadOnlyList<CustomRegisterRead> reads,
+		IReadOnlyList<CustomRegisterWrite> colorWrites,
+		long cpuCycle)
+	{
+		var readText = string.Join(
+			"; ",
+			reads.Select((read, index) =>
+			{
+				var request = bus.GetPalBeamPosition(read.RequestedCycle);
+				var grant = bus.GetPalBeamPosition(read.GrantedCycle);
+				var delta = index == 0 ? 0 : read.SampleCycle - reads[index - 1].SampleCycle;
+				return $"#{index}:reg=0x{read.Address:X3},value=0x{read.Value:X4}," +
+					$"req=v{request.BeamLine}h{request.BeamHorizontal}," +
+					$"grant=v{grant.BeamLine}h{grant.BeamHorizontal},delta={delta}";
+			}));
+		var colorText = string.Join(
+			"; ",
+			colorWrites.Select(write =>
+			{
+				var beam = bus.GetPalBeamPosition(write.Cycle);
+				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
+			}));
+		var phaseStart = reads.Count == 0
+			? cpuCycle - 128
+			: reads[0].RequestedCycle - 16;
+		var phaseEnd = colorWrites.Count == 0
+			? cpuCycle
+			: colorWrites[^1].Cycle + 16;
+		var phaseText = BuildCpuBusPhaseTimeline(
+			bus.CpuBusPhases
+				.Where(phase => phase.CpuPhase.RequestedCycle >= phaseStart &&
+					phase.CpuPhase.RequestedCycle <= phaseEnd)
+				.ToArray(),
+			phaseStart);
+		return $"reads=[{readText}] colors=[{colorText}] phases=[{phaseText}]";
+	}
+
 	private static void EmitMoveColor00(List<byte> program, ushort value)
 	{
 		EmitWord(program, 0x337C); // MOVE.W #value,$0180(A1)
@@ -4132,7 +8707,7 @@ public sealed class AmigaBusTimingTests
 						? bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle)
 						: complete;
 					var value = (ushort)((grant.BeamLine << 8) |
-						((Math.Clamp(grant.BeamHorizontal, 0, 0xE2) + 4) % AmigaConstants.A500PalColorClocksPerRasterLine));
+						EncodeVhposrHorizontal(grant.BeamHorizontal));
 					var wait = phase.BusAccess.HasValue
 						? phase.BusAccess.GetValueOrDefault().WaitCycles
 						: 0;
@@ -4142,6 +8717,26 @@ public sealed class AmigaBusTimingTests
 						$"wait={wait} vhpos=0x{value:X4}";
 				}));
 		return $"markers={markerSummary} | vhposrPhases={phaseSummary}";
+	}
+
+	private static string BuildBeamReadDiagnostic(
+		AmigaBus bus,
+		IReadOnlyList<CustomRegisterRead> reads,
+		long colorWriteCycle)
+	{
+		return string.Join(
+			"; ",
+			reads.Select(read =>
+			{
+				var request = bus.GetPalBeamPosition(read.RequestedCycle);
+				var grant = bus.GetPalBeamPosition(read.GrantedCycle);
+				var complete = bus.GetPalBeamPosition(read.CompletedCycle);
+				return $"reg=0x{read.Address:X3} value=0x{read.Value:X4} " +
+					$"req={read.RequestedCycle}/v{request.BeamLine:X3}h{request.BeamHorizontal:X2} " +
+					$"grant={read.GrantedCycle}/v{grant.BeamLine:X3}h{grant.BeamHorizontal:X2} " +
+					$"done={read.CompletedCycle}/v{complete.BeamLine:X3}h{complete.BeamHorizontal:X2} " +
+					$"colorDelta={colorWriteCycle - read.CompletedCycle}";
+			}));
 	}
 
 	private static void ReserveBlitterWordSlot(AgnusHrmSlotEngine engine, long cycle)
@@ -4488,6 +9083,387 @@ public sealed class AmigaBusTimingTests
 		return bus.ReadWord(0x00DFF004);
 	}
 
+	private static ushort EncodeVposr(AgnusPalBeamPosition beam)
+		=> (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((beam.BeamLine >> 8) & 0x0001));
+
+	private static ushort EncodeVhposr(AgnusPalBeamPosition beam)
+	{
+		var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
+		return (ushort)(((beam.BeamLine & 0x00FF) << 8) | horizontal);
+	}
+
+	private static int EncodeVhposrHorizontal(int beamHorizontal)
+	{
+		var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
+            var offset = physicalHorizontal >= 0xDF
+                ? 4
+                : physicalHorizontal >= 0xBF
+                    ? 3
+                    : 8;
+		return (physicalHorizontal + offset) % AmigaConstants.A500PalColorClocksPerRasterLine;
+	}
+
+	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVAmigaTsProbe10VhposrReadMacro(
+		int programAddress,
+		int valuesAddress,
+		ushort firstExpectedValue)
+	{
+		var program = CreateVAmigaTsProbeVhposrReadMacroProgram();
+		var lineStart = 312L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var firstExpectedPhysicalHorizontal = ((firstExpectedValue & 0x00FF) -
+			4 + AmigaConstants.A500PalColorClocksPerRasterLine) %
+			AmigaConstants.A500PalColorClocksPerRasterLine;
+		var searchCenter = lineStart + (firstExpectedPhysicalHorizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
+
+		var candidates = new List<string>();
+		for (var startCycle = searchCenter - 512; startCycle <= searchCenter + 512; startCycle++)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			Write(bus.ChipRam, programAddress, program);
+			var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+			cpu.Reset((uint)programAddress, 0x3000);
+			cpu.State.A[2] = (uint)valuesAddress;
+			cpu.State.A[3] = 0x00DFF006;
+			cpu.State.Cycles = startCycle;
+
+			for (var i = 0; i < 32; i++)
+			{
+				cpu.ExecuteInstruction();
+			}
+
+			var reads = bus.CustomRegisterReads
+				.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+				.ToArray();
+			if (reads.Length == 16 && reads[0].Value == firstExpectedValue)
+			{
+				return (startCycle, bus, reads);
+			}
+
+			if (reads.Length == 16 && candidates.Count < 48)
+			{
+				candidates.Add($"start={startCycle}:first=0x{reads[0].Value:X4}@{reads[0].SampleCycle}");
+			}
+		}
+
+		throw new InvalidOperationException(
+			$"Unable to align probe macro first VHPOSR read to 0x{firstExpectedValue:X4} near cycle {searchCenter}. " +
+			$"Candidates: {string.Join("; ", candidates)}");
+	}
+
+	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVAmigaTsVprobeVposrReadMacro(
+		int programAddress,
+		int valuesAddress,
+		long startCycle)
+	{
+		var program = CreateVAmigaTsProbeVhposrReadMacroProgram();
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, programAddress, program);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset((uint)programAddress, 0x3000);
+		cpu.State.A[2] = (uint)valuesAddress;
+		cpu.State.A[3] = 0x00DFF004;
+		cpu.State.Cycles = startCycle;
+
+		for (var i = 0; i < 32; i++)
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var reads = bus.CustomRegisterReads
+			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+			.ToArray();
+		return (startCycle, bus, reads);
+	}
+
+	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVAmigaTsProbe10SourceVhposrReadMacro(
+		int programAddress,
+		int valuesAddress,
+		ushort firstExpectedValue)
+	{
+		var program = CreateVAmigaTsProbe10SourceVhposrReadMacroProgram();
+		var lineStart = 312L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var firstExpectedPhysicalHorizontal = ((firstExpectedValue & 0x00FF) -
+			4 + AmigaConstants.A500PalColorClocksPerRasterLine) %
+			AmigaConstants.A500PalColorClocksPerRasterLine;
+		var searchCenter = lineStart + (firstExpectedPhysicalHorizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
+
+		var candidates = new List<string>();
+		for (var startCycle = searchCenter - 512; startCycle <= searchCenter + 512; startCycle++)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			Write(bus.ChipRam, programAddress, program);
+			var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+			cpu.Reset((uint)programAddress, 0x3000);
+			cpu.State.A[1] = 0x00DFF000;
+			cpu.State.A[2] = (uint)valuesAddress;
+			cpu.State.Cycles = startCycle;
+
+			for (var i = 0; i < 32; i++)
+			{
+				cpu.ExecuteInstruction();
+			}
+
+			var reads = bus.CustomRegisterReads
+				.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+				.ToArray();
+			if (reads.Length == 16 && reads[0].Value == firstExpectedValue)
+			{
+				return (startCycle, bus, reads);
+			}
+
+			if (reads.Length == 16 && candidates.Count < 48)
+			{
+				candidates.Add($"start={startCycle}:first=0x{reads[0].Value:X4}@{reads[0].SampleCycle}");
+			}
+		}
+
+		throw new InvalidOperationException(
+			$"Unable to align source-shaped probe10 macro first VHPOSR read to 0x{firstExpectedValue:X4} near cycle {searchCenter}. " +
+			$"Candidates: {string.Join("; ", candidates)}");
+	}
+
+	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVhposrReadStorePair(
+		int programAddress,
+		int valuesAddress,
+		ushort firstExpectedValue)
+	{
+		var program = new byte[]
+		{
+			0x3A, 0x13, // MOVE.W (A3),D5
+			0x34, 0xC5, // MOVE.W D5,(A2)+
+			0x4E, 0x71, // NOP, lets the store instruction top up fallthrough prefetch.
+			0x4E, 0x71
+		};
+		var lineStart = 312L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var firstExpectedPhysicalHorizontal = ((firstExpectedValue & 0x00FF) -
+			4 + AmigaConstants.A500PalColorClocksPerRasterLine) %
+			AmigaConstants.A500PalColorClocksPerRasterLine;
+		var searchCenter = lineStart + (firstExpectedPhysicalHorizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
+
+		var candidates = new List<string>();
+		for (var startCycle = searchCenter - 512; startCycle <= searchCenter + 512; startCycle++)
+		{
+			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+			Write(bus.ChipRam, programAddress, program);
+			var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+			cpu.Reset((uint)programAddress, 0x3000);
+			cpu.State.A[2] = (uint)valuesAddress;
+			cpu.State.A[3] = 0x00DFF006;
+			cpu.State.Cycles = startCycle;
+
+			cpu.ExecuteInstruction();
+			cpu.ExecuteInstruction();
+
+			var reads = bus.CustomRegisterReads
+				.Where(read => read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead)
+				.ToArray();
+			if (reads.Length == 1 && reads[0].Value == firstExpectedValue)
+			{
+				return (startCycle, bus, reads);
+			}
+
+			if (reads.Length == 1 && candidates.Count < 48)
+			{
+				candidates.Add($"start={startCycle}:first=0x{reads[0].Value:X4}@{reads[0].SampleCycle}");
+			}
+		}
+
+		throw new InvalidOperationException(
+			$"Unable to align VHPOSR read/store pair first read to 0x{firstExpectedValue:X4} near cycle {searchCenter}. " +
+			$"Candidates: {string.Join("; ", candidates)}");
+	}
+
+	private static byte[] CreateVAmigaTsProbeVhposrReadMacroProgram()
+	{
+		var program = new byte[16 * 4];
+		for (var offset = 0; offset < program.Length; offset += 4)
+		{
+			program[offset] = 0x3A;
+			program[offset + 1] = 0x13; // MOVE.W (A3),D5
+			program[offset + 2] = 0x34;
+			program[offset + 3] = 0xC5; // MOVE.W D5,(A2)+
+		}
+
+		return program;
+	}
+
+	private static byte[] CreateVAmigaTsProbe10SourceVhposrReadMacroProgram()
+	{
+		var program = new byte[16 * 6];
+		for (var offset = 0; offset < program.Length; offset += 6)
+		{
+			program[offset] = 0x3A;
+			program[offset + 1] = 0x29; // MOVE.W $0006(A1),D5
+			program[offset + 2] = 0x00;
+			program[offset + 3] = 0x06;
+			program[offset + 4] = 0x34;
+			program[offset + 5] = 0xC5; // MOVE.W D5,(A2)+
+		}
+
+		return program;
+	}
+
+	private static byte[] CreateVAmigaTsVprobe2SourceVposrReadMacroProgram()
+	{
+		var program = new byte[16 * 6];
+		for (var offset = 0; offset < program.Length; offset += 6)
+		{
+			program[offset] = 0x3A;
+			program[offset + 1] = 0x29; // MOVE.W $0004(A1),D5
+			program[offset + 2] = 0x00;
+			program[offset + 3] = 0x04;
+			program[offset + 4] = 0x34;
+			program[offset + 5] = 0xC5; // MOVE.W D5,(A2)+
+		}
+
+		return program;
+	}
+
+	private static byte[] CreateVAmigaTsProbe10Irq1Handler(int valuesAddress)
+	{
+		var program = new List<byte>(84);
+		EmitWord(program, 0x337C); // MOVE.W #$0300,COLOR00(A1)
+		EmitWord(program, 0x0300);
+		EmitWord(program, 0x0180);
+		EmitWord(program, 0x337C); // MOVE.W #$3FFF,INTREQ(A1)
+		EmitWord(program, 0x3FFF);
+		EmitWord(program, 0x009C);
+		EmitWord(program, 0x45F9); // LEA values,A2
+		EmitWord(program, (ushort)(valuesAddress >> 16));
+		EmitWord(program, (ushort)valuesAddress);
+		program.AddRange(CreateVAmigaTsProbeVhposrReadMacroProgram());
+		EmitWord(program, 0x4E73); // RTE
+		return program.ToArray();
+	}
+
+	private static byte[] CreateVAmigaTsVprobe2Irq1Handler(int valuesAddress)
+	{
+		var program = new List<byte>(104);
+		EmitWord(program, 0x45F9); // LEA values,A2
+		EmitWord(program, (ushort)(valuesAddress >> 16));
+		EmitWord(program, (ushort)valuesAddress);
+		program.AddRange(CreateVAmigaTsVprobe2SourceVposrReadMacroProgram());
+		EmitWord(program, 0x337C); // MOVE.W #$3FFF,INTREQ(A1)
+		EmitWord(program, 0x3FFF);
+		EmitWord(program, 0x009C);
+		EmitWord(program, 0x4E73); // RTE
+		return program.ToArray();
+	}
+
+	private static string BuildVhposrProbeDiagnostic(
+		long startCycle,
+		IReadOnlyList<CustomRegisterRead> reads,
+		IReadOnlyList<ushort> actual,
+		IReadOnlyList<ushort> expected)
+		=> BuildVhposrProbeDiagnostic(startCycle, bus: null, reads, actual, expected);
+
+	private static string BuildVhposrProbeDiagnostic(
+		long startCycle,
+		AmigaBus? bus,
+		IReadOnlyList<CustomRegisterRead> reads,
+		IReadOnlyList<ushort> actual,
+		IReadOnlyList<ushort> expected)
+	{
+		var actualText = string.Join(",", actual.Select(value => $"0x{value:X4}"));
+		var expectedText = string.Join(",", expected.Select(value => $"0x{value:X4}"));
+		var readsText = string.Join("; ", reads.Select((read, index) =>
+		{
+			var delta = index == 0 ? 0 : read.SampleCycle - reads[index - 1].SampleCycle;
+			var expectedValue = index < expected.Count ? expected[index] : (ushort)0;
+			var expectedDelta = index == 0 ? 0 : 20;
+			var beam = bus?.GetPalBeamPosition(read.SampleCycle);
+			var beamText = beam.HasValue ? $"/v{beam.Value.BeamLine:X3}h{beam.Value.BeamHorizontal:X2}" : string.Empty;
+			return
+				$"#{index}: actual=0x{read.Value:X4}, expected=0x{expectedValue:X4}, " +
+				$"sample={read.SampleCycle}(+{read.SampleCycle - startCycle}){beamText}, " +
+				$"delta={delta}/expectedDelta={expectedDelta}, " +
+				$"request={read.RequestedCycle - startCycle}, grant={read.GrantedCycle - startCycle}, complete={read.CompletedCycle - startCycle}";
+		}));
+		var timeline = string.Empty;
+		if (bus != null && reads.Count > 0)
+		{
+			var endCycle = reads[^1].CompletedCycle + 12;
+			var phases = bus.CpuBusPhases
+				.Where(phase => phase.CpuPhase.RequestedCycle >= startCycle &&
+					phase.CpuPhase.RequestedCycle <= endCycle)
+				.ToArray();
+			timeline = $", phases=[{BuildCpuBusPhaseTimeline(phases, startCycle)}]";
+		}
+
+		return
+			$"startCycle={startCycle}, expected=[{expectedText}], actual=[{actualText}], " +
+			$"reads=[{readsText}]{timeline}";
+	}
+
+	private static string BuildCpuBusPhaseTimeline(
+		IReadOnlyList<AmigaCpuBusPhaseTrace> phases,
+		long originCycle)
+		=> string.Join(
+			" | ",
+			phases.Select(phase =>
+			{
+				var cpu = phase.CpuPhase;
+				var access = phase.BusAccess;
+				var grant = access.HasValue
+					? $",g+{access.Value.GrantedCycle - originCycle}"
+					: string.Empty;
+				return $"pc=0x{cpu.InstructionProgramCounter:X4},{cpu.AccessKind},0x{cpu.Address:X6}," +
+					$"r+{cpu.RequestedCycle - originCycle}..+{cpu.CompletedCycle - originCycle}{grant}";
+			}));
+
+	private static string ClassifyMoveReadStorePairEarlyPhase(
+		CustomRegisterRead firstRead,
+		CustomRegisterRead secondRead,
+		IReadOnlyList<AmigaCpuBusPhaseTrace> phases)
+	{
+		var dataWrite = phases.FirstOrDefault(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+			phase.CpuPhase.RequestedCycle >= firstRead.CompletedCycle &&
+			phase.CpuPhase.RequestedCycle < secondRead.RequestedCycle);
+		var finalPrefetch = phases.LastOrDefault(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.CpuPhase.RequestedCycle >= firstRead.CompletedCycle &&
+			phase.CpuPhase.RequestedCycle < secondRead.RequestedCycle);
+		var actualDelta = secondRead.SampleCycle - firstRead.SampleCycle;
+		var missingCycles = 20 - actualDelta;
+		if (missingCycles <= 0)
+		{
+			return "cadence is not early";
+		}
+
+		return
+			$"next read is {missingCycles} cycles early; " +
+			$"write={FormatOptionalPhase(dataWrite, firstRead.SampleCycle)}, " +
+			$"finalPrefetch={FormatOptionalPhase(finalPrefetch, firstRead.SampleCycle)}";
+	}
+
+	private static string FormatOptionalPhase(AmigaCpuBusPhaseTrace phase, long originCycle)
+	{
+		if (phase.CpuPhase.AccessKind == default &&
+			phase.CpuPhase.Address == default &&
+			phase.CpuPhase.RequestedCycle == default &&
+			phase.CpuPhase.CompletedCycle == default)
+		{
+			return "missing";
+		}
+
+		return
+			$"{phase.CpuPhase.AccessKind}@r+{phase.CpuPhase.RequestedCycle - originCycle}" +
+			$"..+{phase.CpuPhase.CompletedCycle - originCycle}";
+	}
+
+	private static ushort[] ReadChipWords(byte[] memory, int address, int count)
+	{
+		var values = new ushort[count];
+		for (var i = 0; i < values.Length; i++)
+		{
+			var offset = address + (i * 2);
+			values[i] = (ushort)((memory[offset] << 8) | memory[offset + 1]);
+		}
+
+		return values;
+	}
+
 	private static T GetPrivateField<T>(object target, string name)
 	{
 		var field = target.GetType().GetField(
@@ -4509,6 +9485,20 @@ public sealed class AmigaBusTimingTests
 		}
 
 		return rom;
+	}
+
+	private static byte[] CreateMoveWordReadStorePairProgram(int pairs)
+	{
+		var program = new byte[pairs * 4];
+		for (var offset = 0; offset < program.Length; offset += 4)
+		{
+			program[offset] = 0x3A;
+			program[offset + 1] = 0x18; // MOVE.W (A0)+,D5
+			program[offset + 2] = 0x32;
+			program[offset + 3] = 0xC5; // MOVE.W D5,(A1)+
+		}
+
+		return program;
 	}
 
 	private static void StartNastyBlit(AmigaBus bus)
@@ -4539,6 +9529,20 @@ public sealed class AmigaBusTimingTests
 		{
 			var granted = request.RequestedCycle + _waitCycles;
 			return new AmigaBusAccessResult(request, granted, granted + _accessCycles);
+		}
+	}
+
+	private sealed class NoOpBoundary : IM68kInstructionBoundary
+	{
+		public static NoOpBoundary Instance { get; } = new();
+
+		public bool BeforeInstruction()
+			=> true;
+
+		public void AfterInstruction(long previousCycle, long currentCycle)
+		{
+			_ = previousCycle;
+			_ = currentCycle;
 		}
 	}
 }

@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -54,6 +59,8 @@ namespace CopperMod.Amiga
         public bool DeferredCpuBusBatchEnabled { get; private set; }
 
         public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
+
+        public bool CpuWaitSlotReferencePathEnabled { get; private set; }
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
@@ -150,6 +157,12 @@ namespace CopperMod.Amiga
         {
             DeferredCpuBusBatchEnabled = enabled;
             DeferredCpuBusBatchVerifyEnabled = verify;
+            return this;
+        }
+
+        public AmigaMachineOptions WithCpuWaitSlotReferencePath(bool enabled)
+        {
+            CpuWaitSlotReferencePathEnabled = enabled;
             return this;
         }
 
@@ -263,7 +276,8 @@ namespace CopperMod.Amiga
                 options.CopperQuiescentFastPathVerifyEnabled,
                 options.DeferredCpuBusBatchEnabled,
                 options.DeferredCpuBusBatchVerifyEnabled,
-                options.CopperQuiescentDiagnosticsEnabled);
+                options.CopperQuiescentDiagnosticsEnabled,
+                options.CpuWaitSlotReferencePathEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {
@@ -321,6 +335,12 @@ namespace CopperMod.Amiga
 
             var level = Bus.Paula.GetHighestCpuVisibleInterruptLevel(Cpu.State.Cycles);
             if (level <= 0)
+            {
+                return false;
+            }
+
+            var interruptMask = (Cpu.State.StatusRegister >> 8) & 0x07;
+            if (level <= interruptMask)
             {
                 return false;
             }

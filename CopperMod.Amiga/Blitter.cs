@@ -659,6 +659,61 @@ namespace CopperMod.Amiga
             => new BlitterCompiledKernel(key, supported: true);
     }
 
+    internal readonly struct BlitterCpuWaitScratchResult
+    {
+        public BlitterCpuWaitScratchResult(
+            bool supported,
+            string unsupportedReason,
+            long grantedCycle,
+            long secondWordCycle,
+            long completedCycle,
+            AgnusSlotTimelineSignature timeline,
+            int microOps,
+            bool startedFromPartial,
+            long firstDmaCycle,
+            long lastDmaCycle)
+        {
+            Supported = supported;
+            UnsupportedReason = unsupportedReason ?? string.Empty;
+            GrantedCycle = grantedCycle;
+            SecondWordCycle = secondWordCycle;
+            CompletedCycle = completedCycle;
+            Timeline = timeline;
+            MicroOps = microOps;
+            StartedFromPartial = startedFromPartial;
+            FirstDmaCycle = firstDmaCycle;
+            LastDmaCycle = lastDmaCycle;
+        }
+
+        public static BlitterCpuWaitScratchResult Unsupported(string reason)
+            => new BlitterCpuWaitScratchResult(false, reason, -1, -1, -1, default, 0, false, -1, -1);
+
+        public bool Supported { get; }
+
+        public string UnsupportedReason { get; }
+
+        public long GrantedCycle { get; }
+
+        public long SecondWordCycle { get; }
+
+        public long CompletedCycle { get; }
+
+        public AgnusSlotTimelineSignature Timeline { get; }
+
+        public int MicroOps { get; }
+
+        public bool StartedFromPartial { get; }
+
+        public long FirstDmaCycle { get; }
+
+        public long LastDmaCycle { get; }
+
+        public string ToDetailString()
+            => Supported
+                ? $"bltscratch=ops:{MicroOps},partial:{StartedFromPartial},firstLast:{FirstDmaCycle}->{LastDmaCycle}"
+                : $"bltscratch=unsupported:{UnsupportedReason}";
+    }
+
     internal sealed class AmigaBlitter
     {
         private const ushort DmaMasterEnable = 0x0200;
@@ -766,6 +821,23 @@ namespace CopperMod.Amiga
         private BlitterDmaReadLatch _sourceBLatch;
         private BlitterDmaReadLatch _sourceCLatch;
         private BlitterDmaWriteLatch _destinationDLatch;
+        private BlitterDmaRollbackSnapshot _dmaRollbackSnapshot;
+        private bool _dmaRollbackSnapshotActive;
+        private bool _areaMicroOpActive;
+        private int _areaMicroOpIndex;
+        private long _areaMicroOpStepStart;
+        private long _areaMicroOpStepEnd;
+        private long _areaMicroOpNextReadCycle;
+        private long _areaMicroOpNextCycle;
+        private long _areaMicroOpInternalCompletionCycle;
+        private ushort _areaMicroOpRawA;
+        private ushort _areaMicroOpRawB;
+        private ushort _areaMicroOpRawC;
+        private ushort _areaMicroOpMask;
+        private ushort _areaMicroOpOutput;
+        private bool _areaMicroOpOutputReady;
+        private bool _areaMicroOpFinalWord;
+        private long _cpuWaitExactSlotCycle = -1;
         private bool _areaSlotQueueEnabled;
         private int _areaSlotQueueOpCount;
         private BlitterSlotQueueKind _areaSlotQueueKind;
@@ -888,6 +960,7 @@ namespace CopperMod.Amiga
             _sourceBLatch = default;
             _sourceCLatch = default;
             _destinationDLatch = default;
+            ClearAreaMicroOpState();
             _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
@@ -1216,6 +1289,134 @@ namespace CopperMod.Amiga
             return Math.Max(requestedCycle, _currentCycle);
         }
 
+        internal bool CpuStallActive => ShouldStallCpu();
+
+        internal bool CanUseCpuWaitAreaMicroOps
+            => _areaMicroOpActive ||
+                (_busy &&
+                !_completionPending &&
+                !_lineMode &&
+                !_fillEnabled &&
+                !_descending &&
+                (_useA || _useB || _useC || _useD) &&
+                RequiresDmaForCurrentBlit() &&
+                IsBlitterDmaEnabled());
+
+        internal bool TryRunCpuWaitSlotScratch(
+            AgnusHrmSlotEngine slots,
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out BlitterCpuWaitScratchResult result)
+        {
+            if (!_busy)
+            {
+                result = BlitterCpuWaitScratchResult.Unsupported("idle");
+                return false;
+            }
+
+            if (size == AmigaBusAccessSize.Long)
+            {
+                result = BlitterCpuWaitScratchResult.Unsupported("cpu-long");
+                return false;
+            }
+
+            if (_completionPending)
+            {
+                result = BlitterCpuWaitScratchResult.Unsupported("completion-pending");
+                return false;
+            }
+
+            if (_lineMode || _fillEnabled || _descending)
+            {
+                result = BlitterCpuWaitScratchResult.Unsupported(
+                    _lineMode ? "line" : _fillEnabled ? "fill" : "descending");
+                return false;
+            }
+
+            if ((!_useA && !_useB && !_useC && !_useD) ||
+                !RequiresDmaForCurrentBlit() ||
+                !IsBlitterDmaEnabled())
+            {
+                result = BlitterCpuWaitScratchResult.Unsupported("no-dma");
+                return false;
+            }
+
+            var scratch = new CpuWaitScratchState(this);
+            slots.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
+            try
+            {
+                var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Min(
+                    Math.Max(0, requestedCycle),
+                    Math.Max(0, scratch.CurrentCycle)));
+                for (var attempt = 0; attempt < 4096; attempt++, slotCycle += ChipSlotCycles)
+                {
+                    if (!scratch.TryAdvanceAtSlot(slots, slotCycle, out var unsupportedReason))
+                    {
+                        if (unsupportedReason.Length != 0)
+                        {
+                            result = BlitterCpuWaitScratchResult.Unsupported(unsupportedReason);
+                            return false;
+                        }
+                    }
+
+                    if (slots.TryGrantCpuDataSingleExactSlot(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        requestedCycle,
+                        slotCycle,
+                        isWrite,
+                        allowNiceBlitterSteal: true,
+                        out var completedCycle))
+                    {
+                        var timeline = slots.CaptureTimelineSignature(requestedCycle, completedCycle);
+                        result = new BlitterCpuWaitScratchResult(
+                            supported: true,
+                            unsupportedReason: string.Empty,
+                            slotCycle,
+                            slotCycle,
+                            completedCycle,
+                            timeline,
+                            scratch.MicroOps,
+                            scratch.StartedFromPartial,
+                            scratch.FirstDmaCycle,
+                            scratch.LastDmaCycle);
+                        return true;
+                    }
+                }
+            }
+            finally
+            {
+                slots.ClearPendingCpuSlotRequest();
+            }
+
+            result = BlitterCpuWaitScratchResult.Unsupported("loop");
+            return false;
+        }
+
+        internal bool AdvanceCpuWaitAreaMicroOpTo(long targetCycle)
+        {
+            if (!CanUseCpuWaitAreaMicroOps && !_areaMicroOpActive)
+            {
+                return false;
+            }
+
+            _cpuWaitExactSlotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, targetCycle));
+            try
+            {
+                return AdvanceAreaMicroOpTo(targetCycle);
+            }
+            finally
+            {
+                _cpuWaitExactSlotCycle = -1;
+            }
+        }
+
         private void StartBlit(ushort bltsize, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter start cycles must be non-negative.");
@@ -1235,7 +1436,9 @@ namespace CopperMod.Amiga
             _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
+            ClearAreaMicroOpState();
             _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, cycle) + ChipSlotCycles);
+            _bus.NotifyHardwareWorkScheduled(_currentCycle);
             _previousA = 0;
             if (_useB)
             {
@@ -1545,6 +1748,7 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             stepEnd += GetAreaFillIdlePhaseDelay(stepStart, stepEnd);
@@ -1567,7 +1771,11 @@ namespace CopperMod.Amiga
             {
                 _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
                 var access = _sourceALatch.BusAccess;
-                rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+                if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out rawA))
+                {
+                    return;
+                }
+
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
@@ -1577,7 +1785,11 @@ namespace CopperMod.Amiga
             {
                 _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
                 var access = _sourceBLatch.BusAccess;
-                rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out rawB))
+                {
+                    return;
+                }
+
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
@@ -1587,7 +1799,11 @@ namespace CopperMod.Amiga
             {
                 _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
                 var access = _sourceCLatch.BusAccess;
-                rawC = ConsumeSourceDmaLatch(ref _sourceCLatch);
+                if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out rawC))
+                {
+                    return;
+                }
+
                 _activeDataC = rawC;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
@@ -1605,14 +1821,269 @@ namespace CopperMod.Amiga
             {
                 var writeCycle = Math.Max(nextReadCycle, stepEnd - ChipSlotCycles);
                 _destinationDLatch = CreateDestinationDmaLatch(output);
-                var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle);
+                if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle, out var write))
+                {
+                    return;
+                }
+
                 nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             }
 
             _currentCycle = isFinalWord && _useD
                 ? internalCompletionCycle
                 : nextCycle;
+            EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
+        }
+
+        private bool AdvanceAreaMicroOpTo(long targetCycle)
+        {
+            if (!_areaMicroOpActive)
+            {
+                if (!BeginAreaMicroOpWord())
+                {
+                    return false;
+                }
+            }
+
+            while (_areaMicroOpIndex < GetAreaMicroOpCount())
+            {
+                var op = GetAreaMicroOp(_areaMicroOpIndex);
+                var requestCycle = GetAreaMicroOpRequestCycle(op);
+                if (requestCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                if (!ExecuteAreaMicroOp(op, requestCycle))
+                {
+                    return false;
+                }
+
+                _areaMicroOpIndex++;
+                return true;
+            }
+
+            if (_areaMicroOpNextCycle > targetCycle)
+            {
+                return false;
+            }
+
+            FinishAreaMicroOpWord(targetCycle);
+            return true;
+        }
+
+        private bool BeginAreaMicroOpWord()
+        {
+            if (_lineMode ||
+                _fillEnabled ||
+                _descending ||
+                (! _useA && !_useB && !_useC && !_useD))
+            {
+                return false;
+            }
+
+            BeginDmaRollbackSnapshot();
+            _areaMicroOpActive = true;
+            _areaMicroOpIndex = 0;
+            _areaMicroOpStepStart = _currentCycle;
+            _areaMicroOpStepEnd = _areaMicroOpStepStart + GetAreaWordCycles();
+            _areaMicroOpNextReadCycle = _areaMicroOpStepStart;
+            _areaMicroOpNextCycle = _areaMicroOpStepEnd;
+            _areaMicroOpInternalCompletionCycle = _areaMicroOpStepEnd;
+            _areaMicroOpRawA = _activeDataA;
+            _areaMicroOpRawB = _activeDataB;
+            _areaMicroOpRawC = _activeDataC;
+            _areaMicroOpMask = GetCurrentAreaWordMask();
+            _areaMicroOpOutput = 0;
+            _areaMicroOpOutputReady = false;
+            _areaMicroOpFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            return true;
+        }
+
+        private int GetAreaMicroOpCount()
+        {
+            var count = 0;
+            if (_useA)
+            {
+                count++;
+            }
+
+            if (_useB)
+            {
+                count++;
+            }
+
+            if (_useC)
+            {
+                count++;
+            }
+
+            if (_useD)
+            {
+                count++;
+            }
+
+            return count;
+        }
+
+        private BlitterSlotQueueOp GetAreaMicroOp(int index)
+        {
+            if (_useA)
+            {
+                if (index == 0)
+                {
+                    return BlitterSlotQueueOp.ReadA;
+                }
+
+                index--;
+            }
+
+            if (_useB)
+            {
+                if (index == 0)
+                {
+                    return BlitterSlotQueueOp.ReadB;
+                }
+
+                index--;
+            }
+
+            if (_useC)
+            {
+                if (index == 0)
+                {
+                    return BlitterSlotQueueOp.ReadC;
+                }
+
+                index--;
+            }
+
+            return BlitterSlotQueueOp.WriteD;
+        }
+
+        private long GetAreaMicroOpRequestCycle(BlitterSlotQueueOp op)
+            => op == BlitterSlotQueueOp.WriteD
+                ? Math.Max(_areaMicroOpNextReadCycle, _areaMicroOpStepEnd - ChipSlotCycles)
+                : _areaMicroOpNextReadCycle;
+
+        private bool ExecuteAreaMicroOp(BlitterSlotQueueOp op, long requestCycle)
+        {
+            switch (op)
+            {
+                case BlitterSlotQueueOp.ReadA:
+                {
+                    _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, requestCycle);
+                    var access = _sourceALatch.BusAccess;
+                    if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out _areaMicroOpRawA))
+                    {
+                        return false;
+                    }
+
+                    _areaMicroOpNextReadCycle = access.CompletedCycle;
+                    _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
+                    return true;
+                }
+
+                case BlitterSlotQueueOp.ReadB:
+                {
+                    _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, requestCycle);
+                    var access = _sourceBLatch.BusAccess;
+                    if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out _areaMicroOpRawB))
+                    {
+                        return false;
+                    }
+
+                    _areaMicroOpNextReadCycle = access.CompletedCycle;
+                    _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
+                    return true;
+                }
+
+                case BlitterSlotQueueOp.ReadC:
+                {
+                    _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, requestCycle);
+                    var access = _sourceCLatch.BusAccess;
+                    if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out _areaMicroOpRawC))
+                    {
+                        return false;
+                    }
+
+                    _activeDataC = _areaMicroOpRawC;
+                    _areaMicroOpNextReadCycle = access.CompletedCycle;
+                    _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
+                    return true;
+                }
+
+                case BlitterSlotQueueOp.WriteD:
+                {
+                    EnsureAreaMicroOpOutputReady();
+                    _destinationDLatch = CreateDestinationDmaLatch(_areaMicroOpOutput);
+                    if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, requestCycle, out var write))
+                    {
+                        return false;
+                    }
+
+                    _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, write.CompletedCycle);
+                    return true;
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        private void EnsureAreaMicroOpOutputReady()
+        {
+            if (_areaMicroOpOutputReady)
+            {
+                return;
+            }
+
+            _areaMicroOpOutput = ExecuteAreaFromSourceLatches(
+                _areaMicroOpRawA,
+                _areaMicroOpRawB,
+                _areaMicroOpRawC,
+                _areaMicroOpMask);
+            if (_areaMicroOpOutput != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            _areaMicroOpOutputReady = true;
+            _areaMicroOpInternalCompletionCycle = Math.Max(_areaMicroOpStepEnd, _areaMicroOpNextReadCycle);
+        }
+
+        private void FinishAreaMicroOpWord(long targetCycle)
+        {
+            if (!_areaMicroOpOutputReady)
+            {
+                EnsureAreaMicroOpOutputReady();
+            }
+
+            _currentCycle = _areaMicroOpFinalWord && _useD
+                ? _areaMicroOpInternalCompletionCycle
+                : _areaMicroOpNextCycle;
+            ClearAreaMicroOpState();
+            EndDmaRollbackSnapshot();
+            AdvanceAreaPosition(targetCycle);
+        }
+
+        private void ClearAreaMicroOpState()
+        {
+            _areaMicroOpActive = false;
+            _areaMicroOpIndex = 0;
+            _areaMicroOpStepStart = 0;
+            _areaMicroOpStepEnd = 0;
+            _areaMicroOpNextReadCycle = 0;
+            _areaMicroOpNextCycle = 0;
+            _areaMicroOpInternalCompletionCycle = 0;
+            _areaMicroOpRawA = 0;
+            _areaMicroOpRawB = 0;
+            _areaMicroOpRawC = 0;
+            _areaMicroOpMask = 0;
+            _areaMicroOpOutput = 0;
+            _areaMicroOpOutputReady = false;
+            _areaMicroOpFinalWord = false;
         }
 
         private void StepAreaWordFromSlotQueue(long targetCycle)
@@ -1630,6 +2101,7 @@ namespace CopperMod.Amiga
                     return;
             }
 
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             var nextReadCycle = stepStart;
@@ -1650,7 +2122,11 @@ namespace CopperMod.Amiga
                     {
                         _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
                         var access = _sourceALatch.BusAccess;
-                        rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+                        if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out rawA))
+                        {
+                            return;
+                        }
+
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
                         _slotQueueCommittedOps++;
@@ -1661,7 +2137,11 @@ namespace CopperMod.Amiga
                     {
                         _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
                         var access = _sourceBLatch.BusAccess;
-                        rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                        if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out rawB))
+                        {
+                            return;
+                        }
+
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
                         _slotQueueCommittedOps++;
@@ -1672,7 +2152,11 @@ namespace CopperMod.Amiga
                     {
                         _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
                         var access = _sourceCLatch.BusAccess;
-                        rawC = ConsumeSourceDmaLatch(ref _sourceCLatch);
+                        if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out rawC))
+                        {
+                            return;
+                        }
+
                         _activeDataC = rawC;
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
@@ -1696,7 +2180,11 @@ namespace CopperMod.Amiga
 
                         var writeCycle = Math.Max(nextReadCycle, stepEnd - ChipSlotCycles);
                         _destinationDLatch = CreateDestinationDmaLatch(output);
-                        var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle);
+                        if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, writeCycle, out var write))
+                        {
+                            return;
+                        }
+
                         nextCycle = Math.Max(nextCycle, write.CompletedCycle);
                         _slotQueueCommittedOps++;
                         break;
@@ -1719,11 +2207,13 @@ namespace CopperMod.Amiga
             _currentCycle = isFinalWord && _useD
                 ? internalCompletionCycle
                 : nextCycle;
+            EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
         }
 
         private void StepAreaWordQueuedWriteD(long targetCycle)
         {
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
@@ -1734,7 +2224,11 @@ namespace CopperMod.Amiga
             }
 
             _destinationDLatch = CreateDestinationDmaLatch(output);
-            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, stepEnd - ChipSlotCycles);
+            if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, stepEnd - ChipSlotCycles, out var write))
+            {
+                return;
+            }
+
             _slotQueueWords++;
             _slotQueueCommittedOps++;
             _rowPipelineWords++;
@@ -1742,18 +2236,24 @@ namespace CopperMod.Amiga
             _currentCycle = isFinalWord
                 ? stepEnd
                 : Math.Max(stepEnd, write.CompletedCycle);
+            EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
         }
 
         private void StepAreaWordQueuedReadAWriteD(long targetCycle)
         {
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             var nextCycle = stepEnd;
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, stepStart);
             var sourceAAccess = _sourceALatch.BusAccess;
-            var rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+            if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out var rawA))
+            {
+                return;
+            }
+
             var nextReadCycle = sourceAAccess.CompletedCycle;
             nextCycle = Math.Max(nextCycle, nextReadCycle);
             var output = ExecuteAreaFromSourceLatches(rawA, _activeDataB, _activeDataC, GetCurrentAreaWordMask());
@@ -1764,7 +2264,11 @@ namespace CopperMod.Amiga
 
             var internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
             _destinationDLatch = CreateDestinationDmaLatch(output);
-            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles));
+            if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles), out var write))
+            {
+                return;
+            }
+
             nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             _slotQueueWords++;
             _slotQueueCommittedOps += 2;
@@ -1773,24 +2277,34 @@ namespace CopperMod.Amiga
             _currentCycle = isFinalWord
                 ? internalCompletionCycle
                 : nextCycle;
+            EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
         }
 
         private void StepAreaWordQueuedReadAReadBWriteD(long targetCycle)
         {
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             var nextCycle = stepEnd;
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, stepStart);
             var sourceAAccess = _sourceALatch.BusAccess;
-            var rawA = ConsumeSourceDmaLatch(ref _sourceALatch);
+            if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out var rawA))
+            {
+                return;
+            }
+
             var nextReadCycle = sourceAAccess.CompletedCycle;
             nextCycle = Math.Max(nextCycle, nextReadCycle);
 
             _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
             var sourceBAccess = _sourceBLatch.BusAccess;
-            var rawB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+            if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out var rawB))
+            {
+                return;
+            }
+
             nextReadCycle = sourceBAccess.CompletedCycle;
             nextCycle = Math.Max(nextCycle, nextReadCycle);
 
@@ -1802,13 +2316,18 @@ namespace CopperMod.Amiga
 
             var internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
             _destinationDLatch = CreateDestinationDmaLatch(output);
-            var write = CommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles));
+            if (!TryCommitDestinationDmaLatch(ref _workDestinationD, _step, ref _destinationDLatch, Math.Max(nextReadCycle, stepEnd - ChipSlotCycles), out var write))
+            {
+                return;
+            }
+
             nextCycle = Math.Max(nextCycle, write.CompletedCycle);
             _slotQueueWords++;
             _slotQueueCommittedOps += 3;
             _currentCycle = isFinalWord
                 ? internalCompletionCycle
                 : nextCycle;
+            EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
         }
 
@@ -1870,6 +2389,7 @@ namespace CopperMod.Amiga
 
         private void StepLinePixel(long targetCycle)
         {
+            BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetLinePixelCycles();
             var nextCycle = stepEnd;
@@ -1880,12 +2400,20 @@ namespace CopperMod.Amiga
                 {
                     _sourceBLatch = LoadLineBPatternLatch(nextReadCycle);
                     var firstBAccess = _sourceBLatch.BusAccess;
-                    _ = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                    if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out _))
+                    {
+                        return;
+                    }
+
                     nextReadCycle = firstBAccess.CompletedCycle;
                     nextCycle = Math.Max(nextCycle, firstBAccess.CompletedCycle);
                     _sourceBLatch = LoadLineBPatternLatch(nextReadCycle);
                     var secondBAccess = _sourceBLatch.BusAccess;
-                    _dataB = ConsumeSourceDmaLatch(ref _sourceBLatch);
+                    if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out _dataB))
+                    {
+                        return;
+                    }
+
                     nextReadCycle = secondBAccess.CompletedCycle;
                     nextCycle = Math.Max(nextCycle, secondBAccess.CompletedCycle);
                     _workSourceB = _bus.AddChipDmaPointerOffset(_workSourceB, _lineBPatternStride);
@@ -1893,7 +2421,11 @@ namespace CopperMod.Amiga
 
                 _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, _workSourceC, nextReadCycle);
                 var sourceCAccess = _sourceCLatch.BusAccess;
-                var sourceC = ConsumeSourceDmaLatch(ref _sourceCLatch);
+                if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out var sourceC))
+                {
+                    return;
+                }
+
                 nextCycle = Math.Max(nextCycle, sourceCAccess.CompletedCycle);
                 var lineMask = RotateRight(_dataA, _lineBit);
                 var textureBit = (_dataB & (0x8000 >> ((_shiftB + _lineIndex) & 0x0F))) != 0;
@@ -1907,15 +2439,21 @@ namespace CopperMod.Amiga
 
                 var destination = _lineIndex == 0 ? _workDestinationD : _workSourceC;
                 _destinationDLatch = CreateDestinationDmaLatch(output);
-                var write = CommitDestinationDmaLatch(
+                if (!TryCommitDestinationDmaLatch(
                     destination,
                     ref _destinationDLatch,
-                    Math.Max(sourceCAccess.CompletedCycle, stepEnd - ChipSlotCycles));
+                    Math.Max(sourceCAccess.CompletedCycle, stepEnd - ChipSlotCycles),
+                    out var write))
+                {
+                    return;
+                }
+
                 nextCycle = Math.Max(nextCycle, write.CompletedCycle);
                 _lineLastDrawnY = _lineY;
             }
 
             _currentCycle = nextCycle;
+            EndDmaRollbackSnapshot();
             _lineIndex++;
             _rowY = _lineIndex;
             if (_lineIndex >= _lineLength)
@@ -2174,6 +2712,57 @@ namespace CopperMod.Amiga
             _completedMicroOps++;
         }
 
+        private void BeginDmaRollbackSnapshot()
+        {
+            _dmaRollbackSnapshot = new BlitterDmaRollbackSnapshot(
+                _currentCycle,
+                _workSourceA,
+                _workSourceB,
+                _workSourceC,
+                _workDestinationD,
+                _previousA,
+                _previousB,
+                _fillCarry,
+                _areaKernelState,
+                _activeDataC,
+                _zeroFlag,
+                _dataB,
+                _lineLastDrawnY);
+            _dmaRollbackSnapshotActive = true;
+        }
+
+        private void EndDmaRollbackSnapshot()
+        {
+            _dmaRollbackSnapshotActive = false;
+        }
+
+        private void RollbackDmaStepToDeniedCycle(long deniedCycle)
+        {
+            if (_dmaRollbackSnapshotActive)
+            {
+                _workSourceA = _dmaRollbackSnapshot.WorkSourceA;
+                _workSourceB = _dmaRollbackSnapshot.WorkSourceB;
+                _workSourceC = _dmaRollbackSnapshot.WorkSourceC;
+                _workDestinationD = _dmaRollbackSnapshot.WorkDestinationD;
+                _previousA = _dmaRollbackSnapshot.PreviousA;
+                _previousB = _dmaRollbackSnapshot.PreviousB;
+                _fillCarry = _dmaRollbackSnapshot.FillCarry;
+                _areaKernelState = _dmaRollbackSnapshot.AreaKernelState;
+                _activeDataC = _dmaRollbackSnapshot.ActiveDataC;
+                _zeroFlag = _dmaRollbackSnapshot.ZeroFlag;
+                _dataB = _dmaRollbackSnapshot.DataB;
+                _lineLastDrawnY = _dmaRollbackSnapshot.LineLastDrawnY;
+                _sourceALatch = default;
+                _sourceBLatch = default;
+                _sourceCLatch = default;
+                _destinationDLatch = default;
+                ClearAreaMicroOpState();
+                _dmaRollbackSnapshotActive = false;
+            }
+
+            _currentCycle = Math.Max(_currentCycle, deniedCycle);
+        }
+
         private ushort ExecuteAreaFromSourceLatches(ushort rawA, ushort rawB, ushort rawC, ushort mask)
         {
             if (_specializationEnabled && _activeKernel.SupportsArea)
@@ -2243,7 +2832,11 @@ namespace CopperMod.Amiga
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, ref uint pointer, int step, long cycle)
         {
             var latch = LoadSourceDmaLatch(source, GetEffectiveBlitterAddress(pointer), cycle);
-            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            if (latch.Reservation.Granted)
+            {
+                pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            }
+
             return latch;
         }
 
@@ -2253,7 +2846,9 @@ namespace CopperMod.Amiga
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, uint address, long cycle)
         {
             var effectiveAddress = GetEffectiveBlitterAddress(address);
-            var reservation = _specializationEnabled
+            var reservation = _cpuWaitExactSlotCycle >= 0
+                ? ReserveSourceDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
+                : _specializationEnabled
                 ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: false)
                 : _bus.ReserveChipWordForDevice(
                     AmigaBusRequester.Blitter,
@@ -2265,8 +2860,37 @@ namespace CopperMod.Amiga
                 _specializedReservations++;
             }
 
-            RecordBlitterDma(reservation.Access);
+            if (reservation.Granted)
+            {
+                RecordBlitterDma(reservation.Access);
+            }
+
             return new BlitterDmaReadLatch(source, reservation);
+        }
+
+        private AmigaDmaWordReservation ReserveSourceDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
+        {
+            _ = _bus.TryReserveBlitterChipWordExactSlot(
+                effectiveAddress,
+                cycle,
+                _cpuWaitExactSlotCycle,
+                isWrite: false,
+                out var reservation);
+            return reservation;
+        }
+
+        private bool TryConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch, out ushort value)
+        {
+            if (!latch.Reservation.Granted)
+            {
+                RollbackDmaStepToDeniedCycle(latch.Reservation.GrantedCycle);
+                latch = default;
+                value = 0;
+                return false;
+            }
+
+            value = ConsumeSourceDmaLatch(ref latch);
+            return true;
         }
 
         private ushort ConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch)
@@ -2280,17 +2904,58 @@ namespace CopperMod.Amiga
         private static BlitterDmaWriteLatch CreateDestinationDmaLatch(ushort value)
             => new BlitterDmaWriteLatch(value);
 
-        private AmigaBusAccessResult CommitDestinationDmaLatch(ref uint pointer, int step, ref BlitterDmaWriteLatch latch, long cycle)
+        private bool TryCommitDestinationDmaLatch(
+            ref uint pointer,
+            int step,
+            ref BlitterDmaWriteLatch latch,
+            long cycle,
+            out AmigaBusAccessResult access)
         {
-            var access = CommitDestinationDmaLatch(GetEffectiveBlitterAddress(pointer), ref latch, cycle);
-            pointer = _bus.AddChipDmaPointerOffset(pointer, step);
-            return access;
+            var reservation = CommitDestinationDmaLatch(ref pointer, step, ref latch, cycle);
+            access = reservation.Access;
+            if (reservation.Granted)
+            {
+                return true;
+            }
+
+            RollbackDmaStepToDeniedCycle(reservation.GrantedCycle);
+            return false;
         }
 
-        private AmigaBusAccessResult CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
+        private bool TryCommitDestinationDmaLatch(
+            uint address,
+            ref BlitterDmaWriteLatch latch,
+            long cycle,
+            out AmigaBusAccessResult access)
+        {
+            var reservation = CommitDestinationDmaLatch(address, ref latch, cycle);
+            access = reservation.Access;
+            if (reservation.Granted)
+            {
+                return true;
+            }
+
+            RollbackDmaStepToDeniedCycle(reservation.GrantedCycle);
+            return false;
+        }
+
+        private AmigaDmaWordReservation CommitDestinationDmaLatch(ref uint pointer, int step, ref BlitterDmaWriteLatch latch, long cycle)
+        {
+            var reservation = CommitDestinationDmaLatch(GetEffectiveBlitterAddress(pointer), ref latch, cycle);
+            if (reservation.Granted)
+            {
+                pointer = _bus.AddChipDmaPointerOffset(pointer, step);
+            }
+
+            return reservation;
+        }
+
+        private AmigaDmaWordReservation CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
             var effectiveAddress = GetEffectiveBlitterAddress(address);
-            var reservation = _specializationEnabled
+            var reservation = _cpuWaitExactSlotCycle >= 0
+                ? ReserveDestinationDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
+                : _specializationEnabled
                 ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: true)
                 : _bus.ReserveChipWordWriteForDevice(
                     AmigaBusRequester.Blitter,
@@ -2302,10 +2967,27 @@ namespace CopperMod.Amiga
                 _specializedReservations++;
             }
 
+            if (!reservation.Granted)
+            {
+                latch = default;
+                return reservation;
+            }
+
             _bus.CommitDmaWordWrite(in reservation, latch.Value);
             RecordBlitterDma(reservation.Access);
             latch = default;
-            return reservation.Access;
+            return reservation;
+        }
+
+        private AmigaDmaWordReservation ReserveDestinationDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
+        {
+            _ = _bus.TryReserveBlitterChipWordExactSlot(
+                effectiveAddress,
+                cycle,
+                _cpuWaitExactSlotCycle,
+                isWrite: true,
+                out var reservation);
+            return reservation;
         }
 
         private uint AddModulo(uint pointer, short modulo, bool descending)
@@ -2317,6 +2999,306 @@ namespace CopperMod.Amiga
         private uint GetEffectiveBlitterAddress(uint pointer)
         {
             return _bus.MaskChipDmaAddress(pointer);
+        }
+
+        private sealed class CpuWaitScratchState
+        {
+            private readonly AmigaBlitter _owner;
+            private long _stepStart;
+            private long _stepEnd;
+            private long _nextReadCycle;
+            private long _nextCycle;
+            private long _internalCompletionCycle;
+            private bool _wordActive;
+            private int _opIndex;
+            private bool _outputReady;
+            private bool _finalWord;
+            private uint _workSourceA;
+            private uint _workSourceB;
+            private uint _workSourceC;
+            private uint _workDestinationD;
+            private int _wordX;
+            private int _rowY;
+            private bool _busy;
+
+            public CpuWaitScratchState(AmigaBlitter owner)
+            {
+                _owner = owner;
+                CurrentCycle = owner._currentCycle;
+                _workSourceA = owner._workSourceA;
+                _workSourceB = owner._workSourceB;
+                _workSourceC = owner._workSourceC;
+                _workDestinationD = owner._workDestinationD;
+                _wordX = owner._wordX;
+                _rowY = owner._rowY;
+                _busy = owner._busy;
+                FirstDmaCycle = -1;
+                LastDmaCycle = -1;
+                if (owner._areaMicroOpActive)
+                {
+                    StartedFromPartial = true;
+                    _wordActive = true;
+                    _opIndex = owner._areaMicroOpIndex;
+                    _stepStart = owner._areaMicroOpStepStart;
+                    _stepEnd = owner._areaMicroOpStepEnd;
+                    _nextReadCycle = owner._areaMicroOpNextReadCycle;
+                    _nextCycle = owner._areaMicroOpNextCycle;
+                    _internalCompletionCycle = owner._areaMicroOpInternalCompletionCycle;
+                    _outputReady = owner._areaMicroOpOutputReady;
+                    _finalWord = owner._areaMicroOpFinalWord;
+                }
+            }
+
+            public long CurrentCycle { get; private set; }
+
+            public int MicroOps { get; private set; }
+
+            public bool StartedFromPartial { get; }
+
+            public long FirstDmaCycle { get; private set; }
+
+            public long LastDmaCycle { get; private set; }
+
+            public bool TryAdvanceAtSlot(
+                AgnusHrmSlotEngine slots,
+                long slotCycle,
+                out string unsupportedReason)
+            {
+                unsupportedReason = string.Empty;
+                if (!_busy)
+                {
+                    return false;
+                }
+
+                if (!_wordActive)
+                {
+                    BeginWord();
+                }
+
+                if (_opIndex >= GetOpCount())
+                {
+                    if (_nextCycle > slotCycle)
+                    {
+                        return false;
+                    }
+
+                    FinishWord();
+                    return true;
+                }
+
+                var op = GetOp(_opIndex);
+                var requestCycle = GetRequestCycle(op);
+                if (requestCycle > slotCycle)
+                {
+                    return false;
+                }
+
+                var address = GetAddress(op);
+                var write = op == BlitterSlotQueueOp.WriteD;
+                if (!slots.TryReserveBlitterDmaWordExactSlot(
+                    address,
+                    requestCycle,
+                    slotCycle,
+                    write,
+                    out var access))
+                {
+                    return false;
+                }
+
+                CommitOp(op, access);
+                RecordDma(access.GrantedCycle);
+                _opIndex++;
+                return true;
+            }
+
+            private void BeginWord()
+            {
+                _wordActive = true;
+                _opIndex = 0;
+                _stepStart = CurrentCycle;
+                _stepEnd = _stepStart + _owner.GetAreaWordCycles();
+                _nextReadCycle = _stepStart;
+                _nextCycle = _stepEnd;
+                _internalCompletionCycle = _stepEnd;
+                _outputReady = false;
+                _finalWord = _rowY == _owner._height - 1 && _wordX == _owner._widthWords - 1;
+            }
+
+            private int GetOpCount()
+            {
+                var count = 0;
+                if (_owner._useA)
+                {
+                    count++;
+                }
+
+                if (_owner._useB)
+                {
+                    count++;
+                }
+
+                if (_owner._useC)
+                {
+                    count++;
+                }
+
+                if (_owner._useD)
+                {
+                    count++;
+                }
+
+                return count;
+            }
+
+            private BlitterSlotQueueOp GetOp(int index)
+            {
+                if (_owner._useA)
+                {
+                    if (index == 0)
+                    {
+                        return BlitterSlotQueueOp.ReadA;
+                    }
+
+                    index--;
+                }
+
+                if (_owner._useB)
+                {
+                    if (index == 0)
+                    {
+                        return BlitterSlotQueueOp.ReadB;
+                    }
+
+                    index--;
+                }
+
+                if (_owner._useC)
+                {
+                    if (index == 0)
+                    {
+                        return BlitterSlotQueueOp.ReadC;
+                    }
+
+                    index--;
+                }
+
+                return BlitterSlotQueueOp.WriteD;
+            }
+
+            private long GetRequestCycle(BlitterSlotQueueOp op)
+                => op == BlitterSlotQueueOp.WriteD
+                    ? Math.Max(_nextReadCycle, _stepEnd - ChipSlotCycles)
+                    : _nextReadCycle;
+
+            private uint GetAddress(BlitterSlotQueueOp op)
+                => op switch
+                {
+                    BlitterSlotQueueOp.ReadA => _owner.GetEffectiveBlitterAddress(_workSourceA),
+                    BlitterSlotQueueOp.ReadB => _owner.GetEffectiveBlitterAddress(_workSourceB),
+                    BlitterSlotQueueOp.ReadC => _owner.GetEffectiveBlitterAddress(_workSourceC),
+                    _ => _owner.GetEffectiveBlitterAddress(_workDestinationD)
+                };
+
+            private void CommitOp(BlitterSlotQueueOp op, AmigaBusAccessResult access)
+            {
+                switch (op)
+                {
+                    case BlitterSlotQueueOp.ReadA:
+                        _workSourceA = _owner._bus.AddChipDmaPointerOffset(_workSourceA, _owner._step);
+                        _nextReadCycle = access.CompletedCycle;
+                        _nextCycle = Math.Max(_nextCycle, access.CompletedCycle);
+                        break;
+                    case BlitterSlotQueueOp.ReadB:
+                        _workSourceB = _owner._bus.AddChipDmaPointerOffset(_workSourceB, _owner._step);
+                        _nextReadCycle = access.CompletedCycle;
+                        _nextCycle = Math.Max(_nextCycle, access.CompletedCycle);
+                        break;
+                    case BlitterSlotQueueOp.ReadC:
+                        _workSourceC = _owner._bus.AddChipDmaPointerOffset(_workSourceC, _owner._step);
+                        _nextReadCycle = access.CompletedCycle;
+                        _nextCycle = Math.Max(_nextCycle, access.CompletedCycle);
+                        break;
+                    case BlitterSlotQueueOp.WriteD:
+                        EnsureOutputReady();
+                        _workDestinationD = _owner._bus.AddChipDmaPointerOffset(_workDestinationD, _owner._step);
+                        _nextCycle = Math.Max(_nextCycle, access.CompletedCycle);
+                        break;
+                }
+            }
+
+            private void EnsureOutputReady()
+            {
+                if (_outputReady)
+                {
+                    return;
+                }
+
+                _outputReady = true;
+                _internalCompletionCycle = Math.Max(_stepEnd, _nextReadCycle);
+            }
+
+            private void FinishWord()
+            {
+                if (!_outputReady)
+                {
+                    EnsureOutputReady();
+                }
+
+                CurrentCycle = _finalWord && _owner._useD
+                    ? _internalCompletionCycle
+                    : _nextCycle;
+                _wordActive = false;
+                _opIndex = 0;
+                AdvancePosition();
+            }
+
+            private void AdvancePosition()
+            {
+                _wordX++;
+                if (_wordX < _owner._widthWords)
+                {
+                    return;
+                }
+
+                _wordX = 0;
+                _rowY++;
+                if (_rowY >= _owner._height)
+                {
+                    _busy = false;
+                    return;
+                }
+
+                if (_owner._useA)
+                {
+                    _workSourceA = _owner.AddModulo(_workSourceA, _owner._activeSourceAModulo, descending: false);
+                }
+
+                if (_owner._useB)
+                {
+                    _workSourceB = _owner.AddModulo(_workSourceB, _owner._activeSourceBModulo, descending: false);
+                }
+
+                if (_owner._useC)
+                {
+                    _workSourceC = _owner.AddModulo(_workSourceC, _owner._activeSourceCModulo, descending: false);
+                }
+
+                if (_owner._useD)
+                {
+                    _workDestinationD = _owner.AddModulo(_workDestinationD, _owner._activeDestinationDModulo, descending: false);
+                }
+            }
+
+            private void RecordDma(long cycle)
+            {
+                if (FirstDmaCycle < 0)
+                {
+                    FirstDmaCycle = cycle;
+                }
+
+                LastDmaCycle = cycle;
+                MicroOps++;
+            }
         }
 
         private static ushort RotateRight(ushort value, int bits)
@@ -2380,6 +3362,65 @@ namespace CopperMod.Amiga
             }
 
             public ushort Value { get; }
+        }
+
+        private readonly struct BlitterDmaRollbackSnapshot
+        {
+            public BlitterDmaRollbackSnapshot(
+                long currentCycle,
+                uint workSourceA,
+                uint workSourceB,
+                uint workSourceC,
+                uint workDestinationD,
+                ushort previousA,
+                ushort previousB,
+                bool fillCarry,
+                BlitterAreaKernelState areaKernelState,
+                ushort activeDataC,
+                bool zeroFlag,
+                ushort dataB,
+                int lineLastDrawnY)
+            {
+                CurrentCycle = currentCycle;
+                WorkSourceA = workSourceA;
+                WorkSourceB = workSourceB;
+                WorkSourceC = workSourceC;
+                WorkDestinationD = workDestinationD;
+                PreviousA = previousA;
+                PreviousB = previousB;
+                FillCarry = fillCarry;
+                AreaKernelState = areaKernelState;
+                ActiveDataC = activeDataC;
+                ZeroFlag = zeroFlag;
+                DataB = dataB;
+                LineLastDrawnY = lineLastDrawnY;
+            }
+
+            public long CurrentCycle { get; }
+
+            public uint WorkSourceA { get; }
+
+            public uint WorkSourceB { get; }
+
+            public uint WorkSourceC { get; }
+
+            public uint WorkDestinationD { get; }
+
+            public ushort PreviousA { get; }
+
+            public ushort PreviousB { get; }
+
+            public bool FillCarry { get; }
+
+            public BlitterAreaKernelState AreaKernelState { get; }
+
+            public ushort ActiveDataC { get; }
+
+            public bool ZeroFlag { get; }
+
+            public ushort DataB { get; }
+
+            public int LineLastDrawnY { get; }
         }
 
         private readonly struct SchedulerWakeSignature : IEquatable<SchedulerWakeSignature>

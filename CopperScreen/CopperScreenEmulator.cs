@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -319,6 +324,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithDeferredCpuBusBatch(
 				startupOptions.DeferredCpuBusBatch,
 				startupOptions.DeferredCpuBusBatchVerify);
+		}
+
+		if (startupOptions.CpuWaitSlotReference)
+		{
+			machineOptions.WithCpuWaitSlotReferencePath(true);
 		}
 
 		if (startupOptions.HardwareSpecialization)

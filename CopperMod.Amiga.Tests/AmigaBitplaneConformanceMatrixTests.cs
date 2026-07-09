@@ -778,6 +778,41 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     }
 
     [Fact]
+    public void LiveCopperSelfModifiedOperandUsesValueFetchedBeforeCpuWrite()
+    {
+        const uint copperList = CopperListBase + 0x300;
+        const ushort fetchedColor = 0x0333;
+        const ushort laterColor = 0x0CCC;
+        var bus = new AmigaBus(enableLiveAgnusDma: true);
+        var targetLine = 0x2C - AmigaConstants.PalLowResOverscanBorderY + StandardY;
+        WriteCopperList(
+            bus,
+            copperList,
+            ((ushort)((targetLine << 8) | 0x51), 0xFFFE),
+            (0x0180, fetchedColor),
+            (0xFFFF, 0xFFFE));
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF080, (ushort)(copperList >> 16));
+        bus.WriteWord(0x00DFF082, (ushort)copperList);
+        bus.WriteWord(0x00DFF096, 0x8280);
+
+        var cpuWriteAfterCopperFetch = OutputRowStartCycle(StandardY + 1);
+        bus.WriteWord(copperList + 6, laterColor, cpuWriteAfterCopperFetch);
+        bus.AdvanceDmaTo(FrameCycles());
+
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        var snapshot = bus.Display.CaptureSnapshot();
+
+        Assert.Equal(0xFF333333u, Pixel(frame, StandardX + 160, StandardY));
+        Assert.Equal(0xFF333333u, Pixel(frame, StandardX, StandardY + 1));
+        Assert.NotEqual(0xFFCCCCCCu, Pixel(frame, StandardX + 160, StandardY));
+        Assert.NotEqual(0xFFCCCCCCu, Pixel(frame, StandardX, StandardY + 1));
+        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
+        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
+    }
+
+    [Fact]
     public void LiveDmaArchivedTimelineExpandsLowResPixelsInHighResOutput()
     {
         var presentationBus = CreateCopperBplcon0DisableBus(enableLiveDma: false);
