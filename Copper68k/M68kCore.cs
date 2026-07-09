@@ -277,7 +277,8 @@ namespace Copper68k
             long requestedCycle,
             long completedCycle,
             M68kBusAccessKind accessKind,
-            bool isWrite)
+            bool isWrite,
+            ushort statusRegister)
         {
             InstructionProgramCounter = instructionProgramCounter;
             Address = address;
@@ -286,6 +287,7 @@ namespace Copper68k
             CompletedCycle = completedCycle;
             AccessKind = accessKind;
             IsWrite = isWrite;
+            StatusRegister = statusRegister;
         }
 
         public uint InstructionProgramCounter { get; }
@@ -301,6 +303,8 @@ namespace Copper68k
         public M68kBusAccessKind AccessKind { get; }
 
         public bool IsWrite { get; }
+
+        public ushort StatusRegister { get; }
     }
 
     internal interface IM68kCpuBusPhaseTrace
@@ -7408,7 +7412,8 @@ namespace Copper68k
                 requestedCycle,
                 completedCycle,
                 accessKind,
-                isWrite);
+                isWrite,
+                State.StatusRegister);
             trace.RecordCpuBusPhase(in phase);
         }
 
