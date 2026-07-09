@@ -135,8 +135,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1000u, dataWrite.InstructionProgramCounter);
 		Assert.Equal(0x2000u, dataWrite.Address);
 		Assert.Equal(M68kOperandSize.Long, dataWrite.Size);
-		Assert.Equal(4, dataWrite.RequestedCycle);
-		Assert.Equal(8, dataWrite.CompletedCycle);
+		Assert.Equal(6, dataWrite.RequestedCycle);
+		Assert.Equal(10, dataWrite.CompletedCycle);
 		Assert.True(dataWrite.IsWrite);
 		Assert.Equal(0x1234_5678u, ReadBigEndianUInt32(bus.Memory, 0x2000, "long write"));
 	}
@@ -589,8 +589,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			dmaconrReadCycles.Length >= 2,
 			"Expected at least two DMACONR reads; data reads were " +
 			string.Join(", ", bus.DataReadCycles.Select(read => $"0x{read.Address:X8}@{read.Cycle}")));
-		Assert.Equal(62, dmaconrReadCycles[0]);
-		Assert.Equal(34, dmaconrReadCycles[1] - dmaconrReadCycles[0]);
+		Assert.Equal(60, dmaconrReadCycles[0]);
+		Assert.Equal(36, dmaconrReadCycles[1] - dmaconrReadCycles[0]);
 	}
 	[Fact]
 	public void MoveaDoesNotAlterConditionCodes()
@@ -1036,11 +1036,15 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	{
 		var bus = new TestBus();
 		Write(bus.Memory, 0x1000, 0x08, 0xC8, 0x00, 0x00); // BSET #0,A0 is illegal on MC68000
+		Write(bus.Memory, 4 * 4, 0x00, 0x00, 0x40, 0x00);
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(0x1000, 0x3000);
-		var exception = Assert.Throws<UnsupportedM68kOpcodeException>(() => cpu.ExecuteInstruction());
-		Assert.Equal(0x08C8, exception.Opcode);
-		Assert.Equal(0x1000u, exception.ProgramCounter);
+		cpu.ExecuteInstruction();
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.SupervisorStackPointer);
+		Assert.Equal((ushort)M68kCpuState.ResetStatusRegister, ReadWord(bus.Memory, 0x2FFA));
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 	[Fact]
 	public void MovepExecutesOn68000Interpreter()
@@ -1364,7 +1368,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		cpu.ExecuteInstruction();
 		cpu.ExecuteInstruction();
 		Assert.Equal(1, bus.WindowRequests);
-		Assert.Equal(3, bus.WindowCommits);
+		Assert.Equal(4, bus.WindowCommits);
 		Assert.Equal(0, bus.GenericInstructionFetchWordReads);
 		Assert.Equal(8, cpu.State.Cycles);
 	}

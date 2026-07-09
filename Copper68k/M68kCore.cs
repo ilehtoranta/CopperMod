@@ -1779,7 +1779,8 @@ namespace Copper68k
                 return CompleteInstruction(startCycles);
             }
 
-            throw new UnsupportedM68kOpcodeException(opcode, instructionPc);
+            RaiseException(4, instructionPc, 34);
+            return CompleteInstruction(startCycles);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2262,6 +2263,7 @@ namespace Copper68k
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
+
             if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
                 State.SetNegativeZero(value, size);
@@ -2387,6 +2389,7 @@ namespace Copper68k
 
             AddMovePostincrementWriteFaultFloor(GetEaOperandCycles(3, sourceRegister, size), destinationRegister, size);
             WritePostincrement(destinationRegister, value, size);
+            PrefetchFallthroughAfterMemoryWriteback();
             State.SetNegativeZero(value, size);
             AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 3, destinationRegister, size));
         }
@@ -2419,15 +2422,17 @@ namespace Copper68k
                 AddInstructionCycles(8);
                 if ((State.A[destinationRegister] & 1) == 0)
                 {
-                    DelayNextCpuDataAccess(4);
+                    AddPendingInternalCycles(4);
                 }
 
                 WritePostincrement(destinationRegister, value, size);
+                PrefetchFallthroughAfterMemoryWriteback();
                 return;
             }
             else if (size == M68kOperandSize.Long)
             {
                 WritePostincrement(destinationRegister, value, size);
+                PrefetchFallthroughAfterMemoryWriteback();
                 SetLogicFlags(value, size);
             }
             else
@@ -2435,6 +2440,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
                 WritePostincrement(destinationRegister, value, size);
+                PrefetchFallthroughAfterMemoryWriteback();
                 State.SetNegativeZero(value, size);
             }
 
@@ -3263,6 +3269,7 @@ namespace Copper68k
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
+
             if (plan.DestinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
                 State.SetNegativeZero(value, plan.Size);
@@ -3917,7 +3924,7 @@ namespace Copper68k
             return (opcode >> 12) switch
             {
                 0x0 => DecodeLine0(opcode, instructionPc),
-                0x1 or 0x2 or 0x3 => DecodeMove(opcode),
+                0x1 or 0x2 or 0x3 => DecodeMove(opcode, instructionPc),
                 0x4 => DecodeLine4(opcode, instructionPc),
                 0x5 => DecodeLine5(opcode),
                 0x6 => DecodeBranch(opcode, instructionPc),
@@ -3987,7 +3994,7 @@ namespace Copper68k
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
         }
 
-        private bool DecodeMove(ushort opcode)
+        private bool DecodeMove(ushort opcode, uint instructionPc)
         {
             var size = ((opcode >> 12) & 0x03) switch
             {
@@ -4005,6 +4012,18 @@ namespace Copper68k
             var srcReg = opcode & 7;
             var destMode = (opcode >> 6) & 7;
             var destReg = (opcode >> 9) & 7;
+            if (size == M68kOperandSize.Byte && (srcMode == 1 || destMode == 1))
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
+            if (destMode != 1 && !IsDataAlterableEffectiveAddress(destMode, destReg))
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
             var moveWritesMemory = destMode != 1 && destMode != 0;
             var src = moveWritesMemory
                 ? ResolveEaWithoutPrefetchTopUp(
@@ -4149,7 +4168,7 @@ namespace Copper68k
                 (dest.Address & 1) == 0)
             {
                 AddInstructionCycles(8);
-                DelayNextCpuDataAccess(4);
+                AddPendingInternalCycles(4);
             }
 
             dest.Write(value);
@@ -4157,6 +4176,7 @@ namespace Copper68k
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
+
             if (destMode != 1 && deferConditionCodesUntilSuccessfulWrite)
             {
                 State.SetNegativeZero(value, size);
@@ -4349,21 +4369,22 @@ namespace Copper68k
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
-                if (bitMode == 1 || (bitMode == 7 && bitReg == 4 && operation != 0))
+                if (!IsDataAlterableEffectiveAddress(bitMode, bitReg))
                 {
-                    return false;
-                }
+                    if (bitMode == 7 && bitReg == 4 && operation == 0)
+                    {
+                        var immediateValue = FetchWord();
+                        var immediateMask = 1u << (int)(bit & 7);
+                        State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
+                        AddInstructionCycles(8);
+                        return true;
+                    }
 
-                var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
-                if (bitMode == 7 && bitReg == 4)
-                {
-                    var immediateValue = FetchWord();
-                    var immediateMask = 1u << (int)(bit & 7);
-                    State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
-                    AddInstructionCycles(8);
+                    RaiseException(4, instructionPc, 34);
                     return true;
                 }
 
+                var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
                 if (bitMode == 7 && bitReg == 1)
                 {
                     var address = FetchLong();
@@ -4412,22 +4433,23 @@ namespace Copper68k
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
-                if (bitMode == 1 || (bitMode == 7 && bitReg == 4 && operation != 0))
+                if (!IsDataAlterableEffectiveAddress(bitMode, bitReg))
                 {
-                    return false;
-                }
+                    if (bitMode == 7 && bitReg == 4 && operation == 0)
+                    {
+                        var immediateValue = FetchWord();
+                        var immediateBit = State.D[bitRegister] & 7u;
+                        var immediateMask = 1u << (int)immediateBit;
+                        State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
+                        AddInstructionCycles(10);
+                        return true;
+                    }
 
-                var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
-                if (bitMode == 7 && bitReg == 4)
-                {
-                    var immediateValue = FetchWord();
-                    var immediateBit = State.D[bitRegister] & 7u;
-                    var immediateMask = 1u << (int)immediateBit;
-                    State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
-                    AddInstructionCycles(10);
+                    RaiseException(4, instructionPc, 34);
                     return true;
                 }
 
+                var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();
                 var bit = State.D[bitRegister] & (bitMode == 0 ? 31u : 7u);
@@ -4475,6 +4497,12 @@ namespace Copper68k
 
             var mode = (opcode >> 3) & 7;
             var reg = opcode & 7;
+            if (!IsDataAlterableEffectiveAddress(mode, reg))
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
             var writesEffectiveAddress = high != 0x0C00;
             var immediate = writesEffectiveAddress && mode != 0 && mode != 1 && !(mode == 7 && reg == 4)
                 ? FetchImmediateWithoutPrefetchTopUp(size)
@@ -4745,6 +4773,12 @@ namespace Copper68k
             {
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsDataAlterableEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Word, write: true);
                 if (mode == 3 && (ea.Address & 1) != 0)
                 {
@@ -4815,13 +4849,7 @@ namespace Copper68k
 
             if ((opcode & 0xFFF0) == 0x4E40)
             {
-                var vector = (uint)(32 + (opcode & 0x0F));
-                var savedStatusRegister = State.StatusRegister;
-                State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-                PushLong(State.ProgramCounter);
-                PushWord(savedStatusRegister);
-                SetProgramCounterAndFlushPrefetch(ReadLong(vector * 4));
-                AddInstructionCycles(34);
+                RaiseException(32 + (opcode & 0x0F), State.ProgramCounter, 34);
                 return true;
             }
 
@@ -4912,7 +4940,7 @@ namespace Copper68k
             {
                 var target = State.A[opcode & 7];
                 AddInstructionCycles(GetJmpCycles(2, opcode & 7));
-                JumpToSubroutine(target, State.ProgramCounter);
+                JumpToSubroutine(target, State.ProgramCounter, prefetchFallthroughBeforeStackWrite: true);
                 AddInstructionCycles(16);
                 return true;
             }
@@ -4923,7 +4951,7 @@ namespace Copper68k
                 var reg = opcode & 7;
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
                 AddInstructionCycles(GetJmpCycles(mode, reg));
-                JumpToSubroutine(ea.Address, State.ProgramCounter);
+                JumpToSubroutine(ea.Address, State.ProgramCounter, prefetchFallthroughBeforeStackWrite: false);
                 AddInstructionCycles(GetJsrCycles(mode, reg));
                 return true;
             }
@@ -5001,6 +5029,12 @@ namespace Copper68k
 
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsDataAlterableEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var writesEffectiveAddress = unary != 0x4A00;
                 var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
                     size == M68kOperandSize.Long &&
@@ -5062,6 +5096,12 @@ namespace Copper68k
             {
                 var dataRegister = (opcode >> 9) & 7;
                 var mode = (opcode >> 3) & 7;
+                if (mode == 1)
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(
                     mode,
                     opcode & 7,
@@ -5402,7 +5442,7 @@ namespace Copper68k
         {
             if (sourceMode == 7 && sourceRegister == 4)
             {
-                return size == M68kOperandSize.Long ? 16 : 12;
+                return size == M68kOperandSize.Long ? 16 : 8;
             }
 
             if (sourceIsRegister)
@@ -5445,6 +5485,14 @@ namespace Copper68k
                 : size == M68kOperandSize.Long ? 12 : 8;
             return baseCycles + GetEaOperandCycles(mode, reg, size);
         }
+
+        private static bool IsDataAlterableEffectiveAddress(int mode, int reg)
+            => mode switch
+            {
+                0 or 2 or 3 or 4 or 5 or 6 => true,
+                7 => reg <= 1,
+                _ => false
+            };
 
         private static int GetJmpCycles(int mode, int reg)
             => mode switch
@@ -6728,7 +6776,7 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
-        private void JumpToSubroutine(uint target, uint stackedProgramCounter)
+        private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
         {
             if ((target & 1) != 0)
             {
@@ -6740,9 +6788,16 @@ namespace Copper68k
                     useDataAccessStackedProgramCounter: true);
             }
 
+            if (prefetchFallthroughBeforeStackWrite)
+            {
+                TopUpPrefetchOne();
+            }
+
             PushLong(State.ProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
-            FullPrefetch(target);
+            _prefetchAddress = target;
+            TopUpPrefetchOne();
+            _skipRetirePrefetchTopUp = true;
         }
 
         private void ResetPrefetchPipeline()
