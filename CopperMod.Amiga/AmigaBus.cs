@@ -573,6 +573,8 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<AmigaBusAccessResult> BusAccesses => _busAccesses;
 
+        internal bool BusAccessCaptureEnabled => _captureBusAccesses;
+
         internal IReadOnlyList<AmigaCpuBusPhaseTrace> CpuBusPhases => _cpuBusPhases;
 
         internal IReadOnlyList<CpuChipRamWriteTrace> CpuChipRamWriteTrace
