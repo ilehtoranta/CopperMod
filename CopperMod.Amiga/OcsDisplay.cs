@@ -1900,7 +1900,6 @@ namespace CopperMod.Amiga
         {
             _liveNextDisplayEventValid = false;
             _liveNextDisplayEventCycle = long.MaxValue;
-            _bus.InvalidateLiveDisplayHrmGrantCache();
             InvalidateLiveCopperWaitCycle();
             InvalidateLiveWorkCycle();
         }
