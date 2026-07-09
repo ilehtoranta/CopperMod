@@ -583,6 +583,11 @@ namespace Copper68k
                 return false;
             }
 
+            if (mode == 0 && opmode >= 4 && line != 0xB)
+            {
+                return false;
+            }
+
             if (mode != 0)
             {
                 if (mode is not (2 or 3 or 5) || opmode > 2)

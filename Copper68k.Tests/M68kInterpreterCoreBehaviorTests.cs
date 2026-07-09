@@ -1067,6 +1067,171 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
 	}
 	[Fact]
+	public void DynamicBtstAllowsPcRelativeSource()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(
+			0x013A, 0x0002, // BTST D0,2(PC)
+			0x0100, 0x0000));
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+	}
+	[Fact]
+	public void MoveCcrToAddressRegisterRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x44C8)); // MOVE.B A0,CCR is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void MoveSrToAddressRegisterRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x46C8)); // MOVE SR,A0 is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.StatusRegister = 0;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void RegisterToDataRegisterArithmeticEncodingRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0xC180)); // AND.L D0,D0 in the register-to-EA form is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Theory]
+	[InlineData(0x4888)] // EXT.W A0 is illegal
+	[InlineData(0x48C8)] // EXT.L A0 is illegal
+	public void ExtAddressRegisterEncodingRaisesIllegalInstructionException(ushort opcode)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(opcode));
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void TasAddressRegisterEncodingRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x4AC8)); // TAS A0 is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void ByteQuickArithmeticToAddressRegisterRaisesIllegalInstructionException()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x5008)); // ADDQ.B #8,A0 is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void QuickArithmeticRejectsPcRelativeDestination()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x503A, 0x0002)); // ADDQ.B #8,2(PC) is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
+	public void ByteArithmeticRejectsAddressRegisterSource()
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x8008)); // OR.B A0,D0 is illegal
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Theory]
+	[InlineData(0x80C8)] // DIVU.W A0,D0 is illegal
+	[InlineData(0xC0C8)] // MULU.W A0,D0 is illegal
+	public void MultiplyAndDivideRejectAddressRegisterSource(ushort opcode)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(opcode));
+		bus.WriteLong(4 * 4, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadLong(bus.Memory, 0x2FFC));
+	}
+	[Fact]
 	public void MovepExecutesOn68000Interpreter()
 	{
 		var bus = new TestBus();

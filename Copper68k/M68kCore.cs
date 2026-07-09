@@ -2420,11 +2420,6 @@ namespace Copper68k
                 State.SetNegativeZero(value, size);
                 AddMovePostincrementWriteFaultFloor(0, destinationRegister, size);
                 AddInstructionCycles(8);
-                if ((State.A[destinationRegister] & 1) == 0)
-                {
-                    AddPendingInternalCycles(4);
-                }
-
                 WritePostincrement(destinationRegister, value, size);
                 PrefetchFallthroughAfterMemoryWriteback();
                 return;
@@ -4168,7 +4163,6 @@ namespace Copper68k
                 (dest.Address & 1) == 0)
             {
                 AddInstructionCycles(8);
-                AddPendingInternalCycles(4);
             }
 
             dest.Write(value);
@@ -4433,7 +4427,10 @@ namespace Copper68k
                 var operation = (opcode >> 6) & 3;
                 var bitMode = (opcode >> 3) & 7;
                 var bitReg = opcode & 7;
-                if (!IsDataAlterableEffectiveAddress(bitMode, bitReg))
+                var validBitEffectiveAddress = operation == 0
+                    ? IsBitTestEffectiveAddress(bitMode, bitReg)
+                    : IsDataAlterableEffectiveAddress(bitMode, bitReg);
+                if (!validBitEffectiveAddress)
                 {
                     if (bitMode == 7 && bitReg == 4 && operation == 0)
                     {
@@ -4798,15 +4795,18 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x44C0)
             {
-                var ea = ResolveEa(
-                    (opcode >> 3) & 7,
-                    opcode & 7,
-                    M68kOperandSize.Word,
-                    completeWordPostIncrementBeforeRead: true);
-                if (!ea.IsRegister && (ea.Address & 1) != 0)
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                if (!IsDataReadableEffectiveAddress(mode, reg))
                 {
-                    AddInstructionCycles(4);
+                    RaiseException(4, instructionPc, 34);
+                    return true;
                 }
+
+                var ea = ResolveEa(
+                    mode,
+                    reg,
+                    M68kOperandSize.Word);
 
                 SetCcr((ushort)ea.Read());
                 AddInstructionCycles(12 + (ea.IsRegister ? 0 : ea.EaCycles));
@@ -4815,6 +4815,14 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x46C0)
             {
+                var mode = (opcode >> 3) & 7;
+                var reg = opcode & 7;
+                if (!IsDataReadableEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 if (!State.GetFlag(M68kCpuState.Supervisor))
                 {
                     RaiseException(8, instructionPc, 34);
@@ -4822,8 +4830,8 @@ namespace Copper68k
                 }
 
                 var ea = ResolveEa(
-                    (opcode >> 3) & 7,
-                    opcode & 7,
+                    mode,
+                    reg,
                     M68kOperandSize.Word,
                     completeWordPostIncrementBeforeRead: true);
                 if (!ea.IsRegister && (ea.Address & 1) != 0)
@@ -4873,7 +4881,8 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xFB80) == 0x4880 && ((opcode >> 3) & 7) != 0)
+            if ((opcode & 0xFB80) == 0x4880 &&
+                IsMovemEffectiveAddress((opcode & 0x0400) != 0, (opcode >> 3) & 7, opcode & 7))
             {
                 DecodeMovem(opcode);
                 return true;
@@ -4907,7 +4916,7 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xFFC0) == 0x4880)
+            if ((opcode & 0xFFF8) == 0x4880)
             {
                 var reg = opcode & 7;
                 var value = M68kCpuState.SignExtend(State.D[reg] & 0xFF, M68kOperandSize.Byte) & 0xFFFF;
@@ -4919,7 +4928,7 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xFFC0) == 0x48C0)
+            if ((opcode & 0xFFF8) == 0x48C0)
             {
                 var reg = opcode & 7;
                 var value = M68kCpuState.SignExtend(State.D[reg] & 0xFFFF, M68kOperandSize.Word);
@@ -5020,6 +5029,12 @@ namespace Copper68k
             {
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsDataAlterableEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Byte, write: true);
                 var value = ea.Read();
                 State.SetNegativeZero(value, M68kOperandSize.Byte);
@@ -5241,6 +5256,12 @@ namespace Copper68k
             var mode = (opcode >> 3) & 7;
             if (mode == 1)
             {
+                if (size == M68kOperandSize.Byte)
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
                 var reg = opcode & 7;
                 SetAddressRegister(
                     reg,
@@ -5248,6 +5269,12 @@ namespace Copper68k
                         ? unchecked(State.A[reg] - (uint)count)
                         : unchecked(State.A[reg] + (uint)count));
                 AddInstructionCycles(8);
+                return true;
+            }
+
+            if (!IsDataAlterableEffectiveAddress(mode, opcode & 7))
+            {
+                RaiseException(4, State.LastInstructionProgramCounter, 34);
                 return true;
             }
 
@@ -5518,6 +5545,34 @@ namespace Copper68k
                 _ => false
             };
 
+        private static bool IsMemoryAlterableEffectiveAddress(int mode, int reg)
+            => mode is 2 or 3 or 4 or 5 or 6 || (mode == 7 && reg <= 1);
+
+        private static bool IsDataReadableEffectiveAddress(int mode, int reg)
+            => mode switch
+            {
+                0 or 2 or 3 or 4 or 5 or 6 => true,
+                1 => false,
+                7 => reg <= 4,
+                _ => false
+            };
+
+        private static bool IsArithmeticSourceEffectiveAddress(
+            int line,
+            M68kOperandSize size,
+            int mode,
+            int reg)
+            => (line is 0x9 or 0xB or 0xD && size != M68kOperandSize.Byte && mode == 1) ||
+                IsDataReadableEffectiveAddress(mode, reg);
+
+        private static bool IsBitTestEffectiveAddress(int mode, int reg)
+            => IsDataAlterableEffectiveAddress(mode, reg) || (mode == 7 && reg is 2 or 3);
+
+        private static bool IsMovemEffectiveAddress(bool memoryToRegisters, int mode, int reg)
+            => memoryToRegisters
+                ? mode is 2 or 3 or 5 or 6 || (mode == 7 && reg <= 3)
+                : mode is 2 or 4 or 5 or 6 || (mode == 7 && reg <= 1);
+
         private static bool IsControlEffectiveAddress(int mode, int reg)
             => mode is 2 or 5 or 6 || (mode == 7 && reg <= 3);
 
@@ -5665,6 +5720,12 @@ namespace Copper68k
 
             if (line == 0xC && opmode == 3)
             {
+                if (!IsDataReadableEffectiveAddress(mode, eaReg))
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
                 var sourceEa = ResolveEa(
                     mode,
                     eaReg,
@@ -5689,6 +5750,12 @@ namespace Copper68k
 
             if (line == 0xC && opmode == 7)
             {
+                if (!IsDataReadableEffectiveAddress(mode, eaReg))
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
                 var sourceEa = ResolveEa(
                     mode,
                     eaReg,
@@ -5713,6 +5780,12 @@ namespace Copper68k
 
             if (line == 0x8 && (opmode == 3 || opmode == 7))
             {
+                if (!IsDataReadableEffectiveAddress(mode, eaReg))
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
                 var sourceEa = ResolveEa(
                     mode,
                     eaReg,
@@ -5838,6 +5911,17 @@ namespace Copper68k
             }
 
             var writesEffectiveAddress = registerToEa && (line != 0xB || opmode >= 4);
+            var validEffectiveAddress = writesEffectiveAddress
+                ? line == 0xB
+                    ? IsDataAlterableEffectiveAddress(mode, eaReg)
+                    : IsMemoryAlterableEffectiveAddress(mode, eaReg)
+                : IsArithmeticSourceEffectiveAddress(line, operandSize, mode, eaReg);
+            if (!validEffectiveAddress)
+            {
+                RaiseException(4, State.LastInstructionProgramCounter, 34);
+                return true;
+            }
+
             var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
                 operandSize == M68kOperandSize.Long &&
                 mode is 4 or 5 or 6
@@ -6206,9 +6290,23 @@ namespace Copper68k
 
             if ((opcode & 0x00C0) == 0x00C0)
             {
+                if ((opcode & 0x0800) != 0)
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
+                var memoryMode = (opcode >> 3) & 7;
+                var memoryReg = opcode & 7;
+                if (!IsMemoryAlterableEffectiveAddress(memoryMode, memoryReg))
+                {
+                    RaiseException(4, State.LastInstructionProgramCounter, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(
-                    (opcode >> 3) & 7,
-                    opcode & 7,
+                    memoryMode,
+                    memoryReg,
                     M68kOperandSize.Word,
                     write: true,
                     completeWordPostIncrementBeforeRead: true);

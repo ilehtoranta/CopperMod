@@ -45,6 +45,26 @@ public sealed class M68kShiftTests
 		Assert.Equal(0x4FF2u, cpu.State.A[7]);
 	}
 
+	[Theory]
+	[InlineData(0xE0C0)] // ASR.W D0 is an invalid memory-shift encoding
+	[InlineData(0xE8D8)] // the memory-shift operation field has an invalid bit set
+	public void InvalidMemoryShiftEncodingRaisesIllegalInstructionException(ushort opcode)
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, opcode);
+		bus.WriteLong(4 * 4, 0x4000);
+
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x5000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, bus.ReadLong(0x4FFC));
+	}
+
 	[Fact]
 	public void AslByteSetsOverflowWhenSignChanges()
 	{
