@@ -4895,6 +4895,12 @@ namespace Copper68k
             {
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsControlEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
                 PushLong(ea.Address);
                 AddInstructionCycles(GetPeaCycles(mode, reg));
@@ -4930,6 +4936,12 @@ namespace Copper68k
                 var addressRegister = (opcode >> 9) & 7;
                 var mode = (opcode >> 3) & 7;
                 var register = opcode & 7;
+                if (!IsControlEffectiveAddress(mode, register))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, register, M68kOperandSize.Long, addressOnly: true);
                 SetAddressRegister(addressRegister, ea.Address);
                 AddInstructionCycles(GetLeaCycles(mode, register));
@@ -4949,6 +4961,12 @@ namespace Copper68k
             {
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsControlEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
                 AddInstructionCycles(GetJmpCycles(mode, reg));
                 JumpToSubroutine(ea.Address, State.ProgramCounter, prefetchFallthroughBeforeStackWrite: false);
@@ -4961,6 +4979,12 @@ namespace Copper68k
                 var targetStackedProgramCounter = State.ProgramCounter;
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
+                if (!IsControlEffectiveAddress(mode, reg))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Long, addressOnly: true);
                 AddInstructionCycles(GetJmpCycles(mode, reg));
                 BranchTo(ea.Address, targetStackedProgramCounter);
@@ -5493,6 +5517,9 @@ namespace Copper68k
                 7 => reg <= 1,
                 _ => false
             };
+
+        private static bool IsControlEffectiveAddress(int mode, int reg)
+            => mode is 2 or 5 or 6 || (mode == 7 && reg <= 3);
 
         private static int GetJmpCycles(int mode, int reg)
             => mode switch

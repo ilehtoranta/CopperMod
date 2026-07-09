@@ -487,6 +487,26 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			cpu.State.StatusRegister);
 		Assert.DoesNotContain(bus.Accesses, access => access.Kind == M68kBusAccessKind.CpuDataRead);
 	}
+	[Theory]
+	[InlineData(0x41C0)] // LEA D0,A0
+	[InlineData(0x4848)] // PEA A0
+	[InlineData(0x4E80)] // JSR D0
+	[InlineData(0x4EC0)] // JMP D0
+	public void InvalidControlEffectiveAddressRaisesIllegalInstructionException(ushort opcode)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(opcode));
+		bus.WriteLong(0x0010, 0x4000);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFAu, cpu.State.A[7]);
+		Assert.Equal(0x1000u, ReadBigEndianUInt32(bus.Memory, 0x2FFC, "stacked program counter"));
+	}
 	[Fact]
 	public void PlannedInterpreterMatchesScalarForBranchBtstAndImmediateLoop()
 	{
