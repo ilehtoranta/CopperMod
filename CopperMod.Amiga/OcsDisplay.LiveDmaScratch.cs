@@ -288,93 +288,21 @@ namespace CopperMod.Amiga
                         out result);
                 }
 
-                var candidate = requestedCycle;
-                var predictedGrant = -1L;
-                var predictedSecond = -1L;
-                var predictedCompletion = -1L;
-                if (requestedCycle < _frameStopCycle &&
-                    HasWorkThrough(requestedCycle) &&
-                    !AdvanceThrough(requestedCycle))
-                {
-                    result = OcsLiveDmaScratchResult.Unsupported(_unsupported);
-                    return false;
-                }
-
-                for (var attempt = 0; attempt < 8; attempt++)
-                {
-                    if (!AdvanceBeforeHrmGrant(candidate))
-                    {
-                        result = OcsLiveDmaScratchResult.Unsupported(_unsupported);
-                        return false;
-                    }
-
-                    if (!TryPredictCpuGrant(
-                            kind,
-                            target,
-                            address,
-                            size,
-                            requestedCycle,
-                            isWrite,
-                            out var nextGrant,
-                            out var nextSecond,
-                            out var nextCompletion))
-                    {
-                        result = OcsLiveDmaScratchResult.Unsupported("cpu-predict");
-                        return false;
-                    }
-
-                    if (nextGrant == predictedGrant &&
-                        nextSecond == predictedSecond &&
-                        nextCompletion == predictedCompletion)
-                    {
-                        break;
-                    }
-
-                    predictedGrant = nextGrant;
-                    predictedSecond = nextSecond;
-                    predictedCompletion = nextCompletion;
-                    if (predictedGrant <= candidate)
-                    {
-                        break;
-                    }
-
-                    candidate = size == AmigaBusAccessSize.Long ? predictedSecond : predictedGrant;
-                }
-
-                if (predictedGrant < 0)
-                {
-                    result = OcsLiveDmaScratchResult.Unsupported("unstable");
-                    return false;
-                }
-
-                long granted;
-                long second;
-                long completed;
-                if (size == AmigaBusAccessSize.Long)
-                {
-                    _slots.GrantCpuDataLongSlots(
-                        kind,
-                        target,
-                        address,
-                        requestedCycle,
-                        isWrite,
-                        out granted,
-                        out second,
-                        out completed);
-                }
-                else
-                {
-                    _slots.GrantCpuDataSingleSlot(
+                if (!TryRunCpuWaitSingleSlotExecutor(
                         kind,
                         target,
                         address,
                         size,
                         requestedCycle,
                         isWrite,
-                        out granted,
-                        out completed);
-                    second = granted;
+                        out var granted,
+                        out var completed))
+                {
+                    result = OcsLiveDmaScratchResult.Unsupported(_unsupported);
+                    return false;
                 }
+
+                var second = granted;
 
                 if (!ApplyPendingCpuWrite(granted, second))
                 {
@@ -415,6 +343,54 @@ namespace CopperMod.Amiga
                     _lastDmaCycle,
                     BuildScratchDetail(requestedCycle));
                 return true;
+            }
+
+            private bool TryRunCpuWaitSingleSlotExecutor(
+                AmigaBusAccessKind kind,
+                AmigaBusAccessTarget target,
+                uint address,
+                AmigaBusAccessSize size,
+                long requestedCycle,
+                bool isWrite,
+                out long grantedCycle,
+                out long completedCycle)
+            {
+                const int MaxSlots = 4096;
+                grantedCycle = 0;
+                completedCycle = 0;
+                var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+                for (var slot = 0; slot < MaxSlots; slot++, candidate += AgnusChipSlotScheduler.SlotCycles)
+                {
+                    if (candidate < _frameStopCycle &&
+                        HasWorkThrough(candidate) &&
+                        !AdvanceThrough(candidate))
+                    {
+                        return false;
+                    }
+
+                    if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
+                    {
+                        continue;
+                    }
+
+                    if (_slots.TryGrantCpuDataSingleExactSlot(
+                            kind,
+                            target,
+                            address,
+                            size,
+                            requestedCycle,
+                            candidate,
+                            isWrite,
+                            allowNiceBlitterSteal: true,
+                            out completedCycle))
+                    {
+                        grantedCycle = candidate;
+                        return true;
+                    }
+                }
+
+                _unsupported = "slot-loop";
+                return false;
             }
 
             private string BuildScratchDetail(long requestedCycle)
@@ -1629,12 +1605,6 @@ namespace CopperMod.Amiga
             {
                 while (_nextSpriteRow < LowResOutputHeight)
                 {
-                    if (!_display.IsLiveLineValid(_nextSpriteRow))
-                    {
-                        _unsupported = "line-state";
-                        return false;
-                    }
-
                     if (!IsSpriteDmaEnabled())
                     {
                         return false;

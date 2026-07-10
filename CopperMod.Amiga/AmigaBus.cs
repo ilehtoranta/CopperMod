@@ -225,8 +225,6 @@ namespace CopperMod.Amiga
         /// from the per-access hot path.
         /// </summary>
         private readonly bool _exactCpuChipSlotFastPathEnabled;
-        private ulong _deferredCpuWaitLiveWorkCacheVersion = ulong.MaxValue;
-        private bool _deferredCpuWaitLiveWorkCached;
         private readonly bool _usePaulaDmaFixedSlotFastPath;
         private readonly bool _deferredCpuBusBatchEnabled;
         private readonly bool _deferredCpuBusBatchVerifyEnabled;
@@ -983,13 +981,24 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            var access = _lastCpuBusAccess;
+            var access = phase.AccessKind == M68kBusAccessKind.CpuInterruptAcknowledge
+                ? null
+                : _lastCpuBusAccess;
+            var grantedSlot = phase.AccessKind == M68kBusAccessKind.CpuInterruptAcknowledge
+                ? null
+                : _lastCpuBusGrantedSlot;
             var secondWordCycle = access.HasValue ? GetSecondWordCycle(access.Value) : phase.CompletedCycle;
             _cpuBusPhases.Add(new AmigaCpuBusPhaseTrace(
                 phase,
                 access,
                 secondWordCycle,
-                _lastCpuBusGrantedSlot));
+                grantedSlot));
+
+            if (phase.AccessKind == M68kBusAccessKind.CpuInterruptAcknowledge)
+            {
+                _lastCpuBusAccess = null;
+                _lastCpuBusGrantedSlot = null;
+            }
         }
 
         bool IM68kPhysicalAddressMap.IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)

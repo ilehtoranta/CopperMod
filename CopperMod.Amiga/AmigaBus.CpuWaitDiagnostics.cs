@@ -11,7 +11,8 @@ namespace CopperMod.Amiga
     internal sealed partial class AmigaBus
     {
         private const int DeferredCpuWaitSlotShadowMaxSamples = 20000;
-        private const int DeferredCpuWaitSlotShadowLiveMaxSamples = 20000;
+        private const int DeferredCpuWaitSlotShadowLiveMaxSamples = 256;
+        private const int DeferredCpuWaitFixedImageMaxSamples = 20000;
         private bool _deferredCpuWaitDiagnosticsEnabled;
 
         private long _deferredCpuWaitWindowAttempts;
@@ -76,6 +77,12 @@ namespace CopperMod.Amiga
         private long _deferredCpuWaitSlotShadowBlitterScratchPartial;
         private long _deferredCpuWaitSlotShadowBlitterScratchMicroOps;
         private string _deferredCpuWaitSlotShadowFirstMismatch = string.Empty;
+        private long _deferredCpuWaitFixedImageAttempts;
+        private long _deferredCpuWaitFixedImageSupported;
+        private long _deferredCpuWaitFixedImageMatches;
+        private long _deferredCpuWaitFixedImageMismatches;
+        private long _deferredCpuWaitFixedImageUnsupported;
+        private string _deferredCpuWaitFixedImageFirstMismatch = string.Empty;
 
 
 
@@ -99,10 +106,17 @@ namespace CopperMod.Amiga
             public bool BlitterAttempted;
             public bool BlitterSupported;
             public BlitterCpuWaitScratchResult Blitter;
+            public bool FixedImageAttempted;
+            public bool FixedImageSupported;
+            public long FixedImageGrant;
+            public long FixedImageCompletion;
+            public CpuWaitFixedSlotImageUnsupported FixedImageUnsupported;
+            public CpuWaitFixedSlotTimelineSignature FixedImageTimeline;
 
             public readonly bool HasSupportedScratch
                 => (LiveAttempted && LiveSupported) ||
-                    (BlitterAttempted && BlitterSupported);
+                    (BlitterAttempted && BlitterSupported) ||
+                    (FixedImageAttempted && FixedImageSupported);
         }
 
 
@@ -229,6 +243,12 @@ namespace CopperMod.Amiga
         internal long DeferredCpuWaitSlotShadowBlitterScratchMicroOps => _deferredCpuWaitSlotShadowBlitterScratchMicroOps;
 
         internal string DeferredCpuWaitSlotShadowFirstMismatch => _deferredCpuWaitSlotShadowFirstMismatch;
+        internal long DeferredCpuWaitFixedImageAttempts => _deferredCpuWaitFixedImageAttempts;
+        internal long DeferredCpuWaitFixedImageSupported => _deferredCpuWaitFixedImageSupported;
+        internal long DeferredCpuWaitFixedImageMatches => _deferredCpuWaitFixedImageMatches;
+        internal long DeferredCpuWaitFixedImageMismatches => _deferredCpuWaitFixedImageMismatches;
+        internal long DeferredCpuWaitFixedImageUnsupported => _deferredCpuWaitFixedImageUnsupported;
+        internal string DeferredCpuWaitFixedImageFirstMismatch => _deferredCpuWaitFixedImageFirstMismatch;
 
 
 
@@ -296,7 +316,13 @@ namespace CopperMod.Amiga
             _deferredCpuWaitSlotShadowBlitterScratchPartial = 0;
             _deferredCpuWaitSlotShadowBlitterScratchMicroOps = 0;
             _deferredCpuWaitSlotShadowFirstMismatch = string.Empty;
-
+            _deferredCpuWaitFixedImageAttempts = 0;
+            _deferredCpuWaitFixedImageSupported = 0;
+            _deferredCpuWaitFixedImageMatches = 0;
+            _deferredCpuWaitFixedImageMismatches = 0;
+            _deferredCpuWaitFixedImageUnsupported = 0;
+            _deferredCpuWaitFixedImageFirstMismatch = string.Empty;
+            Display.ResetCpuWaitFixedSlotImageDiagnostics();
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -312,6 +338,38 @@ namespace CopperMod.Amiga
             ref DeferredCpuWaitScratchAudit audit)
         {
             var searchHorizon = grantRequestCycle + PalLineCycles;
+            if (_deferredCpuWaitFixedImageAttempts < DeferredCpuWaitFixedImageMaxSamples &&
+                LiveAgnusDmaEnabled &&
+                Display.HasLiveDisplayWork() &&
+                size is AmigaBusAccessSize.Byte or AmigaBusAccessSize.Word &&
+                target is AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.ExpansionRam or AmigaBusAccessTarget.RealTimeClock &&
+                !Blitter.Busy &&
+                !Disk.ActiveDma &&
+                !Paula.HasDmaWorkThrough(searchHorizon))
+            {
+                audit.FixedImageAttempted = true;
+                _deferredCpuWaitFixedImageAttempts++;
+                audit.FixedImageSupported = TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out audit.FixedImageGrant,
+                    out audit.FixedImageCompletion,
+                    out audit.FixedImageUnsupported,
+                    out audit.FixedImageTimeline);
+                if (audit.FixedImageSupported)
+                {
+                    _deferredCpuWaitFixedImageSupported++;
+                }
+                else
+                {
+                    _deferredCpuWaitFixedImageUnsupported++;
+                }
+            }
+
             if (!Display.HasLiveDisplayWork() &&
                 Blitter.Busy &&
                 !Disk.ActiveDma &&
@@ -348,8 +406,23 @@ namespace CopperMod.Amiga
             if (_deferredCpuWaitSlotShadowLiveAttempts >= DeferredCpuWaitSlotShadowLiveMaxSamples ||
                 !LiveAgnusDmaEnabled ||
                 !Display.HasLiveDisplayWork() ||
-                !Display.GetNextLiveDisplayWakeCandidateCycle(grantRequestCycle, searchHorizon).HasValue ||
                 !IsDeferredCpuWaitSlotShadowGrantSupported(target, size, searchHorizon))
+            {
+                return;
+            }
+
+            if (!TryPredictCpuGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out var initialGrant,
+                    out var initialSecondWord,
+                    out _) ||
+                !Display.HasLiveDmaSlotWorkThrough(
+                    size == AmigaBusAccessSize.Long ? initialSecondWord : initialGrant))
             {
                 return;
             }
@@ -402,6 +475,32 @@ namespace CopperMod.Amiga
             long completedCycle,
             AgnusSlotTimelineSignature referenceTimeline)
         {
+            if (audit.FixedImageAttempted && audit.FixedImageSupported)
+            {
+                _ = TryCaptureCpuWaitFixedSlotTimeline(
+                    grantRequestCycle,
+                    completedCycle,
+                    grantedCycle,
+                    predicted: false,
+                    out var fixedReferenceTimeline,
+                    out _);
+                if (audit.FixedImageGrant == grantedCycle &&
+                    audit.FixedImageCompletion == completedCycle &&
+                    audit.FixedImageTimeline.Equals(fixedReferenceTimeline))
+                {
+                    _deferredCpuWaitFixedImageMatches++;
+                }
+                else
+                {
+                    _deferredCpuWaitFixedImageMismatches++;
+                    if (_deferredCpuWaitFixedImageFirstMismatch.Length == 0)
+                    {
+                        _deferredCpuWaitFixedImageFirstMismatch =
+                            $"{kind}/{target}/{size}/write={isWrite}/addr=0x{address:X6}/req={grantRequestCycle}/image={audit.FixedImageGrant}->{audit.FixedImageCompletion}/{audit.FixedImageTimeline}/reference={grantedCycle}->{completedCycle}/{fixedReferenceTimeline}";
+                    }
+                }
+            }
+
             if (audit.LiveAttempted && audit.LiveSupported)
             {
                 RecordDeferredCpuWaitSlotShadowAudit(

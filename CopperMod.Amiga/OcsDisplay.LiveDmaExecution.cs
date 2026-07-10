@@ -37,7 +37,12 @@ namespace CopperMod.Amiga
                     if (nextCopperBarrierCycle <= targetCycle &&
                         nextCopperBarrierCycle <= nextCycle)
                     {
-                        var barrierStopCycle = Math.Max(_liveFrameStartCycle, nextCopperBarrierCycle - 1);
+                        var barrierStopCycle = nextCopperBarrierCycle - 1;
+                        if (barrierStopCycle < _liveFrameStartCycle)
+                        {
+                            return;
+                        }
+
                         RecordLiveRasterlinePlanEvent(
                             LiveRasterlinePlanEventKind.CopperBarrier,
                             barrierStopCycle,
@@ -153,7 +158,12 @@ namespace CopperMod.Amiga
                     if (nextCopperBarrierCycle <= targetCycle &&
                         nextCopperBarrierCycle <= nextCycle)
                     {
-                        var barrierStopCycle = Math.Max(_liveFrameStartCycle, nextCopperBarrierCycle - 1);
+                        var barrierStopCycle = nextCopperBarrierCycle - 1;
+                        if (barrierStopCycle < _liveFrameStartCycle)
+                        {
+                            return;
+                        }
+
                         AdvanceLiveDisplayStateTo(barrierStopCycle, includeCopper: false);
                         _liveCycle = Math.Max(_liveCycle, barrierStopCycle);
                         InvalidateLiveWorkCycle();

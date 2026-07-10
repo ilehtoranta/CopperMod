@@ -1373,6 +1373,33 @@ namespace CopperMod.Amiga
             return true;
         }
 
+        internal bool TryPredictCpuDataSingleSlotFrom(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long searchCycle,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle)
+        {
+            grantedCycle = 0;
+            if (size == AmigaBusAccessSize.Long || searchCycle < 0 || requestedCycle < 0)
+            {
+                return false;
+            }
+
+            grantedCycle = PredictFreeCpuSingleSlot(
+                searchCycle,
+                kind,
+                target,
+                address,
+                size,
+                isWrite,
+                requestedCycle);
+            return true;
+        }
+
         internal bool TryPredictCpuDataLongSlots(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -1693,6 +1720,25 @@ namespace CopperMod.Amiga
             System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
             return AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle) || TryGetSlot(slotCycle, out _);
+        }
+
+        internal bool TryGetCommittedSlotOwner(long cycle, out AgnusChipSlotOwner owner)
+        {
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, cycle));
+            if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+            {
+                owner = AgnusChipSlotOwner.Refresh;
+                return true;
+            }
+
+            if (TryGetSlot(slotCycle, out var slot))
+            {
+                owner = slot.Owner;
+                return true;
+            }
+
+            owner = AgnusChipSlotOwner.Free;
+            return false;
         }
 
         public bool IsFixedDmaReserved(long cycle)
@@ -3153,6 +3199,27 @@ namespace CopperMod.Amiga
 
             _chipSlots.AdvanceTo(targetCycle);
             _currentCycle = targetCycle;
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceCpuWaitLiveSlotTo(
+            long targetCycle,
+            out int bitplaneFetches,
+            out int spriteFetches,
+            out bool completedSafeCopper)
+        {
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Agnus CPU-wait slot cycles must be non-negative.");
+            var result = _bus.Display.AdvanceCpuWaitLiveSlot(
+                targetCycle,
+                out bitplaneFetches,
+                out spriteFetches,
+                out completedSafeCopper);
+            if (result == OcsCpuWaitLiveSlotResult.Processed)
+            {
+                _chipSlots.AdvanceTo(targetCycle);
+                _currentCycle = Math.Max(_currentCycle, targetCycle);
+            }
+
+            return result;
         }
 
         public long GetNextWakeCandidateCycle(long currentCycle, long targetCycle, bool includeLiveDisplay)

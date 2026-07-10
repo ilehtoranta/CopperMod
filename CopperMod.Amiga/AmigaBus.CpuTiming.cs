@@ -778,18 +778,58 @@ namespace CopperMod.Amiga
             var grantRequestCycle = requestedCycle;
             var slotContendedClean = _hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle);
             var scratchAudit = default(DeferredCpuWaitScratchAudit);
+            var cpuGrantCommitted = false;
+            var deferredPreparationUsed = false;
+            if (!slotContendedClean &&
+                ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle))
+            {
+                _deferredCpuBatchExitChipAccessCycle = -1;
+                _deferredCpuWaitWindowFastPathAttempts++;
+                if (_captureBusAccesses ||
+                    size == AmigaBusAccessSize.Long ||
+                    target is not (AmigaBusAccessTarget.ChipRam or
+                        AmigaBusAccessTarget.ExpansionRam or
+                        AmigaBusAccessTarget.RealTimeClock))
+                {
+                    _deferredCpuWaitWindowFastPathRejectedUnsupported++;
+                }
+                else if (HasNonDisplayDynamicCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles) ||
+                    Display.HasLiveDisplayWork())
+                {
+                    _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
+                    RecordDeferredCpuWaitDynamicRejectShadow(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        isWrite,
+                        requestedCycle);
+                }
+                else
+                {
+                    var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        grantRequestCycle,
+                        isWrite,
+                        out grantedCycle,
+                        out completedCycle);
+                    if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
+                    {
+                        secondWordCycle = grantedCycle;
+                        cpuGrantCommitted = true;
+                        deferredPreparationUsed = true;
+                    }
+                    else
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                    }
+                }
+            }
 
-            var deferredPreparationUsed = !slotContendedClean &&
-                ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle) &&
-                TryPrepareDeferredCpuWaitWindow(
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite,
-                    kind);
-
-            if (!slotContendedClean && !deferredPreparationUsed)
+            if (!slotContendedClean && !cpuGrantCommitted)
             {
                 if (ShouldRunDeferredCpuWaitSlotShadowAudit)
                 {
@@ -808,30 +848,34 @@ namespace CopperMod.Amiga
                 _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite, size);
             }
 
-            if (Blitter.Busy)
+            if (!cpuGrantCommitted && Blitter.Busy)
             {
                 grantRequestCycle = Blitter.AdvanceThroughCpuStall(grantRequestCycle);
             }
 
             grantRequestCycle = Math.Max(0, grantRequestCycle);
 
-            if (size != AmigaBusAccessSize.Long ||
-                !isWrite ||
-                target is not (AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.ExpansionRam))
+            if (!cpuGrantCommitted &&
+                (size != AmigaBusAccessSize.Long ||
+                    !isWrite ||
+                    target is not (AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.ExpansionRam)))
             {
                 PrepareLiveDisplayBeforeCpuHrmGrantUntilStable(target, address, size, isWrite, kind, grantRequestCycle);
             }
 
-            GrantExactCpuDataSlots(
-                kind,
-                target,
-                address,
-                size,
-                grantRequestCycle,
-                isWrite,
-                out grantedCycle,
-                out secondWordCycle,
-                out completedCycle);
+            if (!cpuGrantCommitted)
+            {
+                GrantExactCpuDataSlots(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out completedCycle);
+            }
 
             if (deferredPreparationUsed)
             {
@@ -968,76 +1012,6 @@ namespace CopperMod.Amiga
             secondWordCycle = grantedCycle;
         }
 
-        private bool TryPrepareDeferredCpuWaitWindow(
-            AmigaBusAccessTarget target,
-            uint address,
-            AmigaBusAccessSize size,
-            long requestedCycle,
-            bool isWrite,
-            AmigaBusAccessKind kind)
-        {
-            _deferredCpuBatchExitChipAccessCycle = -1;
-            _deferredCpuWaitWindowFastPathAttempts++;
-
-            if (_captureBusAccesses ||
-                !_exactCpuChipSlotFastPathEnabled ||
-                !ShouldUseChipSlotScheduler(target) ||
-                target is not (AmigaBusAccessTarget.ChipRam or
-                    AmigaBusAccessTarget.ExpansionRam or
-                    AmigaBusAccessTarget.RealTimeClock) ||
-                size == AmigaBusAccessSize.Long)
-            {
-                _deferredCpuWaitWindowFastPathRejectedUnsupported++;
-                RecordDeferredCpuWaitSlotShadowUnsupported(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    isWrite,
-                    requestedCycle,
-                    requestedCycle,
-                    CpuWaitSlotShadowReason.SlotOwner);
-                return false;
-            }
-
-            var searchHorizon = requestedCycle + PalLineCycles;
-            if (Display.HasLiveDisplayWork() ||
-                HasUnsupportedStaticCpuWaitDmaThrough(searchHorizon))
-            {
-                _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
-                RecordDeferredCpuWaitDynamicRejectShadow(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    isWrite,
-                    requestedCycle);
-                return false;
-            }
-
-            var grantRequestCycle = Math.Max(0, requestedCycle);
-            if (grantRequestCycle > 0)
-            {
-                _hardwareScheduler.DrainSlotContendedAccess(grantRequestCycle - 1);
-            }
-
-            if (Display.HasLiveDisplayWork() ||
-                HasUnsupportedStaticCpuWaitDmaThrough(searchHorizon))
-            {
-                _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
-                RecordDeferredCpuWaitDynamicRejectShadow(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    isWrite,
-                    requestedCycle);
-                return false;
-            }
-
-            return true;
-        }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldAttemptDeferredCpuWaitWindowFastPath(long requestedCycle)
         {
@@ -1048,40 +1022,261 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            if (requestedCycle != _deferredCpuBatchExitChipAccessCycle)
+            if (requestedCycle == _deferredCpuBatchExitChipAccessCycle)
             {
-                if (requestedCycle > _deferredCpuBatchExitChipAccessCycle)
-                {
-                    _deferredCpuBatchExitChipAccessCycle = -1;
-                }
-
-                return false;
+                return true;
             }
 
-            return !HasLiveDisplayWorkForDeferredCpuWait();
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool HasLiveDisplayWorkForDeferredCpuWait()
-        {
-            var version = Display.LiveWakeVersion;
-            if (version == _deferredCpuWaitLiveWorkCacheVersion)
+            if (requestedCycle > _deferredCpuBatchExitChipAccessCycle)
             {
-                return _deferredCpuWaitLiveWorkCached;
+                _deferredCpuBatchExitChipAccessCycle = -1;
             }
 
-            var hasWork = Display.HasLiveDisplayWork();
-            _deferredCpuWaitLiveWorkCached = hasWork;
-            _deferredCpuWaitLiveWorkCacheVersion = version;
-            return hasWork;
+            return false;
         }
 
+        internal void BeginPendingCpuSlotRequest(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite)
+            => _hrmSlotEngine.BeginPendingCpuSlotRequest(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite);
+
+        internal void ClearPendingCpuSlotRequest()
+            => _hrmSlotEngine.ClearPendingCpuSlotRequest();
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool HasUnsupportedStaticCpuWaitDmaThrough(long cycle)
-            => Blitter.Busy ||
+        internal bool HasDynamicCpuWaitSlotWorkThrough(long cycle)
+            => Display.HasLiveDisplayWork() ||
+                HasNonDisplayDynamicCpuWaitSlotWorkThrough(cycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool HasNonDisplayDynamicCpuWaitSlotWorkThrough(long cycle)
+            =>
+                Blitter.Busy ||
                 Disk.ActiveDma ||
                 Disk.HasSlotDmaWakeSourceThrough(cycle) ||
                 Paula.HasDmaWorkThrough(cycle);
+
+        internal OcsCpuWaitLiveSlotResult AdvanceCpuWaitLiveSlot(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches,
+            out bool completedSafeCopper)
+            => Agnus.AdvanceCpuWaitLiveSlotTo(
+                slotCycle,
+                out bitplaneFetches,
+                out spriteFetches,
+                out completedSafeCopper);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SynchronizeHrmBlitterPriority()
+            => _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
+
+        internal bool TryGrantPendingCpuSingleSlot(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            long slotCycle,
+            bool isWrite,
+            out long completedCycle)
+            => _hrmSlotEngine.TryGrantCpuDataSingleExactSlot(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                slotCycle,
+                isWrite,
+                allowNiceBlitterSteal: true,
+                out completedCycle);
+
+        internal bool TryPredictCpuWaitFixedSlotGrant(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+            => TryPredictCpuWaitFixedSlotGrant(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                out unsupported,
+                out _);
+
+        internal bool TryPredictCpuWaitFixedSlotGrant(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            out CpuWaitFixedSlotImageUnsupported unsupported,
+            out CpuWaitFixedSlotTimelineSignature timeline)
+        {
+            grantedCycle = 0;
+            completedCycle = 0;
+            unsupported = CpuWaitFixedSlotImageUnsupported.None;
+            timeline = default;
+            if (size == AmigaBusAccessSize.Long ||
+                target is not (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock))
+            {
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                return false;
+            }
+
+            var prepareCycle = Math.Max(0, requestedCycle);
+            var lastGrant = -1L;
+            for (var prepareAttempt = 0; prepareAttempt < 8; prepareAttempt++)
+            {
+                var searchCycle = Math.Max(0, requestedCycle);
+                long candidate;
+                while (true)
+                {
+                    if (!_hrmSlotEngine.TryPredictCpuDataSingleSlotFrom(
+                            kind,
+                            target,
+                            address,
+                            size,
+                            searchCycle,
+                            requestedCycle,
+                            isWrite,
+                            out candidate) ||
+                        !Display.TryGetCpuWaitFixedSlotOwner(candidate, out var owner, out unsupported))
+                    {
+                        return false;
+                    }
+
+                    if (candidate > prepareCycle || owner == CpuWaitFixedSlotOwner.Free)
+                    {
+                        break;
+                    }
+
+                    searchCycle = candidate + (AgnusChipSlotScheduler.SlotCycles * 2L);
+                }
+
+                if (candidate == lastGrant || candidate <= prepareCycle)
+                {
+                    grantedCycle = candidate;
+                    completedCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
+                    return TryCaptureCpuWaitFixedSlotTimeline(
+                        requestedCycle,
+                        completedCycle,
+                        grantedCycle,
+                        predicted: true,
+                        out timeline,
+                        out unsupported);
+                }
+
+                lastGrant = candidate;
+                prepareCycle = candidate;
+            }
+
+            grantedCycle = lastGrant;
+            completedCycle = lastGrant + AgnusChipSlotScheduler.SlotCycles;
+            return lastGrant >= 0 && TryCaptureCpuWaitFixedSlotTimeline(
+                requestedCycle,
+                completedCycle,
+                grantedCycle,
+                predicted: true,
+                out timeline,
+                out unsupported);
+        }
+
+        private bool TryCaptureCpuWaitFixedSlotTimeline(
+            long requestedCycle,
+            long completedCycle,
+            long cpuGrantCycle,
+            bool predicted,
+            out CpuWaitFixedSlotTimelineSignature timeline,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+        {
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            var count = 0;
+            var firstCycle = 0L;
+            var lastCycle = 0L;
+            var firstOwner = AgnusChipSlotOwner.Free;
+            var lastOwner = AgnusChipSlotOwner.Free;
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
+            var lastCandidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, completedCycle - 1));
+            for (; slotCycle <= lastCandidate; slotCycle += AgnusChipSlotScheduler.SlotCycles)
+            {
+                AgnusChipSlotOwner owner;
+                if (slotCycle == cpuGrantCycle)
+                {
+                    owner = AgnusChipSlotOwner.Cpu;
+                }
+                else if (!_hrmSlotEngine.TryGetCommittedSlotOwner(slotCycle, out owner))
+                {
+                    if (!predicted)
+                    {
+                        owner = AgnusChipSlotOwner.Free;
+                    }
+                    else if (!Display.TryGetCpuWaitFixedSlotOwner(slotCycle, out var fixedOwner, out unsupported))
+                    {
+                        timeline = default;
+                        return false;
+                    }
+                    else
+                    {
+                        owner = fixedOwner switch
+                        {
+                            CpuWaitFixedSlotOwner.Refresh => AgnusChipSlotOwner.Refresh,
+                            CpuWaitFixedSlotOwner.BitplaneRead => AgnusChipSlotOwner.Bitplane,
+                            CpuWaitFixedSlotOwner.SpriteRead => AgnusChipSlotOwner.Sprite,
+                            _ => AgnusChipSlotOwner.Free
+                        };
+                    }
+                }
+
+                if (count == 0)
+                {
+                    firstCycle = slotCycle;
+                    firstOwner = owner;
+                }
+
+                lastCycle = slotCycle;
+                lastOwner = owner;
+                count++;
+                hash = (hash ^ unchecked((ulong)slotCycle)) * prime;
+                hash = (hash ^ (ulong)owner) * prime;
+            }
+
+            unsupported = CpuWaitFixedSlotImageUnsupported.None;
+            timeline = new CpuWaitFixedSlotTimelineSignature(
+                count,
+                hash,
+                firstCycle,
+                lastCycle,
+                firstOwner,
+                lastOwner);
+            return true;
+        }
 
         private bool TryPredictCpuGrant(
             AmigaBusAccessKind kind,

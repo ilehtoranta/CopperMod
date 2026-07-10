@@ -7,6 +7,12 @@ using System;
 
 namespace CopperMod.Amiga
 {
+    internal enum OcsCpuWaitLiveSlotResult : byte
+    {
+        Processed,
+        CopperBarrier
+    }
+
     internal sealed partial class OcsDisplay
     {
         internal bool HasLiveDmaCapturedThrough(long cycle)
@@ -14,6 +20,105 @@ namespace CopperMod.Amiga
             return _liveFrameValid &&
                 cycle >= _liveFrameStartCycle &&
                 cycle <= _liveCapturedThroughCycle;
+        }
+
+        internal bool HasLiveDmaSlotWorkThrough(long targetCycle)
+        {
+            if (!_liveDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
+            {
+                return false;
+            }
+
+            targetCycle = Math.Max(0, targetCycle);
+            var nextCycle = Math.Min(
+                GetNextPreparedLiveBitplaneFetchCycle(),
+                Math.Min(
+                    GetNextLiveBitplaneFetchCycle(),
+                    Math.Min(
+                        GetNextLiveSpriteFetchCycle(),
+                        GetNextLiveCopperCycle(Math.Min(targetCycle + 1, GetLiveFrameStopCycle())))));
+            return nextCycle <= targetCycle;
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceCpuWaitLiveSlot(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches,
+            out bool completedSafeCopper)
+        {
+            var bitplanesBefore = _liveBitplaneDmaFetches;
+            var spritesBefore = _liveSpriteDmaFetches;
+            completedSafeCopper = false;
+
+            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            {
+                bitplaneFetches = 0;
+                spriteFetches = 0;
+                return OcsCpuWaitLiveSlotResult.Processed;
+            }
+
+            slotCycle = Math.Max(_liveFrameStartCycle, slotCycle);
+            if (slotCycle >= GetLiveFrameStopCycle())
+            {
+                bitplaneFetches = 0;
+                spriteFetches = 0;
+                return OcsCpuWaitLiveSlotResult.CopperBarrier;
+            }
+
+            var nextCopper = GetNextLiveCopperCycle(slotCycle);
+            if (nextCopper <= slotCycle)
+            {
+                if (!CanCompleteSafeCpuWaitCopperOperation(slotCycle))
+                {
+                    bitplaneFetches = 0;
+                    spriteFetches = 0;
+                    return OcsCpuWaitLiveSlotResult.CopperBarrier;
+                }
+
+                StepLiveCopper(slotCycle);
+                completedSafeCopper = true;
+            }
+
+            AdvanceLiveDmaWithinFrame(slotCycle, includeCopper: false);
+            bitplaneFetches = _liveBitplaneDmaFetches - bitplanesBefore;
+            spriteFetches = _liveSpriteDmaFetches - spritesBefore;
+            return GetNextLiveCopperCycle(slotCycle) <= slotCycle
+                ? OcsCpuWaitLiveSlotResult.CopperBarrier
+                : OcsCpuWaitLiveSlotResult.Processed;
+        }
+
+        private bool CanCompleteSafeCpuWaitCopperOperation(long slotCycle)
+        {
+            if (_liveCopper.PendingSkip)
+            {
+                // Completing a SKIP leaves the next instruction eligible at the same
+                // Copper cycle. Falling back after that mutation would lose atomicity.
+                return false;
+            }
+
+            if (!_liveCopper.PendingMove || _liveCopper.PendingMoveCycle > slotCycle)
+            {
+                return false;
+            }
+
+            // The production wait-slot path cannot roll back. Only complete a MOVE
+            // when its stop cycle is beyond this candidate, so no second Copper action
+            // can become due before the method returns.
+            if (_liveCopper.PendingMoveStopCycle <= slotCycle)
+            {
+                return false;
+            }
+
+            var register = _liveCopper.PendingMoveRegister;
+            if (IsCopperDangerStopRegister(register))
+            {
+                return false;
+            }
+
+            return _liveCopper.PendingMoveSuppress ||
+                register >= 0x180 && register < 0x1C0 && (register & 1) == 0;
         }
 
         internal void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle)
