@@ -1189,6 +1189,50 @@ namespace Copper68k
             _statusRegister = (ushort)status;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SetLongLogicFlags(uint value)
+        {
+            var status = _statusRegister & unchecked((ushort)~(Negative | Zero | Overflow | Carry));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & 0x8000_0000) != 0)
+            {
+                status |= Negative;
+            }
+
+            _statusRegister = (ushort)status;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SetLongArithmeticFlags(uint value, bool overflow, bool carry)
+        {
+            var status = _statusRegister & unchecked((ushort)~(Negative | Zero | Overflow | Carry | Extend));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & 0x8000_0000) != 0)
+            {
+                status |= Negative;
+            }
+
+            if (overflow)
+            {
+                status |= Overflow;
+            }
+
+            if (carry)
+            {
+                status |= Carry | Extend;
+            }
+
+            _statusRegister = (ushort)status;
+        }
+
         /// <summary>
         /// Gets the value mask for an operand size.
         /// </summary>
@@ -1287,6 +1331,14 @@ namespace Copper68k
         where TBus : IM68kBus
         where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
     {
+        private enum PlannedRetireMode : byte
+        {
+            Unsupported = 0,
+            General,
+            SequentialOneWordRefill,
+            PrefetchHandled
+        }
+
         private const int AddressErrorExceptionCycles = 50;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
@@ -1722,7 +1774,13 @@ namespace Copper68k
         {
             var instructionPc = State.ProgramCounter;
             _activeInstructionProgramCounter = instructionPc;
-            var opcode = FetchOpcodeWord();
+            var consumedFromFullPlannedQueue =
+                _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                _prefetchCount == 2 &&
+                _prefetchAddress == instructionPc;
+            var opcode = consumedFromFullPlannedQueue
+                ? ConsumeSequentialPlannedOpcodeWord()
+                : FetchOpcodeWord();
             State.LastOpcode = opcode;
             State.LastInstructionProgramCounter = instructionPc;
             if (_instructionFrequency.Enabled)
@@ -1730,10 +1788,19 @@ namespace Copper68k
                 _instructionFrequency.Record(instructionPc, opcode);
             }
 
-            if (_opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
-                TryExecutePlannedInstruction(opcode, instructionPc))
+            if (_opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar)
             {
-                return CompleteInstruction(startCycles);
+                var retireMode = TryExecutePlannedInstruction(opcode, instructionPc);
+                if (retireMode != PlannedRetireMode.Unsupported)
+                {
+                    if (retireMode == PlannedRetireMode.SequentialOneWordRefill &&
+                        !consumedFromFullPlannedQueue)
+                    {
+                        retireMode = PlannedRetireMode.General;
+                    }
+
+                    return CompleteInstruction(startCycles, retireMode);
+                }
             }
 
             // Exception bookkeeping deferred to scalar path only.
@@ -1788,7 +1855,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryExecutePlannedInstruction(ushort opcode, uint instructionPc)
+        private PlannedRetireMode TryExecutePlannedInstruction(ushort opcode, uint instructionPc)
         {
             return _opcodePlanDispatch switch
             {
@@ -1800,82 +1867,94 @@ namespace Copper68k
                     opcode,
                     instructionPc,
                     in M68kOpcodePlanTable.PackedPlans[opcode]),
-                _ => false
+                _ => PlannedRetireMode.Unsupported
             };
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryExecutePlannedKind(ushort opcode, uint instructionPc, M68kOpcodePlanKind kind)
+        private PlannedRetireMode TryExecutePlannedKind(ushort opcode, uint instructionPc, M68kOpcodePlanKind kind)
         {
             switch (kind)
             {
                 case M68kOpcodePlanKind.Nop:
                     AddInstructionCycles(4);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Moveq:
                     ExecutePlannedMoveq(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Branch:
                     ExecutePlannedBranch(opcode, instructionPc);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    ExecutePlannedShortUnconditionalBranch(opcode, instructionPc);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.PrefetchHandled;
                 case M68kOpcodePlanKind.Dbcc:
                     ExecutePlannedDbcc(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.QuickRegister:
                     ExecutePlannedQuickRegister(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    ExecutePlannedQuickLongDataRegister(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Move:
                     ExecutePlannedMove(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.MoveLongPostincrementToData:
                     ExecutePlannedMoveLongPostincrementToData(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.MoveLongDataToPostincrement:
                     ExecutePlannedMoveLongDataToPostincrement(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
+                case M68kOpcodePlanKind.MoveLongDataToAbsoluteLong:
+                    ExecutePlannedMoveLongDataToAbsoluteLong(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.Immediate:
                     ExecutePlannedImmediate(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.ImmediateBtst:
                     ExecutePlannedImmediateBtst(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.RegisterArithmetic:
                     ExecutePlannedRegisterArithmetic(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
                     ExecutePlannedOrLongToDataRegister(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
                     ExecutePlannedEorLongToDataRegister(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
                     ExecutePlannedAndLongToDataRegister(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecutePlannedAddLongToDataRegister(opcode);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 default:
-                    return false;
+                    return PlannedRetireMode.Unsupported;
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryExecutePackedPlan(ushort opcode, uint instructionPc, in M68kPackedOpcodePlan plan)
+        private PlannedRetireMode TryExecutePackedPlan(ushort opcode, uint instructionPc, in M68kPackedOpcodePlan plan)
         {
             _ = opcode;
             var kind = plan.Kind;
@@ -1884,65 +1963,77 @@ namespace Copper68k
                 case M68kOpcodePlanKind.Nop:
                     AddInstructionCycles(4);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Moveq:
                     ExecutePackedMoveq(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Branch:
                     ExecutePackedBranch(in plan, instructionPc);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    ExecutePackedShortUnconditionalBranch(opcode, in plan, instructionPc);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.PrefetchHandled;
                 case M68kOpcodePlanKind.Dbcc:
                     ExecutePackedDbcc(opcode, in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.QuickRegister:
                     ExecutePackedQuickRegister(opcode, in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    ExecutePackedQuickLongDataRegister(in plan);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.Move:
                     ExecutePackedMove(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.MoveLongPostincrementToData:
                     ExecutePackedMoveLongPostincrementToData(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.MoveLongDataToPostincrement:
                     ExecutePackedMoveLongDataToPostincrement(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
+                case M68kOpcodePlanKind.MoveLongDataToAbsoluteLong:
+                    ExecutePackedMoveLongDataToAbsoluteLong(in plan);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.Immediate:
                     ExecutePackedImmediate(opcode, in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.ImmediateBtst:
                     ExecutePackedImmediateBtst(opcode, in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.RegisterArithmetic:
                     ExecutePackedRegisterArithmetic(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
                     ExecutePackedOrLongToDataRegister(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
                     ExecutePackedEorLongToDataRegister(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
                     ExecutePackedAndLongToDataRegister(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecutePackedAddLongToDataRegister(in plan);
                     RecordPlannedFast(kind);
-                    return true;
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 default:
-                    return false;
+                    return PlannedRetireMode.Unsupported;
             }
         }
 
@@ -1950,9 +2041,7 @@ namespace Copper68k
         {
             var register = (opcode >> 9) & 7;
             State.D[register] = unchecked((uint)(int)(sbyte)(opcode & 0xFF));
-            State.SetNegativeZeroLong(State.D[register]);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
+            State.SetLongLogicFlags(State.D[register]);
             AddInstructionCycles(4);
         }
 
@@ -1987,6 +2076,32 @@ namespace Copper68k
             }
 
             AddInstructionCycles(extensionDisplacement ? 12 : 8);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedShortUnconditionalBranch(ushort opcode, uint instructionPc)
+            => ExecuteShortUnconditionalBranch(opcode, unchecked((sbyte)opcode), instructionPc);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePackedShortUnconditionalBranch(
+            ushort opcode,
+            in M68kPackedOpcodePlan plan,
+            uint instructionPc)
+            => ExecuteShortUnconditionalBranch(opcode, plan.Displacement, instructionPc);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteShortUnconditionalBranch(ushort opcode, int displacement, uint instructionPc)
+        {
+            var branchBase = State.ProgramCounter;
+            AddPendingInternalCycles(2);
+            var target = unchecked((uint)(branchBase + displacement));
+            if (_instructionFrequency.Enabled)
+            {
+                _instructionFrequency.RecordTakenBranch(instructionPc, opcode, target, 2);
+            }
+
+            AddInstructionCycles(10);
+            PrimePlannedBranchTargetOpcode(target, branchBase);
         }
 
         private void ExecutePlannedDbcc(ushort opcode)
@@ -2092,6 +2207,32 @@ namespace Copper68k
                 : Add(old, (uint)count, size, setExtend: true);
             WriteDataRegister(register, result, size);
             AddInstructionCycles(size == M68kOperandSize.Long ? 8 : 4);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedQuickLongDataRegister(ushort opcode)
+        {
+            var count = (opcode >> 9) & 7;
+            ExecuteQuickLongDataRegister(
+                opcode & 7,
+                count == 0 ? 8u : (uint)count,
+                (opcode & 0x0100) != 0);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePackedQuickLongDataRegister(in M68kPackedOpcodePlan plan)
+            => ExecuteQuickLongDataRegister(plan.DestinationRegister, plan.QuickValue, plan.Variant != 0);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteQuickLongDataRegister(int register, uint count, bool subtract)
+        {
+            var old = State.D[register];
+            var arithmetic = subtract
+                ? M68kIntegerSemantics.Subtract(old, count, M68kOperandSize.Long)
+                : M68kIntegerSemantics.Add(old, count, M68kOperandSize.Long);
+            State.D[register] = arithmetic.Value;
+            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
+            AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2243,6 +2384,11 @@ namespace Copper68k
                 }
             }
 
+            if (moveWritesMemory && !destination.IsRegister)
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             if (size == M68kOperandSize.Word && destinationMode == 4)
             {
                 UsePrefetchedInstructionWordForAddressErrorFrame();
@@ -2392,6 +2538,7 @@ namespace Copper68k
             }
 
             AddMovePostincrementWriteFaultFloor(GetEaOperandCycles(3, sourceRegister, size), destinationRegister, size);
+            PrefetchFallthroughBeforeMemoryWriteback();
             WritePostincrement(destinationRegister, value, size);
             PrefetchFallthroughAfterMemoryWriteback();
             State.SetNegativeZero(value, size);
@@ -2424,12 +2571,14 @@ namespace Copper68k
                 State.SetNegativeZero(value, size);
                 AddMovePostincrementWriteFaultFloor(0, destinationRegister, size);
                 AddInstructionCycles(8);
+                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
                 PrefetchFallthroughAfterMemoryWriteback();
                 return;
             }
             else if (size == M68kOperandSize.Long)
             {
+                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
                 PrefetchFallthroughAfterMemoryWriteback();
                 SetLogicFlags(value, size);
@@ -2438,6 +2587,7 @@ namespace Copper68k
             {
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
+                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
                 PrefetchFallthroughAfterMemoryWriteback();
                 State.SetNegativeZero(value, size);
@@ -2640,6 +2790,35 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
             AddInstructionCycles(12);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedMoveLongDataToAbsoluteLong(ushort opcode)
+            => ExecuteMoveLongDataToAbsoluteLong(opcode & 7);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePackedMoveLongDataToAbsoluteLong(in M68kPackedOpcodePlan plan)
+            => ExecuteMoveLongDataToAbsoluteLong(plan.SourceRegister);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMoveLongDataToAbsoluteLong(int sourceRegister)
+        {
+            var destinationAddress = FetchLongWithoutPrefetchTopUp();
+            var value = State.D[sourceRegister];
+            _dataAccessStackedProgramCounter = State.ProgramCounter;
+            State.SetNegativeZeroLong(value);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+
+            if ((destinationAddress & 1) != 0)
+            {
+                AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(20, 7, 1));
+            }
+
+            PrefetchFallthroughBeforeMemoryWriteback();
+            WriteLong(destinationAddress, value);
+            PrefetchFallthroughAfterMemoryWriteback();
+            AddInstructionCycles(20);
         }
 
         private void ExecutePlannedImmediate(ushort opcode)
@@ -2964,20 +3143,19 @@ namespace Copper68k
         private void ExecutePlannedAddLongToDataRegister(ushort opcode)
         {
             var register = (opcode >> 9) & 7;
-            State.D[register] = Add(
+            var arithmetic = M68kIntegerSemantics.Add(
                 State.D[register],
                 State.D[opcode & 7],
-                M68kOperandSize.Long,
-                setExtend: true);
+                M68kOperandSize.Long);
+            State.D[register] = arithmetic.Value;
+            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
             AddInstructionCycles(8);
         }
 
         private void ExecutePackedMoveq(in M68kPackedOpcodePlan plan)
         {
             State.D[plan.Register] = unchecked((uint)(int)plan.Displacement);
-            State.SetNegativeZeroLong(State.D[plan.Register]);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
+            State.SetLongLogicFlags(State.D[plan.Register]);
             AddInstructionCycles(4);
         }
 
@@ -3227,6 +3405,11 @@ namespace Copper68k
                 }
             }
 
+            if (moveWritesMemory && !destination.IsRegister)
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             if (plan.Size == M68kOperandSize.Word && plan.DestinationMode == 4)
             {
                 UsePrefetchedInstructionWordForAddressErrorFrame();
@@ -3469,11 +3652,12 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedAddLongToDataRegister(in M68kPackedOpcodePlan plan)
         {
-            State.D[plan.Register] = Add(
+            var arithmetic = M68kIntegerSemantics.Add(
                 State.D[plan.Register],
                 State.D[plan.SourceRegister],
-                M68kOperandSize.Long,
-                setExtend: true);
+                M68kOperandSize.Long);
+            State.D[plan.Register] = arithmetic.Value;
+            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
             AddInstructionCycles(8);
         }
 
@@ -3822,7 +4006,7 @@ namespace Copper68k
 
             if (destinationMode == 7 && destinationRegister == 1)
             {
-                return successfulCycles - 8;
+                return Math.Max(16, successfulCycles - 8);
             }
 
             return successfulCycles - 4;
@@ -3889,17 +4073,20 @@ namespace Copper68k
                     _plannedMoveqInstructions++;
                     break;
                 case M68kOpcodePlanKind.Branch:
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
                     _plannedBranchInstructions++;
                     break;
                 case M68kOpcodePlanKind.Dbcc:
                     _plannedDbccInstructions++;
                     break;
                 case M68kOpcodePlanKind.QuickRegister:
+                case M68kOpcodePlanKind.QuickLongDataRegister:
                     _plannedQuickRegisterInstructions++;
                     break;
                 case M68kOpcodePlanKind.Move:
                 case M68kOpcodePlanKind.MoveLongPostincrementToData:
                 case M68kOpcodePlanKind.MoveLongDataToPostincrement:
+                case M68kOpcodePlanKind.MoveLongDataToAbsoluteLong:
                     _plannedMoveInstructions++;
                     break;
                 case M68kOpcodePlanKind.Immediate:
@@ -3974,15 +4161,29 @@ namespace Copper68k
 
             State.Stopped = false;
             var interruptStartCycle = Math.Max(State.Cycles, _cpuRetireBusCycle);
+            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref interruptStartCycle);
+            State.Cycles = interruptStartCycle;
+            _cpuBusCycle = Math.Max(_cpuBusCycle, interruptStartCycle);
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interruptStartCycle);
             var savedStatusRegister = State.StatusRegister;
             State.StatusRegister = (ushort)((savedStatusRegister & ~M68kCpuState.Trace & 0xF8FF) |
                 ((level & 7) << 8) |
                 M68kCpuState.Supervisor);
-            PushLong(State.ProgramCounter);
-            PushWord(savedStatusRegister);
+
+            var stackedProgramCounter = State.ProgramCounter;
+            var stackPointer = State.A[7] - 6;
+            State.SetActiveStackPointer(stackPointer);
+
+            AdvanceInterruptInternalCycles(6);
+            WriteWord(stackPointer + 4, (ushort)stackedProgramCounter);
+            PerformInterruptAcknowledge(level);
+            AdvanceInterruptInternalCycles(4);
+            WriteWord(stackPointer, savedStatusRegister);
+            WriteWord(stackPointer + 2, (ushort)(stackedProgramCounter >> 16));
+
             var target = ReadLong(vectorAddress);
             SetProgramCounterAndFlushPrefetch(target);
-            FullPrefetch(target);
+            PrefetchInterruptTarget(target);
             var completedCycle = interruptStartCycle + 44;
             if (State.Cycles < completedCycle)
             {
@@ -3991,6 +4192,40 @@ namespace Copper68k
 
             _cpuBusCycle = Math.Max(_cpuBusCycle, State.Cycles);
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AdvanceInterruptInternalCycles(int cycles)
+        {
+            State.Cycles += cycles;
+        }
+
+        private void PerformInterruptAcknowledge(int level)
+        {
+            var cycle = BeginCpuBusAccessCycle();
+            var requestedCycle = cycle;
+            cycle += 4;
+            CompleteCpuBusAccess(cycle);
+            RecordCpuBusPhase(
+                GetCpuBusAddress(0x00FF_FFF1u | ((uint)(level & 7) << 1)),
+                M68kOperandSize.Word,
+                requestedCycle,
+                cycle,
+                M68kBusAccessKind.CpuInterruptAcknowledge,
+                isWrite: false);
+        }
+
+        private void PrefetchInterruptTarget(uint target)
+        {
+            _prefetchAddress = target;
+            _prefetchCount = 0;
+            _prefetchDeferredCpuBusBatchEligible0 = false;
+            _prefetchDeferredCpuBusBatchEligible1 = false;
+            TopUpPrefetchOne();
+            State.Cycles = Math.Max(State.Cycles, _cpuBusCycle);
+            AdvanceInterruptInternalCycles(2);
+            TopUpPrefetchOne();
+            State.Cycles = Math.Max(State.Cycles, _cpuBusCycle);
         }
 
         private bool DecodeMove(ushort opcode, uint instructionPc)
@@ -4139,6 +4374,11 @@ namespace Copper68k
                         State.SetFlag(M68kCpuState.Zero, false);
                     }
                 }
+            }
+
+            if (moveWritesMemory && !dest.IsRegister)
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
             }
 
             if (size == M68kOperandSize.Word && destMode == 4)
@@ -4810,7 +5050,12 @@ namespace Copper68k
                 var ea = ResolveEa(
                     mode,
                     reg,
-                    M68kOperandSize.Word);
+                    M68kOperandSize.Word,
+                    completeWordPostIncrementBeforeRead: true);
+                if (!ea.IsRegister && (ea.Address & 1) != 0)
+                {
+                    AddInstructionCycles(4);
+                }
 
                 SetCcr((ushort)ea.Read());
                 AddInstructionCycles(12 + (ea.IsRegister ? 0 : ea.EaCycles));
@@ -5497,7 +5742,7 @@ namespace Copper68k
         {
             if (sourceMode == 7 && sourceRegister == 4)
             {
-                return size == M68kOperandSize.Long ? 16 : 8;
+                return size == M68kOperandSize.Long ? 16 : 12;
             }
 
             if (sourceIsRegister)
@@ -6809,6 +7054,20 @@ namespace Copper68k
             }
         }
 
+        private uint FetchLongWithoutPrefetchTopUp()
+        {
+            var previous = _consumeWithoutPrefetch;
+            _consumeWithoutPrefetch = true;
+            try
+            {
+                return FetchLong();
+            }
+            finally
+            {
+                _consumeWithoutPrefetch = previous;
+            }
+        }
+
         private static int GetImmediateFetchCycles(M68kOperandSize size)
             => size == M68kOperandSize.Long ? 8 : 4;
 
@@ -6905,6 +7164,24 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrimePlannedBranchTargetOpcode(uint target, uint stackedProgramCounter)
+        {
+            if ((target & 1) != 0)
+            {
+                _dataAccessStackedProgramCounter = stackedProgramCounter;
+                ThrowOddAddressAccess(
+                    target,
+                    isWrite: false,
+                    M68kBusAccessKind.CpuInstructionFetch,
+                    useDataAccessStackedProgramCounter: true);
+            }
+
+            SetProgramCounterAndFlushPrefetch(target);
+            _prefetchAddress = target;
+            TopUpPrefetchOne();
+        }
+
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
         {
             if ((target & 1) != 0)
@@ -6993,6 +7270,41 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ConsumeSequentialPlannedOpcodeWord()
+        {
+            System.Diagnostics.Debug.Assert(_prefetchCount == 2);
+            System.Diagnostics.Debug.Assert(_prefetchAddress == State.ProgramCounter);
+
+            var value = _prefetchWord0;
+            var completedCycle = _prefetchCompletedCycle0;
+            var address = _prefetchAddress;
+            State.ProgramCounter = unchecked(address + 2);
+            if (_pendingInternalCycles != 0)
+            {
+                State.Cycles += _pendingInternalCycles;
+                _pendingInternalCycles = 0;
+            }
+
+            if (State.Cycles < completedCycle)
+            {
+                State.Cycles = completedCycle;
+            }
+
+            if (_cpuRetireBusCycle < completedCycle)
+            {
+                _cpuRetireBusCycle = completedCycle;
+            }
+
+            _prefetchAddress = unchecked(address + 2);
+            _prefetchWord0 = _prefetchWord1;
+            _prefetchCompletedCycle0 = _prefetchCompletedCycle1;
+            _prefetchDeferredCpuBusBatchEligible0 = _prefetchDeferredCpuBusBatchEligible1;
+            _prefetchDeferredCpuBusBatchEligible1 = false;
+            _prefetchCount = 1;
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void FullPrefetch(uint address)
         {
             _prefetchAddress = address;
@@ -7031,6 +7343,18 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AppendSequentialPlannedPrefetchWord()
+        {
+            System.Diagnostics.Debug.Assert(_prefetchCount == 1);
+            System.Diagnostics.Debug.Assert(_prefetchAddress == State.ProgramCounter);
+
+            var address = unchecked(_prefetchAddress + 2);
+            _prefetchWord1 = ReadPrefetchWord(address, out _prefetchCompletedCycle1, out var deferredEligible);
+            _prefetchDeferredCpuBusBatchEligible1 = deferredEligible;
+            _prefetchCount = 2;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughBeforeMemoryWriteback()
         {
             if ((State.ProgramCounter & 1) != 0)
@@ -7052,7 +7376,6 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughAfterMemoryWriteback()
         {
-            PrefetchFallthroughBeforeMemoryWriteback();
             _skipRetirePrefetchTopUp = true;
         }
 
@@ -7550,16 +7873,31 @@ namespace Copper68k
             }
         }
 
-        private int CompleteInstruction(long startCycle)
+        private int CompleteInstruction(long startCycle, PlannedRetireMode retireMode = PlannedRetireMode.General)
         {
             _pendingInternalCycles = 0;
-            if (_skipRetirePrefetchTopUp)
+            if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
+            {
+                AppendSequentialPlannedPrefetchWord();
+            }
+            else if (retireMode == PlannedRetireMode.PrefetchHandled)
+            {
+                System.Diagnostics.Debug.Assert(!_skipRetirePrefetchTopUp);
+            }
+            else if (_skipRetirePrefetchTopUp)
             {
                 _skipRetirePrefetchTopUp = false;
             }
             else
             {
-                TopUpPrefetch();
+                if (_prefetchCount == 1 && _prefetchAddress == State.ProgramCounter)
+                {
+                    TopUpPrefetchOne();
+                }
+                else
+                {
+                    TopUpPrefetch();
+                }
             }
 
             var completedCycle = Math.Max(_instructionCycleFloor, _cpuRetireBusCycle);

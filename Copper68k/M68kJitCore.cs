@@ -205,6 +205,14 @@ namespace Copper68k
         private static readonly MethodInfo GetDivideCoreCyclesMethod =
             typeof(M68kJitCore).GetMethod(nameof(GetDivideCoreCycles), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetDivideCoreCycles));
+        private static readonly MethodInfo GetBitOperationCyclesMethod =
+            typeof(M68kJitCore).GetMethod(
+                nameof(GetBitOperationCycles),
+                BindingFlags.Static | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(bool), typeof(int), typeof(int), typeof(uint), typeof(bool) },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(GetBitOperationCycles));
         private static readonly MethodInfo AddBcdByteMethod =
             typeof(M68kIntegerSemantics).GetMethod(
                 nameof(M68kIntegerSemantics.AddBcdByte),
@@ -323,6 +331,23 @@ namespace Copper68k
                 new[] { typeof(int), typeof(uint) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledStatusImmediate));
+        private static readonly MethodInfo ExecuteMoveToStatusForV2BatchMethod =
+            typeof(M68kJitCore).GetMethod(
+                nameof(ExecuteCompiledMoveToStatus),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[]
+                {
+                    typeof(int),
+                    typeof(int),
+                    typeof(int),
+                    typeof(uint),
+                    typeof(ushort),
+                    typeof(ushort),
+                    typeof(uint)
+                },
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledMoveToStatus));
         private static readonly MethodInfo ExecuteM68040FpuForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ExecuteCompiledM68040Fpu),
@@ -380,6 +405,10 @@ namespace Copper68k
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
         private bool _compiledInstructionCycleFloorActive;
+        private long _classicCompiledCpuBusCycle;
+        private bool _classicCompiledBusSynchronized;
+        private bool _classicCompiledTimingActive;
+        private bool _classicCompiledPrefetchHandled;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -789,12 +818,20 @@ namespace Copper68k
         public void Reset(uint programCounter, uint stackPointer)
         {
             _fallback.Reset(programCounter, stackPointer);
+            _classicCompiledCpuBusCycle = State.Cycles;
+            _classicCompiledBusSynchronized = false;
+            _classicCompiledTimingActive = false;
+            _classicCompiledPrefetchHandled = false;
             ClearRuntimeState();
         }
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             _fallback.BeginSubroutine(address, stackPointer, returnAddress);
+            _classicCompiledCpuBusCycle = State.Cycles;
+            _classicCompiledBusSynchronized = false;
+            _classicCompiledTimingActive = false;
+            _classicCompiledPrefetchHandled = false;
             ClearRuntimeState();
         }
 
@@ -1909,6 +1946,7 @@ namespace Copper68k
             var root = Normalize(State.ProgramCounter);
             var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
             _fallback.ExecuteInstruction();
+            _classicCompiledBusSynchronized = false;
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
             RecordFallbackAttribution(root, opcodeAvailable, opcode);
@@ -4241,9 +4279,9 @@ namespace Copper68k
                 M68kJitOperation.AndiToCcr or
                 M68kJitOperation.AndiToSr or
                 M68kJitOperation.EoriToCcr or
-                M68kJitOperation.EoriToSr or
+                M68kJitOperation.EoriToSr => true,
                 M68kJitOperation.MoveToCcr or
-                M68kJitOperation.MoveToSr => true,
+                M68kJitOperation.MoveToSr => IsV2ReadableSource(instruction.Source, allowMemoryRead),
                 M68kJitOperation.Pea => IsV2AddressOnlyEa(instruction.Source),
                 M68kJitOperation.Movem => true,
                 M68kJitOperation.Mulu or M68kJitOperation.Muls => IsV2MultiplyInstruction(instruction),
@@ -4338,9 +4376,9 @@ namespace Copper68k
                 M68kJitOperation.AndiToCcr or
                 M68kJitOperation.AndiToSr or
                 M68kJitOperation.EoriToCcr or
-                M68kJitOperation.EoriToSr or
+                M68kJitOperation.EoriToSr => true,
                 M68kJitOperation.MoveToCcr or
-                M68kJitOperation.MoveToSr => true,
+                M68kJitOperation.MoveToSr => IsV2ReadableSource(instruction.Source, allowMemoryRead),
                 M68kJitOperation.Pea => IsV2AddressOnlyEa(instruction.Source),
                 M68kJitOperation.Movem => true,
                 M68kJitOperation.Mulu or M68kJitOperation.Muls => IsV2MultiplyInstruction(instruction, options),
@@ -4567,6 +4605,8 @@ namespace Copper68k
                 M68kJitOperation.Divu or
                 M68kJitOperation.Divs => !IsV2MemoryReadEa(instruction.Source),
                 M68kJitOperation.Movem => false,
+                M68kJitOperation.MoveToCcr or
+                M68kJitOperation.MoveToSr => !IsV2MemoryReadEa(instruction.Source),
                 M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction),
                 M68kJitOperation.Jsr or M68kJitOperation.Bsr or M68kJitOperation.Rts => false,
                 _ => true
@@ -5496,9 +5536,11 @@ namespace Copper68k
                 case M68kJitOperation.AndiToSr:
                 case M68kJitOperation.EoriToCcr:
                 case M68kJitOperation.EoriToSr:
+                    EmitV2StatusImmediate(il, context, instruction, exit);
+                    return;
                 case M68kJitOperation.MoveToCcr:
                 case M68kJitOperation.MoveToSr:
-                    EmitV2StatusImmediate(il, context, instruction, exit);
+                    EmitV2MoveToStatus(il, context, instruction, exit);
                     return;
                 case M68kJitOperation.Pea:
                     EmitV2Pea(il, context, instruction);
@@ -5636,7 +5678,7 @@ namespace Copper68k
             EmitV2ResolveAddress(il, context, instruction.Source);
             il.Emit(OpCodes.Stloc, address);
             context.EmitStoreAddressRegister(instruction.Register, address);
-            context.EmitAddCycles(8);
+            context.EmitAddCycles(GetLeaCyclesForTiming(instruction.Source));
         }
 
         private static void EmitV2QuickArithmetic(
@@ -5653,7 +5695,7 @@ namespace Copper68k
                 il.Emit(add ? OpCodes.Add : OpCodes.Sub);
                 il.Emit(OpCodes.Stloc, value);
                 context.EmitStoreAddressRegister(instruction.Destination.Register, value);
-                context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 8 : 6);
+                context.EmitAddCycles(8);
                 return;
             }
 
@@ -5712,7 +5754,7 @@ namespace Copper68k
                 il.Emit(add ? OpCodes.Add : OpCodes.Sub);
                 il.Emit(OpCodes.Stloc, result);
                 context.EmitStoreAddressRegister(instruction.Register, result);
-                context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 8 : 6);
+                context.EmitAddCycles(GetAddressArithmeticCyclesForTiming(instruction.Source, instruction.Size));
                 return;
             }
 
@@ -5844,7 +5886,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, source);
             EmitV2ArithmeticResult(il, destination, source, result, M68kOperandSize.Long, add: false);
             context.EmitSetPendingArithmetic(V2PendingFlags.Subtract, destination, source, result, M68kOperandSize.Long, setExtend: false);
-            context.EmitAddCycles(instruction.Size == M68kOperandSize.Long ? 8 : 6);
+            context.EmitAddCycles(GetCompareAddressCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitV2CompareMemory(ILGenerator il, V2EmitContext context, M68kDecodedInstruction instruction)
@@ -6266,6 +6308,7 @@ namespace Copper68k
             var value = il.DeclareLocal(typeof(uint));
             var bit = il.DeclareLocal(typeof(int));
             var mask = il.DeclareLocal(typeof(uint));
+            var cycles = il.DeclareLocal(typeof(int));
             var statusNotZero = il.DefineLabel();
             var memoryTarget = instruction.Destination.Kind != M68kJitEaKind.DataRegister;
             var address = memoryTarget ? il.DeclareLocal(typeof(uint)) : null;
@@ -6361,7 +6404,22 @@ namespace Copper68k
                     break;
             }
 
-            context.EmitAddCycles(memoryTarget ? 14 : immediateBit ? 10 : 8);
+            il.Emit(memoryTarget ? OpCodes.Ldc_I4_0 : OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.Ldc_I4, GetEaOperandCyclesForTiming(instruction.Destination, instruction.Size));
+            il.Emit(OpCodes.Ldc_I4, instruction.Variant);
+            if (immediateBit)
+            {
+                il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldloc, bit);
+            }
+
+            il.Emit(immediateBit ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, GetBitOperationCyclesMethod);
+            il.Emit(OpCodes.Stloc, cycles);
+            context.EmitAddCycles(cycles);
         }
 
         private static void EmitV2StatusImmediate(
@@ -6550,6 +6608,8 @@ namespace Copper68k
             il.Emit(OpCodes.Call, GetDivideCoreCyclesMethod);
             il.Emit(OpCodes.Ldc_I4, GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
             il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldc_I4_4);
+            il.Emit(OpCodes.Add);
             il.Emit(OpCodes.Stloc, cycles);
             context.EmitAddCycles(cycles);
         }
@@ -6598,7 +6658,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, target);
             il.Emit(OpCodes.Ldloc, target);
             il.Emit(OpCodes.Stloc, context.ProgramCounter);
-            context.EmitAddCycles(12);
+            context.EmitAddCycles(GetJmpCyclesForTiming(instruction.Source));
             if (recordOutOfBlockSideExit ||
                 instruction.Source.Kind is not (M68kJitEaKind.AbsoluteWord or M68kJitEaKind.AbsoluteLong))
             {
@@ -8497,6 +8557,23 @@ namespace Copper68k
             return PackV2ShiftResult(shifted.Value, status);
         }
 
+        private static void EmitV2MoveToStatus(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, (int)instruction.Operation);
+            EmitV2EaArguments(il, instruction.Source);
+            il.Emit(OpCodes.Call, ExecuteMoveToStatusForV2BatchMethod);
+            il.Emit(OpCodes.Pop);
+            context.EmitReloadState();
+            il.Emit(OpCodes.Br, exit);
+        }
+
         private static ulong PackV2ShiftResult(uint value, int status)
             => ((ulong)(ushort)status << 32) | value;
 
@@ -8566,6 +8643,14 @@ namespace Copper68k
             State.ProgramCounter = Normalize(nextProgramCounter);
             _instructionFrequency.Record(programCounter, expectedOpcode);
             _compiledInstructionCycleFloorActive = true;
+            _classicCompiledTimingActive = true;
+            _classicCompiledPrefetchHandled = false;
+            if (!_classicCompiledBusSynchronized)
+            {
+                _classicCompiledCpuBusCycle = _compiledInstructionPreviousCycle + 4;
+                _classicCompiledBusSynchronized = true;
+            }
+
             return true;
         }
 
@@ -8730,7 +8815,7 @@ namespace Copper68k
                     return ExecuteMovea(source, destination.Register, size);
                 case M68kJitOperation.Lea:
                     SetAddressRegister(register, ResolveEaAddress(source, size, applySideEffects: false));
-                    AddCycles(8);
+                    AddCycles(GetLeaCyclesForTiming(source));
                     return true;
                 case M68kJitOperation.Tst:
                     SetLogicFlags(ReadEaValue(source, size), size);
@@ -8877,10 +8962,18 @@ namespace Copper68k
                 case M68kJitOperation.AndiToSr:
                 case M68kJitOperation.EoriToCcr:
                 case M68kJitOperation.EoriToSr:
-                case M68kJitOperation.MoveToCcr:
-                case M68kJitOperation.MoveToSr:
                     ExecuteCompiledStatusImmediate(operationValue, source.Immediate);
                     return true;
+                case M68kJitOperation.MoveToCcr:
+                case M68kJitOperation.MoveToSr:
+                    return ExecuteCompiledMoveToStatus(
+                        operationValue,
+                        (int)source.Kind,
+                        source.Register,
+                        source.ExtensionAddress,
+                        source.Extension0,
+                        source.Extension1,
+                        source.Immediate);
                 case M68kJitOperation.Pea:
                     ExecuteCompiledPea(
                         (int)source.Kind,
@@ -9268,6 +9361,58 @@ namespace Copper68k
             AddCycles(20);
         }
 
+        private bool ExecuteCompiledMoveToStatus(
+            int operationValue,
+            int sourceKindValue,
+            int sourceRegister,
+            uint sourceExtensionAddress,
+            ushort sourceExtension0,
+            ushort sourceExtension1,
+            uint sourceImmediate)
+        {
+            var operation = (M68kJitOperation)operationValue;
+            if (operation == M68kJitOperation.MoveToSr &&
+                !State.GetFlag(M68kCpuState.Supervisor))
+            {
+                RaiseException(8, State.LastInstructionProgramCounter, 34);
+                return true;
+            }
+
+            var source = new M68kDecodedEa(
+                (M68kJitEaKind)sourceKindValue,
+                sourceRegister,
+                sourceExtensionAddress,
+                sourceExtension0,
+                sourceExtension1,
+                sourceImmediate);
+            if (source.IsMemory &&
+                (ResolveEaAddress(source, M68kOperandSize.Word, applySideEffects: false) & 1) != 0)
+            {
+                var instructionPc = State.LastInstructionProgramCounter;
+                State.ProgramCounter = instructionPc;
+                State.Cycles = _compiledInstructionPreviousCycle;
+                _compiledInstructionCycleFloorActive = false;
+                _fallback.ExecuteInstruction();
+                _classicCompiledBusSynchronized = false;
+                _counters.FallbackInstructions++;
+                RecordFallbackAttribution(instructionPc, opcodeAvailable: true, opcode: State.LastOpcode);
+                return true;
+            }
+
+            var value = (ushort)ReadEaValue(source, M68kOperandSize.Word);
+            if (operation == M68kJitOperation.MoveToCcr)
+            {
+                SetCcr(value);
+            }
+            else
+            {
+                State.StatusRegister = value;
+            }
+
+            AddCycles(12 + GetEaOperandCyclesForTiming(source, M68kOperandSize.Word));
+            return true;
+        }
+
         private void ExecuteCompiledPea(
             int sourceKindValue,
             int sourceRegister,
@@ -9328,18 +9473,18 @@ namespace Copper68k
             return true;
         }
 
-        private bool ExecuteCompiledJumpTo(uint target, bool link)
+        private bool ExecuteCompiledJumpTo(uint target, bool link, int cycles)
         {
             if (link)
             {
                 PushLong(State.ProgramCounter);
                 State.ProgramCounter = Normalize(target);
-                AddCycles(18);
+                AddCycles(cycles);
             }
             else
             {
                 State.ProgramCounter = Normalize(target);
-                AddCycles(12);
+                AddCycles(cycles);
             }
 
             return true;
@@ -9410,7 +9555,7 @@ namespace Copper68k
                     State.SetFlag(M68kCpuState.Carry, false);
                 }
 
-                AddCycles(GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: false));
+                AddCycles(4 + GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: false));
                 return true;
             }
 
@@ -9432,7 +9577,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddCycles(GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: true));
+            AddCycles(4 + GetDivideCycles(sourceEaCycles, dividend, (ushort)divisor, signed: true));
             return true;
         }
 
@@ -9475,7 +9620,9 @@ namespace Copper68k
                 SetAddressRegister(register, State.A[register] - extended);
             }
 
-            AddCycles(size == M68kOperandSize.Long ? 8 : 6);
+            AddCycles(compareOnly
+                ? GetCompareAddressCyclesForTiming(source, size)
+                : GetAddressArithmeticCyclesForTiming(source, size));
             return true;
         }
 
@@ -9642,7 +9789,7 @@ namespace Copper68k
                     State.SetFlag(M68kCpuState.Carry, false);
                 }
 
-                AddCycles(GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: false));
+                AddCycles(4 + GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: false));
                 return;
             }
 
@@ -9664,7 +9811,7 @@ namespace Copper68k
                 State.SetFlag(M68kCpuState.Carry, false);
             }
 
-            AddCycles(GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: true));
+            AddCycles(4 + GetDivideCycles(GetEaOperandCyclesForTiming(source, M68kOperandSize.Word), dividend, (ushort)divisor, signed: true));
         }
 
         private bool ExecuteBinaryLogical(
@@ -9740,7 +9887,7 @@ namespace Copper68k
             {
                 var delta = M68kCpuState.SignExtend((uint)value, size);
                 SetAddressRegister(destination.Register, add ? State.A[destination.Register] + delta : State.A[destination.Register] - delta);
-                AddCycles(size == M68kOperandSize.Long ? 8 : 6);
+                AddCycles(8);
                 return true;
             }
 
@@ -9784,12 +9931,12 @@ namespace Copper68k
             {
                 PushLong(State.ProgramCounter);
                 State.ProgramCounter = Normalize(target);
-                AddCycles(source.Kind == M68kJitEaKind.AddressIndirect ? 16 : 18);
+                AddCycles(GetJsrCyclesForTiming(source));
             }
             else
             {
                 State.ProgramCounter = Normalize(target);
-                AddCycles(12);
+                AddCycles(GetJmpCyclesForTiming(source));
             }
 
             return true;
@@ -10036,7 +10183,7 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Zero, (value & mask) == 0);
             if (operation == 0)
             {
-                AddCycles(ea.Kind == M68kJitEaKind.DataRegister && immediateBit ? 10 : ea.Kind == M68kJitEaKind.DataRegister ? 8 : 14);
+                AddCycles(GetBitOperationCyclesForTiming(ea, operation, (uint)bitValue, immediateBit));
                 return;
             }
 
@@ -10047,7 +10194,7 @@ namespace Copper68k
                 _ => value | mask
             };
             WriteResolvedEa(ea, size, value, resolvedAddress, memory);
-            AddCycles(ea.Kind == M68kJitEaKind.DataRegister && immediateBit ? 10 : ea.Kind == M68kJitEaKind.DataRegister ? 8 : 14);
+            AddCycles(GetBitOperationCyclesForTiming(ea, operation, (uint)bitValue, immediateBit));
         }
 
         private uint ReadEaValue(M68kDecodedEa ea, M68kOperandSize size)
@@ -10686,6 +10833,98 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Extend, carry);
         }
 
+        private uint ReadClassicCompiledMemoryValue(uint address, M68kOperandSize size)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68000)
+            {
+                return ReadMemoryValue(address, size);
+            }
+
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
+            address = Normalize(address);
+            if (size != M68kOperandSize.Byte && (address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 compiled read at 0x{address:X8}.");
+            }
+
+            var cycle = _classicCompiledCpuBusCycle;
+            var value = size switch
+            {
+                M68kOperandSize.Byte => _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                M68kOperandSize.Word => _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                _ => _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead)
+            };
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+            return value;
+        }
+
+        private void WriteClassicCompiledMemoryValue(uint address, uint value, M68kOperandSize size)
+        {
+            if (_cpuModel != M68kJitCpuModel.M68000)
+            {
+                WriteMemoryValue(address, value, size);
+                return;
+            }
+
+            var prefetchPhase = size == M68kOperandSize.Byte && (address & 1) != 0 ? 6 : 7;
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase);
+            address = Normalize(address);
+            if (size != M68kOperandSize.Byte && (address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 compiled write at 0x{address:X8}.");
+            }
+
+            var cycle = _classicCompiledCpuBusCycle;
+            if (size == M68kOperandSize.Byte)
+            {
+                _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            }
+            else if (size == M68kOperandSize.Word)
+            {
+                _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            }
+            else
+            {
+                _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            }
+
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+        }
+
+        private void BeginClassicCompiledBusPhase(bool prefetchBeforeAccess, int prefetchPhase)
+        {
+            if (!_classicCompiledTimingActive || _minimalCycleTiming)
+            {
+                return;
+            }
+
+            if (prefetchBeforeAccess && !_classicCompiledPrefetchHandled)
+            {
+                _classicCompiledCpuBusCycle = _compiledInstructionPreviousCycle + prefetchPhase;
+                _classicCompiledPrefetchHandled = true;
+            }
+            else
+            {
+                _classicCompiledCpuBusCycle = Math.Max(
+                    _classicCompiledCpuBusCycle,
+                    _compiledInstructionPreviousCycle);
+            }
+
+        }
+
+        private void CompleteClassicCompiledBusPhase()
+        {
+            if (_classicCompiledTimingActive && !_minimalCycleTiming)
+            {
+                if (State.Cycles < _classicCompiledCpuBusCycle)
+                {
+                    State.Cycles = _classicCompiledCpuBusCycle;
+                }
+            }
+        }
+
         private uint Shift(uint value, int count, M68kOperandSize size, int type, bool left)
         {
             var shifted = M68kIntegerSemantics.Shift(value, count, size, type, left, State.GetFlag(M68kCpuState.Extend));
@@ -10730,12 +10969,26 @@ namespace Copper68k
             Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
             cycles = GetEffectiveCompiledCycles(cycles);
             var floor = _compiledInstructionPreviousCycle + cycles;
+            if (_classicCompiledTimingActive && !_minimalCycleTiming)
+            {
+                if (!_classicCompiledPrefetchHandled)
+                {
+                    _classicCompiledCpuBusCycle = Math.Max(
+                        _classicCompiledCpuBusCycle,
+                        _compiledInstructionPreviousCycle + 4);
+                }
+
+                floor = Math.Max(floor, _classicCompiledCpuBusCycle);
+            }
+
             if (State.Cycles < floor)
             {
                 State.Cycles = floor;
             }
 
             _compiledInstructionCycleFloorActive = false;
+            _classicCompiledTimingActive = false;
+            _classicCompiledPrefetchHandled = false;
         }
 
         private int GetEffectiveCompiledCycles(int cycles)
@@ -11548,6 +11801,37 @@ namespace Copper68k
             };
         }
 
+        internal static int GetLeaCyclesForTiming(M68kDecodedEa source)
+            => source.Kind switch
+            {
+                M68kJitEaKind.AddressIndirect => 4,
+                M68kJitEaKind.AddressDisplacement or
+                M68kJitEaKind.AbsoluteWord or
+                M68kJitEaKind.PcDisplacement => 8,
+                M68kJitEaKind.AddressIndex or
+                M68kJitEaKind.AbsoluteLong or
+                M68kJitEaKind.PcIndex => 12,
+                _ => throw new InvalidOperationException("Invalid LEA effective-address timing kind.")
+            };
+
+        internal static int GetJmpCyclesForTiming(M68kDecodedEa source)
+            => source.Kind switch
+            {
+                M68kJitEaKind.AddressIndirect => 8,
+                M68kJitEaKind.AddressDisplacement or
+                M68kJitEaKind.AbsoluteWord or
+                M68kJitEaKind.PcDisplacement => 10,
+                M68kJitEaKind.AbsoluteLong => 12,
+                M68kJitEaKind.AddressIndex or
+                M68kJitEaKind.PcIndex => 14,
+                _ => throw new InvalidOperationException("Invalid JMP effective-address timing kind.")
+            };
+
+        internal static int GetJsrCyclesForTiming(M68kDecodedEa source)
+            => source.Kind == M68kJitEaKind.AddressIndirect
+                ? 16
+                : GetJmpCyclesForTiming(source) + 8;
+
         internal static int GetMultiplyCycles(int sourceEaCycles, uint sourceValue, bool signed)
             => M68kIntegerSemantics.GetMultiplyCycles(sourceEaCycles, sourceValue, signed);
 
@@ -11577,6 +11861,36 @@ namespace Copper68k
             return (size == M68kOperandSize.Long ? 6 : 4) + GetEaOperandCyclesForTiming(source, size);
         }
 
+        internal static int GetCompareAddressCyclesForTiming(M68kDecodedEa source, M68kOperandSize size)
+        {
+            if (source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister)
+            {
+                return 6;
+            }
+
+            if (source.Kind == M68kJitEaKind.Immediate)
+            {
+                return size == M68kOperandSize.Long ? 14 : 10;
+            }
+
+            return 6 + GetEaOperandCyclesForTiming(source, size);
+        }
+
+        internal static int GetAddressArithmeticCyclesForTiming(M68kDecodedEa source, M68kOperandSize size)
+        {
+            if (source.Kind == M68kJitEaKind.Immediate)
+            {
+                return size == M68kOperandSize.Long ? 16 : 12;
+            }
+
+            if (source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister)
+            {
+                return 8;
+            }
+
+            return (size == M68kOperandSize.Long ? 6 : 8) + GetEaOperandCyclesForTiming(source, size);
+        }
+
         internal static int GetCmpiCyclesForTiming(M68kDecodedEa destination, M68kOperandSize size)
         {
             if (destination.Kind == M68kJitEaKind.DataRegister)
@@ -11592,6 +11906,11 @@ namespace Copper68k
             if (source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister)
             {
                 return size == M68kOperandSize.Long ? 8 : 4;
+            }
+
+            if (source.Kind == M68kJitEaKind.Immediate && size == M68kOperandSize.Long)
+            {
+                return 16;
             }
 
             return (size == M68kOperandSize.Long ? 6 : 4) + GetEaOperandCyclesForTiming(source, size);
@@ -11615,6 +11934,43 @@ namespace Copper68k
             }
 
             return (size == M68kOperandSize.Long ? 20 : 12) + GetEaOperandCyclesForTiming(destination, size);
+        }
+
+        internal static int GetBitOperationCyclesForTiming(
+            M68kDecodedEa destination,
+            int operation,
+            uint bitValue,
+            bool immediateBit)
+            => GetBitOperationCycles(
+                destination.Kind == M68kJitEaKind.DataRegister,
+                GetEaOperandCyclesForTiming(destination, M68kOperandSize.Byte),
+                operation,
+                bitValue,
+                immediateBit);
+
+        private static int GetBitOperationCycles(
+            bool dataRegister,
+            int eaCycles,
+            int operation,
+            uint bitValue,
+            bool immediateBit)
+        {
+            if (!dataRegister)
+            {
+                return (operation == 0
+                    ? immediateBit ? 8 : 4
+                    : immediateBit ? 12 : 8) + eaCycles;
+            }
+
+            if (operation == 0)
+            {
+                return immediateBit ? 10 : 6;
+            }
+
+            var baseCycles = immediateBit
+                ? operation == 2 ? 12 : 10
+                : operation == 2 ? 8 : 6;
+            return (bitValue & 31) >= 16 ? baseCycles + 2 : baseCycles;
         }
 
         private static int GetMultiplyCoreCycles(uint sourceValue, bool signed)

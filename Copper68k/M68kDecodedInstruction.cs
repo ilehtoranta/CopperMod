@@ -1098,6 +1098,41 @@ namespace Copper68k
                 return true;
             }
 
+            if ((opcode & 0xFFC0) is 0x44C0 or 0x46C0)
+            {
+                var local = cursor;
+                if (!TryDecodeEa(
+                        ref local,
+                        (opcode >> 3) & 7,
+                        opcode & 7,
+                        M68kOperandSize.Word,
+                        EaAllowed.DataRegister | EaAllowed.Memory | EaAllowed.PrePost | EaAllowed.PcMemory,
+                        out var source))
+                {
+                    reason = M68kJitBailoutReason.UnsupportedEa;
+                    return false;
+                }
+
+                cursor = local;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    (opcode & 0xFFC0) == 0x44C0 ? M68kJitOperation.MoveToCcr : M68kJitOperation.MoveToSr,
+                    M68kOperandSize.Word,
+                    source,
+                    M68kDecodedEa.None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    pc + 2,
+                    cursor,
+                    stopsTrace: true);
+                return true;
+            }
+
             if ((opcode & 0xFB80) == 0x4880 && ((opcode >> 3) & 7) != 0)
             {
                 var local = cursor;

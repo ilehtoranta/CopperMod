@@ -18,11 +18,14 @@ namespace Copper68k
         Nop,
         Moveq,
         Branch,
+        ShortUnconditionalBranch,
         Dbcc,
         QuickRegister,
+        QuickLongDataRegister,
         Move,
         MoveLongPostincrementToData,
         MoveLongDataToPostincrement,
+        MoveLongDataToAbsoluteLong,
         Immediate,
         ImmediateBtst,
         RegisterArithmetic,
@@ -35,18 +38,19 @@ namespace Copper68k
     internal readonly struct M68kPackedOpcodePlan
     {
         private const int KindShift = 0;
-        private const int SizeShift = 4;
-        private const int RegisterShift = 6;
-        private const int SourceModeShift = 9;
-        private const int SourceRegisterShift = 12;
-        private const int DestinationModeShift = 15;
-        private const int DestinationRegisterShift = 18;
-        private const int ConditionShift = 21;
-        private const int QuickValueShift = 25;
-        private const int VariantShift = 29;
-        private const int DisplacementShift = 37;
-        private const int ExtensionDisplacementShift = 45;
+        private const int SizeShift = 5;
+        private const int RegisterShift = 7;
+        private const int SourceModeShift = 10;
+        private const int SourceRegisterShift = 13;
+        private const int DestinationModeShift = 16;
+        private const int DestinationRegisterShift = 19;
+        private const int ConditionShift = 22;
+        private const int QuickValueShift = 26;
+        private const int VariantShift = 30;
+        private const int DisplacementShift = 38;
+        private const int ExtensionDisplacementShift = 46;
 
+        private const ulong FiveBitMask = 0x1F;
         private const ulong FourBitMask = 0x0F;
         private const ulong ThreeBitMask = 0x07;
         private const ulong TwoBitMask = 0x03;
@@ -83,7 +87,7 @@ namespace Copper68k
                 (extensionDisplacement ? 1UL << ExtensionDisplacementShift : 0);
         }
 
-        public M68kOpcodePlanKind Kind => (M68kOpcodePlanKind)((_bits >> KindShift) & FourBitMask);
+        public M68kOpcodePlanKind Kind => (M68kOpcodePlanKind)((_bits >> KindShift) & FiveBitMask);
 
         public M68kOperandSize Size => DecodeSize((byte)((_bits >> SizeShift) & TwoBitMask));
 
@@ -185,6 +189,11 @@ namespace Copper68k
             if ((opcode & 0xF000) == 0x6000)
             {
                 var condition = (opcode >> 8) & 0x0F;
+                if (condition == 0 && (opcode & 0xFF) != 0)
+                {
+                    return M68kOpcodePlanKind.ShortUnconditionalBranch;
+                }
+
                 return condition == 1
                     ? M68kOpcodePlanKind.Unsupported
                     : M68kOpcodePlanKind.Branch;
@@ -249,7 +258,9 @@ namespace Copper68k
 
                 var displacement = opcode & 0xFF;
                 return new M68kPackedOpcodePlan(
-                    M68kOpcodePlanKind.Branch,
+                    condition == 0 && displacement != 0
+                        ? M68kOpcodePlanKind.ShortUnconditionalBranch
+                        : M68kOpcodePlanKind.Branch,
                     condition: (byte)condition,
                     displacement: displacement == 0 ? (short)0 : unchecked((sbyte)displacement),
                     extensionDisplacement: displacement == 0);
@@ -313,7 +324,9 @@ namespace Copper68k
                 return false;
             }
 
-            kind = M68kOpcodePlanKind.QuickRegister;
+            kind = sizeCode == 2 && mode == 0
+                ? M68kOpcodePlanKind.QuickLongDataRegister
+                : M68kOpcodePlanKind.QuickRegister;
             return true;
         }
 
@@ -387,6 +400,15 @@ namespace Copper68k
                 destinationMode == 3)
             {
                 kind = M68kOpcodePlanKind.MoveLongDataToPostincrement;
+                return true;
+            }
+
+            if (size == M68kOperandSize.Long &&
+                sourceMode == 0 &&
+                destinationMode == 7 &&
+                destinationRegister == 1)
+            {
+                kind = M68kOpcodePlanKind.MoveLongDataToAbsoluteLong;
                 return true;
             }
 

@@ -23,6 +23,11 @@ namespace Copper68k
         /// <summary>
         /// The CPU is writing data to memory or a device.
         /// </summary>
-        CpuDataWrite
+        CpuDataWrite,
+
+        /// <summary>
+        /// The CPU is performing an interrupt-acknowledge bus cycle.
+        /// </summary>
+        CpuInterruptAcknowledge
     }
 }

@@ -98,7 +98,8 @@ namespace Copper68k
             typeof(M68kJitCore),
             "ExecuteCompiledJumpTo",
             typeof(uint),
-            typeof(bool));
+            typeof(bool),
+            typeof(int));
         private static readonly MethodInfo ExecuteRegisterShift = RequiredMethod(
             typeof(M68kJitCore),
             "ExecuteCompiledRegisterShift",
@@ -116,12 +117,12 @@ namespace Copper68k
             typeof(int));
         private static readonly MethodInfo ReadMemoryValue = RequiredMethod(
             typeof(M68kJitCore),
-            "ReadMemoryValue",
+            "ReadClassicCompiledMemoryValue",
             typeof(uint),
             typeof(M68kOperandSize));
         private static readonly MethodInfo WriteMemoryValue = RequiredMethod(
             typeof(M68kJitCore),
-            "WriteMemoryValue",
+            "WriteClassicCompiledMemoryValue",
             typeof(uint),
             typeof(uint),
             typeof(M68kOperandSize));
@@ -679,7 +680,7 @@ namespace Copper68k
             EmitResolveEaAddress(il, context, instruction.Source, instruction.Size, applySideEffects: false);
             il.Emit(OpCodes.Stloc, address);
             EmitStoreAddressRegister(il, instruction.Register, address);
-            EmitAddCycles(il, context, 8);
+            EmitAddCycles(il, context, M68kJitCore.GetLeaCyclesForTiming(instruction.Source));
         }
 
         private static void EmitQuickArithmetic(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context, bool add)
@@ -692,7 +693,7 @@ namespace Copper68k
                 il.Emit(add ? OpCodes.Add : OpCodes.Sub);
                 il.Emit(OpCodes.Stloc, value);
                 EmitStoreAddressRegister(il, instruction.Destination.Register, value);
-                EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 8 : 6);
+                EmitAddCycles(il, context, 8);
                 return;
             }
 
@@ -775,7 +776,12 @@ namespace Copper68k
                 EmitStoreAddressRegister(il, instruction.Register, result);
             }
 
-            EmitAddCycles(il, context, instruction.Size == M68kOperandSize.Long ? 8 : 6);
+            EmitAddCycles(
+                il,
+                context,
+                compareOnly
+                    ? M68kJitCore.GetCompareAddressCyclesForTiming(instruction.Source, instruction.Size)
+                    : M68kJitCore.GetAddressArithmeticCyclesForTiming(instruction.Source, instruction.Size));
         }
 
         private static void EmitCmpm(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -1126,6 +1132,9 @@ namespace Copper68k
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, target);
             il.Emit(link ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Ldc_I4, link
+                ? M68kJitCore.GetJsrCyclesForTiming(instruction.Source)
+                : M68kJitCore.GetJmpCyclesForTiming(instruction.Source));
             il.Emit(OpCodes.Call, ExecuteJumpTo);
         }
 

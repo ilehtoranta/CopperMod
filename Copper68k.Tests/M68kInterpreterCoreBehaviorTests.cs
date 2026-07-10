@@ -90,6 +90,35 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
 		Assert.Contains(bus.InstructionFetchCycles, fetch => fetch.Address == 0x1006u);
 	}
+	[Theory]
+	[InlineData((int)M68kOpcodePlanDispatch.Scalar)]
+	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void MoveWordPredecrementAddressErrorFramesPrefetchedFallthroughWord(int dispatchValue)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words(0x312E, 0x0000, 0x7EC5)); // MOVE.W 0(A6),-(A0)
+		bus.WriteLong(0x000C, 0x0000_4000);
+		Write(bus.Memory, 0x2000, 0xA1, 0xCA);
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableCpuBusPhaseTrace: true,
+			enableOpcodePlan: dispatch != M68kOpcodePlanDispatch.Scalar,
+			opcodePlanDispatch: dispatch);
+		cpu.Reset(0x1000, 0x8000);
+		cpu.State.A[0] = 0x3003;
+		cpu.State.A[6] = 0x2000;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(3, cpu.State.LastExceptionVector);
+		Assert.Equal(0x3001u, cpu.State.A[0]);
+		Assert.Equal(0x7EC5, ReadWord(bus.Memory, 0x7FF8));
+	}
 	[Fact]
 	public void CpuDataReadWaitsBehindPendingPrefetch()
 	{
@@ -193,6 +222,15 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(
 			M68kOpcodePlanKind.MoveLongDataToPostincrement,
 			M68kOpcodePlanTable.Kinds[0x22C0]);
+		Assert.Equal(
+			M68kOpcodePlanKind.MoveLongDataToAbsoluteLong,
+			M68kOpcodePlanTable.Kinds[0x23C0]);
+		Assert.Equal(
+			M68kOpcodePlanKind.ShortUnconditionalBranch,
+			M68kOpcodePlanTable.Kinds[0x60FE]);
+		Assert.Equal(
+			M68kOpcodePlanKind.QuickLongDataRegister,
+			M68kOpcodePlanTable.Kinds[0x5482]);
 		Assert.Equal(
 			M68kOpcodePlanKind.DataRegisterLongEorToDestination,
 			M68kOpcodePlanTable.Kinds[0xB183]);
@@ -486,6 +524,87 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry,
 			cpu.State.StatusRegister);
 		Assert.DoesNotContain(bus.Accesses, access => access.Kind == M68kBusAccessKind.CpuDataRead);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedSequentialRetireMatchesScalarPrefetchBusOrder(int dispatchValue)
+	{
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x7202, // MOVEQ #2,D1
+			0x5480, // ADDQ.L #2,D0
+			0xD081, // ADD.L D1,D0
+			0x4E71); // NOP
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+
+		for (var instruction = 0; instruction < 5; instruction++)
+		{
+			scalar.ExecuteInstruction();
+			planned.ExecuteInstruction();
+			AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		}
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedShortBranchRetireMatchesScalarPrefetchBusOrder(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, Words(0x60FE)); // BRA.S self
+		Write(plannedBus.Memory, 0x1000, Words(0x60FE));
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+
+		for (var instruction = 0; instruction < 4; instruction++)
+		{
+			scalar.ExecuteInstruction();
+			planned.ExecuteInstruction();
+			AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		}
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMoveLongDataToAbsoluteLongMatchesScalar(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var program = Words(0x23C0, 0x0000, 0x3000); // MOVE.L D0,$3000.L
+		var scalar = CreateParityCpu(program, enableOpcodePlan: false);
+		var planned = CreateParityCpu(program, enableOpcodePlan: true, dispatch);
+		SetupMoveFastShapeParityState(scalar.Cpu.State, scalar.Bus);
+		SetupMoveFastShapeParityState(planned.Cpu.State, planned.Bus);
+		scalar.Cpu.ExecuteInstruction();
+		planned.Cpu.ExecuteInstruction();
+		AssertParity(scalar, planned);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedQuickLongDataRegisterMatchesScalar(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var opcodes = new ushort[] { 0x5080, 0x5482, 0x5183, 0x5F84 };
+		foreach (var opcode in opcodes)
+		{
+			var scalar = CreateParityCpu(Words(opcode), enableOpcodePlan: false);
+			var planned = CreateParityCpu(Words(opcode), enableOpcodePlan: true, dispatch);
+			scalar.Cpu.State.D[opcode & 7] = 0x7FFF_FFFE;
+			planned.Cpu.State.D[opcode & 7] = 0x7FFF_FFFE;
+			scalar.Cpu.State.StatusRegister = M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Carry;
+			planned.Cpu.State.StatusRegister = scalar.Cpu.State.StatusRegister;
+			scalar.Cpu.ExecuteInstruction();
+			planned.Cpu.ExecuteInstruction();
+			AssertParity(scalar, planned);
+		}
 	}
 	[Theory]
 	[InlineData(0x41C0)] // LEA D0,A0
@@ -1571,6 +1690,28 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(1u, cpu.State.D[0]);
 		Assert.Equal(0x7001, cpu.State.LastOpcode);
 	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedMoveLongDataToAbsoluteLongPreservesPrefetchedSequentialOpcode(int dispatchValue)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, 0x23, 0xC0, 0x00, 0x00, 0x10, 0x06); // MOVE.L D0,$1006.L
+		Write(bus.Memory, 0x1006, 0x70, 0x01); // MOVEQ #1,D0, prefetched before the write
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: true,
+			opcodePlanDispatch: (M68kOpcodePlanDispatch)dispatchValue);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.D[0] = 0x7005_4E71;
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x7005, ReadWord(bus.Memory, 0x1006));
+		Assert.Equal(1u, cpu.State.D[0]);
+		Assert.Equal(0x7001, cpu.State.LastOpcode);
+	}
 	[Fact]
 	public void TakenJumpFlushesSelfModifiedPrefetchTarget()
 	{
@@ -1711,6 +1852,55 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		cpu.Reset(0x1000, 0x8000);
 		return new ParityRun(cpu, bus);
 	}
+	private static M68kInterpreter CreateCycleParityCpu(
+		CycleCountingBus bus,
+		bool enableOpcodePlan,
+		M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+	{
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableCpuBusPhaseTrace: true,
+			enableOpcodePlan: enableOpcodePlan,
+			opcodePlanDispatch: opcodePlanDispatch);
+		cpu.Reset(0x1000, 0x8000);
+		return cpu;
+	}
+	private static void AssertCycleParity(
+		M68kInterpreter scalar,
+		CycleCountingBus scalarBus,
+		M68kInterpreter planned,
+		CycleCountingBus plannedBus)
+	{
+		Assert.Equal(scalar.State.ProgramCounter, planned.State.ProgramCounter);
+		Assert.Equal(scalar.State.Cycles, planned.State.Cycles);
+		Assert.Equal(scalar.State.StatusRegister, planned.State.StatusRegister);
+		Assert.Equal(scalar.State.LastOpcode, planned.State.LastOpcode);
+		Assert.Equal(scalar.State.LastInstructionProgramCounter, planned.State.LastInstructionProgramCounter);
+		Assert.Equal(scalar.State.D, planned.State.D);
+		Assert.Equal(scalar.State.A, planned.State.A);
+		Assert.Equal(scalarBus.InstructionFetchCycles.ToArray(), plannedBus.InstructionFetchCycles.ToArray());
+		Assert.Equal(
+			scalarBus.CpuBusPhases.Select(ToComparableBusPhase).ToArray(),
+			plannedBus.CpuBusPhases.Select(ToComparableBusPhase).ToArray());
+		Assert.True(
+			scalarBus.Memory.AsSpan(0x1000, 0x20).SequenceEqual(plannedBus.Memory.AsSpan(0x1000, 0x20)),
+			"planned execution changed code memory differently from scalar execution");
+	}
+	private static object ToComparableBusPhase(M68kCpuBusPhase phase)
+		=> new
+		{
+			phase.InstructionProgramCounter,
+			phase.Address,
+			phase.Size,
+			phase.RequestedCycle,
+			phase.CompletedCycle,
+			phase.AccessKind,
+			phase.IsWrite,
+			phase.StatusRegister
+		};
 	private static void SetupTransformParityState(M68kCpuState state, TestBus bus)
 	{
 		state.A[0] = 0x2000;

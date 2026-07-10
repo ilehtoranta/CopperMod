@@ -52,6 +52,24 @@ public sealed class M68kDecoderTests
 		Assert.Equal(4, decoded.Length);
 	}
 
+	[Theory]
+	[InlineData(0x44DD, (int)M68kJitOperation.MoveToCcr)]
+	[InlineData(0x46DD, (int)M68kJitOperation.MoveToSr)]
+	public void DecodesMovePostincrementToStatus(ushort opcode, int operation)
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, opcode);
+
+		var decoded = Decode(bus, 0x1000);
+
+		Assert.Equal((M68kJitOperation)operation, decoded.Operation);
+		Assert.Equal(M68kOperandSize.Word, decoded.Size);
+		Assert.Equal(M68kJitEaKind.AddressPostincrement, decoded.Source.Kind);
+		Assert.Equal(5, decoded.Source.Register);
+		Assert.Equal(2, decoded.Length);
+		Assert.True(decoded.StopsTrace);
+	}
+
 	[Fact]
 	public void DecodesDbccAsTraceStop()
 	{
