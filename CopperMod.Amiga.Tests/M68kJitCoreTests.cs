@@ -937,6 +937,54 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void M68000JitCompiledMoveToCcrPreservesPostincrementOnAddressError()
+	{
+		var bus = CreateCodeBus();
+		var data = FastCodeBase + 0x2000;
+		WriteWords(bus, FastCodeBase, 0x44D8, 0x60FC); // MOVE (A0)+,CCR; BRA.S loop
+		for (var i = 0; i < 128; i++)
+		{
+			bus.WriteWord(data + (uint)(i * 2), 0x0015);
+		}
+
+		bus.WriteLong(3 * 4, 0x4000);
+		using var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: true);
+		cpu.Reset(FastCodeBase, 0x5000);
+		cpu.State.A[0] = data;
+		_ = cpu.ExecuteInstructions(160, null, new CountingBoundary());
+		Assert.True(cpu.Counters.TraceHits > 0);
+
+		cpu.State.ProgramCounter = FastCodeBase;
+		cpu.State.A[0] = data;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		var alignedStartCycles = cpu.State.Cycles;
+		var alignedTraceHits = cpu.Counters.TraceHits;
+		Assert.Equal(1, cpu.ExecuteInstructions(1, null, new CountingBoundary()));
+		Assert.True(cpu.Counters.TraceHits > alignedTraceHits);
+		Assert.Equal(alignedStartCycles + 16, cpu.State.Cycles);
+		Assert.Equal(data + 2, cpu.State.A[0]);
+		Assert.Equal((ushort)(M68kCpuState.Supervisor | 0x0015), cpu.State.StatusRegister);
+
+		var traceHits = cpu.Counters.TraceHits;
+		cpu.State.ProgramCounter = FastCodeBase;
+		cpu.State.A[0] = 0x2101;
+		cpu.State.A[7] = 0x5000;
+		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
+
+		Assert.Equal(1, cpu.ExecuteInstructions(1, null, new CountingBoundary()));
+
+		Assert.True(cpu.Counters.TraceHits > traceHits);
+		Assert.Equal(0x2103u, cpu.State.A[0]);
+		Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x4FF2u, cpu.State.A[7]);
+		Assert.Equal(0x44D5u, bus.ReadWord(0x4FF2));
+		Assert.Equal(0x2101u, bus.ReadLong(0x4FF4));
+		Assert.Equal(0x44D8, bus.ReadWord(0x4FF8));
+		Assert.Equal(FastCodeBase + 2, bus.ReadLong(0x4FFC));
+	}
+
+	[Fact]
 	public void JitDoesNotCompileChipRamTrace()
 	{
 		var bus = new AmigaBus();
@@ -4454,9 +4502,9 @@ public sealed class M68kJitCoreTests
 		{
 			0x70FF,       // MOVEQ #-1,D0
 			0x4240,       // CLR.W D0
-			0x7201,       // MOVEQ #1,D1
-			0x08C0, 0x0003, // BSET #3,D0
-			0x0800, 0x0003, // BTST #3,D0
+			0x7214,       // MOVEQ #20,D1
+			0x08C0, 0x0014, // BSET #20,D0
+			0x0800, 0x0014, // BTST #20,D0
 			0x0380,       // BCLR D1,D0
 			0x0340,       // BCHG D1,D0
 			0x03C0,       // BSET D1,D0
@@ -4478,6 +4526,7 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreterExecuted, jitExecuted);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.True(jit.Counters.V2TraceHits > 0);
@@ -4515,6 +4564,7 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreterExecuted, jitExecuted);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.True(jit.Counters.V2TraceHits > 0);
@@ -5354,7 +5404,7 @@ public sealed class M68kJitCoreTests
 
 	[Theory]
 	[MemberData(nameof(RepresentativeGenericTracePrograms))]
-	public void JitAndInterpreterAgreeForRepresentativeGenericTraces(ushort[] words)
+	public void JitAndInterpreterAgreeForRepresentativeGenericTraces(ushort[] words, bool exactCycles)
 	{
 		var interpreterBus = CreateCodeBus();
 		var jitBus = CreateCodeBus();
@@ -5372,6 +5422,14 @@ public sealed class M68kJitCoreTests
 		Assert.True(jit.Counters.CompiledTraces > 0);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+		if (exactCycles)
+		{
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		}
+		else
+		{
+			Assert.InRange(jit.State.Cycles, interpreter.State.Cycles - 4, interpreter.State.Cycles);
+		}
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.Equal(interpreterBus.ChipRam[0x2000..0x2008], jitBus.ChipRam[0x2000..0x2008]);
@@ -5391,7 +5449,8 @@ public sealed class M68kJitCoreTests
 				0x0A80, 0x0000, 0x0001,
 				0x0C80, 0x0000, 0x0010,
 				0x60E0
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5405,7 +5464,8 @@ public sealed class M68kJitCoreTests
 				0x207C, 0x0000, 0x2000,
 				0x3210,
 				0x60E8
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5418,7 +5478,8 @@ public sealed class M68kJitCoreTests
 				0x7201,
 				0xC141,
 				0x60F2
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5429,7 +5490,8 @@ public sealed class M68kJitCoreTests
 				0xB1C0,
 				0x51C8, 0xFFFC,
 				0x60F2
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5440,7 +5502,8 @@ public sealed class M68kJitCoreTests
 				0x4640,               // NOT.W D0
 				0x4A40,               // TST.W D0
 				0x60F6
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5451,7 +5514,8 @@ public sealed class M68kJitCoreTests
 				0x80C1,                 // DIVU.W D1,D0
 				0xC0C1,                 // MULU.W D1,D0
 				0x60F0
-			}
+			},
+			true
 		};
 		yield return new object[]
 		{
@@ -5462,7 +5526,42 @@ public sealed class M68kJitCoreTests
 				0x81C1,                 // DIVS.W D1,D0
 				0xC1C1,                 // MULS.W D1,D0
 				0x60F0
-			}
+			},
+			true
+		};
+		yield return new object[]
+		{
+			new ushort[]
+			{
+				0x207C, 0x0000, 0x0000, // MOVEA.L #0,A0
+				0x5248,                 // ADDQ.W #1,A0
+				0x5348,                 // SUBQ.W #1,A0
+				0x7001,                 // MOVEQ #1,D0
+				0xD0BC, 0x0000, 0x0001, // ADD.L #1,D0
+				0x60EC                  // BRA.S start
+			},
+			true
+		};
+		yield return new object[]
+		{
+			new ushort[]
+			{
+				0x207C, 0x0000, 0x2000, // MOVEA.L #$2000,A0
+				0x7001,                 // MOVEQ #1,D0
+				0x10C0,                 // MOVE.B D0,(A0)+
+				0x60F4                  // BRA.S start
+			},
+			true
+		};
+		yield return new object[]
+		{
+			new ushort[]
+			{
+				0x207C, 0x0000, 0x2000, // MOVEA.L #$2000,A0
+				0x3210,                 // MOVE.W (A0),D1
+				0x60F6                  // BRA.S start
+			},
+			false // One initial queue-refill cycle remains at the fallback-to-trace transition.
 		};
 	}
 
