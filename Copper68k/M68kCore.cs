@@ -482,6 +482,11 @@ namespace Copper68k
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
     }
 
+    internal interface IM68kJitFallbackFetchSynchronization
+    {
+        void SynchronizeInstructionFetch();
+    }
+
     internal enum M68kBackendKind
     {
         AccurateM68000 = 0,
@@ -1327,7 +1332,10 @@ namespace Copper68k
         }
     }
 
-    internal class M68kInterpreterCore<TBus, TCpuDataAccess> : IM68kBatchCore, IM68kInstructionFrequencyProvider
+    internal class M68kInterpreterCore<TBus, TCpuDataAccess> :
+        IM68kBatchCore,
+        IM68kInstructionFrequencyProvider,
+        IM68kJitFallbackFetchSynchronization
         where TBus : IM68kBus
         where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
     {
@@ -4193,6 +4201,9 @@ namespace Copper68k
             _cpuBusCycle = Math.Max(_cpuBusCycle, State.Cycles);
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
         }
+
+        void IM68kJitFallbackFetchSynchronization.SynchronizeInstructionFetch()
+            => ResetPrefetchPipeline();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AdvanceInterruptInternalCycles(int cycles)

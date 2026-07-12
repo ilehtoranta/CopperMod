@@ -123,6 +123,7 @@ namespace Copper68k
         private readonly M68kJitHostAdapter? _amigaBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
+        private readonly IM68kJitFallbackFetchSynchronization? _fallbackFetchSynchronization;
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -178,6 +179,8 @@ namespace Copper68k
         private bool _v2PendingOutOfBlockBranchIsFallthrough;
         private bool _disposed;
         private bool _subscribedToWriteInvalidation;
+        private bool _fallbackFetchSynchronized;
+        private uint _fallbackExpectedProgramCounter;
         private int _asyncCompileEpoch;
         private int _asyncCompileSequence;
         private static readonly MethodInfo CheckV2ConditionMethod =
@@ -571,6 +574,9 @@ namespace Copper68k
             FallbackAttributionEnabled = IsFallbackAttributionEnabledByDefault();
             _fallback = options.FallbackFactory?.Invoke(State, _instructionFrequency, _cpuModel) ??
                 CreateFallback(bus, State, _instructionFrequency, _cpuModel);
+            _fallbackFetchSynchronization = _cpuModel == M68kJitCpuModel.M68000
+                ? _fallback as IM68kJitFallbackFetchSynchronization
+                : null;
             if (_asyncJitEnabled)
             {
                 _asyncCompiler = new M68kAsyncJitCompiler(
@@ -873,6 +879,8 @@ namespace Copper68k
         public void Reset(uint programCounter, uint stackPointer)
         {
             _fallback.Reset(programCounter, stackPointer);
+            _fallbackFetchSynchronized = true;
+            _fallbackExpectedProgramCounter = State.ProgramCounter;
             _classicCompiledCpuBusCycle = State.Cycles;
             _classicCompiledBusSynchronized = false;
             _classicCompiledTimingActive = false;
@@ -883,6 +891,8 @@ namespace Copper68k
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             _fallback.BeginSubroutine(address, stackPointer, returnAddress);
+            _fallbackFetchSynchronized = true;
+            _fallbackExpectedProgramCounter = State.ProgramCounter;
             _classicCompiledCpuBusCycle = State.Cycles;
             _classicCompiledBusSynchronized = false;
             _classicCompiledTimingActive = false;
@@ -960,6 +970,7 @@ namespace Copper68k
             }
 
             _counters.TraceHits++;
+            _fallbackFetchSynchronized = false;
             var executed = compiled(this, maxInstructions, targetCycle ?? long.MaxValue, boundary);
             if (executed == 0)
             {
@@ -1132,6 +1143,7 @@ namespace Copper68k
                 }
 
                 ClearPendingV2OutOfBlockBranch();
+                _fallbackFetchSynchronized = false;
                 var executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
                 if (executed == 0)
                 {
@@ -1830,6 +1842,7 @@ namespace Copper68k
 
                 ClearPendingV2OutOfBlockBranch();
                 var currentIsPure = current.V2PureCpuBatchEligible;
+                _fallbackFetchSynchronized = false;
                 var executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
                 if (executed == 0)
                 {
@@ -1982,6 +1995,7 @@ namespace Copper68k
             }
 
             _counters.TraceHits++;
+            _fallbackFetchSynchronized = false;
             var executed = pureCompiled(this, maxInstructions, batchTargetCycle, boundary);
             if (executed == 0)
             {
@@ -2009,7 +2023,15 @@ namespace Copper68k
             var previousCycle = State.Cycles;
             var root = Normalize(State.ProgramCounter);
             var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
+            if (_fallbackFetchSynchronization != null &&
+                (!_fallbackFetchSynchronized || _fallbackExpectedProgramCounter != State.ProgramCounter))
+            {
+                _fallbackFetchSynchronization.SynchronizeInstructionFetch();
+            }
+
             _fallback.ExecuteInstruction();
+            _fallbackFetchSynchronized = true;
+            _fallbackExpectedProgramCounter = State.ProgramCounter;
             _classicCompiledBusSynchronized = false;
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
@@ -8798,6 +8820,7 @@ namespace Copper68k
             State.ProgramCounter = Normalize(programCounter);
             State.Cycles = _compiledInstructionPreviousCycle;
             _compiledInstructionCycleFloorActive = false;
+            _fallbackFetchSynchronized = false;
             _counters.Invalidations++;
             _counters.SelfModifiedCodeExits++;
             RemoveTrace(Normalize(programCounter));
