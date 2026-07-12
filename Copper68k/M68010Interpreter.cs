@@ -8,17 +8,134 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
-    internal sealed class M68010Interpreter : M68020Interpreter
+    internal sealed class M68010AddressMaskedBus :
+        IM68kBus,
+        IM68kCodeReader,
+        IM68kFastMemoryBus,
+        IM68kPhysicalAddressMap
     {
         private const uint AddressMask = 0x00FF_FFFFu;
+        private readonly IM68kBus _bus;
+        private readonly IM68kCodeReader? _codeReader;
+        private readonly IM68kFastMemoryBus? _fastMemoryBus;
+        private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
 
+        public M68010AddressMaskedBus(IM68kBus bus)
+        {
+            _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _codeReader = bus as IM68kCodeReader;
+            _fastMemoryBus = bus as IM68kFastMemoryBus;
+            _physicalAddressMap = bus as IM68kPhysicalAddressMap;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.ReadByte(Mask(address), ref cycle, accessKind);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.ReadWord(Mask(address), ref cycle, accessKind);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.ReadLong(Mask(address), ref cycle, accessKind);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.WriteByte(Mask(address), value, ref cycle, accessKind);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.WriteWord(Mask(address), value, ref cycle, accessKind);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+            => _bus.WriteLong(Mask(address), value, ref cycle, accessKind);
+
+        public bool HasHostTrapStub(uint address)
+            => _bus.HasHostTrapStub(Mask(address));
+
+        public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+            => _bus.TryInvokeHostTrap(Mask(instructionProgramCounter), trapId, state);
+
+        public ushort ReadHostWord(uint address)
+            => _codeReader is not null
+                ? _codeReader.ReadHostWord(Mask(address))
+                : throw new InvalidOperationException("The wrapped MC68010 bus does not provide host code reads.");
+
+        public void ResetExternalDevices(long cycle)
+            => _bus.ResetExternalDevices(cycle);
+
+        public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
+            => TryReadFast(address, accessKind, out value);
+
+        public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
+            => TryReadFast(address, accessKind, out value);
+
+        public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
+            => TryReadFast(address, accessKind, out value);
+
+        public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
+            => _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastByte(Mask(address), value, accessKind);
+
+        public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
+            => _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastWord(Mask(address), value, accessKind);
+
+        public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
+            => _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastLong(Mask(address), value, accessKind);
+
+        public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
+            => _physicalAddressMap?.IsCpuPhysicalAddressMapped(Mask(address), byteCount, accessKind) ?? false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint Mask(uint address)
+            => address & AddressMask;
+
+        private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out byte value)
+        {
+            if (_fastMemoryBus is not null)
+            {
+                return _fastMemoryBus.TryReadFastByte(Mask(address), accessKind, out value);
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out ushort value)
+        {
+            if (_fastMemoryBus is not null)
+            {
+                return _fastMemoryBus.TryReadFastWord(Mask(address), accessKind, out value);
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out uint value)
+        {
+            if (_fastMemoryBus is not null)
+            {
+                return _fastMemoryBus.TryReadFastLong(Mask(address), accessKind, out value);
+            }
+
+            value = 0;
+            return false;
+        }
+    }
+
+    internal sealed class M68010Interpreter :
+        M68kInterpreterCore<M68010AddressMaskedBus, M68kNoExactCpuDataAccess<M68010AddressMaskedBus>>
+    {
         public M68010Interpreter(IM68kBus bus)
             : base(
-                MaskBus(bus),
-                M68020CpuProfile.OcsAccelerator14Mhz,
-                new M68kCpuState(),
-                enableM68020StackMode: false,
-                opcodeKinds: M68020OpcodeDispatchTable.M68010Kinds)
+                CreateBus(bus),
+                default,
+                opcodePlanDispatch: M68kCoreFactory.M68000OpcodePlanDispatch)
         {
         }
 
@@ -27,137 +144,95 @@ namespace Copper68k
             M68kCpuState state,
             M68kInstructionFrequencyMatrix? instructionFrequency = null)
             : base(
-                MaskBus(bus),
-                M68020CpuProfile.OcsAccelerator14Mhz,
+                CreateBus(bus),
+                default,
                 state,
                 instructionFrequency,
-                enableM68020StackMode: false,
-                opcodeKinds: M68020OpcodeDispatchTable.M68010Kinds)
+                opcodePlanDispatch: M68kCoreFactory.M68000OpcodePlanDispatch)
         {
         }
 
-        private static IM68kBus MaskBus(IM68kBus bus)
-            => bus is IM68kCodeReader codeReader
-                ? new M68010AddressMaskedCodeReaderBus(bus, codeReader)
-                : new M68010AddressMaskedBus(bus);
+        private static M68010AddressMaskedBus CreateBus(IM68kBus bus)
+            => new(bus);
 
-        private class M68010AddressMaskedBus : IM68kBus, IM68kFastMemoryBus, IM68kPhysicalAddressMap
+        protected override bool TryExecuteModelSpecificLine4(ushort opcode, uint instructionPc)
         {
-            private readonly IM68kBus _bus;
-            private readonly IM68kFastMemoryBus? _fastMemoryBus;
-            private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
-
-            public M68010AddressMaskedBus(IM68kBus bus)
+            if (opcode is not (0x4E7A or 0x4E7B))
             {
-                _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-                _fastMemoryBus = bus as IM68kFastMemoryBus;
-                _physicalAddressMap = bus as IM68kPhysicalAddressMap;
-            }
-
-            public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.ReadByte(Mask(address), ref cycle, accessKind);
-
-            public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.ReadWord(Mask(address), ref cycle, accessKind);
-
-            public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.ReadLong(Mask(address), ref cycle, accessKind);
-
-            public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.WriteByte(Mask(address), value, ref cycle, accessKind);
-
-            public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.WriteWord(Mask(address), value, ref cycle, accessKind);
-
-            public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
-                => _bus.WriteLong(Mask(address), value, ref cycle, accessKind);
-
-            public bool HasHostTrapStub(uint address)
-                => _bus.HasHostTrapStub(Mask(address));
-
-            public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
-                => _bus.TryInvokeHostTrap(Mask(instructionProgramCounter), trapId, state);
-
-            public void ResetExternalDevices(long cycle)
-                => _bus.ResetExternalDevices(cycle);
-
-            public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
-                => TryReadFast(address, accessKind, out value);
-
-            public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
-                => TryReadFast(address, accessKind, out value);
-
-            public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
-                => TryReadFast(address, accessKind, out value);
-
-            public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
-                => _fastMemoryBus is not null &&
-                    _fastMemoryBus.TryWriteFastByte(Mask(address), value, accessKind);
-
-            public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
-                => _fastMemoryBus is not null &&
-                    _fastMemoryBus.TryWriteFastWord(Mask(address), value, accessKind);
-
-            public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
-                => _fastMemoryBus is not null &&
-                    _fastMemoryBus.TryWriteFastLong(Mask(address), value, accessKind);
-
-            public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
-                => _physicalAddressMap?.IsCpuPhysicalAddressMapped(Mask(address), byteCount, accessKind) ?? false;
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            protected static uint Mask(uint address)
-                => address & AddressMask;
-
-            private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out byte value)
-            {
-                if (_fastMemoryBus is not null)
-                {
-                    return _fastMemoryBus.TryReadFastByte(Mask(address), accessKind, out value);
-                }
-
-                value = 0;
                 return false;
             }
 
-            private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out ushort value)
+            var extension = FetchWord();
+            if (!State.GetFlag(M68kCpuState.Supervisor))
             {
-                if (_fastMemoryBus is not null)
-                {
-                    return _fastMemoryBus.TryReadFastWord(Mask(address), accessKind, out value);
-                }
-
-                value = 0;
-                return false;
+                RaiseException(8, instructionPc, 34);
+                return true;
             }
 
-            private bool TryReadFast(uint address, M68kBusAccessKind accessKind, out uint value)
+            var generalRegister = (extension >> 12) & 7;
+            var useAddressRegister = (extension & 0x8000) != 0;
+            var controlRegister = extension & 0x0FFF;
+            if (opcode == 0x4E7A)
             {
-                if (_fastMemoryBus is not null)
+                if (!TryReadControlRegister(controlRegister, instructionPc, out var value))
                 {
-                    return _fastMemoryBus.TryReadFastLong(Mask(address), accessKind, out value);
+                    return true;
                 }
 
-                value = 0;
-                return false;
+                WriteGeneralRegister(useAddressRegister, generalRegister, value);
             }
+            else
+            {
+                var value = ReadGeneralRegister(useAddressRegister, generalRegister);
+                if (!TryWriteControlRegister(controlRegister, value, instructionPc))
+                {
+                    return true;
+                }
+            }
+
+            AddInstructionCycles(12);
+            return true;
         }
 
-        private sealed class M68010AddressMaskedCodeReaderBus : M68010AddressMaskedBus, IM68kCodeReader
+        protected override uint GetExceptionVectorAddress(int vector)
+            => State.VectorBaseRegister + unchecked((uint)(vector * 4));
+
+        protected override uint GetInterruptVectorAddress(uint vectorAddress)
+            => State.VectorBaseRegister + vectorAddress;
+
+        protected override bool TryHandleModelSpecificExceptionFrame(
+            int vector,
+            uint stackedProgramCounter,
+            ushort savedStatusRegister)
         {
-            private readonly IM68kCodeReader _codeReader;
-
-            public M68010AddressMaskedCodeReaderBus(IM68kBus bus, IM68kCodeReader codeReader)
-                : base(bus)
-            {
-                _codeReader = codeReader ?? throw new ArgumentNullException(nameof(codeReader));
-            }
-
-            public ushort ReadHostWord(uint address)
-                => _codeReader.ReadHostWord(Mask(address));
+            PushWord((ushort)((vector * 4) & 0x0FFF));
+            PushLong(stackedProgramCounter);
+            PushWord(savedStatusRegister);
+            return true;
         }
 
-        protected override bool TryReadControlRegister(int register, uint instructionPc, out uint value)
+        protected override bool TryHandleModelSpecificAddressError(
+            uint faultAddress,
+            bool isWrite,
+            M68kBusAccessKind accessKind,
+            bool useDataAccessStackedProgramCounter)
+        {
+            _ = faultAddress;
+            _ = isWrite;
+            _ = accessKind;
+            _ = useDataAccessStackedProgramCounter;
+            var stackedProgramCounter = State.LastInstructionProgramCounter;
+            var savedStatusRegister = State.StatusRegister;
+            State.RecordException(3, stackedProgramCounter, savedStatusRegister);
+            State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
+            PushWord(0x800C);
+            PushLong(stackedProgramCounter);
+            PushWord(savedStatusRegister);
+            State.ProgramCounter = ReadLong(GetExceptionVectorAddress(3));
+            return true;
+        }
+
+        private bool TryReadControlRegister(int register, uint instructionPc, out uint value)
         {
             switch (register)
             {
@@ -171,12 +246,13 @@ namespace Copper68k
                     value = State.VectorBaseRegister;
                     return true;
                 default:
-                    value = RaiseIllegalControlRegister(instructionPc);
+                    RaiseException(4, instructionPc, 34);
+                    value = 0;
                     return false;
             }
         }
 
-        protected override bool TryWriteControlRegister(int register, uint value, uint instructionPc)
+        private bool TryWriteControlRegister(int register, uint value, uint instructionPc)
         {
             switch (register)
             {
@@ -190,23 +266,31 @@ namespace Copper68k
                     State.VectorBaseRegister = value;
                     return true;
                 default:
-                    _ = RaiseIllegalControlRegister(instructionPc);
+                    RaiseException(4, instructionPc, 34);
                     return false;
             }
         }
 
-        protected override bool TryRaiseMisalignedWordDataRead(uint address, uint instructionPc)
+        private uint ReadGeneralRegister(bool addressRegister, int register)
+            => addressRegister ? State.A[register] : State.D[register];
+
+        private void WriteGeneralRegister(bool addressRegister, int register, uint value)
         {
-            var savedStatusRegister = State.StatusRegister;
-            State.RecordException(3, instructionPc, savedStatusRegister);
-            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            PushWord(0x800C);
-            PushLong(instructionPc);
-            PushWord(savedStatusRegister);
-            State.ProgramCounter = ReadLong(State.VectorBaseRegister + 0x0C);
-            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
-            _ = address;
-            return true;
+            if (addressRegister)
+            {
+                if (register == 7)
+                {
+                    State.SetActiveStackPointer(value);
+                }
+                else
+                {
+                    State.A[register] = value;
+                }
+            }
+            else
+            {
+                State.D[register] = value;
+            }
         }
     }
 }

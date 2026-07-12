@@ -1265,7 +1265,7 @@ namespace Copper68k
         internal readonly M68020CpuProfile _profile;
         internal readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         internal readonly M68kTimingEngine _timing;
-        internal readonly M68kAcceleratorBusBridge _busBridge;
+        internal readonly M68kTimedBusAdapter _timedBus;
         private readonly M68020OpcodeKind[] _opcodeKinds;
         private readonly bool _hasModelSpecificInstructions;
         private readonly bool _enableM68020StackMode;
@@ -1302,7 +1302,7 @@ namespace Copper68k
 
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
             _timing = new M68kTimingEngine(_profile, State);
-            _busBridge = new M68kAcceleratorBusBridge(_bus, _profile, State, _timing);
+            _timedBus = new M68kTimedBusAdapter(_bus, _profile, State, _timing);
         }
 
         public M68kCpuState State { get; }
@@ -5964,32 +5964,32 @@ namespace Copper68k
 
         protected byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
-            return _busBridge.ReadByte(address, accessKind);
+            return _timedBus.ReadByte(address, accessKind);
         }
 
         protected ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
-            return _busBridge.ReadWord(address, accessKind);
+            return _timedBus.ReadWord(address, accessKind);
         }
 
         protected uint ReadLong(uint address)
         {
-            return _busBridge.ReadLong(address, M68kBusAccessKind.CpuDataRead);
+            return _timedBus.ReadLong(address, M68kBusAccessKind.CpuDataRead);
         }
 
         protected void WriteByte(uint address, byte value)
         {
-            _busBridge.WriteByte(address, value, M68kBusAccessKind.CpuDataWrite);
+            _timedBus.WriteByte(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void WriteWord(uint address, ushort value)
         {
-            _busBridge.WriteWord(address, value, M68kBusAccessKind.CpuDataWrite);
+            _timedBus.WriteWord(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void WriteLong(uint address, uint value)
         {
-            _busBridge.WriteLong(address, value, M68kBusAccessKind.CpuDataWrite);
+            _timedBus.WriteLong(address, value, M68kBusAccessKind.CpuDataWrite);
         }
 
         protected void PushWord(ushort value)

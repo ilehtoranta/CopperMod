@@ -477,6 +477,11 @@ namespace Copper68k
         void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
+    internal interface IM68kDeferredCpuBusBatchBoundary
+    {
+        bool CanBeginDeferredCpuBusBatch { get; }
+    }
+
     internal interface IM68kBatchCore : IM68kCore
     {
         int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary);
@@ -1364,6 +1369,7 @@ namespace Copper68k
         private long _prefetchCompletedCycle1;
         private bool _prefetchDeferredCpuBusBatchEligible0;
         private bool _prefetchDeferredCpuBusBatchEligible1;
+        private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private int _prefetchCount;
         private bool _consumeWithoutPrefetch;
         private bool _skipRetirePrefetchTopUp;
@@ -1560,7 +1566,8 @@ namespace Copper68k
 
             var elapsed = ExecuteSingleInstruction();
             _ = elapsed;
-            if (TryExecuteDeferredCpuBusBatch(
+            if (CanAttemptDeferredCpuBusBatch(DeferredCpuBusBatchNoTargetInstructionLimit - 1) &&
+                TryExecuteDeferredCpuBusBatch(
                 DeferredCpuBusBatchNoTargetInstructionLimit - 1,
                 targetCycle: null,
                 NoOpInstructionBoundary.Instance,
@@ -1609,11 +1616,19 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CanAttemptDeferredCpuBusBatch(int maxInstructions)
-            => _deferredCpuInstructionTiming != null &&
+        {
+            if (_deferredCpuBusBatchAdmissionRetryInstructions != 0)
+            {
+                _deferredCpuBusBatchAdmissionRetryInstructions--;
+                return false;
+            }
+
+            return _deferredCpuInstructionTiming != null &&
                 maxInstructions > 1 &&
                 !State.Halted &&
                 !State.Stopped &&
                 IsCurrentPrefetchDeferredCpuBusBatchEligible();
+        }
 
         private bool TryExecuteDeferredCpuBusBatch(
             int maxInstructions,
@@ -1627,6 +1642,8 @@ namespace Copper68k
                 maxInstructions <= 1 ||
                 State.Halted ||
                 State.Stopped ||
+                (boundary is IM68kDeferredCpuBusBatchBoundary batchAdmissionBoundary &&
+                    !batchAdmissionBoundary.CanBeginDeferredCpuBusBatch) ||
                 !IsCurrentPrefetchDeferredCpuBusBatchEligible())
             {
                 return false;
@@ -1640,6 +1657,7 @@ namespace Copper68k
                 out var batchTargetCycle,
                 out _))
             {
+                _deferredCpuBusBatchAdmissionRetryInstructions = 3;
                 return false;
             }
 
@@ -1752,6 +1770,12 @@ namespace Copper68k
                     executedInstructions > 0)
                 {
                     batchBoundary!.AfterBusAccessTraceBatch(batchStartCycle, State.Cycles, executedInstructions);
+                }
+
+                if (reason == M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess &&
+                    executedInstructions <= 1)
+                {
+                    _deferredCpuBusBatchAdmissionRetryInstructions = 3;
                 }
 
                 _deferredCpuBusBatchExecutionActive = false;
@@ -4129,6 +4153,43 @@ namespace Copper68k
             };
         }
 
+        protected virtual bool TryExecuteModelSpecificLine4(ushort opcode, uint instructionPc)
+        {
+            _ = opcode;
+            _ = instructionPc;
+            return false;
+        }
+
+        protected virtual uint GetExceptionVectorAddress(int vector)
+            => unchecked((uint)(vector * 4));
+
+        protected virtual uint GetInterruptVectorAddress(uint vectorAddress)
+            => vectorAddress;
+
+        protected virtual bool TryHandleModelSpecificAddressError(
+            uint faultAddress,
+            bool isWrite,
+            M68kBusAccessKind accessKind,
+            bool useDataAccessStackedProgramCounter)
+        {
+            _ = faultAddress;
+            _ = isWrite;
+            _ = accessKind;
+            _ = useDataAccessStackedProgramCounter;
+            return false;
+        }
+
+        protected virtual bool TryHandleModelSpecificExceptionFrame(
+            int vector,
+            uint stackedProgramCounter,
+            ushort savedStatusRegister)
+        {
+            _ = vector;
+            _ = stackedProgramCounter;
+            _ = savedStatusRegister;
+            return false;
+        }
+
         public void Reset(uint programCounter, uint stackPointer)
         {
             Array.Clear(State.D);
@@ -4136,6 +4197,7 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(programCounter);
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
             State.StatusRegister = M68kCpuState.ResetStatusRegister;
+            State.VectorBaseRegister = 0;
             State.Cycles = 0;
             ResetPrefetchPipeline();
             State.Halted = false;
@@ -4189,7 +4251,7 @@ namespace Copper68k
             WriteWord(stackPointer, savedStatusRegister);
             WriteWord(stackPointer + 2, (ushort)(stackedProgramCounter >> 16));
 
-            var target = ReadLong(vectorAddress);
+            var target = ReadLong(GetInterruptVectorAddress(vectorAddress));
             SetProgramCounterAndFlushPrefetch(target);
             PrefetchInterruptTarget(target);
             var completedCycle = interruptStartCycle + 44;
@@ -4991,6 +5053,11 @@ namespace Copper68k
                 case 0x4AFC:
                     RaiseException(4, instructionPc, 34);
                     return true;
+            }
+
+            if (TryExecuteModelSpecificLine4(opcode, instructionPc))
+            {
+                return true;
             }
 
             if (opcode is 0x4E7A or 0x4E7B)
@@ -7095,7 +7162,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ushort FetchWord()
+        protected ushort FetchWord()
         {
             var address = State.ProgramCounter;
             if (_prefetchCount == 0 || _prefetchAddress != address)
@@ -7519,7 +7586,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint ReadLong(uint address)
+        protected uint ReadLong(uint address)
         {
             if ((address & 1) != 0)
             {
@@ -7649,13 +7716,13 @@ namespace Copper68k
             throw M68kAddressErrorException.Instance;
         }
 
-        private void PushWord(ushort value)
+        protected void PushWord(ushort value)
         {
             State.SetActiveStackPointer(State.A[7] - 2);
             WriteWord(State.A[7], value);
         }
 
-        private void PushLong(uint value)
+        protected void PushLong(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
             WriteLongDescending(State.A[7], value);
@@ -7769,7 +7836,7 @@ namespace Copper68k
         /// Caller guarantees <see cref="_instructionCycleFloorActive"/> is true.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void AddInstructionCycles(int cycles)
+        protected void AddInstructionCycles(int cycles)
         {
             System.Diagnostics.Debug.Assert(cycles > 0, "MC68000 cycle increments must be positive.");
             System.Diagnostics.Debug.Assert(
@@ -7956,14 +8023,22 @@ namespace Copper68k
             }
         }
 
-        private void RaiseException(int vector, uint stackedProgramCounter, int cycles)
+        protected void RaiseException(int vector, uint stackedProgramCounter, int cycles)
         {
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
+
+            if (TryHandleModelSpecificExceptionFrame(vector, stackedProgramCounter, savedStatusRegister))
+            {
+                SetProgramCounterAndFlushPrefetch(ReadLong(GetExceptionVectorAddress(vector)));
+                AddInstructionCycles(cycles);
+                return;
+            }
+
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
-            SetProgramCounterAndFlushPrefetch(ReadLong((uint)(vector * 4)));
+            SetProgramCounterAndFlushPrefetch(ReadLong(GetExceptionVectorAddress(vector)));
             AddInstructionCycles(cycles);
         }
 
@@ -7973,6 +8048,16 @@ namespace Copper68k
             M68kBusAccessKind accessKind,
             bool useDataAccessStackedProgramCounter = false)
         {
+            if (TryHandleModelSpecificAddressError(
+                faultAddress,
+                isWrite,
+                accessKind,
+                useDataAccessStackedProgramCounter))
+            {
+                AddInstructionCycles(AddressErrorExceptionCycles);
+                return;
+            }
+
             var exceptionCycleBase = Math.Max(Math.Max(State.Cycles, _cpuRetireBusCycle), _instructionCycleFloor);
             var savedStatusRegister = State.StatusRegister;
             var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;

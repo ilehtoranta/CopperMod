@@ -668,14 +668,14 @@ namespace Copper68k
         }
     }
 
-    internal sealed class M68kAcceleratorBusBridge
+    internal sealed class M68kTimedBusAdapter
     {
         private readonly IM68kBus _bus;
         private readonly M68020CpuProfile _profile;
         private readonly M68kCpuState _state;
         private readonly M68kTimingEngine _timing;
 
-        public M68kAcceleratorBusBridge(
+        public M68kTimedBusAdapter(
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,

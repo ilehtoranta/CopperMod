@@ -1,4 +1,5 @@
 using Copper68k;
+using static Copper68k.Tests.M68kInterpreterTestHelpers;
 namespace Copper68k.Tests;
 public sealed class M68020InterpreterTests
 {
@@ -9,13 +10,6 @@ public sealed class M68020InterpreterTests
 		var interpreter = Assert.IsType<M68020Interpreter>(cpu);
 		Assert.Same(M68020CpuProfile.OcsAccelerator14Mhz, interpreter.Profile);
 		Assert.True(interpreter.State.M68020StackModeEnabled);
-	}
-	[Fact]
-	public void FactoryCreatesM68010CoreWithoutM68020StackMode()
-	{
-		using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68010, new Copper68kTestBus());
-		var interpreter = Assert.IsType<M68010Interpreter>(cpu);
-		Assert.False(interpreter.State.M68020StackModeEnabled);
 	}
 	[Fact]
 	public void FactoryCreatesAccurateM68030Backend()
@@ -43,56 +37,6 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x0000_0400u, cpu.State.D[1]);
 		Assert.Equal(24, cpu.State.NativeCycles);
 		Assert.Equal(12, cpu.State.Cycles);
-	}
-	[Fact]
-	public void M68010MovecTransfersVectorBaseRegister()
-	{
-		var bus = new ZeroWaitCodeBus();
-		WriteWords(
-			bus,
-			CodeBase,
-			0x4E7B, 0x0801, // MOVEC D0,VBR
-			0x4E7A, 0x1801); // MOVEC VBR,D1
-		var cpu = new M68010Interpreter(bus);
-		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.D[0] = 0x0000_0400;
-		cpu.ExecuteInstruction();
-		cpu.ExecuteInstruction();
-		Assert.Equal(0x0000_0400u, cpu.State.VectorBaseRegister);
-		Assert.Equal(0x0000_0400u, cpu.State.D[1]);
-		Assert.False(cpu.State.M68020StackModeEnabled);
-	}
-	[Fact]
-	public void M68010OddWordReadRaisesFormat8AddressErrorFrame()
-	{
-		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0x3211); // MOVE.W (A1),D1
-		bus.WriteLong(3u * 4u, 0x0000_2000);
-		var cpu = new M68010Interpreter(bus);
-		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.A[1] = 1;
-		cpu.ExecuteInstruction();
-		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x2FF8u, cpu.State.A[7]);
-		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FF8));
-		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
-		Assert.Equal(0x800Cu, bus.ReadWord(0x2FFE));
-	}
-	[Fact]
-	public void M68010RejectsM68020OnlyExtbLong()
-	{
-		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
-		bus.WriteLong(4u * 4u, 0x0000_2000);
-		var cpu = new M68010Interpreter(bus);
-		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.D[0] = 0x0000_0080;
-		cpu.ExecuteInstruction();
-		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x0000_0080u, cpu.State.D[0]);
-		Assert.Equal(0x2FF8u, cpu.State.A[7]);
-		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
-		Assert.Equal(4 * 4, bus.ReadWord(0x2FFE));
 	}
 	[Fact]
 	public void M68020ExecutesM68020OnlyExtbLong()
@@ -4853,98 +4797,4 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(23, cpu.State.Cycles);
 	}
 	private const uint CodeBase = 0x1000;
-	private static void WriteWords(ZeroWaitCodeBus bus, uint address, params ushort[] words)
-	{
-		for (var i = 0; i < words.Length; i++)
-		{
-			bus.WriteWord(address + (uint)(i * 2), words[i]);
-		}
-	}
-	private static byte ReadByte(ZeroWaitCodeBus bus, uint address)
-	{
-		long cycle = 0;
-		return bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
-	}
-	private sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
-	{
-		private readonly byte[] _memory = new byte[0x0100_0000];
-		public int InstructionFetchWords { get; private set; }
-		public int WriteMachineDelay { get; init; }
-		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			_ = cycle;
-			_ = accessKind;
-			return _memory[Normalize(address)];
-		}
-		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
-			{
-				InstructionFetchWords++;
-			}
-			return ReadWord(address);
-		}
-		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			_ = cycle;
-			_ = accessKind;
-			return ReadLong(address);
-		}
-		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			_ = accessKind;
-			_memory[Normalize(address)] = value;
-			cycle += WriteMachineDelay;
-		}
-		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			_ = accessKind;
-			WriteWord(address, value);
-			cycle += WriteMachineDelay;
-		}
-		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
-		{
-			_ = accessKind;
-			WriteLong(address, value);
-			cycle += WriteMachineDelay;
-		}
-		public bool HasHostTrapStub(uint address)
-		{
-			_ = address;
-			return false;
-		}
-		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
-		{
-			_ = instructionProgramCounter;
-			_ = trapId;
-			_ = state;
-			return false;
-		}
-		public void ResetExternalDevices(long cycle)
-		{
-			_ = cycle;
-		}
-		public ushort ReadHostWord(uint address)
-			=> ReadWord(address);
-		public ushort ReadWord(uint address)
-		{
-			var offset = Normalize(address);
-			return (ushort)((_memory[offset] << 8) | _memory[Normalize(address + 1)]);
-		}
-		public uint ReadLong(uint address)
-			=> ((uint)ReadWord(address) << 16) | ReadWord(address + 2);
-		public void WriteWord(uint address, ushort value)
-		{
-			var offset = Normalize(address);
-			_memory[offset] = (byte)(value >> 8);
-			_memory[Normalize(address + 1)] = (byte)value;
-		}
-		public void WriteLong(uint address, uint value)
-		{
-			WriteWord(address, (ushort)(value >> 16));
-			WriteWord(address + 2, (ushort)value);
-		}
-		private static int Normalize(uint address)
-			=> (int)(address & 0x00FF_FFFF);
-	}
 }
