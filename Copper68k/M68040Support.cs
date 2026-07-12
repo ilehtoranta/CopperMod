@@ -340,6 +340,13 @@ namespace Copper68k
 
         public bool Enabled => (TranslationControl & TranslationEnable) != 0;
 
+        internal bool CanBypassTranslation(
+            uint logicalAddress,
+            M68kBusAccessKind accessKind,
+            bool write,
+            bool supervisor)
+            => !Enabled || MatchesTransparent(logicalAddress, accessKind, write, supervisor);
+
         public void Reset()
         {
             TranslationControl = 0;
@@ -388,7 +395,7 @@ namespace Copper68k
             }
 
             Status = 0;
-            if (!Enabled || MatchesTransparent(logicalAddress, accessKind, write, supervisor))
+            if (CanBypassTranslation(logicalAddress, accessKind, write, supervisor))
             {
                 return TryAcceptPhysical(logicalAddress, accessKind, write, out physicalAddress, out fault);
             }

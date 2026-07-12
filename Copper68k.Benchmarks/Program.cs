@@ -121,7 +121,7 @@ static void WarmUpJitUntilStable(M68kJitCore jit)
         ExecuteMany(jit, chunkInstructions);
         executedInstructions += chunkInstructions;
         var current = JitCompilationSnapshot.Capture(jit);
-        if (current.Equals(previous))
+        if (current.Equals(previous) && jit.AsyncCompilationIdle)
         {
             stableChunks++;
         }

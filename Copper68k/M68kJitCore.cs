@@ -123,6 +123,7 @@ namespace Copper68k
         private readonly M68kJitHostAdapter? _amigaBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
+        private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
         private readonly bool _minimalCycleTiming;
@@ -269,6 +270,21 @@ namespace Copper68k
                 new[] { typeof(long).MakeByRefType(), typeof(uint), typeof(M68kOperandSize) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ReadMemoryValueForV2BatchSlowRef));
+        private static readonly MethodInfo ReadM68000MemoryValueForV2BatchSlowRefByteMethod =
+            RequiredV2MemoryHelper(
+                nameof(ReadM68000MemoryValueForV2BatchSlowRefByte),
+                typeof(long).MakeByRefType(),
+                typeof(uint));
+        private static readonly MethodInfo ReadM68000MemoryValueForV2BatchSlowRefWordMethod =
+            RequiredV2MemoryHelper(
+                nameof(ReadM68000MemoryValueForV2BatchSlowRefWord),
+                typeof(long).MakeByRefType(),
+                typeof(uint));
+        private static readonly MethodInfo ReadM68000MemoryValueForV2BatchSlowRefLongMethod =
+            RequiredV2MemoryHelper(
+                nameof(ReadM68000MemoryValueForV2BatchSlowRefLong),
+                typeof(long).MakeByRefType(),
+                typeof(uint));
         private static readonly MethodInfo WriteMemoryValueForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(WriteMemoryValueForV2Batch),
@@ -285,6 +301,24 @@ namespace Copper68k
                 new[] { typeof(long).MakeByRefType(), typeof(uint), typeof(uint), typeof(M68kOperandSize) },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(WriteMemoryValueForV2BatchSlowRef));
+        private static readonly MethodInfo WriteM68000MemoryValueForV2BatchSlowRefByteMethod =
+            RequiredV2MemoryHelper(
+                nameof(WriteM68000MemoryValueForV2BatchSlowRefByte),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
+        private static readonly MethodInfo WriteM68000MemoryValueForV2BatchSlowRefWordMethod =
+            RequiredV2MemoryHelper(
+                nameof(WriteM68000MemoryValueForV2BatchSlowRefWord),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
+        private static readonly MethodInfo WriteM68000MemoryValueForV2BatchSlowRefLongMethod =
+            RequiredV2MemoryHelper(
+                nameof(WriteM68000MemoryValueForV2BatchSlowRefLong),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
         private static readonly MethodInfo PushLongMethod =
             typeof(M68kJitCore).GetMethod(nameof(PushLong), BindingFlags.Instance | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(PushLong));
@@ -402,6 +436,19 @@ namespace Copper68k
         private static readonly MethodInfo CompleteJitZeroWaitWriteMethod =
             typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite)) ??
             throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite));
+
+        private static MethodInfo RequiredV2MemoryHelper(string name, params Type[] parameterTypes)
+            => typeof(M68kJitCore).GetMethod(
+                name,
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                parameterTypes,
+                modifiers: null) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, name);
+
+        private static readonly MethodInfo CanBypassM68040DataTranslationMethod =
+            typeof(M68kJitCore).GetMethod(nameof(CanBypassM68040DataTranslation), BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(CanBypassM68040DataTranslation));
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
         private bool _compiledInstructionCycleFloorActive;
@@ -429,7 +476,7 @@ namespace Copper68k
             bool enableV2MemoryRead = false,
             bool enableV2BusAccess = true,
             bool enableV2FastRead = false,
-            bool enableV2BusGraph = false,
+            bool enableV2BusGraph = true,
             M68kJitFallbackFactory? fallbackFactory = null)
             : this(
                 bus,
@@ -508,6 +555,7 @@ namespace Copper68k
             _timedMemoryBus = bus as IM68kJitTimedMemoryBus;
             _amigaBus = _jitBus == null ? null : new M68kJitHostAdapter(bus, _jitBus, _fastMemoryBus, _timedMemoryBus);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
+            _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
             _cpuModel = options.CpuModel;
             _cacheFlushOnlyInvalidation = options.CacheFlushOnlyInvalidation;
             _minimalCycleTiming = options.MinimalCycleTiming;
@@ -549,6 +597,8 @@ namespace Copper68k
         public M68kCpuState State { get; }
 
         internal bool FallbackAttributionEnabled { get; set; }
+
+        internal bool AsyncCompilationIdle => _asyncCompiler?.IsIdle ?? true;
 
         public M68kJitCounters Counters
         {
@@ -616,12 +666,7 @@ namespace Copper68k
         }
 
         private static bool IsV2EnabledByDefault()
-        {
-            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_V2");
-            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
-        }
+            => IsFeatureEnabledByDefault("COPPER_M68K_JIT_V2", defaultValue: true);
 
         private static bool IsV2Tier3EnabledByDefault()
         {
@@ -640,12 +685,7 @@ namespace Copper68k
         }
 
         private static bool IsV2BusAccessEnabledByDefault()
-        {
-            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_V2_BUS_ACCESS");
-            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
-        }
+            => IsFeatureEnabledByDefault("COPPER_M68K_JIT_V2_BUS_ACCESS", defaultValue: true);
 
         private static bool IsV2FastReadEnabledByDefault()
         {
@@ -664,11 +704,26 @@ namespace Copper68k
         }
 
         private static bool IsV2BusGraphEnabledByDefault()
+            => IsFeatureEnabledByDefault("COPPER_M68K_JIT_V2_BUS_GRAPH", defaultValue: true);
+
+        private static bool IsFeatureEnabledByDefault(string variable, bool defaultValue)
         {
-            var value = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_V2_BUS_GRAPH");
-            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
+            var value = Environment.GetEnvironmentVariable(variable);
+            if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "off", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+                string.Equals(value, "on", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return defaultValue;
         }
 
         private static bool IsAsyncJitEnabledByDefault()
@@ -921,6 +976,15 @@ namespace Copper68k
 
         private bool TryValidateTraceGeneration(uint pc, ref TraceEntry trace)
         {
+            if (_cpuModel == M68kJitCpuModel.M68040 &&
+                trace.M68040MmuGeneration != GetCurrentM68040MmuGeneration() &&
+                (!trace.M68040TranslationChecksEnabled || !State.M68040Mmu.Enabled))
+            {
+                RemoveTrace(pc);
+                _counters.M68040MmuGenerationGuardExits++;
+                return false;
+            }
+
             if (_cacheFlushOnlyInvalidation)
             {
                 return true;
@@ -2080,7 +2144,7 @@ namespace Copper68k
                     fault.AccessKind,
                     fault.Write,
                     supervisor,
-                    ReadPhysicalLongForM68040Mmu,
+                    _readPhysicalLongForM68040Mmu,
                     out _,
                     out var refreshedFault) &&
                     refreshedFault.Status != 0)
@@ -2297,7 +2361,7 @@ namespace Copper68k
                 accessKind,
                 write,
                 supervisor,
-                ReadPhysicalLongForM68040Mmu,
+                _readPhysicalLongForM68040Mmu,
                 out physicalAddress,
                 out fault))
             {
@@ -2757,7 +2821,9 @@ namespace Copper68k
                 v2Trace,
                 SelectTraceDelegatePolicy(compilationOptions, reason, v2Trace),
                 _v2BusGraphEnabled,
-                compilationOptions.ForceTranslatedMemoryAccesses,
+                compilationOptions.CpuModel == M68kJitCpuModel.M68000,
+                compilationOptions.M68040TranslationChecksEnabled,
+                compilationOptions.MinimalCycleTiming,
                 compilationOptions.M68040MmuGeneration);
             return true;
         }
@@ -2782,8 +2848,9 @@ namespace Copper68k
                     plan.V2Trace.PureCpuBatchEligible,
                     plan.V2Trace.FastReadOnlyBatchEligible,
                     plan.V2BusGraphEnabled,
-                    plan.ForceTranslatedMemoryAccesses,
-                    plan.ForceTranslatedMemoryAccesses);
+                    plan.M68000MemoryHelpers,
+                    plan.M68040TranslationChecksEnabled,
+                    plan.MinimalCycleTiming);
             return new TraceEntry(
                 plan.Root,
                 plan.CodeStart,
@@ -2799,7 +2866,9 @@ namespace Copper68k
                 plan.V2Trace.Tier,
                 plan.V2Trace.InstructionCount,
                 plan.V2Trace.HasInternalLoop,
-                plan.V2Trace.PureCpuBatchEligible);
+                plan.V2Trace.PureCpuBatchEligible,
+                plan.M68040TranslationChecksEnabled,
+                plan.M68040MmuGeneration);
         }
 
         private void SeedTraceSuccessorHotCounters(M68kTraceCompilationPlan plan)
@@ -2855,7 +2924,7 @@ namespace Copper68k
                 return M68kTraceDelegatePolicy.Default;
             }
 
-            if (options.ForceTranslatedMemoryAccesses ||
+            if (options.CpuModel == M68kJitCpuModel.M68040 ||
                 reason is M68kJitCompileReason.Handoff or
                 M68kJitCompileReason.GraphHole or
                 M68kJitCompileReason.BranchPressure)
@@ -2863,18 +2932,28 @@ namespace Copper68k
                 return M68kTraceDelegatePolicy.V2Only;
             }
 
-            return IsM68000PureGraphTraceCompilation(options)
+            return IsM68000PureCpuV2TraceCompilation(options, v2Trace)
                 ? M68kTraceDelegatePolicy.V2Only
                 : M68kTraceDelegatePolicy.Default;
         }
 
-        private static bool IsM68000PureGraphTraceCompilation(M68kTraceCompilationOptions options)
-            => options.CpuModel == M68kJitCpuModel.M68000 &&
-                options.V2Enabled &&
-                !options.V2MemoryReadEnabled &&
-                !options.V2BusAccessEnabled &&
-                !options.V2FastReadEnabled &&
-                !options.V2BusGraphEnabled;
+        private static bool IsM68000PureCpuV2TraceCompilation(
+            M68kTraceCompilationOptions options,
+            V2TracePlan v2Trace)
+        {
+            if (options.CpuModel != M68kJitCpuModel.M68000 || !options.V2Enabled)
+            {
+                return false;
+            }
+
+            // Preserve the explicit legacy pure-graph preset. With the production
+            // graph enabled, the trace plan provides the stronger no-bus-edge proof.
+            return (!options.V2MemoryReadEnabled &&
+                    !options.V2BusAccessEnabled &&
+                    !options.V2FastReadEnabled &&
+                    !options.V2BusGraphEnabled) ||
+                (options.V2BusGraphEnabled && v2Trace.PureCpuBatchEligible);
+        }
 
         private static void PrepareTraceEntry(TraceEntry trace)
         {
@@ -3046,7 +3125,7 @@ namespace Copper68k
                 TryCreateV2TracePlanFromSnapshot(reader, input.Root, input.Tier, input.Options, out var compiledV2Trace)
                     ? compiledV2Trace
                     : default;
-            if (input.Options.ForceTranslatedMemoryAccesses && v2Trace.IsEmpty)
+            if (input.Options.CpuModel == M68kJitCpuModel.M68040 && v2Trace.IsEmpty)
             {
                 return false;
             }
@@ -3083,7 +3162,9 @@ namespace Copper68k
                 v2Trace,
                 SelectTraceDelegatePolicy(input.Options, input.Reason, v2Trace),
                 input.Options.V2BusGraphEnabled,
-                input.Options.ForceTranslatedMemoryAccesses,
+                input.Options.CpuModel == M68kJitCpuModel.M68000,
+                input.Options.M68040TranslationChecksEnabled,
+                input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
         }
@@ -3127,7 +3208,9 @@ namespace Copper68k
                 codeWords,
                 v2Trace,
                 input.Options.V2BusGraphEnabled,
-                input.Options.ForceTranslatedMemoryAccesses,
+                input.Options.CpuModel == M68kJitCpuModel.M68000,
+                input.Options.M68040TranslationChecksEnabled,
+                input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
         }
@@ -3610,7 +3693,13 @@ namespace Copper68k
                 return false;
             }
 
-            trace = CompileV2FromPlan(root, plan, _v2BusGraphEnabled, _cpuModel == M68kJitCpuModel.M68040);
+            trace = CompileV2FromPlan(
+                root,
+                plan,
+                _v2BusGraphEnabled,
+                _cpuModel == M68kJitCpuModel.M68000,
+                _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
+                _minimalCycleTiming);
             RecordV2CompiledTrace(tier);
             return true;
         }
@@ -3675,7 +3764,9 @@ namespace Copper68k
             uint root,
             V2TracePlan plan,
             bool useGraph,
-            bool forceTranslatedMemoryAccesses)
+            bool useM68000MemoryHelpers,
+            bool m68040TranslationChecksEnabled,
+            bool minimalCycleTiming)
         {
             var compiled = CompileV2(
                 root,
@@ -3686,8 +3777,9 @@ namespace Copper68k
                 plan.PureCpuBatchEligible,
                 plan.FastReadOnlyBatchEligible,
                 useGraph,
-                forceTranslatedMemoryAccesses,
-                forceTranslatedMemoryAccesses);
+                useM68000MemoryHelpers,
+                m68040TranslationChecksEnabled,
+                minimalCycleTiming);
             return new V2TraceCompilation(
                 compiled,
                 plan.Tier,
@@ -5092,10 +5184,11 @@ namespace Copper68k
             bool pureCpuBatchEligible,
             bool fastReadOnlyBatchEligible,
             bool busGraphEnabled,
-            bool forceTranslatedMemoryAccesses,
+            bool useM68000MemoryHelpers,
+            bool m68040TranslationChecksEnabled,
             bool minimalCycleTiming)
         {
-            if (forceTranslatedMemoryAccesses)
+            if (m68040TranslationChecksEnabled)
             {
                 fastReadOnlyBatchEligible = false;
             }
@@ -5124,7 +5217,7 @@ namespace Copper68k
                     loadAddressRegisters,
                     dirtyDataRegisters,
                     dirtyAddressRegisters,
-                    forceTranslatedMemoryAccesses,
+                    m68040TranslationChecksEnabled,
                     minimalCycleTiming)
                 : CompileV2BusAccessBatch(
                     root,
@@ -5133,11 +5226,12 @@ namespace Copper68k
                     codeStart,
                     byteLength,
                     busGraphEnabled,
+                    useM68000MemoryHelpers,
                     loadDataRegisters,
                     loadAddressRegisters,
                     dirtyDataRegisters,
                     dirtyAddressRegisters,
-                    forceTranslatedMemoryAccesses,
+                    m68040TranslationChecksEnabled,
                     minimalCycleTiming);
         }
 
@@ -5180,7 +5274,7 @@ namespace Copper68k
             int loadAddressRegisters,
             int dirtyDataRegisters,
             int dirtyAddressRegisters,
-            bool forceTranslatedMemoryAccesses,
+            bool m68040TranslationChecksEnabled,
             bool minimalCycleTiming)
         {
             var method = new DynamicMethod(
@@ -5201,7 +5295,7 @@ namespace Copper68k
             var exit = il.DefineLabel();
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il, minimalCycleTiming);
-            context.SetZeroWaitProbe(enabled: !forceTranslatedMemoryAccesses);
+            context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             var fastReadFailureLabels = new List<(Label Label, uint ProgramCounter)>();
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
@@ -5292,11 +5386,12 @@ namespace Copper68k
             uint codeStart,
             int byteLength,
             bool useGraph,
+            bool useM68000MemoryHelpers,
             int loadDataRegisters,
             int loadAddressRegisters,
             int dirtyDataRegisters,
             int dirtyAddressRegisters,
-            bool forceTranslatedMemoryAccesses,
+            bool m68040TranslationChecksEnabled,
             bool minimalCycleTiming)
         {
             var method = new DynamicMethod(
@@ -5309,7 +5404,8 @@ namespace Copper68k
             var exit = il.DefineLabel();
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il, minimalCycleTiming);
-            context.SetZeroWaitProbe(enabled: !forceTranslatedMemoryAccesses);
+            context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
+            context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
             if (useGraph)
@@ -6915,6 +7011,7 @@ namespace Copper68k
             var done = il.DefineLabel();
             if (context.ZeroWaitProbeEnabled)
             {
+                context.EmitBranchToSlowForM68040Translation(address, write: false, slowRead);
                 if (IsV2InlineZeroWaitMemoryEnabled())
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
@@ -6980,8 +7077,15 @@ namespace Copper68k
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
             il.Emit(OpCodes.Ldloc, address);
-            il.Emit(OpCodes.Ldc_I4, (int)size);
-            il.Emit(OpCodes.Call, ReadMemoryValueForV2BatchSlowRefMethod);
+            if (context.M68000MemoryHelpers)
+            {
+                il.Emit(OpCodes.Call, GetM68000V2ReadMemorySlowRefMethod(size));
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldc_I4, (int)size);
+                il.Emit(OpCodes.Call, ReadMemoryValueForV2BatchSlowRefMethod);
+            }
             il.MarkLabel(done);
         }
 
@@ -6996,6 +7100,7 @@ namespace Copper68k
             var done = il.DefineLabel();
             if (context.ZeroWaitProbeEnabled)
             {
+                context.EmitBranchToSlowForM68040Translation(address, write: true, slowWrite);
                 if (IsV2InlineZeroWaitMemoryEnabled())
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
@@ -7056,8 +7161,15 @@ namespace Copper68k
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
             il.Emit(OpCodes.Ldloc, address);
             il.Emit(OpCodes.Ldloc, value);
-            il.Emit(OpCodes.Ldc_I4, (int)size);
-            il.Emit(OpCodes.Call, WriteMemoryValueForV2BatchSlowRefMethod);
+            if (context.M68000MemoryHelpers)
+            {
+                il.Emit(OpCodes.Call, GetM68000V2WriteMemorySlowRefMethod(size));
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldc_I4, (int)size);
+                il.Emit(OpCodes.Call, WriteMemoryValueForV2BatchSlowRefMethod);
+            }
             il.MarkLabel(done);
         }
 
@@ -7065,6 +7177,22 @@ namespace Copper68k
         {
             return size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
         }
+
+        private static MethodInfo GetM68000V2ReadMemorySlowRefMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => ReadM68000MemoryValueForV2BatchSlowRefByteMethod,
+                M68kOperandSize.Word => ReadM68000MemoryValueForV2BatchSlowRefWordMethod,
+                _ => ReadM68000MemoryValueForV2BatchSlowRefLongMethod
+            };
+
+        private static MethodInfo GetM68000V2WriteMemorySlowRefMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => WriteM68000MemoryValueForV2BatchSlowRefByteMethod,
+                M68kOperandSize.Word => WriteM68000MemoryValueForV2BatchSlowRefWordMethod,
+                _ => WriteM68000MemoryValueForV2BatchSlowRefLongMethod
+            };
 
         private static void EmitSelectV2InlineZeroWaitMemory(
             ILGenerator il,
@@ -10375,6 +10503,70 @@ namespace Copper68k
                 : _bus.ReadLong(address, ref cycles, M68kBusAccessKind.CpuDataRead);
         }
 
+        private uint ReadM68000MemoryValueForV2BatchSlowRefByte(ref long cycles, uint address)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryReadJitZeroWaitMemory(address, M68kOperandSize.Byte, out var fastValue))
+            {
+                return fastValue;
+            }
+
+            if (_amigaBus != null)
+            {
+                return _amigaBus.ReadJitSlotAwareMemory(ref cycles, address, M68kOperandSize.Byte);
+            }
+
+            return _bus.ReadByte(address, ref cycles, M68kBusAccessKind.CpuDataRead);
+        }
+
+        private uint ReadM68000MemoryValueForV2BatchSlowRefWord(ref long cycles, uint address)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryReadJitZeroWaitMemory(address, M68kOperandSize.Word, out var fastValue))
+            {
+                return fastValue;
+            }
+
+            if (_amigaBus != null)
+            {
+                return _amigaBus.ReadJitSlotAwareMemory(ref cycles, address, M68kOperandSize.Word);
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
+            }
+
+            return _bus.ReadWord(address, ref cycles, M68kBusAccessKind.CpuDataRead);
+        }
+
+        private uint ReadM68000MemoryValueForV2BatchSlowRefLong(ref long cycles, uint address)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryReadJitZeroWaitMemory(address, M68kOperandSize.Long, out var fastValue))
+            {
+                return fastValue;
+            }
+
+            if (_amigaBus != null)
+            {
+                return _amigaBus.ReadJitSlotAwareMemory(ref cycles, address, M68kOperandSize.Long);
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
+            }
+
+            return _bus.ReadLong(address, ref cycles, M68kBusAccessKind.CpuDataRead);
+        }
+
         private void WriteMemoryValueForV2Batch(uint address, uint value, M68kOperandSize size)
         {
             address = TranslateM68040DataAddress(address, write: true, size);
@@ -10444,6 +10636,73 @@ namespace Copper68k
             {
                 _bus.WriteLong(address, value, ref cycles, M68kBusAccessKind.CpuDataWrite);
             }
+        }
+
+        private void WriteM68000MemoryValueForV2BatchSlowRefByte(ref long cycles, uint address, uint value)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryWriteJitZeroWaitMemory(address, value, M68kOperandSize.Byte))
+            {
+                return;
+            }
+
+            if (_amigaBus != null)
+            {
+                _amigaBus.WriteJitSlotAwareMemory(ref cycles, address, value, M68kOperandSize.Byte);
+                return;
+            }
+
+            _bus.WriteByte(address, (byte)value, ref cycles, M68kBusAccessKind.CpuDataWrite);
+        }
+
+        private void WriteM68000MemoryValueForV2BatchSlowRefWord(ref long cycles, uint address, uint value)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryWriteJitZeroWaitMemory(address, value, M68kOperandSize.Word))
+            {
+                return;
+            }
+
+            if (_amigaBus != null)
+            {
+                _amigaBus.WriteJitSlotAwareMemory(ref cycles, address, value, M68kOperandSize.Word);
+                return;
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
+            }
+
+            _bus.WriteWord(address, (ushort)value, ref cycles, M68kBusAccessKind.CpuDataWrite);
+        }
+
+        private void WriteM68000MemoryValueForV2BatchSlowRefLong(ref long cycles, uint address, uint value)
+        {
+            address = Normalize(address);
+            if (_minimalCycleTiming &&
+                _amigaBus != null &&
+                _amigaBus.TryWriteJitZeroWaitMemory(address, value, M68kOperandSize.Long))
+            {
+                return;
+            }
+
+            if (_amigaBus != null)
+            {
+                _amigaBus.WriteJitSlotAwareMemory(ref cycles, address, value, M68kOperandSize.Long);
+                return;
+            }
+
+            if ((address & 1) != 0)
+            {
+                throw new M68kEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
+            }
+
+            _bus.WriteLong(address, value, ref cycles, M68kBusAccessKind.CpuDataWrite);
         }
 
         private void WriteMemoryValue(uint address, uint value, M68kOperandSize size)
@@ -10554,6 +10813,13 @@ namespace Copper68k
                 write ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead,
                 write,
                 (int)size);
+
+        private bool CanBypassM68040DataTranslation(uint address, bool write, int statusRegister)
+            => State.M68040Mmu.CanBypassTranslation(
+                address,
+                write ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead,
+                write,
+                (statusRegister & M68kCpuState.Supervisor) != 0);
 
         private uint TranslateM68040MemoryAddress(uint address, M68kBusAccessKind accessKind, bool write)
             => TranslateM68040MemoryAddress(address, accessKind, write, byteCount: 1);
@@ -10840,20 +11106,52 @@ namespace Copper68k
                 return ReadMemoryValue(address, size);
             }
 
+            return size switch
+            {
+                M68kOperandSize.Byte => ReadClassicCompiledMemoryByte(address),
+                M68kOperandSize.Word => ReadClassicCompiledMemoryWord(address),
+                _ => ReadClassicCompiledMemoryLong(address)
+            };
+        }
+
+        private uint ReadClassicCompiledMemoryByte(uint address)
+        {
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
-            if (size != M68kOperandSize.Byte && (address & 1) != 0)
+            var cycle = _classicCompiledCpuBusCycle;
+            var value = _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+            return value;
+        }
+
+        private uint ReadClassicCompiledMemoryWord(uint address)
+        {
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
+            address = Normalize(address);
+            if ((address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 compiled read at 0x{address:X8}.");
             }
 
             var cycle = _classicCompiledCpuBusCycle;
-            var value = size switch
+            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+            return value;
+        }
+
+        private uint ReadClassicCompiledMemoryLong(uint address)
+        {
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
+            address = Normalize(address);
+            if ((address & 1) != 0)
             {
-                M68kOperandSize.Byte => _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead),
-                M68kOperandSize.Word => _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead),
-                _ => _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead)
-            };
+                throw new M68kEmulationException($"Odd MC68000 compiled read at 0x{address:X8}.");
+            }
+
+            var cycle = _classicCompiledCpuBusCycle;
+            var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
             _classicCompiledCpuBusCycle = cycle;
             CompleteClassicCompiledBusPhase();
             return value;
@@ -10867,28 +11165,57 @@ namespace Copper68k
                 return;
             }
 
-            var prefetchPhase = size == M68kOperandSize.Byte && (address & 1) != 0 ? 6 : 7;
+            switch (size)
+            {
+                case M68kOperandSize.Byte:
+                    WriteClassicCompiledMemoryByte(address, value);
+                    return;
+                case M68kOperandSize.Word:
+                    WriteClassicCompiledMemoryWord(address, value);
+                    return;
+                default:
+                    WriteClassicCompiledMemoryLong(address, value);
+                    return;
+            }
+        }
+
+        private void WriteClassicCompiledMemoryByte(uint address, uint value)
+        {
+            var prefetchPhase = (address & 1) != 0 ? 6 : 7;
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase);
             address = Normalize(address);
-            if (size != M68kOperandSize.Byte && (address & 1) != 0)
+            var cycle = _classicCompiledCpuBusCycle;
+            _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+        }
+
+        private void WriteClassicCompiledMemoryWord(uint address, uint value)
+        {
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 7);
+            address = Normalize(address);
+            if ((address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 compiled write at 0x{address:X8}.");
             }
 
             var cycle = _classicCompiledCpuBusCycle;
-            if (size == M68kOperandSize.Byte)
+            _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            _classicCompiledCpuBusCycle = cycle;
+            CompleteClassicCompiledBusPhase();
+        }
+
+        private void WriteClassicCompiledMemoryLong(uint address, uint value)
+        {
+            BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 7);
+            address = Normalize(address);
+            if ((address & 1) != 0)
             {
-                _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            }
-            else if (size == M68kOperandSize.Word)
-            {
-                _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            }
-            else
-            {
-                _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                throw new M68kEmulationException($"Odd MC68000 compiled write at 0x{address:X8}.");
             }
 
+            var cycle = _classicCompiledCpuBusCycle;
+            _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
             _classicCompiledCpuBusCycle = cycle;
             CompleteClassicCompiledBusPhase();
         }
@@ -11366,7 +11693,8 @@ namespace Copper68k
                 _v2FastReadEnabled,
                 _v2BusGraphEnabled || _v2BusAccessEnabled,
                 workerGraphExpansionEnabled,
-                _cpuModel == M68kJitCpuModel.M68040,
+                _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
+                _minimalCycleTiming,
                 _cpuModel,
                 GetCurrentM68040MmuGeneration());
 
@@ -12193,6 +12521,10 @@ namespace Copper68k
 
             public bool ZeroWaitProbeEnabled { get; private set; } = true;
 
+            public bool M68040TranslationChecksEnabled { get; private set; }
+
+            public bool M68000MemoryHelpers { get; private set; }
+
             public bool ZeroWaitStatsUsed { get; private set; }
 
             public bool MinimalCycleTiming { get; }
@@ -12203,6 +12535,31 @@ namespace Copper68k
             public void SetZeroWaitProbe(bool enabled)
             {
                 ZeroWaitProbeEnabled = enabled;
+            }
+
+            public void SetM68040TranslationChecks(bool enabled)
+            {
+                M68040TranslationChecksEnabled = enabled;
+            }
+
+            public void SetM68000MemoryHelpers(bool enabled)
+            {
+                M68000MemoryHelpers = enabled;
+            }
+
+            public void EmitBranchToSlowForM68040Translation(LocalBuilder address, bool write, Label slowPath)
+            {
+                if (!M68040TranslationChecksEnabled)
+                {
+                    return;
+                }
+
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldloc, address);
+                _il.Emit(write ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+                _il.Emit(OpCodes.Ldloc, StatusRegister);
+                _il.Emit(OpCodes.Call, CanBypassM68040DataTranslationMethod);
+                _il.Emit(OpCodes.Brfalse, slowPath);
             }
 
             public void SetFastReadOnlyFailure(bool enabled, Label failureLabel)
@@ -12994,7 +13351,9 @@ namespace Copper68k
                 V2TracePlan v2Trace,
                 M68kTraceDelegatePolicy delegatePolicy,
                 bool v2BusGraphEnabled,
-                bool forceTranslatedMemoryAccesses,
+                bool m68000MemoryHelpers,
+                bool m68040TranslationChecksEnabled,
+                bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
                 Root = root;
@@ -13011,7 +13370,9 @@ namespace Copper68k
                 V2Trace = v2Trace;
                 DelegatePolicy = delegatePolicy;
                 V2BusGraphEnabled = v2BusGraphEnabled;
-                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                M68000MemoryHelpers = m68000MemoryHelpers;
+                M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
 
@@ -13043,7 +13404,11 @@ namespace Copper68k
 
             public bool V2BusGraphEnabled { get; }
 
-            public bool ForceTranslatedMemoryAccesses { get; }
+            public bool M68000MemoryHelpers { get; }
+
+            public bool M68040TranslationChecksEnabled { get; }
+
+            public bool MinimalCycleTiming { get; }
 
             public uint M68040MmuGeneration { get; }
         }
@@ -13058,7 +13423,8 @@ namespace Copper68k
                 bool v2FastReadEnabled,
                 bool v2BusGraphEnabled,
                 bool workerGraphExpansionEnabled,
-                bool forceTranslatedMemoryAccesses,
+                bool m68040TranslationChecksEnabled,
+                bool minimalCycleTiming,
                 M68kJitCpuModel cpuModel,
                 uint m68040MmuGeneration)
             {
@@ -13069,7 +13435,8 @@ namespace Copper68k
                 V2FastReadEnabled = v2FastReadEnabled;
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
-                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                MinimalCycleTiming = minimalCycleTiming;
                 CpuModel = cpuModel;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -13088,7 +13455,9 @@ namespace Copper68k
 
             public bool WorkerGraphExpansionEnabled { get; }
 
-            public bool ForceTranslatedMemoryAccesses { get; }
+            public bool M68040TranslationChecksEnabled { get; }
+
+            public bool MinimalCycleTiming { get; }
 
             public M68kJitCpuModel CpuModel { get; }
 
@@ -13165,7 +13534,9 @@ namespace Copper68k
                 ushort[] codeWords,
                 V2TracePlan v2Trace,
                 bool v2BusGraphEnabled,
-                bool forceTranslatedMemoryAccesses,
+                bool m68000MemoryHelpers,
+                bool m68040TranslationChecksEnabled,
+                bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
                 Root = root;
@@ -13177,7 +13548,9 @@ namespace Copper68k
                 CodeWords = codeWords;
                 V2Trace = v2Trace;
                 V2BusGraphEnabled = v2BusGraphEnabled;
-                ForceTranslatedMemoryAccesses = forceTranslatedMemoryAccesses;
+                M68000MemoryHelpers = m68000MemoryHelpers;
+                M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
 
@@ -13199,7 +13572,11 @@ namespace Copper68k
 
             public bool V2BusGraphEnabled { get; }
 
-            public bool ForceTranslatedMemoryAccesses { get; }
+            public bool M68000MemoryHelpers { get; }
+
+            public bool M68040TranslationChecksEnabled { get; }
+
+            public bool MinimalCycleTiming { get; }
 
             public uint M68040MmuGeneration { get; }
         }
@@ -13343,7 +13720,9 @@ namespace Copper68k
                         promotionPlan.Root,
                         promotionPlan.V2Trace,
                         promotionPlan.V2BusGraphEnabled,
-                        promotionPlan.ForceTranslatedMemoryAccesses);
+                        promotionPlan.M68000MemoryHelpers,
+                        promotionPlan.M68040TranslationChecksEnabled,
+                        promotionPlan.MinimalCycleTiming);
                     PrepareCompiledTrace(compiled.Compiled!);
                     return M68kJitCompileResult.ForPromotion(
                         Epoch,
@@ -13607,6 +13986,17 @@ namespace Copper68k
 
             public int MaxQueueDepth => Volatile.Read(ref _maxQueueDepth);
 
+            public bool IsIdle
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _pending.Count == 0 && _compiling.Count == 0 && _completed.IsEmpty;
+                    }
+                }
+            }
+
             public void Dispose()
             {
                 lock (_gate)
@@ -13664,16 +14054,13 @@ namespace Copper68k
                     }
 
                     var result = request.Compile();
-                    var shouldPublish = true;
                     lock (_gate)
                     {
                         _compiling.Remove(request.Key);
-                        shouldPublish = !_stopping;
-                    }
-
-                    if (shouldPublish)
-                    {
-                        _completed.Enqueue(result);
+                        if (!_stopping)
+                        {
+                            _completed.Enqueue(result);
+                        }
                     }
                 }
             }
@@ -13709,7 +14096,9 @@ namespace Copper68k
                 V2TraceTier v2Tier,
                 int v2InstructionCount,
                 bool v2HasInternalLoop,
-                bool v2PureCpuBatchEligible)
+                bool v2PureCpuBatchEligible,
+                bool m68040TranslationChecksEnabled,
+                uint m68040MmuGeneration)
             {
                 Root = root;
                 CodeStart = codeStart;
@@ -13726,6 +14115,8 @@ namespace Copper68k
                 V2InstructionCount = v2InstructionCount;
                 V2HasInternalLoop = v2HasInternalLoop;
                 V2PureCpuBatchEligible = v2PureCpuBatchEligible;
+                M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                M68040MmuGeneration = m68040MmuGeneration;
             }
 
             public uint Root { get; }
@@ -13758,6 +14149,10 @@ namespace Copper68k
 
             public bool V2PureCpuBatchEligible { get; }
 
+            public bool M68040TranslationChecksEnabled { get; }
+
+            public uint M68040MmuGeneration { get; }
+
             public TraceEntry WithGenerations(uint startGeneration, uint endGeneration)
                 => new TraceEntry(
                     Root,
@@ -13774,7 +14169,9 @@ namespace Copper68k
                     V2Tier,
                     V2InstructionCount,
                     V2HasInternalLoop,
-                    V2PureCpuBatchEligible);
+                    V2PureCpuBatchEligible,
+                    M68040TranslationChecksEnabled,
+                    M68040MmuGeneration);
 
             public TraceEntry WithV2(
                 uint codeStart,
@@ -13802,7 +14199,9 @@ namespace Copper68k
                     tier,
                     instructionCount,
                     hasInternalLoop,
-                    pureCpuBatchEligible);
+                    pureCpuBatchEligible,
+                    M68040TranslationChecksEnabled,
+                    M68040MmuGeneration);
         }
 
         private sealed class NoOpBoundary : IM68kInstructionBoundary
@@ -14041,6 +14440,8 @@ namespace Copper68k
         public long HelperIlInstructions { get; set; }
 
         public long GenerationGuardExits { get; set; }
+
+        public long M68040MmuGenerationGuardExits { get; set; }
 
         public long PureTraceBatchExecutions { get; set; }
 

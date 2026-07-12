@@ -115,17 +115,33 @@ namespace Copper68k
             typeof(bool),
             typeof(bool),
             typeof(int));
-        private static readonly MethodInfo ReadMemoryValue = RequiredMethod(
+        private static readonly MethodInfo ReadMemoryByte = RequiredMethod(
             typeof(M68kJitCore),
-            "ReadClassicCompiledMemoryValue",
-            typeof(uint),
-            typeof(M68kOperandSize));
-        private static readonly MethodInfo WriteMemoryValue = RequiredMethod(
+            "ReadClassicCompiledMemoryByte",
+            typeof(uint));
+        private static readonly MethodInfo ReadMemoryWord = RequiredMethod(
             typeof(M68kJitCore),
-            "WriteClassicCompiledMemoryValue",
+            "ReadClassicCompiledMemoryWord",
+            typeof(uint));
+        private static readonly MethodInfo ReadMemoryLong = RequiredMethod(
+            typeof(M68kJitCore),
+            "ReadClassicCompiledMemoryLong",
+            typeof(uint));
+        private static readonly MethodInfo WriteMemoryByte = RequiredMethod(
+            typeof(M68kJitCore),
+            "WriteClassicCompiledMemoryByte",
             typeof(uint),
+            typeof(uint));
+        private static readonly MethodInfo WriteMemoryWord = RequiredMethod(
+            typeof(M68kJitCore),
+            "WriteClassicCompiledMemoryWord",
             typeof(uint),
-            typeof(M68kOperandSize));
+            typeof(uint));
+        private static readonly MethodInfo WriteMemoryLong = RequiredMethod(
+            typeof(M68kJitCore),
+            "WriteClassicCompiledMemoryLong",
+            typeof(uint),
+            typeof(uint));
         private static readonly MethodInfo SetAddressRegister = RequiredMethod(
             typeof(M68kJitCore),
             "SetAddressRegister",
@@ -1219,8 +1235,7 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, address);
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, address);
-            il.Emit(OpCodes.Ldc_I4, (int)size);
-            il.Emit(OpCodes.Call, ReadMemoryValue);
+            il.Emit(OpCodes.Call, GetReadMemoryMethod(size));
         }
 
         private static void EmitWriteResolvedEa(
@@ -1241,8 +1256,7 @@ namespace Copper68k
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, address!);
             il.Emit(OpCodes.Ldloc, value);
-            il.Emit(OpCodes.Ldc_I4, (int)size);
-            il.Emit(OpCodes.Call, WriteMemoryValue);
+            il.Emit(OpCodes.Call, GetWriteMemoryMethod(size));
         }
 
         private static void EmitLoadEaValue(
@@ -1272,8 +1286,7 @@ namespace Copper68k
                 default:
                     il.Emit(OpCodes.Ldarg_0);
                     EmitResolveEaAddress(il, context, ea, size, applySideEffects);
-                    il.Emit(OpCodes.Ldc_I4, (int)size);
-                    il.Emit(OpCodes.Call, ReadMemoryValue);
+                    il.Emit(OpCodes.Call, GetReadMemoryMethod(size));
                     return;
             }
         }
@@ -1310,11 +1323,26 @@ namespace Copper68k
                     il.Emit(OpCodes.Ldarg_0);
                     EmitResolveEaAddress(il, context, ea, size, applySideEffects: true);
                     il.Emit(OpCodes.Ldloc, value);
-                    il.Emit(OpCodes.Ldc_I4, (int)size);
-                    il.Emit(OpCodes.Call, WriteMemoryValue);
+                    il.Emit(OpCodes.Call, GetWriteMemoryMethod(size));
                     return;
             }
         }
+
+        private static MethodInfo GetReadMemoryMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => ReadMemoryByte,
+                M68kOperandSize.Word => ReadMemoryWord,
+                _ => ReadMemoryLong
+            };
+
+        private static MethodInfo GetWriteMemoryMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => WriteMemoryByte,
+                M68kOperandSize.Word => WriteMemoryWord,
+                _ => WriteMemoryLong
+            };
 
         private static void EmitResolveEaAddress(
             ILGenerator il,
