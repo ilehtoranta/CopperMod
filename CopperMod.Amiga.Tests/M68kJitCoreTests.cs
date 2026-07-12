@@ -2060,15 +2060,18 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(batchAfterCount, boundary.BatchAfterCount);
 	}
 
-	[Fact]
-	public void JitGenerationGuardExitsWhenTraceBytesChangeWithoutWriteNotification()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void JitGenerationGuardExitsWhenTraceBytesChangeWithoutWriteNotification(bool enableV2)
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2);
 		cpu.Reset(FastCodeBase, 0x4000);
-		cpu.ExecuteInstructions(220, null, new CountingBoundary());
-		Assert.True(cpu.Counters.TraceHits > 0);
+		var boundary = enableV2 ? new PureBatchBoundary() : new CountingBoundary();
+		cpu.ExecuteInstructions(220, enableV2 ? 100_000 : null, boundary);
+		Assert.True(enableV2 ? cpu.Counters.V2TraceHits > 0 : cpu.Counters.TraceHits > 0);
 		var generationGuardExits = cpu.Counters.GenerationGuardExits;
 		var generationMismatches = cpu.Counters.GenerationMismatches;
 
@@ -2080,7 +2083,7 @@ public sealed class M68kJitCoreTests
 		touchCodePage.Invoke(bus, new object[] { FastCodeBase });
 		cpu.State.ProgramCounter = FastCodeBase;
 
-		cpu.ExecuteInstructions(1, null, new CountingBoundary());
+		cpu.ExecuteInstructions(1, enableV2 ? cpu.State.Cycles + 10_000 : null, boundary);
 
 		Assert.Equal(0x0000_0002u, cpu.State.D[0]);
 		Assert.True(cpu.Counters.GenerationGuardExits > generationGuardExits);

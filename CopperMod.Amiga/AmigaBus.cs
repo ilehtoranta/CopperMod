@@ -1857,7 +1857,8 @@ namespace CopperMod.Amiga
             long sampleCycle,
             AmigaBusAccessKind accessKind)
         {
-            if (!_captureBusAccesses)
+            var trace = _customRegisterReadTrace;
+            if (!_captureBusAccesses && trace == null)
             {
                 return;
             }
@@ -1876,8 +1877,11 @@ namespace CopperMod.Amiga
                 completedCycle,
                 sampleCycle,
                 accessKind);
-            _customRegisterReads.Add(read);
-            var trace = _customRegisterReadTrace;
+            if (_captureBusAccesses)
+            {
+                _customRegisterReads.Add(read);
+            }
+
             if (trace != null &&
                 offset >= _customRegisterReadTraceStart &&
                 offset < _customRegisterReadTraceEndExclusive)

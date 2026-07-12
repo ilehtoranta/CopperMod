@@ -58,6 +58,10 @@ namespace CopperMod.Amiga
         private long _diskEvents;
         private long _agnusEvents;
         private long _blitterEvents;
+        private long _deferredCpuWaitBlitterOverlapAttempts;
+        private long _deferredCpuWaitBlitterOverlapSupported;
+        private long _deferredCpuWaitBlitterOverlapUnsupported;
+        private long _deferredCpuWaitBlitterOverlapNasty;
         private long _hostDrainTicks;
         private long _hostWakeQueryTicks;
         private long _hostSameCycleQueryTicks;
@@ -140,6 +144,10 @@ namespace CopperMod.Amiga
             _diskEvents = 0;
             _agnusEvents = 0;
             _blitterEvents = 0;
+            _deferredCpuWaitBlitterOverlapAttempts = 0;
+            _deferredCpuWaitBlitterOverlapSupported = 0;
+            _deferredCpuWaitBlitterOverlapUnsupported = 0;
+            _deferredCpuWaitBlitterOverlapNasty = 0;
             _wakeAgendaCacheHits = 0;
             _wakeAgendaCacheMisses = 0;
             _wakeAgendaDrainSkips = 0;

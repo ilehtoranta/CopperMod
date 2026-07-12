@@ -786,6 +786,7 @@ namespace CopperMod.Amiga
             var scratchAudit = default(DeferredCpuWaitScratchAudit);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
+            var deferredPreGrantPrepared = false;
             var deferredFixedImageUsed = false;
             var verifyDeferredFixedImage = false;
             var deferredFixedImageTimeline = default(CpuWaitFixedSlotTimelineSignature);
@@ -807,7 +808,8 @@ namespace CopperMod.Amiga
                         RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unsupported);
                     }
                 }
-                else if (HasNonDisplayDynamicCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles))
+                else if (HasUnsupportedDeferredBlitterPreparationWorkThrough(
+                    grantRequestCycle + PalLineCycles))
                 {
                     _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
                     if (Display.HasLiveDisplayWork())
@@ -822,6 +824,35 @@ namespace CopperMod.Amiga
                         size,
                         isWrite,
                         requestedCycle);
+                }
+                else if (Blitter.Busy)
+                {
+                    _hardwareScheduler.RecordDeferredCpuWaitBlitterOverlap(
+                        Blitter.CanUseCpuWaitAreaMicroOps,
+                        Blitter.CpuStallActive);
+                    if (ShouldRunDeferredCpuWaitSlotShadowAudit)
+                    {
+                        BeginDeferredCpuWaitScratchAudit(
+                            kind,
+                            target,
+                            address,
+                            size,
+                            requestedCycle,
+                            grantRequestCycle,
+                            isWrite,
+                            scratchWrite,
+                            ref scratchAudit);
+                    }
+
+                    if (_hardwareScheduler.PrepareCpuGrantAfterDeferredBatchExit(grantRequestCycle))
+                    {
+                        deferredPreGrantPrepared = true;
+                        deferredPreparationUsed = true;
+                    }
+                    else
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                    }
                 }
                 else if (Display.HasLiveDisplayWork())
                 {
@@ -876,7 +907,7 @@ namespace CopperMod.Amiga
                 }
             }
 
-            if (!slotContendedClean && !cpuGrantCommitted)
+            if (!slotContendedClean && !cpuGrantCommitted && !deferredPreGrantPrepared)
             {
                 if (ShouldRunDeferredCpuWaitSlotShadowAudit)
                 {
@@ -1128,6 +1159,14 @@ namespace CopperMod.Amiga
         internal bool HasNonDisplayDynamicCpuWaitSlotWorkThrough(long cycle)
             =>
                 Blitter.Busy ||
+                Disk.ActiveDma ||
+                Disk.HasSlotDmaWakeSourceThrough(cycle) ||
+                Paula.HasDmaWorkThrough(cycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasUnsupportedDeferredBlitterPreparationWorkThrough(long cycle)
+            =>
+                (Blitter.Busy && !Blitter.CanUseCpuWaitAreaMicroOps) ||
                 Disk.ActiveDma ||
                 Disk.HasSlotDmaWakeSourceThrough(cycle) ||
                 Paula.HasDmaWorkThrough(cycle);

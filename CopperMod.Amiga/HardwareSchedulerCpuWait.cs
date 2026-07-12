@@ -31,8 +31,44 @@ namespace CopperMod.Amiga
 
     internal sealed partial class AmigaHardwareScheduler
     {
+        internal void RecordDeferredCpuWaitBlitterOverlap(bool supported, bool nasty)
+        {
+            _deferredCpuWaitBlitterOverlapAttempts++;
+            if (supported)
+            {
+                _deferredCpuWaitBlitterOverlapSupported++;
+            }
+            else
+            {
+                _deferredCpuWaitBlitterOverlapUnsupported++;
+            }
+
+            if (nasty)
+            {
+                _deferredCpuWaitBlitterOverlapNasty++;
+            }
+        }
+
         internal void SetCpuWaitSlotContendedCleanThroughForTest(long cycle)
             => _slotContendedCleanThroughCycle = cycle;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool PrepareCpuGrantAfterDeferredBatchExit(long requestedCycle)
+        {
+            if (_draining)
+            {
+                return false;
+            }
+
+            requestedCycle = Math.Max(0, requestedCycle);
+            if (requestedCycle > 0)
+            {
+                DrainSlotContendedAccess(requestedCycle - 1);
+            }
+
+            _busAccessDrainCount++;
+            return true;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrant(
