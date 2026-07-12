@@ -322,6 +322,9 @@ namespace CopperMod.Amiga
                 hash = (hash * 397) ^ _liveNextFetchRow;
                 hash = (hash * 397) ^ _liveNextFetchWord;
                 hash = (hash * 397) ^ _liveNextFetchSlot;
+                hash = (hash * 397) ^ _livePreparedFetchRow;
+                hash = (hash * 397) ^ _livePreparedFetchWord;
+                hash = (hash * 397) ^ _livePreparedFetchSlot;
                 hash = (hash * 397) ^ _liveNextSpriteRow;
                 hash = (hash * 397) ^ _liveNextSpriteIndex;
                 hash = (hash * 397) ^ _liveNextSpriteWord;

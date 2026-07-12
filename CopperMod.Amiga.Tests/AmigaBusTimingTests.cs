@@ -1503,6 +1503,193 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void DeferredCpuBatchExitUsesFixedSlotImageAcrossLiveBitplaneCollision()
+	{
+		var baseline = new AmigaBus(captureBusAccesses: false, enableLiveAgnusDma: true);
+		var deferred = new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		ConfigureLiveOneBitplaneDma(baseline);
+		ConfigureLiveOneBitplaneDma(deferred);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1357);
+		BigEndian.WriteUInt16(deferred.ChipRam, 0x1000, 0x1357);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var requestCycle = LowResPlane1FetchCycle(row);
+		baseline.AdvanceDmaTo(lineStart);
+		deferred.AdvanceDmaTo(lineStart);
+		deferred.SetCpuWaitSlotContendedCleanThroughForTest(requestCycle - 1);
+		deferred.ArmDeferredCpuBatchExitForTest(requestCycle);
+		var baselineCycle = requestCycle;
+		var deferredCycle = requestCycle;
+
+		var baselineValue = AmigaCpuDataAccess.ReadWord(baseline, 0x00001000, ref baselineCycle);
+		var deferredValue = AmigaCpuDataAccess.ReadWord(deferred, 0x00001000, ref deferredCycle);
+		var scheduler = deferred.CaptureHardwareSchedulerSnapshot();
+		var diagnostic =
+			$"waitfast={scheduler.DeferredCpuWaitWindowFastPathAttempts}/" +
+			$"{scheduler.DeferredCpuWaitWindowFastPathUsed}/" +
+			$"{scheduler.DeferredCpuWaitWindowFastPathRejectedUnsupported}/" +
+			$"{scheduler.DeferredCpuWaitWindowFastPathRejectedDynamicDma}/" +
+			$"{scheduler.DeferredCpuWaitWindowFastPathRejectedUnstable}," +
+			$"fixed={scheduler.DeferredCpuWaitFixedImageAttempts}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageSupported}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageMatches}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageMismatches}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupported},unsup=" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/" +
+			$"{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState}";
+
+		Assert.Equal(baselineValue, deferredValue);
+		Assert.True(baselineCycle == deferredCycle, diagnostic);
+		Assert.Equal(
+			baseline.Display.CaptureSnapshot().LastBitplaneDmaFetches,
+			deferred.Display.CaptureSnapshot().LastBitplaneDmaFetches);
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathUsed > 0, diagnostic);
+		Assert.True(scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches > 0, diagnostic);
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches);
+	}
+
+	[Fact]
+	public void DeferredCpuBatchExitFixedSlotImagePreservesLiveBitplaneFetchBeforeCpuWrite()
+	{
+		var baseline = new AmigaBus(captureBusAccesses: false, enableLiveAgnusDma: true);
+		var deferred = new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		ConfigureLiveOneBitplaneDma(baseline);
+		ConfigureLiveOneBitplaneDma(deferred);
+		BigEndian.WriteUInt16(baseline.ChipRam, 0x1000, 0x1357);
+		BigEndian.WriteUInt16(deferred.ChipRam, 0x1000, 0x1357);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var requestCycle = LowResPlane1FetchCycle(row);
+		baseline.AdvanceDmaTo(lineStart);
+		deferred.AdvanceDmaTo(lineStart);
+		deferred.SetCpuWaitSlotContendedCleanThroughForTest(requestCycle - 1);
+		deferred.ArmDeferredCpuBatchExitForTest(requestCycle);
+		var baselineCycle = requestCycle;
+		var deferredCycle = requestCycle;
+
+		AmigaCpuDataAccess.WriteWord(baseline, 0x00001000, 0xA55A, ref baselineCycle);
+		AmigaCpuDataAccess.WriteWord(deferred, 0x00001000, 0xA55A, ref deferredCycle);
+		var scheduler = deferred.CaptureHardwareSchedulerSnapshot();
+
+		Assert.Equal(baselineCycle, deferredCycle);
+		Assert.Equal(0x1357, ReadLiveBitplaneWord(baseline, row, plane: 0, word: 0));
+		Assert.Equal(0x1357, ReadLiveBitplaneWord(deferred, row, plane: 0, word: 0));
+		Assert.Equal(0xA55A, BigEndian.ReadUInt16(deferred.ChipRam, 0x1000, "deferred CPU write"));
+		Assert.True(scheduler.DeferredCpuWaitWindowFastPathUsed > 0);
+		Assert.True(scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches > 0);
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches);
+	}
+
+	[Fact]
+	public void DeferredCpuFixedSlotImageMismatchDisablesProductionAndFallsBack()
+	{
+		var baseline = new AmigaBus(captureBusAccesses: false, enableLiveAgnusDma: true);
+		var deferred = new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableDeferredCpuBusBatch: true,
+			verifyDeferredCpuBusBatch: true);
+		ConfigureLiveOneBitplaneDma(baseline);
+		ConfigureLiveOneBitplaneDma(deferred);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var requestCycle = LowResPlane1FetchCycle(row);
+		baseline.AdvanceDmaTo(lineStart);
+		deferred.AdvanceDmaTo(lineStart);
+		deferred.VerifyProductionCpuWaitFixedSlotImageForTest(
+			default,
+			new CpuWaitFixedSlotTimelineSignature(
+				1,
+				1,
+				requestCycle,
+				requestCycle,
+				AgnusChipSlotOwner.Cpu,
+				AgnusChipSlotOwner.Cpu));
+		deferred.SetCpuWaitSlotContendedCleanThroughForTest(requestCycle - 1);
+		deferred.ArmDeferredCpuBatchExitForTest(requestCycle);
+		var baselineCycle = requestCycle;
+		var deferredCycle = requestCycle;
+
+		var baselineValue = AmigaCpuDataAccess.ReadWord(baseline, 0x00001000, ref baselineCycle);
+		var deferredValue = AmigaCpuDataAccess.ReadWord(deferred, 0x00001000, ref deferredCycle);
+		var scheduler = deferred.CaptureHardwareSchedulerSnapshot();
+
+		Assert.Equal(baselineValue, deferredValue);
+		Assert.Equal(baselineCycle, deferredCycle);
+		Assert.True(scheduler.DeferredCpuWaitFixedImageProductionDisabled);
+		Assert.Equal(1, scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches);
+		Assert.Equal(1, scheduler.DeferredCpuWaitFixedImageProductionAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionUsed);
+		Assert.Equal(1, scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported);
+	}
+
+	[Fact]
+	public void DeferredCpuFixedSlotImageNonVerifyAccessAllocatesNothing()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableDeferredCpuBusBatch: true);
+		ConfigureLiveOneBitplaneDma(bus);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var firstLineStart = OutputRowStartCycle(row);
+		var firstRequest = LowResPlane1FetchCycle(row);
+		bus.AdvanceDmaTo(firstLineStart);
+		bus.SetCpuWaitSlotContendedCleanThroughForTest(firstRequest - 1);
+		bus.ArmDeferredCpuBatchExitForTest(firstRequest);
+		var warmCycle = firstRequest;
+		_ = AmigaCpuDataAccess.ReadWord(bus, 0x00001000, ref warmCycle);
+		var measuredRow = row + 1;
+		var measuredLineStart = OutputRowStartCycle(measuredRow);
+		var measuredRequest = LowResPlane1FetchCycle(measuredRow);
+		bus.AdvanceDmaTo(measuredLineStart);
+		bus.SetCpuWaitSlotContendedCleanThroughForTest(measuredRequest - 1);
+		bus.ArmDeferredCpuBatchExitForTest(measuredRequest);
+		var measuredCycle = measuredRequest;
+		var before = GC.GetAllocatedBytesForCurrentThread();
+
+		_ = AmigaCpuDataAccess.ReadWord(bus, 0x00001000, ref measuredCycle);
+
+		Assert.Equal(before, GC.GetAllocatedBytesForCurrentThread());
+		Assert.True(bus.CaptureHardwareSchedulerSnapshot().DeferredCpuWaitFixedImageProductionUsed >= 2);
+	}
+
+	[Fact]
+	public void DeferredCpuFixedSlotImageCountsLiveLongAccessFallback()
+	{
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableLiveAgnusDma: true,
+			enableDeferredCpuBusBatch: true);
+		ConfigureLiveOneBitplaneDma(bus);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var requestCycle = LowResPlane1FetchCycle(row);
+		bus.AdvanceDmaTo(lineStart);
+		bus.SetCpuWaitSlotContendedCleanThroughForTest(requestCycle - 1);
+		bus.ArmDeferredCpuBatchExitForTest(requestCycle);
+		var cycle = requestCycle;
+
+		_ = AmigaCpuDataAccess.ReadLong(bus, 0x00001000, ref cycle);
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+
+		Assert.Equal(1, scheduler.DeferredCpuWaitFixedImageProductionAttempts);
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionUsed);
+		Assert.Equal(1, scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported);
+	}
+
+	[Fact]
 	public void DeferredCpuLiveSlotFallbackMatchesReferenceAcrossBitplaneLine()
 	{
 		var baseline = new AmigaBus(enableLiveAgnusDma: true);

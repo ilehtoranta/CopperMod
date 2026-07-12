@@ -21,7 +21,7 @@ namespace CopperMod.Amiga
                 ? backend switch
                 {
                     M68kBackendKind.AccurateM68000 => M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess)),
-                    M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000PureGraphTier(
+                    M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000(
                         amigaBus,
                         (state, instructionFrequency, cpuModel) => CreateJitM68000Fallback(
                             amigaBus,

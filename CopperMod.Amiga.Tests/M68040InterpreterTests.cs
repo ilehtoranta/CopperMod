@@ -205,6 +205,32 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
+	public void M68040JitMaxSpeedProfileUsesFastCiaAPortAWriteAccesses()
+	{
+		const uint RomBase = 0x00F8_0000;
+		var bus = new AmigaBus();
+		bus.MapReadOnlyMemory(
+			RomBase,
+			new byte[]
+			{
+				0x08, 0xF9, // BSET #1,$00BFE001.L
+				0x00, 0x01,
+				0x00, 0xBF,
+				0xE0, 0x01
+			});
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed);
+		cpu.Reset(RomBase, StackBase);
+
+		cpu.ExecuteInstruction();
+
+		Assert.False(bus.AudioFilterEnabled);
+		Assert.Equal(1, cpu.Timing.LastInstructionTiming.Plan.NativeCycles);
+		Assert.Equal(1, cpu.Timing.LastInstructionTiming.ElapsedNativeCycles);
+		Assert.True(cpu.State.Cycles > 0);
+		Assert.Empty(bus.BusAccesses);
+	}
+
+	[Fact]
 	public void UnsupportedM68040InstructionFormDoesNotReportTimingGap()
 	{
 		var bus = new AmigaBus();

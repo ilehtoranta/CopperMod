@@ -11,6 +11,12 @@ namespace CopperMod.Amiga
 {
     internal sealed partial class AmigaBus
     {
+        internal void ArmDeferredCpuBatchExitForTest(long cycle)
+            => _deferredCpuBatchExitChipAccessCycle = Math.Max(0, cycle);
+
+        internal void SetCpuWaitSlotContendedCleanThroughForTest(long cycle)
+            => _hardwareScheduler.SetCpuWaitSlotContendedCleanThroughForTest(cycle);
+
         void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuInstructionTiming(long cycle)
         {
             if (_deferredCpuBusBatchActive)
@@ -780,6 +786,9 @@ namespace CopperMod.Amiga
             var scratchAudit = default(DeferredCpuWaitScratchAudit);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
+            var deferredFixedImageUsed = false;
+            var verifyDeferredFixedImage = false;
+            var deferredFixedImageTimeline = default(CpuWaitFixedSlotTimelineSignature);
             if (!slotContendedClean &&
                 ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle))
             {
@@ -792,11 +801,20 @@ namespace CopperMod.Amiga
                         AmigaBusAccessTarget.RealTimeClock))
                 {
                     _deferredCpuWaitWindowFastPathRejectedUnsupported++;
+                    if (Display.HasLiveDisplayWork())
+                    {
+                        RecordProductionCpuWaitFixedSlotImageAttempt();
+                        RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unsupported);
+                    }
                 }
-                else if (HasNonDisplayDynamicCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles) ||
-                    Display.HasLiveDisplayWork())
+                else if (HasNonDisplayDynamicCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles))
                 {
                     _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
+                    if (Display.HasLiveDisplayWork())
+                    {
+                        RecordProductionCpuWaitFixedSlotImageAttempt();
+                        RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.DynamicDma);
+                    }
                     RecordDeferredCpuWaitDynamicRejectShadow(
                         kind,
                         target,
@@ -804,6 +822,35 @@ namespace CopperMod.Amiga
                         size,
                         isWrite,
                         requestedCycle);
+                }
+                else if (Display.HasLiveDisplayWork())
+                {
+                    var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrantUsingFixedSlotImage(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        grantRequestCycle,
+                        isWrite,
+                        out grantedCycle,
+                        out completedCycle,
+                        out deferredFixedImageTimeline,
+                        out verifyDeferredFixedImage);
+                    if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
+                    {
+                        secondWordCycle = grantedCycle;
+                        cpuGrantCommitted = true;
+                        deferredPreparationUsed = true;
+                        deferredFixedImageUsed = true;
+                    }
+                    else if (advanceResult == CpuWaitGrantAdvanceResult.ReferenceContinuation)
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
+                    }
+                    else
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                    }
                 }
                 else
                 {
@@ -877,22 +924,6 @@ namespace CopperMod.Amiga
                     out completedCycle);
             }
 
-            if (deferredPreparationUsed)
-            {
-                _hardwareScheduler.MarkSlotContendedCleanThroughCpuGrant(grantedCycle);
-                RecordDeferredCpuWaitFastPathUse(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    grantRequestCycle,
-                    isWrite,
-                    grantedCycle,
-                    secondWordCycle,
-                    completedCycle);
-            }
-
             RecordDeferredCpuWaitWindow(
                 kind,
                 target,
@@ -938,7 +969,42 @@ namespace CopperMod.Amiga
 
             if (synchronizeDmaAfterGrant)
             {
+                var fixedImageRequiresPostGrantCatchup = deferredFixedImageUsed &&
+                    !_hardwareScheduler.IsSlotContendedCleanThrough(grantedCycle);
                 AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+                if (fixedImageRequiresPostGrantCatchup && grantedCycle > requestedCycle)
+                {
+                    RecordProductionCpuWaitFixedSlotImagePostGrantCatchup();
+                }
+            }
+
+            if (deferredPreparationUsed)
+            {
+                _hardwareScheduler.MarkSlotContendedCleanThroughCpuGrant(grantedCycle);
+                RecordDeferredCpuWaitFastPathUse(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    grantRequestCycle,
+                    isWrite,
+                    grantedCycle,
+                    secondWordCycle,
+                    completedCycle);
+                if (deferredFixedImageUsed && verifyDeferredFixedImage)
+                {
+                    VerifyProductionCpuWaitFixedSlotImage(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        grantRequestCycle,
+                        isWrite,
+                        grantedCycle,
+                        completedCycle,
+                        deferredFixedImageTimeline);
+                }
             }
 
             return true;
@@ -1101,6 +1167,9 @@ namespace CopperMod.Amiga
                 allowNiceBlitterSteal: true,
                 out completedCycle);
 
+        internal void CaptureCpuWaitFixedImageDisplayDma(long grantCycle)
+            => Display.CaptureLiveDisplayDmaBeforeHrmGrant(grantCycle);
+
         internal bool TryPredictCpuWaitFixedSlotGrant(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -1111,7 +1180,7 @@ namespace CopperMod.Amiga
             out long grantedCycle,
             out long completedCycle,
             out CpuWaitFixedSlotImageUnsupported unsupported)
-            => TryPredictCpuWaitFixedSlotGrant(
+            => TryPredictCpuWaitFixedSlotGrantCore(
                 kind,
                 target,
                 address,
@@ -1121,7 +1190,8 @@ namespace CopperMod.Amiga
                 out grantedCycle,
                 out completedCycle,
                 out unsupported,
-                out _);
+                out _,
+                captureTimeline: false);
 
         internal bool TryPredictCpuWaitFixedSlotGrant(
             AmigaBusAccessKind kind,
@@ -1134,6 +1204,31 @@ namespace CopperMod.Amiga
             out long completedCycle,
             out CpuWaitFixedSlotImageUnsupported unsupported,
             out CpuWaitFixedSlotTimelineSignature timeline)
+            => TryPredictCpuWaitFixedSlotGrantCore(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                out unsupported,
+                out timeline,
+                captureTimeline: true);
+
+        private bool TryPredictCpuWaitFixedSlotGrantCore(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            out CpuWaitFixedSlotImageUnsupported unsupported,
+            out CpuWaitFixedSlotTimelineSignature timeline,
+            bool captureTimeline)
         {
             grantedCycle = 0;
             completedCycle = 0;
@@ -1182,7 +1277,7 @@ namespace CopperMod.Amiga
                 {
                     grantedCycle = candidate;
                     completedCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
-                    return TryCaptureCpuWaitFixedSlotTimeline(
+                    return !captureTimeline || TryCaptureCpuWaitFixedSlotTimeline(
                         requestedCycle,
                         completedCycle,
                         grantedCycle,
@@ -1197,13 +1292,13 @@ namespace CopperMod.Amiga
 
             grantedCycle = lastGrant;
             completedCycle = lastGrant + AgnusChipSlotScheduler.SlotCycles;
-            return lastGrant >= 0 && TryCaptureCpuWaitFixedSlotTimeline(
+            return lastGrant >= 0 && (!captureTimeline || TryCaptureCpuWaitFixedSlotTimeline(
                 requestedCycle,
                 completedCycle,
                 grantedCycle,
                 predicted: true,
                 out timeline,
-                out unsupported);
+                out unsupported));
         }
 
         private bool TryCaptureCpuWaitFixedSlotTimeline(

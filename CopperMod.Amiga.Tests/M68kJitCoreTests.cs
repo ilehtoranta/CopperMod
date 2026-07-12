@@ -15,8 +15,31 @@ public sealed class M68kJitCoreTests
 		var bus = new AmigaBus();
 
 		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
+		var jit = Assert.IsType<M68kJitCore>(cpu);
 
-		Assert.IsType<M68kJitCore>(cpu);
+		Assert.True(GetPrivateBool(jit, "_v2Enabled"));
+		Assert.True(GetPrivateBool(jit, "_v2BusAccessEnabled"));
+		Assert.True(GetPrivateBool(jit, "_v2BusGraphEnabled"));
+	}
+
+	[Fact]
+	public void FactoryM68000JitUsesV2BusGraphForMemoryLoop()
+	{
+		var bus = CreateCodeBus();
+		WriteWords(bus, FastCodeBase, 0x2010, 0x60FC); // MOVE.L (A0),D0; BRA.S MOVE
+		bus.WriteLong(0x2000, 0x1234_5678);
+		var jit = Assert.IsType<M68kJitCore>(
+			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus));
+		jit.Reset(FastCodeBase, 0x4000);
+		jit.State.A[0] = 0x2000;
+
+		var executed = jit.ExecuteInstructions(220, jit.State.Cycles + 100_000, new PureBatchBoundary());
+
+		Assert.Equal(220, executed);
+		Assert.Equal(0x1234_5678u, jit.State.D[0]);
+		Assert.True(jit.Counters.V2TraceHits > 0);
+		Assert.True(jit.Counters.V2BusAccessBatchExecutions > 0);
+		Assert.True(jit.Counters.V2BusAccessBatchInstructions > 0);
 	}
 
 	[Fact]
@@ -234,6 +257,152 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void M68040JitDisabledMmuMemoryLoopUsesAllocationFreeZeroWaitAccesses()
+	{
+		const uint data = RealFastCodeBase + 0x1000;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(
+			bus,
+			RealFastCodeBase,
+			0x41F9, unchecked((ushort)(data >> 16)), unchecked((ushort)data), // LEA data,A0
+			0x2010, // MOVE.L (A0),D0
+			0x5280, // ADDQ.L #1,D0
+			0x2080, // MOVE.L D0,(A0)
+			0x60F8); // BRA.S MOVE.L
+		bus.WriteLong(data, 1);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(RealFastCodeBase, 0x4000);
+		EnableM68040InstructionCache(cpu);
+		var boundary = new PureBatchBoundary();
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		for (var i = 0; i < 6_000; i++)
+		{
+			cpu.ExecuteInstructions(64, cpu.State.Cycles + 1_000_000, boundary);
+		}
+		Thread.Sleep(20);
+		cpu.ExecuteInstructions(20_000, cpu.State.Cycles + 1_000_000, boundary);
+
+		GC.Collect();
+		GC.WaitForPendingFinalizers();
+		GC.Collect();
+		var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+		cpu.ExecuteInstructions(100_000, cpu.State.Cycles + 1_000_000, boundary);
+		var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+		Assert.Equal(0, allocated);
+		Assert.True(cpu.Counters.V2ZeroWaitReadRealFast > 0);
+		Assert.True(cpu.Counters.V2ZeroWaitWriteRealFast > 0);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitReadSlow);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitWriteSlow);
+	}
+
+	[Fact]
+	public void M68040JitTransparentDataMappingUsesZeroWaitAccesses()
+	{
+		const uint data = RealFastCodeBase + 0x1000;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(
+			bus,
+			RealFastCodeBase,
+			0x41F9, unchecked((ushort)(data >> 16)), unchecked((ushort)data),
+			0x2010,
+			0x5280,
+			0x2080,
+			0x60F8);
+		bus.WriteLong(data, 1);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(RealFastCodeBase, 0x4000);
+		EnableM68040InstructionCache(cpu);
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
+		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_8000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		var boundary = new PureBatchBoundary();
+
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		cpu.ExecuteInstructions(10_000, cpu.State.Cycles + 1_000_000, boundary);
+
+		Assert.True(cpu.Counters.V2ZeroWaitReadRealFast > 0);
+		Assert.True(cpu.Counters.V2ZeroWaitWriteRealFast > 0);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitReadSlow);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitWriteSlow);
+	}
+
+	[Fact]
+	public void M68040JitWriteProtectedTransparentMappingKeepsWritesOnTranslatedPath()
+	{
+		const uint data = RealFastCodeBase + 0x1000;
+		const uint root = 0x4000;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(
+			bus,
+			RealFastCodeBase,
+			0x41F9, unchecked((ushort)(data >> 16)), unchecked((ushort)data),
+			0x2010,
+			0x5280,
+			0x2080,
+			0x60F8);
+		bus.WriteLong(data, 1);
+		bus.WriteLong(root + (((data >> 12) & 0x000F_FFFFu) * 4u), data | 1u);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(RealFastCodeBase, 0x8000);
+		EnableM68040InstructionCache(cpu);
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
+		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_8004;
+		cpu.State.M68040Mmu.SupervisorRootPointer = root;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		var boundary = new PureBatchBoundary();
+
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		cpu.ExecuteInstructions(10_000, cpu.State.Cycles + 1_000_000, boundary);
+
+		Assert.True(cpu.Counters.V2ZeroWaitReadRealFast > 0);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitWriteRealFast);
+		Assert.True(cpu.Counters.V2ZeroWaitWriteSlow > 0);
+	}
+
+	[Fact]
+	public void M68040JitMmuGenerationChangeInvalidatesDisabledMmuTrace()
+	{
+		const uint logicalData = 0x0000_3000;
+		const uint physicalData = RealFastCodeBase + 0x1000;
+		const uint root = 0x4000;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(
+			bus,
+			RealFastCodeBase,
+			0x2039, 0x0000, 0x3000, // MOVE.L logicalData,D0
+			0x60F8); // BRA.S MOVE.L
+		bus.WriteLong(logicalData, 0x1111_1111);
+		bus.WriteLong(physicalData, 0x2222_2222);
+		bus.WriteLong(root + 12, physicalData | 1u);
+		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		cpu.Reset(RealFastCodeBase, 0x8000);
+		EnableM68040InstructionCache(cpu);
+		var boundary = new PureBatchBoundary();
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		Assert.Equal(0x1111_1111u, cpu.State.D[0]);
+
+		var guardExits = cpu.Counters.M68040MmuGenerationGuardExits;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
+		cpu.State.M68040Mmu.SupervisorRootPointer = root;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.ProgramCounter = RealFastCodeBase;
+		cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
+
+		Assert.Equal(0x2222_2222u, cpu.State.D[0]);
+		Assert.True(cpu.Counters.M68040MmuGenerationGuardExits > guardExits);
+
+		ExecuteUntilTraceHits(cpu, boundary, cpu.Counters.TraceHits + 1);
+		guardExits = cpu.Counters.M68040MmuGenerationGuardExits;
+		cpu.State.M68040Mmu.TranslationControl = 0;
+		cpu.State.ProgramCounter = RealFastCodeBase;
+		cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
+
+		Assert.Equal(0x1111_1111u, cpu.State.D[0]);
+		Assert.True(cpu.Counters.M68040MmuGenerationGuardExits > guardExits);
+	}
+
+	[Fact]
 	public void M68040JitMaxSpeedCiaDelayLoopUsesFastPortAccesses()
 	{
 		const uint romBase = 0x00F8_0000;
@@ -251,14 +420,22 @@ public sealed class M68kJitCoreTests
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(romBase, 0x4000);
+		EnableM68040InstructionCache(cpu);
 		var boundary = new PureBatchBoundary();
 
-		cpu.ExecuteInstructions(10_000, 1_000_000, boundary);
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		var ciaAccessesBeforeMeasurement = bus.BusAccesses.Count(access => access.Request.Target == AmigaBusAccessTarget.Cia);
+		var v2TraceHitsBeforeMeasurement = cpu.Counters.V2TraceHits;
+		var v2BusAccessInstructionsBeforeMeasurement = cpu.Counters.V2BusAccessBatchInstructions;
+		cpu.State.ProgramCounter = romBase + 4;
+		cpu.State.D[1] = 0x03FF;
+		cpu.ExecuteInstructions(2_048, cpu.State.Cycles + 100_000, boundary);
 
 		Assert.Equal(romBase + 0x10, cpu.State.ProgramCounter);
-		Assert.True(cpu.State.Cycles < 20_000, $"Expected max-speed CIA-A delay loop, cycles={cpu.State.Cycles}.");
+		Assert.True(cpu.Counters.V2TraceHits > v2TraceHitsBeforeMeasurement);
+		Assert.True(cpu.Counters.V2BusAccessBatchInstructions > v2BusAccessInstructionsBeforeMeasurement);
 		Assert.False(bus.AudioFilterEnabled);
-		Assert.DoesNotContain(bus.BusAccesses, access => access.Request.Target == AmigaBusAccessTarget.Cia);
+		Assert.Equal(ciaAccessesBeforeMeasurement, bus.BusAccesses.Count(access => access.Request.Target == AmigaBusAccessTarget.Cia));
 	}
 
 	[Fact]
@@ -469,6 +646,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(logicalCode, cpu.State.ProgramCounter);
 		Assert.True(cpu.Counters.CompiledTraces > 0);
 		Assert.True(cpu.Counters.TraceHits > 0);
+		Assert.True(cpu.Counters.V2ZeroWaitReadSlow > 0);
+		Assert.Equal(0, cpu.Counters.V2ZeroWaitReadRealFast);
 	}
 
 	[Fact]
@@ -922,7 +1101,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		var boundary = new CountingBoundary();
 
@@ -1070,7 +1249,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(bus, RealFastCodeBase, 0x81FC, 0x0000, 0x60FA); // DIVS.W #0,D0; BRA.S back to DIVS
 		WriteWords(bus, 0x2000, 0x4E73); // RTE
 		bus.WriteLong(5 * 4, 0x0000_2000);
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		cpu.State.D[0] = 0x1234_5678;
 
@@ -1111,7 +1290,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.ExecuteInstructions(180, null, new CountingBoundary());
 		Assert.True(cpu.Counters.CompiledTraces > 0);
@@ -1129,7 +1308,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.ExecuteInstructions(180, null, new CountingBoundary());
 		Assert.True(cpu.Counters.CompiledTraces > 0);
@@ -1150,7 +1329,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 
 		cpu.ExecuteInstructions(220, null, new CountingBoundary());
@@ -1193,7 +1372,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(interpreterBus, RealFastCodeBase, words);
 		WriteWords(jitBus, RealFastCodeBase, words);
 		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.D[1] = jit.State.D[1] = 1;
@@ -1246,7 +1425,7 @@ public sealed class M68kJitCoreTests
 		};
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -1460,7 +1639,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false, enableV2BusGraph: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 
 		var executed = cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
@@ -1475,11 +1654,11 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitNormalV2CompileKeepsClassicFallbackDelegates()
+	public void JitGraphEnabledPureCpuTraceUsesV2OnlyDelegate()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus, enableV2: true);
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: true, enableV2BusGraph: true);
 		cpu.Reset(FastCodeBase, 0x4000);
 
 		var executed = cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
@@ -1487,8 +1666,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(220, executed);
 		Assert.True(cpu.Counters.CompiledTraces > 0);
 		Assert.True(cpu.Counters.V2TraceMethodsCompiled > 0);
-		Assert.True(cpu.Counters.ClassicTraceMethodsCompiled > 0);
-		Assert.True(cpu.Counters.PureClassicTraceMethodsCompiled > 0);
+		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
+		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
 	}
 
 	[Fact]
@@ -1496,7 +1675,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false, enableV2BusGraph: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
 		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
@@ -1551,7 +1730,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitDoesNotPureBatchBusTouchingTrace()
+	public void JitGraphUsesBusAccessBatchForBusTouchingTrace()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(
@@ -1570,8 +1749,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(800, executed);
 		Assert.True(cpu.Counters.CompiledTraces > 0);
 		Assert.True(cpu.Counters.HelperIlInstructions > 0 || cpu.Counters.DirectMemoryIlInstructions > 0);
-		Assert.Equal(0, cpu.Counters.PureTraceBatchExecutions);
-		Assert.Equal(0, boundary.BatchBeginCount);
+		Assert.True(cpu.Counters.V2BusAccessBatchExecutions > 0);
+		Assert.True(cpu.Counters.V2BusAccessBatchInstructions > 0);
 		Assert.True(boundary.AfterCount > 0);
 	}
 
@@ -1760,7 +1939,7 @@ public sealed class M68kJitCoreTests
 			var bus = CreateCodeBus();
 			WriteWords(bus, rootA, 0x7001, 0x6000, branchAToB); // MOVEQ #1,D0; BRA.W rootB
 			WriteWords(bus, rootB, 0x5280, 0x60FC); // ADDQ.L #1,D0; BRA.S rootB
-			using var cpu = new M68kJitCore(bus, enableV2: true);
+			using var cpu = new M68kJitCore(bus);
 			cpu.Reset(rootA, 0x4000);
 			var boundary = new PureBatchBoundary();
 
@@ -1822,7 +2001,8 @@ public sealed class M68kJitCoreTests
 			}
 
 			Assert.True(cpu.Counters.AsyncCompletedInstalled >= 2);
-			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootA, "Compiled"));
+			Assert.Null(GetInstalledTraceDelegate(cpu, rootA, "Compiled"));
+			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootA, "V2Compiled"));
 			Assert.Null(GetInstalledTraceDelegate(cpu, rootB, "Compiled"));
 			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootB, "V2Compiled"));
 
@@ -2385,7 +2565,7 @@ public sealed class M68kJitCoreTests
 			interpreterBus.WriteWord(data + (uint)(i * 2), (ushort)(0x4000 + i));
 		}
 
-		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: true);
+		var jit = new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: true, enableV2BusGraph: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(FastCodeBase, 0x4000);
 		interpreter.Reset(FastCodeBase, 0x4000);
@@ -3591,7 +3771,7 @@ public sealed class M68kJitCoreTests
 		};
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, words);
-		var jit = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false);
+		var jit = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false, enableV2BusGraph: false);
 		jit.FallbackAttributionEnabled = true;
 		jit.Reset(FastCodeBase, 0x4000);
 		jit.State.D[0] = 0x1234_5678;
@@ -4018,7 +4198,7 @@ public sealed class M68kJitCoreTests
 			jitBus.WriteByte(0x2004, 0, 0);
 			jitBus.WriteLong(0x2008, 0x0000_0010);
 			jitBus.WriteLong(0x200C, 0xFFFF_FFFF);
-			interpreter.State.ProgramCounter = FastCodeBase;
+			interpreter.Reset(FastCodeBase, 0x4000);
 			interpreter.State.D[0] = 0x1234_5678;
 			interpreter.State.A[0] = 0x2000;
 			interpreterBus.WriteByte(0x2004, 0, 0);
@@ -4157,7 +4337,7 @@ public sealed class M68kJitCoreTests
 			jit.State.A[0] = 0x2000;
 			jit.State.A[1] = 0x0000_0020;
 			jitBus.WriteLong(0x2004, 0x0000_0010);
-			interpreter.State.ProgramCounter = FastCodeBase;
+			interpreter.Reset(FastCodeBase, 0x4000);
 			interpreter.State.D[0] = 0x0000_0001;
 			interpreter.State.A[0] = 0x2000;
 			interpreter.State.A[1] = 0x0000_0020;
@@ -4267,7 +4447,7 @@ public sealed class M68kJitCoreTests
 			jitBus.WriteByte(0x2010, 0xF5, 0);
 			jitBus.WriteWord(0x2012, 0x0005);
 			jitBus.WriteLong(0x2014, 0x1234_5600);
-			interpreter.State.ProgramCounter = FastCodeBase;
+			interpreter.Reset(FastCodeBase, 0x4000);
 			interpreter.State.D[0] = 0x0F0F_0F0F;
 			interpreter.State.A[0] = 0x2000;
 			interpreterBus.WriteLong(0x2004, 0xFFFF_0000);
@@ -5004,7 +5184,7 @@ public sealed class M68kJitCoreTests
 			0x0A80, 0x0000, 0x0001, // EORI.L #1,D0
 			0x0C80, 0x0000, 0x0010, // CMPI.L #$10,D0
 			0x60E0);            // BRA.S loop
-		var cpu = new M68kJitCore(bus);
+		var cpu = new M68kJitCore(bus, enableV2: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		var boundary = new CountingBoundary();
 
@@ -5198,7 +5378,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(interpreterBus, RealFastCodeBase, words);
 		WriteWords(jitBus, RealFastCodeBase, words);
 		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.D[1] = jit.State.D[1] = 0x01;
@@ -5568,6 +5748,11 @@ public sealed class M68kJitCoreTests
 	private static AmigaBus CreateCodeBus()
 		=> new AmigaBus(expansionRamSize: FastCodeSize);
 
+	private static bool GetPrivateBool(M68kJitCore cpu, string fieldName)
+		=> (bool)typeof(M68kJitCore).GetField(
+			fieldName,
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cpu)!;
+
 	private static AmigaBus CreateRealFastCodeBus()
 		=> new AmigaBus(realFastRamSize: FastCodeSize);
 
@@ -5737,7 +5922,7 @@ public sealed class M68kJitCoreTests
 		var interpreterBus = CreateRealFastCodeBus();
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);

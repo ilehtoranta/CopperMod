@@ -281,6 +281,7 @@ namespace CopperMod.Amiga
         private long _deferredCpuBusBatchDiskWakePassiveByteReady;
         private long _deferredCpuBusBatchDiskWakeUnknown;
         private long _deferredCpuBatchExitChipAccessCycle = -1;
+        private bool _deferredCpuWaitFixedImageProductionDisabled;
         private long _deferredCpuInternalNoBusWindowAttempts;
         private long _deferredCpuInternalNoBusWindowUsed;
         private long _deferredCpuInternalNoBusWindowTotalCycles;
@@ -1076,6 +1077,19 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CanUseInterpreterFastRead(uint address, int byteCount, M68kBusAccessKind accessKind)
         {
+            // The 68040 JIT max-speed profile explicitly treats CIA-A Port A as a host
+            // device access. Keep this narrow so normal CIA timing remains observable.
+            if (byteCount == 1 && (address & CpuAddressMask) == 0x00BF_E001u)
+            {
+                return true;
+            }
+
+            if (TryGetRealFastRamOffset(address, out var realFastOffset) &&
+                realFastOffset + byteCount <= _realFastRam.Length)
+            {
+                return true;
+            }
+
             var amigaAccessKind = ToAmigaBusAccessKind(accessKind);
             var target = amigaAccessKind == AmigaBusAccessKind.CpuInstructionFetch
                 ? ClassifyInstructionFetchTarget(address)
@@ -1095,6 +1109,17 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CanUseInterpreterFastWrite(uint address, int byteCount)
         {
+            if (byteCount == 1 && (address & CpuAddressMask) == 0x00BF_E001u)
+            {
+                return true;
+            }
+
+            if (TryGetRealFastRamOffset(address, out var realFastOffset) &&
+                realFastOffset + byteCount <= _realFastRam.Length)
+            {
+                return true;
+            }
+
             if (ClassifyTarget(address) != AmigaBusAccessTarget.RealFastRam)
             {
                 return false;

@@ -83,6 +83,22 @@ namespace CopperMod.Amiga
         private long _deferredCpuWaitFixedImageMismatches;
         private long _deferredCpuWaitFixedImageUnsupported;
         private string _deferredCpuWaitFixedImageFirstMismatch = string.Empty;
+        private long _deferredCpuWaitFixedImageProductionAttempts;
+        private long _deferredCpuWaitFixedImageProductionUsed;
+        private long _deferredCpuWaitFixedImageProductionPreGrantDrainsSkipped;
+        private long _deferredCpuWaitFixedImageProductionPostGrantCatchups;
+        private long _deferredCpuWaitFixedImageProductionPredictedWaitCycles;
+        private long _deferredCpuWaitFixedImageProductionFallbackUnsupported;
+        private long _deferredCpuWaitFixedImageProductionFallbackDynamicDma;
+        private long _deferredCpuWaitFixedImageProductionFallbackFrame;
+        private long _deferredCpuWaitFixedImageProductionFallbackCopper;
+        private long _deferredCpuWaitFixedImageProductionFallbackPendingWrite;
+        private long _deferredCpuWaitFixedImageProductionFallbackRasterlinePlan;
+        private long _deferredCpuWaitFixedImageProductionFallbackSpriteState;
+        private long _deferredCpuWaitFixedImageProductionFallbackUnstable;
+        private long _deferredCpuWaitFixedImageProductionVerificationMatches;
+        private long _deferredCpuWaitFixedImageProductionVerificationMismatches;
+        private string _deferredCpuWaitFixedImageProductionFirstMismatch = string.Empty;
 
 
 
@@ -249,6 +265,26 @@ namespace CopperMod.Amiga
         internal long DeferredCpuWaitFixedImageMismatches => _deferredCpuWaitFixedImageMismatches;
         internal long DeferredCpuWaitFixedImageUnsupported => _deferredCpuWaitFixedImageUnsupported;
         internal string DeferredCpuWaitFixedImageFirstMismatch => _deferredCpuWaitFixedImageFirstMismatch;
+        internal bool DeferredCpuWaitFixedImageProductionDisabled => _deferredCpuWaitFixedImageProductionDisabled;
+        internal bool ShouldVerifyProductionCpuWaitFixedSlotImage
+            => _deferredCpuBusBatchVerifyEnabled &&
+                !_deferredCpuWaitFixedImageProductionDisabled;
+        internal long DeferredCpuWaitFixedImageProductionAttempts => _deferredCpuWaitFixedImageProductionAttempts;
+        internal long DeferredCpuWaitFixedImageProductionUsed => _deferredCpuWaitFixedImageProductionUsed;
+        internal long DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped => _deferredCpuWaitFixedImageProductionPreGrantDrainsSkipped;
+        internal long DeferredCpuWaitFixedImageProductionPostGrantCatchups => _deferredCpuWaitFixedImageProductionPostGrantCatchups;
+        internal long DeferredCpuWaitFixedImageProductionPredictedWaitCycles => _deferredCpuWaitFixedImageProductionPredictedWaitCycles;
+        internal long DeferredCpuWaitFixedImageProductionFallbackUnsupported => _deferredCpuWaitFixedImageProductionFallbackUnsupported;
+        internal long DeferredCpuWaitFixedImageProductionFallbackDynamicDma => _deferredCpuWaitFixedImageProductionFallbackDynamicDma;
+        internal long DeferredCpuWaitFixedImageProductionFallbackFrame => _deferredCpuWaitFixedImageProductionFallbackFrame;
+        internal long DeferredCpuWaitFixedImageProductionFallbackCopper => _deferredCpuWaitFixedImageProductionFallbackCopper;
+        internal long DeferredCpuWaitFixedImageProductionFallbackPendingWrite => _deferredCpuWaitFixedImageProductionFallbackPendingWrite;
+        internal long DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan => _deferredCpuWaitFixedImageProductionFallbackRasterlinePlan;
+        internal long DeferredCpuWaitFixedImageProductionFallbackSpriteState => _deferredCpuWaitFixedImageProductionFallbackSpriteState;
+        internal long DeferredCpuWaitFixedImageProductionFallbackUnstable => _deferredCpuWaitFixedImageProductionFallbackUnstable;
+        internal long DeferredCpuWaitFixedImageProductionVerificationMatches => _deferredCpuWaitFixedImageProductionVerificationMatches;
+        internal long DeferredCpuWaitFixedImageProductionVerificationMismatches => _deferredCpuWaitFixedImageProductionVerificationMismatches;
+        internal string DeferredCpuWaitFixedImageProductionFirstMismatch => _deferredCpuWaitFixedImageProductionFirstMismatch;
 
 
 
@@ -322,7 +358,107 @@ namespace CopperMod.Amiga
             _deferredCpuWaitFixedImageMismatches = 0;
             _deferredCpuWaitFixedImageUnsupported = 0;
             _deferredCpuWaitFixedImageFirstMismatch = string.Empty;
+            _deferredCpuWaitFixedImageProductionAttempts = 0;
+            _deferredCpuWaitFixedImageProductionUsed = 0;
+            _deferredCpuWaitFixedImageProductionPreGrantDrainsSkipped = 0;
+            _deferredCpuWaitFixedImageProductionPostGrantCatchups = 0;
+            _deferredCpuWaitFixedImageProductionPredictedWaitCycles = 0;
+            _deferredCpuWaitFixedImageProductionFallbackUnsupported = 0;
+            _deferredCpuWaitFixedImageProductionFallbackDynamicDma = 0;
+            _deferredCpuWaitFixedImageProductionFallbackFrame = 0;
+            _deferredCpuWaitFixedImageProductionFallbackCopper = 0;
+            _deferredCpuWaitFixedImageProductionFallbackPendingWrite = 0;
+            _deferredCpuWaitFixedImageProductionFallbackRasterlinePlan = 0;
+            _deferredCpuWaitFixedImageProductionFallbackSpriteState = 0;
+            _deferredCpuWaitFixedImageProductionFallbackUnstable = 0;
+            _deferredCpuWaitFixedImageProductionVerificationMatches = 0;
+            _deferredCpuWaitFixedImageProductionVerificationMismatches = 0;
+            _deferredCpuWaitFixedImageProductionFirstMismatch = string.Empty;
+            _deferredCpuWaitFixedImageProductionDisabled = false;
             Display.ResetCpuWaitFixedSlotImageDiagnostics();
+        }
+
+        internal void RecordProductionCpuWaitFixedSlotImageAttempt()
+        {
+            _deferredCpuWaitFixedImageProductionAttempts++;
+        }
+
+        internal void RecordProductionCpuWaitFixedSlotImageUse(long requestedCycle, long grantedCycle)
+        {
+            _deferredCpuWaitFixedImageProductionUsed++;
+            _deferredCpuWaitFixedImageProductionPreGrantDrainsSkipped++;
+            if (grantedCycle > requestedCycle)
+            {
+                _deferredCpuWaitFixedImageProductionPredictedWaitCycles += grantedCycle - requestedCycle;
+            }
+        }
+
+        internal void RecordProductionCpuWaitFixedSlotImagePostGrantCatchup()
+            => _deferredCpuWaitFixedImageProductionPostGrantCatchups++;
+
+        internal void RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback fallback)
+        {
+            switch (fallback)
+            {
+                case CpuWaitFixedImageProductionFallback.DynamicDma: _deferredCpuWaitFixedImageProductionFallbackDynamicDma++; break;
+                case CpuWaitFixedImageProductionFallback.Frame: _deferredCpuWaitFixedImageProductionFallbackFrame++; break;
+                case CpuWaitFixedImageProductionFallback.Copper: _deferredCpuWaitFixedImageProductionFallbackCopper++; break;
+                case CpuWaitFixedImageProductionFallback.PendingWrite: _deferredCpuWaitFixedImageProductionFallbackPendingWrite++; break;
+                case CpuWaitFixedImageProductionFallback.RasterlinePlan: _deferredCpuWaitFixedImageProductionFallbackRasterlinePlan++; break;
+                case CpuWaitFixedImageProductionFallback.SpriteState: _deferredCpuWaitFixedImageProductionFallbackSpriteState++; break;
+                case CpuWaitFixedImageProductionFallback.Unstable: _deferredCpuWaitFixedImageProductionFallbackUnstable++; break;
+                case CpuWaitFixedImageProductionFallback.Unsupported:
+                default: _deferredCpuWaitFixedImageProductionFallbackUnsupported++; break;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void VerifyProductionCpuWaitFixedSlotImage(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            long grantedCycle,
+            long completedCycle,
+            CpuWaitFixedSlotTimelineSignature predictedTimeline)
+        {
+            _ = TryCaptureCpuWaitFixedSlotTimeline(
+                requestedCycle,
+                completedCycle,
+                grantedCycle,
+                predicted: false,
+                out var committedTimeline,
+                out _);
+            if (predictedTimeline.Equals(committedTimeline))
+            {
+                _deferredCpuWaitFixedImageProductionVerificationMatches++;
+                return;
+            }
+
+            _deferredCpuWaitFixedImageProductionVerificationMismatches++;
+            _deferredCpuWaitFixedImageProductionDisabled = true;
+            if (_deferredCpuWaitFixedImageProductionFirstMismatch.Length == 0)
+            {
+                _deferredCpuWaitFixedImageProductionFirstMismatch =
+                    $"production/{kind}/{target}/{size}/write={isWrite}/addr=0x{address:X6}/req={requestedCycle}/grant={grantedCycle}->{completedCycle}/image={predictedTimeline}/committed={committedTimeline}";
+            }
+        }
+
+        internal void VerifyProductionCpuWaitFixedSlotImageForTest(
+            CpuWaitFixedSlotTimelineSignature predictedTimeline,
+            CpuWaitFixedSlotTimelineSignature committedTimeline)
+        {
+            if (predictedTimeline.Equals(committedTimeline))
+            {
+                _deferredCpuWaitFixedImageProductionVerificationMatches++;
+                return;
+            }
+
+            _deferredCpuWaitFixedImageProductionVerificationMismatches++;
+            _deferredCpuWaitFixedImageProductionDisabled = true;
+            _deferredCpuWaitFixedImageProductionFirstMismatch = "test-injected-fixed-image-mismatch";
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -404,6 +540,7 @@ namespace CopperMod.Amiga
             }
 
             if (_deferredCpuWaitSlotShadowLiveAttempts >= DeferredCpuWaitSlotShadowLiveMaxSamples ||
+                (audit.FixedImageAttempted && audit.FixedImageSupported) ||
                 !LiveAgnusDmaEnabled ||
                 !Display.HasLiveDisplayWork() ||
                 !IsDeferredCpuWaitSlotShadowGrantSupported(target, size, searchHorizon))

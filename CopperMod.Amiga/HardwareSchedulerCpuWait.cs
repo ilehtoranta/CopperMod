@@ -16,8 +16,24 @@ namespace CopperMod.Amiga
         ReferenceContinuation
     }
 
+    internal enum CpuWaitFixedImageProductionFallback : byte
+    {
+        None,
+        Unsupported,
+        DynamicDma,
+        Frame,
+        Copper,
+        PendingWrite,
+        RasterlinePlan,
+        SpriteState,
+        Unstable
+    }
+
     internal sealed partial class AmigaHardwareScheduler
     {
+        internal void SetCpuWaitSlotContendedCleanThroughForTest(long cycle)
+            => _slotContendedCleanThroughCycle = cycle;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrant(
             AmigaBusAccessKind kind,
@@ -99,6 +115,134 @@ namespace CopperMod.Amiga
 
                     candidate += AgnusChipSlotScheduler.SlotCycles;
                 }
+            }
+            finally
+            {
+                _bus.ClearPendingCpuSlotRequest();
+                _draining = false;
+            }
+        }
+
+        internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantUsingFixedSlotImage(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            out CpuWaitFixedSlotTimelineSignature timeline,
+            out bool verifyTimeline)
+        {
+            _bus.RecordProductionCpuWaitFixedSlotImageAttempt();
+            grantedCycle = 0;
+            completedCycle = 0;
+            timeline = default;
+            verifyTimeline = false;
+            if (_draining ||
+                _bus.DeferredCpuWaitFixedImageProductionDisabled ||
+                size == AmigaBusAccessSize.Long ||
+                target is not (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock))
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unsupported);
+                return CpuWaitGrantAdvanceResult.Unsupported;
+            }
+
+            requestedCycle = Math.Max(0, requestedCycle);
+            if (requestedCycle > 0)
+            {
+                DrainSlotContendedAccess(requestedCycle - 1);
+            }
+
+            if (!_bus.Display.HasLiveDisplayWork() ||
+                _bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(requestedCycle + _bus.PalLineCycles))
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.DynamicDma);
+                return CpuWaitGrantAdvanceResult.ReferenceContinuation;
+            }
+
+            verifyTimeline = _bus.ShouldVerifyProductionCpuWaitFixedSlotImage;
+            CpuWaitFixedSlotImageUnsupported unsupported;
+            var supported = verifyTimeline
+                ? _bus.TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle,
+                    out unsupported,
+                    out timeline)
+                : _bus.TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle,
+                    out unsupported);
+            if (!supported)
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(unsupported switch
+                {
+                    CpuWaitFixedSlotImageUnsupported.Frame => CpuWaitFixedImageProductionFallback.Frame,
+                    CpuWaitFixedSlotImageUnsupported.Copper => CpuWaitFixedImageProductionFallback.Copper,
+                    CpuWaitFixedSlotImageUnsupported.PendingWrite => CpuWaitFixedImageProductionFallback.PendingWrite,
+                    CpuWaitFixedSlotImageUnsupported.RasterlinePlan => CpuWaitFixedImageProductionFallback.RasterlinePlan,
+                    CpuWaitFixedSlotImageUnsupported.SpriteState => CpuWaitFixedImageProductionFallback.SpriteState,
+                    _ => CpuWaitFixedImageProductionFallback.Unsupported
+                });
+                return CpuWaitGrantAdvanceResult.ReferenceContinuation;
+            }
+
+            var predictedGrant = grantedCycle;
+            _bus.CaptureCpuWaitFixedImageDisplayDma(predictedGrant);
+            if (!_bus.TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle,
+                    out _) ||
+                grantedCycle != predictedGrant)
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unstable);
+                return CpuWaitGrantAdvanceResult.ReferenceContinuation;
+            }
+
+            _busAccessDrainCount++;
+            _draining = true;
+            _bus.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
+            try
+            {
+                if (!_bus.TryGrantPendingCpuSingleSlot(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        requestedCycle,
+                        grantedCycle,
+                        isWrite,
+                        out var committedCompletion))
+                {
+                    _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unstable);
+                    return CpuWaitGrantAdvanceResult.Unsupported;
+                }
+
+                completedCycle = committedCompletion;
+                MarkClean(grantedCycle, SlotContendedMemoryAccessMask);
+                _bus.RecordProductionCpuWaitFixedSlotImageUse(requestedCycle, grantedCycle);
+                return CpuWaitGrantAdvanceResult.Granted;
             }
             finally
             {
