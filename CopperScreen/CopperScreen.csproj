@@ -26,6 +26,8 @@
     <PackageReference Include="Avalonia" Version="12.0.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
+    <PackageReference Include="CopperPad" Version="2.0.0-preview.1" />
+    <PackageReference Include="CopperPad.HidSharp" Version="2.0.0-preview.1" />
     <PackageReference Include="HotPathGuard.Abstractions" Version="0.1.0" />
     <PackageReference Include="HotPathGuard.Analyzers" Version="0.1.0" PrivateAssets="all" />
     <PackageReference Include="NAudio" Version="2.3.0" />
@@ -35,8 +37,6 @@
     <ProjectReference Include="..\CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
-    <ProjectReference Include="..\CopperPad\src\CopperPad\CopperPad.csproj" />
-    <ProjectReference Include="..\CopperPad\src\CopperPad.HidSharp\CopperPad.HidSharp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

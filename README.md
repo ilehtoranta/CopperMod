@@ -92,12 +92,14 @@ CopperDisk package automation lives under `scripts\nuget`:
 .\scripts\nuget\publish-copperdisk.ps1 -PackagePath .\artifacts\packages\CopperDisk.1.0.0.nupkg -WhatIf
 ```
 
-CopperPad is staged for future NuGet publishing with the same script layout:
+CopperScreen uses the standalone CopperPad preview packages from NuGet.org:
 
 ```powershell
-.\scripts\nuget\pack-copperpad.ps1
-.\scripts\nuget\publish-copperpad.ps1 -PackagePath .\artifacts\packages\CopperPad.1.0.0.nupkg -WhatIf
+dotnet add .\CopperScreen\CopperScreen.csproj package CopperPad --version 2.0.0-preview.1
+dotnet add .\CopperScreen\CopperScreen.csproj package CopperPad.HidSharp --version 2.0.0-preview.1
 ```
+
+CopperPad source, CI, releases, and issue tracking live in the [standalone CopperPad repository](https://github.com/ilehtoranta/CopperPad).
 
 ## Run
 
