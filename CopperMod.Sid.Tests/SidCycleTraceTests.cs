@@ -153,6 +153,52 @@ public sealed class SidCycleTraceTests
 	}
 
 	[Fact]
+	public void TracePreservesFreeRunningRateCounterAcrossGateForAdsrDelay()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		var trace = new SidCycleTrace();
+		chip.Trace = trace;
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0xF0);
+		chip.Render(5);
+		Assert.Equal(5, chip.DebugState.Voices[0].RateCounter);
+
+		chip.Write(0x04, 0x11);
+		chip.Render(4);
+
+		var gate = Frame(trace, cycle: 6, voice: 0);
+		var step = Frame(trace, cycle: 9, voice: 0);
+		Assert.True(gate.Events.HasFlag(SidCycleTraceEvents.GateRising));
+		Assert.Equal(6, gate.RateCounter);
+		Assert.DoesNotContain(
+			trace.Frames,
+			frame => frame.VoiceIndex == 0 && frame.Cycle is >= 6 and < 9 && frame.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
+		Assert.True(step.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
+		Assert.Equal(1, step.EnvelopeCounter);
+	}
+
+	[Fact]
+	public void TraceCapturesRapidGateAttackReleaseEnvelopeWrap()
+	{
+		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
+		var trace = new SidCycleTrace();
+		chip.Trace = trace;
+		chip.Write(0x05, 0x00);
+		chip.Write(0x06, 0x00);
+		chip.Write(0x04, 0x11);
+		chip.Render(1);
+		chip.Write(0x04, 0x10);
+		chip.Render(269);
+
+		var release = Frame(trace, cycle: 2, voice: 0);
+		var wrap = Frame(trace, cycle: 270, voice: 0);
+		Assert.True(release.Events.HasFlag(SidCycleTraceEvents.GateFalling));
+		Assert.True(wrap.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
+		Assert.Equal(0, wrap.EnvelopeCounterBefore);
+		Assert.Equal(0xFF, wrap.EnvelopeCounter);
+	}
+
+	[Fact]
 	public void SidSystemTraceUsesAbsoluteCycleForForwardedVoiceWrites()
 	{
 		var sid = new SidSystem(new[] { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) }, SidChipModel.Mos6581);

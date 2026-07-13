@@ -77,6 +77,30 @@ public sealed class SidConformanceTests
 	}
 
 	[Fact]
+	public void SidConformanceAccuracyEvidenceIsVersionedAndComplete()
+	{
+		var suite = SidConformance.LoadSuite(FixtureRoot());
+		Assert.True(suite.Manifest.Schema >= 2);
+		var evidence = Assert.IsType<SidConformanceEvidence>(suite.Manifest.Evidence);
+		Assert.Equal("sidplayfp", evidence.Authority);
+		Assert.Equal("reference", evidence.Profile);
+		Assert.Equal(48000, evidence.SampleRate);
+		Assert.False(string.IsNullOrWhiteSpace(evidence.ReferenceVersion));
+		Assert.Matches("^[0-9a-f]{64}$", evidence.ReferenceSha256);
+		Assert.Contains("segmentMetrics", evidence.Metrics);
+
+		foreach (var fixture in suite.Fixtures)
+		{
+			Assert.Equal(fixture.Spec.ChipModel, fixture.Manifest.ChipModel, ignoreCase: true);
+			Assert.Equal(fixture.Spec.Clock, fixture.Manifest.Clock, ignoreCase: true);
+			var accuracy = Assert.IsType<SidConformanceAccuracyThreshold>(fixture.Manifest.Accuracy);
+			Assert.True(accuracy.MinimumAcRatio > 0.0, fixture.Id + " minimum AC ratio must be positive.");
+			Assert.True(accuracy.MaximumAcRatio >= accuracy.MinimumAcRatio, fixture.Id + " AC ratio range is invalid.");
+			Assert.False(string.IsNullOrWhiteSpace(accuracy.Authority));
+		}
+	}
+
+	[Fact]
 	public void OptionalSidConformanceFixturesCompareAgainstSidPlayFp()
 	{
 		if (Environment.GetEnvironmentVariable(OracleEnvironmentVariable) != "1" &&
@@ -92,6 +116,9 @@ public sealed class SidConformanceTests
 		}
 
 		Assert.True(File.Exists(sidPlayFp), "SidPlayFP executable was not found: " + sidPlayFp);
+		var suite = SidConformance.LoadSuite(FixtureRoot());
+		var evidence = Assert.IsType<SidConformanceEvidence>(suite.Manifest.Evidence);
+		Assert.Equal(evidence.ReferenceSha256, SidConformance.Sha256Hex(File.ReadAllBytes(sidPlayFp)));
 		var reportRoot = Environment.GetEnvironmentVariable("SID_CONFORMANCE_REPORT_DIR");
 		if (string.IsNullOrWhiteSpace(reportRoot))
 		{
@@ -109,6 +136,8 @@ public sealed class SidConformanceTests
 				reportRoot,
 				"--sidplayfp",
 				sidPlayFp,
+				"--sid-profile",
+				"reference",
 				"--overwrite"
 			},
 			stdout,
@@ -119,6 +148,10 @@ public sealed class SidConformanceTests
 		Assert.True(File.Exists(Path.Combine(reportRoot, "conformance-comparison.csv")));
 		Assert.True(File.Exists(Path.Combine(reportRoot, "conformance-segments.csv")));
 		Assert.True(File.Exists(Path.Combine(reportRoot, "index.html")));
+		var accuracyErrors = SidConformance.ValidateAccuracyReport(
+			suite,
+			Path.Combine(reportRoot, "conformance-comparison.csv"));
+		Assert.True(accuracyErrors.Count == 0, string.Join(Environment.NewLine, accuracyErrors));
 	}
 
 	private static void EnsureGeneratedBinaries(SidConformanceSuite suite)

@@ -83,7 +83,15 @@ internal static partial class SidConformance
 			var referencePath = Path.Combine(referenceDirectory, fixture.Id + "-ref.wav");
 			if ((!File.Exists(referencePath) || options.OverwriteReference) && !string.IsNullOrWhiteSpace(options.SidPlayFpPath))
 			{
-				RunSidPlayFp(options.SidPlayFpPath!, fixture.BinaryPath, referenceDirectory, fixture.Id + "-ref", Math.Ceiling(seconds), sampleRate);
+				RunSidPlayFp(
+					options.SidPlayFpPath!,
+					fixture.BinaryPath,
+					referenceDirectory,
+					fixture.Id + "-ref",
+					Math.Ceiling(seconds),
+					sampleRate,
+					fixture.Spec.Clock,
+					fixture.Spec.ChipModel);
 			}
 
 			if (!File.Exists(referencePath))
@@ -165,6 +173,272 @@ internal static partial class SidConformance
 		}
 
 		return new SidConformanceSuite(root, manifest, fixtures);
+	}
+
+	public static IReadOnlyList<string> ValidateAccuracyReport(
+		SidConformanceSuite suite,
+		string comparisonCsvPath)
+	{
+		ArgumentNullException.ThrowIfNull(suite);
+		var errors = new List<string>();
+		if (suite.Manifest.Schema < 2)
+		{
+			errors.Add("Conformance manifest schema must be at least 2 for external accuracy evidence.");
+			return errors;
+		}
+
+		if (suite.Manifest.Evidence == null)
+		{
+			errors.Add("Conformance manifest is missing external evidence metadata.");
+			return errors;
+		}
+
+		if (!File.Exists(comparisonCsvPath))
+		{
+			errors.Add("Conformance comparison CSV does not exist: " + comparisonCsvPath);
+			return errors;
+		}
+
+		var lines = File.ReadAllLines(comparisonCsvPath);
+		if (lines.Length < 2)
+		{
+			errors.Add("Conformance comparison CSV is empty: " + comparisonCsvPath);
+			return errors;
+		}
+
+		var header = ParseCsvLine(lines[0]);
+		var idIndex = Array.IndexOf(header, "id");
+		var ratioIndex = Array.IndexOf(header, "ac_ratio");
+		if (idIndex < 0 || ratioIndex < 0)
+		{
+			errors.Add("Conformance comparison CSV is missing id or ac_ratio columns.");
+			return errors;
+		}
+
+		var ratios = new Dictionary<string, double>(StringComparer.Ordinal);
+		for (var i = 1; i < lines.Length; i++)
+		{
+			var fields = ParseCsvLine(lines[i]);
+			if (fields.Length <= Math.Max(idIndex, ratioIndex) ||
+				!double.TryParse(fields[ratioIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out var ratio))
+			{
+				continue;
+			}
+
+			ratios[fields[idIndex]] = ratio;
+		}
+
+		foreach (var fixture in suite.Fixtures)
+		{
+			var accuracy = fixture.Manifest.Accuracy;
+			if (accuracy == null)
+			{
+				errors.Add(fixture.Id + " is missing accuracy thresholds.");
+				continue;
+			}
+
+			if (!string.Equals(fixture.Manifest.ChipModel, fixture.Spec.ChipModel, StringComparison.OrdinalIgnoreCase) ||
+				!string.Equals(fixture.Manifest.Clock, fixture.Spec.Clock, StringComparison.OrdinalIgnoreCase))
+			{
+				errors.Add(fixture.Id + " manifest chip/clock does not match its fixture spec.");
+			}
+
+			if (!ratios.TryGetValue(fixture.Id, out var ratio))
+			{
+				errors.Add(fixture.Id + " is missing from the conformance comparison report.");
+				continue;
+			}
+
+			if (ratio < accuracy.MinimumAcRatio || ratio > accuracy.MaximumAcRatio)
+			{
+				errors.Add(
+					$"{fixture.Id} AC ratio {ratio:0.000000} is outside " +
+					$"{accuracy.MinimumAcRatio:0.000000}..{accuracy.MaximumAcRatio:0.000000}.");
+			}
+		}
+
+		ValidateSegmentAccuracyReport(
+			suite,
+			Path.Combine(Path.GetDirectoryName(comparisonCsvPath) ?? ".", "conformance-segments.csv"),
+			errors);
+
+		return errors;
+	}
+
+	private static void ValidateSegmentAccuracyReport(
+		SidConformanceSuite suite,
+		string segmentCsvPath,
+		List<string> errors)
+	{
+		var measuredFixtures = suite.Fixtures
+			.Where(fixture => fixture.Manifest.Accuracy is
+				{
+					MaximumSegmentRmsErrorDb: > 0.0
+				} || fixture.Manifest.Accuracy is
+				{
+					MaximumCutoffLocationErrorFraction: > 0.0
+				})
+			.ToDictionary(fixture => fixture.Id, StringComparer.Ordinal);
+		if (measuredFixtures.Count == 0)
+		{
+			return;
+		}
+
+		if (!File.Exists(segmentCsvPath))
+		{
+			errors.Add("Conformance segment CSV does not exist: " + segmentCsvPath);
+			return;
+		}
+
+		var lines = File.ReadAllLines(segmentCsvPath);
+		if (lines.Length < 2)
+		{
+			errors.Add("Conformance segment CSV is empty: " + segmentCsvPath);
+			return;
+		}
+
+		var header = ParseCsvLine(lines[0]);
+		var idIndex = Array.IndexOf(header, "id");
+		var segmentIndex = Array.IndexOf(header, "segment");
+		var referenceAcIndex = Array.IndexOf(header, "ref_ac");
+		var candidateAcIndex = Array.IndexOf(header, "cand_player_ac");
+		if (idIndex < 0 || segmentIndex < 0 || referenceAcIndex < 0 || candidateAcIndex < 0)
+		{
+			errors.Add("Conformance segment CSV is missing required accuracy columns.");
+			return;
+		}
+
+		var rowsByFixture = new Dictionary<string, List<SidSegmentAccuracyRow>>(StringComparer.Ordinal);
+		for (var lineIndex = 1; lineIndex < lines.Length; lineIndex++)
+		{
+			var fields = ParseCsvLine(lines[lineIndex]);
+			var requiredIndex = Math.Max(Math.Max(idIndex, segmentIndex), Math.Max(referenceAcIndex, candidateAcIndex));
+			if (fields.Length <= requiredIndex || !measuredFixtures.ContainsKey(fields[idIndex]) ||
+				!double.TryParse(fields[referenceAcIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out var referenceAc) ||
+				!double.TryParse(fields[candidateAcIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out var candidateAc))
+			{
+				continue;
+			}
+
+			if (!rowsByFixture.TryGetValue(fields[idIndex], out var rows))
+			{
+				rows = new List<SidSegmentAccuracyRow>();
+				rowsByFixture.Add(fields[idIndex], rows);
+			}
+
+			rows.Add(new SidSegmentAccuracyRow(fields[segmentIndex], referenceAc, candidateAc));
+		}
+
+		foreach (var (fixtureId, fixture) in measuredFixtures)
+		{
+			if (!rowsByFixture.TryGetValue(fixtureId, out var rows) || rows.Count == 0)
+			{
+				errors.Add(fixtureId + " is missing from the conformance segment report.");
+				continue;
+			}
+
+			var accuracy = fixture.Manifest.Accuracy!;
+			if (accuracy.MaximumSegmentRmsErrorDb > 0.0)
+			{
+				var squaredErrors = rows
+					.Where(row => row.ReferenceAc >= accuracy.MinimumSegmentReferenceAc && row.CandidateAc > 0.0)
+					.Select(row => Math.Pow(20.0 * Math.Log10(row.CandidateAc / row.ReferenceAc), 2.0))
+					.ToArray();
+				if (squaredErrors.Length == 0)
+				{
+					errors.Add(fixtureId + " has no segments above its reference AC evidence floor.");
+				}
+				else
+				{
+					var rmsErrorDb = Math.Sqrt(squaredErrors.Average());
+					if (rmsErrorDb > accuracy.MaximumSegmentRmsErrorDb)
+					{
+						errors.Add(
+							$"{fixtureId} segment RMS response error {rmsErrorDb:0.000000} dB exceeds " +
+							$"{accuracy.MaximumSegmentRmsErrorDb:0.000000} dB.");
+					}
+				}
+			}
+
+			if (accuracy.MaximumCutoffLocationErrorFraction > 0.0)
+			{
+				var cutoffGroups = new Dictionary<string, List<SidCutoffAccuracyPoint>>(StringComparer.Ordinal);
+				foreach (var row in rows)
+				{
+					if (!TryParseCutoffPoint(row, out var group, out var point))
+					{
+						continue;
+					}
+
+					if (!cutoffGroups.TryGetValue(group, out var points))
+					{
+						points = new List<SidCutoffAccuracyPoint>();
+						cutoffGroups.Add(group, points);
+					}
+
+					points.Add(point);
+				}
+
+				foreach (var (group, points) in cutoffGroups)
+				{
+					if (points.Count < 2)
+					{
+						continue;
+					}
+
+					var referenceWeight = points.Sum(point => point.ReferenceAc * point.ReferenceAc);
+					var candidateWeight = points.Sum(point => point.CandidateAc * point.CandidateAc);
+					if (referenceWeight <= 0.0 || candidateWeight <= 0.0)
+					{
+						continue;
+					}
+
+					var referenceLocation = points.Sum(point => point.Index * point.ReferenceAc * point.ReferenceAc) / referenceWeight;
+					var candidateLocation = points.Sum(point => point.Index * point.CandidateAc * point.CandidateAc) / candidateWeight;
+					var locationError = Math.Abs(referenceLocation - candidateLocation) / 4.0;
+					if (locationError > accuracy.MaximumCutoffLocationErrorFraction)
+					{
+						errors.Add(
+							$"{fixtureId} {group} cutoff-location error {locationError:0.000000} exceeds " +
+							$"{accuracy.MaximumCutoffLocationErrorFraction:0.000000}.");
+					}
+				}
+			}
+		}
+	}
+
+	private static bool TryParseCutoffPoint(
+		SidSegmentAccuracyRow row,
+		out string group,
+		out SidCutoffAccuracyPoint point)
+	{
+		var parts = row.Name.Split('-');
+		if (parts.Length != 3 || parts[0] is not ("lp" or "bp" or "hp") || !parts[1].StartsWith("res", StringComparison.Ordinal))
+		{
+			group = "";
+			point = default;
+			return false;
+		}
+
+		var index = parts[2] switch
+		{
+			"closed" => 0,
+			"low" => 1,
+			"mid" => 2,
+			"high" => 3,
+			"open" => 4,
+			_ => -1
+		};
+		if (index < 0)
+		{
+			group = "";
+			point = default;
+			return false;
+		}
+
+		group = parts[0] + "-" + parts[1];
+		point = new SidCutoffAccuracyPoint(index, row.ReferenceAc, row.CandidateAc);
+		return true;
 	}
 
 	public static SidConformanceBaseline LoadBaseline(string path)
@@ -519,7 +793,9 @@ internal static partial class SidConformance
 		string outputDirectory,
 		string outputBaseName,
 		double seconds,
-		int sampleRate)
+		int sampleRate,
+		string clock,
+		string chipModel)
 	{
 		var sidPlayFp = Path.GetFullPath(sidPlayFpPath);
 		if (!File.Exists(sidPlayFp))
@@ -536,9 +812,10 @@ internal static partial class SidConformance
 			RedirectStandardOutput = true
 		};
 		startInfo.ArgumentList.Add("--residfp");
+		startInfo.ArgumentList.Add("--delay=0");
 		startInfo.ArgumentList.Add("-cwa");
-		startInfo.ArgumentList.Add("-vpf");
-		startInfo.ArgumentList.Add("-mof");
+		startInfo.ArgumentList.Add(string.Equals(clock, "ntsc", StringComparison.OrdinalIgnoreCase) ? "-vnf" : "-vpf");
+		startInfo.ArgumentList.Add(string.Equals(chipModel, "mos8580", StringComparison.OrdinalIgnoreCase) ? "-mnf" : "-mof");
 		startInfo.ArgumentList.Add("-q");
 		startInfo.ArgumentList.Add("-f" + sampleRate.ToString(CultureInfo.InvariantCulture));
 		startInfo.ArgumentList.Add("-p32");
@@ -853,6 +1130,41 @@ internal static partial class SidConformance
 		return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 	}
 
+	private static string[] ParseCsvLine(string line)
+	{
+		var fields = new List<string>();
+		var value = new StringBuilder();
+		var quoted = false;
+		for (var i = 0; i < line.Length; i++)
+		{
+			var character = line[i];
+			if (character == '"')
+			{
+				if (quoted && i + 1 < line.Length && line[i + 1] == '"')
+				{
+					value.Append('"');
+					i++;
+				}
+				else
+				{
+					quoted = !quoted;
+				}
+			}
+			else if (character == ',' && !quoted)
+			{
+				fields.Add(value.ToString());
+				value.Clear();
+			}
+			else
+			{
+				value.Append(character);
+			}
+		}
+
+		fields.Add(value.ToString());
+		return fields.ToArray();
+	}
+
 	private static string FormatInvariant(double value)
 	{
 		return value.ToString("0.######", CultureInfo.InvariantCulture);
@@ -987,6 +1299,10 @@ internal static partial class SidConformance
 	private sealed record FloatWav(int SampleRate, float[] Samples);
 
 	private readonly record struct SampleStats(double Mean, double AcRms, double Peak);
+
+	private readonly record struct SidSegmentAccuracyRow(string Name, double ReferenceAc, double CandidateAc);
+
+	private readonly record struct SidCutoffAccuracyPoint(int Index, double ReferenceAc, double CandidateAc);
 
 	private sealed record SidConformanceComparisonResult(
 		string Id,
@@ -1260,6 +1576,8 @@ internal sealed class SidConformanceManifest
 
 	public int? SampleRate { get; set; }
 
+	public SidConformanceEvidence? Evidence { get; set; }
+
 	public List<SidConformanceManifestFixture> Fixtures { get; set; } = new();
 }
 
@@ -1276,6 +1594,42 @@ internal sealed class SidConformanceManifestFixture
 	public string Binary { get; set; } = "";
 
 	public string Sha256 { get; set; } = "";
+
+	public string ChipModel { get; set; } = "";
+
+	public string Clock { get; set; } = "";
+
+	public SidConformanceAccuracyThreshold? Accuracy { get; set; }
+}
+
+internal sealed class SidConformanceEvidence
+{
+	public string Authority { get; set; } = "sidplayfp";
+
+	public string ReferenceVersion { get; set; } = "";
+
+	public string ReferenceSha256 { get; set; } = "";
+
+	public string Profile { get; set; } = "reference";
+
+	public int SampleRate { get; set; } = SidConformance.DefaultSampleRate;
+
+	public List<string> Metrics { get; set; } = new();
+}
+
+internal sealed class SidConformanceAccuracyThreshold
+{
+	public double MinimumAcRatio { get; set; }
+
+	public double MaximumAcRatio { get; set; }
+
+	public double MinimumSegmentReferenceAc { get; set; }
+
+	public double MaximumSegmentRmsErrorDb { get; set; }
+
+	public double MaximumCutoffLocationErrorFraction { get; set; }
+
+	public string Authority { get; set; } = "sidplayfp-provisional";
 }
 
 internal sealed class SidConformanceFixtureSpec

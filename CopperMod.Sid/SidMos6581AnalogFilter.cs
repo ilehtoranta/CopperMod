@@ -1083,14 +1083,6 @@ namespace CopperMod.Sid
                 direct += voice3;
             }
 
-            if ((filterMode & 0x70) == 0)
-            {
-                _lastHighDebug = 0.0;
-                _lastBandDebug = 0.0;
-                _lastLowDebug = 0.0;
-                return _model.SignalToOutputNodeVoltage(direct);
-            }
-
             if (routedVoiceCount == 0 && IsAtRest())
             {
                 _lastHighDebug = 0.0;
@@ -1101,7 +1093,9 @@ namespace CopperMod.Sid
 
             filtered *= _model.MapMixerGain(routedVoiceCount);
             var filterOutput = ClockFilter(filtered, filterMode, cutoffRegister, resonanceNibble);
-            var leakage = filtered * _model.Parameters.FilterLeakageGain;
+            var leakage = (filterMode & 0x70) == 0
+                ? 0.0
+                : filtered * _model.Parameters.FilterLeakageGain;
             return _model.SignalToOutputNodeVoltage(direct + leakage + filterOutput);
         }
 

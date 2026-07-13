@@ -10,15 +10,18 @@ public class SidChipRenderBenchmarks
     private const int CyclesPerInvocation = SidConstants.PalCyclesPerFrame;
 
     private SidChip _mos6581 = null!;
+    private SidChip _mos6581Reference = null!;
     private SidChip _mos8580 = null!;
     private long _mos6581Cycle;
+    private long _mos6581ReferenceCycle;
     private long _mos8580Cycle;
 
     [GlobalSetup]
     public void GlobalSetup()
     {
-        _mos6581 = CreateChip(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
-        _mos8580 = CreateChip(SidChipModel.Mos8580, SidFilterProfileId.Mos8580Linear);
+        _mos6581 = CreateChip(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced, SidEmulationProfile.Balanced);
+        _mos6581Reference = CreateChip(SidChipModel.Mos6581, SidFilterProfileId.Auto, SidEmulationProfile.ReferenceMeasured);
+        _mos8580 = CreateChip(SidChipModel.Mos8580, SidFilterProfileId.Mos8580Linear, SidEmulationProfile.Balanced);
     }
 
     [Benchmark(Baseline = true, OperationsPerInvoke = CyclesPerInvocation)]
@@ -33,13 +36,23 @@ public class SidChipRenderBenchmarks
         return RenderFrame(_mos8580, ref _mos8580Cycle);
     }
 
-    private static SidChip CreateChip(SidChipModel model, SidFilterProfileId filterProfile)
+    [Benchmark(OperationsPerInvoke = CyclesPerInvocation)]
+    public double Mos6581ReferenceMeasuredRenderFrame()
+    {
+        return RenderFrame(_mos6581Reference, ref _mos6581ReferenceCycle);
+    }
+
+    private static SidChip CreateChip(
+        SidChipModel model,
+        SidFilterProfileId filterProfile,
+        SidEmulationProfile sidEmulationProfile)
     {
         var chip = new SidChip(
             model,
             SidConstants.DefaultSidBaseAddress,
             SidConstants.PalCpuCyclesPerSecond,
-            filterProfile);
+            filterProfile,
+            sidEmulationProfile);
 
         WriteVoice(chip, registerOffset: 0x00, frequency: 0x1800, pulseWidth: 0x0800, control: 0x21);
         WriteVoice(chip, registerOffset: 0x07, frequency: 0x2435, pulseWidth: 0x0400, control: 0x41);

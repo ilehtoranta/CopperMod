@@ -169,6 +169,47 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void DacCalibrationIsExplicitlyScopedByModelAndProfile()
+	{
+		var balanced6581Wave = SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference6581Wave = SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		var balanced6581Envelope = SidAnalog.ConvertEnvelope(128, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference6581Envelope = SidAnalog.ConvertEnvelope(128, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+
+		Assert.NotEqual(balanced6581Wave, reference6581Wave);
+		Assert.NotEqual(balanced6581Envelope, reference6581Envelope);
+		Assert.Equal(
+			SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos8580, SidEmulationProfile.Balanced),
+			SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured),
+			precision: 12);
+		Assert.Equal(
+			SidAnalog.ConvertEnvelope(128, SidChipModel.Mos8580, SidEmulationProfile.Balanced),
+			SidAnalog.ConvertEnvelope(128, SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured),
+			precision: 12);
+	}
+
+	[Fact]
+	public void ReferenceCombinedWaveformsUsePinnedPerModelCalibration()
+	{
+		Assert.Equal("sidplayfp-emulator-derived", SidReferenceCombinedWaveformData.Authority);
+		Assert.Equal(64, SidReferenceCombinedWaveformData.SourceSha256.Length);
+
+		Assert.True(SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, 0x70, out var mos6581));
+		Assert.Equal(3, mos6581.ActiveWaveforms);
+		Assert.Equal(0.105800, mos6581.Gain, precision: 6);
+		Assert.Equal(0x0F1F, mos6581.RetentionMask);
+
+		Assert.True(SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos8580, 0x70, out var mos8580));
+		Assert.Equal(3, mos8580.ActiveWaveforms);
+		Assert.Equal(0.384400, mos8580.Gain, precision: 6);
+		Assert.Equal(0x0FFF, mos8580.RetentionMask);
+
+		var balanced = SidAnalog.ConvertCombinedWaveformDac12(0x080, 0x70, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
+		var reference = SidAnalog.ConvertCombinedWaveformDac12(0x080, 0x70, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
+		Assert.NotEqual(balanced, reference);
+	}
+
+	[Fact]
 	public void Mos8580WaveformDacIsNearLinear()
 	{
 		var lowerHalf = SidAnalog.ConvertWaveformDac12(0x800, SidChipModel.Mos8580) -

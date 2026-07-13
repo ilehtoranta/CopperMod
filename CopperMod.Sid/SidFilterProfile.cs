@@ -368,9 +368,10 @@ namespace CopperMod.Sid
             resonanceDamping: 1.23,
             minDamping: 0.40,
             maxDamping: 1.95,
-            lowPassGain: 1.49,
-            bandPassGain: 0.70,
-            lowCutoffResonanceBoost: 0.54,
+            lowPassGain: 1.20,
+            bandPassGain: 0.84,
+            highPassGain: 0.45,
+            lowCutoffResonanceBoost: 0.25,
             filterVoiceLeakageGain: 0.027,
             dampingTable: BuildDampingTable(
                 1.84, 1.78, 1.69, 1.59,
@@ -386,7 +387,10 @@ namespace CopperMod.Sid
                 cutoffCircuit: new SidMos6581CutoffCircuit(
                     minimumCutoffHz: 210.0,
                     fullScaleCutoffHz: 11250.0),
-                voiceVoltageRange: 1.50,
+                // Provisional sidplayfp lane calibration. Pex does not measure
+                // oscillator/filter amplitude, so keep this separate from the
+                // hardware-derived D418 tables.
+                voiceVoltageRange: 0.86,
                 voiceDcVoltage: 5.00,
                 filterInputGain: 0.73,
                 filterOutputGain: 0.96,
@@ -400,7 +404,7 @@ namespace CopperMod.Sid
                     mixerDriveTrim: 1.00,
                     summerDriveTrim: 1.00,
                     resonanceFeedbackTrim: 1.01,
-                    resonanceOutputTrim: 1.00,
+                    resonanceOutputTrim: 0.82,
                     outputGainTrim: 1.01),
                 outputCircuit: new SidMos6581OutputCircuit(
                     outputLowPassCutoffHz: 28_000.0)));

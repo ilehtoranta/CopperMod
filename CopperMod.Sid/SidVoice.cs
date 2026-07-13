@@ -20,8 +20,6 @@ namespace CopperMod.Sid
         private const int Mos6581FloatingOutputFadeCycles = 1400;
         private const int Mos8580FloatingOutputTtlCycles = 800000;
         private const int Mos8580FloatingOutputFadeCycles = 50000;
-        private const double Mos6581TrianglePulseContentionScale = 0.66;
-        private const double Mos6581TrianglePulseRingContentionScale = 0.48;
         internal const int NoiseTestAllOnesDelayCycles = 0x4000;
         private static readonly int[] NoiseDacRegisterBits = { 22, 20, 16, 13, 11, 7, 4, 2 };
         private static readonly int[] NoiseDacWaveformBits = { 11, 10, 9, 8, 7, 6, 5, 4 };
@@ -60,6 +58,7 @@ namespace CopperMod.Sid
         private byte _oscillatorReadPipeline;
         private byte _control;
         private SidCycleTraceEvents _cycleEvents;
+        private SidEmulationProfile _sidEmulationProfile = SidEmulationProfile.Balanced;
 
         public ushort Frequency { get; private set; }
 
@@ -72,6 +71,8 @@ namespace CopperMod.Sid
         public byte Control => _control;
 
         public uint Phase => _phase;
+
+        public bool PhaseMsbSet => (_phase & PhaseMsb) != 0;
 
         public uint NoiseShiftRegister => _noise;
 
@@ -88,6 +89,11 @@ namespace CopperMod.Sid
         public bool TestEnabled => (_control & 0x08) != 0;
 
         public SidCycleTraceEvents CycleEvents => _cycleEvents;
+
+        public void ConfigureEmulationProfile(SidEmulationProfile sidEmulationProfile)
+        {
+            _sidEmulationProfile = sidEmulationProfile;
+        }
 
         public void Reset()
         {
@@ -156,6 +162,7 @@ namespace CopperMod.Sid
             _oscillatorReadPipeline = source._oscillatorReadPipeline;
             _control = source._control;
             _cycleEvents = source._cycleEvents;
+            _sidEmulationProfile = source._sidEmulationProfile;
             Frequency = source.Frequency;
             PulseWidth = source.PulseWidth;
             AttackDecay = source.AttackDecay;
@@ -402,28 +409,28 @@ namespace CopperMod.Sid
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform)
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: false, applyNoiseWriteback: true, out _);
-            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model, _sidEmulationProfile);
             waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
-            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model, _sidEmulationProfile);
         }
 
         public double RenderOutput(SidVoice? syncSource, SidChipModel model, out double waveform, out SidWaveformTrace trace)
         {
             waveform = RenderWaveform(syncSource, model, captureTrace: true, applyNoiseWriteback: true, out trace);
-            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model, _sidEmulationProfile);
             waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
-            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model, _sidEmulationProfile);
         }
 
         public double RenderOutputFast(SidVoice? syncSource, SidChipModel model)
         {
             var waveform = RenderWaveformFast(syncSource, model);
-            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model);
+            waveform = SidAnalog.ScaleWaveformOutput(waveform, _control & 0xF0, model, _sidEmulationProfile);
             waveform = SidAnalog.ScalePulseWidthEdgeOutput(waveform, _control & 0xF0, PulseWidth, model);
             waveform = ScaleModulatedTriangleOutput(waveform, model);
-            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model);
+            return waveform * SidAnalog.ConvertEnvelope(_envelopeCounter, model, _sidEmulationProfile);
         }
 
         public byte ReadOscillator(SidVoice? syncSource, SidChipModel model)
@@ -481,7 +488,8 @@ namespace CopperMod.Sid
                 _envelopeCounterEnabled = !_envelopeMaxHold;
                 if (attackFromZeroHold)
                 {
-                    _rateCounter = 0;
+                    // The SID rate counter is free-running. Keeping its phase
+                    // across GATE is what produces the classic ADSR delay bug.
                     _exponentialCounter = 0;
                 }
 
@@ -545,7 +553,9 @@ namespace CopperMod.Sid
                     triangleInverted);
             }
 
-            if (model == SidChipModel.Mos6581 && waveformMask == 0x50)
+            if (model == SidChipModel.Mos6581 &&
+                waveformMask == 0x50 &&
+                _sidEmulationProfile == SidEmulationProfile.Balanced)
             {
                 return SelectMos6581TrianglePulse(
                     triangleDac,
@@ -560,7 +570,9 @@ namespace CopperMod.Sid
             var noiseDac = 0u;
             if (noiseSelected)
             {
-                if (model != SidChipModel.Mos6581 && NoiseCombinedWithOtherWaveforms(waveformMask))
+                if (model != SidChipModel.Mos6581 &&
+                    NoiseCombinedWithOtherWaveforms(waveformMask) &&
+                    _sidEmulationProfile == SidEmulationProfile.Balanced)
                 {
                     _noise = 0;
                 }
@@ -587,12 +599,25 @@ namespace CopperMod.Sid
                 noiseDac,
                 waveformMask,
                 model,
-                out var outputs);
+                out var outputs,
+                _sidEmulationProfile);
             if (model == SidChipModel.Mos6581 &&
                 waveformMask == 0x60 &&
                 (_control & 0x04) != 0)
             {
                 selectorDac = 0;
+            }
+
+            if (_sidEmulationProfile == SidEmulationProfile.ReferenceMeasured &&
+                model == SidChipModel.Mos6581 &&
+                (waveformMask & 0x20) != 0 &&
+                (selectorDac & 0x0800) == 0)
+            {
+                // On a 6581 the shared combined-waveform bus can pull the
+                // accumulator MSB low when saw is selected. This feeds the
+                // digital state back into the next cycle, rather than being
+                // merely an analog output-shaping effect.
+                _phase &= ~PhaseMsb;
             }
 
             ApplyMos6581NoiseCombinedWriteback(model, waveformMask, selectorDac, applyNoiseWriteback);
@@ -609,9 +634,10 @@ namespace CopperMod.Sid
                     noiseUsesPostShiftRegister: false);
             }
 
-            var output = SidAnalog.UsesCombinedWaveformTable(waveformMask, model)
-                ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model)
-                : SidAnalog.ConvertWaveformDac12(selectorDac, model) * SidAnalog.CombinedWaveformScale(outputs, model);
+            var output = SidAnalog.UsesCombinedWaveformTable(waveformMask, model, _sidEmulationProfile)
+                ? SidAnalog.ConvertCombinedWaveformDac12(selectorDac, waveformMask, model, _sidEmulationProfile)
+                : SidAnalog.ConvertWaveformDac12(selectorDac, model, _sidEmulationProfile) *
+                    SidAnalog.CombinedWaveformScale(outputs, model, _sidEmulationProfile);
             LatchFloatingWaveform(selectorDac, output, model);
             return CompleteWaveformSelection(
                 selectorDac,
@@ -633,8 +659,9 @@ namespace CopperMod.Sid
         {
             if (pulseDac == 0)
             {
-                var mutedPulseOutput = (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581) *
-                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581)) + GetMos6581TrianglePulseBias();
+                var mutedPulseOutput = (SidAnalog.ConvertWaveformDac12(0, SidChipModel.Mos6581, _sidEmulationProfile) *
+                    SidAnalog.CombinedWaveformScale(2, SidChipModel.Mos6581, _sidEmulationProfile)) +
+                    GetMos6581TrianglePulseBias();
                 LatchFloatingWaveform(0, mutedPulseOutput, SidChipModel.Mos6581);
                 return CompleteWaveformSelection(
                     0,
@@ -646,7 +673,7 @@ namespace CopperMod.Sid
                     noiseUsesPostShiftRegister: false);
             }
 
-            var output = (SidAnalog.ConvertWaveformDac12(triangleDac, SidChipModel.Mos6581) *
+            var output = (SidAnalog.ConvertWaveformDac12(triangleDac, SidChipModel.Mos6581, _sidEmulationProfile) *
                 GetMos6581TrianglePulseContentionScale()) + GetMos6581TrianglePulseBias();
             LatchFloatingWaveform(triangleDac, output, SidChipModel.Mos6581);
             return CompleteWaveformSelection(
@@ -695,7 +722,7 @@ namespace CopperMod.Sid
                 _floatingWaveformDac &= _floatingWaveformDac >> 1;
                 _floatingWaveformOutput = _floatingWaveformDac == 0
                     ? 0.0
-                    : SidAnalog.ConvertWaveformDac12(_floatingWaveformDac, model);
+                    : SidAnalog.ConvertWaveformDac12(_floatingWaveformDac, model, _sidEmulationProfile);
                 if (_floatingWaveformDac != 0)
                 {
                     _floatingWaveformTtl = FloatingOutputFadeCycles(model);
@@ -749,14 +776,18 @@ namespace CopperMod.Sid
 
         private double GetMos6581TrianglePulseBias()
         {
-            return (_control & 0x01) == 0 ? -0.55 : -1.4;
+            return SidAnalog.TrianglePulseBias(
+                (_control & 0x01) != 0,
+                SidChipModel.Mos6581,
+                _sidEmulationProfile);
         }
 
         private double GetMos6581TrianglePulseContentionScale()
         {
-            return (_control & 0x04) == 0
-                ? Mos6581TrianglePulseContentionScale
-                : Mos6581TrianglePulseRingContentionScale;
+            return SidAnalog.TrianglePulseContentionScale(
+                (_control & 0x04) != 0,
+                SidChipModel.Mos6581,
+                _sidEmulationProfile);
         }
 
         private readonly record struct WaveformSelection(

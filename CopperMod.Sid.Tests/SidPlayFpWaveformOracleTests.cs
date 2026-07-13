@@ -56,14 +56,14 @@ public sealed class SidPlayFpWaveformOracleTests
 
 	private static readonly OracleSegment[] Segments =
 	{
-		new("triangle", OracleSegmentKind.Correlation, 0x1000, 0.95),
-		new("saw", OracleSegmentKind.Correlation, 0x1000, 0.95),
-		new("pulse", OracleSegmentKind.Correlation, 0x1000, 0.95),
+		new("triangle", OracleSegmentKind.Correlation, 0x1000, 0.97),
+		new("saw", OracleSegmentKind.Correlation, 0x1000, 0.97),
+		new("pulse", OracleSegmentKind.Correlation, 0x1000, 0.97),
 		new("noise", OracleSegmentKind.Noise, 0x4000, 0.0),
-		new("sync-fm", OracleSegmentKind.Correlation, 0x1800, 0.85),
-		new("ring", OracleSegmentKind.Correlation, 0x1300, 0.85),
-		new("triangle-saw", OracleSegmentKind.Harmonics, 0x1000, 0.0),
-		new("triangle-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
+		new("sync-fm", OracleSegmentKind.Correlation, 0x1800, 0.90),
+		new("ring", OracleSegmentKind.Correlation, 0x1300, 0.90),
+		new("triangle-saw", OracleSegmentKind.Correlation, 0x1000, 0.80),
+		new("triangle-pulse", OracleSegmentKind.Correlation, 0x1000, 0.80),
 		new("saw-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
 		new("triangle-saw-pulse", OracleSegmentKind.Level, 0x1000, 0.0),
 		new("noise-saw", OracleSegmentKind.NoiseCombined, 0x4000, 0.0),
@@ -121,7 +121,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected oracle WAV: " + wavPath);
 
 			var reference = MeasurementWav.Read(wavPath);
-			var candidateRaw = RenderCopperMod(sidPath, RenderSeconds);
+			var candidateRaw = RenderCopperMod(sidPath, RenderSeconds, SidEmulationProfile.ReferenceMeasured);
 			var candidatePlayer = RenderCopperModPlayer(candidateRaw);
 			Assert.Equal(SampleRate, reference.SampleRate);
 			Assert.True(reference.Samples.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
@@ -135,7 +135,7 @@ public sealed class SidPlayFpWaveformOracleTests
 					Segments[i],
 					i,
 					reference.Samples,
-					CandidateForSegment(Segments[i], candidateRaw, candidatePlayer));
+					Segments[i].Kind == OracleSegmentKind.NoiseCombined ? candidateRaw : candidatePlayer);
 			}
 		}
 		finally
@@ -461,7 +461,10 @@ public sealed class SidPlayFpWaveformOracleTests
 		=> UsesPlayerOutputForSegment(segment.Name) ? player : raw;
 
 	private static bool UsesPlayerOutputForSegment(string segmentName)
-		=> segmentName.StartsWith("pulse-width-", StringComparison.Ordinal);
+		// The external player lane is the fidelity target for audible output. The
+		// noise+saw fixture is intentionally evaluated on the raw SID lane because
+		// its near-null digital signal is dominated by player high-pass transients.
+		=> !segmentName.Equals("noise-saw", StringComparison.Ordinal);
 
 	private static string EscapeCsv(string value)
 		=> value.Contains(',') || value.Contains('"')
@@ -2584,6 +2587,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			RedirectStandardOutput = true
 		};
 		startInfo.ArgumentList.Add("--residfp");
+		startInfo.ArgumentList.Add("--delay=0");
 		startInfo.ArgumentList.Add("-cwa");
 		startInfo.ArgumentList.Add("-vpf");
 		startInfo.ArgumentList.Add("-mof");
@@ -2777,17 +2781,50 @@ public sealed class SidPlayFpWaveformOracleTests
 			candidateFlatness >= minimumFlatness && candidateFlatness <= maximumFlatness,
 			$"{segment.Name} spectral flatness {candidateFlatness:0.0000} was outside {minimumFlatness:0.0000}..{maximumFlatness:0.0000}.");
 
-		ReadOnlySpan<double> bands = stackalloc[] { 1000.0, 2000.0, 4000.0, 8000.0, 12000.0, 16000.0 };
+		var spectrumSimilarity = NormalizedNoiseSpectrumSimilarity(
+			reference,
+			candidate,
+			referenceStart,
+			candidateStart,
+			length);
+		Assert.True(
+			spectrumSimilarity >= 0.90,
+			$"{segment.Name} normalized noise-spectrum similarity {spectrumSimilarity:0.0000} was below 0.9000.");
+	}
+
+	private static double NormalizedNoiseSpectrumSimilarity(
+		float[] reference,
+		float[] candidate,
+		int referenceStart,
+		int candidateStart,
+		int length)
+	{
+		const int bandCount = 8;
+		const int samplesPerBand = 9;
+		const double minimumFrequency = 500.0;
+		const double maximumFrequency = 20000.0;
+		var dot = 0.0;
 		var referenceEnergy = 0.0;
 		var candidateEnergy = 0.0;
-		for (var i = 0; i < bands.Length; i++)
+		for (var band = 0; band < bandCount; band++)
 		{
-			referenceEnergy += HarmonicMagnitude(reference, referenceStart, length, bands[i]);
-			candidateEnergy += HarmonicMagnitude(candidate, candidateStart, length, bands[i]);
+			var frequency = minimumFrequency * Math.Pow(
+				maximumFrequency / minimumFrequency,
+				band / (double)(bandCount - 1));
+			var referenceMagnitude = 0.0;
+			var candidateMagnitude = 0.0;
+			for (var sample = 0; sample < samplesPerBand; sample++)
+			{
+				var spread = Math.Pow(1.12, sample - ((samplesPerBand - 1) * 0.5));
+				referenceMagnitude += HarmonicMagnitude(reference, referenceStart, length, frequency * spread);
+				candidateMagnitude += HarmonicMagnitude(candidate, candidateStart, length, frequency * spread);
+			}
+			dot += referenceMagnitude * candidateMagnitude;
+			referenceEnergy += referenceMagnitude * referenceMagnitude;
+			candidateEnergy += candidateMagnitude * candidateMagnitude;
 		}
 
-		Assert.True(referenceEnergy > 1.0e-7, segment.Name + " SidPlayFP noise band energy was too small.");
-		Assert.True(candidateEnergy > referenceEnergy * 0.35, segment.Name + " CopperMod noise band energy was too small.");
+		return dot / Math.Sqrt(Math.Max(1.0e-24, referenceEnergy * candidateEnergy));
 	}
 
 	private static void AssertNoiseCombinedShape(

@@ -1,6 +1,14 @@
 {
-  "schema": 1,
+  "schema": 2,
   "sampleRate": 48000,
+  "evidence": {
+    "authority": "sidplayfp",
+    "referenceVersion": "3.0.2-ucrt64",
+    "referenceSha256": "a08d4f24a4baab726b49ea41d7e0b33026d856d2fe687879054b653da0506e35",
+    "profile": "reference",
+    "sampleRate": 48000,
+    "metrics": ["acRms", "diffRms", "correlation", "segmentMetrics"]
+  },
   "fixtures": [
     {
       "id": "sidtest5-01-basic-waveforms",
@@ -8,7 +16,9 @@
       "name": "BASIC WAVEFORMS",
       "spec": "specs/sidtest5-01-basic-waveforms.json",
       "binary": "binaries/sidtest5-01-basic-waveforms.sid",
-      "sha256": "ba1a0c178e408437e48ac49def845cdd6dcb9a8136fa20f97a698b30f3100460"
+      "sha256": "ba1a0c178e408437e48ac49def845cdd6dcb9a8136fa20f97a698b30f3100460",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-02-adsr-organ",
@@ -16,7 +26,9 @@
       "name": "ADSR ORGAN",
       "spec": "specs/sidtest5-02-adsr-organ.json",
       "binary": "binaries/sidtest5-02-adsr-organ.sid",
-      "sha256": "bd00c6be002186a6e2e9313131c33fd4ca2338b229dfb474da079c5d0058fea9"
+      "sha256": "bd00c6be002186a6e2e9313131c33fd4ca2338b229dfb474da079c5d0058fea9",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-03-adsr-piano",
@@ -24,7 +36,9 @@
       "name": "ADSR PIANO",
       "spec": "specs/sidtest5-03-adsr-piano.json",
       "binary": "binaries/sidtest5-03-adsr-piano.sid",
-      "sha256": "3048208fa7d7d0972c0a320e75e661e563b56becea80286292a28e3dadbddfaf"
+      "sha256": "3048208fa7d7d0972c0a320e75e661e563b56becea80286292a28e3dadbddfaf",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sid-adsr-gate-trace",
@@ -32,7 +46,9 @@
       "name": "ADSR GATE TRACE",
       "spec": "specs/sid-adsr-gate-trace.json",
       "binary": "binaries/sid-adsr-gate-trace.sid",
-      "sha256": "22ebd49c1db76c3ebc1a683eda71897f3712fa6fa8b12401416d1e080ea23fbc"
+      "sha256": "22ebd49c1db76c3ebc1a683eda71897f3712fa6fa8b12401416d1e080ea23fbc",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-04-ring-modulation",
@@ -40,7 +56,9 @@
       "name": "RING MODULATION",
       "spec": "specs/sidtest5-04-ring-modulation.json",
       "binary": "binaries/sidtest5-04-ring-modulation.sid",
-      "sha256": "4884c7b3b397380631ae5c71d7d723392484ec212e3175bf7c4fff380a37f44e"
+      "sha256": "4884c7b3b397380631ae5c71d7d723392484ec212e3175bf7c4fff380a37f44e",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-05-sync",
@@ -48,7 +66,9 @@
       "name": "SYNC",
       "spec": "specs/sidtest5-05-sync.json",
       "binary": "binaries/sidtest5-05-sync.sid",
-      "sha256": "1707a8f4dd80dc70f8048777777fe1c8e3b40b91280f00f16540ad93d90bcd6f"
+      "sha256": "1707a8f4dd80dc70f8048777777fe1c8e3b40b91280f00f16540ad93d90bcd6f",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-06-low-pass-filter",
@@ -56,7 +76,9 @@
       "name": "LOW-PASS FILTER",
       "spec": "specs/sidtest5-06-low-pass-filter.json",
       "binary": "binaries/sidtest5-06-low-pass-filter.sid",
-      "sha256": "0137ccf8cf00194aa26e71cd2ecb0367aed9d6dc32f20a9526d47096c0d6e00a"
+      "sha256": "0137ccf8cf00194aa26e71cd2ecb0367aed9d6dc32f20a9526d47096c0d6e00a",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-07-high-pass-filter",
@@ -64,7 +86,9 @@
       "name": "HIGH-PASS FILTER",
       "spec": "specs/sidtest5-07-high-pass-filter.json",
       "binary": "binaries/sidtest5-07-high-pass-filter.sid",
-      "sha256": "dc7b63a195b9e96b49f738ab1df506fff9ff78e88c7c3d46578a8275ddd566c3"
+      "sha256": "dc7b63a195b9e96b49f738ab1df506fff9ff78e88c7c3d46578a8275ddd566c3",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-08-band-pass-filter",
@@ -72,7 +96,9 @@
       "name": "BAND-PASS FILTER",
       "spec": "specs/sidtest5-08-band-pass-filter.json",
       "binary": "binaries/sidtest5-08-band-pass-filter.sid",
-      "sha256": "d824999cdc72bca360ad26ebe0f344c1bd6d53d433a1544ba83d5411d561c376"
+      "sha256": "d824999cdc72bca360ad26ebe0f344c1bd6d53d433a1544ba83d5411d561c376",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sid-filter-mode-resonance-sweep",
@@ -80,7 +106,16 @@
       "name": "FILTER MODE RESONANCE SWEEP",
       "spec": "specs/sid-filter-mode-resonance-sweep.json",
       "binary": "binaries/sid-filter-mode-resonance-sweep.sid",
-      "sha256": "765a076a20af09d87271184af31ca762677ed9893da6a258ee34af5998bfb9df"
+      "sha256": "765a076a20af09d87271184af31ca762677ed9893da6a258ee34af5998bfb9df",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": {
+        "minimumAcRatio": 0.80,
+        "maximumAcRatio": 1.50,
+        "minimumSegmentReferenceAc": 0.005,
+        "maximumSegmentRmsErrorDb": 3.0,
+        "maximumCutoffLocationErrorFraction": 0.10,
+        "authority": "sidplayfp-provisional"
+      }
     },
     {
       "id": "sidtest5-09-frequency-modulation",
@@ -88,7 +123,9 @@
       "name": "FREQUENCY MODULATION",
       "spec": "specs/sidtest5-09-frequency-modulation.json",
       "binary": "binaries/sidtest5-09-frequency-modulation.sid",
-      "sha256": "ab490661f0644539ef879820bf534fe3a6c8ec21767ed854709984a92ebd2efb"
+      "sha256": "ab490661f0644539ef879820bf534fe3a6c8ec21767ed854709984a92ebd2efb",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-10-combined-waves",
@@ -96,7 +133,9 @@
       "name": "COMBINED WAVES",
       "spec": "specs/sidtest5-10-combined-waves.json",
       "binary": "binaries/sidtest5-10-combined-waves.sid",
-      "sha256": "b57491668eef1ee680b6dc8bd15e595b5ba305b1e98c611f8d403312ec39f7fc"
+      "sha256": "b57491668eef1ee680b6dc8bd15e595b5ba305b1e98c611f8d403312ec39f7fc",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.67, "maximumAcRatio": 1.50, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-11-pulse-width-sweep",
@@ -104,7 +143,9 @@
       "name": "PULSE WIDTH SWEEP",
       "spec": "specs/sidtest5-11-pulse-width-sweep.json",
       "binary": "binaries/sidtest5-11-pulse-width-sweep.sid",
-      "sha256": "1cb47d257b0a5f1d4df870840e7d62684d6530f362deefd23d10ed568ddf6fd5"
+      "sha256": "1cb47d257b0a5f1d4df870840e7d62684d6530f362deefd23d10ed568ddf6fd5",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sid-pulse-width-edge-cases",
@@ -112,7 +153,9 @@
       "name": "PULSE WIDTH EDGE CASES",
       "spec": "specs/sid-pulse-width-edge-cases.json",
       "binary": "binaries/sid-pulse-width-edge-cases.sid",
-      "sha256": "b3c56d2e8d3e6f66d762659789ef22ef1e285d009e0c1bd7a60c06cfabb2e084"
+      "sha256": "b3c56d2e8d3e6f66d762659789ef22ef1e285d009e0c1bd7a60c06cfabb2e084",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sid-noise-edge-cases",
@@ -120,7 +163,9 @@
       "name": "NOISE EDGE CASES",
       "spec": "specs/sid-noise-edge-cases.json",
       "binary": "binaries/sid-noise-edge-cases.sid",
-      "sha256": "f6ac7d1f64e36050cc8d05b4817791ae85bc0b4c963adbad0d94d021a96da7cf"
+      "sha256": "f6ac7d1f64e36050cc8d05b4817791ae85bc0b4c963adbad0d94d021a96da7cf",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.80, "maximumAcRatio": 1.25, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sid-combined-wave-edge-cases",
@@ -128,7 +173,9 @@
       "name": "COMBINED WAVE EDGE CASES",
       "spec": "specs/sid-combined-wave-edge-cases.json",
       "binary": "binaries/sid-combined-wave-edge-cases.sid",
-      "sha256": "fdcf01dd60d9b1b8bf3ec33282e33393ac685b13b1066420f8802653de6cc4b9"
+      "sha256": "fdcf01dd60d9b1b8bf3ec33282e33393ac685b13b1066420f8802653de6cc4b9",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.67, "maximumAcRatio": 1.50, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-12-master-volume-modulation",
@@ -136,7 +183,9 @@
       "name": "MASTER VOLUME MODULATION",
       "spec": "specs/sidtest5-12-master-volume-modulation.json",
       "binary": "binaries/sidtest5-12-master-volume-modulation.sid",
-      "sha256": "020d574f74758643d91c17389168c6fd95c9f871f829dd77e9b045249fcb8e11"
+      "sha256": "020d574f74758643d91c17389168c6fd95c9f871f829dd77e9b045249fcb8e11",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.50, "maximumAcRatio": 1.50, "authority": "pex-d418-primary" }
     },
     {
       "id": "sidtest5-13-ring-mod-all-combinations",
@@ -144,7 +193,9 @@
       "name": "RING MOD ALL COMBINATIONS",
       "spec": "specs/sidtest5-13-ring-mod-all-combinations.json",
       "binary": "binaries/sidtest5-13-ring-mod-all-combinations.sid",
-      "sha256": "c51b2c6483eb3b51f9d3648e4eadc4007971d26fa6c718d665013da8657338de"
+      "sha256": "c51b2c6483eb3b51f9d3648e4eadc4007971d26fa6c718d665013da8657338de",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.67, "maximumAcRatio": 1.50, "authority": "sidplayfp-provisional" }
     },
     {
       "id": "sidtest5-14-sync-ring-mod",
@@ -152,7 +203,9 @@
       "name": "SYNC \u002B RING MOD",
       "spec": "specs/sidtest5-14-sync-ring-mod.json",
       "binary": "binaries/sidtest5-14-sync-ring-mod.sid",
-      "sha256": "b887a10c9322e7a659ebc6b6e7063a1814257ac20cda1c07eea63a1b0257a2ae"
+      "sha256": "b887a10c9322e7a659ebc6b6e7063a1814257ac20cda1c07eea63a1b0257a2ae",
+      "chipModel": "mos6581", "clock": "pal",
+      "accuracy": { "minimumAcRatio": 0.67, "maximumAcRatio": 1.50, "authority": "sidplayfp-provisional" }
     }
   ]
 }

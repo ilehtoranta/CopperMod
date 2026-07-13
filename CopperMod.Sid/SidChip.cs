@@ -64,12 +64,16 @@ namespace CopperMod.Sid
             Model = model == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
             BaseAddress = baseAddress;
             SidEmulationProfile = sidEmulationProfile;
+            foreach (var voice in _voices)
+            {
+                voice.ConfigureEmulationProfile(sidEmulationProfile);
+            }
             _cpuCyclesPerSecond = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
             _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile, SidEmulationProfile);
             _outputLowPassAlpha = 1.0 - Math.Exp(-2.0 * Math.PI * SidAnalog.OutputLowPassCutoffHz(Model, SidEmulationProfile) / _cpuCyclesPerSecond);
             _filterInputGain = _filterProfile.FilterInputGain;
             _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(0);
-            _voiceMixGain = SidAnalog.VoiceMixGain(Model);
+            _voiceMixGain = SidAnalog.VoiceMixGain(Model, SidEmulationProfile);
             _filterLowPassGain = _filterProfile.LowPassGain;
             _filterBandPassGain = _filterProfile.BandPassGain;
             _filterHighPassGain = _filterProfile.HighPassGain;
@@ -392,21 +396,6 @@ namespace CopperMod.Sid
             var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
             var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
             var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
-            if (chipVoice1.SyncEnabled && voice3MsbRising)
-            {
-                chipVoice1.ResetOscillator();
-            }
-
-            if (chipVoice2.SyncEnabled && voice1MsbRising)
-            {
-                chipVoice2.ResetOscillator();
-            }
-
-            if (chipVoice3.SyncEnabled && voice2MsbRising)
-            {
-                chipVoice3.ResetOscillator();
-            }
-
             chipVoice1.ClockPulse();
             chipVoice2.ClockPulse();
             chipVoice3.ClockPulse();
@@ -421,18 +410,32 @@ namespace CopperMod.Sid
                 voice1 = chipVoice1.RenderOutput(chipVoice3, model, out var waveform1, out var waveformTrace1);
                 voice2 = chipVoice2.RenderOutput(chipVoice1, model, out var waveform2, out var waveformTrace2);
                 voice3 = chipVoice3.RenderOutput(chipVoice2, model, out var waveform3, out var waveformTrace3);
+                var output = Mix(voice1, voice2, voice3);
+                ApplyHardSync(
+                    chipVoice1,
+                    chipVoice2,
+                    chipVoice3,
+                    voice1MsbRising,
+                    voice2MsbRising,
+                    voice3MsbRising);
                 TraceVoice(cycle, 0, before1, waveformTrace1, waveform1, voice1);
                 TraceVoice(cycle, 1, before2, waveformTrace2, waveform2, voice2);
                 TraceVoice(cycle, 2, before3, waveformTrace3, waveform3, voice3);
-            }
-            else
-            {
-                voice1 = chipVoice1.RenderOutputFast(chipVoice3, model);
-                voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
-                voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
+                return output;
             }
 
-            return Mix(voice1, voice2, voice3);
+            voice1 = chipVoice1.RenderOutputFast(chipVoice3, model);
+            voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
+            voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
+            var fastOutput = Mix(voice1, voice2, voice3);
+            ApplyHardSync(
+                chipVoice1,
+                chipVoice2,
+                chipVoice3,
+                voice1MsbRising,
+                voice2MsbRising,
+                voice3MsbRising);
+            return fastOutput;
         }
 
         [HotPath]
@@ -461,21 +464,6 @@ namespace CopperMod.Sid
             var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
             var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
             var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
-            if (chipVoice1.SyncEnabled && voice3MsbRising)
-            {
-                chipVoice1.ResetOscillator();
-            }
-
-            if (chipVoice2.SyncEnabled && voice1MsbRising)
-            {
-                chipVoice2.ResetOscillator();
-            }
-
-            if (chipVoice3.SyncEnabled && voice2MsbRising)
-            {
-                chipVoice3.ResetOscillator();
-            }
-
             chipVoice1.ClockPulse();
             chipVoice2.ClockPulse();
             chipVoice3.ClockPulse();
@@ -488,7 +476,15 @@ namespace CopperMod.Sid
             var voice1 = chipVoice1.RenderOutputFast(chipVoice3, model);
             var voice2 = chipVoice2.RenderOutputFast(chipVoice1, model);
             var voice3 = chipVoice3.RenderOutputFast(chipVoice2, model);
-            return Mix(voice1, voice2, voice3);
+            var output = Mix(voice1, voice2, voice3);
+            ApplyHardSync(
+                chipVoice1,
+                chipVoice2,
+                chipVoice3,
+                voice1MsbRising,
+                voice2MsbRising,
+                voice3MsbRising);
+            return output;
         }
 
         [HotPath]
@@ -517,21 +513,6 @@ namespace CopperMod.Sid
             var voice1MsbRising = SidVoice.MsbRising(previousPhase1, advancedPhase1);
             var voice2MsbRising = SidVoice.MsbRising(previousPhase2, advancedPhase2);
             var voice3MsbRising = SidVoice.MsbRising(previousPhase3, advancedPhase3);
-            if (chipVoice1.SyncEnabled && voice3MsbRising)
-            {
-                chipVoice1.ResetOscillator();
-            }
-
-            if (chipVoice2.SyncEnabled && voice1MsbRising)
-            {
-                chipVoice2.ResetOscillator();
-            }
-
-            if (chipVoice3.SyncEnabled && voice2MsbRising)
-            {
-                chipVoice3.ResetOscillator();
-            }
-
             chipVoice1.ClockPulse();
             chipVoice2.ClockPulse();
             chipVoice3.ClockPulse();
@@ -544,6 +525,53 @@ namespace CopperMod.Sid
             chipVoice1.RefreshRegisterObservableReadback(chipVoice3, model);
             chipVoice2.RefreshRegisterObservableReadback(chipVoice1, model);
             chipVoice3.RefreshRegisterObservableReadback(chipVoice2, model);
+            ApplyHardSync(
+                chipVoice1,
+                chipVoice2,
+                chipVoice3,
+                voice1MsbRising,
+                voice2MsbRising,
+                voice3MsbRising);
+        }
+
+        [HotPath]
+        private static void ApplyHardSync(
+            SidVoice voice1,
+            SidVoice voice2,
+            SidVoice voice3,
+            bool voice1MsbRising,
+            bool voice2MsbRising,
+            bool voice3MsbRising)
+        {
+            // Combined-waveform pulldown can clear a 6581 accumulator MSB and
+            // suppress the sync edge before destinations are evaluated.
+            voice1MsbRising &= voice1.PhaseMsbSet;
+            voice2MsbRising &= voice2.PhaseMsbSet;
+            voice3MsbRising &= voice3.PhaseMsbSet;
+
+            // A source that is itself synchronized on this cycle does not pass
+            // its transient MSB edge on to the next oscillator in the ring.
+            var resetVoice1 = voice1.SyncEnabled && voice3MsbRising &&
+                !(voice3.SyncEnabled && voice2MsbRising);
+            var resetVoice2 = voice2.SyncEnabled && voice1MsbRising &&
+                !(voice1.SyncEnabled && voice3MsbRising);
+            var resetVoice3 = voice3.SyncEnabled && voice2MsbRising &&
+                !(voice2.SyncEnabled && voice1MsbRising);
+
+            if (resetVoice1)
+            {
+                voice1.ResetOscillator();
+            }
+
+            if (resetVoice2)
+            {
+                voice2.ResetOscillator();
+            }
+
+            if (resetVoice3)
+            {
+                voice3.ResetOscillator();
+            }
         }
 
         [HotPath]
@@ -574,7 +602,9 @@ namespace CopperMod.Sid
                     else if (register == 0x17)
                     {
                         var previousRouting = _filterRouting;
-                        _filterRouting = value & 0x07;
+                        // Keep the EXT IN routing bit even though the external source is
+                        // intentionally zero until a public injection path is introduced.
+                        _filterRouting = value & 0x0F;
                         AddRegisterTransient(SidAnalog.FilterRoutingTransient(
                             previousRouting,
                             _filterRouting,
@@ -823,14 +853,6 @@ namespace CopperMod.Sid
         [HotPath]
         private double ApplyFilter(double input)
         {
-            if (_filterMode == 0)
-            {
-                _lastLowPass = 0;
-                _lastBandPass = 0;
-                _lastHighPass = 0;
-                return 0;
-            }
-
             return _filterProfile.UsesNonlinearFilter
                 ? ApplyNonlinearFilter(input)
                 : ApplyLinearFilter(input, _filterG, _filterDamping, _filterDenominator);
@@ -930,18 +952,6 @@ namespace CopperMod.Sid
             _filterCutoffRegister = (_forwardedRegisters[0x16] << 3) | (_forwardedRegisters[0x15] & 0x07);
             _filterResonanceNibble = _forwardedRegisters[0x17] >> 4;
             _filterMode = _forwardedRegisters[0x18] & 0x70;
-            if (_filterMode == 0)
-            {
-                _filterG = 0;
-                _filterDamping = 0;
-                _filterDenominator = 1.0;
-                _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
-                _filterOutputGain = _filterProfile.MapFilterOutputGain(_filterResonanceNibble, _filterCutoffRegister);
-                _filterVoiceLeakageGain = _filterProfile.MapFilterVoiceLeakageGain(_filterCutoffRegister);
-                _filterCoefficientsDirty = false;
-                return;
-            }
-
             _filterCutoffHz = _filterProfile.MapCutoff(_filterCutoffRegister);
             _filterG = Math.Tan(Math.PI * _filterCutoffHz / _cpuCyclesPerSecond);
             _filterDamping = _filterProfile.MapDamping(_filterResonanceNibble, _filterCutoffRegister);

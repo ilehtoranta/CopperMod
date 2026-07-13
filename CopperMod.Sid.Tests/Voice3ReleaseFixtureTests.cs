@@ -60,7 +60,7 @@ public sealed class Voice3ReleaseFixtureTests
 		var afterPlay = machine.Sid.Chips[0].DebugState.Voices[2];
 
 		Assert.Equal(3, afterPlay.EnvelopeState);
-		Assert.InRange(afterPlay.EnvelopeCounter, 0x40, 0x90);
+		Assert.Equal(0, afterPlay.EnvelopeCounter);
 
 		machine.RunCycles(SidConstants.PalCyclesPerFrame * 2);
 

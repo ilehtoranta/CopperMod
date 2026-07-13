@@ -103,7 +103,7 @@ public sealed class SidFilterProfileTests
 	}
 
 	[Fact]
-	public void Measured6581ProfilesKeepLowPassModeGainCalibration()
+	public void Measured6581ProfilesKeepIndependentModeGainCalibration()
 	{
 		var balanced = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581Balanced);
 		var reference = SidFilterProfileDefinition.Resolve(SidChipModel.Mos6581, SidFilterProfileId.Mos6581ReferenceMeasured);
@@ -111,11 +111,11 @@ public sealed class SidFilterProfileTests
 		Assert.True(balanced.UsesAnalog6581Filter);
 		Assert.True(reference.UsesAnalog6581Filter);
 		Assert.InRange(balanced.LowPassGain, 1.48, 1.50);
-		Assert.InRange(reference.LowPassGain, 1.48, 1.50);
+		Assert.Equal(1.20, reference.LowPassGain, precision: 12);
 		Assert.Equal(0.70, balanced.BandPassGain, precision: 12);
-		Assert.Equal(0.70, reference.BandPassGain, precision: 12);
+		Assert.Equal(0.84, reference.BandPassGain, precision: 12);
 		Assert.Equal(1.0, balanced.HighPassGain, precision: 12);
-		Assert.Equal(1.0, reference.HighPassGain, precision: 12);
+		Assert.Equal(0.45, reference.HighPassGain, precision: 12);
 	}
 
 	[Theory]
@@ -483,6 +483,54 @@ public sealed class SidFilterProfileTests
 		Assert.True(routedRange < unroutedRange * 0.25, $"Expected routed/no-mode voice to disappear from audio output, routed {routedRange:0.000}, unrouted {unroutedRange:0.000}.");
 	}
 
+	[Theory]
+	[InlineData(1, 0x10)]
+	[InlineData(1, 0x20)]
+	[InlineData(1, 0x30)]
+	[InlineData(1, 0x40)]
+	[InlineData(1, 0x50)]
+	[InlineData(1, 0x60)]
+	[InlineData(1, 0x70)]
+	[InlineData(2, 0x10)]
+	[InlineData(2, 0x20)]
+	[InlineData(2, 0x30)]
+	[InlineData(2, 0x40)]
+	[InlineData(2, 0x50)]
+	[InlineData(2, 0x60)]
+	[InlineData(2, 0x70)]
+	public void FilterStateAdvancesWhileOutputModesAreDisconnected(int modelValue, int audibleMode)
+	{
+		var model = (SidChipModel)modelValue;
+		var hidden = CreateFilteredPulse(model, SidFilterProfileId.Auto, mode: 0x00, cutoffHigh: 0x88, resonance: 0xA0);
+		var audible = CreateFilteredPulse(model, SidFilterProfileId.Auto, mode: (byte)audibleMode, cutoffHigh: 0x88, resonance: 0xA0);
+
+		CollectSamples(hidden, warmupCycles: 0, measuredCycles: 4096);
+		CollectSamples(audible, warmupCycles: 0, measuredCycles: 4096);
+
+		AssertFilterStateClose(audible.DebugState, hidden.DebugState);
+	}
+
+	[Theory]
+	[InlineData(1)]
+	[InlineData(2)]
+	public void ResidualFilterStateDecaysAcrossRoutingAndModeChanges(int modelValue)
+	{
+		var model = (SidChipModel)modelValue;
+		var hidden = CreateFilteredPulse(model, SidFilterProfileId.Auto, mode: 0x10, cutoffHigh: 0x78, resonance: 0xC0);
+		var audible = CreateFilteredPulse(model, SidFilterProfileId.Auto, mode: 0x10, cutoffHigh: 0x78, resonance: 0xC0);
+		CollectSamples(hidden, warmupCycles: 0, measuredCycles: 4096);
+		CollectSamples(audible, warmupCycles: 0, measuredCycles: 4096);
+
+		hidden.Write(0x17, 0xC0);
+		hidden.Write(0x18, 0x0F);
+		audible.Write(0x17, 0xC0);
+		audible.Write(0x18, 0x1F);
+		CollectSamples(hidden, warmupCycles: 0, measuredCycles: 512);
+		CollectSamples(audible, warmupCycles: 0, measuredCycles: 512);
+
+		AssertFilterStateClose(audible.DebugState, hidden.DebugState);
+	}
+
 	[Fact]
 	public void ExternalInputRoutingIsZeroForNow()
 	{
@@ -500,6 +548,8 @@ public sealed class SidFilterProfileTests
 		{
 			Assert.Equal(noExternalSamples[i], externalSamples[i], precision: 12);
 		}
+
+		Assert.Equal(0x08, external.DebugState.ForwardedRegisters[0x17] & 0x08);
 	}
 
 	[Fact]
@@ -721,6 +771,15 @@ public sealed class SidFilterProfileTests
 	private static double MeasureRange(IReadOnlyList<double> samples)
 	{
 		return samples.Max() - samples.Min();
+	}
+
+	private static void AssertFilterStateClose(SidChipDebugState expected, SidChipDebugState actual)
+	{
+		Assert.Equal(expected.FilterCutoffRegister, actual.FilterCutoffRegister);
+		Assert.Equal(expected.FilterResonanceNibble, actual.FilterResonanceNibble);
+		Assert.InRange(Math.Abs(expected.LowPassOutput - actual.LowPassOutput), 0.0, 1.0e-12);
+		Assert.InRange(Math.Abs(expected.BandPassOutput - actual.BandPassOutput), 0.0, 1.0e-12);
+		Assert.InRange(Math.Abs(expected.HighPassOutput - actual.HighPassOutput), 0.0, 1.0e-12);
 	}
 
 	private static double MeasureLowPassPeak(SidChip chip, int warmupCycles, int measuredCycles)

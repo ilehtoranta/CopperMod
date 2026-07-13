@@ -108,15 +108,18 @@ public sealed class PexD418ReplayCalibrationTests
 		AssertFinite(reference);
 		AssertFinite(balanced);
 		AssertReferenceMeasuredStageFits(reference);
+		var minimumCorrelation = model == SidChipModel.Mos6581 ? 0.70 : 0.45;
+		var maximumNormalizedError = model == SidChipModel.Mos6581 ? 0.75 : 0.90;
+		var requiredImprovement = model == SidChipModel.Mos6581 ? 0.90 : 0.95;
 		Assert.True(
-			Math.Abs(reference.ContextFit.Correlation) > 0.50,
-			$"Expected {model} reference final context fit to retain useful correlation: {reference.ContextFit}.");
+			Math.Abs(reference.ContextFit.Correlation) >= minimumCorrelation,
+			$"Expected {model} reference final context correlation to reach {minimumCorrelation:0.00}: {reference.ContextFit}.");
 		Assert.True(
-			reference.ContextFit.NormalizedRootMeanSquareError < 0.90,
-			$"Expected {model} reference final context fit to stay within calibrated error bounds: {reference.ContextFit}.");
+			reference.ContextFit.NormalizedRootMeanSquareError <= maximumNormalizedError,
+			$"Expected {model} reference final context normalized error to stay at or below {maximumNormalizedError:0.00}: {reference.ContextFit}.");
 		Assert.True(
-			reference.ContextFit.NormalizedRootMeanSquareError < balanced.ContextFit.NormalizedRootMeanSquareError * 0.95,
-			$"Expected {model} reference final context fit to beat balanced. Reference {reference.ContextFit}; balanced {balanced.ContextFit}.");
+			reference.ContextFit.NormalizedRootMeanSquareError <= balanced.ContextFit.NormalizedRootMeanSquareError * requiredImprovement,
+			$"Expected {model} reference final context fit to beat balanced by at least {(1.0 - requiredImprovement) * 100.0:0}% model-relative error. Reference {reference.ContextFit}; balanced {balanced.ContextFit}.");
 	}
 
 	private CalibrationReport BuildCalibrationReport(

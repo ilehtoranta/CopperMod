@@ -14,28 +14,28 @@ namespace CopperMod.Sid
         private static readonly SidAnalogProfile Mos8580BalancedProfile = BuildProfile(SidChipModel.Mos8580, SidEmulationProfile.Balanced);
         private static readonly SidAnalogProfile Mos6581ReferenceProfile = BuildProfile(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
         private static readonly SidAnalogProfile Mos8580ReferenceProfile = BuildProfile(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured);
-        private static readonly double[] Mos6581WaveformDac = BuildWaveformDac(SidChipModel.Mos6581);
-        private static readonly double[] Mos8580WaveformDac = BuildWaveformDac(SidChipModel.Mos8580);
-        private static readonly double[] Mos6581Envelope = BuildEnvelope(SidChipModel.Mos6581);
-        private static readonly double[] Mos8580Envelope = BuildEnvelope(SidChipModel.Mos8580);
-        private static readonly ushort[][] Mos6581CombinedWaveformDac = BuildMos6581CombinedWaveformDacTables();
-        private static readonly double[] Mos6581CombinedWaveformGain = BuildMos6581CombinedWaveformGain();
-        private static readonly double[] Mos6581CombinedWaveformBias = BuildMos6581CombinedWaveformBias();
         private static readonly AsyncLocal<SidAnalogReferenceCalibration?> ReferenceCalibrationOverride = new AsyncLocal<SidAnalogReferenceCalibration?>();
 
-        public static double ConvertWaveformDac12(uint value, SidChipModel model)
+        public static double ConvertWaveformDac12(
+            uint value,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetWaveformDac(model)[value & 0x0FFF];
+            return GetProfile(model, sidEmulationProfile).WaveformDac[value & 0x0FFF];
         }
 
-        public static double ScaleWaveformOutput(double waveform, int waveformMask, SidChipModel model)
+        public static double ScaleWaveformOutput(
+            double waveform,
+            int waveformMask,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             if (model != SidChipModel.Mos6581)
             {
                 return waveform;
             }
 
-            return waveform * Mos6581WaveformOutputScale(waveformMask);
+            return waveform * GetProfile(model, sidEmulationProfile).WaveformOutputScale[waveformMask & 0xF0];
         }
 
         public static double ScalePulseWidthEdgeOutput(double waveform, int waveformMask, ushort pulseWidth, SidChipModel model)
@@ -65,9 +65,32 @@ namespace CopperMod.Sid
             return waveform * edgeScale;
         }
 
-        public static double ConvertEnvelope(int envelope, SidChipModel model)
+        public static double TrianglePulseContentionScale(
+            bool ringModulated,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return GetEnvelope(model)[Math.Clamp(envelope, 0, 255)];
+            var profile = GetProfile(model, sidEmulationProfile);
+            return ringModulated
+                ? profile.TrianglePulseRingContentionScale
+                : profile.TrianglePulseContentionScale;
+        }
+
+        public static double TrianglePulseBias(
+            bool gateEnabled,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
+        {
+            var profile = GetProfile(model, sidEmulationProfile);
+            return gateEnabled ? profile.TrianglePulseGateOnBias : profile.TrianglePulseGateOffBias;
+        }
+
+        public static double ConvertEnvelope(
+            int envelope,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
+        {
+            return GetProfile(model, sidEmulationProfile).EnvelopeDac[Math.Clamp(envelope, 0, 255)];
         }
 
         public static double ConvertVolume(int volume, SidChipModel model, SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
@@ -117,38 +140,39 @@ namespace CopperMod.Sid
             return SidD418TransitionMatrices.GetMos8580PostWrite(previousRegisterValue, nextRegisterValue);
         }
 
-        public static double VoiceMixGain(SidChipModel model)
+        public static double VoiceMixGain(
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return model == SidChipModel.Mos8580 ? 0.32 : 0.33;
+            return GetProfile(model, sidEmulationProfile).VoiceMixGain;
         }
 
-        public static double CombinedWaveformScale(int activeWaveforms, SidChipModel model)
+        public static double CombinedWaveformScale(
+            int activeWaveforms,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             if (activeWaveforms <= 1)
             {
                 return 1.0;
             }
 
-            return model == SidChipModel.Mos8580
-                ? Math.Pow(0.82, activeWaveforms - 1)
-                : Math.Pow(0.34, activeWaveforms - 1);
+            return Math.Pow(GetProfile(model, sidEmulationProfile).CombinedWaveformScaleBase, activeWaveforms - 1);
         }
 
-        private static double Mos6581WaveformOutputScale(int waveformMask)
+        public static bool UsesCombinedWaveformTable(
+            int waveformMask,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
-            return (waveformMask & 0xF0) switch
+            if (sidEmulationProfile == SidEmulationProfile.ReferenceMeasured)
             {
-                0x00 => 1.0,
-                0x40 => 0.54,
-                _ => 0.65
-            };
-        }
+                return SidReferenceCombinedWaveformData.TryGet(model, waveformMask, out _);
+            }
 
-        public static bool UsesCombinedWaveformTable(int waveformMask, SidChipModel model)
-        {
             return model == SidChipModel.Mos6581 &&
                 waveformMask != 0x50 &&
-                Mos6581CombinedWaveformDac[waveformMask & 0xF0] != null;
+                GetProfile(model, sidEmulationProfile).CombinedWaveformDac[waveformMask & 0xF0] != null;
         }
 
         public static uint MapCombinedWaveformDac12(
@@ -158,7 +182,8 @@ namespace CopperMod.Sid
             uint noiseDac,
             int waveformMask,
             SidChipModel model,
-            out int activeWaveforms)
+            out int activeWaveforms,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             waveformMask &= 0xF0;
             activeWaveforms = 0;
@@ -195,7 +220,33 @@ namespace CopperMod.Sid
                 activeWaveforms++;
             }
 
-            if (activeWaveforms <= 1 || model != SidChipModel.Mos6581 || !UsesCombinedWaveformTable(waveformMask, model))
+            if (activeWaveforms > 1 && sidEmulationProfile == SidEmulationProfile.ReferenceMeasured)
+            {
+                // The T+S selector is not a simple triangle/saw AND. On the
+                // SID's shared waveform bus it is formed from adjacent saw
+                // bits. Other selectors then pull that result down through
+                // pulse/noise. Per-mask analog calibration is applied later.
+                if ((waveformMask & 0x30) == 0x30)
+                {
+                    combinedDac = sawDac & ((sawDac << 1) & 0x0FFFu);
+                    if ((waveformMask & 0x40) != 0)
+                    {
+                        combinedDac &= pulseDac;
+                    }
+
+                    if ((waveformMask & 0x80) != 0)
+                    {
+                        combinedDac &= noiseDac;
+                    }
+                }
+
+                return SidReferenceCombinedWaveformData.ApplyPulldown(
+                    model,
+                    waveformMask,
+                    combinedDac);
+            }
+
+            if (activeWaveforms <= 1 || model != SidChipModel.Mos6581 || !UsesCombinedWaveformTable(waveformMask, model, sidEmulationProfile))
             {
                 return combinedDac & 0x0FFFu;
             }
@@ -204,54 +255,63 @@ namespace CopperMod.Sid
             {
                 var halfCyclePhase = sawDac & 0x07FFu;
                 var contentionPulse = halfCyclePhase < 0x00C0u ? 0x0FFFu : 0u;
-                return MapCombinedWaveformDac12(contentionPulse, waveformMask, model);
+                return MapCombinedWaveformDac12(contentionPulse, waveformMask, model, sidEmulationProfile);
             }
 
             if (waveformMask == 0x60)
             {
-                var sawPulseMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+                var sawPulseMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model, sidEmulationProfile);
                 var sawPulseDisagreement = (sourceBleedUnion & ~combinedDac) & 0x0FFFu;
-                var weakPull = (sawPulseDisagreement >> 7) & (uint)GetMos6581CombinedWeakMask(waveformMask);
-                return ((sawPulseMapped >> 5) | weakPull) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
+                var weakPull = (sawPulseDisagreement >> 7) & (uint)GetMos6581CombinedWeakMask(waveformMask, sidEmulationProfile);
+                return ((sawPulseMapped >> 5) | weakPull) & (uint)GetMos6581CombinedRetentionMask(waveformMask, sidEmulationProfile);
             }
 
             if (waveformMask == 0x70)
             {
-                var collapsedMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
-                return (collapsedMapped >> 2) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
+                var collapsedMapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model, sidEmulationProfile);
+                return (collapsedMapped >> 2) & (uint)GetMos6581CombinedRetentionMask(waveformMask, sidEmulationProfile);
             }
 
-            var mapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model);
+            var mapped = MapCombinedWaveformDac12(combinedDac, waveformMask, model, sidEmulationProfile);
             if ((waveformMask & 0x80) != 0)
             {
                 return mapped;
             }
 
             var disagreement = (sourceBleedUnion & ~combinedDac) & 0x0FFFu;
-            var bleed = (disagreement >> Math.Min(activeWaveforms + 2, 5)) & (uint)GetMos6581CombinedWeakMask(waveformMask);
-            return (mapped | bleed) & (uint)GetMos6581CombinedRetentionMask(waveformMask);
+            var bleed = (disagreement >> Math.Min(activeWaveforms + 2, 5)) & (uint)GetMos6581CombinedWeakMask(waveformMask, sidEmulationProfile);
+            return (mapped | bleed) & (uint)GetMos6581CombinedRetentionMask(waveformMask, sidEmulationProfile);
         }
 
-        public static uint MapCombinedWaveformDac12(uint value, int waveformMask, SidChipModel model)
+        public static uint MapCombinedWaveformDac12(
+            uint value,
+            int waveformMask,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             var table = model == SidChipModel.Mos6581
-                ? Mos6581CombinedWaveformDac[waveformMask & 0xF0]
+                ? GetProfile(model, sidEmulationProfile).CombinedWaveformDac[waveformMask & 0xF0]
                 : null;
             return table == null ? value & 0x0FFFu : table[value & 0x0FFFu];
         }
 
-        public static double ConvertCombinedWaveformDac12(uint value, int waveformMask, SidChipModel model)
+        public static double ConvertCombinedWaveformDac12(
+            uint value,
+            int waveformMask,
+            SidChipModel model,
+            SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
             if (model != SidChipModel.Mos6581)
             {
-                return ConvertWaveformDac12(value, model) *
-                    CombinedWaveformScale(CountSelectedWaveforms(waveformMask), model);
+                return ConvertWaveformDac12(value, model, sidEmulationProfile) *
+                    CombinedWaveformScale(CountSelectedWaveforms(waveformMask), model, sidEmulationProfile);
             }
 
             waveformMask &= 0xF0;
+            var profile = GetProfile(model, sidEmulationProfile);
             return Math.Clamp(
-                (ConvertWaveformDac12(value, model) * Mos6581CombinedWaveformGain[waveformMask]) +
-                    Mos6581CombinedWaveformBias[waveformMask],
+                (ConvertWaveformDac12(value, model, sidEmulationProfile) * profile.CombinedWaveformGain[waveformMask]) +
+                    profile.CombinedWaveformBias[waveformMask],
                 -1.0,
                 1.0);
         }
@@ -424,16 +484,6 @@ namespace CopperMod.Sid
             return Math.Clamp(modeImpulse + voice3Impulse, -profile.VolumeStepTransientLimit, profile.VolumeStepTransientLimit);
         }
 
-        private static double[] GetWaveformDac(SidChipModel model)
-        {
-            return model == SidChipModel.Mos8580 ? Mos8580WaveformDac : Mos6581WaveformDac;
-        }
-
-        private static double[] GetEnvelope(SidChipModel model)
-        {
-            return model == SidChipModel.Mos8580 ? Mos8580Envelope : Mos6581Envelope;
-        }
-
         private static SidAnalogProfile GetProfile(SidChipModel model, SidEmulationProfile sidEmulationProfile)
         {
             if (sidEmulationProfile == SidEmulationProfile.ReferenceMeasured)
@@ -507,14 +557,18 @@ namespace CopperMod.Sid
             return Mos8580D418LowNibbleDcRange / (Mos8580D418Amplitude[0x0F] - Mos8580D418Amplitude[0x00]);
         }
 
-        private static double[] BuildWaveformDac(SidChipModel model)
+        private static double[] BuildWaveformDac(SidChipModel model, SidEmulationProfile sidEmulationProfile)
         {
             // The SID waveform DACs are R-2R ladder networks. The 6581 has a
             // mismatched R-2R ratio and lacks the bit-0 termination resistor, so
             // its lower DAC bits are audibly nonlinear. The 8580 is much closer
             // to an ideal, terminated ladder.
             bool is6581 = model != SidChipModel.Mos8580;
-            double ratio = is6581 ? 2.25 : 2.00;
+            bool referenceMeasured = sidEmulationProfile == SidEmulationProfile.ReferenceMeasured;
+            // The reference 6581 ratio is the circuit-derived ~R/2.02R estimate
+            // from the saved die-analysis notes. It is provisional, not a Pex
+            // measurement; Balanced retains its historical playback tuning.
+            double ratio = is6581 ? (referenceMeasured ? 2.02 : 2.25) : 2.00;
             bool term = !is6581;
             double leakage = is6581 ? 0.0075 : 0.0035;
 
@@ -533,12 +587,13 @@ namespace CopperMod.Sid
             return table;
         }
 
-        private static double[] BuildEnvelope(SidChipModel model)
+        private static double[] BuildEnvelope(SidChipModel model, SidEmulationProfile sidEmulationProfile)
         {
             bool is6581 = model != SidChipModel.Mos8580;
+            bool referenceMeasured = sidEmulationProfile == SidEmulationProfile.ReferenceMeasured;
             double[] normalized = BuildR2RDacTable(
                 8,
-                is6581 ? 2.20 : 2.00,
+                is6581 ? (referenceMeasured ? 2.05 : 2.20) : 2.00,
                 !is6581,
                 is6581 ? 0.0075 : 0.0035);
 
@@ -559,26 +614,32 @@ namespace CopperMod.Sid
             return Math.Clamp(value + lift, 0.0, 1.0);
         }
 
-        private static ushort[][] BuildMos6581CombinedWaveformDacTables()
+        private static ushort[][] BuildMos6581CombinedWaveformDacTables(bool referenceMeasured)
         {
             var tables = new ushort[256][];
             ReadOnlySpan<int> masks = stackalloc[] { 0x30, 0x60, 0x70, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
             for (var i = 0; i < masks.Length; i++)
             {
-                tables[masks[i]] = BuildMos6581CombinedWaveformDacTable(masks[i]);
+                tables[masks[i]] = BuildMos6581CombinedWaveformDacTable(masks[i], referenceMeasured);
             }
 
             return tables;
         }
 
-        private static ushort[] BuildMos6581CombinedWaveformDacTable(int waveformMask)
+        private static ushort[] BuildMos6581CombinedWaveformDacTable(int waveformMask, bool referenceMeasured)
         {
             var activeWaveforms = CountSelectedWaveforms(waveformMask);
             var hasNoise = (waveformMask & 0x80) != 0;
             var table = new ushort[1 << 12];
             var shift = Math.Clamp(activeWaveforms - 1 + (hasNoise ? 1 : 0), 1, 4);
-            var retentionMask = GetMos6581CombinedRetentionMask(waveformMask);
-            var weakMask = GetMos6581CombinedWeakMask(waveformMask);
+            var retentionMask = GetMos6581CombinedRetentionMaskHeuristic(waveformMask);
+            var weakMask = GetMos6581CombinedWeakMaskHeuristic(waveformMask);
+            if (referenceMeasured && SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, waveformMask, out var calibration))
+            {
+                shift = calibration.ContentionShift;
+                retentionMask = calibration.RetentionMask;
+                weakMask = calibration.WeakMask;
+            }
             for (var dac = 0; dac < table.Length; dac++)
             {
                 var value = (uint)dac;
@@ -595,7 +656,7 @@ namespace CopperMod.Sid
             return table;
         }
 
-        private static double[] BuildMos6581CombinedWaveformGain()
+        private static double[] BuildMos6581CombinedWaveformGain(bool referenceMeasured)
         {
             var gain = new double[256];
             for (var mask = 0; mask < gain.Length; mask += 0x10)
@@ -618,10 +679,21 @@ namespace CopperMod.Sid
                 }
             }
 
+            if (referenceMeasured)
+            {
+                for (var mask = 0; mask < gain.Length; mask += 0x10)
+                {
+                    if (SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, mask, out var calibration))
+                    {
+                        gain[mask] = calibration.Gain;
+                    }
+                }
+            }
+
             return gain;
         }
 
-        private static double[] BuildMos6581CombinedWaveformBias()
+        private static double[] BuildMos6581CombinedWaveformBias(double[] gain, bool referenceMeasured)
         {
             var bias = new double[256];
             for (var mask = 0; mask < bias.Length; mask += 0x10)
@@ -640,14 +712,32 @@ namespace CopperMod.Sid
 
                 if ((mask & 0x80) != 0)
                 {
-                    bias[mask] = Mos6581CombinedWaveformGain[mask];
+                    bias[mask] = gain[mask];
+                }
+
+                if (referenceMeasured)
+                {
+                    if (SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, mask, out var calibration))
+                    {
+                        bias[mask] = calibration.Bias;
+                    }
                 }
             }
 
             return bias;
         }
 
-        private static int GetMos6581CombinedRetentionMask(int waveformMask)
+        private static int GetMos6581CombinedRetentionMask(
+            int waveformMask,
+            SidEmulationProfile sidEmulationProfile)
+        {
+            return sidEmulationProfile == SidEmulationProfile.ReferenceMeasured &&
+                SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, waveformMask, out var calibration)
+                    ? calibration.RetentionMask
+                    : GetMos6581CombinedRetentionMaskHeuristic(waveformMask);
+        }
+
+        private static int GetMos6581CombinedRetentionMaskHeuristic(int waveformMask)
         {
             var mask = 0x0FFF;
             if ((waveformMask & 0x10) != 0)
@@ -673,7 +763,17 @@ namespace CopperMod.Sid
             return mask;
         }
 
-        private static int GetMos6581CombinedWeakMask(int waveformMask)
+        private static int GetMos6581CombinedWeakMask(
+            int waveformMask,
+            SidEmulationProfile sidEmulationProfile)
+        {
+            return sidEmulationProfile == SidEmulationProfile.ReferenceMeasured &&
+                SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos6581, waveformMask, out var calibration)
+                    ? calibration.WeakMask
+                    : GetMos6581CombinedWeakMaskHeuristic(waveformMask);
+        }
+
+        private static int GetMos6581CombinedWeakMaskHeuristic(int waveformMask)
         {
             var active = CountSelectedWaveforms(waveformMask);
             var mask = active >= 3 ? 0x0125 : 0x0021;
@@ -715,14 +815,38 @@ namespace CopperMod.Sid
         {
             bool is6581 = model != SidChipModel.Mos8580;
             bool referenceMeasured = sidEmulationProfile == SidEmulationProfile.ReferenceMeasured;
+            var waveformDac = BuildWaveformDac(model, sidEmulationProfile);
+            var envelopeDac = BuildEnvelope(model, sidEmulationProfile);
+            var combinedWaveformDac = is6581 ? BuildMos6581CombinedWaveformDacTables(referenceMeasured) : new ushort[256][];
+            var combinedWaveformGain = is6581 ? BuildMos6581CombinedWaveformGain(referenceMeasured) : new double[256];
+            var combinedWaveformBias = is6581
+                ? BuildMos6581CombinedWaveformBias(combinedWaveformGain, referenceMeasured)
+                : new double[256];
+            var waveformOutputScale = BuildWaveformOutputScale(model);
             var volumeGain = BuildVolumeGain(model);
             var volumeDc = is6581
                 ? BuildMos6581MeasuredD418Offset()
                 : BuildMos8580MeasuredD418Offset();
 
             return new SidAnalogProfile(
-                volumeGain,
-                volumeDc,
+                waveformDac,
+                envelopeDac,
+                combinedWaveformDac,
+                combinedWaveformGain,
+                combinedWaveformBias,
+                waveformOutputScale,
+                voiceMixGain: is6581
+                    ? (referenceMeasured ? 0.195 : 0.33)
+                    : (referenceMeasured ? 0.190 : 0.32),
+                combinedWaveformScaleBase: is6581
+                    ? (referenceMeasured ? 0.17 : 0.34)
+                    : (referenceMeasured ? 0.62 : 0.82),
+                trianglePulseContentionScale: referenceMeasured ? 0.33 : 0.66,
+                trianglePulseRingContentionScale: referenceMeasured ? 0.24 : 0.48,
+                trianglePulseGateOffBias: referenceMeasured ? -0.275 : -0.55,
+                trianglePulseGateOnBias: referenceMeasured ? -0.70 : -1.40,
+                volumeGain: volumeGain,
+                volumeDc: volumeDc,
                 volumeStepTransientGain: is6581 ? (referenceMeasured ? 0.0 : 3.40) : 0.0,
                 volumeStepTransientLimit: is6581 ? (referenceMeasured ? 0.70 : 0.70) : (referenceMeasured ? 0.055 : 0.0),
                 volumeStepAttackSeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientAttackSeconds : 0.00130) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientAttackSeconds : 0.0),
@@ -734,6 +858,19 @@ namespace CopperMod.Sid
                 filterRoutingTransientGain: is6581 ? (referenceMeasured ? 0.012 : 0.0) : (referenceMeasured ? 0.0020 : 0.0),
                 filterModeTransientGain: 0.0,
                 voice3MuteTransientGain: 0.0);
+        }
+
+        private static double[] BuildWaveformOutputScale(SidChipModel model)
+        {
+            var scale = new double[256];
+            for (var mask = 0; mask < scale.Length; mask += 0x10)
+            {
+                scale[mask] = model != SidChipModel.Mos6581
+                    ? 1.0
+                    : mask == 0x40 ? 0.54 : mask == 0x00 ? 1.0 : 0.65;
+            }
+
+            return scale;
         }
 
         private static double[] BuildVolumeGain(SidChipModel model)
@@ -924,6 +1061,18 @@ namespace CopperMod.Sid
         private sealed class SidAnalogProfile
         {
             public SidAnalogProfile(
+                double[] waveformDac,
+                double[] envelopeDac,
+                ushort[][] combinedWaveformDac,
+                double[] combinedWaveformGain,
+                double[] combinedWaveformBias,
+                double[] waveformOutputScale,
+                double voiceMixGain,
+                double combinedWaveformScaleBase,
+                double trianglePulseContentionScale,
+                double trianglePulseRingContentionScale,
+                double trianglePulseGateOffBias,
+                double trianglePulseGateOnBias,
                 double[] volumeGain,
                 double[] volumeDc,
                 double volumeStepTransientGain,
@@ -938,6 +1087,18 @@ namespace CopperMod.Sid
                 double filterModeTransientGain,
                 double voice3MuteTransientGain)
             {
+                WaveformDac = waveformDac;
+                EnvelopeDac = envelopeDac;
+                CombinedWaveformDac = combinedWaveformDac;
+                CombinedWaveformGain = combinedWaveformGain;
+                CombinedWaveformBias = combinedWaveformBias;
+                WaveformOutputScale = waveformOutputScale;
+                VoiceMixGain = voiceMixGain;
+                CombinedWaveformScaleBase = combinedWaveformScaleBase;
+                TrianglePulseContentionScale = trianglePulseContentionScale;
+                TrianglePulseRingContentionScale = trianglePulseRingContentionScale;
+                TrianglePulseGateOffBias = trianglePulseGateOffBias;
+                TrianglePulseGateOnBias = trianglePulseGateOnBias;
                 VolumeGain = volumeGain;
                 VolumeDc = volumeDc;
                 VolumeStepTransientGain = volumeStepTransientGain;
@@ -952,6 +1113,30 @@ namespace CopperMod.Sid
                 FilterModeTransientGain = filterModeTransientGain;
                 Voice3MuteTransientGain = voice3MuteTransientGain;
             }
+
+            public double[] WaveformDac { get; }
+
+            public double[] EnvelopeDac { get; }
+
+            public ushort[][] CombinedWaveformDac { get; }
+
+            public double[] CombinedWaveformGain { get; }
+
+            public double[] CombinedWaveformBias { get; }
+
+            public double[] WaveformOutputScale { get; }
+
+            public double VoiceMixGain { get; }
+
+            public double CombinedWaveformScaleBase { get; }
+
+            public double TrianglePulseContentionScale { get; }
+
+            public double TrianglePulseRingContentionScale { get; }
+
+            public double TrianglePulseGateOffBias { get; }
+
+            public double TrianglePulseGateOnBias { get; }
 
             public double[] VolumeGain { get; }
 

@@ -79,7 +79,7 @@ public sealed class SidEnvelopeCycleTests
 	}
 
 	[Fact]
-	public void GateRisingFromZeroHoldResetsStaleRateCounterForAttack()
+	public void GateRisingFromZeroHoldPreservesStaleRateCounterAndDelaysAttack()
 	{
 		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
 		SetEnvelope(chip, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
@@ -93,9 +93,9 @@ public sealed class SidEnvelopeCycleTests
 
 		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
 		Assert.Equal(Attack, chip.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(1, chip.DebugState.Voices[0].RateCounter);
+		Assert.Equal(21, chip.DebugState.Voices[0].RateCounter);
 
-		chip.Render(RatePeriods[0] - 2);
+		chip.Render(32755);
 
 		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
 		Assert.Equal(RatePeriods[0] - 1, chip.DebugState.Voices[0].RateCounter);
