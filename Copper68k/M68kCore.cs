@@ -152,6 +152,19 @@ namespace Copper68k
         bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind);
     }
 
+    internal interface IM68kStablePhysicalAddressMap : IM68kPhysicalAddressMap
+    {
+        uint CpuPhysicalAddressMapGeneration { get; }
+    }
+
+    internal interface IM68kFixedPhysicalAddressMap : IM68kPhysicalAddressMap
+    {
+        bool TryGetCpuPhysicalAddressMappedRange(
+            M68kBusAccessKind accessKind,
+            out uint startAddress,
+            out uint endAddress);
+    }
+
     internal interface IM68kFastMemoryBus
     {
         bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value);

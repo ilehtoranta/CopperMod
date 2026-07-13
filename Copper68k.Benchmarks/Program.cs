@@ -18,9 +18,15 @@ var workloads = CreateWorkloads()
     .Where(workload => options.Workload is null ||
         workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
     .ToArray();
-var backends = CreateBackends()
-    .Where(backend => options.Backend is null ||
-        backend.Name.Contains(options.Backend, StringComparison.OrdinalIgnoreCase))
+var availableBackends = CreateBackends();
+var exactBackendMatch = options.Backend is not null &&
+    availableBackends.Any(backend => backend.Name.Equals(options.Backend, StringComparison.OrdinalIgnoreCase));
+var backends = availableBackends
+    .Where(backend => options.Backend is null
+        ? backend.IncludeByDefault
+        : exactBackendMatch
+            ? backend.Name.Equals(options.Backend, StringComparison.OrdinalIgnoreCase)
+            : backend.Name.Contains(options.Backend, StringComparison.OrdinalIgnoreCase))
     .ToArray();
 
 if (workloads.Length == 0)
@@ -38,10 +44,11 @@ Console.WriteLine("workload\tbackend\trepeat\tinstructions\tms\tinstr/sec\tmips\
 
 foreach (var workload in workloads)
 {
-    foreach (var backend in backends)
+    for (var repeat = 1; repeat <= options.Repeats; repeat++)
     {
-        for (var repeat = 1; repeat <= options.Repeats; repeat++)
+        for (var backendOffset = 0; backendOffset < backends.Length; backendOffset++)
         {
+            var backend = backends[(backendOffset + repeat - 1) % backends.Length];
             var result = RunBenchmark(workload, backend, options);
             Console.WriteLine(
                 $"{workload.Name}\t{backend.Name}\t{repeat}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t{result.InstructionsPerSecond:F0}\t{result.InstructionsPerSecond / 1_000_000.0:F3}\t{result.Cycles}\t{result.NativeCycles}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}\t{result.CompiledTraces}\t{result.FallbackInstructions}\t{result.PureTraceInstructions}\t{result.BusTraceInstructions}\t{result.ZeroWaitReads}\t{result.ZeroWaitWrites}");
@@ -166,6 +173,14 @@ static BenchmarkBackend[] CreateBackends()
         new BenchmarkBackend("InterpreterM68020", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68020, bus)),
         new BenchmarkBackend("InterpreterM68030", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68030, bus)),
         new BenchmarkBackend("InterpreterM68040", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68040, bus)),
+        new BenchmarkBackend(
+            "InterpreterM68040General",
+            bus => new M68040Interpreter(
+                bus,
+                M68020CpuProfile.Ocs68040Accelerator25Mhz,
+                new M68kCpuState(),
+                enableAdvancedFastPath: false),
+            IncludeByDefault: false),
         new BenchmarkBackend("JitM68000", bus => M68kJitCore.CreateM68000(bus)),
         new BenchmarkBackend("JitM68040", bus => M68kJitCore.CreateM68040(bus))
     ];
@@ -329,7 +344,10 @@ internal sealed record BenchmarkOptions(
     }
 }
 
-internal sealed record BenchmarkBackend(string Name, Func<BenchmarkBus, IM68kCore> Create);
+internal sealed record BenchmarkBackend(
+    string Name,
+    Func<BenchmarkBus, IM68kCore> Create,
+    bool IncludeByDefault = true);
 
 internal readonly record struct JitCompilationSnapshot(
     long CompiledTraces,
@@ -443,7 +461,7 @@ internal sealed class BenchmarkBus :
     IM68kJitBus,
     IM68kJitFastMemoryBus,
     IM68kJitTimedMemoryBus,
-    IM68kPhysicalAddressMap
+    IM68kFixedPhysicalAddressMap
 {
     private const int CodeGenerationPageShift = 8;
     private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
@@ -462,6 +480,17 @@ internal sealed class BenchmarkBus :
     }
 
     public event Action<uint, int>? JitCodeRangeWritten;
+
+    public bool TryGetCpuPhysicalAddressMappedRange(
+        M68kBusAccessKind accessKind,
+        out uint startAddress,
+        out uint endAddress)
+    {
+        _ = accessKind;
+        startAddress = 0;
+        endAddress = uint.MaxValue;
+        return true;
+    }
 
     public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
     {

@@ -96,6 +96,35 @@ public sealed class M68kAdvancedFastPathTests
 		AssertEquivalent(result);
 	}
 
+	[Fact]
+	public void M68040RegisterFastPlansMatchGeneralExecution()
+	{
+		var result = ExecutePair(
+			[
+				0x7001, // MOVEQ #1,D0
+				0xD081, // ADD.L D1,D0
+				0x5482, // ADDQ.L #2,D2
+				0x4E71  // NOP
+			],
+			state => state.D[1] = 0x10,
+			instructionCount: 4,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz);
+
+		AssertEquivalent(result);
+	}
+
+	[Fact]
+	public void M68040TakenByteBranchFastPlanMatchesGeneralExecution()
+	{
+		var result = ExecutePair(
+			[0x60FE],
+			_ => { },
+			instructionCount: 1,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz);
+
+		AssertEquivalent(result);
+	}
+
 	[Theory]
 	[InlineData(false)]
 	[InlineData(true)]
@@ -152,6 +181,53 @@ public sealed class M68kAdvancedFastPathTests
 	}
 
 	[Fact]
+	public void M68040RegisterHotBlockMatchesGeneralBatchExecution()
+	{
+		var result = ExecuteBatchPair(
+			[
+				0x7001, // MOVEQ #1,D0
+				0x7202, // MOVEQ #2,D1
+				0x7400, // MOVEQ #0,D2
+				0xD081, // ADD.L D1,D0
+				0x5482, // ADDQ.L #2,D2
+				0x4E71, // NOP
+				0x60F8  // BRA.S loop
+			],
+			state => state.D[7] = 0x0F0F_0F0F,
+			instructionCount: 70,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz);
+
+		AssertEquivalent(result);
+		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
+	public void M68040MemoryTransformHotBlockMatchesGeneralBatchExecution()
+	{
+		var result = ExecuteBatchPair(
+			[
+				0x207C, 0x0002, 0x0000, // MOVEA.L #$00020000,A0
+				0x7402, // MOVEQ #2,D2
+				0x2018, // MOVE.L (A0)+,D0
+				0xD081, // ADD.L D1,D0
+				0x23C0, 0x0008, 0x0000, // MOVE.L D0,$00080000.L
+				0x51CA, 0xFFF4 // DBRA D2,loop
+			],
+			state => state.D[1] = 0x0101_0101,
+			instructionCount: 14,
+			configureBus: bus =>
+			{
+				bus.WriteLong(0x0002_0000, 0x1020_3040);
+				bus.WriteLong(0x0002_0004, 0x1121_3141);
+				bus.WriteLong(0x0002_0008, 0x1222_3242);
+			},
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz);
+
+		AssertEquivalent(result);
+		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
 	public void HotBlockFallsBackWhenStoreChangesANotYetFetchedOpcode()
 	{
 		var changedOpcodeAddress = CodeBase + 6;
@@ -182,6 +258,27 @@ public sealed class M68kAdvancedFastPathTests
 			],
 			state => state.D[0] = 1,
 			instructionCount: 4,
+			codeBase: CacheableCodeBase);
+
+		AssertEquivalent(result);
+		Assert.True(result.Fast.Timing.InstructionCache.Enabled);
+		Assert.Equal(result.GeneralBus.InstructionFetchWords, result.FastBus.InstructionFetchWords);
+		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
+	public void M68040CacheEnabledHotBlockMatchesGeneralPipeAndFetchBehavior()
+	{
+		var result = ExecuteBatchPair(
+			[
+				0x4E7B, 0x0002, // MOVEC D0,CACR
+				0x4E71,
+				0x4E71,
+				0x60FE
+			],
+			state => state.D[0] = 1,
+			instructionCount: 4,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz,
 			codeBase: CacheableCodeBase);
 
 		AssertEquivalent(result);
@@ -228,12 +325,47 @@ public sealed class M68kAdvancedFastPathTests
 	}
 
 	[Fact]
+	public void M68040HotBlockStopsAtTheSameTargetCycleAsGeneralExecution()
+	{
+		var result = ExecuteBatchPair(
+			[0x7001, 0xD081, 0x60FA],
+			state => state.D[1] = 2,
+			instructionCount: 100,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz,
+			targetCycle: 30);
+
+		AssertEquivalent(result);
+		Assert.Equal(result.GeneralExecutedInstructions, result.FastExecutedInstructions);
+		Assert.InRange(result.FastExecutedInstructions, 1, 99);
+		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
 	public void HotBlockRecordsInstructionFrequencyLikeGeneralExecution()
 	{
 		var result = ExecuteBatchPair(
 			[0x7001, 0xD081, 0x60FA],
 			state => state.D[1] = 2,
 			instructionCount: 30,
+			enableInstructionFrequency: true);
+		var fast = result.Fast.CaptureInstructionFrequency();
+		var general = result.General.CaptureInstructionFrequency();
+
+		Assert.Equal(general.TotalInstructions, fast.TotalInstructions);
+		Assert.Equal(general.Families, fast.Families);
+		Assert.Equal(general.Opcodes, fast.Opcodes);
+		Assert.Equal(general.HotPcs, fast.HotPcs);
+		Assert.Equal(general.HotLoops, fast.HotLoops);
+	}
+
+	[Fact]
+	public void M68040HotBlockRecordsInstructionFrequencyLikeGeneralExecution()
+	{
+		var result = ExecuteBatchPair(
+			[0x7001, 0xD081, 0x60FA],
+			state => state.D[1] = 2,
+			instructionCount: 30,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz,
 			enableInstructionFrequency: true);
 		var fast = result.Fast.CaptureInstructionFrequency();
 		var general = result.General.CaptureInstructionFrequency();
@@ -260,14 +392,8 @@ public sealed class M68kAdvancedFastPathTests
 		configureBus?.Invoke(fastBus);
 		configureBus?.Invoke(generalBus);
 
-		M68kAdvancedTimingInterpreter fast = profile.Model == M68kAcceleratorModel.M68030
-			? new M68030Interpreter(fastBus, profile)
-			: new M68020Interpreter(fastBus, profile);
-		var general = new M68kAdvancedTimingInterpreter(
-			generalBus,
-			profile,
-			new M68kCpuState(),
-			enableAdvancedFastPath: false);
+		var fast = CreateInterpreter(fastBus, profile, enableAdvancedFastPath: true);
+		var general = CreateInterpreter(generalBus, profile, enableAdvancedFastPath: false);
 		fast.Reset(CodeBase, 0x0000_3000);
 		general.Reset(CodeBase, 0x0000_3000);
 		configureState(fast.State);
@@ -308,14 +434,8 @@ public sealed class M68kAdvancedFastPathTests
 		configureBus?.Invoke(fastBus);
 		configureBus?.Invoke(generalBus);
 
-		M68kAdvancedTimingInterpreter fast = profile.Model == M68kAcceleratorModel.M68030
-			? new M68030Interpreter(fastBus, profile)
-			: new M68020Interpreter(fastBus, profile);
-		var general = new M68kAdvancedTimingInterpreter(
-			generalBus,
-			profile,
-			new M68kCpuState(),
-			enableAdvancedFastPath: false);
+		var fast = CreateInterpreter(fastBus, profile, enableAdvancedFastPath: true);
+		var general = CreateInterpreter(generalBus, profile, enableAdvancedFastPath: false);
 		fast.Reset(codeBase, 0x0000_3000);
 		general.Reset(codeBase, 0x0000_3000);
 		configureState(fast.State);
@@ -342,6 +462,34 @@ public sealed class M68kAdvancedFastPathTests
 			generalBoundary,
 			fastExecuted,
 			generalExecuted);
+	}
+
+	private static M68kAdvancedTimingInterpreter CreateInterpreter(
+		ZeroWaitCodeBus bus,
+		M68020CpuProfile profile,
+		bool enableAdvancedFastPath)
+	{
+		if (!enableAdvancedFastPath)
+		{
+			return profile.Model == M68kAcceleratorModel.M68040
+				? new M68040Interpreter(
+					bus,
+					profile,
+					new M68kCpuState(),
+					enableAdvancedFastPath: false)
+				: new M68kAdvancedTimingInterpreter(
+					bus,
+					profile,
+					new M68kCpuState(),
+					enableAdvancedFastPath: false);
+		}
+
+		return profile.Model switch
+		{
+			M68kAcceleratorModel.M68030 => new M68030Interpreter(bus, profile),
+			M68kAcceleratorModel.M68040 => new M68040Interpreter(bus, profile),
+			_ => new M68020Interpreter(bus, profile)
+		};
 	}
 
 	private static void AssertEquivalent(FastPathResult result)

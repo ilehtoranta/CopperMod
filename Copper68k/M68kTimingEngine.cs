@@ -403,7 +403,9 @@ namespace Copper68k
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _branchByteTakenPlan = profile.FixedInstructionNativeCycles is int fixedCycles
-                ? M68kTimingFormula.CreateFixedPlan(M68kInstructionTimingKey.BranchByteTaken, fixedCycles)
+                ? fixedCycles == 1
+                    ? M68040FixedTimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken)
+                    : M68kTimingFormula.CreateFixedPlan(M68kInstructionTimingKey.BranchByteTaken, fixedCycles)
                 : profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
                     ? M68030TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken)
                     : M68020TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken);
@@ -443,7 +445,9 @@ namespace Copper68k
 
         public M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
             => _profile.FixedInstructionNativeCycles is int fixedCycles
-                ? M68kTimingFormula.CreateFixedPlan(key, fixedCycles)
+                ? fixedCycles == 1
+                    ? M68040FixedTimingModel.GetPlan(key)
+                    : M68kTimingFormula.CreateFixedPlan(key, fixedCycles)
                 : _profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
                 ? M68030TimingModel.GetPlan(key)
                 : M68020TimingModel.GetPlan(key);
@@ -569,7 +573,10 @@ namespace Copper68k
 
         internal void CompleteFlatInstruction(M68kInstructionPlan plan)
         {
-            if (_profile.Model is not (M68kAcceleratorModel.M68020 or M68kAcceleratorModel.M68030) ||
+            if (_profile.Model is not (
+                    M68kAcceleratorModel.M68020 or
+                    M68kAcceleratorModel.M68030 or
+                    M68kAcceleratorModel.M68040) ||
                 plan.Barriers != M68kTimingBarrier.None)
             {
                 CompleteInstruction(plan);
@@ -810,6 +817,34 @@ namespace Copper68k
         }
     }
 
+    internal static class M68040FixedTimingModel
+    {
+        private static readonly M68kInstructionPlan[] Plans = CreatePlans();
+
+        public static M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
+        {
+            var index = (int)key;
+            if ((uint)index < (uint)Plans.Length && Plans[index].Name is not null)
+            {
+                return Plans[index];
+            }
+
+            throw new UnsupportedM68kTimingException(key, M68kAcceleratorModel.M68040);
+        }
+
+        private static M68kInstructionPlan[] CreatePlans()
+        {
+            var keys = Enum.GetValues<M68kInstructionTimingKey>();
+            var plans = new M68kInstructionPlan[(int)keys[^1] + 1];
+            foreach (var key in keys)
+            {
+                plans[(int)key] = M68kTimingFormula.CreateFixedPlan(key, nativeCycles: 1);
+            }
+
+            return plans;
+        }
+    }
+
     internal sealed class M68kTimedBusAdapter
     {
         private readonly IM68kBus _bus;
@@ -818,6 +853,8 @@ namespace Copper68k
         private readonly M68kTimingEngine _timing;
         private readonly IM68kCodeReader? _codeReader;
         private readonly IM68kFastMemoryBus? _fastMemoryBus;
+        private readonly M68040LogicalBus? _m68040LogicalBus;
+        private readonly IM68kBus? _m68040PhysicalBus;
         private readonly bool _directUncachedInstructionFetch;
         private readonly bool _hasInstructionFetchWaitStates;
 
@@ -833,6 +870,8 @@ namespace Copper68k
             _timing = timing ?? throw new ArgumentNullException(nameof(timing));
             _codeReader = bus as IM68kCodeReader;
             _fastMemoryBus = bus as IM68kFastMemoryBus;
+            _m68040LogicalBus = bus as M68040LogicalBus;
+            _m68040PhysicalBus = _m68040LogicalBus?.PhysicalBus;
             _directUncachedInstructionFetch = !profile.FastInstructionFetch;
             for (var i = 0; i < profile.BusTiming.Count; i++)
             {
@@ -862,7 +901,17 @@ namespace Copper68k
 
             cacheHit = false;
             var cycle = GetBusRequestMachineCycle();
-            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            var value = _m68040LogicalBus is { } logicalBus
+                ? logicalBus.CanUseDirectIdentityAccess(address, byteCount: 2)
+                    ? _m68040PhysicalBus!.ReadWord(
+                        address,
+                        ref cycle,
+                        M68kBusAccessKind.CpuInstructionFetch)
+                    : logicalBus.ReadWord(
+                        address,
+                        ref cycle,
+                        M68kBusAccessKind.CpuInstructionFetch)
+                : _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
             if (_hasInstructionFetchWaitStates)
             {
                 AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
@@ -883,7 +932,14 @@ namespace Copper68k
             }
 
             var cycle = GetBusRequestMachineCycle();
-            var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+            var value = _m68040LogicalBus is { } logicalBus
+                ? logicalBus.CanUseDirectIdentityAccess(address, byteCount: 4)
+                    ? _m68040PhysicalBus!.ReadLong(
+                        address,
+                        ref cycle,
+                        M68kBusAccessKind.CpuDataRead)
+                    : logicalBus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead)
+                : _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
             _timing.CompleteBlockingBusAccess(cycle);
             return value;
         }
@@ -898,7 +954,30 @@ namespace Copper68k
             }
 
             var cycle = GetBusRequestMachineCycle();
-            _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            if (_m68040LogicalBus is { } logicalBus)
+            {
+                if (logicalBus.CanUseDirectIdentityAccess(address, byteCount: 4))
+                {
+                    _m68040PhysicalBus!.WriteLong(
+                        address,
+                        value,
+                        ref cycle,
+                        M68kBusAccessKind.CpuDataWrite);
+                }
+                else
+                {
+                    logicalBus.WriteLong(
+                        address,
+                        value,
+                        ref cycle,
+                        M68kBusAccessKind.CpuDataWrite);
+                }
+            }
+            else
+            {
+                _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            }
+
             _timing.RecordPostedBusCompletion(cycle);
         }
 

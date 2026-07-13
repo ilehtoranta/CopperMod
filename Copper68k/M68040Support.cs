@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using HotPathGuard;
 
 namespace Copper68k
@@ -289,11 +290,18 @@ namespace Copper68k
         private uint _instructionTransparentTranslation1;
         private uint _dataTransparentTranslation0;
         private uint _dataTransparentTranslation1;
+        private uint _status;
+        private bool _bypassTranslation;
+        private bool _directIdentityAccessEnabled = true;
 
         public uint TranslationControl
         {
             get => _translationControl;
-            set => SetTranslationRegister(ref _translationControl, value);
+            set
+            {
+                SetTranslationRegister(ref _translationControl, value);
+                UpdateDirectIdentityAccess();
+            }
         }
 
         public uint SupervisorRootPointer
@@ -332,13 +340,41 @@ namespace Copper68k
             set => SetTranslationRegister(ref _dataTransparentTranslation1, value);
         }
 
-        public uint Status { get; set; }
+        public uint Status
+        {
+            get => _status;
+            set
+            {
+                if (_status == value)
+                {
+                    return;
+                }
 
-        public bool BypassTranslation { get; set; }
+                _status = value;
+                UpdateDirectIdentityAccess();
+            }
+        }
+
+        public bool BypassTranslation
+        {
+            get => _bypassTranslation;
+            set
+            {
+                if (_bypassTranslation == value)
+                {
+                    return;
+                }
+
+                _bypassTranslation = value;
+                UpdateDirectIdentityAccess();
+            }
+        }
 
         public uint Generation { get; private set; }
 
         public bool Enabled => (TranslationControl & TranslationEnable) != 0;
+
+        internal bool DirectIdentityAccessEnabled => _directIdentityAccessEnabled;
 
         internal bool CanBypassTranslation(
             uint logicalAddress,
@@ -360,6 +396,7 @@ namespace Copper68k
             BypassTranslation = false;
             Generation = 0;
             _atc.Clear();
+            UpdateDirectIdentityAccess();
         }
 
         public void Flush()
@@ -376,6 +413,11 @@ namespace Copper68k
             Generation++;
             Flush();
         }
+
+        private void UpdateDirectIdentityAccess()
+            => _directIdentityAccessEnabled =
+                _bypassTranslation ||
+                ((_translationControl & TranslationEnable) == 0 && _status == 0);
 
         public bool TryTranslate(
             uint logicalAddress,
@@ -560,36 +602,83 @@ namespace Copper68k
 
     internal sealed class M68040LogicalBus : IM68kBus, IM68kCodeReader, IM68kFastMemoryBus
     {
+        private const uint PhysicalMapPageMask = 0xFFFF_FF00u;
+        private const int PhysicalMapPageSize = 0x100;
+
         private readonly IM68kBus _physicalBus;
         private readonly IM68kCodeReader? _codeReader;
+        private readonly IM68kFastMemoryBus? _fastMemoryBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
+        private readonly IM68kStablePhysicalAddressMap? _stablePhysicalAddressMap;
+        private readonly PhysicalMapRange _instructionMapRange;
+        private readonly PhysicalMapRange _dataReadMapRange;
+        private readonly PhysicalMapRange _dataWriteMapRange;
+        private readonly bool _allPhysicalAddressesMapped;
         private readonly Func<uint, uint> _readPhysicalLong;
         private readonly M68kCpuState _state;
+        private readonly M68040MmuState _mmu;
+        private PhysicalMapPageCache _instructionMapCache;
+        private PhysicalMapPageCache _dataReadMapCache;
+        private PhysicalMapPageCache _dataWriteMapCache;
 
         public M68040LogicalBus(IM68kBus physicalBus, M68kCpuState state)
         {
             _physicalBus = physicalBus ?? throw new ArgumentNullException(nameof(physicalBus));
             _codeReader = physicalBus as IM68kCodeReader;
+            _fastMemoryBus = physicalBus as IM68kFastMemoryBus;
             _physicalAddressMap = physicalBus as IM68kPhysicalAddressMap;
+            _stablePhysicalAddressMap = physicalBus as IM68kStablePhysicalAddressMap;
+            if (physicalBus is IM68kFixedPhysicalAddressMap fixedMap)
+            {
+                _instructionMapRange = GetFixedPhysicalMapRange(
+                    fixedMap,
+                    M68kBusAccessKind.CpuInstructionFetch);
+                _dataReadMapRange = GetFixedPhysicalMapRange(
+                    fixedMap,
+                    M68kBusAccessKind.CpuDataRead);
+                _dataWriteMapRange = GetFixedPhysicalMapRange(
+                    fixedMap,
+                    M68kBusAccessKind.CpuDataWrite);
+                _allPhysicalAddressesMapped =
+                    _instructionMapRange.CoversAllAddresses &&
+                    _dataReadMapRange.CoversAllAddresses &&
+                    _dataWriteMapRange.CoversAllAddresses;
+            }
+
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            _mmu = state.M68040Mmu;
             _readPhysicalLong = ReadPhysicalLong;
         }
 
+        internal IM68kBus PhysicalBus => _physicalBus;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool CanUseDirectIdentityAccess(uint address, int byteCount)
+            => _allPhysicalAddressesMapped &&
+                _mmu.DirectIdentityAccessEnabled &&
+                (uint)(byteCount - 1) <= uint.MaxValue - address;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadByte(Translate(address, accessKind, write: false, byteCount: 1), ref cycle, accessKind);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadWord(Translate(address, accessKind, write: false, byteCount: 2), ref cycle, accessKind);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.ReadLong(Translate(address, accessKind, write: false, byteCount: 4), ref cycle, accessKind);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteByte(Translate(address, accessKind, write: true, byteCount: 1), value, ref cycle, accessKind);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteWord(Translate(address, accessKind, write: true, byteCount: 2), value, ref cycle, accessKind);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4), value, ref cycle, accessKind);
 
@@ -619,6 +708,7 @@ namespace Copper68k
         public void ResetExternalDevices(long cycle)
             => _physicalBus.ResetExternalDevices(cycle);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ushort ReadHostWord(uint address)
         {
             var physical = Translate(address, M68kBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2);
@@ -634,9 +724,9 @@ namespace Copper68k
         public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 1);
-            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
+            if (_fastMemoryBus is not null && CanFastReadPhysical(physical))
             {
-                return fastBus.TryReadFastByte(physical, accessKind, out value);
+                return _fastMemoryBus.TryReadFastByte(physical, accessKind, out value);
             }
 
             value = 0;
@@ -646,9 +736,9 @@ namespace Copper68k
         public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 2);
-            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
+            if (_fastMemoryBus is not null && CanFastReadPhysical(physical))
             {
-                return fastBus.TryReadFastWord(physical, accessKind, out value);
+                return _fastMemoryBus.TryReadFastWord(physical, accessKind, out value);
             }
 
             value = 0;
@@ -658,9 +748,9 @@ namespace Copper68k
         public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
         {
             var physical = Translate(address, accessKind, write: false, byteCount: 4);
-            if (_physicalBus is IM68kFastMemoryBus fastBus && CanFastReadPhysical(physical))
+            if (_fastMemoryBus is not null && CanFastReadPhysical(physical))
             {
-                return fastBus.TryReadFastLong(physical, accessKind, out value);
+                return _fastMemoryBus.TryReadFastLong(physical, accessKind, out value);
             }
 
             value = 0;
@@ -670,34 +760,34 @@ namespace Copper68k
         public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 1);
-            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
+            if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            return fastBus.TryWriteFastByte(physical, value, accessKind);
+            return _fastMemoryBus.TryWriteFastByte(physical, value, accessKind);
         }
 
         public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 2);
-            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
+            if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            return fastBus.TryWriteFastWord(physical, value, accessKind);
+            return _fastMemoryBus.TryWriteFastWord(physical, value, accessKind);
         }
 
         public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
             var physical = Translate(address, accessKind, write: true, byteCount: 4);
-            if (_physicalBus is not IM68kFastMemoryBus fastBus || !CanFastWritePhysical(physical))
+            if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
             }
 
-            return fastBus.TryWriteFastLong(physical, value, accessKind);
+            return _fastMemoryBus.TryWriteFastLong(physical, value, accessKind);
         }
 
         private static bool CanFastReadPhysical(uint physical)
@@ -714,10 +804,52 @@ namespace Copper68k
                 M68020MemoryTarget.RealFastRam;
 
         [HotPath]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint Translate(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
         {
+            var mmu = _mmu;
+            if (mmu.BypassTranslation)
+            {
+                return _allPhysicalAddressesMapped
+                    ? address
+                    : AcceptPhysicalAddress(address, byteCount, accessKind, write);
+            }
+
+            if (!mmu.Enabled)
+            {
+                if (mmu.Status != 0)
+                {
+                    mmu.Status = 0;
+                }
+
+                return _allPhysicalAddressesMapped
+                    ? address
+                    : AcceptPhysicalAddress(address, byteCount, accessKind, write);
+            }
+
+            return TranslateEnabled(address, accessKind, write, byteCount);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint AcceptPhysicalAddress(
+            uint address,
+            int byteCount,
+            M68kBusAccessKind accessKind,
+            bool write)
+        {
+            if (IsPhysicalAddressMapped(address, byteCount, accessKind))
+            {
+                return address;
+            }
+
+            return ThrowPhysicalAddressFault(address, accessKind, write);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private uint TranslateEnabled(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
+        {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
-            if (_state.M68040Mmu.TryTranslate(
+            if (_mmu.TryTranslate(
                 address,
                 accessKind,
                 write,
@@ -742,9 +874,129 @@ namespace Copper68k
                 WithStackedProgramCounter(fault, address, accessKind));
         }
 
-        private bool IsPhysicalAddressMapped(uint physicalAddress, int byteCount, M68kBusAccessKind accessKind)
-            => _physicalAddressMap == null ||
-                _physicalAddressMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private uint ThrowPhysicalAddressFault(
+            uint address,
+            M68kBusAccessKind accessKind,
+            bool write)
+        {
+            var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
+            throw new M68040MmuFaultException(
+                WithStackedProgramCounter(
+                    CreatePhysicalAddressFault(address, accessKind, write, supervisor),
+                    address,
+                    accessKind));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsPhysicalAddressMapped(
+            uint physicalAddress,
+            int byteCount,
+            M68kBusAccessKind accessKind)
+        {
+            var fixedRange = accessKind switch
+            {
+                M68kBusAccessKind.CpuInstructionFetch => _instructionMapRange,
+                M68kBusAccessKind.CpuDataRead => _dataReadMapRange,
+                M68kBusAccessKind.CpuDataWrite => _dataWriteMapRange,
+                _ => default
+            };
+            if (fixedRange.Contains(physicalAddress, byteCount))
+            {
+                return true;
+            }
+
+            var stableMap = _stablePhysicalAddressMap;
+            if (stableMap is null ||
+                (physicalAddress & ~PhysicalMapPageMask) > PhysicalMapPageSize - byteCount)
+            {
+                return _physicalAddressMap == null ||
+                    _physicalAddressMap.IsCpuPhysicalAddressMapped(
+                        physicalAddress,
+                        byteCount,
+                        accessKind);
+            }
+
+            return accessKind switch
+            {
+                M68kBusAccessKind.CpuInstructionFetch => IsPhysicalAddressMappedCached(
+                    stableMap,
+                    physicalAddress,
+                    byteCount,
+                    accessKind,
+                    ref _instructionMapCache),
+                M68kBusAccessKind.CpuDataRead => IsPhysicalAddressMappedCached(
+                    stableMap,
+                    physicalAddress,
+                    byteCount,
+                    accessKind,
+                    ref _dataReadMapCache),
+                M68kBusAccessKind.CpuDataWrite => IsPhysicalAddressMappedCached(
+                    stableMap,
+                    physicalAddress,
+                    byteCount,
+                    accessKind,
+                    ref _dataWriteMapCache),
+                _ => stableMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind)
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsPhysicalAddressMappedCached(
+            IM68kStablePhysicalAddressMap stableMap,
+            uint physicalAddress,
+            int byteCount,
+            M68kBusAccessKind accessKind,
+            ref PhysicalMapPageCache cache)
+        {
+            var page = physicalAddress & PhysicalMapPageMask;
+            var generation = stableMap.CpuPhysicalAddressMapGeneration;
+            if (!cache.Initialized || cache.Page != page || cache.Generation != generation)
+            {
+                cache.Page = page;
+                cache.Generation = generation;
+                cache.FullyMapped = stableMap.IsCpuPhysicalAddressMapped(
+                    page,
+                    PhysicalMapPageSize,
+                    accessKind);
+                cache.Initialized = true;
+            }
+
+            return cache.FullyMapped ||
+                stableMap.IsCpuPhysicalAddressMapped(physicalAddress, byteCount, accessKind);
+        }
+
+        private struct PhysicalMapPageCache
+        {
+            public uint Page;
+            public uint Generation;
+            public bool FullyMapped;
+            public bool Initialized;
+        }
+
+        private readonly record struct PhysicalMapRange(uint StartAddress, uint EndAddress, bool Valid)
+        {
+            public bool CoversAllAddresses
+                => Valid && StartAddress == 0 && EndAddress == uint.MaxValue;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Contains(uint address, int byteCount)
+                => Valid &&
+                    byteCount > 0 &&
+                    address >= StartAddress &&
+                    address <= EndAddress &&
+                    (uint)(byteCount - 1) <= EndAddress - address;
+        }
+
+        private static PhysicalMapRange GetFixedPhysicalMapRange(
+            IM68kFixedPhysicalAddressMap fixedMap,
+            M68kBusAccessKind accessKind)
+            => fixedMap.TryGetCpuPhysicalAddressMappedRange(
+                accessKind,
+                out var startAddress,
+                out var endAddress)
+                ? new PhysicalMapRange(startAddress, endAddress, Valid: true)
+                : default;
 
         private static M68040MmuFault CreatePhysicalAddressFault(
             uint logicalAddress,
@@ -927,14 +1179,16 @@ namespace Copper68k
             IM68kBus bus,
             M68020CpuProfile profile,
             M68kCpuState state,
-            M68kInstructionFrequencyMatrix? instructionFrequency = null)
+            M68kInstructionFrequencyMatrix? instructionFrequency = null,
+            bool enableAdvancedFastPath = true)
             : base(
                 new M68040LogicalBus(bus, state),
                 profile,
                 state,
                 instructionFrequency,
                 opcodeKinds: M68020OpcodeDispatchTable.M68040Kinds,
-                hasModelSpecificInstructions: true)
+                hasModelSpecificInstructions: true,
+                enableAdvancedFastPath: enableAdvancedFastPath)
         {
             _physicalBus = bus ?? throw new ArgumentNullException(nameof(bus));
             if (profile.Model != M68kAcceleratorModel.M68040)

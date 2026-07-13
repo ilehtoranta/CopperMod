@@ -1492,6 +1492,9 @@ namespace Copper68k
         private static readonly byte[] M68030FastKinds =
             CreateFastKinds(M68020OpcodeDispatchTable.M68030Kinds);
 
+        private static readonly byte[] M68040FastKinds =
+            CreateFastKinds(M68020OpcodeDispatchTable.M68040Kinds);
+
         private static byte[] CreateFastKinds(M68020OpcodeKind[] opcodeKinds)
         {
             var kinds = new byte[0x10000];
@@ -1553,17 +1556,22 @@ namespace Copper68k
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             State = state ?? throw new ArgumentNullException(nameof(state));
             _opcodeKinds = opcodeKinds ?? M68020OpcodeDispatchTable.M68020Kinds;
-            _fastKinds = profile.Model == M68kAcceleratorModel.M68030
-                ? M68030FastKinds
-                : M68020FastKinds;
+            _fastKinds = profile.Model switch
+            {
+                M68kAcceleratorModel.M68030 => M68030FastKinds,
+                M68kAcceleratorModel.M68040 => M68040FastKinds,
+                _ => M68020FastKinds
+            };
             _codeReader = bus as IM68kCodeReader;
             _jitBus = bus as IM68kJitBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _hasModelSpecificInstructions = hasModelSpecificInstructions;
             _enableAdvancedFastPath =
                 enableAdvancedFastPath &&
-                !_hasModelSpecificInstructions &&
-                profile.Model is M68kAcceleratorModel.M68020 or M68kAcceleratorModel.M68030;
+                profile.Model is
+                    M68kAcceleratorModel.M68020 or
+                    M68kAcceleratorModel.M68030 or
+                    M68kAcceleratorModel.M68040;
             if (_enableAdvancedFastPath && _codeReader is not null)
             {
                 _hotBlocks = new M68kAdvancedHotBlock[HotBlockCacheSize];
