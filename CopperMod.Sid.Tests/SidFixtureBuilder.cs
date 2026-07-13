@@ -15,11 +15,14 @@ internal static class SidFixtureBuilder
 		ushort flags = (1 << 2) | (2 << 4),
 		string title = "Generated SID",
 		string author = "CopperMod",
-		string released = "2026")
+		string released = "2026",
+		ushort version = 2,
+		byte secondSidAddress = 0,
+		byte thirdSidAddress = 0)
 	{
 		var data = new byte[0x7C + payload.Length];
 		WriteAscii(data, 0, "PSID");
-		WriteBigEndian(data, 4, (ushort)2);
+		WriteBigEndian(data, 4, version);
 		WriteBigEndian(data, 6, (ushort)0x7C);
 		WriteBigEndian(data, 8, loadAddress);
 		WriteBigEndian(data, 0x0A, initAddress);
@@ -31,6 +34,8 @@ internal static class SidFixtureBuilder
 		WriteFixed(data, 0x36, author);
 		WriteFixed(data, 0x56, released);
 		WriteBigEndian(data, 0x76, flags);
+		data[0x7A] = secondSidAddress;
+		data[0x7B] = thirdSidAddress;
 		payload.CopyTo(data, 0x7C);
 		return data;
 	}

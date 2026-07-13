@@ -75,7 +75,6 @@ namespace CopperMod.Sid
                 flags = BigEndian.ReadUInt16(data, 0x76, "flags");
                 relocationStartPage = data[0x78];
                 relocationPageLength = data[0x79];
-                _ = BigEndian.ReadUInt16(data, 0x7A, "reserved");
                 clock = DecodeClock(flags);
                 chipModel = DecodeChipModel(flags);
             }
@@ -130,10 +129,10 @@ namespace CopperMod.Sid
                     "SID_RSID_BASIC_NATIVE_RUNNER"));
             }
 
-            var chips = ParseChips(data, version, dataOffset, diagnostics);
+            var chips = ParseChips(data, version, dataOffset, flags, chipModel, diagnostics);
             if (chips.Count == 0)
             {
-                chips.Add(new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress));
+                chips.Add(new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress, chipModel));
             }
 
             if (chipModel == SidChipModel.Unknown)
@@ -200,8 +199,11 @@ namespace CopperMod.Sid
         }
 
         private static SidChipModel DecodeChipModel(ushort flags)
+            => DecodeChipModel(flags, 4);
+
+        private static SidChipModel DecodeChipModel(ushort flags, int shift)
         {
-            return ((flags >> 4) & 0x03) switch
+            return ((flags >> shift) & 0x03) switch
             {
                 1 => SidChipModel.Mos6581,
                 2 => SidChipModel.Mos8580,
@@ -214,20 +216,34 @@ namespace CopperMod.Sid
             ReadOnlySpan<byte> data,
             int version,
             int dataOffset,
+            ushort flags,
+            SidChipModel primaryModel,
             List<ModuleDiagnostic> diagnostics)
         {
-            var chips = new List<SidChipPlacement> { new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress) };
-            if (version < 3 || dataOffset < 0x80 || data.Length < 0x80)
+            var chips = new List<SidChipPlacement>
+            {
+                new SidChipPlacement(0, SidConstants.DefaultSidBaseAddress, primaryModel)
+            };
+            if (version < 3 || dataOffset < SidConstants.V2HeaderLength || data.Length < SidConstants.V2HeaderLength)
             {
                 return chips;
             }
 
-            AddExtraChip(data[0x7E], 1, chips, diagnostics);
-            AddExtraChip(data[0x7F], 2, chips, diagnostics);
+            AddExtraChip(data[0x7A], 1, DecodeChipModel(flags, 6), chips, diagnostics);
+            if (version >= 4)
+            {
+                AddExtraChip(data[0x7B], 2, DecodeChipModel(flags, 8), chips, diagnostics);
+            }
+
             return chips;
         }
 
-        private static void AddExtraChip(byte encodedAddress, int index, List<SidChipPlacement> chips, List<ModuleDiagnostic> diagnostics)
+        private static void AddExtraChip(
+            byte encodedAddress,
+            int index,
+            SidChipModel model,
+            List<SidChipPlacement> chips,
+            List<ModuleDiagnostic> diagnostics)
         {
             if (encodedAddress == 0)
             {
@@ -244,7 +260,21 @@ namespace CopperMod.Sid
                 return;
             }
 
-            chips.Add(new SidChipPlacement(index, baseAddress));
+            for (var i = 0; i < chips.Count; i++)
+            {
+                if (chips[i].BaseAddress != baseAddress)
+                {
+                    continue;
+                }
+
+                diagnostics.Add(new ModuleDiagnostic(
+                    ModuleDiagnosticSeverity.Warning,
+                    $"SID chip {index + 1} duplicates base address ${baseAddress:X4} and was ignored.",
+                    "SID_EXTRA_DUPLICATE_BASE"));
+                return;
+            }
+
+            chips.Add(new SidChipPlacement(index, baseAddress, model));
         }
 
         private static ushort DecodeExtraSidAddress(byte encodedAddress)

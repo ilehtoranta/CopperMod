@@ -41,7 +41,7 @@ namespace CopperMod.Sid
     /// </summary>
     internal sealed class SidChipPlacement
     {
-        public SidChipPlacement(int index, ushort baseAddress)
+        public SidChipPlacement(int index, ushort baseAddress, SidChipModel model = SidChipModel.Unknown)
         {
             if (index < 0)
             {
@@ -50,11 +50,24 @@ namespace CopperMod.Sid
 
             Index = index;
             BaseAddress = baseAddress;
+            Model = model;
         }
 
         public int Index { get; }
 
         public ushort BaseAddress { get; }
+
+        public SidChipModel Model { get; }
+
+        public SidChipModel ResolveModel(SidChipModel primaryModel)
+        {
+            if (Model == SidChipModel.Mos6581 || Model == SidChipModel.Mos8580)
+            {
+                return Model;
+            }
+
+            return primaryModel == SidChipModel.Mos8580 ? SidChipModel.Mos8580 : SidChipModel.Mos6581;
+        }
     }
 
     /// <summary>

@@ -49,9 +49,10 @@ namespace CopperMod.Sid
             _registerChips = new SidChip[placements.Count];
             for (var i = 0; i < placements.Count; i++)
             {
-                Chips[i] = new SidChip(model, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile, sidEmulationProfile);
+                var chipModel = placements[i].ResolveModel(model);
+                Chips[i] = new SidChip(chipModel, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile, sidEmulationProfile);
                 Chips[i].TraceChipIndex = i;
-                _registerChips[i] = new SidChip(model, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile, sidEmulationProfile);
+                _registerChips[i] = new SidChip(chipModel, placements[i].BaseAddress, cpuCyclesPerSecond, filterProfile, sidEmulationProfile);
                 _registerChips[i].TraceChipIndex = i;
             }
 
@@ -517,7 +518,10 @@ namespace CopperMod.Sid
                 channelAccumulator[offset + 2] += channelScratch[offset + 2];
             }
 
-            _sampleAccumulator += sample / Chips.Length;
+            // Multiple physical SIDs are summed by the output network. Do not normalize by
+            // the number of installed chips: doing so attenuates active audio when another
+            // declared chip is silent. Final headroom limiting happens at the sample boundary.
+            _sampleAccumulator += sample;
             _sampleCycles++;
         }
 

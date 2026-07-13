@@ -35,6 +35,72 @@ public sealed class SidParserTests
 		Assert.Equal("Generated SID", module.Title);
 		Assert.Equal("CopperMod", module.Author);
 		Assert.Single(module.Chips);
+		Assert.Equal(SidChipModel.Mos8580, module.Chips[0].Model);
+	}
+
+	[Fact]
+	public void ParseReadsStandardV4ExtraSidAddressesAndPerChipModels()
+	{
+		var flags = (ushort)((1 << 2) | (1 << 4) | (2 << 6) | (1 << 8));
+		var data = SidFixtureBuilder.CreatePsid(
+			SidFixtureBuilder.SimpleToneProgram(),
+			flags: flags,
+			version: 4,
+			secondSidAddress: 0x42,
+			thirdSidAddress: 0x50);
+
+		var module = SidParser.Parse(data);
+
+		Assert.Collection(
+			module.Chips,
+			chip =>
+			{
+				Assert.Equal(0xD400, chip.BaseAddress);
+				Assert.Equal(SidChipModel.Mos6581, chip.Model);
+			},
+			chip =>
+			{
+				Assert.Equal(0xD420, chip.BaseAddress);
+				Assert.Equal(SidChipModel.Mos8580, chip.Model);
+			},
+			chip =>
+			{
+				Assert.Equal(0xD500, chip.BaseAddress);
+				Assert.Equal(SidChipModel.Mos6581, chip.Model);
+			});
+	}
+
+	[Fact]
+	public void ParseV3UsesSecondSidAndIgnoresReservedThirdSidField()
+	{
+		var flags = (ushort)((1 << 2) | (2 << 4) | (1 << 6) | (1 << 8));
+		var data = SidFixtureBuilder.CreatePsid(
+			SidFixtureBuilder.SimpleToneProgram(),
+			flags: flags,
+			version: 3,
+			secondSidAddress: 0x42,
+			thirdSidAddress: 0x50);
+
+		var module = SidParser.Parse(data);
+
+		Assert.Equal(2, module.Chips.Count);
+		Assert.Equal(0xD420, module.Chips[1].BaseAddress);
+		Assert.Equal(SidChipModel.Mos6581, module.Chips[1].Model);
+	}
+
+	[Fact]
+	public void ParseIgnoresDuplicateExtraSidAddress()
+	{
+		var data = SidFixtureBuilder.CreatePsid(
+			SidFixtureBuilder.SimpleToneProgram(),
+			version: 4,
+			secondSidAddress: 0x42,
+			thirdSidAddress: 0x42);
+
+		var module = SidParser.Parse(data);
+
+		Assert.Equal(2, module.Chips.Count);
+		Assert.Contains(module.Diagnostics, diagnostic => diagnostic.Code == "SID_EXTRA_DUPLICATE_BASE");
 	}
 
 	[Fact]
