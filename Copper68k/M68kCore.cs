@@ -2617,10 +2617,8 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
-            if (MoveSourceHasExtensionWord(sourceMode, sourceRegister))
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
+            PrefetchMoveSourceExtensionsBeforeRead(
+                GetMoveSourceExtensionWordCount(sourceMode, sourceRegister, size));
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -3632,10 +3630,8 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
-            if (MoveSourceHasExtensionWord(plan.SourceMode, plan.SourceRegister))
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
+            PrefetchMoveSourceExtensionsBeforeRead(
+                GetMoveSourceExtensionWordCount(plan.SourceMode, plan.SourceRegister, plan.Size));
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -4659,10 +4655,8 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
-            if (MoveSourceHasExtensionWord(srcMode, srcReg))
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
+            PrefetchMoveSourceExtensionsBeforeRead(
+                GetMoveSourceExtensionWordCount(srcMode, srcReg, size));
 
             var value = src.Read();
             if (!moveWritesMemory)
@@ -7784,8 +7778,44 @@ namespace Copper68k
             => mode is 5 or 6 || (mode == 7 && register <= 1);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool MoveSourceHasExtensionWord(int mode, int register)
-            => mode is 5 or 6 || (mode == 7 && register <= 4);
+        private static int GetMoveSourceExtensionWordCount(
+            int mode,
+            int register,
+            M68kOperandSize size)
+        {
+            if (mode is 5 or 6)
+            {
+                return 1;
+            }
+
+            if (mode != 7)
+            {
+                return 0;
+            }
+
+            return register switch
+            {
+                0 or 2 or 3 => 1,
+                1 => 2,
+                4 => size == M68kOperandSize.Long ? 2 : 1,
+                _ => 0
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrefetchMoveSourceExtensionsBeforeRead(int extensionWordCount)
+        {
+            if (extensionWordCount <= 0)
+            {
+                return;
+            }
+
+            PrefetchFallthroughBeforeMemoryWriteback();
+            if (extensionWordCount > 1)
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughAfterMoveSourceRead()

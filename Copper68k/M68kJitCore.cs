@@ -4,12 +4,14 @@
  */
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -120,6 +122,8 @@ namespace Copper68k
         private readonly IM68kJitBus? _jitBus;
         private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
         private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
+        private readonly IM68kJitDirectRamBus? _directRamBus;
+        private readonly M68kJitDirectRamMap _directRamMap;
         private readonly M68kJitHostAdapter? _amigaBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
@@ -179,6 +183,12 @@ namespace Copper68k
         private bool _v2PendingOutOfBlockBranchIsFallthrough;
         private bool _disposed;
         private bool _subscribedToWriteInvalidation;
+        private int _directPseudoFastAccessCount;
+        private ulong _directPseudoFastLongAccessBits;
+        private long _directPseudoFastReplayCycle;
+        private bool _directRamWritePending;
+        private uint _directRamWriteStart;
+        private uint _directRamWriteEnd;
         private bool _fallbackFetchSynchronized;
         private uint _fallbackExpectedProgramCounter;
         private int _asyncCompileEpoch;
@@ -439,6 +449,46 @@ namespace Copper68k
         private static readonly MethodInfo CompleteJitZeroWaitWriteMethod =
             typeof(IM68kJitFastMemoryBus).GetMethod(nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite)) ??
             throw new MissingMethodException(typeof(IM68kJitFastMemoryBus).FullName, nameof(IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite));
+        private static readonly MethodInfo TryReadM68040DirectRamByteMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryReadM68040DirectRamByte),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint).MakeByRefType());
+        private static readonly MethodInfo TryReadM68040DirectRamWordMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryReadM68040DirectRamWord),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint).MakeByRefType());
+        private static readonly MethodInfo TryReadM68040DirectRamLongMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryReadM68040DirectRamLong),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint).MakeByRefType());
+        private static readonly MethodInfo TryWriteM68040DirectRamByteMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryWriteM68040DirectRamByte),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
+        private static readonly MethodInfo TryWriteM68040DirectRamWordMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryWriteM68040DirectRamWord),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
+        private static readonly MethodInfo TryWriteM68040DirectRamLongMethod =
+            RequiredV2MemoryHelper(
+                nameof(TryWriteM68040DirectRamLong),
+                typeof(long).MakeByRefType(),
+                typeof(uint),
+                typeof(uint));
+        private static readonly MethodInfo FlushM68040DirectRamWorkRefMethod =
+            RequiredV2MemoryHelper(
+                nameof(FlushM68040DirectRamWork),
+                typeof(long).MakeByRefType());
 
         private static MethodInfo RequiredV2MemoryHelper(string name, params Type[] parameterTypes)
             => typeof(M68kJitCore).GetMethod(
@@ -556,6 +606,16 @@ namespace Copper68k
             _jitBus = bus as IM68kJitBus;
             _fastMemoryBus = bus as IM68kJitFastMemoryBus;
             _timedMemoryBus = bus as IM68kJitTimedMemoryBus;
+            _directRamBus = options.CpuModel == M68kJitCpuModel.M68040 &&
+                IsFeatureEnabledByDefault("COPPER_M68K_JIT_040_DIRECT_RAM", defaultValue: true)
+                ? bus as IM68kJitDirectRamBus
+                : null;
+            if (_directRamBus != null &&
+                _directRamBus.TryGetJitDirectRamMap(out var directRamMap) &&
+                directRamMap.IsValid)
+            {
+                _directRamMap = directRamMap;
+            }
             _amigaBus = _jitBus == null ? null : new M68kJitHostAdapter(bus, _jitBus, _fastMemoryBus, _timedMemoryBus);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
@@ -1843,7 +1903,15 @@ namespace Copper68k
                 ClearPendingV2OutOfBlockBranch();
                 var currentIsPure = current.V2PureCpuBatchEligible;
                 _fallbackFetchSynchronized = false;
-                var executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
+                int executed;
+                try
+                {
+                    executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
+                }
+                finally
+                {
+                    FlushM68040DirectRamWork();
+                }
                 if (executed == 0)
                 {
                     if (pendingHandoff)
@@ -2845,6 +2913,7 @@ namespace Copper68k
                 _v2BusGraphEnabled,
                 compilationOptions.CpuModel == M68kJitCpuModel.M68000,
                 compilationOptions.M68040TranslationChecksEnabled,
+                compilationOptions.M68040DirectRamEnabled,
                 compilationOptions.MinimalCycleTiming,
                 compilationOptions.M68040MmuGeneration);
             return true;
@@ -2872,6 +2941,7 @@ namespace Copper68k
                     plan.V2BusGraphEnabled,
                     plan.M68000MemoryHelpers,
                     plan.M68040TranslationChecksEnabled,
+                    plan.M68040DirectRamEnabled,
                     plan.MinimalCycleTiming);
             return new TraceEntry(
                 plan.Root,
@@ -3186,6 +3256,7 @@ namespace Copper68k
                 input.Options.V2BusGraphEnabled,
                 input.Options.CpuModel == M68kJitCpuModel.M68000,
                 input.Options.M68040TranslationChecksEnabled,
+                input.Options.M68040DirectRamEnabled,
                 input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
@@ -3232,6 +3303,7 @@ namespace Copper68k
                 input.Options.V2BusGraphEnabled,
                 input.Options.CpuModel == M68kJitCpuModel.M68000,
                 input.Options.M68040TranslationChecksEnabled,
+                input.Options.M68040DirectRamEnabled,
                 input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
@@ -3721,6 +3793,7 @@ namespace Copper68k
                 _v2BusGraphEnabled,
                 _cpuModel == M68kJitCpuModel.M68000,
                 _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
+                _directRamBus != null && _directRamMap.IsValid,
                 _minimalCycleTiming);
             RecordV2CompiledTrace(tier);
             return true;
@@ -3788,6 +3861,7 @@ namespace Copper68k
             bool useGraph,
             bool useM68000MemoryHelpers,
             bool m68040TranslationChecksEnabled,
+            bool m68040DirectRamEnabled,
             bool minimalCycleTiming)
         {
             var compiled = CompileV2(
@@ -3801,6 +3875,7 @@ namespace Copper68k
                 useGraph,
                 useM68000MemoryHelpers,
                 m68040TranslationChecksEnabled,
+                m68040DirectRamEnabled,
                 minimalCycleTiming);
             return new V2TraceCompilation(
                 compiled,
@@ -5208,6 +5283,7 @@ namespace Copper68k
             bool busGraphEnabled,
             bool useM68000MemoryHelpers,
             bool m68040TranslationChecksEnabled,
+            bool m68040DirectRamEnabled,
             bool minimalCycleTiming)
         {
             if (m68040TranslationChecksEnabled)
@@ -5254,6 +5330,7 @@ namespace Copper68k
                     dirtyDataRegisters,
                     dirtyAddressRegisters,
                     m68040TranslationChecksEnabled,
+                    m68040DirectRamEnabled,
                     minimalCycleTiming);
         }
 
@@ -5419,6 +5496,7 @@ namespace Copper68k
             int dirtyDataRegisters,
             int dirtyAddressRegisters,
             bool m68040TranslationChecksEnabled,
+            bool m68040DirectRamEnabled,
             bool minimalCycleTiming)
         {
             var method = new DynamicMethod(
@@ -5433,6 +5511,7 @@ namespace Copper68k
             var context = V2EmitContext.Create(il, minimalCycleTiming);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
+            context.SetM68040DirectRamEnabled(m68040DirectRamEnabled);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
             if (useGraph)
@@ -7069,6 +7148,24 @@ namespace Copper68k
             if (context.ZeroWaitProbeEnabled)
             {
                 context.EmitBranchToSlowForM68040Translation(address, write: false, slowRead);
+                if (context.M68040DirectRamEnabled)
+                {
+                    var directValue = il.DeclareLocal(typeof(uint));
+                    var directMiss = il.DefineLabel();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                    il.Emit(OpCodes.Ldloc, address);
+                    il.Emit(OpCodes.Ldloca_S, directValue);
+                    il.Emit(OpCodes.Call, GetM68040DirectReadMethod(size));
+                    il.Emit(OpCodes.Brfalse, directMiss);
+                    il.Emit(OpCodes.Ldloc, directValue);
+                    il.Emit(OpCodes.Br, done);
+                    il.MarkLabel(directMiss);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                    il.Emit(OpCodes.Call, FlushM68040DirectRamWorkRefMethod);
+                }
+
                 if (IsV2InlineZeroWaitMemoryEnabled())
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
@@ -7118,6 +7215,13 @@ namespace Copper68k
             }
 
             il.MarkLabel(slowRead);
+            if (context.M68040DirectRamEnabled)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                il.Emit(OpCodes.Call, FlushM68040DirectRamWorkRefMethod);
+            }
+
             if (context.FastReadOnlyFailureEnabled)
             {
                 il.Emit(OpCodes.Br, context.FastReadOnlyFailureLabel);
@@ -7158,6 +7262,22 @@ namespace Copper68k
             if (context.ZeroWaitProbeEnabled)
             {
                 context.EmitBranchToSlowForM68040Translation(address, write: true, slowWrite);
+                if (context.M68040DirectRamEnabled)
+                {
+                    var directMiss = il.DefineLabel();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                    il.Emit(OpCodes.Ldloc, address);
+                    il.Emit(OpCodes.Ldloc, value);
+                    il.Emit(OpCodes.Call, GetM68040DirectWriteMethod(size));
+                    il.Emit(OpCodes.Brfalse, directMiss);
+                    il.Emit(OpCodes.Br, done);
+                    il.MarkLabel(directMiss);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                    il.Emit(OpCodes.Call, FlushM68040DirectRamWorkRefMethod);
+                }
+
                 if (IsV2InlineZeroWaitMemoryEnabled())
                 {
                     var fastMemory = il.DeclareLocal(typeof(byte[]));
@@ -7208,6 +7328,13 @@ namespace Copper68k
             }
 
             il.MarkLabel(slowWrite);
+            if (context.M68040DirectRamEnabled)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldloca_S, context.Cycles);
+                il.Emit(OpCodes.Call, FlushM68040DirectRamWorkRefMethod);
+            }
+
             if (context.ZeroWaitProbeEnabled)
             {
                 context.EmitIncrementZeroWaitSlowWrite();
@@ -7234,6 +7361,22 @@ namespace Copper68k
         {
             return size == M68kOperandSize.Long ? 4 : size == M68kOperandSize.Word ? 2 : 1;
         }
+
+        private static MethodInfo GetM68040DirectReadMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => TryReadM68040DirectRamByteMethod,
+                M68kOperandSize.Word => TryReadM68040DirectRamWordMethod,
+                _ => TryReadM68040DirectRamLongMethod
+            };
+
+        private static MethodInfo GetM68040DirectWriteMethod(M68kOperandSize size)
+            => size switch
+            {
+                M68kOperandSize.Byte => TryWriteM68040DirectRamByteMethod,
+                M68kOperandSize.Word => TryWriteM68040DirectRamWordMethod,
+                _ => TryWriteM68040DirectRamLongMethod
+            };
 
         private static MethodInfo GetM68000V2ReadMemorySlowRefMethod(M68kOperandSize size)
             => size switch
@@ -10496,6 +10639,330 @@ namespace Copper68k
             };
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadM68040DirectRamByte(ref long cycles, uint address, out uint value)
+        {
+            if (!TryResolveM68040DirectRam(address, 1, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamReadMisses++;
+                value = 0;
+                return false;
+            }
+
+            value = memory[offset];
+            RecordM68040DirectRamRead(ref cycles, kind, M68kOperandSize.Byte);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadM68040DirectRamWord(ref long cycles, uint address, out uint value)
+        {
+            if ((address & 1) != 0 ||
+                !TryResolveM68040DirectRam(address, 2, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamReadMisses++;
+                value = 0;
+                return false;
+            }
+
+            value = ReadDirectRamWord(memory, offset);
+            RecordM68040DirectRamRead(ref cycles, kind, M68kOperandSize.Word);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadM68040DirectRamLong(ref long cycles, uint address, out uint value)
+        {
+            if ((address & 1) != 0 ||
+                !TryResolveM68040DirectRam(address, 4, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamReadMisses++;
+                value = 0;
+                return false;
+            }
+
+            value = ReadDirectRamLong(memory, offset);
+            RecordM68040DirectRamRead(ref cycles, kind, M68kOperandSize.Long);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteM68040DirectRamByte(ref long cycles, uint address, uint value)
+        {
+            if (!TryResolveM68040DirectRam(address, 1, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamWriteMisses++;
+                return false;
+            }
+
+            memory[offset] = (byte)value;
+            RecordM68040DirectRamWrite(ref cycles, kind, M68kOperandSize.Byte, address, 1);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteM68040DirectRamWord(ref long cycles, uint address, uint value)
+        {
+            if ((address & 1) != 0 ||
+                !TryResolveM68040DirectRam(address, 2, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamWriteMisses++;
+                return false;
+            }
+
+            WriteDirectRamWord(memory, offset, (ushort)value);
+            RecordM68040DirectRamWrite(ref cycles, kind, M68kOperandSize.Word, address, 2);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteM68040DirectRamLong(ref long cycles, uint address, uint value)
+        {
+            if ((address & 1) != 0 ||
+                !TryResolveM68040DirectRam(address, 4, out var memory, out var offset, out var kind))
+            {
+                _counters.M68040DirectRamWriteMisses++;
+                return false;
+            }
+
+            WriteDirectRamLong(memory, offset, value);
+            RecordM68040DirectRamWrite(ref cycles, kind, M68kOperandSize.Long, address, 4);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryResolveM68040DirectRam(
+            uint address,
+            int byteCount,
+            out byte[] memory,
+            out int offset,
+            out M68kJitDirectRamBankKind kind)
+        {
+            var map = _directRamMap;
+            if (_directRamBus == null ||
+                !map.IsValid ||
+                address > 0x00FF_FFFFu)
+            {
+                memory = null!;
+                offset = 0;
+                kind = M68kJitDirectRamBankKind.None;
+                return false;
+            }
+
+            var bankShift = map.BankShift;
+            var bankSize = 1 << bankShift;
+            var inBank = (int)(address & (uint)(bankSize - 1));
+            if (inBank > bankSize - byteCount)
+            {
+                memory = null!;
+                offset = 0;
+                kind = M68kJitDirectRamBankKind.None;
+                return false;
+            }
+
+            var bank = (int)(address >> bankShift);
+            if ((uint)bank >= (uint)map.BankKinds.Length)
+            {
+                memory = null!;
+                offset = 0;
+                kind = M68kJitDirectRamBankKind.None;
+                return false;
+            }
+
+            kind = (M68kJitDirectRamBankKind)map.BankKinds[bank];
+            memory = kind switch
+            {
+                M68kJitDirectRamBankKind.PseudoFast => map.PseudoFastMemory,
+                M68kJitDirectRamBankKind.RealFast => map.RealFastMemory,
+                _ => null!
+            };
+            offset = map.BankOffsets[bank] + inBank;
+            return memory != null &&
+                memory.Length >= byteCount &&
+                (uint)offset <= (uint)(memory.Length - byteCount);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordM68040DirectRamRead(
+            ref long cycles,
+            M68kJitDirectRamBankKind kind,
+            M68kOperandSize size)
+        {
+            if (kind == M68kJitDirectRamBankKind.PseudoFast)
+            {
+                _counters.M68040DirectPseudoFastReads++;
+                RecordM68040DirectPseudoFastAccess(ref cycles, size);
+                return;
+            }
+
+            _counters.M68040DirectRealFastReads++;
+            _counters.V2ZeroWaitReadRealFast++;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordM68040DirectRamWrite(
+            ref long cycles,
+            M68kJitDirectRamBankKind kind,
+            M68kOperandSize size,
+            uint address,
+            int byteCount)
+        {
+            if (kind == M68kJitDirectRamBankKind.PseudoFast)
+            {
+                _counters.M68040DirectPseudoFastWrites++;
+                RecordM68040DirectPseudoFastAccess(ref cycles, size);
+            }
+            else
+            {
+                _counters.M68040DirectRealFastWrites++;
+                _counters.V2ZeroWaitWriteRealFast++;
+            }
+
+            RecordM68040DirectRamDirtyRange(address, byteCount);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordM68040DirectPseudoFastAccess(ref long cycles, M68kOperandSize size)
+        {
+            var count = _directPseudoFastAccessCount;
+            if (count == 0)
+            {
+                _directPseudoFastReplayCycle = cycles;
+                _directPseudoFastLongAccessBits = 0;
+            }
+
+            if (size == M68kOperandSize.Long)
+            {
+                _directPseudoFastLongAccessBits |= 1UL << count;
+            }
+
+            count++;
+            _directPseudoFastAccessCount = count;
+            if (count == 64)
+            {
+                FlushM68040DirectPseudoFastTiming(ref cycles);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordM68040DirectRamDirtyRange(uint address, int byteCount)
+        {
+            var end = address + (uint)byteCount;
+            if (_directRamWritePending)
+            {
+                var page = address & ~(uint)(CodeGenerationPageSize - 1);
+                var pendingPage = _directRamWriteStart & ~(uint)(CodeGenerationPageSize - 1);
+                if (page == pendingPage && end <= page + CodeGenerationPageSize)
+                {
+                    _directRamWriteStart = Math.Min(_directRamWriteStart, address);
+                    _directRamWriteEnd = Math.Max(_directRamWriteEnd, end);
+                    return;
+                }
+
+                FlushM68040DirectRamWrite();
+            }
+
+            _directRamWritePending = true;
+            _directRamWriteStart = address;
+            _directRamWriteEnd = end;
+        }
+
+        private void FlushM68040DirectRamWork(ref long cycles)
+        {
+            FlushM68040DirectPseudoFastTiming(ref cycles);
+            FlushM68040DirectRamWrite();
+        }
+
+        private void FlushM68040DirectRamWork()
+        {
+            var cycles = State.Cycles;
+            FlushM68040DirectRamWork(ref cycles);
+            if (State.Cycles < cycles)
+            {
+                State.Cycles = cycles;
+            }
+        }
+
+        private void FlushM68040DirectPseudoFastTiming(ref long cycles)
+        {
+            var count = _directPseudoFastAccessCount;
+            if (count == 0 || _directRamBus == null)
+            {
+                return;
+            }
+
+            var replayCycle = _directPseudoFastReplayCycle;
+            _directRamBus.ReplayJitPseudoFastAccesses(
+                ref replayCycle,
+                count,
+                _directPseudoFastLongAccessBits);
+            if (cycles < replayCycle)
+            {
+                cycles = replayCycle;
+            }
+
+            _directPseudoFastAccessCount = 0;
+            _directPseudoFastLongAccessBits = 0;
+            _directPseudoFastReplayCycle = cycles;
+            _counters.M68040DirectPseudoFastTimingFlushes++;
+        }
+
+        private void FlushM68040DirectRamWrite()
+        {
+            if (!_directRamWritePending || _directRamBus == null)
+            {
+                return;
+            }
+
+            var start = _directRamWriteStart;
+            var byteCount = checked((int)(_directRamWriteEnd - start));
+            _directRamWritePending = false;
+            _directRamWriteStart = 0;
+            _directRamWriteEnd = 0;
+            _directRamBus.CompleteJitDirectRamWrite(start, byteCount);
+            _counters.M68040DirectRamWriteCompletionFlushes++;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort ReadDirectRamWord(byte[] memory, int offset)
+        {
+            ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(memory), offset);
+            var value = Unsafe.ReadUnaligned<ushort>(ref source);
+            return BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(value) : value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint ReadDirectRamLong(byte[] memory, int offset)
+        {
+            ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(memory), offset);
+            var value = Unsafe.ReadUnaligned<uint>(ref source);
+            return BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(value) : value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteDirectRamWord(byte[] memory, int offset, ushort value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                value = BinaryPrimitives.ReverseEndianness(value);
+            }
+
+            ref var destination = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(memory), offset);
+            Unsafe.WriteUnaligned(ref destination, value);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteDirectRamLong(byte[] memory, int offset, uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                value = BinaryPrimitives.ReverseEndianness(value);
+            }
+
+            ref var destination = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(memory), offset);
+            Unsafe.WriteUnaligned(ref destination, value);
+        }
+
         private uint ReadMemoryValueForV2Batch(uint address, M68kOperandSize size)
         {
             address = TranslateM68040DataAddress(address, write: false, size);
@@ -10536,6 +11003,15 @@ namespace Copper68k
                 _amigaBus.TryReadJitZeroWaitMemory(address, size, out var fastValue))
             {
                 return fastValue;
+            }
+
+            if (_cpuModel == M68kJitCpuModel.M68040 &&
+                size != M68kOperandSize.Byte &&
+                (address & 1) != 0)
+            {
+                return size == M68kOperandSize.Word
+                    ? _bus.ReadWord(address, ref cycles, M68kBusAccessKind.CpuDataRead)
+                    : _bus.ReadLong(address, ref cycles, M68kBusAccessKind.CpuDataRead);
             }
 
             if (_amigaBus != null)
@@ -10663,6 +11139,22 @@ namespace Copper68k
                 _amigaBus != null &&
                 _amigaBus.TryWriteJitZeroWaitMemory(address, value, size))
             {
+                return;
+            }
+
+            if (_cpuModel == M68kJitCpuModel.M68040 &&
+                size != M68kOperandSize.Byte &&
+                (address & 1) != 0)
+            {
+                if (size == M68kOperandSize.Word)
+                {
+                    _bus.WriteWord(address, (ushort)value, ref cycles, M68kBusAccessKind.CpuDataWrite);
+                }
+                else
+                {
+                    _bus.WriteLong(address, value, ref cycles, M68kBusAccessKind.CpuDataWrite);
+                }
+
                 return;
             }
 
@@ -11588,6 +12080,12 @@ namespace Copper68k
 
         private void ClearRuntimeState()
         {
+            _directPseudoFastAccessCount = 0;
+            _directPseudoFastLongAccessBits = 0;
+            _directPseudoFastReplayCycle = State.Cycles;
+            _directRamWritePending = false;
+            _directRamWriteStart = 0;
+            _directRamWriteEnd = 0;
             _traces.Clear();
             _traceRootsByPage.Clear();
             _hotCounters.Clear();
@@ -11752,6 +12250,7 @@ namespace Copper68k
                 _v2BusGraphEnabled || _v2BusAccessEnabled,
                 workerGraphExpansionEnabled,
                 _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
+                _directRamBus != null && _directRamMap.IsValid,
                 _minimalCycleTiming,
                 _cpuModel,
                 GetCurrentM68040MmuGeneration());
@@ -12581,6 +13080,8 @@ namespace Copper68k
 
             public bool M68040TranslationChecksEnabled { get; private set; }
 
+            public bool M68040DirectRamEnabled { get; private set; }
+
             public bool M68000MemoryHelpers { get; private set; }
 
             public bool ZeroWaitStatsUsed { get; private set; }
@@ -12598,6 +13099,11 @@ namespace Copper68k
             public void SetM68040TranslationChecks(bool enabled)
             {
                 M68040TranslationChecksEnabled = enabled;
+            }
+
+            public void SetM68040DirectRamEnabled(bool enabled)
+            {
+                M68040DirectRamEnabled = enabled;
             }
 
             public void SetM68000MemoryHelpers(bool enabled)
@@ -13411,6 +13917,7 @@ namespace Copper68k
                 bool v2BusGraphEnabled,
                 bool m68000MemoryHelpers,
                 bool m68040TranslationChecksEnabled,
+                bool m68040DirectRamEnabled,
                 bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
@@ -13430,6 +13937,7 @@ namespace Copper68k
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 M68000MemoryHelpers = m68000MemoryHelpers;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                M68040DirectRamEnabled = m68040DirectRamEnabled;
                 MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -13466,6 +13974,8 @@ namespace Copper68k
 
             public bool M68040TranslationChecksEnabled { get; }
 
+            public bool M68040DirectRamEnabled { get; }
+
             public bool MinimalCycleTiming { get; }
 
             public uint M68040MmuGeneration { get; }
@@ -13482,6 +13992,7 @@ namespace Copper68k
                 bool v2BusGraphEnabled,
                 bool workerGraphExpansionEnabled,
                 bool m68040TranslationChecksEnabled,
+                bool m68040DirectRamEnabled,
                 bool minimalCycleTiming,
                 M68kJitCpuModel cpuModel,
                 uint m68040MmuGeneration)
@@ -13494,6 +14005,7 @@ namespace Copper68k
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                M68040DirectRamEnabled = m68040DirectRamEnabled;
                 MinimalCycleTiming = minimalCycleTiming;
                 CpuModel = cpuModel;
                 M68040MmuGeneration = m68040MmuGeneration;
@@ -13514,6 +14026,8 @@ namespace Copper68k
             public bool WorkerGraphExpansionEnabled { get; }
 
             public bool M68040TranslationChecksEnabled { get; }
+
+            public bool M68040DirectRamEnabled { get; }
 
             public bool MinimalCycleTiming { get; }
 
@@ -13594,6 +14108,7 @@ namespace Copper68k
                 bool v2BusGraphEnabled,
                 bool m68000MemoryHelpers,
                 bool m68040TranslationChecksEnabled,
+                bool m68040DirectRamEnabled,
                 bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
@@ -13608,6 +14123,7 @@ namespace Copper68k
                 V2BusGraphEnabled = v2BusGraphEnabled;
                 M68000MemoryHelpers = m68000MemoryHelpers;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
+                M68040DirectRamEnabled = m68040DirectRamEnabled;
                 MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -13633,6 +14149,8 @@ namespace Copper68k
             public bool M68000MemoryHelpers { get; }
 
             public bool M68040TranslationChecksEnabled { get; }
+
+            public bool M68040DirectRamEnabled { get; }
 
             public bool MinimalCycleTiming { get; }
 
@@ -13780,6 +14298,7 @@ namespace Copper68k
                         promotionPlan.V2BusGraphEnabled,
                         promotionPlan.M68000MemoryHelpers,
                         promotionPlan.M68040TranslationChecksEnabled,
+                        promotionPlan.M68040DirectRamEnabled,
                         promotionPlan.MinimalCycleTiming);
                     PrepareCompiledTrace(compiled.Compiled!);
                     return M68kJitCompileResult.ForPromotion(
@@ -14456,6 +14975,22 @@ namespace Copper68k
         public long V2ZeroWaitReadSlow { get; set; }
 
         public long V2ZeroWaitWriteSlow { get; set; }
+
+        public long M68040DirectPseudoFastReads { get; set; }
+
+        public long M68040DirectPseudoFastWrites { get; set; }
+
+        public long M68040DirectRealFastReads { get; set; }
+
+        public long M68040DirectRealFastWrites { get; set; }
+
+        public long M68040DirectRamReadMisses { get; set; }
+
+        public long M68040DirectRamWriteMisses { get; set; }
+
+        public long M68040DirectPseudoFastTimingFlushes { get; set; }
+
+        public long M68040DirectRamWriteCompletionFlushes { get; set; }
 
         public long Invalidations { get; set; }
 

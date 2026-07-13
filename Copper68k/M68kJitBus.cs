@@ -7,6 +7,56 @@ using System;
 
 namespace Copper68k
 {
+    internal enum M68kJitDirectRamBankKind : byte
+    {
+        None = 0,
+        PseudoFast = 1,
+        RealFast = 2
+    }
+
+    internal readonly struct M68kJitDirectRamMap
+    {
+        public M68kJitDirectRamMap(
+            byte[] bankKinds,
+            int[] bankOffsets,
+            byte[] pseudoFastMemory,
+            byte[] realFastMemory,
+            int bankShift)
+        {
+            BankKinds = bankKinds ?? throw new ArgumentNullException(nameof(bankKinds));
+            BankOffsets = bankOffsets ?? throw new ArgumentNullException(nameof(bankOffsets));
+            PseudoFastMemory = pseudoFastMemory ?? throw new ArgumentNullException(nameof(pseudoFastMemory));
+            RealFastMemory = realFastMemory ?? throw new ArgumentNullException(nameof(realFastMemory));
+            BankShift = bankShift;
+        }
+
+        public byte[] BankKinds { get; }
+
+        public int[] BankOffsets { get; }
+
+        public byte[] PseudoFastMemory { get; }
+
+        public byte[] RealFastMemory { get; }
+
+        public int BankShift { get; }
+
+        public bool IsValid =>
+            BankShift > 0 &&
+            BankShift < 24 &&
+            BankKinds != null &&
+            BankOffsets != null &&
+            BankKinds.Length == BankOffsets.Length;
+    }
+
+    internal interface IM68kJitDirectRamBus
+    {
+        bool TryGetJitDirectRamMap(out M68kJitDirectRamMap map);
+
+        void ReplayJitPseudoFastAccesses(ref long cycle, int accessCount, ulong longAccessBits);
+
+        void CompleteJitDirectRamWrite(uint physicalAddress, int byteCount);
+    }
+
     /// <summary>
     /// Selects how a Copper68k core executes instructions.
     /// </summary>
