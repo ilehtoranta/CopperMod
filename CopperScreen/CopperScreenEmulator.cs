@@ -41,7 +41,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly IReadOnlyList<CopperScreenHardfileSettings> _initialHardDrives;
 	private readonly float[] _frameAudio;
 	private readonly int[] _interlacePresentationFrame;
-	private readonly Action<long, long> _renderFrameAudioUntil;
+	private readonly FrameExecutionBoundarySchedule _executionBoundarySchedule;
 	private bool _bootAttempted;
 	private bool _interlacePresentationFrameValid;
 	private CopperScreenPresentationOptions _presentationOptions;
@@ -95,7 +95,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		Array.Fill(Framebuffer, unchecked((int)0xFF000000));
 		_frameAudio = new float[AudioFramesPerAppFrame(DefaultAudioSampleRate) * DefaultAudioChannels];
 		_interlacePresentationFrame = new int[Framebuffer.Length];
-		_renderFrameAudioUntil = RenderFrameAudioUntil;
+		_executionBoundarySchedule = new FrameExecutionBoundarySchedule(this);
 		DiskPath = startupOptions.DriveDiskPaths.Length > 0 ? startupOptions.DriveDiskPaths[0] : startupOptions.DiskPath;
 		_diskName = CopperScreenDiskImageArchive.GetDisplayName(DiskPath);
 		for (var driveIndex = 0; driveIndex < _driveDiskPaths.Length; driveIndex++)
@@ -1030,7 +1030,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		_mousePrimaryFirePressed = primaryFirePressed;
 		_mouseSecondFirePressed = secondFirePressed;
-		ApplyInputState();
+		_executionBoundarySchedule.BeginFrame();
 	}
 
 	public void SetJoystickPort(
@@ -1155,7 +1155,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 				};
 			}
 
-			AdvanceInputPulse();
+			_executionBoundarySchedule.CompleteFrame();
 			return;
 		}
 
@@ -1174,15 +1174,15 @@ internal sealed class CopperScreenEmulator : IDisposable
 				};
 			}
 
-			AdvanceInputPulse();
+			_executionBoundarySchedule.CompleteFrame();
 			return;
 		}
 
-		AdvancePendingDiskInsert();
+		_executionBoundarySchedule.ApplyPendingDiskInsert();
 		if (IsPaused)
 		{
 			_frameAudio.AsSpan().Clear();
-			AdvanceInputPulse();
+			_executionBoundarySchedule.CompleteFrame();
 			return;
 		}
 
@@ -1231,7 +1231,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 					};
 				}
 
-				AdvanceInputPulse();
+				_executionBoundarySchedule.CompleteFrame();
 				return;
 			}
 		}
@@ -1240,7 +1240,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		var frameTargetCycle = GetPresentationFrameStopCycle(frameStartCycle);
 		_targetCycle = frameTargetCycle;
 		var executionTargetCycle = GetBootExecutionTargetCycle(frameTargetCycle);
-		BeginFrameAudio(frameTargetCycle);
+		_executionBoundarySchedule.BeginExecution(frameStartCycle, frameTargetCycle);
 		AmigaBootResult result;
 		var cpuStart = Stopwatch.GetTimestamp();
 		if (_copperStartRuntimeHandoff)
@@ -1248,14 +1248,14 @@ internal sealed class CopperScreenEmulator : IDisposable
 			result = _boot.ContinueCopperStartRuntimeUntilCycle(
 				executionTargetCycle,
 				GetBootMaxInstructionsPerFrame(),
-				_renderFrameAudioUntil);
+				_executionBoundarySchedule);
 		}
 		else
 		{
 			result = _boot.ContinueExecutionUntilCycle(
 				executionTargetCycle,
 				GetBootMaxInstructionsPerFrame(),
-				_renderFrameAudioUntil);
+				_executionBoundarySchedule);
 		}
 
 		LastFrameTiming = LastFrameTiming with
@@ -1263,7 +1263,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			CpuMilliseconds = Stopwatch.GetElapsedTime(cpuStart).TotalMilliseconds
 		};
 
-		FinishFrameAudio();
+		_executionBoundarySchedule.CompleteExecution(frameTargetCycle);
 		if (HandleBootResult(result))
 		{
 			if (renderPresentation)
@@ -1276,7 +1276,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 				};
 			}
 
-			AdvanceInputPulse();
+			_executionBoundarySchedule.CompleteFrame();
 			return;
 		}
 
@@ -1306,7 +1306,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			};
 		}
 
-		AdvanceInputPulse();
+		_executionBoundarySchedule.CompleteFrame();
 	}
 
 	private int GetBootMaxInstructionsPerFrame()
@@ -1449,6 +1449,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_frameAudioSampleIndex++;
 			_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(_frameAudioSampleIndex);
 		}
+	}
+
+	private long GetFrameAudioBatchHorizon(long currentCycle, long targetCycle)
+	{
+		if (_frameAudioSampleIndex >= _frameAudioSampleCount)
+		{
+			return targetCycle;
+		}
+
+		return Math.Clamp(_frameAudioNextSampleCycle, currentCycle + 1, targetCycle);
 	}
 
 	private long GetFrameAudioSampleCycle(int sampleIndex)
@@ -1696,6 +1706,43 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		ApplyInputState();
+	}
+
+	private sealed class FrameExecutionBoundarySchedule : IAmigaExecutionBoundarySchedule
+	{
+		private readonly CopperScreenEmulator _owner;
+
+		public FrameExecutionBoundarySchedule(CopperScreenEmulator owner)
+		{
+			_owner = owner;
+		}
+
+		public void BeginFrame()
+			=> _owner.ApplyInputState();
+
+		public void ApplyPendingDiskInsert()
+			=> _owner.AdvancePendingDiskInsert();
+
+		public void BeginExecution(long startCycle, long endCycle)
+		{
+			_ = startCycle;
+			_owner.BeginFrameAudio(endCycle);
+		}
+
+		public long GetNextBoundaryCycle(long currentCycle, long targetCycle)
+			=> _owner.GetFrameAudioBatchHorizon(currentCycle, targetCycle);
+
+		public void AdvanceThrough(long previousCycle, long currentCycle)
+			=> _owner.RenderFrameAudioUntil(previousCycle, currentCycle);
+
+		public void CompleteExecution(long endCycle)
+		{
+			_ = endCycle;
+			_owner.FinishFrameAudio();
+		}
+
+		public void CompleteFrame()
+			=> _owner.AdvanceInputPulse();
 	}
 
 	private void ApplyInputState()

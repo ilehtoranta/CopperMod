@@ -205,7 +205,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public static CopperScreenRuntime Create(string[] args, string baseDirectory)
 	{
 		var emulator = CopperScreenEmulator.Create(args, baseDirectory);
-		var audio = WaveOutAudioOutput.TryCreate(
+		var audio = MiniaudioAudioOutput.TryCreate(
 			AudioSampleRate,
 			AudioChannels,
 			emulator.AudioFramesPerAppFrame(AudioSampleRate),
@@ -216,7 +216,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public static CopperScreenRuntime Create(CopperScreenStartupOptions startupOptions)
 	{
 		var emulator = CopperScreenEmulator.Create(startupOptions);
-		var audio = WaveOutAudioOutput.TryCreate(
+		var audio = MiniaudioAudioOutput.TryCreate(
 			AudioSampleRate,
 			AudioChannels,
 			emulator.AudioFramesPerAppFrame(AudioSampleRate),

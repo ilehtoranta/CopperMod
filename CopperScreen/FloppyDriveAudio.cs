@@ -1,6 +1,3 @@
-using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
-
 namespace CopperScreen;
 
 internal sealed class FloppyDriveAudio : IDisposable
@@ -771,33 +768,10 @@ internal sealed class FloppyDriveAudio : IDisposable
 		{
 			try
 			{
-				using var reader = new AudioFileReader(path);
-				ISampleProvider provider = reader;
-				if (provider.WaveFormat.SampleRate != targetSampleRate)
-				{
-					provider = new WdlResamplingSampleProvider(provider, targetSampleRate);
-				}
-
-				var channels = Math.Max(1, provider.WaveFormat.Channels);
-				var readBuffer = new float[4096 * channels];
-				var samples = new List<float>();
-				int read;
-				while ((read = provider.Read(readBuffer, 0, readBuffer.Length)) > 0)
-				{
-					var frames = read / channels;
-					for (var frame = 0; frame < frames; frame++)
-					{
-						var offset = frame * channels;
-						var left = readBuffer[offset];
-						var right = channels == 1 ? left : readBuffer[offset + 1];
-						samples.Add(left);
-						samples.Add(right);
-					}
-				}
-
-				return samples.Count == 0
+				var samples = MiniaudioSampleDecoder.DecodeStereo(path, targetSampleRate);
+				return samples.Length == 0
 					? null
-					: new FloppyDriveAudioSample(samples.ToArray(), samples.Count / 2);
+					: new FloppyDriveAudioSample(samples, samples.Length / 2);
 			}
 			catch (Exception)
 			{
