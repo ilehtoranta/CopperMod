@@ -186,7 +186,11 @@ namespace Copper68k
             out long batchTargetCycle,
             out M68kTraceBatchWakeSource wakeSource);
 
-        void CompleteDeferredCpuBusBatchInstruction(long previousCycle, long currentCycle);
+        void BeginDeferredCpuBusBatchExecution();
+
+        void CompleteDeferredCpuBusBatchExecution(
+            int instructionCount,
+            int skippedInstructionFlushCount);
 
         void EndDeferredCpuBusBatch(ref long cycle, M68kDeferredCpuBusBatchExitReason reason);
 
@@ -479,8 +483,33 @@ namespace Copper68k
 
     internal interface IM68kDeferredCpuBusBatchBoundary
     {
-        bool CanBeginDeferredCpuBusBatch { get; }
+        bool TryPrepareDeferredCpuBusBatch(M68kCpuState state);
+
+        long ClampDeferredCpuBusBatchTarget(M68kCpuState state, long targetCycle);
+
+        void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount);
     }
+
+    internal interface IM68000PrefetchDiagnostics
+    {
+        M68000PrefetchDiagnosticState CapturePrefetchDiagnosticState();
+    }
+
+    internal readonly record struct M68000PrefetchDiagnosticState(
+        uint ProgramCounter,
+        long Cycles,
+        uint PrefetchAddress,
+        int PrefetchCount,
+        ushort Word0,
+        ushort Word1,
+        long ReadyCycle0,
+        long ReadyCycle1,
+        long BusCycle,
+        long RetireBusCycle,
+        long InstructionStartCycle,
+        long InstructionCycleFloor,
+        int PendingInternalCycles,
+        bool SkipRetirePrefetchTopUp);
 
     internal interface IM68kBatchCore : IM68kCore
     {
@@ -1243,6 +1272,33 @@ namespace Copper68k
             _statusRegister = (ushort)status;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SetLongCompareFlags(uint value, bool overflow, bool carry)
+        {
+            var status = _statusRegister & unchecked((ushort)~(Negative | Zero | Overflow | Carry));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & 0x8000_0000) != 0)
+            {
+                status |= Negative;
+            }
+
+            if (overflow)
+            {
+                status |= Overflow;
+            }
+
+            if (carry)
+            {
+                status |= Carry;
+            }
+
+            _statusRegister = (ushort)status;
+        }
+
         /// <summary>
         /// Gets the value mask for an operand size.
         /// </summary>
@@ -1340,7 +1396,8 @@ namespace Copper68k
     internal class M68kInterpreterCore<TBus, TCpuDataAccess> :
         IM68kBatchCore,
         IM68kInstructionFrequencyProvider,
-        IM68kJitFallbackFetchSynchronization
+        IM68kJitFallbackFetchSynchronization,
+        IM68000PrefetchDiagnostics
         where TBus : IM68kBus
         where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
     {
@@ -1506,6 +1563,12 @@ namespace Copper68k
         {
             ArgumentNullException.ThrowIfNull(boundary);
             var instructions = 0;
+            var busAccessBatchBoundary = boundary as IM68kBusAccessTraceBatchBoundary;
+            var fastBatchAdmissionPending =
+                _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                targetCycle.HasValue &&
+                !_instructionFrequency.Enabled &&
+                busAccessBatchBoundary != null;
             while (!State.Halted &&
                 instructions < maxInstructions &&
                 (!targetCycle.HasValue || State.Cycles < targetCycle.Value))
@@ -1534,6 +1597,40 @@ namespace Copper68k
                     continue;
                 }
 
+                if (fastBatchAdmissionPending &&
+                    _prefetchWord0 == 0x60FE &&
+                    _prefetchCount > 0 &&
+                    _prefetchAddress == State.ProgramCounter &&
+                    TryExecuteShortSelfBranchBatch(
+                    maxInstructions - instructions,
+                    targetCycle,
+                    busAccessBatchBoundary!,
+                    out var selfBranchInstructions))
+                {
+                    instructions += selfBranchInstructions;
+                    continue;
+                }
+
+                if (fastBatchAdmissionPending &&
+                    _prefetchCount == 2 &&
+                    _prefetchAddress == State.ProgramCounter &&
+                    TryExecuteFixedPlanBatch(
+                    maxInstructions - instructions,
+                    targetCycle,
+                    busAccessBatchBoundary!,
+                    out var fixedPlanInstructions))
+                {
+                    instructions += fixedPlanInstructions;
+                    continue;
+                }
+
+                if (fastBatchAdmissionPending &&
+                    _prefetchCount > 0 &&
+                    _prefetchAddress == State.ProgramCounter)
+                {
+                    fastBatchAdmissionPending = false;
+                }
+
                 if (!boundary.BeforeInstruction())
                 {
                     break;
@@ -1547,6 +1644,23 @@ namespace Copper68k
 
             return instructions;
         }
+
+        public M68000PrefetchDiagnosticState CapturePrefetchDiagnosticState()
+            => new(
+                State.ProgramCounter,
+                State.Cycles,
+                _prefetchAddress,
+                _prefetchCount,
+                _prefetchWord0,
+                _prefetchWord1,
+                _prefetchCompletedCycle0,
+                _prefetchCompletedCycle1,
+                _cpuBusCycle,
+                _cpuRetireBusCycle,
+                _instructionCycleStart,
+                _instructionCycleFloor,
+                _pendingInternalCycles,
+                _skipRetirePrefetchTopUp);
 
         int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
@@ -1613,6 +1727,8 @@ namespace Copper68k
         }
 
         private const int DeferredCpuBusBatchNoTargetInstructionLimit = 256;
+        private const byte DeferredCpuBusBatchAdmissionRetryInstructionCount = 3;
+        private const int DeferredCpuBusBatchShortChipExitInstructionLimit = 3;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CanAttemptDeferredCpuBusBatch(int maxInstructions)
@@ -1638,49 +1754,44 @@ namespace Copper68k
         {
             executedInstructions = 0;
             var deferredCpuInstructionTiming = _deferredCpuInstructionTiming;
-            if (deferredCpuInstructionTiming == null ||
-                maxInstructions <= 1 ||
-                State.Halted ||
-                State.Stopped ||
-                (boundary is IM68kDeferredCpuBusBatchBoundary batchAdmissionBoundary &&
-                    !batchAdmissionBoundary.CanBeginDeferredCpuBusBatch) ||
-                !IsCurrentPrefetchDeferredCpuBusBatchEligible())
+            var boundaryIsNoOp = ReferenceEquals(boundary, NoOpInstructionBoundary.Instance);
+            var deferredBatchBoundary = boundaryIsNoOp
+                ? null
+                : boundary as IM68kDeferredCpuBusBatchBoundary;
+            if ((!boundaryIsNoOp && deferredBatchBoundary == null) ||
+                (deferredBatchBoundary != null &&
+                    !deferredBatchBoundary.TryPrepareDeferredCpuBusBatch(State)))
             {
                 return false;
             }
 
             var currentCycle = State.Cycles;
-            if (!deferredCpuInstructionTiming.TryBeginDeferredCpuBusBatch(
+            if (!deferredCpuInstructionTiming!.TryBeginDeferredCpuBusBatch(
                 State,
                 currentCycle,
                 targetCycle,
                 out var batchTargetCycle,
                 out _))
             {
-                _deferredCpuBusBatchAdmissionRetryInstructions = 3;
+                _deferredCpuBusBatchAdmissionRetryInstructions =
+                    DeferredCpuBusBatchAdmissionRetryInstructionCount;
                 return false;
             }
 
             var batchStartCycle = currentCycle;
-            var boundaryIsNoOp = ReferenceEquals(boundary, NoOpInstructionBoundary.Instance);
-            var batchBoundary = boundaryIsNoOp ? null : boundary as IM68kBusAccessTraceBatchBoundary;
-            var useBatchBoundary = false;
             var reason = M68kDeferredCpuBusBatchExitReason.Completed;
             var completedWithoutException = false;
+            var batchExecutionStarted = false;
+            var skippedInstructionFlushes = 0;
             _deferredCpuBusBatchExecutionActive = true;
             try
             {
-                if (batchBoundary != null)
+                if (deferredBatchBoundary != null)
                 {
-                    if (!batchBoundary.TryBeginBusAccessTraceBatch(State, batchTargetCycle, out var boundaryBatchTargetCycle))
-                    {
-                        reason = M68kDeferredCpuBusBatchExitReason.Unsupported;
-                        completedWithoutException = true;
-                        return false;
-                    }
-
-                    batchTargetCycle = Math.Min(batchTargetCycle, boundaryBatchTargetCycle);
-                    useBatchBoundary = true;
+                    batchTargetCycle = Math.Clamp(
+                        deferredBatchBoundary.ClampDeferredCpuBusBatchTarget(State, batchTargetCycle),
+                        currentCycle + 1,
+                        batchTargetCycle);
                 }
 
                 while (executedInstructions < maxInstructions &&
@@ -1694,23 +1805,22 @@ namespace Copper68k
                         break;
                     }
 
-                    if (!boundaryIsNoOp &&
-                        !useBatchBoundary &&
-                        !boundary.BeforeInstruction())
+                    if (executedInstructions == 0)
                     {
-                        reason = M68kDeferredCpuBusBatchExitReason.Unsupported;
-                        break;
+                        deferredCpuInstructionTiming.BeginDeferredCpuBusBatchExecution();
+                        batchExecutionStarted = true;
                     }
 
-                    var previousCycle = State.Cycles;
-                    ExecuteSingleInstruction();
-                    if (!boundaryIsNoOp && !useBatchBoundary)
+                    if (!TryExecuteQueuedShortSelfBranch())
                     {
-                        boundary.AfterInstruction(previousCycle, State.Cycles);
+                        ExecuteSingleInstruction();
                     }
 
-                    deferredCpuInstructionTiming.CompleteDeferredCpuBusBatchInstruction(previousCycle, State.Cycles);
                     executedInstructions++;
+                    if (deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
+                    {
+                        skippedInstructionFlushes++;
+                    }
 
                     if (!deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
                     {
@@ -1746,6 +1856,20 @@ namespace Copper68k
             }
             finally
             {
+                var accountedInstructions = executedInstructions;
+                if (batchExecutionStarted && accountedInstructions == 0)
+                {
+                    // The first instruction entered the core but escaped through a host exception.
+                    accountedInstructions = 1;
+                }
+
+                if (accountedInstructions > 0)
+                {
+                    deferredCpuInstructionTiming.CompleteDeferredCpuBusBatchExecution(
+                        accountedInstructions,
+                        skippedInstructionFlushes);
+                }
+
                 if (deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
                 {
                     if (reason == M68kDeferredCpuBusBatchExitReason.Completed &&
@@ -1766,21 +1890,209 @@ namespace Copper68k
                 }
 
                 if (completedWithoutException &&
-                    useBatchBoundary &&
+                    deferredBatchBoundary != null &&
                     executedInstructions > 0)
                 {
-                    batchBoundary!.AfterBusAccessTraceBatch(batchStartCycle, State.Cycles, executedInstructions);
+                    deferredBatchBoundary.AfterDeferredCpuBusBatch(
+                        batchStartCycle,
+                        State.Cycles,
+                        executedInstructions);
                 }
 
                 if (reason == M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess &&
-                    executedInstructions <= 1)
+                    accountedInstructions <= DeferredCpuBusBatchShortChipExitInstructionLimit)
                 {
-                    _deferredCpuBusBatchAdmissionRetryInstructions = 3;
+                    _deferredCpuBusBatchAdmissionRetryInstructions =
+                        DeferredCpuBusBatchAdmissionRetryInstructionCount;
                 }
 
                 _deferredCpuBusBatchExecutionActive = false;
             }
         }
+
+        private bool TryExecuteShortSelfBranchBatch(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kBusAccessTraceBatchBoundary batchBoundary,
+            out int executedInstructions)
+        {
+            executedInstructions = 0;
+            if (maxInstructions <= 1 ||
+                !targetCycle.HasValue ||
+                _instructionFrequency.Enabled ||
+                !IsQueuedShortSelfBranch())
+            {
+                return false;
+            }
+
+            var previousCycle = State.Cycles;
+            if (!batchBoundary.TryBeginBusAccessTraceBatch(
+                State,
+                targetCycle.Value,
+                out var batchTargetCycle))
+            {
+                return false;
+            }
+
+            while (executedInstructions < maxInstructions &&
+                State.Cycles < batchTargetCycle &&
+                TryExecuteQueuedShortSelfBranch())
+            {
+                executedInstructions++;
+            }
+
+            if (executedInstructions == 0)
+            {
+                return false;
+            }
+
+            batchBoundary.AfterBusAccessTraceBatch(
+                previousCycle,
+                State.Cycles,
+                executedInstructions);
+            return true;
+        }
+
+        private bool TryExecuteFixedPlanBatch(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kBusAccessTraceBatchBoundary batchBoundary,
+            out int executedInstructions)
+        {
+            executedInstructions = 0;
+            if (maxInstructions <= 1 ||
+                !targetCycle.HasValue ||
+                _instructionFrequency.Enabled)
+            {
+                return false;
+            }
+
+            if (!HasQueuedFixedPlanPair())
+            {
+                return false;
+            }
+
+            var previousCycle = State.Cycles;
+            if (!batchBoundary.TryBeginBusAccessTraceBatch(
+                State,
+                targetCycle.Value,
+                out var batchTargetCycle))
+            {
+                return false;
+            }
+
+            while (executedInstructions < maxInstructions &&
+                State.Cycles < batchTargetCycle &&
+                IsQueuedFixedPlanInstruction())
+            {
+                if (!TryExecuteQueuedShortSelfBranch())
+                {
+                    ExecuteSingleInstruction();
+                }
+
+                executedInstructions++;
+            }
+
+            if (executedInstructions == 0)
+            {
+                return false;
+            }
+
+            batchBoundary.AfterBusAccessTraceBatch(
+                previousCycle,
+                State.Cycles,
+                executedInstructions);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasQueuedFixedPlanPair()
+        {
+            if (_opcodePlanDispatch == M68kOpcodePlanDispatch.Scalar ||
+                State.Halted ||
+                State.Stopped ||
+                (State.ProgramCounter & 1) != 0 ||
+                _prefetchCount != 2 ||
+                _prefetchAddress != State.ProgramCounter)
+            {
+                return false;
+            }
+
+            var firstKind = M68kOpcodePlanTable.Kinds[_prefetchWord0];
+            return firstKind != M68kOpcodePlanKind.ShortUnconditionalBranch &&
+                IsFixedPlanBatchOpcode(_prefetchWord0, firstKind) &&
+                IsFixedPlanBatchOpcode(
+                    _prefetchWord1,
+                    M68kOpcodePlanTable.Kinds[_prefetchWord1]);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsQueuedFixedPlanInstruction()
+            => _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                !State.Halted &&
+                !State.Stopped &&
+                (State.ProgramCounter & 1) == 0 &&
+                _prefetchCount > 0 &&
+                _prefetchAddress == State.ProgramCounter &&
+                IsFixedPlanBatchOpcode(
+                    _prefetchWord0,
+                    M68kOpcodePlanTable.Kinds[_prefetchWord0]);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFixedPlanBatchOpcode(ushort opcode, M68kOpcodePlanKind kind)
+            => IsFixedPlanBatchKind(kind) &&
+                (kind != M68kOpcodePlanKind.ShortUnconditionalBranch || (opcode & 1) == 0);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFixedPlanBatchKind(M68kOpcodePlanKind kind)
+            => kind is
+                M68kOpcodePlanKind.Nop or
+                M68kOpcodePlanKind.Moveq or
+                M68kOpcodePlanKind.ShortUnconditionalBranch or
+                M68kOpcodePlanKind.QuickRegister or
+                M68kOpcodePlanKind.QuickLongDataRegister or
+                M68kOpcodePlanKind.DataRegisterLongOrToRegister or
+                M68kOpcodePlanKind.DataRegisterLongEorToDestination or
+                M68kOpcodePlanKind.DataRegisterLongAndToRegister or
+                M68kOpcodePlanKind.DataRegisterLongAddToRegister;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryExecuteQueuedShortSelfBranch()
+        {
+            if (!IsQueuedShortSelfBranch())
+            {
+                return false;
+            }
+
+            var startCycle = State.Cycles;
+            var instructionPc = State.ProgramCounter;
+            BeginInstructionCycleFloor(startCycle);
+            _activeInstructionProgramCounter = instructionPc;
+            var opcode = ConsumePrefetchedWord();
+            System.Diagnostics.Debug.Assert(opcode == 0x60FE);
+            State.LastOpcode = opcode;
+            State.LastInstructionProgramCounter = instructionPc;
+            if (_instructionFrequency.Enabled)
+            {
+                _instructionFrequency.Record(instructionPc, opcode);
+            }
+
+            ExecuteShortUnconditionalBranch(opcode, displacement: -2, instructionPc);
+            RecordPlannedFast(M68kOpcodePlanKind.ShortUnconditionalBranch);
+            CompleteInstruction(startCycle, PlannedRetireMode.PrefetchHandled);
+            _instructionCycleFloorActive = false;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsQueuedShortSelfBranch()
+            => _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                !State.Halted &&
+                !State.Stopped &&
+                (State.ProgramCounter & 1) == 0 &&
+                _prefetchCount > 0 &&
+                _prefetchAddress == State.ProgramCounter &&
+                _prefetchWord0 == 0x60FE;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsCurrentPrefetchDeferredCpuBusBatchEligible()
@@ -2295,23 +2607,26 @@ namespace Copper68k
             }
 
             var moveWritesMemory = destinationMode != 1 && destinationMode != 0;
-            var source = moveWritesMemory
-                ? ResolvePlannedEaWithoutPrefetchTopUp(
-                    sourceMode,
-                    sourceRegister,
-                    size,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word)
-                : ResolvePlannedEa(
-                    sourceMode,
-                    sourceRegister,
-                    size,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+            var source = ResolvePlannedEaWithoutPrefetchTopUp(
+                sourceMode,
+                sourceRegister,
+                size,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
             if (size == M68kOperandSize.Word && !source.IsRegister)
             {
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            if (MoveSourceHasExtensionWord(sourceMode, sourceRegister))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             var value = ReadPlannedEaValue(in source);
+            if (!moveWritesMemory)
+            {
+                PrefetchFallthroughAfterMoveSourceRead();
+            }
             var updateNegativeZeroBeforeWrite =
                 (size == M68kOperandSize.Word && destinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
                 (size == M68kOperandSize.Long &&
@@ -2416,11 +2731,6 @@ namespace Copper68k
                 }
             }
 
-            if (moveWritesMemory && !destination.IsRegister)
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
-
             if (size == M68kOperandSize.Word && destinationMode == 4)
             {
                 UsePrefetchedInstructionWordForAddressErrorFrame();
@@ -2440,10 +2750,17 @@ namespace Copper68k
                 AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(cycles, destinationMode, destinationRegister));
             }
 
+            if (moveWritesMemory &&
+                !destination.IsRegister &&
+                MoveDestinationHasExtensionWord(destinationMode, destinationRegister))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             WritePlannedEaValue(in destination, value);
             if (moveWritesMemory && !destination.IsRegister)
             {
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
             }
 
             if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -2570,9 +2887,8 @@ namespace Copper68k
             }
 
             AddMovePostincrementWriteFaultFloor(GetEaOperandCycles(3, sourceRegister, size), destinationRegister, size);
-            PrefetchFallthroughBeforeMemoryWriteback();
             WritePostincrement(destinationRegister, value, size);
-            PrefetchFallthroughAfterMemoryWriteback();
+            PrefetchFallthroughAfterMoveSourceRead();
             State.SetNegativeZero(value, size);
             AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 3, destinationRegister, size));
         }
@@ -2603,25 +2919,22 @@ namespace Copper68k
                 State.SetNegativeZero(value, size);
                 AddMovePostincrementWriteFaultFloor(0, destinationRegister, size);
                 AddInstructionCycles(8);
-                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
                 return;
             }
             else if (size == M68kOperandSize.Long)
             {
-                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
                 SetLogicFlags(value, size);
             }
             else
             {
                 State.SetFlag(M68kCpuState.Overflow, false);
                 State.SetFlag(M68kCpuState.Carry, false);
-                PrefetchFallthroughBeforeMemoryWriteback();
                 WritePostincrement(destinationRegister, value, size);
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
                 State.SetNegativeZero(value, size);
             }
 
@@ -2847,9 +3160,8 @@ namespace Copper68k
                 AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(20, 7, 1));
             }
 
-            PrefetchFallthroughBeforeMemoryWriteback();
             WriteLong(destinationAddress, value);
-            PrefetchFallthroughAfterMemoryWriteback();
+            PrefetchFallthroughAfterMoveSourceRead();
             AddInstructionCycles(20);
         }
 
@@ -3310,23 +3622,26 @@ namespace Copper68k
             }
 
             var moveWritesMemory = plan.DestinationMode != 1 && plan.DestinationMode != 0;
-            var source = moveWritesMemory
-                ? ResolvePlannedEaWithoutPrefetchTopUp(
-                    plan.SourceMode,
-                    plan.SourceRegister,
-                    plan.Size,
-                    completeWordPostIncrementBeforeRead: plan.Size == M68kOperandSize.Word)
-                : ResolvePlannedEa(
-                    plan.SourceMode,
-                    plan.SourceRegister,
-                    plan.Size,
-                    completeWordPostIncrementBeforeRead: plan.Size == M68kOperandSize.Word);
+            var source = ResolvePlannedEaWithoutPrefetchTopUp(
+                plan.SourceMode,
+                plan.SourceRegister,
+                plan.Size,
+                completeWordPostIncrementBeforeRead: plan.Size == M68kOperandSize.Word);
             if (plan.Size == M68kOperandSize.Word && !source.IsRegister)
             {
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            if (MoveSourceHasExtensionWord(plan.SourceMode, plan.SourceRegister))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             var value = ReadPlannedEaValue(in source);
+            if (!moveWritesMemory)
+            {
+                PrefetchFallthroughAfterMoveSourceRead();
+            }
             var updateNegativeZeroBeforeWrite =
                 (plan.Size == M68kOperandSize.Word && plan.DestinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
                 (plan.Size == M68kOperandSize.Long &&
@@ -3437,11 +3752,6 @@ namespace Copper68k
                 }
             }
 
-            if (moveWritesMemory && !destination.IsRegister)
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
-
             if (plan.Size == M68kOperandSize.Word && plan.DestinationMode == 4)
             {
                 UsePrefetchedInstructionWordForAddressErrorFrame();
@@ -3478,10 +3788,17 @@ namespace Copper68k
                     plan.DestinationRegister));
             }
 
+            if (moveWritesMemory &&
+                !destination.IsRegister &&
+                MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             WritePlannedEaValue(in destination, value);
             if (moveWritesMemory && !destination.IsRegister)
             {
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
             }
 
             if (plan.DestinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -4332,23 +4649,26 @@ namespace Copper68k
             }
 
             var moveWritesMemory = destMode != 1 && destMode != 0;
-            var src = moveWritesMemory
-                ? ResolveEaWithoutPrefetchTopUp(
-                    srcMode,
-                    srcReg,
-                    size,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word)
-                : ResolveEa(
-                    srcMode,
-                    srcReg,
-                    size,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+            var src = ResolveEaWithoutPrefetchTopUp(
+                srcMode,
+                srcReg,
+                size,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
             if (size == M68kOperandSize.Word && !src.IsRegister)
             {
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            if (MoveSourceHasExtensionWord(srcMode, srcReg))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             var value = src.Read();
+            if (!moveWritesMemory)
+            {
+                PrefetchFallthroughAfterMoveSourceRead();
+            }
             var updateNegativeZeroBeforeWrite =
                 (size == M68kOperandSize.Word && destMode is 2 or 3 or 4 or 5 or 6 or 7) ||
                 (size == M68kOperandSize.Long &&
@@ -4449,11 +4769,6 @@ namespace Copper68k
                 }
             }
 
-            if (moveWritesMemory && !dest.IsRegister)
-            {
-                PrefetchFallthroughBeforeMemoryWriteback();
-            }
-
             if (size == M68kOperandSize.Word && destMode == 4)
             {
                 UsePrefetchedInstructionWordForAddressErrorFrame();
@@ -4482,10 +4797,17 @@ namespace Copper68k
                 AddInstructionCycles(8);
             }
 
+            if (moveWritesMemory &&
+                !dest.IsRegister &&
+                MoveDestinationHasExtensionWord(destMode, destReg))
+            {
+                PrefetchFallthroughBeforeMemoryWriteback();
+            }
+
             dest.Write(value);
             if (moveWritesMemory && !dest.IsRegister)
             {
-                PrefetchFallthroughAfterMemoryWriteback();
+                PrefetchFallthroughAfterMoveSourceRead();
             }
 
             if (destMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -7454,6 +7776,35 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughAfterMemoryWriteback()
         {
+            _skipRetirePrefetchTopUp = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool MoveDestinationHasExtensionWord(int mode, int register)
+            => mode is 5 or 6 || (mode == 7 && register <= 1);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool MoveSourceHasExtensionWord(int mode, int register)
+            => mode is 5 or 6 || (mode == 7 && register <= 4);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrefetchFallthroughAfterMoveSourceRead()
+        {
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                return;
+            }
+
+            if (_prefetchCount == 0)
+            {
+                _prefetchAddress = State.ProgramCounter;
+            }
+
+            if (_prefetchAddress == State.ProgramCounter)
+            {
+                TopUpPrefetchOne();
+            }
+
             _skipRetirePrefetchTopUp = true;
         }
 

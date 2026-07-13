@@ -906,7 +906,7 @@ namespace Copper68k
         }
     }
 
-    internal sealed class M68040Interpreter : M68020Interpreter
+    internal sealed class M68040Interpreter : M68kAdvancedTimingInterpreter
     {
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;

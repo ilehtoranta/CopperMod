@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
@@ -387,11 +388,26 @@ namespace Copper68k
     {
         private readonly M68020CpuProfile _profile;
         private readonly M68kCpuState _state;
+        private readonly M68kInstructionPlan _branchByteTakenPlan;
+        private readonly int _nativeCyclesPerMachineCycle;
+        private M68kExecutedInstructionTiming _lastInstructionTiming;
+        private M68kInstructionTimingKey _lastFlatTimingKey;
+        private int _lastFlatOverlapCycles;
+        private long _lastFlatStartNativeCycle;
+        private long _lastFlatEndNativeCycle;
+        private long _lastFlatPendingBusNativeCycle;
+        private bool _lastTimingIsFlat;
 
         public M68kTimingEngine(M68020CpuProfile profile, M68kCpuState state)
         {
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            _branchByteTakenPlan = profile.FixedInstructionNativeCycles is int fixedCycles
+                ? M68kTimingFormula.CreateFixedPlan(M68kInstructionTimingKey.BranchByteTaken, fixedCycles)
+                : profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
+                    ? M68030TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken)
+                    : M68020TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken);
+            _nativeCyclesPerMachineCycle = profile.NativeCyclesPerMachineCycle;
             InstructionCache = new M68kInstructionCache();
             DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
                 ? new M68kInstructionCache()
@@ -404,7 +420,15 @@ namespace Copper68k
 
         public M68kInstructionCache? DataCache { get; }
 
-        public M68kExecutedInstructionTiming LastInstructionTiming { get; private set; }
+        public M68kExecutedInstructionTiming LastInstructionTiming
+            => _lastTimingIsFlat
+                ? new M68kExecutedInstructionTiming(
+                    GetPlan(_lastFlatTimingKey),
+                    _lastFlatOverlapCycles,
+                    _lastFlatStartNativeCycle,
+                    _lastFlatEndNativeCycle,
+                    _lastFlatPendingBusNativeCycle)
+                : _lastInstructionTiming;
 
         public long BusControllerAvailableNativeCycle => Pipeline.BusControllerAvailableNativeCycle;
 
@@ -413,7 +437,8 @@ namespace Copper68k
             Pipeline.Reset();
             InstructionCache.Reset();
             DataCache?.Reset();
-            LastInstructionTiming = default;
+            _lastInstructionTiming = default;
+            _lastTimingIsFlat = false;
         }
 
         public M68kInstructionPlan GetPlan(M68kInstructionTimingKey key)
@@ -532,13 +557,130 @@ namespace Copper68k
             Pipeline.SuppressNextOverlap =
                 (plan.Barriers & (M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Exception | M68kTimingBarrier.Branch | M68kTimingBarrier.CacheControl | M68kTimingBarrier.ReadModifyWrite)) != 0;
 
-            LastInstructionTiming = new M68kExecutedInstructionTiming(
+            _lastInstructionTiming = new M68kExecutedInstructionTiming(
                 plan,
                 overlap,
                 start,
                 _state.NativeCycles,
                 Pipeline.BusControllerAvailableNativeCycle);
-            return LastInstructionTiming;
+            _lastTimingIsFlat = false;
+            return _lastInstructionTiming;
+        }
+
+        internal void CompleteFlatInstruction(M68kInstructionPlan plan)
+        {
+            if (_profile.Model is not (M68kAcceleratorModel.M68020 or M68kAcceleratorModel.M68030) ||
+                plan.Barriers != M68kTimingBarrier.None)
+            {
+                CompleteInstruction(plan);
+                return;
+            }
+
+            var machineNativeCycles = _state.Cycles * _nativeCyclesPerMachineCycle;
+            var start = _state.NativeCycles >= machineNativeCycles
+                ? _state.NativeCycles
+                : machineNativeCycles;
+            var pipeline = Pipeline;
+            var overlap = 0;
+            if (plan.UsesHeadTail && !pipeline.SuppressNextOverlap)
+            {
+                overlap = Math.Min(pipeline.PendingTailCycles, Math.Max(0, plan.HeadCycles));
+            }
+
+            var elapsed = plan.NativeCycles - overlap;
+            if (elapsed < 0)
+            {
+                elapsed = 0;
+            }
+
+            var end = start + elapsed;
+            _state.NativeCycles = end;
+            long machineCycles;
+            if (_nativeCyclesPerMachineCycle == 2)
+            {
+                machineCycles = (end + 1) >> 1;
+            }
+            else if (_nativeCyclesPerMachineCycle == 4)
+            {
+                machineCycles = (end + 3) >> 2;
+            }
+            else
+            {
+                machineCycles = (end + _nativeCyclesPerMachineCycle - 1) /
+                    _nativeCyclesPerMachineCycle;
+            }
+
+            if (_state.Cycles < machineCycles)
+            {
+                _state.Cycles = machineCycles;
+            }
+
+            pipeline.InstructionBoundaryNativeCycle = end;
+            pipeline.PendingTailCycles = Math.Max(0, plan.TailCycles);
+            pipeline.SuppressNextOverlap = false;
+            SetLastFlatTiming(
+                plan.Key,
+                overlap,
+                start,
+                end,
+                pipeline.BusControllerAvailableNativeCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal void CompleteHotBranchByteTaken()
+        {
+            var plan = _branchByteTakenPlan;
+            var machineNativeCycles = _state.Cycles * _nativeCyclesPerMachineCycle;
+            var start = _state.NativeCycles >= machineNativeCycles
+                ? _state.NativeCycles
+                : machineNativeCycles;
+            var end = start + plan.NativeCycles;
+            _state.NativeCycles = end;
+            long machineCycles;
+            if (_nativeCyclesPerMachineCycle == 2)
+            {
+                machineCycles = (end + 1) >> 1;
+            }
+            else if (_nativeCyclesPerMachineCycle == 4)
+            {
+                machineCycles = (end + 3) >> 2;
+            }
+            else
+            {
+                machineCycles = (end + _nativeCyclesPerMachineCycle - 1) /
+                    _nativeCyclesPerMachineCycle;
+            }
+
+            if (_state.Cycles < machineCycles)
+            {
+                _state.Cycles = machineCycles;
+            }
+
+            Pipeline.InstructionBoundaryNativeCycle = end;
+            Pipeline.PendingTailCycles = 0;
+            Pipeline.SuppressNextOverlap = true;
+            SetLastFlatTiming(
+                plan.Key,
+                0,
+                start,
+                end,
+                Pipeline.BusControllerAvailableNativeCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SetLastFlatTiming(
+            M68kInstructionTimingKey key,
+            int overlapCycles,
+            long startNativeCycle,
+            long endNativeCycle,
+            long pendingBusNativeCycle)
+        {
+            _lastFlatTimingKey = key;
+            _lastFlatOverlapCycles = overlapCycles;
+            _lastFlatStartNativeCycle = startNativeCycle;
+            _lastFlatEndNativeCycle = endNativeCycle;
+            _lastFlatPendingBusNativeCycle = pendingBusNativeCycle;
+            _lastTimingIsFlat = true;
         }
 
         private void SynchronizeMachineToNative()
@@ -674,6 +816,10 @@ namespace Copper68k
         private readonly M68020CpuProfile _profile;
         private readonly M68kCpuState _state;
         private readonly M68kTimingEngine _timing;
+        private readonly IM68kCodeReader? _codeReader;
+        private readonly IM68kFastMemoryBus? _fastMemoryBus;
+        private readonly bool _directUncachedInstructionFetch;
+        private readonly bool _hasInstructionFetchWaitStates;
 
         public M68kTimedBusAdapter(
             IM68kBus bus,
@@ -685,21 +831,123 @@ namespace Copper68k
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _timing = timing ?? throw new ArgumentNullException(nameof(timing));
+            _codeReader = bus as IM68kCodeReader;
+            _fastMemoryBus = bus as IM68kFastMemoryBus;
+            _directUncachedInstructionFetch = !profile.FastInstructionFetch;
+            for (var i = 0; i < profile.BusTiming.Count; i++)
+            {
+                if (profile.BusTiming[i].WaitStates != 0)
+                {
+                    _hasInstructionFetchWaitStates = true;
+                    break;
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal ushort ReadInstructionFetchWordHot(
+            uint address,
+            out bool cacheHit,
+            out bool requiresSynchronization,
+            out long completedMachineCycle)
+        {
+            if (!_directUncachedInstructionFetch || _timing.InstructionCache.Enabled)
+            {
+                return ReadInstructionFetchWord(
+                    address,
+                    out cacheHit,
+                    out requiresSynchronization,
+                    out completedMachineCycle);
+            }
+
+            cacheHit = false;
+            var cycle = GetBusRequestMachineCycle();
+            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            if (_hasInstructionFetchWaitStates)
+            {
+                AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
+            }
+
+            _timing.RecordPostedBusCompletion(cycle);
+            requiresSynchronization = true;
+            completedMachineCycle = cycle;
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal uint ReadDataLongHot(uint address)
+        {
+            if (_hasInstructionFetchWaitStates || _profile.FastNonChipMemoryAccess)
+            {
+                return ReadLong(address, M68kBusAccessKind.CpuDataRead);
+            }
+
+            var cycle = GetBusRequestMachineCycle();
+            var value = _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+            _timing.CompleteBlockingBusAccess(cycle);
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void WriteDataLongHot(uint address, uint value)
+        {
+            if (_hasInstructionFetchWaitStates || _profile.FastNonChipMemoryAccess)
+            {
+                WriteLong(address, value, M68kBusAccessKind.CpuDataWrite);
+                return;
+            }
+
+            var cycle = GetBusRequestMachineCycle();
+            _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            _timing.RecordPostedBusCompletion(cycle);
+        }
+
+        internal ushort ReadInstructionFetchWord(
+            uint address,
+            out bool cacheHit,
+            out bool requiresSynchronization,
+            out long completedMachineCycle)
+        {
+            if (_codeReader is not null && _timing.ProbeInstructionCache(address))
+            {
+                cacheHit = true;
+                requiresSynchronization = false;
+                completedMachineCycle = _state.Cycles;
+                return _codeReader.ReadHostWord(address);
+            }
+
+            if (CanUseFastInstructionFetch(address, M68kBusAccessKind.CpuInstructionFetch) &&
+                _codeReader is not null)
+            {
+                cacheHit = false;
+                requiresSynchronization = false;
+                completedMachineCycle = _state.Cycles;
+                return _codeReader.ReadHostWord(address);
+            }
+
+            cacheHit = false;
+            var cycle = GetBusRequestMachineCycle();
+            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
+            _timing.RecordPostedBusCompletion(cycle);
+            requiresSynchronization = true;
+            completedMachineCycle = cycle;
+            return value;
         }
 
         public byte ReadByte(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastCiaAPortAAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus ciaFastBus &&
-                ciaFastBus.TryReadFastByte(address, accessKind, out var ciaFastValue))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryReadFastByte(address, accessKind, out var ciaFastValue))
             {
                 CompleteMinimalBlockingFastAccess();
                 return ciaFastValue;
             }
 
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryReadFastByte(address, accessKind, out var fastValue))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryReadFastByte(address, accessKind, out var fastValue))
             {
                 return fastValue;
             }
@@ -714,14 +962,14 @@ namespace Copper68k
         public ushort ReadWord(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastInstructionFetch(address, accessKind) &&
-                _bus is IM68kCodeReader codeReader)
+                _codeReader is not null)
             {
-                return codeReader.ReadHostWord(address);
+                return _codeReader.ReadHostWord(address);
             }
 
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryReadFastWord(address, accessKind, out var fastValue))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryReadFastWord(address, accessKind, out var fastValue))
             {
                 return fastValue;
             }
@@ -736,8 +984,8 @@ namespace Copper68k
         public uint ReadLong(uint address, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryReadFastLong(address, accessKind, out var fastValue))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryReadFastLong(address, accessKind, out var fastValue))
             {
                 return fastValue;
             }
@@ -752,16 +1000,16 @@ namespace Copper68k
         public void WriteByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastCiaAPortAAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus ciaFastBus &&
-                ciaFastBus.TryWriteFastByte(address, value, accessKind))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastByte(address, value, accessKind))
             {
                 RecordMinimalPostedFastAccess();
                 return;
             }
 
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryWriteFastByte(address, value, accessKind))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastByte(address, value, accessKind))
             {
                 return;
             }
@@ -775,8 +1023,8 @@ namespace Copper68k
         public void WriteWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryWriteFastWord(address, value, accessKind))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastWord(address, value, accessKind))
             {
                 return;
             }
@@ -790,8 +1038,8 @@ namespace Copper68k
         public void WriteLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
             if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _bus is IM68kFastMemoryBus fastBus &&
-                fastBus.TryWriteFastLong(address, value, accessKind))
+                _fastMemoryBus is not null &&
+                _fastMemoryBus.TryWriteFastLong(address, value, accessKind))
             {
                 return;
             }
@@ -802,6 +1050,7 @@ namespace Copper68k
             _timing.RecordPostedBusCompletion(cycle);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long GetBusRequestMachineCycle()
         {
             var nativeReady = Math.Max(_state.NativeCycles, _timing.BusControllerAvailableNativeCycle);

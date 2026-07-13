@@ -575,6 +575,146 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedShortSelfBranchBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, Words(0x60FE)); // BRA.S self
+		Write(plannedBus.Memory, 0x1000, Words(0x60FE));
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		planned.PlannedInterpreterCountersEnabled = true;
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(32, ((IM68kBatchCore)scalar).ExecuteInstructions(32, long.MaxValue, scalarBoundary));
+		Assert.Equal(32, ((IM68kBatchCore)planned).ExecuteInstructions(32, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(
+			((IM68000PrefetchDiagnostics)scalar).CapturePrefetchDiagnosticState(),
+			((IM68000PrefetchDiagnostics)planned).CapturePrefetchDiagnosticState());
+		Assert.Equal(32, scalarBoundary.BeforeInstructionCalls);
+		Assert.Equal(32, scalarBoundary.AfterInstructionCalls);
+		Assert.Equal(0, scalarBoundary.BusAccessBatchCalls);
+		Assert.Equal(2, plannedBoundary.BeforeInstructionCalls);
+		Assert.Equal(1, plannedBoundary.AfterInstructionCalls);
+		Assert.Equal(1, plannedBoundary.BusAccessBatchCalls);
+		Assert.Equal(31, plannedBoundary.BusAccessBatchInstructions);
+		var counters = planned.CapturePlannedInterpreterCounters();
+		Assert.Equal(32, counters.FastInstructions);
+		Assert.Equal(32, counters.BranchInstructions);
+		Assert.Equal(0, counters.ScalarFallbackInstructions);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedShortSelfBranchBatchPreservesQueuedOpcodeAfterExternalWrite(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, Words(0x60FE)); // BRA.S self
+		Write(plannedBus.Memory, 0x1000, Words(0x60FE));
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		scalar.ExecuteInstruction();
+		planned.ExecuteInstruction();
+		Write(scalarBus.Memory, 0x1000, Words(0x4E71)); // NOP, old BRA remains queued
+		Write(plannedBus.Memory, 0x1000, Words(0x4E71));
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(2, ((IM68kBatchCore)scalar).ExecuteInstructions(2, long.MaxValue, scalarBoundary));
+		Assert.Equal(2, ((IM68kBatchCore)planned).ExecuteInstructions(2, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(
+			((IM68000PrefetchDiagnostics)scalar).CapturePrefetchDiagnosticState(),
+			((IM68000PrefetchDiagnostics)planned).CapturePrefetchDiagnosticState());
+		Assert.Equal(0x4E71, planned.State.LastOpcode);
+		Assert.Equal(0x1002u, planned.State.ProgramCounter);
+		Assert.Equal(1, plannedBoundary.BusAccessBatchCalls);
+		Assert.Equal(1, plannedBoundary.BusAccessBatchInstructions);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedFixedPlanBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
+	{
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x7202, // MOVEQ #2,D1
+			0x7400, // MOVEQ #0,D2
+			0xD081, // ADD.L D1,D0
+			0x5482, // ADDQ.L #2,D2
+			0x4E71, // NOP
+			0x60F8); // BRA.S arithmetic loop
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		planned.PlannedInterpreterCountersEnabled = true;
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(70, ((IM68kBatchCore)scalar).ExecuteInstructions(70, long.MaxValue, scalarBoundary));
+		Assert.Equal(70, ((IM68kBatchCore)planned).ExecuteInstructions(70, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(
+			((IM68000PrefetchDiagnostics)scalar).CapturePrefetchDiagnosticState(),
+			((IM68000PrefetchDiagnostics)planned).CapturePrefetchDiagnosticState());
+		Assert.Equal(70, scalarBoundary.BeforeInstructionCalls);
+		Assert.Equal(70, scalarBoundary.AfterInstructionCalls);
+		Assert.Equal(2, plannedBoundary.BeforeInstructionCalls);
+		Assert.Equal(1, plannedBoundary.AfterInstructionCalls);
+		Assert.Equal(1, plannedBoundary.BusAccessBatchCalls);
+		Assert.Equal(69, plannedBoundary.BusAccessBatchInstructions);
+		var counters = planned.CapturePlannedInterpreterCounters();
+		Assert.Equal(70, counters.FastInstructions);
+		Assert.Equal(0, counters.ScalarFallbackInstructions);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedFixedPlanBatchRejectsOddTargetBranchPair(int dispatchValue)
+	{
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x4E71, // NOP
+			0x6001); // BRA.S to odd address
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x000C, 0x00, 0x00, 0x40, 0x00);
+		Write(plannedBus.Memory, 0x000C, 0x00, 0x00, 0x40, 0x00);
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(3, ((IM68kBatchCore)scalar).ExecuteInstructions(3, long.MaxValue, scalarBoundary));
+		Assert.Equal(3, ((IM68kBatchCore)planned).ExecuteInstructions(3, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(3, planned.State.LastExceptionVector);
+		Assert.Equal(0, plannedBoundary.BusAccessBatchCalls);
+		Assert.Equal(0, plannedBoundary.BusAccessBatchInstructions);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedMoveLongDataToAbsoluteLongMatchesScalar(int dispatchValue)
 	{
 		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
@@ -2391,6 +2531,42 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public void ResetExternalDevices(long cycle)
 		{
 			_ = cycle;
+		}
+	}
+	private sealed class BusAccessBatchBoundary :
+		IM68kInstructionBoundary,
+		IM68kBusAccessTraceBatchBoundary
+	{
+		public int BeforeInstructionCalls { get; private set; }
+		public int AfterInstructionCalls { get; private set; }
+		public int BusAccessBatchCalls { get; private set; }
+		public int BusAccessBatchInstructions { get; private set; }
+		public bool BeforeInstruction()
+		{
+			BeforeInstructionCalls++;
+			return true;
+		}
+		public void AfterInstruction(long previousCycle, long currentCycle)
+		{
+			_ = previousCycle;
+			_ = currentCycle;
+			AfterInstructionCalls++;
+		}
+		public bool TryBeginBusAccessTraceBatch(
+			M68kCpuState state,
+			long targetCycle,
+			out long batchTargetCycle)
+		{
+			_ = state;
+			batchTargetCycle = targetCycle;
+			return BeforeInstruction();
+		}
+		public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount)
+		{
+			_ = previousCycle;
+			_ = currentCycle;
+			BusAccessBatchCalls++;
+			BusAccessBatchInstructions += instructionCount;
 		}
 	}
 	private sealed class CycleCountingBus : IM68kBus, IM68kCpuBusPhaseTrace

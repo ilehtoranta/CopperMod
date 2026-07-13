@@ -7,7 +7,7 @@ using System;
 
 namespace Copper68k
 {
-    internal sealed class M68030Interpreter : M68020Interpreter
+    internal sealed class M68030Interpreter : M68kAdvancedTimingInterpreter
     {
         public M68030Interpreter(IM68kBus bus)
             : this(bus, M68020CpuProfile.Ocs68030Accelerator14Mhz)
