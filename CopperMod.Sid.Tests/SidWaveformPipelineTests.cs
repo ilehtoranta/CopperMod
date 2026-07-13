@@ -92,7 +92,7 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
-	public void RingModulationUsesSourceMsbAfterSourceAdvanceEvenWhenTargetSyncs()
+	public void RingModulationUsesPreSyncTargetPhaseOnSourceMsbCycle()
 	{
 		var chip = CreateTracedChip(out var trace);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x20);
@@ -104,8 +104,26 @@ public sealed class SidWaveformPipelineTests
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.SyncReset));
 		Assert.True(frame.SyncSourceMsb);
 		Assert.True(frame.RingModInverted);
-		Assert.True(frame.TriangleInverted);
-		Assert.Equal(0xFFEu, frame.WaveformDac);
+		Assert.False(frame.TriangleInverted);
+		Assert.Equal(0u, frame.WaveformDac);
+	}
+
+	[Fact]
+	public void SyncSourceResetSuppressesDownstreamSyncOnSameCycle()
+	{
+		var chip = CreateTracedChip(out var trace);
+		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x20);
+		WriteVoice(chip, voice: 1, frequency: 0x8000, control: 0x22);
+		WriteVoice(chip, voice: 2, frequency: 0x8000, control: 0x22);
+
+		chip.Render(256);
+
+		var firstTarget = Frame(trace, cycle: 256, voice: 1);
+		var downstreamTarget = Frame(trace, cycle: 256, voice: 2);
+		Assert.True(firstTarget.Events.HasFlag(SidCycleTraceEvents.SyncReset));
+		Assert.Equal(0u, firstTarget.Accumulator);
+		Assert.False(downstreamTarget.Events.HasFlag(SidCycleTraceEvents.SyncReset));
+		Assert.Equal(0x800000u, downstreamTarget.Accumulator);
 	}
 
 	[Fact]

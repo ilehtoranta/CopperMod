@@ -562,7 +562,7 @@ public sealed class SidChipTests
 	}
 
 	[Fact]
-	public void SyncResetsVoicesFromSourceMsbRisingSimultaneously()
+	public void SyncDoesNotCascadeThroughSourceResetOnSameCycle()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0x20);
@@ -573,7 +573,7 @@ public sealed class SidChipTests
 
 		Assert.Equal(0x800000u, chip.DebugState.Voices[0].Accumulator);
 		Assert.Equal(0u, chip.DebugState.Voices[1].Accumulator);
-		Assert.Equal(0u, chip.DebugState.Voices[2].Accumulator);
+		Assert.Equal(0x800000u, chip.DebugState.Voices[2].Accumulator);
 	}
 
 	[Fact]
