@@ -5368,11 +5368,16 @@ namespace Copper68k
                         isFallthrough: true,
                         recordOutOfBlockSideExit: false);
                 }
-                else if (!IsV2BranchInstruction(instruction) &&
-                    (i + 1 >= instructions.Length ||
-                        instructions[i + 1].ProgramCounter != Normalize(instruction.ProgramCounter + (uint)instruction.Length)))
+                else if (!IsV2BranchInstruction(instruction))
                 {
-                    il.Emit(OpCodes.Br, exit);
+                    EmitV2SequentialSuccessor(
+                        il,
+                        instruction,
+                        i,
+                        instructions,
+                        labels,
+                        addressToIndex,
+                        exit);
                 }
 
                 if (fastReadFailureEnabled)
@@ -5474,11 +5479,16 @@ namespace Copper68k
                             isFallthrough: true,
                             recordOutOfBlockSideExit: false);
                     }
-                    else if (!IsV2BranchInstruction(instruction) &&
-                        (i + 1 >= instructions.Length ||
-                            instructions[i + 1].ProgramCounter != Normalize(instruction.ProgramCounter + (uint)instruction.Length)))
+                    else if (!IsV2BranchInstruction(instruction))
                     {
-                        il.Emit(OpCodes.Br, exit);
+                        EmitV2SequentialSuccessor(
+                            il,
+                            instruction,
+                            i,
+                            instructions,
+                            labels,
+                            addressToIndex,
+                            exit);
                     }
                 }
             }
@@ -6981,6 +6991,31 @@ namespace Copper68k
             else
             {
                 context.EmitMarkOutOfBlockBranchExit(root, target, codeStart, byteLength, isFallthrough);
+            }
+
+            il.Emit(OpCodes.Br, exit);
+        }
+
+        private static void EmitV2SequentialSuccessor(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            int instructionIndex,
+            M68kDecodedInstruction[] instructions,
+            Label[] labels,
+            Dictionary<uint, int> addressToIndex,
+            Label exit)
+        {
+            var successor = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
+            if (instructionIndex + 1 < instructions.Length &&
+                instructions[instructionIndex + 1].ProgramCounter == successor)
+            {
+                return;
+            }
+
+            if (addressToIndex.TryGetValue(successor, out var successorIndex))
+            {
+                il.Emit(OpCodes.Br, labels[successorIndex]);
+                return;
             }
 
             il.Emit(OpCodes.Br, exit);
