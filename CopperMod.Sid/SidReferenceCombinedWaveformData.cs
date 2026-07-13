@@ -68,17 +68,22 @@ namespace CopperMod.Sid
         private static SidCombinedWaveformCalibration[] BuildMos8580ByMask()
         {
             var table = new SidCombinedWaveformCalibration[256];
-            Add(table, new(0x30, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0x50, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0x60, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0x70, 3, 0.384400, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0x90, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xA0, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xB0, 3, 0.384400, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xC0, 2, 0.620000, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xD0, 3, 0.384400, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xE0, 3, 0.384400, 0.0, 0x0FFF, 0x0000, 0));
-            Add(table, new(0xF0, 4, 0.238328, 0.0, 0x0FFF, 0x0000, 0));
+            // The pulldown table supplies the 8580 combined-wave shape. A
+            // second n-wave gain reduction double-counts that attenuation, so
+            // the calibrated analog gain remains unity for every selector.
+            Add(table, new(0x30, 2, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0x50, 2, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0x60, 2, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0x70, 3, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0x90, 2, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            // Noise+saw retains the sidplayfp writeback residue but reaches the
+            // output mixer at roughly one quarter of the non-noise selectors.
+            Add(table, new(0xA0, 2, 0.250000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0xB0, 3, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0xC0, 2, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0xD0, 3, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0xE0, 3, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
+            Add(table, new(0xF0, 4, 1.000000, 0.0, 0x0FFF, 0x0000, 0));
             return table;
         }
 

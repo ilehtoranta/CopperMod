@@ -620,7 +620,7 @@ namespace CopperMod.Sid
                 _phase &= ~PhaseMsb;
             }
 
-            ApplyMos6581NoiseCombinedWriteback(model, waveformMask, selectorDac, applyNoiseWriteback);
+            ApplyNoiseCombinedWriteback(model, waveformMask, selectorDac, applyNoiseWriteback);
             if (outputs == 0)
             {
                 LatchFloatingWaveform(0, 0.0, model);
@@ -870,14 +870,14 @@ namespace CopperMod.Sid
             _noiseResetReleasePending = false;
         }
 
-        private void ApplyMos6581NoiseCombinedWriteback(
+        private void ApplyNoiseCombinedWriteback(
             SidChipModel model,
             int waveformMask,
             uint waveformDac,
             bool applyNoiseWriteback)
         {
             if (!applyNoiseWriteback ||
-                model != SidChipModel.Mos6581 ||
+                (model != SidChipModel.Mos6581 && _sidEmulationProfile != SidEmulationProfile.ReferenceMeasured) ||
                 TestEnabled ||
                 !NoiseCombinedWithOtherWaveforms(waveformMask))
             {

@@ -301,6 +301,15 @@ namespace CopperMod.Sid
             SidChipModel model,
             SidEmulationProfile sidEmulationProfile = SidEmulationProfile.Balanced)
         {
+            if (sidEmulationProfile == SidEmulationProfile.ReferenceMeasured &&
+                SidReferenceCombinedWaveformData.TryGet(model, waveformMask, out var calibration))
+            {
+                return Math.Clamp(
+                    (ConvertWaveformDac12(value, model, sidEmulationProfile) * calibration.Gain) + calibration.Bias,
+                    -1.0,
+                    1.0);
+            }
+
             if (model != SidChipModel.Mos6581)
             {
                 return ConvertWaveformDac12(value, model, sidEmulationProfile) *

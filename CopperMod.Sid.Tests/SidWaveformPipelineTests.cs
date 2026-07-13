@@ -466,6 +466,24 @@ public sealed class SidWaveformPipelineTests
 	}
 
 	[Fact]
+	public void Mos8580ReferenceCombinedNoiseWritesPulledDownBitsBack()
+	{
+		var chip = new SidChip(
+			SidChipModel.Mos8580,
+			0xD400,
+			sidEmulationProfile: SidEmulationProfile.ReferenceMeasured);
+		var trace = new SidCycleTrace();
+		chip.Trace = trace;
+		WriteVoice(chip, voice: 0, frequency: 0x4000, control: 0xA0);
+
+		chip.Render(1);
+
+		var frame = Frame(trace, cycle: 1, voice: 0);
+		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
+		Assert.NotEqual(0x7FFFF8u, frame.NoiseShiftRegister);
+	}
+
+	[Fact]
 	public void Mos6581TrianglePulseTraceUsesTriangleDacWhenPulseIsHigh()
 	{
 		var chip = CreateTracedChip(out var trace);

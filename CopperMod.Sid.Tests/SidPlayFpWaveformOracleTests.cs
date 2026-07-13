@@ -95,8 +95,15 @@ public sealed class SidPlayFpWaveformOracleTests
 
 	[Fact]
 	public void OptionalGeneratedWaveformFixtureMatchesSidPlayFpOracle()
+		=> RunGeneratedWaveformOracle(SidChipModel.Mos6581, "SIDPLAYFP_ORACLE_TESTS");
+
+	[Fact]
+	public void OptionalGeneratedMos8580WaveformFixtureMatchesSidPlayFpOracle()
+		=> RunGeneratedWaveformOracle(SidChipModel.Mos8580, "SIDPLAYFP_8580_ORACLE_TESTS");
+
+	private static void RunGeneratedWaveformOracle(SidChipModel model, string enableEnvironmentVariable)
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		if (Environment.GetEnvironmentVariable(enableEnvironmentVariable) != "1")
 		{
 			return;
 		}
@@ -115,9 +122,9 @@ public sealed class SidPlayFpWaveformOracleTests
 		{
 			var sidPath = Path.Combine(root, "input.sid");
 			var wavPath = Path.Combine(root, "input.wav");
-			File.WriteAllBytes(sidPath, CreateOracleSid());
+			File.WriteAllBytes(sidPath, CreateOracleSid(model));
 
-			RunSidPlayFp(sidPlayFp, root, RenderSeconds);
+			RunSidPlayFp(sidPlayFp, root, RenderSeconds, model);
 			Assert.True(File.Exists(wavPath), "SidPlayFP did not create the expected oracle WAV: " + wavPath);
 
 			var reference = MeasurementWav.Read(wavPath);
@@ -128,14 +135,19 @@ public sealed class SidPlayFpWaveformOracleTests
 			Assert.True(candidateRaw.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
 			Assert.True(candidatePlayer.Length >= SecondsToSamples(RenderSeconds) - SampleRate / 20);
 
-			WriteOptionalReport(reference.Samples, candidateRaw, candidatePlayer);
+			var levelNormalization = model == SidChipModel.Mos8580
+				? MeasurePureWaveformLevelNormalization(reference.Samples, candidateRaw, candidatePlayer)
+				: 1.0;
+			WriteOptionalReport(model, reference.Samples, candidateRaw, candidatePlayer, levelNormalization);
 			for (var i = 0; i < Segments.Length; i++)
 			{
 				AssertSegmentMatches(
+					model,
 					Segments[i],
 					i,
 					reference.Samples,
-					Segments[i].Kind == OracleSegmentKind.NoiseCombined ? candidateRaw : candidatePlayer);
+					Segments[i].Kind == OracleSegmentKind.NoiseCombined ? candidateRaw : candidatePlayer,
+					levelNormalization);
 			}
 		}
 		finally
@@ -415,9 +427,17 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	private static void WriteOptionalReport(float[] reference, float[] candidateRaw, float[] candidatePlayer)
+	private static void WriteOptionalReport(
+		SidChipModel model,
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer,
+		double levelNormalization)
 	{
-		var path = Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_REPORT");
+		var path = Environment.GetEnvironmentVariable(
+			model == SidChipModel.Mos8580
+				? "SIDPLAYFP_8580_ORACLE_REPORT"
+				: "SIDPLAYFP_ORACLE_REPORT");
 		if (string.IsNullOrWhiteSpace(path))
 		{
 			return;
@@ -426,7 +446,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		path = Path.GetFullPath(path);
 		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
 		var builder = new StringBuilder();
-		builder.AppendLine("segment,kind,candidate_stream,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,corr");
+		builder.AppendLine("segment,kind,candidate_stream,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,normalized_ac_ratio,corr");
 		for (var i = 0; i < Segments.Length; i++)
 		{
 			var segment = Segments[i];
@@ -450,6 +470,7 @@ public sealed class SidPlayFpWaveformOracleTests
 				.Append(referenceAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append(candidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append(ratio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
+				.Append((ratio / levelNormalization).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append(correlation.ToString("0.000000", CultureInfo.InvariantCulture))
 				.AppendLine();
 		}
@@ -459,6 +480,27 @@ public sealed class SidPlayFpWaveformOracleTests
 
 	private static float[] CandidateForSegment(OracleSegment segment, float[] raw, float[] player)
 		=> UsesPlayerOutputForSegment(segment.Name) ? player : raw;
+
+	private static double MeasurePureWaveformLevelNormalization(
+		float[] reference,
+		float[] candidateRaw,
+		float[] candidatePlayer)
+	{
+		var ratios = new double[3];
+		for (var i = 0; i < ratios.Length; i++)
+		{
+			var candidate = CandidateForSegment(Segments[i], candidateRaw, candidatePlayer);
+			var start = SecondsToSamples(((i * FramesPerSegment) / (double)SegmentRate) + 0.10);
+			var length = SecondsToSamples(0.18);
+			var offset = FindBestCandidateOffset(reference, candidate, start, length, maxOffset: SampleRate / 40);
+			var referenceAc = AcRms(reference, start, length);
+			var candidateAc = AcRms(candidate, start + offset, length);
+			ratios[i] = candidateAc / Math.Max(1.0e-12, referenceAc);
+		}
+
+		Array.Sort(ratios);
+		return Math.Max(1.0e-12, ratios[ratios.Length / 2]);
+	}
 
 	private static bool UsesPlayerOutputForSegment(string segmentName)
 		// The external player lane is the fidelity target for audible output. The
@@ -1872,7 +1914,13 @@ public sealed class SidPlayFpWaveformOracleTests
 			_ => "unknown"
 		};
 
-	private static void AssertSegmentMatches(OracleSegment segment, int segmentIndex, float[] reference, float[] candidate)
+	private static void AssertSegmentMatches(
+		SidChipModel model,
+		OracleSegment segment,
+		int segmentIndex,
+		float[] reference,
+		float[] candidate,
+		double levelNormalization)
 	{
 		var start = SecondsToSamples(((segmentIndex * FramesPerSegment) / (double)SegmentRate) + 0.10);
 		var length = SecondsToSamples(0.18);
@@ -1895,12 +1943,45 @@ public sealed class SidPlayFpWaveformOracleTests
 				AssertNoiseShape(segment, reference, candidate, start, start + offset, length);
 				break;
 			case OracleSegmentKind.NoiseCombined:
-				AssertNoiseCombinedShape(segment, reference, candidate, start, start + offset, length);
+				AssertNoiseCombinedShape(model, segment, reference, candidate, start, start + offset, length);
 				break;
 			case OracleSegmentKind.Level:
 				AssertLevelShape(segment.Name, reference, candidate, start, start + offset, length);
 				break;
 		}
+
+		if (model == SidChipModel.Mos8580)
+		{
+			AssertMos8580SegmentLevel(segment.Name, reference, candidate, start, start + offset, length, levelNormalization);
+		}
+	}
+
+	private static void AssertMos8580SegmentLevel(
+		string segmentName,
+		float[] reference,
+		float[] candidate,
+		int referenceStart,
+		int candidateStart,
+		int length,
+		double levelNormalization)
+	{
+		var referenceAc = AcRms(reference, referenceStart, length);
+		var candidateAc = AcRms(candidate, candidateStart, length);
+		var rawRatio = candidateAc / Math.Max(1.0e-12, referenceAc);
+		var ratio = rawRatio / levelNormalization;
+		var combined = segmentName is
+			"triangle-saw" or
+			"triangle-pulse" or
+			"saw-pulse" or
+			"triangle-saw-pulse" or
+			"noise-saw" or
+			"ring-triangle-pulse";
+		var nearNull = referenceAc < CombinedNearNullReferenceAc;
+		var minimum = combined || nearNull ? 0.67 : 0.80;
+		var maximum = combined || nearNull ? 1.50 : 1.25;
+		Assert.True(
+			ratio >= minimum && ratio <= maximum,
+			$"{segmentName} MOS8580 normalized AC ratio {ratio:0.0000} was outside {minimum:0.00}..{maximum:0.00}: raw ratio {rawRatio:0.0000}, pure-wave normalization {levelNormalization:0.0000}, reference {referenceAc:0.0000}, candidate {candidateAc:0.0000}.");
 	}
 
 	private static void AssertWeakSpotSegmentMatches(
@@ -1958,7 +2039,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		return (start, length);
 	}
 
-	private static byte[] CreateOracleSid()
+	private static byte[] CreateOracleSid(SidChipModel model)
 	{
 		var asm = new Mos6510Emitter(ProgramBase);
 		asm.Label("init");
@@ -2000,7 +2081,7 @@ public sealed class SidPlayFpWaveformOracleTests
 			songs: 1,
 			startSong: 1,
 			speed: 0,
-			flags: (1 << 2) | (1 << 4),
+			flags: (ushort)((1 << 2) | ((model == SidChipModel.Mos8580 ? 2 : 1) << 4)),
 			title: "CopperMod SID Waveform Oracle",
 			author: "CopperMod",
 			released: "2026");
@@ -2576,7 +2657,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		asm.StaAbs((ushort)(SidBase + offset + 4));
 	}
 
-	private static void RunSidPlayFp(string sidPlayFp, string workingDirectory, double renderSeconds)
+	private static void RunSidPlayFp(
+		string sidPlayFp,
+		string workingDirectory,
+		double renderSeconds,
+		SidChipModel model = SidChipModel.Mos6581)
 	{
 		var startInfo = new ProcessStartInfo
 		{
@@ -2590,7 +2675,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		startInfo.ArgumentList.Add("--delay=0");
 		startInfo.ArgumentList.Add("-cwa");
 		startInfo.ArgumentList.Add("-vpf");
-		startInfo.ArgumentList.Add("-mof");
+		startInfo.ArgumentList.Add(model == SidChipModel.Mos8580 ? "-mnf" : "-mof");
 		startInfo.ArgumentList.Add("-f" + SampleRate.ToString(CultureInfo.InvariantCulture));
 		startInfo.ArgumentList.Add("-p32");
 		startInfo.ArgumentList.Add("-t" + FormatSidPlayFpDuration(renderSeconds));
@@ -2828,6 +2913,7 @@ public sealed class SidPlayFpWaveformOracleTests
 	}
 
 	private static void AssertNoiseCombinedShape(
+		SidChipModel model,
 		OracleSegment segment,
 		float[] reference,
 		float[] candidate,
@@ -2839,6 +2925,13 @@ public sealed class SidPlayFpWaveformOracleTests
 		Assert.InRange(candidateFlatness, 0.03, 1.05);
 		var referenceAc = AcRms(reference, referenceStart, length);
 		var candidateAc = AcRms(candidate, candidateStart, length);
+		if (model == SidChipModel.Mos8580)
+		{
+			// The common MOS8580 level normalization is enforced by
+			// AssertMos8580SegmentLevel after this shape-specific check.
+			return;
+		}
+
 		var maximumCandidateAc = Math.Max(0.0010, referenceAc * 0.75);
 		Assert.True(
 			candidateAc <= maximumCandidateAc,

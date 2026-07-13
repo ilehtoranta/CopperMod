@@ -201,8 +201,10 @@ public sealed class SidAnalogTests
 
 		Assert.True(SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos8580, 0x70, out var mos8580));
 		Assert.Equal(3, mos8580.ActiveWaveforms);
-		Assert.Equal(0.384400, mos8580.Gain, precision: 6);
+		Assert.Equal(1.000000, mos8580.Gain, precision: 6);
 		Assert.Equal(0x0FFF, mos8580.RetentionMask);
+		Assert.True(SidReferenceCombinedWaveformData.TryGet(SidChipModel.Mos8580, 0xA0, out var mos8580NoiseSaw));
+		Assert.Equal(0.250000, mos8580NoiseSaw.Gain, precision: 6);
 
 		var balanced = SidAnalog.ConvertCombinedWaveformDac12(0x080, 0x70, SidChipModel.Mos6581, SidEmulationProfile.Balanced);
 		var reference = SidAnalog.ConvertCombinedWaveformDac12(0x080, 0x70, SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);
