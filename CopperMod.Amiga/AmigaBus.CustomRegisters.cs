@@ -108,10 +108,14 @@ namespace CopperMod.Amiga
         private static int EncodeVhposrHorizontal(int beamHorizontal)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-            var offset = physicalHorizontal >= 0xDF
-                ? 4
-                : physicalHorizontal >= 0xBF
-                    ? 3
+            // vAmigaTS probe9-13 result buffers require the late-line +3 phase,
+            // while synccpu3 can observe zero only during the two-CCK +4 window.
+            var offset = physicalHorizontal >= 0xE1
+                ? 3
+                : physicalHorizontal >= 0xDF
+                    ? 4
+                    : physicalHorizontal >= 0xB7
+                        ? 3
                     : 8;
             return (physicalHorizontal + offset) % AmigaConstants.A500PalColorClocksPerRasterLine;
         }

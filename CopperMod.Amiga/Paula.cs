@@ -307,6 +307,29 @@ namespace CopperMod.Amiga
         public int GetHighestCpuVisibleInterruptLevel(long cycle)
             => GetHighestInterruptLevel(GetCpuVisibleInterruptBits(cycle));
 
+        internal long? GetCpuInterruptReleaseCycleForLevel(int level, long cycle)
+        {
+            RefreshCpuInterruptVisibility(cycle);
+            var active = ActiveInterruptBits;
+            long? releaseCycle = null;
+            for (var bitIndex = 0; bitIndex < _cpuInterruptReleaseCycles.Length; bitIndex++)
+            {
+                var bit = (ushort)(1 << bitIndex);
+                if ((active & bit) == 0 || GetInterruptLevelForBit(bit) != level)
+                {
+                    continue;
+                }
+
+                var candidate = _cpuInterruptReleaseCycles[bitIndex];
+                if (candidate <= cycle && (!releaseCycle.HasValue || candidate < releaseCycle.Value))
+                {
+                    releaseCycle = candidate;
+                }
+            }
+
+            return releaseCycle;
+        }
+
         public long? GetNextCpuVisibleInterruptCycle(long currentCycle, long targetCycle, int cpuInterruptMask)
         {
             currentCycle = Math.Max(0, currentCycle);
@@ -1748,6 +1771,8 @@ namespace CopperMod.Amiga
 
             public bool DmaEnabled { get; set; }
 
+            public long LastDmaEnableCycle { get; private set; }
+
             public void Reset()
             {
                 Location = 0;
@@ -1756,6 +1781,7 @@ namespace CopperMod.Amiga
                 Volume = 64;
                 CurrentSample = 0;
                 DmaEnabled = false;
+                LastDmaEnableCycle = -1;
                 _dataWord = 0;
                 _hasDataWord = false;
                 _nextByteIsLow = false;
@@ -1794,6 +1820,7 @@ namespace CopperMod.Amiga
                 }
 
                 DmaEnabled = true;
+                LastDmaEnableCycle = cycle;
                 _hasDataWord = false;
                 _nextByteIsLow = false;
                 ClearPrefetchedDmaWord();
@@ -2072,7 +2099,8 @@ namespace CopperMod.Amiga
                     _dataWord,
                     _hasDataWord,
                     _nextByteIsLow,
-                    _nextSampleCycle);
+                    _nextSampleCycle,
+                    LastDmaEnableCycle);
             }
 
             private void RequestStartupDiscardWord(long cycle, in DmaContext context)
@@ -2381,7 +2409,8 @@ namespace CopperMod.Amiga
             ushort dataWord,
             bool hasDataWord,
             bool nextByteIsLow,
-            long nextSampleCycle)
+            long nextSampleCycle,
+            long lastDmaEnableCycle)
         {
             Index = index;
             Location = location;
@@ -2396,6 +2425,7 @@ namespace CopperMod.Amiga
             HasDataWord = hasDataWord;
             NextByteIsLow = nextByteIsLow;
             NextSampleCycle = nextSampleCycle;
+            LastDmaEnableCycle = lastDmaEnableCycle;
         }
 
         public int Index { get; }
@@ -2423,5 +2453,7 @@ namespace CopperMod.Amiga
         public bool NextByteIsLow { get; }
 
         public long NextSampleCycle { get; }
+
+        public long LastDmaEnableCycle { get; }
     }
 }

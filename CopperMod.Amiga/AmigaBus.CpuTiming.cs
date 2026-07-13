@@ -11,6 +11,8 @@ namespace CopperMod.Amiga
 {
     internal sealed partial class AmigaBus
     {
+        private const int DeferredCpuBusBatchMinimumHorizonCycles = 16;
+
         internal void ArmDeferredCpuBatchExitForTest(long cycle)
             => _deferredCpuBatchExitChipAccessCycle = Math.Max(0, cycle);
 
@@ -86,7 +88,7 @@ namespace CopperMod.Amiga
                 interruptMask,
                 out wakeSource,
                 out var diskWakeReason);
-            if (batchTargetCycle <= currentCycle)
+            if (batchTargetCycle - currentCycle < DeferredCpuBusBatchMinimumHorizonCycles)
             {
                 return false;
             }
@@ -97,25 +99,33 @@ namespace CopperMod.Amiga
             _deferredCpuDataLongShapeBits = 0;
             _deferredCpuDataCiaShapeBits = 0;
             _deferredCpuDataReplayCycle = currentCycle;
-            _deferredCpuBusBatchUsed++;
-            RecordDeferredCpuBusBatchWakeSource(wakeSource);
-            if (wakeSource == M68kTraceBatchWakeSource.Disk)
-            {
-                RecordDeferredCpuBusBatchDiskWakeReason(diskWakeReason);
-            }
+            _deferredCpuBusBatchExecutionStarted = false;
+            _deferredCpuBusBatchPendingWakeSource = wakeSource;
+            _deferredCpuBusBatchPendingDiskWakeReason = diskWakeReason;
 
             return true;
         }
 
-        void IM68kDeferredCpuInstructionTiming.CompleteDeferredCpuBusBatchInstruction(long previousCycle, long currentCycle)
+        void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuBusBatchExecution()
         {
-            _ = previousCycle;
-            _ = currentCycle;
-            _deferredCpuBusBatchInstructions++;
-            if (_deferredCpuBusBatchActive)
+            if (!_deferredCpuBusBatchExecutionStarted)
             {
-                _deferredCpuBusBatchSkippedInstructionFlushes++;
+                _deferredCpuBusBatchExecutionStarted = true;
+                _deferredCpuBusBatchUsed++;
+                RecordDeferredCpuBusBatchWakeSource(_deferredCpuBusBatchPendingWakeSource);
+                if (_deferredCpuBusBatchPendingWakeSource == M68kTraceBatchWakeSource.Disk)
+                {
+                    RecordDeferredCpuBusBatchDiskWakeReason(_deferredCpuBusBatchPendingDiskWakeReason);
+                }
             }
+        }
+
+        void IM68kDeferredCpuInstructionTiming.CompleteDeferredCpuBusBatchExecution(
+            int instructionCount,
+            int skippedInstructionFlushCount)
+        {
+            _deferredCpuBusBatchInstructions += instructionCount;
+            _deferredCpuBusBatchSkippedInstructionFlushes += skippedInstructionFlushCount;
         }
 
         void IM68kDeferredCpuInstructionTiming.EndDeferredCpuBusBatch(ref long cycle, M68kDeferredCpuBusBatchExitReason reason)
@@ -328,10 +338,20 @@ namespace CopperMod.Amiga
 
             _deferredCpuBusBatchActive = false;
             _deferredCpuInstructionTimingActive = false;
-            _deferredCpuBusBatchFlushes++;
+            var executionStarted = _deferredCpuBusBatchExecutionStarted;
+            _deferredCpuBusBatchExecutionStarted = false;
+            if (executionStarted)
+            {
+                _deferredCpuBusBatchFlushes++;
+            }
             _deferredCpuBatchExitChipAccessCycle = reason == M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess
                 ? Math.Max(0, cycle)
                 : -1;
+            if (!executionStarted)
+            {
+                return;
+            }
+
             switch (reason)
             {
                 case M68kDeferredCpuBusBatchExitReason.TargetCycle:
@@ -368,6 +388,9 @@ namespace CopperMod.Amiga
             _deferredCpuDataReplayCycle = 0;
             _deferredCpuBusBatchActive = false;
             _endingDeferredCpuBusBatch = false;
+            _deferredCpuBusBatchExecutionStarted = false;
+            _deferredCpuBusBatchPendingWakeSource = M68kTraceBatchWakeSource.Unknown;
+            _deferredCpuBusBatchPendingDiskWakeReason = AmigaDiskController.SchedulerWakeReason.None;
             _deferredCpuBatchExitChipAccessCycle = -1;
             if (!resetCounters)
             {
@@ -422,6 +445,7 @@ namespace CopperMod.Amiga
             _deferredCpuInternalNoBusWindowFirstMismatch = string.Empty;
             ResetDeferredCpuWaitDiagnostics();
         }
+
 
 
 
@@ -486,11 +510,26 @@ namespace CopperMod.Amiga
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void FlushDeferredCpuDataTiming(ref long cycle)
+            => FlushDeferredCpuDataTiming(ref cycle, keepBatchActive: false);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void FlushDeferredCpuDataTimingForAccess(
+            AmigaBusAccessTarget target,
+            AmigaBusAccessKind kind,
+            bool isWrite,
+            ref long cycle)
+            => FlushDeferredCpuDataTiming(
+                ref cycle,
+                CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite));
+
+        private void FlushDeferredCpuDataTiming(ref long cycle, bool keepBatchActive)
         {
             var count = _deferredCpuDataAccessCount;
             if (count == 0)
             {
-                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                if (!keepBatchActive &&
+                    _deferredCpuBusBatchActive &&
+                    !_endingDeferredCpuBusBatch)
                 {
                     EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
                 }
@@ -533,7 +572,9 @@ namespace CopperMod.Amiga
             }
 
             _deferredCpuDataReplayCycle = cycle;
-            if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+            if (!keepBatchActive &&
+                _deferredCpuBusBatchActive &&
+                !_endingDeferredCpuBusBatch)
             {
                 EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
             }
@@ -786,13 +827,14 @@ namespace CopperMod.Amiga
             var scratchAudit = default(DeferredCpuWaitScratchAudit);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
-            var deferredPreGrantPrepared = false;
+            var deferredBatchExitAttempted = false;
             var deferredFixedImageUsed = false;
             var verifyDeferredFixedImage = false;
             var deferredFixedImageTimeline = default(CpuWaitFixedSlotTimelineSignature);
             if (!slotContendedClean &&
                 ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle))
             {
+                deferredBatchExitAttempted = true;
                 _deferredCpuBatchExitChipAccessCycle = -1;
                 _deferredCpuWaitWindowFastPathAttempts++;
                 if (_captureBusAccesses ||
@@ -808,7 +850,7 @@ namespace CopperMod.Amiga
                         RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unsupported);
                     }
                 }
-                else if (HasUnsupportedDeferredBlitterPreparationWorkThrough(
+                else if (HasUnsupportedCpuWaitSlotWorkThrough(
                     grantRequestCycle + PalLineCycles))
                 {
                     _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
@@ -844,15 +886,6 @@ namespace CopperMod.Amiga
                             ref scratchAudit);
                     }
 
-                    if (_hardwareScheduler.PrepareCpuGrantAfterDeferredBatchExit(grantRequestCycle))
-                    {
-                        deferredPreGrantPrepared = true;
-                        deferredPreparationUsed = true;
-                    }
-                    else
-                    {
-                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
-                    }
                 }
                 else if (Display.HasLiveDisplayWork())
                 {
@@ -907,9 +940,54 @@ namespace CopperMod.Amiga
                 }
             }
 
-            if (!slotContendedClean && !cpuGrantCommitted && !deferredPreGrantPrepared)
+            if (!cpuGrantCommitted &&
+                !_captureBusAccesses &&
+                size != AmigaBusAccessSize.Long &&
+                target is (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock) &&
+                Blitter.Busy &&
+                Blitter.CanUseCpuWaitAreaMicroOps &&
+                !HasUnsupportedCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles))
             {
-                if (ShouldRunDeferredCpuWaitSlotShadowAudit)
+                if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
+                {
+                    BeginDeferredCpuWaitScratchAudit(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        requestedCycle,
+                        grantRequestCycle,
+                        isWrite,
+                        scratchWrite,
+                        ref scratchAudit);
+                }
+
+                var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle);
+                if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
+                {
+                    secondWordCycle = grantedCycle;
+                    cpuGrantCommitted = true;
+                    deferredPreparationUsed = deferredBatchExitAttempted;
+                }
+                else if (deferredBatchExitAttempted)
+                {
+                    _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                }
+            }
+
+            if (!slotContendedClean && !cpuGrantCommitted)
+            {
+                if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
                 {
                     BeginDeferredCpuWaitScratchAudit(
                         kind,
@@ -1164,7 +1242,7 @@ namespace CopperMod.Amiga
                 Paula.HasDmaWorkThrough(cycle);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool HasUnsupportedDeferredBlitterPreparationWorkThrough(long cycle)
+        internal bool HasUnsupportedCpuWaitSlotWorkThrough(long cycle)
             =>
                 (Blitter.Busy && !Blitter.CanUseCpuWaitAreaMicroOps) ||
                 Disk.ActiveDma ||
@@ -1892,7 +1970,13 @@ namespace CopperMod.Amiga
             }
 
             _hrmSlotEngine.BlitterPriorityEnabled = (Paula.Dmacon & 0x0400) != 0;
-            PrepareLiveDisplayBeforeCpuHrmGrantIfNeeded(target, size, isWrite, requestedCycle);
+			PrepareLiveDisplayBeforeCpuHrmGrantUntilStable(
+				target,
+				address,
+				size,
+				isWrite,
+				kind,
+				requestedCycle);
 
             if (size == AmigaBusAccessSize.Long)
             {

@@ -1877,6 +1877,48 @@ namespace CopperMod.Amiga
                 => (current ^ value) * prime;
         }
 
+        internal AgnusSlotTimelineSignature CaptureOwnerTimelineSignature(long startCycle, long endExclusiveCycle)
+        {
+            if (endExclusiveCycle <= startCycle)
+            {
+                return default;
+            }
+
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            var count = 0;
+            var firstCycle = 0L;
+            var lastCycle = 0L;
+            var firstOwner = AgnusChipSlotOwner.Free;
+            var lastOwner = AgnusChipSlotOwner.Free;
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(startCycle);
+            var lastCandidate = FloorToSlot(endExclusiveCycle - 1);
+            for (; slotCycle <= lastCandidate; slotCycle += SlotCycles)
+            {
+                if (!TryGetSlot(slotCycle, out var slot))
+                {
+                    continue;
+                }
+
+                if (count == 0)
+                {
+                    firstCycle = slotCycle;
+                    firstOwner = slot.Owner;
+                }
+
+                lastCycle = slotCycle;
+                lastOwner = slot.Owner;
+                count++;
+                hash = (hash ^ unchecked((ulong)slotCycle)) * prime;
+                hash = (hash ^ (ulong)slot.Owner) * prime;
+            }
+
+            return count == 0
+                ? default
+                : new AgnusSlotTimelineSignature(count, hash, firstCycle, lastCycle, firstOwner, lastOwner);
+        }
+
         public long CurrentCycle => _currentCycle;
 
         public long NextMandatoryRefreshCycle => _nextRefreshCommitCycle;

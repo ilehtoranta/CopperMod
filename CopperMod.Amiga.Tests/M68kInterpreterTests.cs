@@ -133,15 +133,58 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuDataWrite, 0x2000u, M68kOperandSize.Word, true, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 30L, 32L));
 	}
-	[Fact]
-	public void MoveWordImmediateDisplacementDestinationBusSequenceWritesBeforeLastPrefetch()
+	[Theory]
+	[MemberData(nameof(M68000DispatchVariants))]
+	public void MoveWordAbsoluteLongToDataPrefetchesNextOpcodeBeforeSourceRead(int dispatchValue)
 	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x30, 0x39, 0x00, 0x00, 0x20, 0x00, // MOVE.W $00002000,D0
+			0x4E, 0x71,
+			0x4E, 0x71);
+		Write(bus.Memory, 0x2000, 0xA5, 0x5A);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: dispatch != M68kOpcodePlanDispatch.Scalar,
+			opcodePlanDispatch: dispatch);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(16, cycles);
+		Assert.Equal(0xA55Au, cpu.State.D[0]);
+		AssertCpuPhaseSequence(
+			bus.CpuBusPhases,
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 26L, 28L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 28L, 30L),
+			(M68kBusAccessKind.CpuDataRead, 0x2000u, M68kOperandSize.Word, false, 30L, 32L));
+	}
+
+	[Theory]
+	[MemberData(nameof(M68000DispatchVariants))]
+	public void MoveWordImmediateDisplacementDestinationBusSequenceWritesBeforeLastPrefetch(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
 		var bus = new CycleCountingBus();
 		Write(bus.Memory, 0x1000,
 			0x33, 0x7C, 0x06, 0x06, 0x01, 0x80, // MOVE.W #$0606,$0180(A1)
 			0x4E, 0x71,
 			0x4E, 0x71);
-		var cpu = new M68kInterpreter(bus);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: dispatch != M68kOpcodePlanDispatch.Scalar,
+			opcodePlanDispatch: dispatch);
 		cpu.Reset(0x1000, 0x3000);
 		cpu.State.Cycles = 20;
 		cpu.State.A[1] = 0x2000;
@@ -154,8 +197,9 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2180u, M68kOperandSize.Word, true, 26L, 28L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 28L, 30L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 26L, 28L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2180u, M68kOperandSize.Word, true, 28L, 30L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 30L, 32L));
 	}
 	[Theory]
 	[MemberData(nameof(M68000DispatchVariants))]
@@ -1429,10 +1473,9 @@ public sealed class M68kInterpreterTests
 			requestDeltas.Skip(1).All(delta => delta == 38),
 			$"requestDeltas={string.Join(",", requestDeltas)} | {diagnostic}");
 	}
-	[Fact(Skip = "Documents unresolved vAmigaTS sync2 entry phase; one-word Bcc target prime improves cycle01v but this loop still has a 24/28-cycle VHPOSR read cadence.")]
-	public void Synccpu2LoopWithPrecedingColorMoveKeepsExpectedVhposrReadPhase()
+	[Fact]
+	public void Synccpu2LoopRetiresEvery26CyclesWhileBusReadsAlternate24And28()
 	{
-		const int iterations = 32;
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
 		Write(bus.ChipRam, 0x1000,
 			0x33, 0x7C, 0x06, 0x06, 0x01, 0x80, // MOVE.W #$0606,$0180(A1)
@@ -1443,9 +1486,26 @@ public sealed class M68kInterpreterTests
 		cpu.State.Cycles = (240L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
 		cpu.State.A[1] = 0x00DFF000;
 		cpu.State.A[3] = 0x00DFF006;
+		var prefetchDiagnostics = Assert.IsAssignableFrom<IM68000PrefetchDiagnostics>(cpu);
+		var instructionLedger = new List<string>();
+		var instructionBoundaries = new List<(M68000PrefetchDiagnosticState Before, M68000PrefetchDiagnosticState After)>();
 
 		cpu.ExecuteInstruction();
-		ExecuteLoopIterations(cpu, iterations, instructionsPerIteration: 2, expectedProgramCounter: 0x1006);
+		for (var instruction = 0; instruction < 128 && cpu.State.ProgramCounter != 0x100C; instruction++)
+		{
+			var before = prefetchDiagnostics.CapturePrefetchDiagnosticState();
+			var phaseStart = bus.CpuBusPhases.Count;
+			cpu.ExecuteInstruction();
+			var after = prefetchDiagnostics.CapturePrefetchDiagnosticState();
+			instructionBoundaries.Add((before, after));
+			if (instructionLedger.Count < 12)
+			{
+				instructionLedger.Add(FormatPrefetchInstructionBoundary(
+					before,
+					after,
+					bus.CpuBusPhases.Skip(phaseStart)));
+			}
+		}
 
 		var colorWrite = Assert.Single(bus.CustomRegisterWrites.Where(write => write.Address == 0x180));
 		var reads = GetSynccpu3DataReads(bus, 0x00DFF006, instructionProgramCounter: 0x1006).ToArray();
@@ -1453,12 +1513,36 @@ public sealed class M68kInterpreterTests
 		var diagnostic =
 			$"colorWrite={colorWrite.Cycle} " +
 			$"requestDeltas={string.Join(",", requestDeltas)} | " +
-			BuildSynccpu3ReadPhaseDiagnostic(bus, reads);
+			BuildSynccpu3ReadPhaseDiagnostic(bus, reads) + Environment.NewLine +
+			string.Join(Environment.NewLine, instructionLedger);
 
-		Assert.Equal(iterations, reads.Length);
-		Assert.True(
-			requestDeltas.Skip(1).All(delta => delta == 26),
-			diagnostic);
+		Assert.Equal((uint)0x100C, cpu.State.ProgramCounter);
+		Assert.True(reads.Length > 2, diagnostic);
+		Assert.All(
+			instructionBoundaries.Where(boundary => boundary.Before.ProgramCounter == 0x1006),
+			boundary => Assert.Equal(16, boundary.After.Cycles - boundary.Before.Cycles));
+		Assert.All(
+			instructionBoundaries.Where(boundary =>
+				boundary.Before.ProgramCounter == 0x100A &&
+				boundary.After.ProgramCounter == 0x1006),
+			boundary => Assert.Equal(10, boundary.After.Cycles - boundary.Before.Cycles));
+		var exitBranch = Assert.Single(instructionBoundaries.Where(boundary =>
+			boundary.Before.ProgramCounter == 0x100A &&
+			boundary.After.ProgramCounter == 0x100C));
+		Assert.Equal(8, exitBranch.After.Cycles - exitBranch.Before.Cycles);
+		var andiStarts = instructionBoundaries
+			.Where(boundary => boundary.Before.ProgramCounter == 0x1006)
+			.Select(boundary => boundary.Before.Cycles)
+			.ToArray();
+		Assert.All(
+			andiStarts.Skip(1).Zip(andiStarts, (current, previous) => current - previous),
+			delta => Assert.Equal(26, delta));
+		Assert.Contains(24, requestDeltas);
+		Assert.Contains(28, requestDeltas);
+		Assert.Single(requestDeltas.Where(delta => delta == 26));
+		Assert.All(reads, read => Assert.Equal(
+			0,
+			(read.CpuPhase.CompletedCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) & 3));
 	}
 	[Fact]
 	public void Synccpu2LoopWithPrecedingColorMoveDocumentsCurrentBusTimeline()
@@ -1517,12 +1601,8 @@ public sealed class M68kInterpreterTests
 			BuildSynccpu3ReadPhaseDiagnostic(bus, reads) + Environment.NewLine +
 			string.Join(Environment.NewLine, instructionProfiles);
 
-		Assert.Equal(new[] { 24L, 24L, 24L, 28L, 24L, 28L, 24L }, requestDeltas);
-		Assert.Contains("pc=0x100A start=+110 end=+120 retired=10", diagnostic);
-		Assert.Contains("CpuInstructionFetch:R:0x001006@+112->116", diagnostic);
-		Assert.Contains("pc=0x1006 start=+120 end=+136 retired=16", diagnostic);
-		Assert.Contains("CpuInstructionFetch:R:0x001008@+120->124", diagnostic);
-		Assert.Contains("CpuDataRead:R:0xDFF006@+124->128", diagnostic);
+		Assert.Equal(new[] { 24L, 28L, 24L, 28L, 24L, 28L, 24L }, requestDeltas);
+		Assert.Contains("colorWrites=[0x0606@+18/v240h41]", diagnostic);
 	}
 	[Fact]
 	public void Synccpu3LoopChipRamReadOnlyPollingShapeDataReadRequestPhaseStaysStableAfterPrefetchWarmup()
@@ -1956,10 +2036,11 @@ public sealed class M68kInterpreterTests
 		AssertCpuPhaseSequence(
 			movePhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x100Au, M68kOperandSize.Word, false, 88L, 90L),
-			(M68kBusAccessKind.CpuDataWrite, 0x00DFF180u, M68kOperandSize.Word, true, 90L, 92L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x100Cu, M68kOperandSize.Word, false, 92L, 94L));
-		Assert.True(firstReadAfterColorWrite == 14, diagnostic);
-		Assert.True(requestDeltas.All(delta => delta == 26), diagnostic);
+			(M68kBusAccessKind.CpuInstructionFetch, 0x100Cu, M68kOperandSize.Word, false, 90L, 92L),
+			(M68kBusAccessKind.CpuDataWrite, 0x00DFF180u, M68kOperandSize.Word, true, 92L, 94L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x100Eu, M68kOperandSize.Word, false, 94L, 96L));
+		Assert.True(firstReadAfterColorWrite == 10, diagnostic);
+		Assert.True(requestDeltas[0] == 28 && requestDeltas.Skip(1).All(delta => delta == 26), diagnostic);
 		Assert.Equal(requestDeltas, grantDeltas);
 		Assert.Equal(requestDeltas, completionDeltas);
 		Assert.True(waitCycles.All(wait => wait == 0), diagnostic);
@@ -3286,6 +3367,28 @@ public sealed class M68kInterpreterTests
 			",",
 			phases.Select(phase =>
 				$"pc=0x{phase.InstructionProgramCounter:X6}:{phase.AccessKind}:{(phase.IsWrite ? "W" : "R")}:0x{phase.Address:X6}@{phase.RequestedCycle}-{phase.CompletedCycle}"));
+	private static string FormatPrefetchInstructionBoundary(
+		M68000PrefetchDiagnosticState before,
+		M68000PrefetchDiagnosticState after,
+		IEnumerable<AmigaCpuBusPhaseTrace> phases)
+	{
+		static string FormatState(M68000PrefetchDiagnosticState state)
+		{
+			var words = state.PrefetchCount switch
+			{
+				0 => "empty",
+				1 => $"0x{state.Word0:X4}@{state.ReadyCycle0}",
+				_ => $"0x{state.Word0:X4}@{state.ReadyCycle0}/0x{state.Word1:X4}@{state.ReadyCycle1}"
+			};
+			return $"pc=0x{state.ProgramCounter:X4},c={state.Cycles},q=0x{state.PrefetchAddress:X4}[{state.PrefetchCount}]={words}," +
+				$"bus={state.BusCycle},ret={state.RetireBusCycle},is={state.InstructionStartCycle},floor={state.InstructionCycleFloor}," +
+				$"pending={state.PendingInternalCycles},skip={state.SkipRetirePrefetchTopUp}";
+		}
+
+		var phaseText = string.Join(",", phases.Select(phase =>
+			$"{phase.CpuPhase.AccessKind}:0x{phase.CpuPhase.Address:X6}@{phase.CpuPhase.RequestedCycle}-{phase.CpuPhase.CompletedCycle}"));
+		return $"before[{FormatState(before)}] after[{FormatState(after)}] phases[{phaseText}]";
+	}
 	private static string? FindTimelineMismatch(
 		IReadOnlyList<(M68kBusAccessKind Kind, uint Address, bool IsWrite, long RequestOffset)> expected,
 		IReadOnlyList<AmigaCpuBusPhaseTrace> actual,

@@ -1035,6 +1035,12 @@ public sealed class AmigaBootMemoryTests
 		addState.A[1] = interrupt;
 
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -168), addState));
+		Assert.Equal(
+			AmigaConstants.A500PalCpuCyclesPerFrame,
+			InvokeGetNextSyntheticVBlankBoundaryCycle(
+				boot,
+				0,
+				AmigaConstants.A500PalCpuCyclesPerFrame * 3L + 42));
 		InvokeAdvanceSyntheticVBlankInterruptServers(
 			boot,
 			0,
@@ -1347,6 +1353,18 @@ public sealed class AmigaBootMemoryTests
 			BindingFlags.Instance | BindingFlags.NonPublic);
 		Assert.NotNull(method);
 		method.Invoke(boot, new object[] { previousCycle, currentCycle });
+	}
+
+	private static long InvokeGetNextSyntheticVBlankBoundaryCycle(
+		AmigaBootController boot,
+		long currentCycle,
+		long targetCycle)
+	{
+		var method = typeof(AmigaBootController).GetMethod(
+			"GetNextSyntheticVBlankBoundaryCycle",
+			BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(method);
+		return (long)method.Invoke(boot, new object[] { currentCycle, targetCycle })!;
 	}
 
 	private static bool InvokeRecoverHostTaskTrapFromZeroVector(AmigaBootController boot)

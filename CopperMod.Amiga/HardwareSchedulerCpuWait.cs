@@ -53,24 +53,6 @@ namespace CopperMod.Amiga
             => _slotContendedCleanThroughCycle = cycle;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool PrepareCpuGrantAfterDeferredBatchExit(long requestedCycle)
-        {
-            if (_draining)
-            {
-                return false;
-            }
-
-            requestedCycle = Math.Max(0, requestedCycle);
-            if (requestedCycle > 0)
-            {
-                DrainSlotContendedAccess(requestedCycle - 1);
-            }
-
-            _busAccessDrainCount++;
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrant(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -97,10 +79,23 @@ namespace CopperMod.Amiga
             // Hardware before the CPU request cannot observe the pending request.
             if (requestedCycle > 0)
             {
+                if (_bus.Blitter.Busy && _bus.Blitter.CanUseCpuWaitAreaMicroOps)
+                {
+                    var blitterSlot = AgnusChipSlotScheduler.AlignToSlot(
+                        Math.Max(0, _bus.Blitter.CurrentCycle));
+                    while (blitterSlot < requestedCycle &&
+                        _bus.Blitter.Busy &&
+                        _bus.Blitter.CanUseCpuWaitAreaMicroOps)
+                    {
+                        _bus.Blitter.AdvanceCpuWaitAreaMicroOpTo(blitterSlot);
+                        blitterSlot += AgnusChipSlotScheduler.SlotCycles;
+                    }
+                }
+
                 DrainSlotContendedAccess(requestedCycle - 1);
             }
 
-            if (_bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(requestedCycle + _bus.PalLineCycles))
+            if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(requestedCycle + _bus.PalLineCycles))
             {
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;
             }
@@ -121,11 +116,13 @@ namespace CopperMod.Amiga
                             out _,
                             out _,
                             out _);
-                        if (_bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(candidate + _bus.PalLineCycles) ||
+                        if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(candidate + _bus.PalLineCycles) ||
                             liveResult == OcsCpuWaitLiveSlotResult.CopperBarrier)
                         {
                             return CpuWaitGrantAdvanceResult.ReferenceContinuation;
                         }
+
+                        ExecutePendingCpuSlot(candidate);
                     }
                     else
                     {

@@ -541,8 +541,8 @@ namespace CopperMod.Amiga
                 (cpuInterruptMask < 0 || pendingPaulaInterruptLevel > (cpuInterruptMask & 0x07));
             if (_bus.HasPendingCiaInterrupts || pendingPaulaInterruptCanEnter)
             {
-                candidate = currentCycle + 1;
                 wakeSource = M68kTraceBatchWakeSource.PendingInterrupt;
+                return currentCycle + 1;
             }
 
             candidate = MinWakeCandidate(

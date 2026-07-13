@@ -36,7 +36,8 @@ namespace CopperMod.Amiga
         IM68kDeferredCpuInstructionTiming,
         IM68kJitBus,
         IM68kJitFastMemoryBus,
-        IM68kJitTimedMemoryBus
+        IM68kJitTimedMemoryBus,
+        IM68kJitDirectRamBus
     {
         private const ushort HostTrapOpcode = 0xFF00;
         private const int MaxCapturedBusAccesses = 65536;
@@ -215,6 +216,7 @@ namespace CopperMod.Amiga
         private readonly AmigaHardwareScheduler _hardwareScheduler;
         private readonly CpuBusBankKind[] _cpuBusBankKinds = new CpuBusBankKind[CpuBusBankCount];
         private readonly int[] _cpuBusBankOffsets = new int[CpuBusBankCount];
+        private readonly byte[] _jitDirectRamBankKinds = new byte[CpuBusBankCount];
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
@@ -251,6 +253,9 @@ namespace CopperMod.Amiga
         private long _deferredCpuDataReplayCycle;
         private bool _deferredCpuBusBatchActive;
         private bool _endingDeferredCpuBusBatch;
+        private bool _deferredCpuBusBatchExecutionStarted;
+        private M68kTraceBatchWakeSource _deferredCpuBusBatchPendingWakeSource;
+        private AmigaDiskController.SchedulerWakeReason _deferredCpuBusBatchPendingDiskWakeReason;
         private long _deferredCpuBusBatchAttempts;
         private long _deferredCpuBusBatchUsed;
         private long _deferredCpuBusBatchInstructions;
@@ -1677,18 +1682,20 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             if (IsCustomRegisterByteAddress(address))
             {
+                FlushDeferredCpuDataTiming(ref cycle);
                 return ReadCpuCustomByte(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
             }
 
             if (TryGetCiaRegister(address, out var directCia, out var directCiaRegister))
             {
+                FlushDeferredCpuDataTiming(ref cycle);
                 return ReadCpuCiaByte(address, directCia, directCiaRegister, ref cycle, accessKind);
             }
 
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -1936,8 +1943,8 @@ namespace CopperMod.Amiga
 
         public void WriteByte(uint address, byte value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -1950,8 +1957,12 @@ namespace CopperMod.Amiga
 
         internal void WriteTasCpuDataByte(uint address, byte value, ref long cycle)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -1992,8 +2003,8 @@ namespace CopperMod.Amiga
 
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -2020,15 +2031,16 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             if (IsCustomRegisterWordAddress(address))
             {
+                FlushDeferredCpuDataTiming(ref cycle);
                 return ReadCpuCustomWord(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
             }
 
             var target = accessKind == AmigaBusAccessKind.CpuInstructionFetch
                 ? ClassifyInstructionFetchTarget(address)
                 : ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
             var requestedCycle = cycle;
             if (accessKind == AmigaBusAccessKind.CpuInstructionFetch &&
                 (target == AmigaBusAccessTarget.ChipRam ||
@@ -2106,13 +2118,14 @@ namespace CopperMod.Amiga
             AmigaBusAccessKind accessKind,
             bool sampleCustomAtGrantedCycle)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             if (IsCustomRegisterByteAddress(address))
             {
+                FlushDeferredCpuDataTiming(ref cycle);
                 return ReadCpuCustomLong(address, ref cycle, accessKind, sampleCustomAtGrantedCycle);
             }
 
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -2162,8 +2175,8 @@ namespace CopperMod.Amiga
 
         public void WriteLong(uint address, uint value, ref long cycle, AmigaBusAccessKind accessKind)
         {
-            FlushDeferredCpuDataTiming(ref cycle);
             var target = ClassifyTarget(address);
+            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -3436,10 +3449,53 @@ namespace CopperMod.Amiga
             for (var bank = 0; bank < CpuBusBankCount; bank++)
             {
                 var bankAddress = (uint)(bank << CpuBusBankShift);
-                _cpuBusBankKinds[bank] = ClassifyCpuBusBank(bankAddress, out var offset);
+                var kind = ClassifyCpuBusBank(bankAddress, out var offset);
+                _cpuBusBankKinds[bank] = kind;
                 _cpuBusBankOffsets[bank] = offset;
+                _jitDirectRamBankKinds[bank] = kind switch
+                {
+                    CpuBusBankKind.ExpansionRam => (byte)M68kJitDirectRamBankKind.PseudoFast,
+                    CpuBusBankKind.RealFastRam => (byte)M68kJitDirectRamBankKind.RealFast,
+                    _ => (byte)M68kJitDirectRamBankKind.None
+                };
             }
         }
+
+        bool IM68kJitDirectRamBus.TryGetJitDirectRamMap(out M68kJitDirectRamMap map)
+        {
+            map = new M68kJitDirectRamMap(
+                _jitDirectRamBankKinds,
+                _cpuBusBankOffsets,
+                _expansionRam.Data,
+                _realFastRam.Data,
+                CpuBusBankShift);
+            return _expansionRam.Length != 0 || _realFastRam.Length != 0;
+        }
+
+        void IM68kJitDirectRamBus.ReplayJitPseudoFastAccesses(
+            ref long cycle,
+            int accessCount,
+            ulong longAccessBits)
+        {
+            for (var index = 0; index < accessCount; index++)
+            {
+                var size = ((longAccessBits >> index) & 1UL) != 0
+                    ? AmigaBusAccessSize.Long
+                    : AmigaBusAccessSize.Word;
+                CommitExactCpuExpansionDataTiming(
+                    ExpansionRamBase,
+                    size,
+                    ref cycle,
+                    isWrite: false,
+                    AmigaBusAccessKind.CpuDataRead,
+                    OcsLiveDmaScratchCpuWrite.None,
+                    out _,
+                    out _);
+            }
+        }
+
+        void IM68kJitDirectRamBus.CompleteJitDirectRamWrite(uint physicalAddress, int byteCount)
+            => CompleteJitZeroWaitWrite(physicalAddress, byteCount);
 
         private CpuBusBankKind ClassifyCpuBusBank(uint bankAddress, out int offset)
         {

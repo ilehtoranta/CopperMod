@@ -11,6 +11,11 @@ const int Channels = 2;
 const int OpcodeDispatchDefaultMemorySize = 1 << 20;
 const int OpcodeDispatchTransformMemorySize = 1 << 24;
 
+if (AmigaFastRamBenchmark.TryRun(args))
+{
+    return;
+}
+
 var options = BenchmarkOptions.Parse(args);
 if (options.JitFallbackAttribution)
 {
@@ -24,6 +29,12 @@ var allWorkloads = new[]
     new BenchmarkWorkload("Alien Breed", "Team17\\AlienBreed_998.zip"),
     new BenchmarkWorkload("Alien Breed SE 92", "Team17\\AlienBreedSpecialEdition92_615.zip"),
     new BenchmarkWorkload("Alien Breed II", "Team17\\AlienBreedII-TheHorrorContinues_44.zip"),
+    new BenchmarkWorkload("Alien Breed 3D", "Team17\\AlienBreed3D_.zip"),
+    new BenchmarkWorkload("Apidya IPF", "Team17\\Apidya_764.zip"),
+    new BenchmarkWorkload("F17 Challenge IPF", "Team17\\F17Challenge_1703.zip"),
+    new BenchmarkWorkload("Overdrive IPF", "Team17\\downloads_overdrive_IPFs.zip"),
+    new BenchmarkWorkload("Worms IPF", "Team17\\Worms_230.zip"),
+    new BenchmarkWorkload("Worms Director's Cut IPF", "Team17\\Worms-TheDirectorsCut_605.zip"),
     new BenchmarkWorkload("Desert Strike intro", "Desert Strike - Return to the Gulf (1993)(Electronic Arts)(Disk 1 of 3).zip", FireFrame: 1800),
     new BenchmarkWorkload("Lemmings SR", "Lemmings (1991)(Psygnosis)(Disk 1 of 2)[cr SR].zip"),
     new BenchmarkWorkload("Full Contact FLT", "Full Contact (1991)(Team 17)(Disk 1 of 2)[cr FLT].zip"),
@@ -56,6 +67,12 @@ if (options.OpcodeDispatchBenchmark)
 if (options.CiaPollBenchmark)
 {
     RunCiaPollBenchmark(options);
+    return;
+}
+
+if (options.SyntheticBlitterBenchmark)
+{
+    RunSyntheticBlitterBenchmarks(options);
     return;
 }
 
@@ -549,6 +566,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
 
             var audioSpan = audio.AsSpan(0, Math.Min(audio.Length, audioFrames * Channels));
             var activeAudio = HasActiveAudio(audioSpan);
+            var frameAudioSummary = CaptureAudioSummary(audioSpan, audioFrames);
             if (activeAudio)
             {
                 activeAudioFrames++;
@@ -577,9 +595,10 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
                     audioUnderrun,
                     audioFrames,
                     activeAudio,
+                    frameAudioSummary,
                     diskAfterFrame,
                     FormatDiskSchedulerDelta(diskBeforeFrame, diskAfterFrame),
-                    diagnostics: string.Empty);
+                    diagnostics: FormatPaulaAudit(GetMachine(emulator).Bus.Paula));
             }
         }
     }
@@ -1250,17 +1269,13 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
     var machineField = type.GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var bootField = type.GetField("_boot", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var targetCycleField = type.GetField("_targetCycle", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var renderAudioField = type.GetField("_renderFrameAudioUntil", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var applyInput = type.GetMethod("ApplyInputState", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    var executionBoundaryScheduleField = type.GetField("_executionBoundarySchedule", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var advancePendingDiskInsert = type.GetMethod("AdvancePendingDiskInsert", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var beginFrameAudio = type.GetMethod("BeginFrameAudio", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var finishFrameAudio = type.GetMethod("FinishFrameAudio", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var handleBootResult = type.GetMethod("HandleBootResult", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var stabilizeInterlaceFrame = type.GetMethod("StabilizeInterlaceFrame", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var advanceInputPulse = type.GetMethod("AdvanceInputPulse", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var machine = (AmigaMachine)machineField.GetValue(emulator)!;
     var boot = (AmigaBootController)bootField.GetValue(emulator)!;
-    var renderAudio = (Action<long, long>)renderAudioField.GetValue(emulator)!;
+    var executionBoundarySchedule = (IAmigaExecutionBoundarySchedule)executionBoundaryScheduleField.GetValue(emulator)!;
     var cpuTicks = 0L;
     var agnusTicks = 0L;
     var displayTicks = 0L;
@@ -1270,11 +1285,12 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
     for (var frame = 0; frame < frames; frame++)
     {
         var phaseStart = Stopwatch.GetTimestamp();
-        applyInput.Invoke(emulator, null);
+        executionBoundarySchedule.BeginFrame();
         advancePendingDiskInsert.Invoke(emulator, null);
-        var targetCycle = (long)targetCycleField.GetValue(emulator)! + AmigaConstants.A500PalCpuCyclesPerFrame;
+        var frameStartCycle = (long)targetCycleField.GetValue(emulator)!;
+        var targetCycle = frameStartCycle + AmigaConstants.A500PalCpuCyclesPerFrame;
         targetCycleField.SetValue(emulator, targetCycle);
-        beginFrameAudio.Invoke(emulator, new object[] { targetCycle });
+        executionBoundarySchedule.BeginExecution(frameStartCycle, targetCycle);
         var liveAgnus = machine.Bus.LiveAgnusDmaEnabled;
         if (liveAgnus)
         {
@@ -1284,7 +1300,10 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
         otherTicks += Stopwatch.GetTimestamp() - phaseStart;
 
         phaseStart = Stopwatch.GetTimestamp();
-        var result = boot.ContinueExecutionUntilCycle(targetCycle, maxInstructions: 100_000, renderAudio);
+        var result = boot.ContinueExecutionUntilCycle(
+            targetCycle,
+            maxInstructions: 100_000,
+            executionBoundarySchedule);
         cpuTicks += Stopwatch.GetTimestamp() - phaseStart;
 
         phaseStart = Stopwatch.GetTimestamp();
@@ -1293,11 +1312,12 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
             machine.Bus.SetLiveAgnusDmaEnabled(true);
         }
 
-        finishFrameAudio.Invoke(emulator, null);
+        executionBoundarySchedule.CompleteExecution(targetCycle);
         var stopped = (bool)handleBootResult.Invoke(emulator, new object[] { result })!;
         otherTicks += Stopwatch.GetTimestamp() - phaseStart;
         if (stopped)
         {
+            executionBoundarySchedule.CompleteFrame();
             continue;
         }
 
@@ -1325,7 +1345,7 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
         displayTicks += Stopwatch.GetTimestamp() - phaseStart;
 
         phaseStart = Stopwatch.GetTimestamp();
-        advanceInputPulse.Invoke(emulator, null);
+        executionBoundarySchedule.CompleteFrame();
         otherTicks += Stopwatch.GetTimestamp() - phaseStart;
     }
 
@@ -1648,6 +1668,10 @@ static StreamWriter? CreateAudioAuditWriter(BenchmarkOptions options, BenchmarkW
         "underrun",
         "audio_frames",
         "active_audio",
+        "audio_nonzero_samples",
+        "audio_peak",
+        "audio_checksum",
+        "cpu_cycles",
         "pc",
         "last_pc",
         "sr",
@@ -1658,6 +1682,131 @@ static StreamWriter? CreateAudioAuditWriter(BenchmarkOptions options, BenchmarkW
         "diagnostics",
         "status"));
     return writer;
+}
+
+static string FormatPaulaAudit(Paula paula)
+{
+    var parts = new string[4];
+    for (var channel = 0; channel < parts.Length; channel++)
+    {
+        var snapshot = paula.GetChannelSnapshot(channel);
+        parts[channel] = string.Create(
+            CultureInfo.InvariantCulture,
+            $"ch{channel}:loc={snapshot.Location:X6},cur={snapshot.CurrentAddress:X6},len={snapshot.LengthWords},rem={snapshot.RemainingWords},per={snapshot.Period},vol={snapshot.Volume},sample={snapshot.CurrentSample},dma={(snapshot.DmaEnabled ? 1 : 0)},enable={snapshot.LastDmaEnableCycle},word={snapshot.DataWord:X4},has={(snapshot.HasDataWord ? 1 : 0)},low={(snapshot.NextByteIsLow ? 1 : 0)},next={snapshot.NextSampleCycle}");
+    }
+
+    return string.Join(';', parts);
+}
+
+static void RunSyntheticBlitterBenchmarks(BenchmarkOptions options)
+{
+    Console.WriteLine(
+        $"Synthetic ROM/expansion blitter bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, deferred={options.DeferredCpuBusBatch}, verify={options.DeferredCpuBusBatchVerify}, Release={IsRelease()}");
+    Console.WriteLine("synthetic-blitter\tsource\trepeat\tinstructions\tms\tinstr/sec\tcycles\tpc\td0\tallocated bytes\tbatch used\twaitfast used\tblitter overlap\tshadow mismatch\tchecksum");
+    foreach (var executeFromExpansion in new[] { false, true })
+    {
+        for (var repeat = 0; repeat < options.RepeatCount; repeat++)
+        {
+            using (var warmup = CreateSyntheticBlitterCpu(executeFromExpansion, options))
+            {
+                _ = warmup.Cpu.ExecuteInstructions(
+                    options.OpcodeDispatchWarmupInstructions,
+                    null,
+                    SyntheticBenchmarkBoundary.Instance);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            using var run = CreateSyntheticBlitterCpu(executeFromExpansion, options);
+            var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+            var start = Stopwatch.GetTimestamp();
+            var executed = run.Cpu.ExecuteInstructions(
+                options.OpcodeDispatchInstructions,
+                null,
+                SyntheticBenchmarkBoundary.Instance);
+            var elapsed = Stopwatch.GetElapsedTime(start);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+            var scheduler = run.Bus.CaptureHardwareSchedulerSnapshot();
+            var checksum = CreateSyntheticBlitterChecksum(run.Cpu.State, run.Bus);
+            Console.WriteLine(
+                $"synthetic-blitter\t{(executeFromExpansion ? "expansion" : "rom")}\t{repeat + 1}\t{executed}\t{elapsed.TotalMilliseconds:F3}\t{executed / Math.Max(elapsed.TotalSeconds, double.Epsilon):F0}\t{run.Cpu.State.Cycles}\t0x{run.Cpu.State.ProgramCounter:X8}\t0x{run.Cpu.State.D[0]:X8}\t{allocated}\t{scheduler.DeferredCpuBusBatchUsed}\t{scheduler.DeferredCpuWaitWindowFastPathUsed}\t{scheduler.DeferredCpuWaitBlitterOverlapAttempts}\t{scheduler.DeferredCpuWaitSlotShadowMismatches}\t0x{checksum:X8}");
+            if (scheduler.DeferredCpuWaitSlotShadowMismatches != 0)
+            {
+                Console.WriteLine($"synthetic-blitter-mismatch\t{(executeFromExpansion ? "expansion" : "rom")}\t{scheduler.DeferredCpuWaitSlotShadowFirstMismatch}");
+            }
+        }
+    }
+}
+
+static SyntheticBlitterBenchmarkRun CreateSyntheticBlitterCpu(
+    bool executeFromExpansion,
+    BenchmarkOptions options)
+{
+    const uint romBase = 0x00FC0000;
+    const int expansionOffset = 0x8000;
+    var program = CreateSyntheticBlitterBenchmarkProgram();
+    var bus = new AmigaBus(
+        expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
+        captureBusAccesses: false,
+        enableDeferredCpuBusBatch: options.DeferredCpuBusBatch,
+        verifyDeferredCpuBusBatch: options.DeferredCpuBusBatchVerify);
+    var programAddress = executeFromExpansion
+        ? bus.ExpansionRamBase + expansionOffset
+        : romBase;
+    if (executeFromExpansion)
+    {
+        program.AsSpan().CopyTo(bus.ExpansionRam.AsSpan(expansionOffset));
+    }
+    else
+    {
+        bus.MapReadOnlyMemory(programAddress, program);
+    }
+
+    for (var offset = 0; offset < 0x2000; offset += 2)
+    {
+        WriteWords(bus.ChipRam, offset, [(ushort)(0x4000 + offset)]);
+    }
+
+    bus.WriteWord(0x00DFF040, 0x09F0, 0);
+    bus.WriteWord(0x00DFF042, 0x0000, 0);
+    bus.WriteWord(0x00DFF050, 0x0000, 0);
+    bus.WriteWord(0x00DFF052, 0x3000, 0);
+    bus.WriteWord(0x00DFF054, 0x0000, 0);
+    bus.WriteWord(0x00DFF056, 0x4000, 0);
+    bus.WriteWord(0x00DFF096, 0x8240, 0);
+
+    var cpu = (IM68kBatchCore)M68kCoreFactory.CreateM68000Core(
+        bus,
+        default(AmigaCpuDataAccess),
+        enableCpuBusPhaseTrace: false);
+    cpu.Reset(programAddress, 0x3000);
+    cpu.State.A[0] = 0x1000;
+    return new SyntheticBlitterBenchmarkRun(cpu, bus);
+}
+
+static byte[] CreateSyntheticBlitterBenchmarkProgram()
+{
+    var program = new byte[42];
+    WriteWords(program, 0,
+    [
+        0x33FC, 0x0044, 0x00DF, 0xF058,
+        0x3010, 0x3010, 0x3010, 0x3010,
+        0x3010, 0x3010, 0x3010, 0x3010,
+        0x3010, 0x3010, 0x3010, 0x3010,
+        0x3010, 0x3010, 0x3010, 0x3010,
+        0x60D6
+    ]);
+    return program;
+}
+
+static uint CreateSyntheticBlitterChecksum(M68kCpuState state, AmigaBus bus)
+{
+    var checksum = state.ProgramCounter ^ (uint)state.Cycles ^ state.D[0];
+    checksum = unchecked((checksum * 16777619u) ^ state.A[0]);
+    checksum = unchecked((checksum * 16777619u) ^ bus.ReadWord(0x4000));
+    return checksum;
 }
 
 static SlotScheduleAuditWriter? CreateSlotScheduleAuditWriter(BenchmarkOptions options, BenchmarkWorkload workload)
@@ -1686,6 +1835,7 @@ static void WriteAudioAuditFrame(
     bool underrun,
     int audioFrames,
     bool activeAudio,
+    AudioSummary audioSummary,
     DiskSummary diskSummary,
     string diskSchedulerDelta,
     string diagnostics)
@@ -1709,6 +1859,10 @@ static void WriteAudioAuditFrame(
         underrun ? "1" : "0",
         audioFrames.ToString(CultureInfo.InvariantCulture),
         activeAudio ? "1" : "0",
+        audioSummary.NonZeroSamples.ToString(CultureInfo.InvariantCulture),
+        audioSummary.Peak.ToString("F6", CultureInfo.InvariantCulture),
+        $"0x{audioSummary.Checksum:X8}",
+        GetMachine(emulator).Cpu.State.Cycles.ToString(CultureInfo.InvariantCulture),
         $"0x{cpu.ProgramCounter:X6}",
         $"0x{cpu.LastInstructionProgramCounter:X6}",
         $"0x{cpu.StatusRegister:X4}",
@@ -1929,7 +2083,8 @@ static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot sc
     var slotShadow = $"slotshadow={scheduler.DeferredCpuWaitSlotShadowAttempts}/{scheduler.DeferredCpuWaitSlotShadowMatches}/{scheduler.DeferredCpuWaitSlotShadowMismatches}/{scheduler.DeferredCpuWaitSlotShadowUnsupported},slotreason={scheduler.DeferredCpuWaitSlotShadowGrantMismatches}/{scheduler.DeferredCpuWaitSlotShadowCompletionMismatches}/{scheduler.DeferredCpuWaitSlotShadowSlotOwnerMismatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterStateMismatches}/{scheduler.DeferredCpuWaitSlotShadowPaulaMismatches}/{scheduler.DeferredCpuWaitSlotShadowDiskMismatches}/{scheduler.DeferredCpuWaitSlotShadowDisplayMismatches}/{scheduler.DeferredCpuWaitSlotShadowCopperMismatches},slotlive={scheduler.DeferredCpuWaitSlotShadowLiveAttempts}/{scheduler.DeferredCpuWaitSlotShadowLiveSupported}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupported}/{scheduler.DeferredCpuWaitSlotShadowLiveLongAccesses},slotliveunsup={scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedBitplaneWindow}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCopperWaitWindow}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCpuPredict}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedUnstable}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedScratchWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedLongWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedOther},slotdma={scheduler.DeferredCpuWaitSlotShadowLiveBitplaneFetches}/{scheduler.DeferredCpuWaitSlotShadowLiveSpriteFetches}/{scheduler.DeferredCpuWaitSlotShadowLiveCopperSteps},slotblt={scheduler.DeferredCpuWaitSlotShadowBlitterScratchAttempts}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchSupported}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchUnsupported}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMismatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchPartial}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMicroOps},slotfirst={scheduler.DeferredCpuWaitSlotShadowFirstMismatch}";
     var fixedImage = $"fixedimg={scheduler.DeferredCpuWaitFixedImageAttempts}/{scheduler.DeferredCpuWaitFixedImageSupported}/{scheduler.DeferredCpuWaitFixedImageMatches}/{scheduler.DeferredCpuWaitFixedImageMismatches}/{scheduler.DeferredCpuWaitFixedImageUnsupported},cache={scheduler.DeferredCpuWaitFixedImageBuilds}/{scheduler.DeferredCpuWaitFixedImageHits}/{scheduler.DeferredCpuWaitFixedImageMisses}/{scheduler.DeferredCpuWaitFixedImageInvalidations},slots={scheduler.DeferredCpuWaitFixedImagePredictedSlots},unsup={scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState},first={scheduler.DeferredCpuWaitFixedImageFirstMismatch}";
     var fixedProduction = $"fixedprod={scheduler.DeferredCpuWaitFixedImageProductionAttempts}/{scheduler.DeferredCpuWaitFixedImageProductionUsed}/{scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped}/{scheduler.DeferredCpuWaitFixedImageProductionPostGrantCatchups}/{scheduler.DeferredCpuWaitFixedImageProductionPredictedWaitCycles},fallback={scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackDynamicDma}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackCopper}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackPendingWrite}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable},verify={scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches}/{scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches},disabled={(scheduler.DeferredCpuWaitFixedImageProductionDisabled ? 1 : 0)},first={scheduler.DeferredCpuWaitFixedImageProductionFirstMismatch}";
-    return $"{batch},{exits},{wakes},{diskWakes},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},{internalWindow},{waitWindow},{waitFast},{slotShadow},{fixedImage},{fixedProduction}";
+    var blitterOverlap = $"bltoverlap={scheduler.DeferredCpuWaitBlitterOverlapAttempts}/{scheduler.DeferredCpuWaitBlitterOverlapSupported}/{scheduler.DeferredCpuWaitBlitterOverlapUnsupported}/{scheduler.DeferredCpuWaitBlitterOverlapNasty}";
+    return $"{batch},{exits},{wakes},{diskWakes},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},{internalWindow},{waitWindow},{waitFast},{slotShadow},{fixedImage},{fixedProduction},{blitterOverlap}";
 }
 
 static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
@@ -2519,6 +2674,7 @@ internal readonly record struct BenchmarkOptions(
     string? DumpChipRamPath,
     bool OpcodeDispatchBenchmark,
     bool CiaPollBenchmark,
+    bool SyntheticBlitterBenchmark,
     M68kOpcodePlanDispatch? OpcodeDispatch,
     int OpcodeDispatchWarmupInstructions,
     int OpcodeDispatchInstructions)
@@ -2566,6 +2722,7 @@ internal readonly record struct BenchmarkOptions(
         string? dumpChipRamPath = null;
         var opcodeDispatchBenchmark = false;
         var ciaPollBenchmark = false;
+        var syntheticBlitterBenchmark = false;
         M68kOpcodePlanDispatch? opcodeDispatch = null;
         var opcodeDispatchWarmupInstructions = smoke ? 20_000 : 200_000;
         var opcodeDispatchInstructions = smoke ? 200_000 : 2_000_000;
@@ -2644,6 +2801,10 @@ internal readonly record struct BenchmarkOptions(
             else if (string.Equals(args[i], "--cia-poll-bench", StringComparison.OrdinalIgnoreCase))
             {
                 ciaPollBenchmark = true;
+            }
+            else if (string.Equals(args[i], "--synthetic-blitter-bench", StringComparison.OrdinalIgnoreCase))
+            {
+                syntheticBlitterBenchmark = true;
             }
             else if (string.Equals(args[i], "--opcode-dispatch", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
@@ -2873,6 +3034,7 @@ internal readonly record struct BenchmarkOptions(
             dumpChipRamPath,
             opcodeDispatchBenchmark,
             ciaPollBenchmark,
+            syntheticBlitterBenchmark,
             opcodeDispatch,
             Math.Max(0, opcodeDispatchWarmupInstructions),
             Math.Max(1, opcodeDispatchInstructions));
@@ -2896,6 +3058,40 @@ internal readonly record struct CiaPollBenchmarkResult(
     uint Checksum)
 {
     public double InstructionsPerSecond => Instructions / Math.Max(Elapsed.TotalSeconds, double.Epsilon);
+}
+
+internal readonly record struct SyntheticBlitterBenchmarkRun(IM68kBatchCore Cpu, AmigaBus Bus) : IDisposable
+{
+    public void Dispose()
+        => Cpu.Dispose();
+}
+
+internal sealed class SyntheticBenchmarkBoundary :
+    IM68kInstructionBoundary,
+    IM68kDeferredCpuBusBatchBoundary
+{
+    public static SyntheticBenchmarkBoundary Instance { get; } = new();
+
+    public bool BeforeInstruction()
+        => true;
+
+    public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state) => true;
+
+    public long ClampDeferredCpuBusBatchTarget(M68kCpuState state, long targetCycle)
+        => targetCycle;
+
+    public void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount)
+    {
+        _ = previousCycle;
+        _ = currentCycle;
+        _ = instructionCount;
+    }
+
+    public void AfterInstruction(long previousCycle, long currentCycle)
+    {
+        _ = previousCycle;
+        _ = currentCycle;
+    }
 }
 
 internal sealed record CiaPollBenchmarkRun(IM68kCore Cpu, AmigaBus Bus) : IDisposable

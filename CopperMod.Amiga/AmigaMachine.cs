@@ -9,6 +9,16 @@ using System.Linq;
 
 namespace CopperMod.Amiga
 {
+    internal readonly record struct AmigaInterruptDispatchTrace(
+        int Level,
+        ushort ActiveInterruptBits,
+        long CpuVisibleCycle,
+        long AcceptanceCycle,
+        long EntryCompletedCycle,
+        uint InterruptedProgramCounter,
+        uint HandlerProgramCounter,
+        ushort SavedStatusRegister);
+
     internal enum AmigaMachineProfile
     {
         A500PalCustPlayback,
@@ -253,6 +263,9 @@ namespace CopperMod.Amiga
 
     internal sealed class AmigaMachine : IDisposable
     {
+        private List<AmigaInterruptDispatchTrace>? _interruptDispatchTrace;
+        private int _interruptDispatchTraceCapacity;
+
         public AmigaMachine(AmigaMachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
@@ -303,6 +316,20 @@ namespace CopperMod.Amiga
 
         public AmigaKickstartHost Kickstart { get; }
 
+        internal IReadOnlyList<AmigaInterruptDispatchTrace> InterruptDispatchTrace
+            => _interruptDispatchTrace ?? (IReadOnlyList<AmigaInterruptDispatchTrace>)Array.Empty<AmigaInterruptDispatchTrace>();
+
+        internal void CaptureInterruptDispatchTrace(int capacity)
+        {
+            if (capacity <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
+            _interruptDispatchTrace = new List<AmigaInterruptDispatchTrace>(capacity);
+            _interruptDispatchTraceCapacity = capacity;
+        }
+
         public void Dispose()
         {
             Cpu.Dispose();
@@ -345,7 +372,26 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            var acceptanceCycle = Cpu.State.Cycles;
+            var interruptedProgramCounter = Cpu.State.ProgramCounter;
+            var savedStatusRegister = Cpu.State.StatusRegister;
+            var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
+            var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
             Cpu.RequestInterrupt(level, GetAutovectorAddress(level));
+            var trace = _interruptDispatchTrace;
+            if (trace != null && trace.Count < _interruptDispatchTraceCapacity)
+            {
+                trace.Add(new AmigaInterruptDispatchTrace(
+                    level,
+                    activeInterruptBits,
+                    cpuVisibleCycle,
+                    acceptanceCycle,
+                    Cpu.State.Cycles,
+                    interruptedProgramCounter,
+                    Cpu.State.ProgramCounter,
+                    savedStatusRegister));
+            }
+
             return true;
         }
 

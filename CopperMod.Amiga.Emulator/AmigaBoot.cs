@@ -539,15 +539,31 @@ namespace CopperMod.Amiga
             return ExecuteBootBlock(maxInstructions, AmigaBootRunMode.ContinueAfterBootDiskRead);
         }
 
-        public AmigaBootResult ContinueExecutionUntilCycle(long targetCycle, int maxInstructions = 100_000, Action<long, long>? beforeDeviceAdvance = null)
+        public AmigaBootResult ContinueExecutionUntilCycle(
+            long targetCycle,
+            int maxInstructions = 100_000,
+            Action<long, long>? beforeDeviceAdvance = null)
         {
             return ExecuteBootBlock(
                 maxInstructions,
                 AmigaBootRunMode.ContinueAfterBootDiskRead,
                 targetCycle,
                 reportOverrun: false,
-                beforeDeviceAdvance);
+                beforeDeviceAdvance,
+                boundarySchedule: null);
         }
+
+        internal AmigaBootResult ContinueExecutionUntilCycle(
+            long targetCycle,
+            int maxInstructions,
+            IAmigaExecutionBoundarySchedule boundarySchedule)
+            => ExecuteBootBlock(
+                maxInstructions,
+                AmigaBootRunMode.ContinueAfterBootDiskRead,
+                targetCycle,
+                reportOverrun: false,
+                beforeDeviceAdvance: null,
+                boundarySchedule);
 
         public AmigaBootResult ContinueCopperStartRuntimeUntilCycle(
             long targetCycle,
@@ -557,8 +573,19 @@ namespace CopperMod.Amiga
             return ExecuteRuntime(
                 maxInstructions,
                 targetCycle,
-                beforeDeviceAdvance);
+                beforeDeviceAdvance,
+                boundarySchedule: null);
         }
+
+        internal AmigaBootResult ContinueCopperStartRuntimeUntilCycle(
+            long targetCycle,
+            int maxInstructions,
+            IAmigaExecutionBoundarySchedule boundarySchedule)
+            => ExecuteRuntime(
+                maxInstructions,
+                targetCycle,
+                beforeDeviceAdvance: null,
+                boundarySchedule);
 
         public static bool HasBootableShape(ReadOnlySpan<byte> bootBlock)
         {
@@ -867,11 +894,12 @@ namespace CopperMod.Amiga
             AmigaBootRunMode runMode,
             long? targetCycle = null,
             bool reportOverrun = true,
-            Action<long, long>? beforeDeviceAdvance = null)
+            Action<long, long>? beforeDeviceAdvance = null,
+            IAmigaExecutionBoundarySchedule? boundarySchedule = null)
         {
             var instructions = 0;
             var boundary = _instructionBoundary;
-            boundary.Reset(runMode, beforeDeviceAdvance);
+            boundary.Reset(runMode, beforeDeviceAdvance, boundarySchedule);
             try
             {
                 if (_machine.Cpu is IM68kBatchCore batchCore)
@@ -923,11 +951,12 @@ namespace CopperMod.Amiga
         private AmigaBootResult ExecuteRuntime(
             int maxInstructions,
             long targetCycle,
-            Action<long, long>? beforeDeviceAdvance)
+            Action<long, long>? beforeDeviceAdvance,
+            IAmigaExecutionBoundarySchedule? boundarySchedule)
         {
             var instructions = 0;
             var boundary = _runtimeInstructionBoundary;
-            boundary.Reset(beforeDeviceAdvance);
+            boundary.Reset(beforeDeviceAdvance, boundarySchedule);
             try
             {
                 if (_machine.Cpu is IM68kBatchCore batchCore)
@@ -968,26 +997,89 @@ namespace CopperMod.Amiga
                 _diagnostics);
         }
 
+        private sealed class ExecutionBoundarySchedule : IAmigaExecutionBoundarySchedule
+        {
+            private readonly AmigaBootController _owner;
+            private Action<long, long>? _legacyAdvance;
+            private IAmigaExecutionBoundarySchedule? _scheduledAdvance;
+
+            public ExecutionBoundarySchedule(AmigaBootController owner)
+            {
+                _owner = owner;
+            }
+
+            public bool HasOpaqueLegacyAdvance
+                => _legacyAdvance != null && _scheduledAdvance == null;
+
+            public void Reset(
+                Action<long, long>? legacyAdvance,
+                IAmigaExecutionBoundarySchedule? scheduledAdvance)
+            {
+                _legacyAdvance = legacyAdvance;
+                _scheduledAdvance = scheduledAdvance;
+            }
+
+            public void BeginFrame()
+                => _scheduledAdvance?.BeginFrame();
+
+            public void BeginExecution(long startCycle, long endCycle)
+                => _scheduledAdvance?.BeginExecution(startCycle, endCycle);
+
+            public long GetNextBoundaryCycle(long currentCycle, long targetCycle)
+            {
+                var scheduledCycle = _scheduledAdvance?.GetNextBoundaryCycle(currentCycle, targetCycle)
+                    ?? targetCycle;
+                return _owner.GetNextSyntheticVBlankBoundaryCycle(
+                    currentCycle,
+                    Math.Min(targetCycle, scheduledCycle));
+            }
+
+            public void AdvanceThrough(long previousCycle, long currentCycle)
+            {
+                if (_scheduledAdvance != null)
+                {
+                    _scheduledAdvance.AdvanceThrough(previousCycle, currentCycle);
+                }
+                else
+                {
+                    _legacyAdvance?.Invoke(previousCycle, currentCycle);
+                }
+
+                _owner.AdvanceSyntheticVBlankInterruptServers(previousCycle, currentCycle);
+            }
+
+            public void CompleteExecution(long endCycle)
+                => _scheduledAdvance?.CompleteExecution(endCycle);
+
+            public void CompleteFrame()
+                => _scheduledAdvance?.CompleteFrame();
+        }
+
         private sealed class BootInstructionBoundary :
             IM68kTraceBatchDiagnosticsBoundary,
             IM68kStoppedCpuFastForwardBoundary,
             IM68kPureCpuTraceBatchBoundary,
-            IM68kBusAccessTraceBatchBoundary
+            IM68kBusAccessTraceBatchBoundary,
+            IM68kDeferredCpuBusBatchBoundary
         {
             private readonly AmigaBootController _owner;
+            private readonly ExecutionBoundarySchedule _executionBoundarySchedule;
             private AmigaBootRunMode _runMode;
-            private Action<long, long>? _beforeDeviceAdvance;
             private int _instructions;
 
             public BootInstructionBoundary(AmigaBootController owner)
             {
                 _owner = owner;
+                _executionBoundarySchedule = new ExecutionBoundarySchedule(owner);
             }
 
-            public void Reset(AmigaBootRunMode runMode, Action<long, long>? beforeDeviceAdvance)
+            public void Reset(
+                AmigaBootRunMode runMode,
+                Action<long, long>? beforeDeviceAdvance,
+                IAmigaExecutionBoundarySchedule? boundarySchedule)
             {
                 _runMode = runMode;
-                _beforeDeviceAdvance = beforeDeviceAdvance;
+                _executionBoundarySchedule.Reset(beforeDeviceAdvance, boundarySchedule);
                 _instructions = 0;
                 Completed = false;
             }
@@ -995,6 +1087,17 @@ namespace CopperMod.Amiga
             public bool Completed { get; private set; }
 
             public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
+
+            public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state)
+                => _runMode != AmigaBootRunMode.StopAfterBootDiskRead &&
+                    !_executionBoundarySchedule.HasOpaqueLegacyAdvance &&
+                    BeforeInstruction();
+
+            public long ClampDeferredCpuBusBatchTarget(M68kCpuState state, long targetCycle)
+                => _executionBoundarySchedule.GetNextBoundaryCycle(state.Cycles, targetCycle);
+
+            public void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
 
             public bool BeforeInstruction()
             {
@@ -1082,6 +1185,7 @@ namespace CopperMod.Amiga
                     interruptMask,
                     out var wakeSource);
                 LastTraceBatchWakeSource = wakeSource;
+                batchTargetCycle = ClampDeferredCpuBusBatchTarget(state, batchTargetCycle);
                 batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle);
                 return batchTargetCycle > state.Cycles;
             }
@@ -1093,7 +1197,15 @@ namespace CopperMod.Amiga
                 M68kCpuState state,
                 long targetCycle,
                 out long batchTargetCycle)
-                => TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+            {
+                if (_executionBoundarySchedule.HasOpaqueLegacyAdvance)
+                {
+                    batchTargetCycle = targetCycle;
+                    return false;
+                }
+
+                return TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+            }
 
             public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount)
                 => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
@@ -1105,8 +1217,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
-                _owner.AdvanceSyntheticVBlankInterruptServers(previousCycle, currentCycle);
+                _executionBoundarySchedule.AdvanceThrough(previousCycle, currentCycle);
                 var interruptMask = (_owner._machine.Cpu.State.StatusRegister >> 8) & 0x07;
                 _owner._machine.Bus.AdvanceHardwareEventsTo(currentCycle, interruptMask);
                 _owner._machine.DispatchPendingHardwareInterrupt();
@@ -1152,22 +1263,35 @@ namespace CopperMod.Amiga
             IM68kTraceBatchDiagnosticsBoundary,
             IM68kStoppedCpuFastForwardBoundary,
             IM68kPureCpuTraceBatchBoundary,
-            IM68kBusAccessTraceBatchBoundary
+            IM68kBusAccessTraceBatchBoundary,
+            IM68kDeferredCpuBusBatchBoundary
         {
             private readonly AmigaBootController _owner;
-            private Action<long, long>? _beforeDeviceAdvance;
+            private readonly ExecutionBoundarySchedule _executionBoundarySchedule;
 
             public RuntimeInstructionBoundary(AmigaBootController owner)
             {
                 _owner = owner;
+                _executionBoundarySchedule = new ExecutionBoundarySchedule(owner);
             }
 
-            public void Reset(Action<long, long>? beforeDeviceAdvance)
+            public void Reset(
+                Action<long, long>? beforeDeviceAdvance,
+                IAmigaExecutionBoundarySchedule? boundarySchedule)
             {
-                _beforeDeviceAdvance = beforeDeviceAdvance;
+                _executionBoundarySchedule.Reset(beforeDeviceAdvance, boundarySchedule);
             }
 
             public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
+
+            public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state)
+                => !_executionBoundarySchedule.HasOpaqueLegacyAdvance;
+
+            public long ClampDeferredCpuBusBatchTarget(M68kCpuState state, long targetCycle)
+                => _executionBoundarySchedule.GetNextBoundaryCycle(state.Cycles, targetCycle);
+
+            public void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount)
+                => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
 
             public bool BeforeInstruction() => true;
 
@@ -1192,6 +1316,7 @@ namespace CopperMod.Amiga
                     interruptMask,
                     out var wakeSource);
                 LastTraceBatchWakeSource = wakeSource;
+                batchTargetCycle = ClampDeferredCpuBusBatchTarget(state, batchTargetCycle);
                 batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle);
                 return batchTargetCycle > state.Cycles;
             }
@@ -1203,7 +1328,15 @@ namespace CopperMod.Amiga
                 M68kCpuState state,
                 long targetCycle,
                 out long batchTargetCycle)
-                => TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+            {
+                if (_executionBoundarySchedule.HasOpaqueLegacyAdvance)
+                {
+                    batchTargetCycle = targetCycle;
+                    return false;
+                }
+
+                return TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle);
+            }
 
             public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount)
                 => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
@@ -1215,8 +1348,7 @@ namespace CopperMod.Amiga
                     return;
                 }
 
-                _beforeDeviceAdvance?.Invoke(previousCycle, currentCycle);
-                _owner.AdvanceSyntheticVBlankInterruptServers(previousCycle, currentCycle);
+                _executionBoundarySchedule.AdvanceThrough(previousCycle, currentCycle);
                 var interruptMask = (_owner._machine.Cpu.State.StatusRegister >> 8) & 0x07;
                 _owner._machine.Bus.AdvanceHardwareEventsTo(currentCycle, interruptMask);
                 _owner._machine.DispatchPendingHardwareInterrupt();
@@ -2055,6 +2187,18 @@ namespace CopperMod.Amiga
                 var value = _machine.Bus.ReadLong(server.DataAddress);
                 _machine.Bus.WriteLong(server.DataAddress, value + increment);
             }
+        }
+
+        private long GetNextSyntheticVBlankBoundaryCycle(long currentCycle, long targetCycle)
+        {
+            if (_syntheticVBlankInterruptServers.Count == 0 || targetCycle <= currentCycle)
+            {
+                return targetCycle;
+            }
+
+            var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+            var nextFrameCycle = ((Math.Max(0, currentCycle) / frameCycles) + 1) * frameCycles;
+            return Math.Min(targetCycle, nextFrameCycle);
         }
 
         private static uint HostExecSuperState(M68kCpuState state)

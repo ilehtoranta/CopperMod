@@ -1291,6 +1291,8 @@ namespace CopperMod.Amiga
 
         internal bool CpuStallActive => ShouldStallCpu();
 
+        internal long CurrentCycle => _currentCycle;
+
         internal bool CanUseCpuWaitAreaMicroOps
             => _areaMicroOpActive ||
                 (_busy &&
@@ -1374,7 +1376,7 @@ namespace CopperMod.Amiga
                         allowNiceBlitterSteal: true,
                         out var completedCycle))
                     {
-                        var timeline = slots.CaptureTimelineSignature(requestedCycle, completedCycle);
+                        var timeline = slots.CaptureOwnerTimelineSignature(requestedCycle, completedCycle);
                         result = new BlitterCpuWaitScratchResult(
                             supported: true,
                             unsupportedReason: string.Empty,
@@ -3017,9 +3019,13 @@ namespace CopperMod.Amiga
             private uint _workSourceB;
             private uint _workSourceC;
             private uint _workDestinationD;
+            private int _widthWords;
+            private int _height;
             private int _wordX;
             private int _rowY;
             private bool _busy;
+            private bool _deferredRestartPending;
+            private ushort _deferredRestartBltsize;
 
             public CpuWaitScratchState(AmigaBlitter owner)
             {
@@ -3029,9 +3035,13 @@ namespace CopperMod.Amiga
                 _workSourceB = owner._workSourceB;
                 _workSourceC = owner._workSourceC;
                 _workDestinationD = owner._workDestinationD;
+                _widthWords = owner._widthWords;
+                _height = owner._height;
                 _wordX = owner._wordX;
                 _rowY = owner._rowY;
                 _busy = owner._busy;
+                _deferredRestartPending = owner._deferredRestartPending;
+                _deferredRestartBltsize = owner._deferredRestartBltsize;
                 FirstDmaCycle = -1;
                 LastDmaCycle = -1;
                 if (owner._areaMicroOpActive)
@@ -3121,7 +3131,7 @@ namespace CopperMod.Amiga
                 _nextCycle = _stepEnd;
                 _internalCompletionCycle = _stepEnd;
                 _outputReady = false;
-                _finalWord = _rowY == _owner._height - 1 && _wordX == _owner._widthWords - 1;
+                _finalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             }
 
             private int GetOpCount()
@@ -3255,16 +3265,38 @@ namespace CopperMod.Amiga
             private void AdvancePosition()
             {
                 _wordX++;
-                if (_wordX < _owner._widthWords)
+                if (_wordX < _widthWords)
                 {
                     return;
                 }
 
                 _wordX = 0;
                 _rowY++;
-                if (_rowY >= _owner._height)
+                if (_rowY >= _height)
                 {
-                    _busy = false;
+                    if (!_deferredRestartPending)
+                    {
+                        _busy = false;
+                        return;
+                    }
+
+                    _deferredRestartPending = false;
+                    _widthWords = _deferredRestartBltsize & 0x3F;
+                    if (_widthWords == 0)
+                    {
+                        _widthWords = 64;
+                    }
+
+                    _height = (_deferredRestartBltsize >> 6) & 0x03FF;
+                    if (_height == 0)
+                    {
+                        _height = 1024;
+                    }
+
+                    _deferredRestartBltsize = 0;
+                    _wordX = 0;
+                    _rowY = 0;
+                    CurrentCycle = _owner._bus.NextChipSlotCycle(CurrentCycle + ChipSlotCycles);
                     return;
                 }
 

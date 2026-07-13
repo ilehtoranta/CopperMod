@@ -548,6 +548,21 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (Blitter.Busy)
+            {
+                RecordDeferredCpuWaitSlotShadowUnsupported(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    isWrite,
+                    requestedCycle,
+                    grantRequestCycle,
+                    CpuWaitSlotShadowReason.BlitterState,
+                    "live-blitter-combined");
+                return;
+            }
+
             if (!TryPredictCpuGrant(
                     kind,
                     target,
@@ -664,12 +679,15 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            var blitterReferenceTimeline = _hrmSlotEngine.CaptureOwnerTimelineSignature(
+                grantRequestCycle,
+                completedCycle);
             RecordDeferredCpuWaitSlotShadowBlitterScratchComparison(
                 audit.Blitter,
                 grantedCycle,
                 secondWordCycle,
                 completedCycle,
-                referenceTimeline);
+                blitterReferenceTimeline);
             RecordDeferredCpuWaitSlotShadowAudit(
                 kind,
                 target,
@@ -685,7 +703,7 @@ namespace CopperMod.Amiga
                 secondWordCycle,
                 completedCycle,
                 audit.Blitter.Timeline,
-                referenceTimeline,
+                blitterReferenceTimeline,
                 audit.Blitter.ToDetailString());
         }
 
