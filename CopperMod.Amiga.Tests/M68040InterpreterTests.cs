@@ -662,6 +662,30 @@ public sealed class M68040InterpreterTests
 		Assert.Equal(0u, cpu.State.M68040Mmu.Status);
 	}
 
+	[Fact]
+	public void PhysicalMapCacheObservesStrictMappingChanges()
+	{
+		var bus = new AmigaBus(chipRamSize: 512 * 1024);
+		WriteWords(
+			bus,
+			CodeBase,
+			0x2039, 0x00F0, 0x0000, // MOVE.L $00F00000.L,D0
+			0x2239, 0x00F0, 0x0000); // MOVE.L $00F00000.L,D1
+		bus.WriteLong(2u * 4, 0x0000_2400);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+
+		cpu.ExecuteInstruction();
+		Assert.Equal(CodeBase + 6u, cpu.State.ProgramCounter);
+
+		bus.StrictCpuPhysicalDataMapping = true;
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2400u, cpu.State.ProgramCounter);
+		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
+		Assert.NotEqual(0u, cpu.State.M68040Mmu.Status);
+	}
+
 	private static void WriteWords(AmigaBus bus, uint address, params ushort[] words)
 	{
 		for (var i = 0; i < words.Length; i++)
