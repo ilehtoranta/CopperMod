@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>1701;1702;NU1900</NoWarn>
+    <PackageId>CopperFloat</PackageId>
+    <Title>CopperFloat</Title>
+    <Authors>Ilkka Lehtoranta</Authors>
+    <Description>Deterministic, allocation-free IEEE extended 80-bit floating-point arithmetic for .NET.</Description>
+    <PackageVersion>0.1.0-preview.1</PackageVersion>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <PackageTags>floating-point;extf80;float80;ieee754;emulation;numerics</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IsPackable>true</IsPackable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CopperFloat.Tests" />
+    <InternalsVisibleTo Include="Copper68k.Benchmarks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HotPathGuard.Analyzers" Version="0.1.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
+  </ItemGroup>
+
+  <Target Name="UseExactCopperFloatProjectReferenceVersion" BeforeTargets="_GetProjectVersion">
+    <PropertyGroup>
+      <PackageVersion>[$(PackageVersion)]</PackageVersion>
+    </PropertyGroup>
+  </Target>
+
+</Project>
