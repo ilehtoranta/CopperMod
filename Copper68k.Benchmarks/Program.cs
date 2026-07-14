@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Copper68k;
+using CopperFloat;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
@@ -14,9 +15,16 @@ if (options.Dispatch)
     return;
 }
 
+if (options.ExtF80)
+{
+    ExtF80KernelBenchmark.Run(options.Instructions, options.WarmupInstructions, options.Repeats);
+    return;
+}
+
 var workloads = CreateWorkloads()
-    .Where(workload => options.Workload is null ||
-        workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
+    .Where(workload => options.Workload is null
+        ? workload.IncludeByDefault
+        : workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
     .ToArray();
 var availableBackends = CreateBackends();
 var exactBackendMatch = options.Backend is not null &&
@@ -39,19 +47,25 @@ if (backends.Length == 0)
     throw new InvalidOperationException($"No backend matched '{options.Backend}'.");
 }
 
+if (!workloads.Any(workload => backends.Any(workload.Supports)))
+{
+    throw new InvalidOperationException("No selected backend supports the selected workload.");
+}
+
 Console.WriteLine($"Copper68k backend benchmark, warmup={options.WarmupInstructions}, measured={options.Instructions}, repeats={options.Repeats}, Release={IsRelease()}");
 Console.WriteLine("workload\tbackend\trepeat\tinstructions\tms\tinstr/sec\tmips\tcycles\tnative-cycles\tallocated bytes\tchecksum\tcompiled traces\tfallback instr\tpure trace instr\tbus trace instr\tzero-wait reads\tzero-wait writes");
 
 foreach (var workload in workloads)
 {
+    var workloadBackends = backends.Where(workload.Supports).ToArray();
     for (var repeat = 1; repeat <= options.Repeats; repeat++)
     {
-        for (var backendOffset = 0; backendOffset < backends.Length; backendOffset++)
+        for (var backendOffset = 0; backendOffset < workloadBackends.Length; backendOffset++)
         {
-            var backend = backends[(backendOffset + repeat - 1) % backends.Length];
+            var backend = workloadBackends[(backendOffset + repeat - 1) % workloadBackends.Length];
             var result = RunBenchmark(workload, backend, options);
             Console.WriteLine(
-                $"{workload.Name}\t{backend.Name}\t{repeat}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t{result.InstructionsPerSecond:F0}\t{result.InstructionsPerSecond / 1_000_000.0:F3}\t{result.Cycles}\t{result.NativeCycles}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}\t{result.CompiledTraces}\t{result.FallbackInstructions}\t{result.PureTraceInstructions}\t{result.BusTraceInstructions}\t{result.ZeroWaitReads}\t{result.ZeroWaitWrites}");
+                $"{workload.Name}\t{backend.Name}\t{repeat}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t{result.InstructionsPerSecond:F0}\t{result.InstructionsPerSecond / 1_000_000.0:F3}\t{result.Cycles}\t{FormatNativeCycles(result.NativeCycles)}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}\t{result.CompiledTraces}\t{result.FallbackInstructions}\t{result.PureTraceInstructions}\t{result.BusTraceInstructions}\t{result.ZeroWaitReads}\t{result.ZeroWaitWrites}");
         }
     }
 }
@@ -60,24 +74,30 @@ static BenchmarkResult RunBenchmark(BenchmarkWorkload workload, BenchmarkBackend
 {
     using var run = CreateRun(workload, backend);
     WarmUp(run.Cpu, options.WarmupInstructions);
+    ResetForMeasurement(run, workload);
 
     GC.Collect();
     GC.WaitForPendingFinalizers();
     GC.Collect();
 
+    var startCycles = run.Cpu.State.Cycles;
+    var startNativeCycles = run.Cpu.State.NativeCycles;
     var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
     var start = Stopwatch.GetTimestamp();
     ExecuteMany(run.Cpu, options.Instructions);
     var elapsed = Stopwatch.GetElapsedTime(start);
     var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
     var counters = run.Cpu is M68kJitCore jit ? jit.Counters : default;
+    var nativeCycles = run.Cpu is M68kJitCore
+        ? (long?)null
+        : run.Cpu.State.NativeCycles - startNativeCycles;
     return new BenchmarkResult(
         options.Instructions,
         elapsed,
-        run.Cpu.State.Cycles,
-        run.Cpu.State.NativeCycles,
+        run.Cpu.State.Cycles - startCycles,
+        nativeCycles,
         allocated,
-        CreateChecksum(run.Cpu.State, run.Bus),
+        CreateChecksum(run.Cpu.State, run.Bus, workload),
         counters.CompiledTraces,
         counters.FallbackInstructions,
         counters.PureTraceBatchInstructions,
@@ -85,6 +105,31 @@ static BenchmarkResult RunBenchmark(BenchmarkWorkload workload, BenchmarkBackend
         counters.V2ZeroWaitReadRealFast + counters.V2ZeroWaitReadRom + counters.V2ZeroWaitReadOverlay,
         counters.V2ZeroWaitWriteRealFast);
 }
+
+static void ResetForMeasurement(BenchmarkRun run, BenchmarkWorkload workload)
+{
+    const uint programCounter = 0x1000;
+    const uint stackPointer = 0x00F0_0000;
+
+    run.Bus.RestoreSnapshot(run.InitialBusSnapshot);
+    if (run.Cpu is M68kJitCore jit)
+    {
+        jit.ResetForBenchmark(programCounter, stackPointer);
+    }
+    else
+    {
+        run.Cpu.Reset(programCounter, stackPointer);
+    }
+
+    workload.SetupState(run.Cpu.State);
+    if (run.BackendName == "JitM68040")
+    {
+        run.Cpu.State.CacheControlRegister = 0x0000_0001;
+    }
+}
+
+static string FormatNativeCycles(long? nativeCycles)
+    => nativeCycles is long value ? value.ToString(CultureInfo.InvariantCulture) : "n/a";
 
 static BenchmarkRun CreateRun(BenchmarkWorkload workload, BenchmarkBackend backend)
 {
@@ -99,7 +144,7 @@ static BenchmarkRun CreateRun(BenchmarkWorkload workload, BenchmarkBackend backe
         cpu.State.CacheControlRegister = 0x0000_0001;
     }
 
-    return new BenchmarkRun(cpu, bus);
+    return new BenchmarkRun(cpu, bus, backend.Name, bus.CaptureSnapshot());
 }
 
 static void WarmUp(IM68kCore cpu, int instructions)
@@ -229,7 +274,35 @@ static BenchmarkWorkload[] CreateWorkloads()
             {
                 state.D[1] = 0x0101_0101;
             },
-            1 << 20)
+            1 << 20),
+        new BenchmarkWorkload(
+            "fpu-register-arithmetic-loop",
+            [
+                0xF200, 0x00A2, // FADD.X FP0,FP1
+                0xF200, 0x00A8, // FSUB.X FP0,FP1
+                0xF200, 0x00A3, // FMUL.X FP0,FP1
+                0xF200, 0x00A0, // FDIV.X FP0,FP1
+                0x60EE          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuArithmetic,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-forced-double-divide-loop",
+            [
+                0xF200, 0x0080, // FMOVE.X FP0,FP1
+                0xF200, 0x00E4, // FDIV.D FP0,FP1
+                0x60F6          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuForcedDivide,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false)
     ];
 
 static void SetupNone(BenchmarkBus bus)
@@ -245,7 +318,28 @@ static void SetupMemoryTransform(BenchmarkBus bus)
     }
 }
 
-static uint CreateChecksum(M68kCpuState state, BenchmarkBus bus)
+static void SetupFpuArithmetic(M68kCpuState state)
+{
+    var one = ExtF80Math.FromInt32(1);
+    state.M68040Fpu.FP[0] = one;
+    state.M68040Fpu.FP[1] = one;
+}
+
+static void SetupFpuForcedDivide(M68kCpuState state)
+{
+    state.M68040Fpu.FP[0] = ExtF80Math.FromInt32(3);
+    state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
+}
+
+static uint ChecksumFpu(M68kCpuState state)
+{
+    var value = state.M68040Fpu.FP[1];
+    var checksum = ((uint)value.SignExponent << 16) ^ (uint)value.Significand ^ (uint)(value.Significand >> 32);
+    checksum = unchecked((checksum * 16777619u) ^ state.M68040Fpu.Fpsr);
+    return unchecked((checksum * 16777619u) ^ state.M68040Fpu.Fpiar);
+}
+
+static uint CreateChecksum(M68kCpuState state, BenchmarkBus bus, BenchmarkWorkload workload)
 {
     var checksum = state.ProgramCounter ^ state.LastInstructionProgramCounter ^ state.LastOpcode;
     checksum = unchecked((checksum * 16777619u) ^ state.D[0]);
@@ -254,6 +348,11 @@ static uint CreateChecksum(M68kCpuState state, BenchmarkBus bus)
     checksum = unchecked((checksum * 16777619u) ^ state.StatusRegister);
     checksum = unchecked((checksum * 16777619u) ^ (uint)state.Cycles);
     checksum = unchecked((checksum * 16777619u) ^ bus.ReadLongValue(0x0008_0000));
+    if (workload.AdditionalChecksum is not null)
+    {
+        checksum = unchecked((checksum * 16777619u) ^ workload.AdditionalChecksum(state));
+    }
+
     return checksum;
 }
 
@@ -280,7 +379,8 @@ internal sealed record BenchmarkOptions(
     int Repeats,
     string? Backend,
     string? Workload,
-    bool Dispatch)
+    bool Dispatch,
+    bool ExtF80)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -290,6 +390,7 @@ internal sealed record BenchmarkOptions(
         string? backend = null;
         string? workload = null;
         var dispatch = false;
+        var extF80 = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -297,6 +398,9 @@ internal sealed record BenchmarkOptions(
             {
                 case "--dispatch":
                     dispatch = true;
+                    break;
+                case "--extf80":
+                    extF80 = true;
                     break;
                 case "--warmup":
                     warmup = ParseInt(args, ref i);
@@ -315,7 +419,7 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--help":
                 case "-h":
-                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
+                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--extf80] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -323,7 +427,7 @@ internal sealed record BenchmarkOptions(
             }
         }
 
-        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch);
+        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, extF80);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -343,6 +447,197 @@ internal sealed record BenchmarkOptions(
         return args[index];
     }
 }
+
+internal static class ExtF80KernelBenchmark
+{
+    private static readonly ExtF80Context Context = new(
+        ExtF80RoundingMode.ToNearestEven,
+        ExtF80Precision.Extended,
+        ExtF80TininessMode.BeforeRounding);
+
+    public static void Run(int operations, int warmupOperations, int repeats)
+    {
+        Console.WriteLine($"CopperFloat extF80 kernel benchmark, warmup={warmupOperations}, measured={operations}, repeats={repeats}, Release={IsReleaseBuild()}");
+        Console.WriteLine("operation\trepeat\toperations\tms\tops/sec\tmops\tallocated bytes\tchecksum");
+
+        foreach (var operation in Enum.GetValues<ExtF80KernelOperation>())
+        {
+            _ = Execute(operation, warmupOperations);
+            for (var repeat = 1; repeat <= repeats; repeat++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+
+                var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+                var start = Stopwatch.GetTimestamp();
+                var result = Execute(operation, operations);
+                var elapsed = Stopwatch.GetElapsedTime(start);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+                var operationsPerSecond = operations / elapsed.TotalSeconds;
+                Console.WriteLine(
+                    $"{operation.ToString().ToLowerInvariant()}\t{repeat}\t{operations}\t{elapsed.TotalMilliseconds:F3}\t{operationsPerSecond:F0}\t{operationsPerSecond / 1_000_000.0:F3}\t{allocated}\t0x{Checksum(result):X8}");
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ExtF80KernelResult Execute(ExtF80KernelOperation operation, int operations)
+        => operation switch
+        {
+            ExtF80KernelOperation.Add => ExecuteAdd(operations),
+            ExtF80KernelOperation.Subtract => ExecuteSubtract(operations),
+            ExtF80KernelOperation.Multiply => ExecuteMultiply(operations),
+            ExtF80KernelOperation.Divide => ExecuteDivide(operations),
+            ExtF80KernelOperation.SquareRoot => ExecuteSquareRoot(operations),
+            ExtF80KernelOperation.Round => ExecuteRound(operations),
+            _ => ExecuteForced(operation, operations)
+        };
+
+    private static ExtF80KernelResult ExecuteForced(ExtF80KernelOperation operation, int operations)
+    {
+        var operationIndex = ((int)operation - (int)ExtF80KernelOperation.SingleDivide) / 2;
+        var reference = (((int)operation - (int)ExtF80KernelOperation.SingleDivide) & 1) != 0;
+        var precision = operationIndex == 0 ? ExtF80Precision.Single : ExtF80Precision.Double;
+        var context = new ExtF80Context(
+            ExtF80RoundingMode.ToNearestEven,
+            precision,
+            ExtF80TininessMode.BeforeRounding);
+        var left = ExtF80Math.FromInt32(1);
+        var right = ExtF80Math.FromInt32(3);
+        var result = new FloatingPointResult<ExtF80>(left, FloatingPointExceptionFlags.None);
+        for (var i = 0; i < operations; i++)
+        {
+            result = reference
+                ? ExtF80Math.DivideReference(left, right, context)
+                : ExtF80Math.Divide(left, right, context);
+        }
+
+        return new ExtF80KernelResult(result.Value, result.Flags);
+    }
+
+    private static ExtF80KernelResult ExecuteAdd(int operations)
+    {
+        var one = ExtF80Math.FromInt32(1);
+        var value = one;
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.Add(value, one, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static ExtF80KernelResult ExecuteSubtract(int operations)
+    {
+        var one = ExtF80Math.FromInt32(1);
+        var value = ExtF80Math.FromInt64(long.MaxValue);
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.Subtract(value, one, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static ExtF80KernelResult ExecuteMultiply(int operations)
+    {
+        var factor = ExtF80.FromBits(0x3FFF, 0x8000_0001_0000_0000);
+        var value = ExtF80Math.FromInt32(1);
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.Multiply(value, factor, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static ExtF80KernelResult ExecuteDivide(int operations)
+    {
+        var factor = ExtF80.FromBits(0x3FFF, 0x8000_0001_0000_0000);
+        var value = ExtF80Math.FromInt32(1);
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.Divide(value, factor, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static ExtF80KernelResult ExecuteSquareRoot(int operations)
+    {
+        var value = ExtF80Math.FromInt32(2);
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.SquareRoot(value, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static ExtF80KernelResult ExecuteRound(int operations)
+    {
+        var value = ExtF80.FromBits(0x3FFF, 0x8000_0000_0000_0001);
+        var flags = FloatingPointExceptionFlags.None;
+        for (var i = 0; i < operations; i++)
+        {
+            var result = ExtF80Math.Round(value, Context);
+            value = result.Value;
+            flags = result.Flags;
+        }
+
+        return new ExtF80KernelResult(value, flags);
+    }
+
+    private static uint Checksum(ExtF80KernelResult result)
+    {
+        var checksum = ((uint)result.Value.SignExponent << 16) ^ (uint)result.Value.Significand;
+        checksum = unchecked((checksum * 16777619u) ^ (uint)(result.Value.Significand >> 32));
+        return unchecked((checksum * 16777619u) ^ (uint)result.Flags);
+    }
+
+    private static bool IsReleaseBuild()
+    {
+#if DEBUG
+        return false;
+#else
+        return true;
+#endif
+    }
+}
+
+internal enum ExtF80KernelOperation
+{
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    SquareRoot,
+    Round,
+    SingleDivide,
+    SingleDivideReference,
+    DoubleDivide,
+    DoubleDivideReference
+}
+
+internal readonly record struct ExtF80KernelResult(
+    ExtF80 Value,
+    FloatingPointExceptionFlags Flags);
 
 internal sealed record BenchmarkBackend(
     string Name,
@@ -385,9 +680,20 @@ internal sealed record BenchmarkWorkload(
     ushort[] Program,
     Action<BenchmarkBus> Setup,
     Action<M68kCpuState> SetupState,
-    int MemorySize);
+    int MemorySize,
+    Func<BenchmarkBackend, bool>? SupportsBackend = null,
+    Func<M68kCpuState, uint>? AdditionalChecksum = null,
+    bool IncludeByDefault = true)
+{
+    public bool Supports(BenchmarkBackend backend)
+        => SupportsBackend?.Invoke(backend) ?? true;
+}
 
-internal sealed record BenchmarkRun(IM68kCore Cpu, BenchmarkBus Bus) : IDisposable
+internal sealed record BenchmarkRun(
+    IM68kCore Cpu,
+    BenchmarkBus Bus,
+    string BackendName,
+    BenchmarkBusSnapshot InitialBusSnapshot) : IDisposable
 {
     public void Dispose()
         => Cpu.Dispose();
@@ -397,7 +703,7 @@ internal readonly record struct BenchmarkResult(
     int Instructions,
     TimeSpan Elapsed,
     long Cycles,
-    long NativeCycles,
+    long? NativeCycles,
     long AllocatedBytes,
     uint Checksum,
     long CompiledTraces,
@@ -409,6 +715,8 @@ internal readonly record struct BenchmarkResult(
 {
     public double InstructionsPerSecond => Instructions / Elapsed.TotalSeconds;
 }
+
+internal sealed record BenchmarkBusSnapshot(byte[] Memory, uint[] CodePageGenerations);
 
 internal sealed class BenchmarkBoundary :
     IM68kInstructionBoundary,
@@ -477,6 +785,22 @@ internal sealed class BenchmarkBus :
 
         _memory = new byte[memorySize];
         _codePageGenerations = new uint[Math.Max(1, memorySize >> CodeGenerationPageShift)];
+    }
+
+    public BenchmarkBusSnapshot CaptureSnapshot()
+        => new((byte[])_memory.Clone(), (uint[])_codePageGenerations.Clone());
+
+    public void RestoreSnapshot(BenchmarkBusSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Memory.Length != _memory.Length ||
+            snapshot.CodePageGenerations.Length != _codePageGenerations.Length)
+        {
+            throw new ArgumentException("The benchmark bus snapshot does not match this bus.", nameof(snapshot));
+        }
+
+        Array.Copy(snapshot.Memory, _memory, _memory.Length);
+        Array.Copy(snapshot.CodePageGenerations, _codePageGenerations, _codePageGenerations.Length);
     }
 
     public event Action<uint, int>? JitCodeRangeWritten;

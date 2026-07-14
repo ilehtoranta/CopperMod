@@ -9,8 +9,8 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <PackageVersion>1.2.0</PackageVersion>
-    <PackageReleaseNotes>Adds public MC68010 support and refined MC68020, MC68030, and MC68040 interpreter backends. Improves MC68000 interpreter and JIT timing, two-word prefetch behavior, exception handling, self-modifying-code invalidation, and hot-path performance; improves MC68040 JIT memory-loop performance and removes steady-state allocations. Expands conformance coverage with SingleStepTests, Musashi, m68k-rs, and WinUAE CPU tests.</PackageReleaseNotes>
+    <PackageVersion>1.3.0-preview.1</PackageVersion>
+    <PackageReleaseNotes>Adds an integer-arithmetic extF80 implementation through CopperFloat and substantially improves MC68040 FPU precision, FPCR/FPSR behavior, exceptions, effective-address handling, conditionals, FPIAR, and state frames. Retains the MC68010 and interpreter/JIT performance work introduced in 1.2.0.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
@@ -44,6 +44,10 @@
   <ItemGroup>
     <PackageReference Include="HotPathGuard.Analyzers" Version="0.1.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CopperFloat\CopperFloat.csproj" Version="[0.1.0-preview.1]" />
   </ItemGroup>
 
 </Project>

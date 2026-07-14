@@ -9,7 +9,7 @@ public sealed class M68kTimingFormulaTests
 	{
 		foreach (var key in Enum.GetValues<M68kInstructionTimingKey>())
 		{
-			if (IsDynamicTimingKey(key))
+			if (IsDynamicTimingKey(key) || IsM68040OnlyTimingKey(key))
 			{
 				continue;
 			}
@@ -34,7 +34,7 @@ public sealed class M68kTimingFormulaTests
 	{
 		foreach (var key in Enum.GetValues<M68kInstructionTimingKey>())
 		{
-			if (IsDynamicTimingKey(key))
+			if (IsDynamicTimingKey(key) || IsM68040OnlyTimingKey(key))
 			{
 				continue;
 			}
@@ -50,6 +50,23 @@ public sealed class M68kTimingFormulaTests
 			Assert.Equal(
 				ExpectedFormulaKind(key),
 				descriptor.FormulaKind);
+		}
+	}
+
+	[Fact]
+	public void M68040FpuTimingKeysResolveFixedPlans()
+	{
+		foreach (var key in Enum.GetValues<M68kInstructionTimingKey>())
+		{
+			if (!IsM68040OnlyTimingKey(key))
+			{
+				continue;
+			}
+
+			var plan = M68040FixedTimingModel.GetPlan(key);
+
+			Assert.False(string.IsNullOrWhiteSpace(plan.Name));
+			Assert.Equal(1, plan.NativeCycles);
 		}
 	}
 
@@ -178,6 +195,9 @@ public sealed class M68kTimingFormulaTests
 		=> key is M68kInstructionTimingKey.MovemLongRegistersToPredecrement or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;
 
+	private static bool IsM68040OnlyTimingKey(M68kInstructionTimingKey key)
+		=> key.ToString().StartsWith("Fpu", StringComparison.Ordinal);
+
 	private static bool IsOperandShapeFormulaKey(M68kInstructionTimingKey key)
 	{
 		var keyName = key.ToString();
@@ -194,6 +214,7 @@ public sealed class M68kTimingFormulaTests
 			keyName.StartsWith("Neg", StringComparison.Ordinal) ||
 			keyName.StartsWith("Not", StringComparison.Ordinal) ||
 			keyName.StartsWith("Ori", StringComparison.Ordinal) ||
+			keyName.StartsWith("Or", StringComparison.Ordinal) ||
 			keyName.StartsWith("And", StringComparison.Ordinal) ||
 			keyName.StartsWith("Eori", StringComparison.Ordinal) ||
 			keyName.StartsWith("Cmpi", StringComparison.Ordinal) ||

@@ -23,8 +23,9 @@ internal static class AmigaFastRamBenchmark
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
         var options = ParseOptions(args);
         var workloads = CreateWorkloads()
-            .Where(workload => options.Workload == null ||
-                workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
+            .Where(workload => options.Workload == null
+                ? workload.IncludeByDefault
+                : workload.Name.Contains(options.Workload, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (workloads.Length == 0)
         {
@@ -37,27 +38,37 @@ internal static class AmigaFastRamBenchmark
             $"measured={options.Instructions}, repeats={options.Repeats}, " +
             $"direct={directSetting ?? "default-on"}, Release={IsRelease()}");
         Console.WriteLine(
-            "workload\trepeat\tinstructions\tms\tinstr/sec\tmips\tcycles\tnative-cycles\tallocated bytes\tchecksum\t" +
-            "direct reads\tdirect writes\tpseudo timing flushes\twrite completion flushes\tread misses\twrite misses");
+            "workload\tstrategy\trepeat\tinstructions\tms\tinstr/sec\tmips\tcycles\tnative-cycles\tallocated bytes\tchecksum\t" +
+            "direct reads\tdirect writes\tpseudo timing flushes\twrite completion flushes\tread misses\twrite misses\t" +
+            "move16 direct\tmove16 fallback");
 
         foreach (var workload in workloads)
         {
+            var strategies = GetMove16Strategies(workload, options.Move16Strategy);
             for (var repeat = 1; repeat <= options.Repeats; repeat++)
             {
-                var result = Run(workload, options);
-                Console.WriteLine(
-                    $"{workload.Name}\t{repeat}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t" +
-                    $"{result.InstructionsPerSecond:F0}\t{result.InstructionsPerSecond / 1_000_000.0:F3}\t" +
-                    $"{result.Cycles}\t{result.NativeCycles}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}\t" +
-                    $"{result.DirectReads}\t{result.DirectWrites}\t{result.PseudoTimingFlushes}\t" +
-                    $"{result.WriteCompletionFlushes}\t{result.ReadMisses}\t{result.WriteMisses}");
+                for (var strategyOffset = 0; strategyOffset < strategies.Length; strategyOffset++)
+                {
+                    var strategy = strategies[(strategyOffset + repeat - 1) % strategies.Length];
+                    var result = Run(workload, strategy, options);
+                    Console.WriteLine(
+                        $"{workload.Name}\t{strategy}\t{repeat}\t{result.Instructions}\t{result.Elapsed.TotalMilliseconds:F3}\t" +
+                        $"{result.InstructionsPerSecond:F0}\t{result.InstructionsPerSecond / 1_000_000.0:F3}\t" +
+                        $"{result.Cycles}\t{result.NativeCycles}\t{result.AllocatedBytes}\t0x{result.Checksum:X8}\t" +
+                        $"{result.DirectReads}\t{result.DirectWrites}\t{result.PseudoTimingFlushes}\t" +
+                        $"{result.WriteCompletionFlushes}\t{result.ReadMisses}\t{result.WriteMisses}\t" +
+                        $"{result.Move16DirectCopies}\t{result.Move16Fallbacks}");
+                }
             }
         }
 
         return true;
     }
 
-    private static AmigaFastRamResult Run(AmigaFastRamWorkload workload, AmigaFastRamOptions options)
+    private static AmigaFastRamResult Run(
+        AmigaFastRamWorkload workload,
+        M68040Move16CopyStrategy move16Strategy,
+        AmigaFastRamOptions options)
     {
         var bus = new AmigaBus(
             expansionRamSize: ExpansionRamSize,
@@ -69,10 +80,12 @@ internal static class AmigaFastRamBenchmark
         var memoryBase = workload.PseudoFast ? bus.ExpansionRamBase : bus.RealFastRamBase;
         var source = memoryBase;
         var destination = memoryBase + StreamingSpan;
-        bus.MapReadOnlyMemory(CodeBase, CreateProgram(workload.Streaming, source, destination));
+        bus.MapReadOnlyMemory(CodeBase, CreateProgram(workload, source, destination));
         InitializeSource(bus, source);
 
-        using var cpu = M68kJitCore.CreateM68040(bus);
+        using var cpu = workload.Move16
+            ? M68kJitCore.CreateM68040ForTesting(bus, enableV2: true, move16Strategy)
+            : M68kJitCore.CreateM68040(bus);
         cpu.Reset(CodeBase, 0x001F_F000);
         cpu.State.CacheControlRegister = M68040InstructionCacheEnable;
         cpu.State.D[1] = 0x1020_3040;
@@ -112,7 +125,9 @@ internal static class AmigaFastRamBenchmark
             counters.M68040DirectPseudoFastTimingFlushes - countersBefore.M68040DirectPseudoFastTimingFlushes,
             counters.M68040DirectRamWriteCompletionFlushes - countersBefore.M68040DirectRamWriteCompletionFlushes,
             counters.M68040DirectRamReadMisses - countersBefore.M68040DirectRamReadMisses,
-            counters.M68040DirectRamWriteMisses - countersBefore.M68040DirectRamWriteMisses);
+            counters.M68040DirectRamWriteMisses - countersBefore.M68040DirectRamWriteMisses,
+            counters.M68040Move16DirectCopies - countersBefore.M68040Move16DirectCopies,
+            counters.M68040Move16Fallbacks - countersBefore.M68040Move16Fallbacks);
     }
 
     private static void ExecuteMany(M68kJitCore cpu, int instructions)
@@ -154,9 +169,17 @@ internal static class AmigaFastRamBenchmark
         }
     }
 
-    private static byte[] CreateProgram(bool streaming, uint source, uint destination)
+    private static byte[] CreateProgram(AmigaFastRamWorkload workload, uint source, uint destination)
     {
-        var words = streaming
+        var words = workload.Move16
+            ? new ushort[]
+            {
+                0x207C, (ushort)(source >> 16), (ushort)source,             // MOVEA.L #source,A0
+                0x227C, (ushort)(destination >> 16), (ushort)destination, // MOVEA.L #destination,A1
+                0xF620, 0x1000,                                           // MOVE16 (A0)+,(A1)+
+                0x60EE                                                    // BRA.S reset
+            }
+            : workload.Streaming
             ? new ushort[]
             {
                 0x207C, (ushort)(source >> 16), (ushort)source,           // MOVEA.L #source,A0
@@ -216,8 +239,38 @@ internal static class AmigaFastRamBenchmark
             new AmigaFastRamWorkload("pseudo-fast-fixed", PseudoFast: true, Streaming: false),
             new AmigaFastRamWorkload("pseudo-fast-streaming", PseudoFast: true, Streaming: true),
             new AmigaFastRamWorkload("real-fast-fixed", PseudoFast: false, Streaming: false),
-            new AmigaFastRamWorkload("real-fast-streaming", PseudoFast: false, Streaming: true)
+            new AmigaFastRamWorkload("real-fast-streaming", PseudoFast: false, Streaming: true),
+            new AmigaFastRamWorkload("pseudo-fast-move16", PseudoFast: true, Streaming: false, Move16: true, IncludeByDefault: false),
+            new AmigaFastRamWorkload("real-fast-move16", PseudoFast: false, Streaming: false, Move16: true, IncludeByDefault: false)
         ];
+
+    private static M68040Move16CopyStrategy[] GetMove16Strategies(
+        AmigaFastRamWorkload workload,
+        string? requested)
+    {
+        if (!workload.Move16)
+        {
+            return [M68040Move16CopyStrategy.Auto];
+        }
+
+        if (requested == null || requested.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                M68040Move16CopyStrategy.UInt32,
+                M68040Move16CopyStrategy.UInt64,
+                M68040Move16CopyStrategy.Vector128,
+                M68040Move16CopyStrategy.Fallback
+            ];
+        }
+
+        if (!Enum.TryParse<M68040Move16CopyStrategy>(requested, ignoreCase: true, out var strategy))
+        {
+            throw new ArgumentException($"Unknown MOVE16 strategy '{requested}'.");
+        }
+
+        return [strategy];
+    }
 
     private static AmigaFastRamOptions ParseOptions(string[] args)
     {
@@ -225,6 +278,7 @@ internal static class AmigaFastRamBenchmark
         var instructions = 100_000_000;
         var repeats = 7;
         string? workload = null;
+        string? move16Strategy = null;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -243,11 +297,15 @@ internal static class AmigaFastRamBenchmark
                 case "--workload":
                     workload = ParseString(args, ref index);
                     break;
+                case "--move16-strategy":
+                    move16Strategy = ParseString(args, ref index);
+                    break;
                 case "--help":
                 case "-h":
                     Console.WriteLine(
-                        "Usage: dotnet run -c Release --project Copper68k.Benchmarks -- " +
-                        "--amiga-fast-ram [--warmup N] [--instructions N] [--repeats N] [--workload text]");
+                        "Usage: dotnet run -c Release --project CopperScreen.Benchmarks -- " +
+                        "--amiga-fast-ram [--warmup N] [--instructions N] [--repeats N] " +
+                        "[--workload text] [--move16-strategy all|Auto|UInt32|UInt64|Vector128|Fallback]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -255,7 +313,7 @@ internal static class AmigaFastRamBenchmark
             }
         }
 
-        return new AmigaFastRamOptions(warmup, instructions, repeats, workload);
+        return new AmigaFastRamOptions(warmup, instructions, repeats, workload, move16Strategy);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -285,9 +343,15 @@ internal static class AmigaFastRamBenchmark
         int WarmupInstructions,
         int Instructions,
         int Repeats,
-        string? Workload);
+        string? Workload,
+        string? Move16Strategy);
 
-    private readonly record struct AmigaFastRamWorkload(string Name, bool PseudoFast, bool Streaming);
+    private readonly record struct AmigaFastRamWorkload(
+        string Name,
+        bool PseudoFast,
+        bool Streaming,
+        bool Move16 = false,
+        bool IncludeByDefault = true);
 
     private readonly record struct AmigaFastRamResult(
         int Instructions,
@@ -301,7 +365,9 @@ internal static class AmigaFastRamBenchmark
         long PseudoTimingFlushes,
         long WriteCompletionFlushes,
         long ReadMisses,
-        long WriteMisses)
+        long WriteMisses,
+        long Move16DirectCopies,
+        long Move16Fallbacks)
     {
         public double InstructionsPerSecond => Instructions / Elapsed.TotalSeconds;
     }

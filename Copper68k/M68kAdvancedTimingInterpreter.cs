@@ -134,6 +134,8 @@ namespace Copper68k
         DivideWordSigned,
         AndiWordImmediateToData,
         AndLongImmediateToData,
+        AndLongEffectiveAddressToData,
+        OrLongEffectiveAddressToData,
         EoriWordImmediateToData,
         EoriLongImmediateToData,
         MultiplyWordUnsigned,
@@ -290,7 +292,12 @@ namespace Copper68k
 
             if ((opcode & 0xF9C0) is 0x00C0 or 0x02C0 or 0x04C0)
             {
-                return M68020OpcodeKind.Chk2Cmp2;
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                return (opcode & 0x0600) != 0x0600 &&
+                    (mode is 2 or 5 or 6 || (mode == 7 && register <= 3))
+                        ? M68020OpcodeKind.Chk2Cmp2
+                        : M68020OpcodeKind.IllegalInstruction;
             }
 
             if ((opcode & 0xF100) == 0x7000)
@@ -873,6 +880,24 @@ namespace Copper68k
                 return M68020OpcodeKind.AndLongImmediateToData;
             }
 
+            if ((opcode & 0xF1C0) == 0xC080)
+            {
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                return mode != 1 && (mode != 7 || register <= 3)
+                    ? M68020OpcodeKind.AndLongEffectiveAddressToData
+                    : M68020OpcodeKind.IllegalInstruction;
+            }
+
+            if ((opcode & 0xF1C0) == 0x8080)
+            {
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                return mode != 1 && (mode != 7 || register <= 3)
+                    ? M68020OpcodeKind.OrLongEffectiveAddressToData
+                    : M68020OpcodeKind.IllegalInstruction;
+            }
+
             if ((opcode & 0xFFF8) == 0x0A40)
             {
                 return M68020OpcodeKind.EoriWordImmediateToData;
@@ -1275,14 +1300,16 @@ namespace Copper68k
         MoveLongDataToAbsoluteLong,
         ShortUnconditionalBranch,
         ByteBranch,
-        Dbcc
+        Dbcc,
+        M68040FpuRegister
     }
 
     internal readonly record struct M68kAdvancedHotInstruction(
         uint Address,
         ushort Opcode,
         M68kAdvancedFastKind Kind,
-        int Length);
+        int Length,
+        ushort Extension = 0);
 
     internal struct M68kAdvancedHotBlock
     {
@@ -1293,6 +1320,7 @@ namespace Copper68k
         internal int Count;
         internal bool Valid;
         internal bool GenerationGuarded;
+        internal bool HasModelSpecificInstruction;
     }
 
     internal readonly record struct M68kInstructionFetchMetadata(
@@ -1492,8 +1520,14 @@ namespace Copper68k
         private static readonly byte[] M68030FastKinds =
             CreateFastKinds(M68020OpcodeDispatchTable.M68030Kinds);
 
-        private static readonly byte[] M68040FastKinds =
-            CreateFastKinds(M68020OpcodeDispatchTable.M68040Kinds);
+        private static readonly byte[] M68040FastKinds = CreateM68040FastKinds();
+
+        private static byte[] CreateM68040FastKinds()
+        {
+            var kinds = CreateFastKinds(M68020OpcodeDispatchTable.M68040Kinds);
+            kinds[0xF200] = (byte)M68kAdvancedFastKind.M68040FpuRegister;
+            return kinds;
+        }
 
         private static byte[] CreateFastKinds(M68020OpcodeKind[] opcodeKinds)
         {
@@ -1759,6 +1793,18 @@ namespace Copper68k
                 return true;
             }
 
+            if (block.HasModelSpecificInstruction)
+            {
+                return TryExecuteModelSpecificHotBlock(
+                    maxInstructions,
+                    targetCycle,
+                    boundary,
+                    cacheSlot,
+                    in block,
+                    out executedInstructions,
+                    out stopBatch);
+            }
+
             var instructionIndex = 0;
             while (executedInstructions < maxInstructions)
             {
@@ -1798,6 +1844,96 @@ namespace Copper68k
                 }
 
                 ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                boundary.AfterInstruction(previousCycle, State.Cycles);
+                executedInstructions++;
+                if (State.Halted || State.Stopped)
+                {
+                    return true;
+                }
+
+                var nextIndex = instructionIndex + 1;
+                if (nextIndex < block.Count &&
+                    State.ProgramCounter == hotInstructions[blockOffset + nextIndex].Address)
+                {
+                    instructionIndex = nextIndex;
+                    continue;
+                }
+
+                if (State.ProgramCounter == block.StartAddress)
+                {
+                    instructionIndex = 0;
+                    continue;
+                }
+
+                return true;
+            }
+
+            return true;
+        }
+
+        private bool TryExecuteModelSpecificHotBlock(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kInstructionBoundary boundary,
+            int cacheSlot,
+            in M68kAdvancedHotBlock block,
+            out int executedInstructions,
+            out bool stopBatch)
+        {
+            executedInstructions = 0;
+            stopBatch = false;
+            var hotInstructions = _hotInstructions!;
+            var blockOffset = cacheSlot * HotBlockMaxInstructions;
+            var instructionIndex = 0;
+            while (executedInstructions < maxInstructions)
+            {
+                if (targetCycle.HasValue && State.Cycles >= targetCycle.Value)
+                {
+                    stopBatch = true;
+                    return true;
+                }
+
+                var hotInstruction = hotInstructions[blockOffset + instructionIndex];
+                if (State.ProgramCounter != hotInstruction.Address)
+                {
+                    if (State.ProgramCounter != block.StartAddress)
+                    {
+                        return true;
+                    }
+
+                    instructionIndex = 0;
+                    hotInstruction = hotInstructions[blockOffset];
+                }
+
+                if (!boundary.BeforeInstruction())
+                {
+                    stopBatch = true;
+                    return true;
+                }
+
+                var previousCycle = State.Cycles;
+                if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
+                    opcode != hotInstruction.Opcode)
+                {
+                    _hotBlocks![cacheSlot].Valid = false;
+                    ExecuteInstructionCore();
+                    boundary.AfterInstruction(previousCycle, State.Cycles);
+                    executedInstructions++;
+                    return true;
+                }
+
+                if (hotInstruction.Kind == M68kAdvancedFastKind.M68040FpuRegister)
+                {
+                    if (!TryExecuteFastModelSpecificInstruction(opcode))
+                    {
+                        throw new InvalidOperationException("The MC68040 FPU hot instruction was not handled.");
+                    }
+                }
+                else
+                {
+                    ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                }
+
                 boundary.AfterInstruction(previousCycle, State.Cycles);
                 executedInstructions++;
                 if (State.Halted || State.Stopped)
@@ -1989,6 +2125,7 @@ namespace Copper68k
             var address = startAddress;
             var endAddress = startAddress;
             var count = 0;
+            var hasModelSpecificInstruction = false;
             while (count < HotBlockMaxInstructions && CanDecodeHotBlockAddress(address))
             {
                 ushort opcode;
@@ -2015,18 +2152,47 @@ namespace Copper68k
                     break;
                 }
 
+                ushort extension = 0;
+                if (kind == M68kAdvancedFastKind.M68040FpuRegister)
+                {
+                    hasModelSpecificInstruction = true;
+                    try
+                    {
+                        extension = _codeReader!.ReadHostWord(unchecked(address + 2));
+                    }
+                    catch (M68kCodeReadException)
+                    {
+                        break;
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        break;
+                    }
+                    catch (IndexOutOfRangeException)
+                    {
+                        break;
+                    }
+
+                    if (!M68040FpuHelpers.IsRegisterOperationCommand(extension))
+                    {
+                        break;
+                    }
+                }
+
                 var length = kind switch
                 {
                     M68kAdvancedFastKind.MoveLongImmediateToAddress => 6,
                     M68kAdvancedFastKind.MoveLongDataToAbsoluteLong => 6,
                     M68kAdvancedFastKind.Dbcc => 4,
+                    M68kAdvancedFastKind.M68040FpuRegister => 4,
                     _ => 2
                 };
                 hotInstructions[blockOffset + count] = new M68kAdvancedHotInstruction(
                     address,
                     opcode,
                     kind,
-                    length);
+                    length,
+                    extension);
                 count++;
                 var nextAddress = unchecked(address + (uint)length);
                 if (nextAddress <= address)
@@ -2050,7 +2216,8 @@ namespace Copper68k
                 StartAddress = startAddress,
                 EndAddressExclusive = endAddress,
                 Count = count,
-                Valid = count != 0
+                Valid = count != 0,
+                HasModelSpecificInstruction = hasModelSpecificInstruction
             };
             var byteCount = endAddress >= startAddress
                 ? endAddress - startAddress
@@ -2254,8 +2421,14 @@ namespace Copper68k
             }
         }
 
+        protected virtual bool TryExecuteFastModelSpecificInstruction(ushort opcode)
+        {
+            _ = opcode;
+            return false;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ConsumeFastOpcode(ushort opcode)
+        protected void ConsumeFastOpcode(ushort opcode)
         {
             if (_directHotOpcodeFetched)
             {
@@ -3170,6 +3343,14 @@ namespace Copper68k
 
                 case M68020OpcodeKind.AndLongImmediateToData:
                     ExecuteAndLongImmediateToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AndLongEffectiveAddressToData:
+                    ExecuteAndLongEffectiveAddressToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.OrLongEffectiveAddressToData:
+                    ExecuteOrLongEffectiveAddressToData(opcode);
                     return true;
 
                 case M68020OpcodeKind.EoriWordImmediateToData:
@@ -5959,6 +6140,74 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.AndLongImmediateToData);
         }
 
+        private void ExecuteAndLongEffectiveAddressToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var mode = (opcode >> 3) & 7;
+            var sourceRegister = opcode & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var source = ReadLongDataSource(mode, sourceRegister, opcode);
+            var result = State.D[destinationRegister] & source;
+            State.D[destinationRegister] = result;
+            State.SetNegativeZero(result, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            CompleteOperandShapeTiming(
+                M68kInstructionTimingKey.AndLongEffectiveAddressToData,
+                GetAndLongTimingLabel(mode, sourceRegister));
+        }
+
+        private static string GetAndLongTimingLabel(int mode, int register)
+            => mode switch
+            {
+                0 => "AND.L Dn,Dn",
+                2 => "AND.L (An),Dn",
+                3 => "AND.L (An)+,Dn",
+                4 => "AND.L -(An),Dn",
+                5 => "AND.L (d16,An),Dn",
+                6 => "AND.L (d8,An,Xn),Dn",
+                7 when register == 0 => "AND.L (xxx).W,Dn",
+                7 when register == 1 => "AND.L (xxx).L,Dn",
+                7 when register == 2 => "AND.L (d16,PC),Dn",
+                7 when register == 3 => "AND.L (d8,PC,Xn),Dn",
+                _ => "AND.L <ea>,Dn"
+            };
+
+        private void ExecuteOrLongEffectiveAddressToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var mode = (opcode >> 3) & 7;
+            var sourceRegister = opcode & 7;
+            var destinationRegister = (opcode >> 9) & 7;
+            var source = ReadLongDataSource(mode, sourceRegister, opcode);
+            var result = State.D[destinationRegister] | source;
+            State.D[destinationRegister] = result;
+            State.SetNegativeZero(result, M68kOperandSize.Long);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+            CompleteOperandShapeTiming(
+                M68kInstructionTimingKey.OrLongEffectiveAddressToData,
+                GetOrLongTimingLabel(mode, sourceRegister));
+        }
+
+        private static string GetOrLongTimingLabel(int mode, int register)
+            => mode switch
+            {
+                0 => "OR.L Dn,Dn",
+                2 => "OR.L (An),Dn",
+                3 => "OR.L (An)+,Dn",
+                4 => "OR.L -(An),Dn",
+                5 => "OR.L (d16,An),Dn",
+                6 => "OR.L (d8,An,Xn),Dn",
+                7 when register == 0 => "OR.L (xxx).W,Dn",
+                7 when register == 1 => "OR.L (xxx).L,Dn",
+                7 when register == 2 => "OR.L (d16,PC),Dn",
+                7 when register == 3 => "OR.L (d8,PC,Xn),Dn",
+                _ => "OR.L <ea>,Dn"
+            };
+
         private void ExecuteAndiWordImmediateToData(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -7245,7 +7494,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void CompleteFastTiming(M68kInstructionTimingKey key)
+        protected void CompleteFastTiming(M68kInstructionTimingKey key)
         {
             var plan = _timing.GetPlan(key);
             _timing.CompleteFlatInstruction(plan);

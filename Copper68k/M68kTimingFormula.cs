@@ -334,6 +334,7 @@ namespace Copper68k
                 keyName.StartsWith("Not", StringComparison.Ordinal) ||
                 keyName.StartsWith("Ori", StringComparison.Ordinal) ||
                 keyName.StartsWith("And", StringComparison.Ordinal) ||
+                keyName.StartsWith("Or", StringComparison.Ordinal) ||
                 keyName.StartsWith("Eori", StringComparison.Ordinal) ||
                 keyName.StartsWith("Cmpi", StringComparison.Ordinal) ||
                 keyName.StartsWith("Cmpa", StringComparison.Ordinal) ||
@@ -534,6 +535,7 @@ namespace Copper68k
                 TryCreateSizedBinaryInstructionLabel(keyName, "Cmpa", "CMPA", out label) ||
                 TryCreateSizedBinaryInstructionLabel(keyName, "Cmp", "CMP", out label) ||
                 TryCreateSizedBinaryInstructionLabel(keyName, "And", "AND", out label) ||
+                TryCreateSizedBinaryInstructionLabel(keyName, "Or", "OR", out label) ||
                 TryCreateSizedBinaryInstructionLabel(keyName, "Eori", "EORI", out label) ||
                 TryCreateSizedBinaryInstructionLabel(keyName, "Ori", "ORI", out label) ||
                 TryCreateSizedBinaryInstructionLabel(keyName, "Mulu", "MULU", out label) ||
@@ -1041,7 +1043,7 @@ namespace Copper68k
             if (keyName.StartsWith("Sub", StringComparison.Ordinal)) return M68kTimingOperation.Subtract;
             if (keyName.StartsWith("Cmpa", StringComparison.Ordinal)) return M68kTimingOperation.CompareAddress;
             if (keyName.StartsWith("Cmp", StringComparison.Ordinal)) return M68kTimingOperation.Compare;
-            if (keyName.StartsWith("And", StringComparison.Ordinal) || keyName.StartsWith("Eori", StringComparison.Ordinal) || keyName.StartsWith("Ori", StringComparison.Ordinal) || keyName.StartsWith("Not", StringComparison.Ordinal) || keyName.StartsWith("ImmediateLogical", StringComparison.Ordinal) || keyName.StartsWith("ImmediateWordTo", StringComparison.Ordinal)) return M68kTimingOperation.Logical;
+            if (keyName.StartsWith("And", StringComparison.Ordinal) || keyName.StartsWith("Or", StringComparison.Ordinal) || keyName.StartsWith("Eori", StringComparison.Ordinal) || keyName.StartsWith("Ori", StringComparison.Ordinal) || keyName.StartsWith("Not", StringComparison.Ordinal) || keyName.StartsWith("ImmediateLogical", StringComparison.Ordinal) || keyName.StartsWith("ImmediateWordTo", StringComparison.Ordinal)) return M68kTimingOperation.Logical;
             if (keyName.StartsWith("Btst", StringComparison.Ordinal) || keyName.StartsWith("Bchg", StringComparison.Ordinal) || keyName.StartsWith("Bclr", StringComparison.Ordinal) || keyName.StartsWith("Bset", StringComparison.Ordinal)) return M68kTimingOperation.Bit;
             if (keyName.StartsWith("As", StringComparison.Ordinal) || keyName.StartsWith("Ls", StringComparison.Ordinal) || keyName.StartsWith("Ro", StringComparison.Ordinal)) return M68kTimingOperation.ShiftRotate;
             if (keyName.StartsWith("Abcd", StringComparison.Ordinal) || keyName.StartsWith("Sbcd", StringComparison.Ordinal) || keyName.StartsWith("Nbcd", StringComparison.Ordinal)) return M68kTimingOperation.Decimal;
@@ -1255,6 +1257,20 @@ namespace Copper68k
                 {
                     return 2;
                 }
+
+                return source switch
+                {
+                    M68kTimingOperandForm.EffectiveAddress => 6,
+                    M68kTimingOperandForm.AddressIndirect => 6,
+                    M68kTimingOperandForm.PostIncrement => 6,
+                    M68kTimingOperandForm.Predecrement => 7,
+                    M68kTimingOperandForm.AddressDisplacement => 7,
+                    M68kTimingOperandForm.BriefIndexed => 9,
+                    M68kTimingOperandForm.AbsoluteWord => 7,
+                    M68kTimingOperandForm.AbsoluteLong => 8,
+                    M68kTimingOperandForm.Other => 9,
+                    _ => throw Unsupported(descriptor)
+                };
             }
 
             if (source == M68kTimingOperandForm.Immediate && IsMemory(destination))

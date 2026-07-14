@@ -11,7 +11,7 @@ const int Channels = 2;
 const int OpcodeDispatchDefaultMemorySize = 1 << 20;
 const int OpcodeDispatchTransformMemorySize = 1 << 24;
 
-if (AmigaFastRamBenchmark.TryRun(args))
+if (Move16AlignmentBenchmark.TryRun(args) || AmigaFastRamBenchmark.TryRun(args))
 {
     return;
 }

@@ -508,6 +508,13 @@ namespace Copper68k
         M68000PrefetchDiagnosticState CapturePrefetchDiagnosticState();
     }
 
+    internal interface IM68000InterruptRecognition
+    {
+        long LastInterruptSampleCycle { get; }
+
+        bool HasRecognizedInterrupt(long pinAssertCycle);
+    }
+
     internal readonly record struct M68000PrefetchDiagnosticState(
         uint ProgramCounter,
         long Cycles,
@@ -1410,7 +1417,8 @@ namespace Copper68k
         IM68kBatchCore,
         IM68kInstructionFrequencyProvider,
         IM68kJitFallbackFetchSynchronization,
-        IM68000PrefetchDiagnostics
+        IM68000PrefetchDiagnostics,
+        IM68000InterruptRecognition
         where TBus : IM68kBus
         where TCpuDataAccess : struct, IM68kCpuDataAccess<TBus, TCpuDataAccess>
     {
@@ -1454,6 +1462,8 @@ namespace Copper68k
         private M68kBusAccessKind _dataReadFaultAccessKind;
         private long _instructionCycleStart;
         private long _instructionCycleFloor;
+        private long _instructionInterruptSampleCycle;
+        private long _lastInterruptSampleCycle;
         private int _nextCpuDataAccessDelayCycles;
         private bool _deferredCpuBusBatchExecutionActive;
         private bool _deferredCpuInstructionTimingStarted;
@@ -4531,7 +4541,14 @@ namespace Copper68k
             State.LastOpcode = 0;
             State.LastInstructionProgramCounter = 0;
             State.RecordException(-1, 0, 0);
+            _instructionInterruptSampleCycle = long.MinValue;
+            _lastInterruptSampleCycle = long.MinValue;
         }
+
+        long IM68000InterruptRecognition.LastInterruptSampleCycle => _lastInterruptSampleCycle;
+
+        bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
+            => pinAssertCycle <= _lastInterruptSampleCycle;
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
@@ -7568,6 +7585,7 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
+            _instructionInterruptSampleCycle = _cpuBusCycle;
             _skipRetirePrefetchTopUp = true;
         }
 
@@ -7587,6 +7605,7 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
+            _instructionInterruptSampleCycle = _cpuBusCycle;
         }
 
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
@@ -8332,6 +8351,7 @@ namespace Copper68k
         {
             _instructionCycleFloorActive = true;
             _instructionCycleStart = startCycle;
+            _instructionInterruptSampleCycle = long.MinValue;
             _instructionCycleFloor = startCycle;
             _cpuBusCycle = Math.Max(_cpuBusCycle, startCycle);
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, startCycle);
@@ -8348,6 +8368,10 @@ namespace Copper68k
         private int CompleteInstruction(long startCycle, PlannedRetireMode retireMode = PlannedRetireMode.General)
         {
             _pendingInternalCycles = 0;
+            if (_instructionInterruptSampleCycle == long.MinValue)
+            {
+                _instructionInterruptSampleCycle = _cpuBusCycle;
+            }
             if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
             {
                 AppendSequentialPlannedPrefetchWord();
@@ -8389,6 +8413,8 @@ namespace Copper68k
             {
                 State.Cycles = completedCycle;
             }
+
+            _lastInterruptSampleCycle = _instructionInterruptSampleCycle;
 
             return (int)(State.Cycles - startCycle);
         }

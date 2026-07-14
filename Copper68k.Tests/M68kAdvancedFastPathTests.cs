@@ -1,4 +1,5 @@
 using Copper68k;
+using CopperFloat;
 using static Copper68k.Tests.M68kInterpreterTestHelpers;
 
 namespace Copper68k.Tests;
@@ -199,6 +200,51 @@ public sealed class M68kAdvancedFastPathTests
 
 		AssertEquivalent(result);
 		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
+	public void M68040FpuRegisterHotBlockMatchesGeneralBatchExecution()
+	{
+		var result = ExecuteBatchPair(
+			[
+				0xF200, 0x00A2, // FADD.X FP0,FP1
+				0xF200, 0x00A8, // FSUB.X FP0,FP1
+				0xF200, 0x00A3, // FMUL.X FP0,FP1
+				0xF200, 0x00A0, // FDIV.X FP0,FP1
+				0x60EE          // BRA.S loop
+			],
+			state =>
+			{
+				state.M68040Fpu.FP[0] = ExtF80Math.FromInt32(2);
+				state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(8);
+			},
+			instructionCount: 100,
+			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz);
+
+		AssertEquivalent(result);
+		Assert.Equal(result.GeneralBus.InstructionFetchWords, result.FastBus.InstructionFetchWords);
+		Assert.Equal(result.GeneralBoundaries!.Cycles, result.FastBoundaries!.Cycles);
+	}
+
+	[Fact]
+	public void M68040FpuHotBlockUsesTheFetchedExtensionWordAfterHostMutation()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xF200, 0x00A2); // FADD.X FP0,FP1
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, 0x0000_3000);
+		cpu.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(2);
+		cpu.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(8);
+
+		Assert.Equal(1, cpu.ExecuteInstructions(1, null, new RecordingBoundary()));
+		Assert.Equal(ExtF80Math.FromInt32(10), cpu.State.M68040Fpu.FP[1]);
+
+		bus.WriteWord(CodeBase + 2, 0x00A8); // FSUB.X FP0,FP1
+		cpu.State.ProgramCounter = CodeBase;
+		cpu.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(8);
+
+		Assert.Equal(1, cpu.ExecuteInstructions(1, null, new RecordingBoundary()));
+		Assert.Equal(ExtF80Math.FromInt32(6), cpu.State.M68040Fpu.FP[1]);
 	}
 
 	[Fact]
@@ -504,6 +550,12 @@ public sealed class M68kAdvancedFastPathTests
 			result.Fast.State.LastInstructionProgramCounter);
 		Assert.Equal(result.General.State.D, result.Fast.State.D);
 		Assert.Equal(result.General.State.A, result.Fast.State.A);
+		Assert.Equal(result.General.State.M68040Fpu.FP, result.Fast.State.M68040Fpu.FP);
+		Assert.Equal(result.General.State.M68040Fpu.Fpcr, result.Fast.State.M68040Fpu.Fpcr);
+		Assert.Equal(result.General.State.M68040Fpu.Fpsr, result.Fast.State.M68040Fpu.Fpsr);
+		Assert.Equal(result.General.State.M68040Fpu.Fpiar, result.Fast.State.M68040Fpu.Fpiar);
+		Assert.Equal(result.General.State.M68040Fpu.StateFrameKind, result.Fast.State.M68040Fpu.StateFrameKind);
+		Assert.Equal(result.General.State.M68040Fpu.StateFrameCommand, result.Fast.State.M68040Fpu.StateFrameCommand);
 		Assert.Equal(result.GeneralBus.ReadLong(0x0008_0000), result.FastBus.ReadLong(0x0008_0000));
 		Assert.Equal(result.General.Timing.LastInstructionTiming, result.Fast.Timing.LastInstructionTiming);
 	}

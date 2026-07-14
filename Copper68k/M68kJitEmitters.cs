@@ -83,6 +83,13 @@ namespace Copper68k
             typeof(int),
             typeof(int),
             typeof(ushort));
+        private static readonly MethodInfo ExecuteM68040FpuRegister = RequiredMethod(
+            typeof(M68kJitCore),
+            "ExecuteCompiledM68040FpuRegister",
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(ushort));
         private static readonly MethodInfo ExecuteMovem = RequiredMethod(
             typeof(M68kJitCore),
             "ExecuteCompiledMovem",
@@ -280,6 +287,7 @@ namespace Copper68k
                 M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori => IsSupportedReadWriteEa(instruction.Destination),
                 M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor => IsSupportedBinaryArithmeticEa(instruction),
                 M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => IsSupportedReadWriteEa(instruction.Destination),
+                M68kJitOperation.M68040Move16 => true,
                 M68kJitOperation.M68040Fpu => M68040FpuHelpers.UsesBus(instruction),
                 _ => false
             };
@@ -549,6 +557,18 @@ namespace Copper68k
 
         private static void EmitM68040Fpu(ILGenerator il, M68kDecodedInstruction instruction)
         {
+            if ((M68040FpuJitKind)instruction.Variant == M68040FpuJitKind.Operation &&
+                instruction.Displacement == 0)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+                il.Emit(OpCodes.Ldc_I4, instruction.Register);
+                il.Emit(OpCodes.Ldc_I4, instruction.Condition);
+                il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
+                il.Emit(OpCodes.Call, ExecuteM68040FpuRegister);
+                return;
+            }
+
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, instruction.Variant);
             M68kEaEmitter.EmitEaArguments(il, instruction.Source);

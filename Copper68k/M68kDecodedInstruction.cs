@@ -67,6 +67,7 @@ namespace Copper68k
         MoveToCcr,
         MoveToSr,
         Pea,
+        M68040Move16,
         M68040Fpu,
         M68040Fallback
     }
@@ -359,18 +360,43 @@ namespace Copper68k
             DecodeCursor cursor,
             out M68kDecodedInstruction instruction)
         {
+            if ((opcode & 0xFFF8) == 0xF620)
+            {
+                var move16Cursor = cursor;
+                var move16Extension = move16Cursor.FetchWord();
+                var sourceRegister = opcode & 7;
+                var destinationRegister = (move16Extension >> 12) & 7;
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Move16,
+                    M68kOperandSize.Long,
+                    new M68kDecodedEa(M68kJitEaKind.AddressPostincrement, sourceRegister, 0, 0, 0, 0),
+                    new M68kDecodedEa(M68kJitEaKind.AddressPostincrement, destinationRegister, 0, 0, 0, 0),
+                    sourceRegister,
+                    destinationRegister,
+                    0,
+                    0,
+                    0,
+                    move16Extension,
+                    pc + 2,
+                    move16Cursor,
+                    stopsTrace: false);
+                return true;
+            }
+
             if ((opcode & 0xFFC0) == 0xF300 || (opcode & 0xFFC0) == 0xF340)
             {
                 var stateCursor = cursor;
                 var stateMode = (opcode >> 3) & 7;
                 var stateRegister = opcode & 7;
-                if (!TryDecodeFpuStateEa(ref stateCursor, stateMode, stateRegister, out var ea))
+                var save = (opcode & 0xFFC0) == 0xF300;
+                if (!TryDecodeFpuStateEa(ref stateCursor, stateMode, stateRegister, save, out var ea))
                 {
                     instruction = CreateM68040Fallback(pc, opcode, cursor);
                     return true;
                 }
 
-                var save = (opcode & 0xFFC0) == 0xF300;
                 instruction = Create(
                     pc,
                     opcode,
@@ -400,9 +426,23 @@ namespace Copper68k
             var extension = local.FetchWord();
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
+            if ((extension & 0xE000) is 0xC000 or 0xE000)
+            {
+                instruction = CreateM68040Fallback(pc, opcode, cursor);
+                return true;
+            }
+
             if ((extension & 0xE000) == 0xA000)
             {
-                if (mode != 0)
+                var controlMask = (ushort)(extension & 0x1C00);
+                if (controlMask == 0)
+                {
+                    controlMask = 0x0400;
+                }
+
+                if ((mode == 0 && controlMask is not (0x0400 or 0x0800 or 0x1000)) ||
+                    (mode == 1 && controlMask != 0x0400) ||
+                    mode is not (0 or 1))
                 {
                     instruction = CreateM68040Fallback(pc, opcode, cursor);
                     return true;
@@ -416,11 +456,11 @@ namespace Copper68k
                     new M68kDecodedEa(M68kJitEaKind.DataRegister, register, 0, 0, 0, 0),
                     M68kDecodedEa.None,
                     register,
+                    mode,
                     0,
                     0,
-                    0,
-                    (int)M68040FpuJitKind.MoveToControl,
-                    (ushort)(extension & 0x1C00),
+                    (int)M68040FpuJitKind.MoveFromControl,
+                    controlMask,
                     pc + 2,
                     local,
                     stopsTrace: false);
@@ -429,7 +469,15 @@ namespace Copper68k
 
             if ((extension & 0xE000) == 0x8000)
             {
-                if (mode != 0)
+                var controlMask = (ushort)(extension & 0x1C00);
+                if (controlMask == 0)
+                {
+                    controlMask = 0x0400;
+                }
+
+                if ((mode == 0 && controlMask is not (0x0400 or 0x0800 or 0x1000)) ||
+                    (mode == 1 && controlMask != 0x0400) ||
+                    mode is not (0 or 1))
                 {
                     instruction = CreateM68040Fallback(pc, opcode, cursor);
                     return true;
@@ -443,11 +491,11 @@ namespace Copper68k
                     M68kDecodedEa.None,
                     new M68kDecodedEa(M68kJitEaKind.DataRegister, register, 0, 0, 0, 0),
                     register,
+                    mode,
                     0,
                     0,
-                    0,
-                    (int)M68040FpuJitKind.MoveFromControl,
-                    (ushort)(extension & 0x1C00),
+                    (int)M68040FpuJitKind.MoveToControl,
+                    controlMask,
                     pc + 2,
                     local,
                     stopsTrace: false);
@@ -475,7 +523,28 @@ namespace Copper68k
                     0,
                     0,
                     (int)M68040FpuJitKind.MoveToEa,
+                    extension,
+                    pc + 2,
+                    local,
+                    stopsTrace: false);
+                return true;
+            }
+
+            if ((extension & 0xE000) is not (0x0000 or 0x4000))
+            {
+                instruction = Create(
+                    pc,
+                    opcode,
+                    M68kJitOperation.M68040Fpu,
+                    M68kOperandSize.Long,
+                    M68kDecodedEa.None,
+                    M68kDecodedEa.None,
                     0,
+                    0,
+                    0,
+                    0,
+                    (int)M68040FpuJitKind.LineFTrap,
+                    extension,
                     pc + 2,
                     local,
                     stopsTrace: false);
@@ -506,8 +575,10 @@ namespace Copper68k
                 sourceIsEa ? 1 : 0,
                 M68040FpuHelpers.IsSupportedOperation(opmode)
                     ? (int)M68040FpuJitKind.Operation
-                    : (int)M68040FpuJitKind.LineFTrap,
-                0,
+                    : M68040FpuHelpers.IsRecognizedUnimplementedOperation(opmode)
+                        ? (int)M68040FpuJitKind.UnimplementedOperation
+                        : (int)M68040FpuJitKind.LineFTrap,
+                extension,
                 pc + 2,
                 local,
                 stopsTrace: false);
@@ -584,14 +655,15 @@ namespace Copper68k
             ref DecodeCursor cursor,
             int mode,
             int register,
+            bool save,
             out M68kDecodedEa ea)
         {
             ea = default;
             return mode switch
             {
                 2 => DecodeSimpleFpuEa(M68kJitEaKind.AddressIndirect, register, out ea),
-                3 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPostincrement, register, out ea),
-                4 => DecodeSimpleFpuEa(M68kJitEaKind.AddressPredecrement, register, out ea),
+                3 when !save => DecodeSimpleFpuEa(M68kJitEaKind.AddressPostincrement, register, out ea),
+                4 when save => DecodeSimpleFpuEa(M68kJitEaKind.AddressPredecrement, register, out ea),
                 5 => DecodeExtensionFpuEa(ref cursor, M68kJitEaKind.AddressDisplacement, register, out ea),
                 7 when register == 1 => DecodeAbsoluteLongFpuEa(ref cursor, out ea),
                 _ => false
