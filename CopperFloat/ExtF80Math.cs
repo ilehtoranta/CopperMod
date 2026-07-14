@@ -136,7 +136,9 @@ public static class ExtF80Math
 
     /// <summary>Adds two extended values.</summary>
     public static FloatingPointResult<ExtF80> Add(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => AddReference(left, right, context);
+        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Add, out var result)
+            ? result
+            : AddReference(left, right, context);
 
     internal static FloatingPointResult<ExtF80> AddReference(
         ExtF80 left,
@@ -146,7 +148,9 @@ public static class ExtF80Math
 
     /// <summary>Subtracts the right extended value from the left.</summary>
     public static FloatingPointResult<ExtF80> Subtract(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => SubtractReference(left, right, context);
+        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Subtract, out var result)
+            ? result
+            : SubtractReference(left, right, context);
 
     internal static FloatingPointResult<ExtF80> SubtractReference(
         ExtF80 left,
@@ -156,7 +160,9 @@ public static class ExtF80Math
 
     /// <summary>Multiplies two extended values.</summary>
     public static FloatingPointResult<ExtF80> Multiply(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => MultiplyReference(left, right, context);
+        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Multiply, out var result)
+            ? result
+            : MultiplyReference(left, right, context);
 
     internal static FloatingPointResult<ExtF80> MultiplyReference(
         ExtF80 left,

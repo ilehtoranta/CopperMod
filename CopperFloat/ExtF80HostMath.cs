@@ -26,8 +26,7 @@ internal static class ExtF80HostMath
         ExtF80HostOperation operation,
         out FloatingPointResult<ExtF80> result)
     {
-        if (operation != ExtF80HostOperation.Divide ||
-            context.RoundingMode != ExtF80RoundingMode.ToNearestEven)
+        if (context.RoundingMode != ExtF80RoundingMode.ToNearestEven)
         {
             result = default;
             return false;
@@ -63,7 +62,14 @@ internal static class ExtF80HostMath
             return false;
         }
 
-        var flags = IsExactQuotient(left, right, 24)
+        var exact = operation switch
+        {
+            ExtF80HostOperation.Add => IsExactBinary32Sum(leftBits, rightBits, bits, subtractRight: false),
+            ExtF80HostOperation.Subtract => IsExactBinary32Sum(leftBits, rightBits, bits, subtractRight: true),
+            ExtF80HostOperation.Multiply => IsExactBinary32Product(leftBits, rightBits),
+            _ => IsExactQuotient(left, right, 24)
+        };
+        var flags = exact
             ? FloatingPointExceptionFlags.None
             : FloatingPointExceptionFlags.Inexact;
         result = new FloatingPointResult<ExtF80>(ExtF80Math.FromBinary32Bits(bits).Value, flags);
@@ -92,7 +98,14 @@ internal static class ExtF80HostMath
             return false;
         }
 
-        var flags = IsExactQuotient(left, right, 53)
+        var exact = operation switch
+        {
+            ExtF80HostOperation.Add => IsExactBinary64Sum(leftBits, rightBits, bits, subtractRight: false),
+            ExtF80HostOperation.Subtract => IsExactBinary64Sum(leftBits, rightBits, bits, subtractRight: true),
+            ExtF80HostOperation.Multiply => IsExactBinary64Product(leftBits, rightBits),
+            _ => IsExactQuotient(left, right, 53)
+        };
+        var flags = exact
             ? FloatingPointExceptionFlags.None
             : FloatingPointExceptionFlags.Inexact;
         result = new FloatingPointResult<ExtF80>(ExtF80Math.FromBinary64Bits(bits).Value, flags);
@@ -168,6 +181,100 @@ internal static class ExtF80HostMath
         var divisor = GreatestCommonDivisor(numerator, denominator);
         denominator /= divisor;
         return BitOperations.IsPow2(denominator);
+    }
+
+    private static bool IsExactBinary32Product(uint leftBits, uint rightBits)
+    {
+        var leftSignificand = (leftBits & 0x007F_FFFFu) | 0x0080_0000u;
+        var rightSignificand = (rightBits & 0x007F_FFFFu) | 0x0080_0000u;
+        var product = (ulong)leftSignificand * rightSignificand;
+        var discardedBits = BitOperations.Log2(product) - 23;
+        var discardedMask = (1UL << discardedBits) - 1;
+        return (product & discardedMask) == 0;
+    }
+
+    private static bool IsExactBinary32Sum(
+        uint leftBits,
+        uint rightBits,
+        uint resultBits,
+        bool subtractRight)
+    {
+        var leftExponent = (int)((leftBits >> 23) & 0xFF);
+        var rightExponent = (int)((rightBits >> 23) & 0xFF);
+        var resultExponent = (int)((resultBits >> 23) & 0xFF);
+        var minimumExponent = Math.Min(leftExponent, Math.Min(rightExponent, resultExponent));
+        var maximumShift = Math.Max(leftExponent, Math.Max(rightExponent, resultExponent)) - minimumExponent;
+        if (maximumShift > 100)
+        {
+            return false;
+        }
+
+        var left = ScaleBinary32Significand(leftBits, leftExponent - minimumExponent);
+        var right = ScaleBinary32Significand(rightBits, rightExponent - minimumExponent);
+        if (subtractRight)
+        {
+            right = -right;
+        }
+
+        var result = ScaleBinary32Significand(resultBits, resultExponent - minimumExponent);
+        return left + right == result;
+    }
+
+    private static Int128 ScaleBinary32Significand(uint bits, int shift)
+    {
+        var significand = (Int128)((bits & 0x007F_FFFFu) | 0x0080_0000u) << shift;
+        return (bits & 0x8000_0000u) != 0 ? -significand : significand;
+    }
+
+    private static bool IsExactBinary64Product(ulong leftBits, ulong rightBits)
+    {
+        var leftSignificand = (leftBits & 0x000F_FFFF_FFFF_FFFFUL) | 0x0010_0000_0000_0000UL;
+        var rightSignificand = (rightBits & 0x000F_FFFF_FFFF_FFFFUL) | 0x0010_0000_0000_0000UL;
+        var product = (UInt128)leftSignificand * rightSignificand;
+        var discardedBits = Log2(product) - 52;
+        var discardedMask = ((UInt128)1 << discardedBits) - 1;
+        return (product & discardedMask) == 0;
+    }
+
+    private static bool IsExactBinary64Sum(
+        ulong leftBits,
+        ulong rightBits,
+        ulong resultBits,
+        bool subtractRight)
+    {
+        var leftExponent = (int)((leftBits >> 52) & 0x7FF);
+        var rightExponent = (int)((rightBits >> 52) & 0x7FF);
+        var resultExponent = (int)((resultBits >> 52) & 0x7FF);
+        var minimumExponent = Math.Min(leftExponent, Math.Min(rightExponent, resultExponent));
+        var maximumShift = Math.Max(leftExponent, Math.Max(rightExponent, resultExponent)) - minimumExponent;
+        if (maximumShift > 70)
+        {
+            return false;
+        }
+
+        var left = ScaleBinary64Significand(leftBits, leftExponent - minimumExponent);
+        var right = ScaleBinary64Significand(rightBits, rightExponent - minimumExponent);
+        if (subtractRight)
+        {
+            right = -right;
+        }
+
+        var result = ScaleBinary64Significand(resultBits, resultExponent - minimumExponent);
+        return left + right == result;
+    }
+
+    private static Int128 ScaleBinary64Significand(ulong bits, int shift)
+    {
+        var significand = (Int128)((bits & 0x000F_FFFF_FFFF_FFFFUL) | 0x0010_0000_0000_0000UL) << shift;
+        return (bits & 0x8000_0000_0000_0000UL) != 0 ? -significand : significand;
+    }
+
+    private static int Log2(UInt128 value)
+    {
+        var high = (ulong)(value >> 64);
+        return high != 0
+            ? 64 + BitOperations.Log2(high)
+            : BitOperations.Log2((ulong)value);
     }
 
     private static ulong GreatestCommonDivisor(ulong left, ulong right)

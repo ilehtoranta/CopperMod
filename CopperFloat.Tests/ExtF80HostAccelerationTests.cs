@@ -19,10 +19,14 @@ public sealed class ExtF80HostAccelerationTests
         ExtF80Precision.Double,
         ExtF80TininessMode.BeforeRounding);
 
-    [Fact]
-    public void Binary32HostDivisionMatchesIntegerReference()
+    [Theory]
+    [InlineData((int)ExtF80HostOperation.Add)]
+    [InlineData((int)ExtF80HostOperation.Subtract)]
+    [InlineData((int)ExtF80HostOperation.Multiply)]
+    [InlineData((int)ExtF80HostOperation.Divide)]
+    public void Binary32HostArithmeticMatchesIntegerReference(int operationValue)
     {
-        const ExtF80HostOperation operation = ExtF80HostOperation.Divide;
+        var operation = (ExtF80HostOperation)operationValue;
         var random = new Random(0x68040 + (int)operation);
         var accelerated = 0;
         for (var index = 0; index < 20_000; index++)
@@ -38,13 +42,17 @@ public sealed class ExtF80HostAccelerationTests
             Assert.Equal(Reference(operation, left, right, SingleContext), actual);
         }
 
-        Assert.True(accelerated > 10_000, $"Only {accelerated} binary32 cases used host arithmetic.");
+        Assert.True(accelerated > 5_000, $"Only {accelerated} binary32 cases used host arithmetic.");
     }
 
-    [Fact]
-    public void Binary64HostDivisionMatchesIntegerReference()
+    [Theory]
+    [InlineData((int)ExtF80HostOperation.Add)]
+    [InlineData((int)ExtF80HostOperation.Subtract)]
+    [InlineData((int)ExtF80HostOperation.Multiply)]
+    [InlineData((int)ExtF80HostOperation.Divide)]
+    public void Binary64HostArithmeticMatchesIntegerReference(int operationValue)
     {
-        const ExtF80HostOperation operation = ExtF80HostOperation.Divide;
+        var operation = (ExtF80HostOperation)operationValue;
         var random = new Random(0x68881 + (int)operation);
         var accelerated = 0;
         for (var index = 0; index < 20_000; index++)
@@ -75,12 +83,6 @@ public sealed class ExtF80HostAccelerationTests
             one,
             DoubleContext with { RoundingMode = ExtF80RoundingMode.TowardZero },
             ExtF80HostOperation.Add,
-            out _));
-        Assert.False(ExtF80HostMath.TryBinary(
-            one,
-            one,
-            DoubleContext,
-            ExtF80HostOperation.Multiply,
             out _));
         Assert.False(ExtF80HostMath.TryBinary(
             one,

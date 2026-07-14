@@ -500,6 +500,7 @@ CopperMod.Amiga/References
 *.png
 !docs/assets/*.png
 !CopperDisk/copperdisk-icon.png
+!CopperFloat/copperfloat-icon.png
 *.bgra
 *.rom
 GeneratedAudio
