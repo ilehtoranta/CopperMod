@@ -44,10 +44,7 @@
   <ItemGroup>
     <PackageReference Include="HotPathGuard.Analyzers" Version="0.1.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\CopperFloat\CopperFloat.csproj" Version="[0.1.0-preview.1]" />
+    <PackageReference Include="CopperFloat" Version="[0.1.0-preview.1]" />
   </ItemGroup>
 
 </Project>
