@@ -6,6 +6,17 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenM68020BackendTests
 {
 	[Theory]
+	[InlineData("AccurateM68EC020")]
+	[InlineData("m68ec020")]
+	[InlineData("68ec020")]
+	[InlineData("ec020")]
+	[InlineData("020ec")]
+	public void CpuBackendParserAcceptsM68EC020Aliases(string backend)
+	{
+		Assert.Equal(M68kBackendKind.AccurateM68EC020, CopperScreenProfile.ParseCpuBackend(backend));
+	}
+
+	[Theory]
 	[InlineData("AccurateM68020")]
 	[InlineData("m68020")]
 	[InlineData("68020")]
@@ -57,6 +68,19 @@ public sealed class CopperScreenM68020BackendTests
 
 		Assert.Null(options.Error);
 		Assert.Equal(M68kBackendKind.AccurateM68020, options.CpuBackendOverride);
+	}
+
+	[Theory]
+	[InlineData("--m68ec020")]
+	[InlineData("--68ec020")]
+	public void StartupArgumentParserCanSelectM68EC020Backend(string alias)
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			new[] { "--profile", "expanded-copperstart", alias },
+			AppContext.BaseDirectory);
+
+		Assert.Null(options.Error);
+		Assert.Equal(M68kBackendKind.AccurateM68EC020, options.CpuBackendOverride);
 	}
 
 	[Fact]

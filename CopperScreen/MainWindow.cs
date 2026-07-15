@@ -1690,7 +1690,7 @@ internal sealed class MainWindow : Window
 		_kickstartSourceBox = AddComboSetting(kickstart, "Kickstart", ["CopperStart", "KickstartRom", "Kickstart13Rom", "DiagRom"]);
 		_kickstartRomBox = AddTextSetting(kickstart, "ROM path");
 		var cpu = CreateSettingsGroupForm();
-		_cpuBackendBox = AddComboSetting(cpu, "CPU backend", ["AccurateM68000", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68000", "JitM68040"]);
+		_cpuBackendBox = AddComboSetting(cpu, "CPU backend", ["AccurateM68000", "AccurateM68EC020", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68000", "JitM68040"]);
 
 		layout.Children.Add(CreateSettingsGroupPair(
 			CreateSettingsGroup("Kickstart", kickstart),
@@ -2921,6 +2921,7 @@ internal sealed class MainWindow : Window
 			string backend when string.Equals(backend, "JitM68000", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.JitM68000,
 			string backend when string.Equals(backend, "JitM68040", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.JitM68040,
 			string backend when string.Equals(backend, "AccurateM68020", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68020,
+			string backend when string.Equals(backend, "AccurateM68EC020", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68EC020,
 			string backend when string.Equals(backend, "AccurateM68030", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68030,
 			string backend when string.Equals(backend, "AccurateM68040", StringComparison.OrdinalIgnoreCase) => M68kBackendKind.AccurateM68040,
 			_ => M68kBackendKind.AccurateM68000

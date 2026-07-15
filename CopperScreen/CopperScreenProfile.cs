@@ -453,6 +453,7 @@ internal sealed class CopperScreenProfile
 		{
 			"interpreter" or "accurate" or "accuratem68000" or "m68000" => M68kBackendKind.AccurateM68000,
 			"accuratem68020" or "m68020" or "68020" or "020" or "ocs6802014mhz" => M68kBackendKind.AccurateM68020,
+			"accuratem68ec020" or "m68ec020" or "68ec020" or "ec020" or "020ec" => M68kBackendKind.AccurateM68EC020,
 			"accuratem68030" or "m68030" or "68030" or "030" or "ocs6803014mhz" => M68kBackendKind.AccurateM68030,
 			"accuratem68040" or "m68040" or "68040" or "040" or "ocs6804025mhz" => M68kBackendKind.AccurateM68040,
 			"jit" or "jitm68000" => M68kBackendKind.JitM68000,

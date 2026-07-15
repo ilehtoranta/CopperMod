@@ -291,6 +291,12 @@ internal sealed class CopperScreenStartupOptions
 				continue;
 			}
 
+			if (IsOption(arg, "--m68ec020") || IsOption(arg, "--68ec020"))
+			{
+				cpuBackendOverride = M68kBackendKind.AccurateM68EC020;
+				continue;
+			}
+
 			if (IsOption(arg, "--m68030") || IsOption(arg, "--68030"))
 			{
 				cpuBackendOverride = M68kBackendKind.AccurateM68030;
