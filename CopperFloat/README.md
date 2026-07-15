@@ -5,8 +5,29 @@ arithmetic for .NET. Values retain their complete 80-bit encoding, including NaN
 payloads and noncanonical encodings, while arithmetic uses an explicit rounding
 context and returns IEEE exception flags with each result.
 
-The implementation is written in managed integer arithmetic. It does not depend on
-the host floating-point environment and has no runtime package dependencies.
+The first public preview targets `net10.0`:
+
+```sh
+dotnet add package CopperFloat --version 0.1.0-preview.1
+```
+
+The architectural arithmetic and final rounding decisions use managed integer
+arithmetic. A few common binary32/binary64 operations may use hardware instructions
+only behind exactness checks; host rounding state never determines the result. The
+package has no runtime dependencies.
+
+## Accuracy and scope
+
+CopperFloat preserves raw extF80 encodings and models zero, subnormal, normal,
+infinity, quiet/signaling NaN, and unsupported values. Arithmetic supports explicit
+24-, 53-, and 64-bit precision, four rounding modes, tininess selection, and
+exception flags. It does not provide a process-global floating-point environment,
+trap delivery, Motorola FPSR/FPCR policy, or a memory layout for 12-byte Motorola
+extended slots; those belong in the CPU integration layer.
+
+The committed CopperFloat test fixtures are generated from Berkeley TestFloat 3e.
+The external level-2 oracle is optional and uses an independently installed
+TestFloat/SoftFloat toolchain; neither is distributed in the package.
 
 ## Representation
 

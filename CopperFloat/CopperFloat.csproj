@@ -10,6 +10,8 @@
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Deterministic, allocation-free IEEE extended 80-bit floating-point arithmetic for .NET.</Description>
     <PackageVersion>0.1.0-preview.1</PackageVersion>
+    <PackageReleaseNotes>First public preview of allocation-free extF80 arithmetic with explicit rounding contexts, raw encoding preservation, deterministic exception flags, and exactness-gated host acceleration.</PackageReleaseNotes>
+    <PackageCopyright>Copyright (c) 2026 ilehtoranta</PackageCopyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
