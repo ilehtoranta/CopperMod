@@ -12,6 +12,9 @@ namespace CopperMod.Amiga
     internal sealed partial class AmigaBus
     {
         private const int DeferredCpuBusBatchMinimumHorizonCycles = 16;
+        // The CPU wait-slot executor remains shadow-only until its display and
+        // scheduler state transitions are proven equivalent to the reference drain.
+        private const bool DeferredCpuWaitFastPathEnabled = true;
 
         internal void ArmDeferredCpuBatchExitForTest(long cycle)
             => _deferredCpuBatchExitChipAccessCycle = Math.Max(0, cycle);
@@ -94,6 +97,7 @@ namespace CopperMod.Amiga
             }
 
             _deferredCpuBusBatchActive = true;
+            _deferredCpuBusBatchHasTargetCycle = targetCycle.HasValue;
             _deferredCpuInstructionTimingActive = !_captureBusAccesses;
             _deferredCpuDataAccessCount = 0;
             _deferredCpuDataLongShapeBits = 0;
@@ -337,6 +341,7 @@ namespace CopperMod.Amiga
             }
 
             _deferredCpuBusBatchActive = false;
+            _deferredCpuBusBatchHasTargetCycle = false;
             _deferredCpuInstructionTimingActive = false;
             var executionStarted = _deferredCpuBusBatchExecutionStarted;
             _deferredCpuBusBatchExecutionStarted = false;
@@ -387,6 +392,7 @@ namespace CopperMod.Amiga
             _deferredCpuDataCiaShapeBits = 0;
             _deferredCpuDataReplayCycle = 0;
             _deferredCpuBusBatchActive = false;
+            _deferredCpuBusBatchHasTargetCycle = false;
             _endingDeferredCpuBusBatch = false;
             _deferredCpuBusBatchExecutionStarted = false;
             _deferredCpuBusBatchPendingWakeSource = M68kTraceBatchWakeSource.Unknown;
@@ -453,7 +459,8 @@ namespace CopperMod.Amiga
             AmigaBusAccessSize size,
             ref long cycle)
         {
-            if (!_deferredCpuInstructionTimingActive)
+            if (!_deferredCpuInstructionTimingActive ||
+                _deferredCpuBusBatchHasTargetCycle)
             {
                 return false;
             }
@@ -918,25 +925,11 @@ namespace CopperMod.Amiga
                 }
                 else
                 {
-                    var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
-                        kind,
-                        target,
-                        address,
-                        size,
-                        grantRequestCycle,
-                        isWrite,
-                        out grantedCycle,
-                        out completedCycle);
-                    if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
-                    {
-                        secondWordCycle = grantedCycle;
-                        cpuGrantCommitted = true;
-                        deferredPreparationUsed = true;
-                    }
-                    else
-                    {
-                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
-                    }
+                    // The ordered wait executor is still measurement-only. Its
+                    // scheduler state can be internally consistent while the
+                    // resulting CPU-visible state diverges from the reference
+                    // drain path, so fall through to the shared reference grant.
+                    _deferredCpuWaitWindowFastPathRejectedUnstable++;
                 }
             }
 
@@ -1190,7 +1183,8 @@ namespace CopperMod.Amiga
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldAttemptDeferredCpuWaitWindowFastPath(long requestedCycle)
         {
-            if (!_deferredCpuBusBatchEnabled ||
+            if (!DeferredCpuWaitFastPathEnabled ||
+                !_deferredCpuBusBatchEnabled ||
                 _forceCpuWaitSlotReference ||
                 _deferredCpuBatchExitChipAccessCycle < 0)
             {
@@ -1387,7 +1381,7 @@ namespace CopperMod.Amiga
                         break;
                     }
 
-                    searchCycle = candidate + (AgnusChipSlotScheduler.SlotCycles * 2L);
+                    searchCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
                 }
 
                 if (candidate == lastGrant || candidate <= prepareCycle)
@@ -1407,15 +1401,11 @@ namespace CopperMod.Amiga
                 prepareCycle = candidate;
             }
 
-            grantedCycle = lastGrant;
-            completedCycle = lastGrant + AgnusChipSlotScheduler.SlotCycles;
-            return lastGrant >= 0 && (!captureTimeline || TryCaptureCpuWaitFixedSlotTimeline(
-                requestedCycle,
-                completedCycle,
-                grantedCycle,
-                predicted: true,
-                out timeline,
-                out unsupported));
+            grantedCycle = 0;
+            completedCycle = 0;
+            unsupported = CpuWaitFixedSlotImageUnsupported.Unstable;
+            timeline = default;
+            return false;
         }
 
         private bool TryCaptureCpuWaitFixedSlotTimeline(
@@ -1435,7 +1425,9 @@ namespace CopperMod.Amiga
             var firstOwner = AgnusChipSlotOwner.Free;
             var lastOwner = AgnusChipSlotOwner.Free;
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
-            var lastCandidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, completedCycle - 1));
+            var lastCompletedCycle = Math.Max(0, completedCycle - 1);
+            var lastCandidate = lastCompletedCycle -
+                (lastCompletedCycle % AgnusChipSlotScheduler.SlotCycles);
             for (; slotCycle <= lastCandidate; slotCycle += AgnusChipSlotScheduler.SlotCycles)
             {
                 AgnusChipSlotOwner owner;
@@ -1618,12 +1610,12 @@ namespace CopperMod.Amiga
                 address,
                 kind,
                 requestedCycle,
-                firstCompletedCycle);
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles);
             _hrmSlotEngine.GrantCpuDataLongWordPhaseSlot(
                 kind,
                 target,
                 address,
-                firstCompletedCycle,
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles,
                 requestedCycle,
                 isWrite: false,
                 out secondWordCycle,
@@ -1659,12 +1651,12 @@ namespace CopperMod.Amiga
                 address,
                 kind,
                 requestedCycle,
-                firstCompletedCycle);
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles);
             _hrmSlotEngine.GrantCpuDataLongWordPhaseSlot(
                 kind,
                 target,
                 address,
-                firstCompletedCycle,
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles,
                 requestedCycle,
                 isWrite: true,
                 out secondWordCycle,
@@ -1815,6 +1807,7 @@ namespace CopperMod.Amiga
         {
             if (region.Target == AmigaBusAccessTarget.ChipRam)
             {
+                RememberChipDataBusByte(value, grantedCycle, wasDma: false);
                 _chipRam.WriteByteAtOffset(region.Offset, value, grantedCycle);
                 TouchCodePage(region.Address);
                 return;
@@ -1833,6 +1826,7 @@ namespace CopperMod.Amiga
         {
             if (region.Target == AmigaBusAccessTarget.ChipRam)
             {
+                RememberChipDataBusWord(value, grantedCycle, wasDma: false);
                 _chipRam.WriteContiguousWordAtOffset(region.Offset, value, grantedCycle);
                 TouchCodePage(region.Address);
                 TouchCodePage(region.Address + 1);
@@ -1855,6 +1849,8 @@ namespace CopperMod.Amiga
         {
             if (region.Target == AmigaBusAccessTarget.ChipRam)
             {
+                RememberChipDataBusWord((ushort)(value >> 16), firstWordCycle, wasDma: false);
+                RememberChipDataBusWord((ushort)value, secondWordCycle, wasDma: false);
                 _chipRam.WriteContiguousLongAtOffset(region.Offset, value, firstWordCycle, secondWordCycle);
                 TouchCodePage(region.Address);
                 TouchCodePage(region.Address + 1);

@@ -14,10 +14,18 @@ namespace CopperMod.Amiga
         ushort ActiveInterruptBits,
         long CpuVisibleCycle,
         long AcceptanceCycle,
-        long EntryCompletedCycle,
-        uint InterruptedProgramCounter,
-        uint HandlerProgramCounter,
-        ushort SavedStatusRegister);
+		long EntryCompletedCycle,
+		uint InterruptedProgramCounter,
+		uint HandlerProgramCounter,
+		ushort SavedStatusRegister,
+		M68000PrefetchDiagnosticState? PrefetchBefore,
+		M68000PrefetchDiagnosticState? PrefetchAfter);
+
+    internal sealed record AmigaInterruptBusPhaseTrace(
+        int Level,
+        long CpuVisibleCycle,
+        long AcceptanceCycle,
+        List<AmigaCpuBusPhaseTrace> Phases);
 
     internal enum AmigaMachineProfile
     {
@@ -265,6 +273,9 @@ namespace CopperMod.Amiga
     {
         private List<AmigaInterruptDispatchTrace>? _interruptDispatchTrace;
         private int _interruptDispatchTraceCapacity;
+        private List<AmigaInterruptBusPhaseTrace>? _interruptBusPhaseTrace;
+        private AmigaInterruptBusPhaseTrace? _activeInterruptBusPhaseTrace;
+        private int _interruptBusPhaseWindowCycles;
 
         public AmigaMachine(AmigaMachineOptions options)
         {
@@ -319,7 +330,10 @@ namespace CopperMod.Amiga
         internal IReadOnlyList<AmigaInterruptDispatchTrace> InterruptDispatchTrace
             => _interruptDispatchTrace ?? (IReadOnlyList<AmigaInterruptDispatchTrace>)Array.Empty<AmigaInterruptDispatchTrace>();
 
-        internal void CaptureInterruptDispatchTrace(int capacity)
+        internal IReadOnlyList<AmigaInterruptBusPhaseTrace> InterruptBusPhaseTrace
+            => _interruptBusPhaseTrace ?? (IReadOnlyList<AmigaInterruptBusPhaseTrace>)Array.Empty<AmigaInterruptBusPhaseTrace>();
+
+        internal void CaptureInterruptDispatchTrace(int capacity, int busPhaseWindowCycles = 0)
         {
             if (capacity <= 0)
             {
@@ -328,6 +342,28 @@ namespace CopperMod.Amiga
 
             _interruptDispatchTrace = new List<AmigaInterruptDispatchTrace>(capacity);
             _interruptDispatchTraceCapacity = capacity;
+            _interruptBusPhaseWindowCycles = busPhaseWindowCycles;
+            _interruptBusPhaseTrace = busPhaseWindowCycles > 0
+                ? new List<AmigaInterruptBusPhaseTrace>(capacity)
+                : null;
+            Bus.SetCpuBusPhaseObserver(busPhaseWindowCycles > 0 ? RecordInterruptBusPhase : null);
+        }
+
+        private void RecordInterruptBusPhase(AmigaCpuBusPhaseTrace phase)
+        {
+            var active = _activeInterruptBusPhaseTrace;
+            if (active == null)
+            {
+                return;
+            }
+
+            if (phase.CpuPhase.RequestedCycle > active.AcceptanceCycle + _interruptBusPhaseWindowCycles)
+            {
+                _activeInterruptBusPhaseTrace = null;
+                return;
+            }
+
+            active.Phases.Add(phase);
         }
 
         public void Dispose()
@@ -375,9 +411,28 @@ namespace CopperMod.Amiga
             var acceptanceCycle = Cpu.State.Cycles;
             var interruptedProgramCounter = Cpu.State.ProgramCounter;
             var savedStatusRegister = Cpu.State.StatusRegister;
-            var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
-            var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
-            Cpu.RequestInterrupt(level, GetAutovectorAddress(level));
+			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
+			var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
+			if (Cpu is IM68000InterruptRecognition interruptRecognition &&
+				!interruptRecognition.HasRecognizedInterrupt(cpuVisibleCycle))
+			{
+				return false;
+			}
+			var prefetchDiagnostics = Cpu as IM68000PrefetchDiagnostics;
+			var prefetchBefore = prefetchDiagnostics?.CapturePrefetchDiagnosticState();
+			if (_interruptBusPhaseTrace != null &&
+				_interruptBusPhaseTrace.Count < _interruptDispatchTraceCapacity)
+			{
+				var window = new AmigaInterruptBusPhaseTrace(
+					level,
+					cpuVisibleCycle,
+					acceptanceCycle,
+					new List<AmigaCpuBusPhaseTrace>(32));
+				_interruptBusPhaseTrace.Add(window);
+				_activeInterruptBusPhaseTrace = window;
+			}
+			Cpu.RequestInterrupt(level, GetAutovectorAddress(level));
+			var prefetchAfter = prefetchDiagnostics?.CapturePrefetchDiagnosticState();
             var trace = _interruptDispatchTrace;
             if (trace != null && trace.Count < _interruptDispatchTraceCapacity)
             {
@@ -387,9 +442,11 @@ namespace CopperMod.Amiga
                     cpuVisibleCycle,
                     acceptanceCycle,
                     Cpu.State.Cycles,
-                    interruptedProgramCounter,
-                    Cpu.State.ProgramCounter,
-                    savedStatusRegister));
+					interruptedProgramCounter,
+					Cpu.State.ProgramCounter,
+					savedStatusRegister,
+					prefetchBefore,
+					prefetchAfter));
             }
 
             return true;

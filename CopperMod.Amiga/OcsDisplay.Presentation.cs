@@ -227,10 +227,13 @@ namespace CopperMod.Amiga
                         if (!TryRenderTimelineCachedBitplanes(bgra, row, segment, state, timeline))
                         {
                             _lastTimelineMissingBitplaneFallbackCount++;
-                            if (allowStatefulFallback)
+                            if (!allowStatefulFallback)
                             {
-                                RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
+                                _lastTimelineFallbackCount++;
+                                return false;
                             }
+
+                            RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
                         }
                     }
                 }

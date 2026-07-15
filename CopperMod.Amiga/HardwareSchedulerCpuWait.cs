@@ -130,8 +130,7 @@ namespace CopperMod.Amiga
                     }
 
                     _bus.SynchronizeHrmBlitterPriority();
-                    if (AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate) &&
-                        _bus.TryGrantPendingCpuSingleSlot(
+                    if (_bus.TryGrantPendingCpuSingleSlot(
                         kind,
                         target,
                         address,
@@ -230,6 +229,7 @@ namespace CopperMod.Amiga
                     CpuWaitFixedSlotImageUnsupported.PendingWrite => CpuWaitFixedImageProductionFallback.PendingWrite,
                     CpuWaitFixedSlotImageUnsupported.RasterlinePlan => CpuWaitFixedImageProductionFallback.RasterlinePlan,
                     CpuWaitFixedSlotImageUnsupported.SpriteState => CpuWaitFixedImageProductionFallback.SpriteState,
+                    CpuWaitFixedSlotImageUnsupported.Unstable => CpuWaitFixedImageProductionFallback.Unstable,
                     _ => CpuWaitFixedImageProductionFallback.Unsupported
                 });
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;

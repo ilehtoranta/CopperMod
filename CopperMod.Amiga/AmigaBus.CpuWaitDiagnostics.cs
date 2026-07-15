@@ -265,10 +265,11 @@ namespace CopperMod.Amiga
         internal long DeferredCpuWaitFixedImageMismatches => _deferredCpuWaitFixedImageMismatches;
         internal long DeferredCpuWaitFixedImageUnsupported => _deferredCpuWaitFixedImageUnsupported;
         internal string DeferredCpuWaitFixedImageFirstMismatch => _deferredCpuWaitFixedImageFirstMismatch;
-        internal bool DeferredCpuWaitFixedImageProductionDisabled => _deferredCpuWaitFixedImageProductionDisabled;
+        internal bool DeferredCpuWaitFixedImageProductionDisabled
+            => !DeferredCpuWaitFastPathEnabled || _deferredCpuWaitFixedImageProductionDisabled;
         internal bool ShouldVerifyProductionCpuWaitFixedSlotImage
             => _deferredCpuBusBatchVerifyEnabled &&
-                !_deferredCpuWaitFixedImageProductionDisabled;
+                !DeferredCpuWaitFixedImageProductionDisabled;
         internal long DeferredCpuWaitFixedImageProductionAttempts => _deferredCpuWaitFixedImageProductionAttempts;
         internal long DeferredCpuWaitFixedImageProductionUsed => _deferredCpuWaitFixedImageProductionUsed;
         internal long DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped => _deferredCpuWaitFixedImageProductionPreGrantDrainsSkipped;

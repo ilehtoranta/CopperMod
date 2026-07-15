@@ -63,6 +63,17 @@ public sealed class AmigaDosFileSystemTests
 	}
 
 	[Fact]
+	public void LaunchRequestStripsMountedVolumeNameFromWorkbenchDefaultTool()
+	{
+		var fileSystem = new AmigaDosFileSystem(CreateWorkbenchDisk("Workbench Disk:C/Tool"));
+
+		Assert.True(fileSystem.TryCreateLaunchRequest("Project", out var request, out var message), message);
+
+		Assert.Equal("C/Tool", request.ExecutablePath);
+		Assert.Equal("Project", request.ProjectPath);
+	}
+
+	[Fact]
 	public void DirectoryListingSupportsLogicalHeaderKeysAndByteStyleFileType()
 	{
 		var fileSystem = new AmigaDosFileSystem(CreateLogicalKeyDisk());
@@ -360,7 +371,7 @@ public sealed class AmigaDosFileSystemTests
 			diagnostic.Code.Contains("LOADWB_HOST", StringComparison.OrdinalIgnoreCase));
 	}
 
-	private static AmigaDiskImage CreateWorkbenchDisk()
+	private static AmigaDiskImage CreateWorkbenchDisk(string defaultTool = "C/Tool")
 	{
 		var data = new byte[AmigaDiskImage.StandardAdfSize];
 		data[0] = (byte)'D';
@@ -375,7 +386,7 @@ public sealed class AmigaDosFileSystemTests
 			13,
 			880,
 			"Project.info",
-			CreateIconData("C/Tool", "STACK=8192", "0LANGUAGES=ENGLISH,FRENCH", "CLOSEWB=YES"),
+			CreateIconData(defaultTool, "STACK=8192", "0LANGUAGES=ENGLISH,FRENCH", "CLOSEWB=YES"),
 			102);
 		return AmigaDiskImage.FromAdfBytes(data, "workbench.adf");
 	}

@@ -137,6 +137,15 @@ namespace CopperMod.Amiga
             _pendingWrites.Insert(insertIndex, pending);
             _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
+
+            // Slot preparation can run ahead of captured display state. A timing write
+            // must release those future reservations even when no captured rows rewind.
+            var changedSlotOwners = CustomRegisterScheduleClassifier.GetPreparedDisplaySlotOwnerChanges(offset, value);
+            if (changedSlotOwners != AgnusLiveDisplaySlotOwnerMask.None)
+            {
+                _bus.ClearLiveDisplayDmaSlotsFrom(cycle, changedSlotOwners);
+            }
+
             if (!_advancingLiveDma && _liveFrameValid && cycle <= _liveCapturedThroughCycle)
             {
                 InvalidateLiveCaptureFrom(cycle, offset);
@@ -201,11 +210,6 @@ namespace CopperMod.Amiga
             {
                 _displayTimeline.InvalidateFromRow(invalidateRow);
             }
-            if (CustomRegisterScheduleClassifier.IsDisplayBusScheduleAffectingWrite(offset))
-            {
-                _bus.ClearLiveDisplayDmaSlotsFrom(cycle);
-            }
-
             ClearLiveBitplaneWordMasksFrom(invalidateRow);
             ClearLiveSpriteWordMasksFrom(invalidateRow);
             ResetLiveSpriteDmaStates(invalidateRow);

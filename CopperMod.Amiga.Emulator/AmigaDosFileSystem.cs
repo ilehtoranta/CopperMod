@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -158,7 +163,7 @@ namespace CopperMod.Amiga
                 if (defaultTool == null &&
                     (normalized.IndexOf(':') >= 0 || normalized.IndexOf('/') >= 0))
                 {
-                    defaultTool = normalized;
+                    defaultTool = NormalizeMountedVolumePath(normalized);
                 }
             }
 
@@ -603,6 +608,17 @@ namespace CopperMod.Amiga
             }
 
             return path;
+        }
+
+        private static string NormalizeMountedVolumePath(string path)
+        {
+            var colon = path.IndexOf(':');
+            if (colon > 0 && !IsRootVolumePrefix(path.Substring(0, colon).Trim('/')))
+            {
+                path = path.Substring(colon + 1);
+            }
+
+            return NormalizeDisplayPath(path);
         }
 
         private static bool IsRootVolumePrefix(string prefix)

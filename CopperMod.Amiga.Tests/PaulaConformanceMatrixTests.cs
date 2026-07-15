@@ -65,8 +65,14 @@ public sealed class PaulaConformanceMatrixTests
             case "manual audio plays high then low byte":
                 ManualAudioPlaysHighThenLowByte();
                 break;
-            case "manual data can be replaced before low byte":
-                ManualDataCanBeReplacedBeforeLowByte();
+            case "manual data can be queued before low byte":
+                ManualDataCanBeQueuedBeforeLowByte();
+                break;
+            case "manual audio uses separate holding and output latches":
+                ManualAudioUsesSeparateHoldingAndOutputLatches();
+                break;
+            case "manual IRQ check is sampled one CCK before completion":
+                ManualIrqCheckIsSampledOneCckBeforeCompletion();
                 break;
             case "audio DMA fetches all four channels":
                 AudioDmaFetchesAllFourChannels();
@@ -74,8 +80,14 @@ public sealed class PaulaConformanceMatrixTests
             case "length-one DMA reloads from original location":
                 LengthOneDmaReloadsFromOriginalLocation();
                 break;
+            case "AUDxLEN zero uses the full sixteen-bit counter":
+                AudxlenZeroUsesTheFullSixteenBitCounter();
+                break;
             case "audio DMA completion requests interrupt":
                 AudioDmaCompletionRequestsInterrupt();
+                break;
+            case "delayed INTREQ2 survives idle and retriggers":
+                DelayedIntreq2SurvivesIdleAndRetriggers();
                 break;
             case "channels 0 and 3 route left, 1 and 2 route right":
                 ChannelsRouteToStereoPairs();
@@ -86,8 +98,20 @@ public sealed class PaulaConformanceMatrixTests
             case "period attach modulates next channel":
                 PeriodAttachModulatesNextChannel();
                 break;
+            case "combined attach applies one word on volume then period transitions":
+                CombinedAttachAppliesOneWordOnVolumeThenPeriodTransitions();
+                break;
+            case "channel three attach suppresses DAC output":
+                ChannelThreeAttachSuppressesDacOutput();
+                break;
+            case "short DMA toggle continues active word":
+                ShortDmaToggleContinuesActiveWord();
+                break;
             case "Paula DMA uses named bus request path":
                 PaulaDmaUsesNamedBusRequestPath();
+                break;
+            case "write-only custom reads apply shared bus latch":
+                WriteOnlyCustomReadsApplySharedBusLatch();
                 break;
             default:
                 throw new InvalidOperationException($"No executable assertion is wired for Paula row '{row.Name}'.");
@@ -114,14 +138,22 @@ public sealed class PaulaConformanceMatrixTests
         Executable("audio-registers", "audio registers latch pointer length period and volume"),
         Executable("audio-registers", "AUDxPER below recommended DMA minimum still drives sample timing"),
         Executable("manual-audio", "manual audio plays high then low byte"),
-        Executable("manual-audio", "manual data can be replaced before low byte"),
+        Executable("manual-audio", "manual data can be queued before low byte"),
+        Executable("manual-audio", "manual audio uses separate holding and output latches"),
+        Executable("manual-audio", "manual IRQ check is sampled one CCK before completion"),
         Executable("audio-dma", "audio DMA fetches all four channels"),
         Executable("audio-dma", "length-one DMA reloads from original location"),
+        Executable("audio-dma", "AUDxLEN zero uses the full sixteen-bit counter"),
+        Executable("audio-dma", "short DMA toggle continues active word"),
         Executable("interrupts", "audio DMA completion requests interrupt"),
+        Executable("interrupts", "delayed INTREQ2 survives idle and retriggers"),
         Executable("stereo-routing", "channels 0 and 3 route left, 1 and 2 route right"),
         Executable("modulation", "volume attach modulates next channel"),
         Executable("modulation", "period attach modulates next channel"),
+        Executable("modulation", "combined attach applies one word on volume then period transitions"),
+        Executable("modulation", "channel three attach suppresses DAC output"),
         Executable("bus-access", "Paula DMA uses named bus request path"),
+        Executable("bus-access", "write-only custom reads apply shared bus latch"),
         Pending("pot-analog", "POT counters and analog paddle timing", "Analog POT circuitry is out of scope for current digital game controls."),
         Pending("serial-output", "Paula serial output shifter", "Out of scope until serial peripherals are emulated."),
         Pending("audio-output", "analog filter and exact DAC reconstruction", "Host audio mixing is digital and not an analog circuit simulation."),
@@ -192,14 +224,14 @@ public sealed class PaulaConformanceMatrixTests
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x4000);
 
         bus.WriteWord(0x00DFF0AA, 0x0102, 0);
-        bus.Paula.AdvanceTo(0);
+        bus.Paula.AdvanceTo(1712);
         Assert.Empty(bus.Paula.DrainInterrupts());
         Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
 
-        bus.WriteWord(0x00DFF09C, 0x0080, 0);
-        bus.WriteWord(0x00DFF09A, 0xC080, 0);
-        bus.WriteWord(0x00DFF0AA, 0x0102, 0);
-        bus.Paula.AdvanceTo(0);
+        bus.WriteWord(0x00DFF09C, 0x0080, 1712);
+        bus.WriteWord(0x00DFF09A, 0xC080, 1712);
+        bus.WriteWord(0x00DFF0AA, 0x0102, 1712);
+        bus.Paula.AdvanceTo(1712);
 
         Assert.Single(bus.Paula.DrainInterrupts());
         Assert.Equal(4, bus.Paula.GetHighestPendingInterruptLevel());
@@ -252,21 +284,80 @@ public sealed class PaulaConformanceMatrixTests
         Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.IntreqBit == 0x0080);
     }
 
-    private static void ManualDataCanBeReplacedBeforeLowByte()
+    private static void ManualDataCanBeQueuedBeforeLowByte()
     {
         var bus = CreatePaulaComponentBus();
-        bus.WriteWord(0x00DFF0A6, 0x0004, 0);
-        bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
-        bus.WriteWord(0x00DFF0AA, 0x4080, 4);
-        var buffer = new float[6];
+        bus.Paula.ScheduleWrite(0, 0x0A6, 0x0004);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x7F81);
+        bus.Paula.ScheduleWrite(1, 0x09C, 0x0080);
+        bus.Paula.ScheduleWrite(1, 0x0AA, 0x4080);
+        var buffer = new float[8];
+
+        bus.Paula.RenderSample(0, buffer, 0, 2);
+        bus.Paula.RenderSample(8, buffer, 1, 2);
+        bus.Paula.RenderSample(16, buffer, 2, 2);
+        bus.Paula.RenderSample(24, buffer, 3, 2);
+
+        Assert.True(buffer[0] > 0.20f);
+        Assert.True(buffer[2] < -0.20f);
+        Assert.True(buffer[4] > 0.10f);
+        Assert.True(buffer[6] < -0.20f);
+    }
+
+    private static void ManualAudioUsesSeparateHoldingAndOutputLatches()
+    {
+        var bus = CreatePaulaComponentBus();
+        bus.Paula.ScheduleWrite(0, 0x0A6, 0x0002);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x7F81);
+        bus.Paula.ScheduleWrite(1, 0x09C, 0x0080);
+        bus.Paula.ScheduleWrite(1, 0x0AA, 0x4080);
+        var buffer = new float[8];
 
         bus.Paula.RenderSample(0, buffer, 0, 2);
         bus.Paula.RenderSample(4, buffer, 1, 2);
-        bus.Paula.RenderSample(12, buffer, 2, 2);
+        bus.Paula.RenderSample(8, buffer, 2, 2);
+        bus.Paula.RenderSample(12, buffer, 3, 2);
 
         Assert.True(buffer[0] > 0.20f);
-        Assert.True(buffer[2] > 0.10f);
-        Assert.True(buffer[4] < -0.20f);
+        Assert.True(buffer[2] < -0.20f);
+        Assert.True(buffer[4] > 0.10f);
+        Assert.True(buffer[6] < -0.20f);
+    }
+
+    private static void ManualIrqCheckIsSampledOneCckBeforeCompletion()
+    {
+        var bus = CreatePaulaComponentBus();
+        bus.Paula.ScheduleWrite(0, 0x0A6, 0x0002);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x7F81);
+        bus.Paula.ScheduleWrite(7, 0x09C, 0x0080);
+        bus.Paula.ScheduleWrite(7, 0x0AA, 0x4080);
+
+        bus.Paula.AdvanceTo(6);
+        Assert.Equal(1, bus.Paula.GetChannelSnapshot(0).IrqCheck);
+        bus.Paula.AdvanceTo(8);
+
+        Assert.Equal(PaulaAudioState.Idle, bus.Paula.GetChannelSnapshot(0).State);
+    }
+
+    private static void ShortDmaToggleContinuesActiveWord()
+    {
+        var bus = CreatePaulaComponentBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x1122);
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1004, 0x3344);
+        ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 4, period: 2, volume: 64);
+        bus.Paula.ScheduleWrite(0, 0x096, 0x8201);
+        bus.Paula.ScheduleWrite(39, 0x096, 0x0001);
+        bus.Paula.ScheduleWrite(40, 0x096, 0x8001);
+        var buffer = new float[6];
+
+        bus.Paula.RenderSample(38, buffer, 0, 2);
+        bus.Paula.RenderSample(42, buffer, 1, 2);
+        bus.Paula.RenderSample(46, buffer, 2, 2);
+
+        Assert.InRange(buffer[0], 0.03f, 0.05f);
+        Assert.InRange(buffer[2], 0.06f, 0.08f);
+        Assert.InRange(buffer[4], 0.09f, 0.12f);
     }
 
     private static void AudioDmaFetchesAllFourChannels()
@@ -301,7 +392,18 @@ public sealed class PaulaConformanceMatrixTests
 
         Assert.Equal(0x1002u, snapshot.CurrentAddress);
         Assert.Equal(0, snapshot.RemainingWords);
-        Assert.True(bus.Paula.DrainInterrupts().Count >= 2);
+        Assert.Single(bus.Paula.DrainInterrupts());
+        Assert.True(snapshot.DelayedInterruptPending);
+    }
+
+    private static void AudxlenZeroUsesTheFullSixteenBitCounter()
+    {
+        var bus = CreatePaulaComponentBus();
+
+        bus.Paula.ScheduleWrite(0, 0x0A4, 0x0000);
+        bus.Paula.AdvanceTo(0);
+
+        Assert.Equal(65_536, bus.Paula.GetChannelSnapshot(0).LengthWords);
     }
 
     private static void AudioDmaCompletionRequestsInterrupt()
@@ -316,6 +418,26 @@ public sealed class PaulaConformanceMatrixTests
 
         Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Channel == 0);
         Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
+    }
+
+    private static void DelayedIntreq2SurvivesIdleAndRetriggers()
+    {
+        var bus = CreatePaulaComponentBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+        ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 2, volume: 64);
+        bus.Paula.ScheduleWrite(0, 0x09A, 0xC080);
+        bus.Paula.ScheduleWrite(0, 0x096, 0x8201);
+        bus.Paula.ScheduleWrite(43, 0x096, 0x0001);
+        bus.Paula.ScheduleWrite(47, 0x09C, 0x0080);
+        bus.Paula.ScheduleWrite(48, 0x096, 0x8001);
+
+        bus.Paula.AdvanceTo(46);
+        Assert.Equal(PaulaAudioState.Idle, bus.Paula.GetChannelSnapshot(0).State);
+        Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+        bus.Paula.AdvanceTo(48);
+
+        Assert.False(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+        Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 48);
     }
 
     private static void ChannelsRouteToStereoPairs()
@@ -367,6 +489,45 @@ public sealed class PaulaConformanceMatrixTests
         bus.Paula.AdvanceTo(4);
 
         Assert.Equal(5, bus.Paula.GetChannelSnapshot(1).Period);
+    }
+
+    private static void CombinedAttachAppliesOneWordOnVolumeThenPeriodTransitions()
+    {
+        var bus = CreatePaulaComponentBus();
+        bus.Paula.ScheduleWrite(0, 0x09E, 0x8011);
+        bus.Paula.ScheduleWrite(0, 0x0A6, 0x0002);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x0020);
+
+        bus.Paula.AdvanceTo(0);
+        bus.Paula.AdvanceTo(4);
+        Assert.Equal(32, bus.Paula.GetChannelSnapshot(1).Volume);
+        Assert.Equal(32, bus.Paula.GetChannelSnapshot(1).Period);
+    }
+
+    private static void ChannelThreeAttachSuppressesDacOutput()
+    {
+        var bus = CreatePaulaComponentBus();
+        bus.WriteWord(0x00DFF09E, 0x8088, 0);
+        bus.WriteWord(0x00DFF0DA, 0x7F81, 0);
+        var buffer = new float[2];
+
+        bus.Paula.RenderSample(0, buffer, 0, 2);
+
+        Assert.Equal(0.0f, buffer[0]);
+        Assert.Equal(0.0f, buffer[1]);
+    }
+
+    private static void WriteOnlyCustomReadsApplySharedBusLatch()
+    {
+        var bus = CreatePaulaComponentBus();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0003);
+        var cycle = 0L;
+
+        _ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(0xFFFF, bus.ReadWord(0x00DFF0A6, ref cycle, AmigaBusAccessKind.CpuDataRead));
+        bus.Paula.AdvanceTo(cycle);
+
+        Assert.Equal(3, bus.Paula.GetChannelSnapshot(0).Period);
     }
 
     private static void PaulaDmaUsesNamedBusRequestPath()

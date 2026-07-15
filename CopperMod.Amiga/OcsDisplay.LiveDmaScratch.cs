@@ -444,7 +444,7 @@ namespace CopperMod.Amiga
                         kind,
                         target,
                         address,
-                        firstCompleted,
+                        firstCompleted + AgnusChipSlotScheduler.SlotCycles,
                         requestedCycle,
                         out _))
                 {
@@ -456,7 +456,7 @@ namespace CopperMod.Amiga
                     kind,
                     target,
                     address,
-                    firstCompleted,
+                    firstCompleted + AgnusChipSlotScheduler.SlotCycles,
                     requestedCycle,
                     isWrite: true,
                     out var second,
@@ -515,7 +515,7 @@ namespace CopperMod.Amiga
                     out var first,
                     out var firstCompleted);
 
-                var secondSearch = firstCompleted;
+                var secondSearch = firstCompleted + AgnusChipSlotScheduler.SlotCycles;
                 if (!TryFindStableLongReadPhaseGrant(
                         kind,
                         target,

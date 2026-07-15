@@ -69,6 +69,74 @@ namespace CopperMod.Amiga
             }
         }
 
+        private ushort ReadCpuCustomWordAtGranted(ushort offset, long grantedCycle, long sampleCycle)
+        {
+            offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            var capturedLatch = _chipDataBusLatch;
+            var dmaValueVisible = _chipDataBusLatchWasDma &&
+                _chipDataBusLatchCycle + AgnusChipSlotScheduler.SlotCycles == grantedCycle;
+            ushort value;
+            if (offset == 0x000)
+            {
+                value = capturedLatch;
+            }
+            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(offset))
+            {
+                WriteCustomWord(AmigaBusRequester.Cpu, offset, capturedLatch, grantedCycle);
+                value = dmaValueVisible ? capturedLatch : (ushort)0xFFFF;
+            }
+            else
+            {
+                value = ReadCustomWord(offset, sampleCycle);
+            }
+
+            RememberChipDataBusWord(value, grantedCycle, wasDma: false);
+            return value;
+        }
+
+        private byte ReadCpuCustomByteAtGranted(ushort offset, long grantedCycle, long sampleCycle)
+        {
+            var wordOffset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            var highLane = (offset & 1) == 0;
+            var capturedLatch = _chipDataBusLatch;
+            var capturedByte = highLane ? (byte)(capturedLatch >> 8) : (byte)capturedLatch;
+            var dmaValueVisible = _chipDataBusLatchWasDma &&
+                _chipDataBusLatchCycle + AgnusChipSlotScheduler.SlotCycles == grantedCycle;
+            byte value;
+            if (wordOffset == 0x000)
+            {
+                value = capturedByte;
+            }
+            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(wordOffset))
+            {
+                WriteCustomByte(AmigaBusRequester.Cpu, offset, capturedByte, grantedCycle);
+                value = dmaValueVisible ? capturedByte : (byte)0xFF;
+            }
+            else
+            {
+                value = ReadCustomByte(offset, sampleCycle);
+            }
+
+            RememberChipDataBusByte(value, grantedCycle, wasDma: false);
+            return value;
+        }
+
+        private uint ReadCpuCustomLongAtGranted(uint address, long firstWordCycle, long secondWordCycle)
+        {
+            var high = ReadCpuCustomWordAtGranted(
+                (ushort)(address - CustomRegisterBaseAddress),
+                firstWordCycle,
+                firstWordCycle);
+            var lowAddress = address + 2;
+            var low = IsCustomRegisterWordAddress(lowAddress)
+                ? ReadCpuCustomWordAtGranted(
+                    (ushort)(lowAddress - CustomRegisterBaseAddress),
+                    secondWordCycle,
+                    secondWordCycle)
+                : ReadRawWord(lowAddress, secondWordCycle);
+            return ((uint)high << 16) | low;
+        }
+
         private bool TryReadBeamPositionByte(ushort offset, long sampleCycle, out byte value)
         {
             var wordOffset = (ushort)(offset & 0x01FE);
@@ -108,8 +176,8 @@ namespace CopperMod.Amiga
         private static int EncodeVhposrHorizontal(int beamHorizontal)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-            // vAmigaTS probe9-13 result buffers require the late-line +3 phase,
-            // while synccpu3 can observe zero only during the two-CCK +4 window.
+            // Internal RGA slot coordinates and the externally visible HPOS counter
+            // use different origins around horizontal sync.
             var offset = physicalHorizontal >= 0xE1
                 ? 3
                 : physicalHorizontal >= 0xDF
@@ -118,18 +186,6 @@ namespace CopperMod.Amiga
                         ? 3
                     : 8;
             return (physicalHorizontal + offset) % AmigaConstants.A500PalColorClocksPerRasterLine;
-        }
-
-        private uint ReadCustomLong(uint address, long firstWordCycle, long secondWordCycle)
-        {
-            var high = IsCustomRegisterWordAddress(address)
-                ? ReadCustomWord((ushort)(address - 0x00DFF000), firstWordCycle)
-                : ReadRawWord(address, firstWordCycle);
-            var lowAddress = address + 2;
-            var low = IsCustomRegisterWordAddress(lowAddress)
-                ? ReadCustomWord((ushort)(lowAddress - 0x00DFF000), secondWordCycle)
-                : ReadRawWord(lowAddress, secondWordCycle);
-            return ((uint)high << 16) | low;
         }
 
         private uint ReadRawLong(uint address)
@@ -214,7 +270,7 @@ namespace CopperMod.Amiga
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, firstWordCycle, isWrite: true);
             WriteCpuCustomRegisterWord(address, (ushort)(value >> 16), firstWordCycle);
 
-            var secondSearchCycle = firstCompletedCycle;
+            var secondSearchCycle = firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
             if (Blitter.Busy)
             {
                 secondSearchCycle = Blitter.AdvanceThroughCpuStall(secondSearchCycle);
@@ -339,6 +395,14 @@ namespace CopperMod.Amiga
             long cycle)
         {
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            if (requester != AmigaBusRequester.Host)
+            {
+                RememberChipDataBusWord(
+                    value,
+                    cycle,
+                    wasDma: requester != AmigaBusRequester.Cpu);
+            }
+
             var write = new CustomRegisterWriteContext(requester, offset, value, cycle);
             BeginCustomRegisterWrite(in write);
             try

@@ -904,6 +904,7 @@ namespace CopperMod.Amiga
             if (offset == 0x09E)
             {
                 ApplySetClear(ref timeline.Adkcon, value);
+
                 if (kind == PaulaTimelineKind.Register)
                 {
                     WriteRegisterWord(0x010, timeline.Adkcon);
@@ -929,7 +930,7 @@ namespace CopperMod.Amiga
                     channel.Location = _bus.WriteChipDmaPointerLow(channel.Location, value);
                     break;
                 case 0x04:
-                    channel.LengthWords = Math.Max(1, (int)value);
+                    channel.LengthWords = value == 0 ? 65_536 : value;
                     break;
                 case 0x06:
                     channel.Period = value;
@@ -963,14 +964,15 @@ namespace CopperMod.Amiga
 
         private void RequestAudioInterrupt(PaulaTimelineKind kind, int channel, long cycle)
         {
-            if (kind == PaulaTimelineKind.Audio)
-            {
-                return;
-            }
-
             if ((uint)channel < AmigaConstants.PaulaChannelCount)
             {
                 var bit = GetAudioInterruptBit(channel);
+                if (kind == PaulaTimelineKind.Audio)
+                {
+                    _audioTimeline.Intreq |= bit;
+                    return;
+                }
+
                 RequestInterrupt(bit, cycle);
             }
         }
@@ -1095,23 +1097,30 @@ namespace CopperMod.Amiga
             return recognitionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
         }
 
-        private void ApplyModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)
+        private void ApplyVolumeModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)
         {
             var targetChannel = sourceChannel + 1;
-            if (sourceChannel < 0 || targetChannel >= timeline.Channels.Length)
+            if (sourceChannel < 0 ||
+                targetChannel >= timeline.Channels.Length ||
+                !IsVolumeAttached(timeline, sourceChannel))
             {
                 return;
             }
 
-            if (IsVolumeAttached(timeline, sourceChannel))
+            timeline.Channels[targetChannel].Volume = Math.Min(64, value & 0x7F);
+        }
+
+        private void ApplyPeriodModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)
+        {
+            var targetChannel = sourceChannel + 1;
+            if (sourceChannel < 0 ||
+                targetChannel >= timeline.Channels.Length ||
+                !IsPeriodAttached(timeline, sourceChannel))
             {
-                timeline.Channels[targetChannel].Volume = Math.Min(64, value & 0x7F);
+                return;
             }
 
-            if (IsPeriodAttached(timeline, sourceChannel))
-            {
-                timeline.Channels[targetChannel].Period = value;
-            }
+            timeline.Channels[targetChannel].Period = value;
         }
 
         private bool IsAttachedSource(PaulaTimelineState timeline, int channel)
@@ -1119,14 +1128,23 @@ namespace CopperMod.Amiga
             return IsVolumeAttached(timeline, channel) || IsPeriodAttached(timeline, channel);
         }
 
+        private bool UsesNormalOrVolumeDmaTransition(PaulaTimelineState timeline, int channel)
+        {
+            var volumeAttached = IsVolumeAttached(timeline, channel);
+            var periodAttached = IsPeriodAttached(timeline, channel);
+            return (!volumeAttached && !periodAttached) || volumeAttached;
+        }
+
         private bool IsVolumeAttached(PaulaTimelineState timeline, int sourceChannel)
         {
-            return sourceChannel is >= 0 and <= 2 && (timeline.Adkcon & (1 << sourceChannel)) != 0;
+            return sourceChannel is >= 0 and < AmigaConstants.PaulaChannelCount &&
+                (timeline.Adkcon & (1 << sourceChannel)) != 0;
         }
 
         private bool IsPeriodAttached(PaulaTimelineState timeline, int sourceChannel)
         {
-            return sourceChannel is >= 0 and <= 2 && (timeline.Adkcon & (1 << (sourceChannel + 4))) != 0;
+            return sourceChannel is >= 0 and < AmigaConstants.PaulaChannelCount &&
+                (timeline.Adkcon & (1 << (sourceChannel + 4))) != 0;
         }
 
         public bool IsInterruptEnabled(ushort bit)
@@ -1733,9 +1751,21 @@ namespace CopperMod.Amiga
 
         private sealed class PaulaChannel
         {
+            private ushort _dataLatch;
+            private bool _dataLatchWritten;
             private ushort _dataWord;
             private bool _hasDataWord;
             private bool _nextByteIsLow;
+            private bool _manualPlayback;
+            private PaulaAudioState _state;
+            private bool _intreq2;
+            private long _intreq2ArmCycle;
+            private bool _dataRequest;
+            private bool _dmaSpecialRequest;
+            private bool _periodBufferLoad;
+            private int _irqCheck;
+            private long _manualIrqCheckCycle;
+            private bool _dmaStreamInitialized;
             private long _nextSampleCycle;
             private PaulaDmaReadLatch _prefetchedDmaLatch;
             private bool _hasPrefetchedDmaWord;
@@ -1747,6 +1777,7 @@ namespace CopperMod.Amiga
             private long _pendingDmaServiceCycle;
             private long _pendingDmaLoadCycle;
             private int _pendingDmaInterruptCount;
+            private bool _pendingDmaArmsDelayedInterrupt;
             private DmaLoadTarget _pendingDmaLoadTarget;
             private uint _currentAddress;
             private int _remainingWords;
@@ -1782,9 +1813,21 @@ namespace CopperMod.Amiga
                 CurrentSample = 0;
                 DmaEnabled = false;
                 LastDmaEnableCycle = -1;
+                _dataLatch = 0;
+                _dataLatchWritten = false;
                 _dataWord = 0;
                 _hasDataWord = false;
                 _nextByteIsLow = false;
+                _manualPlayback = false;
+                _state = PaulaAudioState.Idle;
+                _intreq2 = false;
+                _intreq2ArmCycle = long.MaxValue;
+                _dataRequest = false;
+                _dmaSpecialRequest = false;
+                _periodBufferLoad = false;
+                _irqCheck = 0;
+                _manualIrqCheckCycle = long.MaxValue;
+                _dmaStreamInitialized = false;
                 _nextSampleCycle = 0;
                 _prefetchedDmaLatch = default;
                 _hasPrefetchedDmaWord = false;
@@ -1796,6 +1839,7 @@ namespace CopperMod.Amiga
                 _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
+                _pendingDmaArmsDelayedInterrupt = false;
                 _pendingDmaLoadTarget = DmaLoadTarget.Prefetch;
                 _currentAddress = 0;
                 _remainingWords = 0;
@@ -1812,35 +1856,58 @@ namespace CopperMod.Amiga
                 if (!enabled)
                 {
                     DmaEnabled = false;
-                    _hasDataWord = false;
-                    _nextByteIsLow = false;
-                    ClearPrefetchedDmaWord();
-                    ClearPendingDmaWord();
+                    _dataRequest = false;
+                    _dmaSpecialRequest = false;
+                    if (_state is PaulaAudioState.DmaStartup or PaulaAudioState.DmaStartupData)
+                    {
+                        EnterIdle(clearDmaPipeline: true);
+                        return;
+                    }
+
+                    if (!_hasDataWord)
+                    {
+                        EnterIdle(clearDmaPipeline: true);
+                    }
+
                     return;
                 }
 
                 DmaEnabled = true;
                 LastDmaEnableCycle = cycle;
+                _manualPlayback = false;
+                if (_hasDataWord && _dmaStreamInitialized)
+                {
+                    return;
+                }
+
                 _hasDataWord = false;
                 _nextByteIsLow = false;
                 ClearPrefetchedDmaWord();
                 ClearPendingDmaWord();
                 _currentAddress = bus.MaskChipDmaAddress(Location);
                 _remainingWords = Math.Max(1, LengthWords);
+                _dmaStreamInitialized = true;
+                _state = PaulaAudioState.DmaStartup;
+                _dataRequest = true;
+                _dmaSpecialRequest = true;
+                _periodBufferLoad = false;
+                _irqCheck = 0;
+                TryConsumeDelayedInterrupt(paula, timeline, kind, cycle);
+
                 var context = new DmaContext(bus, paula, timeline, kind);
                 RequestStartupDiscardWord(cycle, in context);
             }
 
             public void WriteData(ushort value, long cycle, Paula paula, PaulaTimelineState timeline, PaulaTimelineKind kind)
             {
-                _dataWord = value;
-                _hasDataWord = true;
-                ClearPrefetchedDmaWord();
-                ClearPendingDmaWord();
-                _nextByteIsLow = true;
-                CurrentSample = unchecked((sbyte)(value >> 8));
-                _nextSampleCycle = cycle + GetPeriodCycles(Period);
-                paula.RequestAudioInterrupt(kind, Index, cycle);
+                _dataLatch = value;
+                _dataLatchWritten = true;
+                if (DmaEnabled || _hasDataWord || (timeline.Intreq & GetAudioInterruptBit(Index)) != 0)
+                {
+                    return;
+                }
+
+                StartManualWord(cycle, paula, timeline, kind);
             }
 
             public void AdvanceTo(long targetCycle, AmigaBus bus, Paula paula, PaulaTimelineState timeline, PaulaTimelineKind kind)
@@ -1859,6 +1926,16 @@ namespace CopperMod.Amiga
                     }
 
                     ServicePendingDmaRequestThrough(targetCycle, in context);
+                    if (TryArmDelayedInterruptBeforeNextAction(targetCycle))
+                    {
+                        continue;
+                    }
+
+                    if (TryEnterManualFinalPeriodPhase(targetCycle, context.Timeline))
+                    {
+                        continue;
+                    }
+
                     if (_hasPendingDmaWord)
                     {
                         var sampleDue = _hasDataWord && _nextSampleCycle <= targetCycle;
@@ -1890,8 +1967,26 @@ namespace CopperMod.Amiga
                     {
                         CurrentSample = unchecked((sbyte)_dataWord);
                         _nextByteIsLow = false;
-                        context.Paula.ApplyModulationFrom(context.Timeline, Index, _dataWord);
+                        _state = PaulaAudioState.LowByte;
+                        _periodBufferLoad = true;
+                        context.Paula.ApplyPeriodModulationFrom(context.Timeline, Index, _dataWord);
+                        if (DmaEnabled && context.Paula.IsPeriodAttached(context.Timeline, Index))
+                        {
+                            TryConsumeDelayedInterrupt(
+                                context.Paula,
+                                context.Timeline,
+                                context.Kind,
+                                _nextSampleCycle);
+                            QueueDataRequest(_nextSampleCycle, in context);
+                        }
+
+                        _periodBufferLoad = false;
                         _nextSampleCycle += GetPeriodCycles(Period);
+                        if (!DmaEnabled)
+                        {
+                            BeginManualLowPeriod(context.Timeline);
+                        }
+
                         if (DmaEnabled &&
                             UsesLiveAgnusAudioDma(context.Bus) &&
                             !_hasPrefetchedDmaWord &&
@@ -1906,6 +2001,15 @@ namespace CopperMod.Amiga
 
                     if (DmaEnabled)
                     {
+                        if (context.Paula.UsesNormalOrVolumeDmaTransition(context.Timeline, Index))
+                        {
+                            TryConsumeDelayedInterrupt(
+                                context.Paula,
+                                context.Timeline,
+                                context.Kind,
+                                _nextSampleCycle);
+                        }
+
                         if (_hasPrefetchedDmaWord)
                         {
                             var latch = _prefetchedDmaLatch;
@@ -1918,9 +2022,10 @@ namespace CopperMod.Amiga
                             continue;
                         }
 
-                        if (!_hasPendingDmaWord)
+                        if (!_hasPendingDmaWord &&
+                            context.Paula.UsesNormalOrVolumeDmaTransition(context.Timeline, Index))
                         {
-                            RequestPrefetchWord(_nextSampleCycle, in context);
+                            QueueDataRequest(_nextSampleCycle, in context);
                         }
 
                         if (_hasPrefetchedDmaWord)
@@ -1936,12 +2041,150 @@ namespace CopperMod.Amiga
                             _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
                         }
                     }
+                    else if (_manualPlayback)
+                    {
+                        if (_irqCheck == 0)
+                        {
+                            _irqCheck = (context.Timeline.Intreq & GetAudioInterruptBit(Index)) != 0 ? 1 : -1;
+                        }
+
+                        if (_irqCheck < 0 && _dataLatchWritten)
+                        {
+                            StartManualWord(
+                                _nextSampleCycle,
+                                context.Paula,
+                                context.Timeline,
+                                context.Kind);
+                            continue;
+                        }
+
+                        EnterIdle(clearDmaPipeline: false);
+                        break;
+                    }
                     else
                     {
-                        _hasDataWord = false;
+                        _irqCheck = (context.Timeline.Intreq & GetAudioInterruptBit(Index)) != 0 ? 1 : -1;
+                        EnterIdle(clearDmaPipeline: true);
                         break;
                     }
                 }
+            }
+
+            private void StartManualWord(
+                long cycle,
+                Paula paula,
+                PaulaTimelineState timeline,
+                PaulaTimelineKind kind)
+            {
+                _dataWord = _dataLatch;
+                _dataLatchWritten = false;
+                _hasDataWord = true;
+                _nextByteIsLow = true;
+                _manualPlayback = true;
+                _state = PaulaAudioState.HighByte;
+                _periodBufferLoad = false;
+                _irqCheck = 0;
+                _manualIrqCheckCycle = long.MaxValue;
+                CurrentSample = unchecked((sbyte)(_dataWord >> 8));
+                paula.ApplyVolumeModulationFrom(timeline, Index, _dataWord);
+                _nextSampleCycle = cycle + GetPeriodCycles(Period);
+                paula.RequestAudioInterrupt(kind, Index, cycle);
+            }
+
+            private bool TryConsumeDelayedInterrupt(
+                Paula paula,
+                PaulaTimelineState timeline,
+                PaulaTimelineKind kind,
+                long cycle)
+            {
+                if (!_intreq2 ||
+                    (timeline.Intreq & GetAudioInterruptBit(Index)) != 0)
+                {
+                    return false;
+                }
+
+                _intreq2 = false;
+                paula.RequestAudioInterrupt(kind, Index, cycle);
+                return true;
+            }
+
+            private bool TryArmDelayedInterruptBeforeNextAction(long targetCycle)
+            {
+                if (_intreq2ArmCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                var nextActionCycle = long.MaxValue;
+                if (_hasPendingDmaWord && _pendingDmaServed)
+                {
+                    nextActionCycle = _pendingDmaLoadCycle;
+                }
+
+                if (_hasDataWord)
+                {
+                    nextActionCycle = Math.Min(nextActionCycle, _nextSampleCycle);
+                }
+
+                if (_intreq2ArmCycle > nextActionCycle)
+                {
+                    return false;
+                }
+
+                _intreq2 = true;
+                _intreq2ArmCycle = long.MaxValue;
+                return true;
+            }
+
+            private void BeginManualLowPeriod(PaulaTimelineState timeline)
+            {
+                var periodCycles = GetPeriodCycles(Period);
+                if (periodCycles <= AgnusChipSlotScheduler.SlotCycles)
+                {
+                    _state = PaulaAudioState.LowByte;
+                    _irqCheck = (timeline.Intreq & GetAudioInterruptBit(Index)) != 0 ? 1 : -1;
+                    _manualIrqCheckCycle = long.MaxValue;
+                    return;
+                }
+
+                _state = PaulaAudioState.ManualPeriodOne;
+                _irqCheck = 0;
+                _manualIrqCheckCycle = _nextSampleCycle - AgnusChipSlotScheduler.SlotCycles;
+            }
+
+            private bool TryEnterManualFinalPeriodPhase(long targetCycle, PaulaTimelineState timeline)
+            {
+                if (_manualIrqCheckCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                _state = PaulaAudioState.LowByte;
+                _irqCheck = (timeline.Intreq & GetAudioInterruptBit(Index)) != 0 ? 1 : -1;
+                _manualIrqCheckCycle = long.MaxValue;
+                return true;
+            }
+
+            private void EnterIdle(bool clearDmaPipeline)
+            {
+                _state = PaulaAudioState.Idle;
+                _irqCheck = 0;
+                _periodBufferLoad = false;
+                _dataRequest = false;
+                _dmaSpecialRequest = false;
+                _manualIrqCheckCycle = long.MaxValue;
+                _hasDataWord = false;
+                _nextByteIsLow = false;
+                _manualPlayback = false;
+                _dmaStreamInitialized = false;
+                if (!clearDmaPipeline)
+                {
+                    return;
+                }
+
+                _intreq2ArmCycle = long.MaxValue;
+                ClearPrefetchedDmaWord();
+                ClearPendingDmaWord();
             }
 
             private bool TryFastForwardStableRegisterDmaTo(long targetCycle, in DmaContext context)
@@ -1967,6 +2210,12 @@ namespace CopperMod.Amiga
                     if (_hasPendingDmaWord)
                     {
                         ServicePendingDmaRequestThrough(targetCycle, in context);
+                        if (TryArmDelayedInterruptBeforeNextAction(targetCycle))
+                        {
+                            iterations++;
+                            continue;
+                        }
+
                         if (_pendingDmaLoadTarget == DmaLoadTarget.StartupDiscard ||
                             !_pendingDmaServed ||
                             _pendingDmaLoadCycle > targetCycle)
@@ -2013,9 +2262,21 @@ namespace CopperMod.Amiga
             public long? GetNextWakeCandidateCycle()
             {
                 long? candidate = null;
+                if (_intreq2ArmCycle != long.MaxValue)
+                {
+                    candidate = _intreq2ArmCycle;
+                }
+
+                if (_manualIrqCheckCycle != long.MaxValue)
+                {
+                    candidate = MinWakeCandidate(candidate, _manualIrqCheckCycle);
+                }
+
                 if (_hasPendingDmaWord)
                 {
-                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
+                    candidate = MinWakeCandidate(
+                        candidate,
+                        _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle);
                 }
 
                 if (DmaEnabled || _hasDataWord)
@@ -2029,9 +2290,21 @@ namespace CopperMod.Amiga
             public long? GetNextRegisterWakeCandidateCycle(PaulaTimelineState timeline, Paula paula)
             {
                 long? candidate = null;
+                if (_intreq2ArmCycle != long.MaxValue)
+                {
+                    candidate = _intreq2ArmCycle;
+                }
+
+                if (_manualIrqCheckCycle != long.MaxValue)
+                {
+                    candidate = MinWakeCandidate(candidate, _manualIrqCheckCycle);
+                }
+
                 if (_hasPendingDmaWord)
                 {
-                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
+                    candidate = MinWakeCandidate(
+                        candidate,
+                        _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle);
                 }
 
                 if (_hasDataWord && _nextByteIsLow && paula.IsAttachedSource(timeline, Index))
@@ -2050,9 +2323,21 @@ namespace CopperMod.Amiga
             public long? GetNextDmaWakeCandidateCycle(PaulaTimelineState timeline, Paula paula)
             {
                 long? candidate = null;
+                if (_intreq2ArmCycle != long.MaxValue)
+                {
+                    candidate = _intreq2ArmCycle;
+                }
+
+                if (_manualIrqCheckCycle != long.MaxValue)
+                {
+                    candidate = MinWakeCandidate(candidate, _manualIrqCheckCycle);
+                }
+
                 if (_hasPendingDmaWord)
                 {
-                    candidate = _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle;
+                    candidate = MinWakeCandidate(
+                        candidate,
+                        _pendingDmaServed ? _pendingDmaLoadCycle : _pendingDmaServiceCycle);
                 }
 
                 if (_hasDataWord && _nextByteIsLow && paula.IsAttachedSource(timeline, Index))
@@ -2097,8 +2382,17 @@ namespace CopperMod.Amiga
                     CurrentSample,
                     DmaEnabled,
                     _dataWord,
+                    _dataLatch,
+                    _dataLatchWritten,
                     _hasDataWord,
                     _nextByteIsLow,
+                    _manualPlayback,
+                    _state,
+                    _intreq2,
+                    _dataRequest,
+                    _dmaSpecialRequest,
+                    _periodBufferLoad,
+                    _irqCheck,
                     _nextSampleCycle,
                     LastDmaEnableCycle);
             }
@@ -2108,6 +2402,17 @@ namespace CopperMod.Amiga
 
             private void RequestPrefetchWord(long cycle, in DmaContext context)
                 => RequestDmaWord(cycle, in context, DmaLoadTarget.Prefetch, forceInterrupt: false);
+
+            private void QueueDataRequest(long cycle, in DmaContext context)
+            {
+                if (_hasPendingDmaWord || _hasPrefetchedDmaWord)
+                {
+                    return;
+                }
+
+                _dataRequest = true;
+                RequestPrefetchWord(cycle, in context);
+            }
 
             private void RequestDmaWord(
                 long cycle,
@@ -2122,11 +2427,13 @@ namespace CopperMod.Amiga
 
                 var requestCycle = cycle;
                 var interruptCount = 0;
+                var armsDelayedInterrupt = false;
                 if (_remainingWords <= 0)
                 {
                     _currentAddress = context.Bus.MaskChipDmaAddress(Location);
                     _remainingWords = Math.Max(1, LengthWords);
-                    interruptCount++;
+                    armsDelayedInterrupt = loadTarget == DmaLoadTarget.Prefetch &&
+                        _state is PaulaAudioState.HighByte or PaulaAudioState.LowByte;
                 }
 
                 var requestAddress = _currentAddress;
@@ -2141,13 +2448,16 @@ namespace CopperMod.Amiga
                     : requestCycle;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaLoadTarget = loadTarget;
+                _dataRequest = false;
+                _dmaSpecialRequest = false;
 
-                if (forceInterrupt || _remainingWords == 0)
+                if (forceInterrupt)
                 {
                     interruptCount++;
                 }
 
                 _pendingDmaInterruptCount = interruptCount;
+                _pendingDmaArmsDelayedInterrupt = armsDelayedInterrupt;
                 if (UsesLiveAgnusAudioDma(context.Bus))
                 {
                     ServicePendingDmaRequestThrough(cycle, in context);
@@ -2208,6 +2518,13 @@ namespace CopperMod.Amiga
                 _pendingDmaServed = true;
                 _pendingDmaLoadCycle = dmaLatch.LoadCycle;
                 _pendingDmaServiceCycle = long.MaxValue;
+                if (_pendingDmaArmsDelayedInterrupt)
+                {
+                    _intreq2ArmCycle = Math.Min(
+                        _intreq2ArmCycle,
+                        dmaLatch.Reservation.GrantedCycle);
+                }
+
                 if (!_hasDataWord)
                 {
                     _nextSampleCycle = _pendingDmaLoadCycle;
@@ -2232,6 +2549,8 @@ namespace CopperMod.Amiga
                 {
                     if (DmaEnabled)
                     {
+                        _state = PaulaAudioState.DmaStartupData;
+                        _dataRequest = true;
                         RequestPrefetchWord(loadCycle, in context);
                     }
 
@@ -2269,9 +2588,14 @@ namespace CopperMod.Amiga
                 long targetCycle)
             {
                 context.Paula.RecordStartDmaWordOutput();
+                _manualPlayback = false;
                 _dataWord = word;
                 _hasDataWord = true;
+                _state = PaulaAudioState.HighByte;
+                _periodBufferLoad = false;
+                _irqCheck = 0;
                 CurrentSample = unchecked((sbyte)(word >> 8));
+                context.Paula.ApplyVolumeModulationFrom(context.Timeline, Index, word);
                 var periodCycles = GetPeriodCycles(Period);
                 if (context.Kind != PaulaTimelineKind.Audio &&
                     TrySkipRegisterLowByteDmaOutput(cycle, in context, periodCycles))
@@ -2281,9 +2605,10 @@ namespace CopperMod.Amiga
 
                 _nextByteIsLow = true;
                 _nextSampleCycle = cycle + periodCycles;
-                if (DmaEnabled)
+                if (DmaEnabled &&
+                    context.Paula.UsesNormalOrVolumeDmaTransition(context.Timeline, Index))
                 {
-                    RequestPrefetchWord(cycle, in context);
+                    QueueDataRequest(cycle, in context);
                 }
 
                 if (context.Kind == PaulaTimelineKind.Audio &&
@@ -2291,16 +2616,17 @@ namespace CopperMod.Amiga
                     !context.Paula.IsAttachedSource(context.Timeline, Index))
                 {
                     CurrentSample = unchecked((sbyte)word);
-                _nextByteIsLow = false;
-                _nextSampleCycle += periodCycles;
-                if (DmaEnabled &&
-                    UsesLiveAgnusAudioDma(context.Bus) &&
-                    !_hasPrefetchedDmaWord &&
-                    _hasPendingDmaWord &&
-                    _pendingDmaServed)
-                {
-                    _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
-                }
+                    _nextByteIsLow = false;
+                    _state = PaulaAudioState.LowByte;
+                    _nextSampleCycle += periodCycles;
+                    if (DmaEnabled &&
+                        UsesLiveAgnusAudioDma(context.Bus) &&
+                        !_hasPrefetchedDmaWord &&
+                        _hasPendingDmaWord &&
+                        _pendingDmaServed)
+                    {
+                        _nextSampleCycle = Math.Max(_nextSampleCycle, _pendingDmaLoadCycle);
+                    }
                 }
             }
 
@@ -2321,8 +2647,9 @@ namespace CopperMod.Amiga
                 }
 
                 _nextByteIsLow = false;
+                _state = PaulaAudioState.LowByte;
                 _nextSampleCycle = nextWordCycle;
-                RequestPrefetchWord(cycle, in context);
+                QueueDataRequest(cycle, in context);
                 if (UsesLiveAgnusAudioDma(context.Bus) &&
                     !_hasPrefetchedDmaWord &&
                     _hasPendingDmaWord &&
@@ -2350,6 +2677,7 @@ namespace CopperMod.Amiga
                 _pendingDmaServiceCycle = long.MaxValue;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaInterruptCount = 0;
+                _pendingDmaArmsDelayedInterrupt = false;
                 _pendingDmaLoadTarget = DmaLoadTarget.Prefetch;
             }
 
@@ -2376,6 +2704,16 @@ namespace CopperMod.Amiga
             }
 
         }
+    }
+
+    internal enum PaulaAudioState
+    {
+        Idle = 0,
+        DmaStartup = 1,
+        HighByte = 2,
+        LowByte = 3,
+        DmaStartupData = 5,
+        ManualPeriodOne = 0x13
     }
 
     internal readonly struct PaulaInterruptEvent
@@ -2407,8 +2745,17 @@ namespace CopperMod.Amiga
             sbyte currentSample,
             bool dmaEnabled,
             ushort dataWord,
+            ushort dataLatch,
+            bool dataLatchWritten,
             bool hasDataWord,
             bool nextByteIsLow,
+            bool manualPlayback,
+            PaulaAudioState state,
+            bool delayedInterruptPending,
+            bool dataRequest,
+            bool dmaSpecialRequest,
+            bool periodBufferLoad,
+            int irqCheck,
             long nextSampleCycle,
             long lastDmaEnableCycle)
         {
@@ -2422,8 +2769,17 @@ namespace CopperMod.Amiga
             CurrentSample = currentSample;
             DmaEnabled = dmaEnabled;
             DataWord = dataWord;
+            DataLatch = dataLatch;
+            DataLatchWritten = dataLatchWritten;
             HasDataWord = hasDataWord;
             NextByteIsLow = nextByteIsLow;
+            ManualPlayback = manualPlayback;
+            State = state;
+            DelayedInterruptPending = delayedInterruptPending;
+            DataRequest = dataRequest;
+            DmaSpecialRequest = dmaSpecialRequest;
+            PeriodBufferLoad = periodBufferLoad;
+            IrqCheck = irqCheck;
             NextSampleCycle = nextSampleCycle;
             LastDmaEnableCycle = lastDmaEnableCycle;
         }
@@ -2448,9 +2804,29 @@ namespace CopperMod.Amiga
 
         public ushort DataWord { get; }
 
+        public ushort DataLatch { get; }
+
+        public bool DataLatchWritten { get; }
+
         public bool HasDataWord { get; }
 
         public bool NextByteIsLow { get; }
+
+        public bool ManualPlayback { get; }
+
+        public PaulaAudioState State { get; }
+
+        public bool DelayedInterruptPending { get; }
+
+        public bool SecondaryInterruptPending => DelayedInterruptPending;
+
+        public bool DataRequest { get; }
+
+        public bool DmaSpecialRequest { get; }
+
+        public bool PeriodBufferLoad { get; }
+
+        public int IrqCheck { get; }
 
         public long NextSampleCycle { get; }
 

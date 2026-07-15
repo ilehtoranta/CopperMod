@@ -23,7 +23,8 @@ namespace CopperMod.Amiga
         Copper,
         PendingWrite,
         RasterlinePlan,
-        SpriteState
+        SpriteState,
+        Unstable
     }
 
     internal readonly struct CpuWaitFixedSlotTimelineSignature : IEquatable<CpuWaitFixedSlotTimelineSignature>
@@ -245,7 +246,7 @@ namespace CopperMod.Amiga
             {
                 var entry = _rowDmaSpriteEntries[index];
                 if (IsCpuWaitFixedImagePendingSpriteEntry(row, entry) &&
-                    WouldCpuWaitFixedImageSpriteFetch(row, entry.SpriteIndex))
+                    WouldCpuWaitFixedImageSpriteFetch(row, entry.SpriteIndex, entry.Word))
                 {
                     SetCpuWaitFixedSlotOwner(ownerBase, lineStart, entry.Cycle, CpuWaitFixedSlotOwner.SpriteRead);
                 }
@@ -261,18 +262,18 @@ namespace CopperMod.Amiga
 
         private bool IsCpuWaitFixedImagePendingBitplaneEntry(int row, RowDmaBitplaneEntry entry)
         {
-            if (row > _livePreparedFetchRow)
+            if (row > _liveNextFetchRow)
             {
                 return true;
             }
 
-            if (row < _livePreparedFetchRow)
+            if (row < _liveNextFetchRow)
             {
                 return false;
             }
 
-            return entry.Word > _livePreparedFetchWord ||
-                entry.Word == _livePreparedFetchWord && entry.Slot >= _livePreparedFetchSlot;
+            return entry.Word > _liveNextFetchWord ||
+                entry.Word == _liveNextFetchWord && entry.Slot >= _liveNextFetchSlot;
         }
 
         private bool IsCpuWaitFixedImagePendingSpriteEntry(int row, RowDmaSpriteEntry entry)
@@ -291,10 +292,11 @@ namespace CopperMod.Amiga
                 entry.SpriteIndex == _liveNextSpriteIndex && entry.Word >= _liveNextSpriteWord;
         }
 
-        private bool WouldCpuWaitFixedImageSpriteFetch(int row, int spriteIndex)
+        private bool WouldCpuWaitFixedImageSpriteFetch(int row, int spriteIndex, int word)
         {
+            var lineState = _liveLineStates[row];
             if ((uint)spriteIndex >= (uint)_liveSpriteDmaStates.Length ||
-                !IsSpriteDmaChannelAvailable(spriteIndex) ||
+                !IsSpriteDmaSlotAvailable(lineState, spriteIndex, word) ||
                 _liveSpriteDmaExhausted[spriteIndex])
             {
                 return false;

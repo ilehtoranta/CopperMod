@@ -159,6 +159,9 @@ namespace CopperMod.Amiga
         internal void SetSlotScheduleAuditSink(Action<AgnusSlotScheduleAuditEntry>? sink)
             => _hrmSlotEngine.SetSlotScheduleAuditSink(sink);
 
+        internal bool TryGetCommittedAgnusSlotOwner(long cycle, out AgnusChipSlotOwner owner)
+            => _hrmSlotEngine.TryGetCommittedSlotOwner(cycle, out owner);
+
         internal AgnusSlotAuditSource PushSlotScheduleAuditSource(AgnusSlotAuditSource source)
         {
             var previous = _hrmSlotEngine.SlotScheduleAuditSource;

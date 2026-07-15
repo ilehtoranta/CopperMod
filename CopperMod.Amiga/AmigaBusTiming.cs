@@ -100,6 +100,16 @@ namespace CopperMod.Amiga
         Refresh
     }
 
+    [Flags]
+    internal enum AgnusLiveDisplaySlotOwnerMask : byte
+    {
+        None = 0,
+        Copper = 1 << 0,
+        Sprite = 1 << 1,
+        Bitplane = 1 << 2,
+        All = Copper | Sprite | Bitplane
+    }
+
     internal static class AgnusChipSlotOwners
     {
         public const int Count = (int)AgnusChipSlotOwner.Refresh + 1;
@@ -620,6 +630,10 @@ namespace CopperMod.Amiga
     internal static class AgnusHrmOcsSlotTable
     {
         public const int RefreshSlotsPerLine = 4;
+        // Internal slot coordinates precede WinUAE's externally reported Agnus
+        // hpos by three CCKs, mapping physical refresh hpos 3/5/7/9 to 0/2/4/6.
+        public const int FirstRefreshHorizontal = 0x00;
+        public const int LastRefreshHorizontal = 0x06;
         public const int DiskSlotsPerLine = 3;
         public const int AudioSlotsPerLine = 4;
         public const int SpriteSlotsPerLine = 16;
@@ -644,7 +658,9 @@ namespace CopperMod.Amiga
 
         public static AgnusChipSlotOwner GetFixedOwner(int horizontal)
         {
-            if (horizontal is 0x00 or 0x02 or 0x04 or 0x06)
+            if (horizontal >= FirstRefreshHorizontal &&
+                horizontal <= LastRefreshHorizontal &&
+                ((horizontal - FirstRefreshHorizontal) & 1) == 0)
             {
                 return AgnusChipSlotOwner.Refresh;
             }
@@ -763,7 +779,8 @@ namespace CopperMod.Amiga
         private long _slotGrantCount;
         private long _slotScheduleAuditSequence;
         private long _currentCycle;
-        private long _nextRefreshCommitCycle;
+        private long _nextRefreshCommitCycle =
+            AgnusHrmOcsSlotTable.FirstRefreshHorizontal * AgnusChipSlotScheduler.SlotCycles;
         private AgnusPalBeamPosition _beam;
         private bool _beamValid;
         private AgnusSlotAuditSource _slotScheduleAuditSource;
@@ -916,7 +933,8 @@ namespace CopperMod.Amiga
             _slotScheduleAuditSequence = 0;
             Array.Clear(_slotGrantCountsByOwner);
             _currentCycle = 0;
-            _nextRefreshCommitCycle = 0;
+            _nextRefreshCommitCycle =
+                AgnusHrmOcsSlotTable.FirstRefreshHorizontal * AgnusChipSlotScheduler.SlotCycles;
             _beam = default;
             _beamValid = false;
             _slotScheduleAuditSource = AgnusSlotAuditSource.None;
@@ -927,7 +945,7 @@ namespace CopperMod.Amiga
             _slotScheduleAuditSink = null;
         }
 
-        public void ClearLiveDisplaySlotsFrom(long cycle)
+        public void ClearLiveDisplaySlotsFrom(long cycle, AgnusLiveDisplaySlotOwnerMask owners)
         {
             var firstSlot = FloorToSlot(cycle);
             var lastSlot = FloorToSlot(Math.Max(firstSlot, _currentCycle));
@@ -941,7 +959,7 @@ namespace CopperMod.Amiga
                 var slot = _slots[index];
                 if (slot.Valid &&
                     slot.IsForSlot(slotCycle) &&
-                    IsLiveDisplaySlotOwner(slot.Owner))
+                    IsLiveDisplaySlotOwner(slot.Owner, owners))
                 {
                     _slots[index] = default;
                     _slotKeys[index] = default;
@@ -954,7 +972,7 @@ namespace CopperMod.Amiga
 
             if (_lastGrantedSlot is { GrantedCycle: >= 0 } granted &&
                 granted.GrantedCycle >= firstSlot &&
-                IsLiveDisplaySlotOwner(granted.Owner))
+                IsLiveDisplaySlotOwner(granted.Owner, owners))
             {
                 _lastGrantedSlot = null;
             }
@@ -1025,7 +1043,7 @@ namespace CopperMod.Amiga
             long requestedGrant)
         {
             var firstWordCycle = FindFreeCpuSingleSlot(requestedGrant, request);
-            var secondWordCycle = FindFreeCpuSingleSlot(firstWordCycle + SlotCycles, request);
+            var secondWordCycle = FindFreeCpuSingleSlot(firstWordCycle + (2 * SlotCycles), request);
             CommitSlot(firstWordCycle, request, AgnusChipSlotOwner.Cpu, AgnusChipSlotPriority.Cpu);
             CommitSlot(secondWordCycle, request, AgnusChipSlotOwner.Cpu, AgnusChipSlotPriority.Cpu);
 
@@ -1302,8 +1320,7 @@ namespace CopperMod.Amiga
             }
 
             slotCycle = AgnusChipSlotScheduler.AlignToSlot(slotCycle);
-            if (slotCycle < requestedCycle ||
-                !AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle))
+            if (slotCycle < requestedCycle)
             {
                 return false;
             }
@@ -1426,7 +1443,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Long,
                 isWrite);
             secondWordCycle = PredictFreeCpuSingleSlot(
-                firstWordCycle + SlotCycles,
+                firstWordCycle + (2 * SlotCycles),
                 kind,
                 target,
                 address,
@@ -1491,16 +1508,10 @@ namespace CopperMod.Amiga
             var niceBlitterCpuMisses = _niceBlitterCpuMisses;
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
                 if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(candidate))
                 {
                     niceBlitterCpuMisses = 0;
-                    candidate += SlotCycles * 2;
+                    candidate += SlotCycles;
                     continue;
                 }
 
@@ -1524,7 +1535,7 @@ namespace CopperMod.Amiga
                     niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles * 2;
+                candidate += SlotCycles;
             }
         }
 
@@ -1540,12 +1551,6 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
                 if (AreCpuSlotsAvailableForPrediction(
                     candidate,
                     slotCount,
@@ -1577,8 +1582,7 @@ namespace CopperMod.Amiga
             for (var slot = 0; slot < slotCount; slot++)
             {
                 var slotCycle = firstSlot + (slot * slotStride);
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle) ||
-                    AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+                if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
                 {
                     return false;
                 }
@@ -1658,7 +1662,7 @@ namespace CopperMod.Amiga
                 AmigaBusAccessSize.Long,
                 isWrite);
             secondWordCycle = FindFreeCpuSingleSlot(
-                firstWordCycle + SlotCycles,
+                firstWordCycle + (2 * SlotCycles),
                 kind,
                 target,
                 address,
@@ -2144,8 +2148,7 @@ namespace CopperMod.Amiga
         private bool PendingCpuRequestClaimsBlitterCandidate(long slotCycle)
         {
             if (!_pendingCpuSlotRequestActive ||
-                slotCycle < _pendingCpuSlotRequestCycle ||
-                !AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle))
+                slotCycle < _pendingCpuSlotRequestCycle)
             {
                 return false;
             }
@@ -2194,12 +2197,6 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
                 CommitRefreshSlotsThrough(candidate);
                 if (!TryGetSlot(candidate, out var existing) ||
                     SlotMatchesRequest(candidate, existing, request) ||
@@ -2223,7 +2220,7 @@ namespace CopperMod.Amiga
                     _niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles * 2;
+                candidate += SlotCycles;
             }
         }
 
@@ -2255,12 +2252,6 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(searchCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
                 CommitRefreshSlotsThrough(candidate);
                 if (!TryGetSlot(candidate, out var existing) ||
                     SlotMatchesRequest(candidate, existing, AmigaBusRequester.Cpu, kind, target, address, size, requestedCycle, isWrite) ||
@@ -2284,7 +2275,7 @@ namespace CopperMod.Amiga
                     _niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles * 2;
+                candidate += SlotCycles;
             }
         }
 
@@ -2300,12 +2291,6 @@ namespace CopperMod.Amiga
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                {
-                    candidate += SlotCycles;
-                    continue;
-                }
-
                 const int slotStride = SlotCycles * 2;
                 CommitRefreshSlotsThrough(candidate + ((slotCount - 1) * slotStride));
                 if (AreCpuSlotsAvailable(
@@ -2375,11 +2360,6 @@ namespace CopperMod.Amiga
             for (var slot = 0; slot < slotCount; slot++)
             {
                 var slotCycle = firstSlot + (slot * slotStride);
-                if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle))
-                {
-                    return false;
-                }
-
                 if (!TryGetSlot(slotCycle, out var existing))
                 {
                     continue;
@@ -2408,11 +2388,6 @@ namespace CopperMod.Amiga
             long requestedCycle,
             bool isWrite)
         {
-            if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle))
-            {
-                return false;
-            }
-
             if (!TryGetSlot(slotCycle, out var existing))
             {
                 return true;
@@ -2493,15 +2468,11 @@ namespace CopperMod.Amiga
             var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
             var lineStart = cycle - (cycle % lineCycles);
             var horizontal = (int)((cycle - lineStart) / SlotCycles);
-            var refreshHorizontal = horizontal <= 0
-                ? 0
-                : horizontal <= 2
-                    ? 2
-                    : horizontal <= 4
-                        ? 4
-                        : horizontal <= 6
-                            ? 6
-                            : -1;
+            var refreshHorizontal = horizontal <= AgnusHrmOcsSlotTable.FirstRefreshHorizontal
+                ? AgnusHrmOcsSlotTable.FirstRefreshHorizontal
+                : horizontal <= AgnusHrmOcsSlotTable.LastRefreshHorizontal
+                    ? horizontal + ((horizontal - AgnusHrmOcsSlotTable.FirstRefreshHorizontal) & 1)
+                    : -1;
             return refreshHorizontal >= 0
                 ? lineStart + ((long)refreshHorizontal * SlotCycles)
                 : lineStart + lineCycles;
@@ -2722,7 +2693,9 @@ namespace CopperMod.Amiga
 
         private static int GetSlotStride(AgnusChipSlotOwner owner)
         {
-            return RequiresEvenSlot(owner) ? SlotCycles * 2 : SlotCycles;
+            return owner is AgnusChipSlotOwner.Cpu or AgnusChipSlotOwner.Copper
+                ? SlotCycles * 2
+                : SlotCycles;
         }
 
         private static long GetCompletedCycle(long firstSlot, int slotCount, int slotStride)
@@ -2732,16 +2705,19 @@ namespace CopperMod.Amiga
 
         private static bool RequiresEvenSlot(AgnusChipSlotOwner owner)
         {
-            return owner == AgnusChipSlotOwner.Cpu ||
-                owner == AgnusChipSlotOwner.Copper;
+            return owner == AgnusChipSlotOwner.Copper;
         }
 
-        private static bool IsLiveDisplaySlotOwner(AgnusChipSlotOwner owner)
-        {
-            return owner == AgnusChipSlotOwner.Bitplane ||
-                owner == AgnusChipSlotOwner.Sprite ||
-                owner == AgnusChipSlotOwner.Copper;
-        }
+        private static bool IsLiveDisplaySlotOwner(
+            AgnusChipSlotOwner owner,
+            AgnusLiveDisplaySlotOwnerMask owners)
+            => owner switch
+            {
+                AgnusChipSlotOwner.Copper => (owners & AgnusLiveDisplaySlotOwnerMask.Copper) != 0,
+                AgnusChipSlotOwner.Sprite => (owners & AgnusLiveDisplaySlotOwnerMask.Sprite) != 0,
+                AgnusChipSlotOwner.Bitplane => (owners & AgnusLiveDisplaySlotOwnerMask.Bitplane) != 0,
+                _ => false
+            };
 
         private static bool IsFixedDmaOwner(AgnusChipSlotOwner owner)
         {

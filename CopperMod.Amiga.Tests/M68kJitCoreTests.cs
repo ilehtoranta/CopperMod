@@ -61,6 +61,59 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
+	public void HardwareSpecializedM68000JitFallbackPreservesExactPrefetchBusPhases()
+	{
+		var interpreterBus = new AmigaBus(captureBusAccesses: true, enableHardwareSpecialization: true);
+		var jitBus = new AmigaBus(captureBusAccesses: true, enableHardwareSpecialization: true);
+		Write(interpreterBus.ChipRam, 0x1000,
+			0x3A, 0x13, // MOVE.W (A3),D5
+			0x34, 0xC5, // MOVE.W D5,(A2)+
+			0x60, 0xFA); // BRA.S loop
+		Write(jitBus.ChipRam, 0x1000,
+			0x3A, 0x13,
+			0x34, 0xC5,
+			0x60, 0xFA);
+		var interpreter = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, interpreterBus);
+		var jit = Assert.IsType<M68kJitCore>(
+			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, jitBus));
+		interpreter.Reset(0x1000, 0x4000);
+		jit.Reset(0x1000, 0x4000);
+		interpreter.State.A[2] = jit.State.A[2] = 0x2000;
+		interpreter.State.A[3] = jit.State.A[3] = 0x00DFF006;
+
+		for (var instruction = 0; instruction < 30; instruction++)
+		{
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+		}
+
+		var interpreterPhases = interpreterBus.CpuBusPhases
+			.Select(phase => (
+				phase.CpuPhase.InstructionProgramCounter,
+				phase.CpuPhase.Address,
+				phase.CpuPhase.RequestedCycle,
+				phase.CpuPhase.CompletedCycle,
+				phase.CpuPhase.AccessKind,
+				phase.CpuPhase.IsWrite))
+			.ToArray();
+		var jitPhases = jitBus.CpuBusPhases
+			.Select(phase => (
+				phase.CpuPhase.InstructionProgramCounter,
+				phase.CpuPhase.Address,
+				phase.CpuPhase.RequestedCycle,
+				phase.CpuPhase.CompletedCycle,
+				phase.CpuPhase.AccessKind,
+				phase.CpuPhase.IsWrite))
+			.ToArray();
+
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreterPhases, jitPhases);
+		Assert.Equal(30, jit.Counters.FallbackInstructions);
+		Assert.Equal(0, jit.Counters.TraceHits);
+	}
+
+	[Fact]
 	public void FactoryCreatesM68040JitBackendWithM68040State()
 	{
 		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, new AmigaBus());
@@ -1265,6 +1318,158 @@ public sealed class M68kJitCoreTests
 			$"v2Hits={jit.Counters.V2TraceHits}");
 	}
 
+	[Theory]
+	[InlineData(0x0000u)]
+	[InlineData(0x0010u)]
+	[InlineData(0x0020u)]
+	[InlineData(0x0030u)]
+	[InlineData(0x0040u)]
+	[InlineData(0x0050u)]
+	[InlineData(0x0060u)]
+	[InlineData(0x0070u)]
+	[InlineData(0x0080u)]
+	[InlineData(0x0090u)]
+	[InlineData(0x00A0u)]
+	[InlineData(0x00B0u)]
+	public void M68040JitSpecializedFpuRegisterHelpersMatchInterpreterAcrossFpcrContexts(uint fpcr)
+	{
+		var words = new ushort[]
+		{
+			0xF200, 0x00A2, // FADD.X FP0,FP1
+			0xF200, 0x00A8, // FSUB.X FP0,FP1
+			0xF200, 0x00A3, // FMUL.X FP0,FP1
+			0xF200, 0x00A0, // FDIV.X FP0,FP1
+			0x60EE          // BRA.S start
+		};
+
+		var result = ExecuteM68040FpuComparison(
+			words,
+			state =>
+			{
+				state.M68040Fpu.Fpcr = fpcr;
+				state.M68040Fpu.FP[0] = ExtF80.FromBits(0x3FFF, 0x8000_0000_0000_0001);
+				state.M68040Fpu.FP[1] = ExtF80.FromBits(0x4000, 0x8000_0000_0000_0003);
+			});
+
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpcr, result.Jit.State.M68040Fpu.Fpcr);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpsr, result.Jit.State.M68040Fpu.Fpsr);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpiar, result.Jit.State.M68040Fpu.Fpiar);
+		AssertM68040FpRegistersEqual(result.Interpreter, result.Jit);
+		Assert.True(result.Jit.Counters.NativeM68040FpuIlInstructions > 0);
+	}
+
+	[Theory]
+	[InlineData((ushort)0x00C1)] // FSQRT.S FP0,FP1
+	[InlineData((ushort)0x00C5)] // FSQRT.D FP0,FP1
+	[InlineData((ushort)0x00E2)] // FADD.S FP0,FP1
+	[InlineData((ushort)0x00E8)] // FSUB.S FP0,FP1
+	[InlineData((ushort)0x00E3)] // FMUL.S FP0,FP1
+	[InlineData((ushort)0x00E0)] // FDIV.S FP0,FP1
+	[InlineData((ushort)0x00E6)] // FADD.D FP0,FP1
+	[InlineData((ushort)0x00EC)] // FSUB.D FP0,FP1
+	[InlineData((ushort)0x00E7)] // FMUL.D FP0,FP1
+	[InlineData((ushort)0x00E4)] // FDIV.D FP0,FP1
+	public void M68040JitSpecializedForcedPrecisionOperationMatchesInterpreter(ushort command)
+	{
+		var result = ExecuteM68040FpuComparison(
+			[
+				0xF200, 0x0080, // FMOVE.X FP0,FP1
+				0xF200, command,
+				0x60F6          // BRA.S start
+			],
+			state =>
+			{
+				state.M68040Fpu.FP[0] = ExtF80Math.FromInt32(3);
+				state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
+			});
+
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpsr, result.Jit.State.M68040Fpu.Fpsr);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpiar, result.Jit.State.M68040Fpu.Fpiar);
+		AssertM68040FpRegistersEqual(result.Interpreter, result.Jit);
+	}
+
+	[Theory]
+	[InlineData(0x1000u)]
+	[InlineData(0x0004u)]
+	public void M68040JitSpecializedFpuExceptionRestoresV2RegisterStateBeforeSideExit(uint handlerOffset)
+	{
+		var handler = RealFastCodeBase + handlerOffset;
+		var words = new ushort[]
+		{
+			0xF200, 0x00A0, // FDIV.X FP0,FP1
+			0x60FA          // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		interpreterBus.WriteLong(50u * 4, handler);
+		jitBus.WriteLong(50u * 4, handler);
+		var interpreter = new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		using var jit = M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: true);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.M68040Fpu.FP[0] = jit.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(1);
+		interpreter.State.M68040Fpu.FP[1] = jit.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
+		EnableM68040InstructionCache(jit);
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+
+		interpreter.State.M68040Fpu.FP[0] = jit.State.M68040Fpu.FP[0] = ExtF80.PositiveZero;
+		interpreter.State.M68040Fpu.Fpcr = jit.State.M68040Fpu.Fpcr = M68040FpuState.ExceptionDivideByZero;
+		interpreter.State.ProgramCounter = jit.State.ProgramCounter = RealFastCodeBase;
+
+		interpreter.ExecuteInstruction();
+		jit.ExecuteInstructions(1, jit.State.Cycles + 100_000, new PureBatchBoundary());
+
+		Assert.Equal(handler, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(interpreter.State.M68040Fpu.Fpsr, jit.State.M68040Fpu.Fpsr);
+		Assert.Equal(interpreter.State.M68040Fpu.Fpiar, jit.State.M68040Fpu.Fpiar);
+		AssertM68040FpRegistersEqual(interpreter, jit);
+	}
+
+	[Fact]
+	public void M68040JitSpecializedFpuExceptionCommitsPriorV2AddressRegisterWriteback()
+	{
+		const uint handler = RealFastCodeBase + 0x1000;
+		var words = new ushort[]
+		{
+			0x598F,          // SUBQ.L #4,A7
+			0xF200, 0x00A0, // FDIV.X FP0,FP1
+			0x60F8          // BRA.S start
+		};
+		var interpreterBus = CreateRealFastCodeBus();
+		var jitBus = CreateRealFastCodeBus();
+		WriteWords(interpreterBus, RealFastCodeBase, words);
+		WriteWords(jitBus, RealFastCodeBase, words);
+		interpreterBus.WriteLong(50u * 4, handler);
+		jitBus.WriteLong(50u * 4, handler);
+		var interpreter = new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		using var jit = M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: true);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		interpreter.State.M68040Fpu.FP[0] = jit.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(1);
+		interpreter.State.M68040Fpu.FP[1] = jit.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
+		EnableM68040InstructionCache(jit);
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+
+		interpreter.State.A[7] = jit.State.A[7] = 0x4000;
+		interpreter.State.M68040Fpu.FP[0] = jit.State.M68040Fpu.FP[0] = ExtF80.PositiveZero;
+		interpreter.State.M68040Fpu.Fpcr = jit.State.M68040Fpu.Fpcr = M68040FpuState.ExceptionDivideByZero;
+		interpreter.State.ProgramCounter = jit.State.ProgramCounter = RealFastCodeBase;
+
+		interpreter.ExecuteInstruction();
+		interpreter.ExecuteInstruction();
+		jit.ExecuteInstructions(2, jit.State.Cycles + 100_000, new PureBatchBoundary());
+
+		Assert.Equal(handler, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.A, jit.State.A);
+		Assert.Equal(interpreter.State.M68040Fpu.Fpsr, jit.State.M68040Fpu.Fpsr);
+		AssertM68040FpRegistersEqual(interpreter, jit);
+	}
+
 	[Fact]
 	public void M68040JitNativeFpuMatchesInterpreterForFsglAndUnaryOverwrite()
 	{
@@ -1358,6 +1563,151 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.M68040Fpu.Fpsr, jit.State.M68040Fpu.Fpsr);
+	}
+
+	[Theory]
+	[MemberData(nameof(M68040V2FpuConditionalLoops))]
+	public void M68040JitV2FpuConditionalLoopsExecuteNatively(ushort[] words, uint data0)
+	{
+		var result = ExecuteM68040FpuComparison(
+			words,
+			state => state.D[0] = data0,
+			instructions: 2_000);
+
+		Assert.True(result.Jit.Counters.V2TraceHits > 0);
+		Assert.True(result.Jit.Counters.M68040NativeFpuConditionSites > 0);
+		Assert.True(result.Jit.Counters.M68040FpuFallbackInstructions < 128,
+			$"FPU fallback count was {result.Jit.Counters.M68040FpuFallbackInstructions}.");
+		Assert.Equal(result.Interpreter.State.D, result.Jit.State.D);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpsr, result.Jit.State.M68040Fpu.Fpsr);
+	}
+
+	[Fact]
+	public void M68040JitV2FpuConditionMatrixMatchesInterpreter()
+	{
+		uint[] statuses =
+		[
+			0,
+			M68040FpuState.ConditionZero,
+			M68040FpuState.ConditionNegative,
+			M68040FpuState.ConditionNan,
+			M68040FpuState.ConditionInfinity,
+			M68040FpuState.ConditionInfinity | M68040FpuState.ConditionNegative
+		];
+
+		for (var condition = 0; condition < 32; condition++)
+		{
+			var words = new ushort[]
+			{
+				0xF240, (ushort)condition, // FScc D0
+				0x60FA                    // BRA.S start
+			};
+			foreach (var status in statuses)
+			{
+				var result = ExecuteM68040FpuComparison(
+					words,
+					state =>
+					{
+						state.D[0] = 0xA5A5_5A5A;
+						state.M68040Fpu.Fpsr = status;
+					},
+					instructions: 80);
+
+				Assert.Equal(result.Interpreter.State.D[0], result.Jit.State.D[0]);
+				Assert.Equal(result.Interpreter.State.M68040Fpu.Fpsr, result.Jit.State.M68040Fpu.Fpsr);
+				Assert.Equal(result.Interpreter.State.ProgramCounter, result.Jit.State.ProgramCounter);
+			}
+		}
+	}
+
+	[Fact]
+	public void M68040JitV2CompareAndTestFeedNativeConditionals()
+	{
+		var words = new ushort[]
+		{
+			0xF200, 0x08B8, // FCMP.X FP2,FP1
+			0xF240, 0x0001, // FSEQ D0
+			0xF200, 0x0C3A, // FTST.X FP3
+			0xF240, 0x0004, // FSLT D0
+			0x60EE          // BRA.S start
+		};
+		var result = ExecuteM68040FpuComparison(
+			words,
+			state =>
+			{
+				state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(3);
+				state.M68040Fpu.FP[2] = ExtF80Math.FromInt32(3);
+				state.M68040Fpu.FP[3] = ExtF80Math.FromInt32(-1);
+			},
+			instructions: 2_000);
+
+		Assert.True(result.Jit.Counters.V2TraceHits > 0);
+		Assert.Equal(result.Interpreter.State.D, result.Jit.State.D);
+		AssertM68040FpRegistersEqual(result.Interpreter, result.Jit);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpsr, result.Jit.State.M68040Fpu.Fpsr);
+		Assert.Equal(result.Interpreter.State.M68040Fpu.Fpiar, result.Jit.State.M68040Fpu.Fpiar);
+	}
+
+	public static TheoryData<ushort[], uint> M68040V2FpuConditionalLoops => new()
+	{
+		{ [0xF28F, 0xFFFE], 0u },                         // FBT.W self
+		{ [0xF2CF, 0xFFFF, 0xFFFE], 0u },                 // FBT.L self
+		{ [0x7005, 0xF248, 0x0000, 0xFFFC, 0x60F6], 0u }, // MOVEQ/FDBF/BRA
+		{ [0xF240, 0x000F, 0x60FA], 0u },                 // FST D0/BRA
+		{ [0xF27C, 0x0000, 0x60FA], 0u }                  // FTRAPF/BRA
+	};
+
+	[Fact]
+	public void M68040JitV2FtrapccTrueConditionUsesArchitecturalTrapPath()
+	{
+		const uint handler = RealFastCodeBase + 0x1200;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase,
+			0xF27C, 0x0001, // FTRAPEQ
+			0x60FA);        // BRA.S start
+		bus.WriteLong(7u * 4, handler);
+		var jit = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		EnableM68040InstructionCache(jit);
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+
+		jit.State.M68040Fpu.Fpsr = M68040FpuState.ConditionZero;
+		jit.State.ProgramCounter = RealFastCodeBase;
+		jit.ExecuteInstructions(1, jit.State.Cycles + 100_000, new CountingBoundary());
+
+		Assert.Equal(handler, jit.State.ProgramCounter);
+		Assert.True(jit.Counters.M68040FpuTrapSlowPathExits > 0);
+	}
+
+	[Fact]
+	public void M68040JitV2SignalingUnorderedConditionPreservesPriorOperationBeforeBsun()
+	{
+		const uint handler = RealFastCodeBase + 0x1000;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase,
+			0xF200, 0x00A2, // FADD.X FP0,FP1
+			0xF200, 0x08B8, // FCMP.X FP2,FP1
+			0xF298, 0xFFF6); // FBSUN.W start
+		bus.WriteLong(48u * 4, handler);
+		var jit = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
+		jit.Reset(RealFastCodeBase, 0x4000);
+		jit.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(1);
+		jit.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(2);
+		jit.State.M68040Fpu.FP[2] = ExtF80.FromBits(0x7FFF, 0xC000_0000_0000_0001);
+		EnableM68040InstructionCache(jit);
+
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+		jit.State.M68040Fpu.Fpcr = M68040FpuState.ExceptionBranchUnordered;
+		jit.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(2);
+		jit.State.M68040Fpu.Fpsr = 0;
+		jit.State.ProgramCounter = RealFastCodeBase;
+		jit.ExecuteInstructions(3, jit.State.Cycles + 100_000, new CountingBoundary());
+
+		Assert.Equal(handler, jit.State.ProgramCounter);
+		Assert.Equal(ExtF80Math.FromInt32(3), jit.State.M68040Fpu.FP[1]);
+		Assert.NotEqual(0u, jit.State.M68040Fpu.Fpsr & M68040FpuState.ExceptionBranchUnordered);
+		Assert.NotEqual(0u, jit.State.M68040Fpu.Fpsr & M68040FpuState.AccruedInvalid);
+		Assert.True(jit.Counters.M68040FpuBsunSlowPathExits > 0);
 	}
 
 	[Fact]

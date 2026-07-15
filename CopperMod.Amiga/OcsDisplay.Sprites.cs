@@ -608,6 +608,23 @@ namespace CopperMod.Amiga
             return IsSpriteDmaChannelAvailable(state, spriteIndex);
         }
 
+        private static bool IsSpriteDmaSlotAvailable(LiveLineState state, int spriteIndex, int word)
+        {
+            if (state.PlaneCount == 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return true;
+            }
+
+            if (!IsHighResolutionEnabled(state.Bplcon0) &&
+                state.DataFetchStart <= 0x0018 &&
+                spriteIndex == 0)
+            {
+                return word == 0;
+            }
+
+            return spriteIndex < GetUsableSpriteDmaChannelCount(state);
+        }
+
         private int GetUsableSpriteDmaChannelCount()
         {
             if (((_bplcon0 >> 12) & 0x7) == 0 || !IsBitplaneDmaEnabledForRendering())
@@ -641,6 +658,38 @@ namespace CopperMod.Amiga
         }
 
         private static int GetUsableSpriteDmaChannelCount(DisplayTimelineState state)
+        {
+            if (state.PlaneCount == 0 || !IsBitplaneDmaEnabled(state.Dmacon))
+            {
+                return LiveSpriteChannelCount;
+            }
+
+            var ddfStart = state.DataFetchStart;
+            var standardStart = IsHighResolutionEnabled(state.Bplcon0) ? DefaultHighResDdfStart : DefaultDdfStart;
+            if (ddfStart >= standardStart)
+            {
+                return LiveSpriteChannelCount;
+            }
+
+            if (ddfStart <= 0x0018)
+            {
+                return 0;
+            }
+
+            if (ddfStart <= 0x001C)
+            {
+                return 1;
+            }
+
+            if (ddfStart >= 0x0030)
+            {
+                return 7;
+            }
+
+            return Math.Clamp(((ddfStart - 0x001C) / 4) + 1, 1, 7);
+        }
+
+        private static int GetUsableSpriteDmaChannelCount(LiveLineState state)
         {
             if (state.PlaneCount == 0 || !IsBitplaneDmaEnabled(state.Dmacon))
             {

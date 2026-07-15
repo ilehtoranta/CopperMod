@@ -37,6 +37,21 @@ public sealed class AmigaCpuAddressBusTests
         Assert.Equal(0x5Au, cpu.State.D[0] & 0xFF);
     }
 
+    [Fact]
+    public void M68EC020CpuAccessWrapsTo24BitAddressBus()
+    {
+        var bus = new AmigaBus();
+        WriteMoveByteAbsoluteLongToD0(bus, CodeAddress, WrappedAddress);
+        bus.WriteHostByte(0x000000, 0x5A);
+        bus.MapWritableMemory(WrappedAddress, new byte[] { 0xA5 });
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68EC020, bus);
+        cpu.Reset(CodeAddress, StackAddress);
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(0x5Au, cpu.State.D[0] & 0xFF);
+    }
+
     [Theory]
     [InlineData(M68kCpuModel.M68020)]
     [InlineData(M68kCpuModel.M68030)]

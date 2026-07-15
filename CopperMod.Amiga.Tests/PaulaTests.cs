@@ -5,6 +5,159 @@ namespace CopperMod.Amiga.Tests;
 public sealed class PaulaTests
 {
 	[Fact]
+	public void ManualAudioTraversesExplicitHighLowAndIdleStates()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+
+		bus.Paula.AdvanceTo(0);
+		var high = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(4);
+		var lowMinusOne = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(6);
+		var low = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(8);
+		var idle = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(PaulaAudioState.HighByte, high.State);
+		Assert.Equal(PaulaAudioState.ManualPeriodOne, lowMinusOne.State);
+		Assert.Equal(PaulaAudioState.LowByte, low.State);
+		Assert.Equal(1, low.IrqCheck);
+		Assert.Equal(PaulaAudioState.Idle, idle.State);
+		Assert.False(idle.DataRequest);
+		Assert.False(idle.DmaSpecialRequest);
+	}
+
+	[Fact]
+	public void ManualIrqCheckIsLatchedOneCckBeforeWordEnds()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 7);
+		SchedulePaulaWrite(bus, 0x0AA, 0x4080, 7);
+
+		bus.Paula.AdvanceTo(6);
+		Assert.Equal(1, bus.Paula.GetChannelSnapshot(0).IrqCheck);
+		bus.Paula.AdvanceTo(8);
+		var stopped = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.Equal(PaulaAudioState.Idle, stopped.State);
+		Assert.False(stopped.HasDataWord);
+		Assert.True(stopped.DataLatchWritten);
+	}
+
+	[Fact]
+	public void DelayedIntreq2SurvivesIdleAndRetriggersOnDmaEnable()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x0001, 43);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 47);
+		SchedulePaulaWrite(bus, 0x096, 0x8001, 48);
+
+		bus.Paula.AdvanceTo(42);
+		var armed = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(46);
+		var idle = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(47);
+		Assert.Equal(0, bus.Paula.Intreq & 0x0080);
+		bus.Paula.AdvanceTo(48);
+		var restarted = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.True(
+			armed.State == PaulaAudioState.LowByte,
+			$"state={armed.State}, next={armed.NextSampleCycle}, sample={armed.CurrentSample}, data={armed.DataWord:X4}, pending={armed.DelayedInterruptPending}, address={armed.CurrentAddress:X8}, remaining={armed.RemainingWords}");
+		Assert.True(armed.DelayedInterruptPending);
+		Assert.Equal(PaulaAudioState.Idle, idle.State);
+		Assert.True(idle.DelayedInterruptPending);
+		Assert.Equal(PaulaAudioState.DmaStartup, restarted.State);
+		Assert.False(restarted.DelayedInterruptPending);
+		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
+		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 48);
+	}
+
+	[Fact]
+	public void DelayedIntreq2ArmsAtDmaGrantBeforeAudxdatLoadCompletes()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+
+		bus.Paula.AdvanceTo(39);
+		var beforeGrant = bus.Paula.GetChannelSnapshot(0);
+		bus.Paula.AdvanceTo(40);
+		var atGrant = bus.Paula.GetChannelSnapshot(0);
+
+		Assert.False(beforeGrant.DelayedInterruptPending);
+		Assert.True(atGrant.DelayedInterruptPending);
+		Assert.Equal(0x7F81, atGrant.DataWord);
+	}
+
+	[Fact]
+	public void NormalDmaConsumesDelayedIntreq2AtLowToHighTransition()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 43);
+
+		bus.Paula.AdvanceTo(45);
+		Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		bus.Paula.AdvanceTo(46);
+
+		Assert.False(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
+		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 46);
+	}
+
+	[Fact]
+	public void PeriodAttachConsumesDelayedIntreq2AtHighToLowTransition()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0002);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x09E, 0x8010, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 43);
+
+		bus.Paula.AdvanceTo(45);
+		Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		bus.Paula.AdvanceTo(50);
+
+		Assert.False(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
+		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 50);
+	}
+
+	[Fact]
+	public void AudxlenZeroUsesFullSixteenBitDmaCounter()
+	{
+		var bus = CreatePaulaComponentBus();
+
+		SchedulePaulaWrite(bus, 0x0A4, 0x0000, 0);
+		bus.Paula.AdvanceTo(0);
+
+		Assert.Equal(65_536, bus.Paula.GetChannelSnapshot(0).LengthWords);
+	}
+
+	[Fact]
 	public void ManualAudioDataOutputsHighThenLowByteAndRequestsInterrupt()
 	{
 		var bus = CreatePaulaComponentBus();
@@ -21,6 +174,265 @@ public sealed class PaulaTests
 		Assert.Equal(0, interruptEvent.Channel);
 		Assert.Equal(0x0080, interruptEvent.IntreqBit);
 		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
+	}
+
+	[Fact]
+	public void ManualAudioUsesHoldingLatchAndContinuesAfterInterruptIsCleared()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 1);
+		SchedulePaulaWrite(bus, 0x0AA, 0x4080, 1);
+		var buffer = new float[8];
+
+		bus.Paula.RenderSample(0, buffer, 0, 2);
+		bus.Paula.RenderSample(4, buffer, 1, 2);
+		bus.Paula.RenderSample(8, buffer, 2, 2);
+		bus.Paula.RenderSample(12, buffer, 3, 2);
+
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.True(buffer[4] > 0.10f);
+		Assert.True(buffer[6] < -0.20f);
+		Assert.Equal(0x4080, bus.Paula.GetChannelSnapshot(0).DataWord);
+	}
+
+	[Fact]
+	public void ManualAudioStopsAfterFullWordWhenInterruptRemainsPending()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x4080, 1);
+		var buffer = new float[8];
+
+		bus.Paula.RenderSample(0, buffer, 0, 2);
+		bus.Paula.RenderSample(4, buffer, 1, 2);
+		bus.Paula.RenderSample(8, buffer, 2, 2);
+		bus.Paula.RenderSample(12, buffer, 3, 2);
+
+		Assert.True(buffer[0] > 0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.True(buffer[4] < -0.20f);
+		Assert.True(buffer[6] < -0.20f);
+		Assert.False(bus.Paula.GetChannelSnapshot(0).HasDataWord);
+	}
+
+	[Fact]
+	public void CombinedAttachmentAppliesOneWordToVolumeThenPeriodTransitions()
+	{
+		var bus = CreatePaulaComponentBus();
+		SchedulePaulaWrite(bus, 0x09E, 0x8011, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x0020, 0);
+
+		bus.Paula.AdvanceTo(0);
+		var afterLoad = bus.Paula.GetChannelSnapshot(1);
+		bus.Paula.AdvanceTo(4);
+		var afterHighTransition = bus.Paula.GetChannelSnapshot(1);
+
+		Assert.Equal(32, afterLoad.Volume);
+		Assert.Equal(428, afterLoad.Period);
+		Assert.Equal(32, afterHighTransition.Volume);
+		Assert.Equal(32, afterHighTransition.Period);
+	}
+
+	[Theory]
+	[InlineData(0x0008)]
+	[InlineData(0x0080)]
+	[InlineData(0x0088)]
+	public void ChannelThreeAttachmentSuppressesItsDacOutput(ushort attachBits)
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.WriteWord(0x00DFF09E, (ushort)(0x8000 | attachBits), 0);
+		bus.WriteWord(0x00DFF0DA, 0x7F81, 0);
+		var buffer = new float[2];
+
+		bus.Paula.RenderSample(0, buffer, 0, 2);
+
+		Assert.Equal(0.0f, buffer[0]);
+		Assert.Equal(0.0f, buffer[1]);
+	}
+
+	[Fact]
+	public void ShortDmaDisableReenableContinuesActiveStreamWithoutRestart()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x1122);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1004, 0x3344);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1006, 0x5566);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0004, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x0001, 39);
+		SchedulePaulaWrite(bus, 0x096, 0x8001, 40);
+		var buffer = new float[6];
+
+		bus.Paula.RenderSample(38, buffer, 0, 2);
+		bus.Paula.RenderSample(42, buffer, 1, 2);
+		bus.Paula.RenderSample(46, buffer, 2, 2);
+
+		Assert.InRange(buffer[0], 0.03f, 0.05f);
+		Assert.InRange(buffer[2], 0.06f, 0.08f);
+		Assert.InRange(buffer[4], 0.09f, 0.12f);
+		Assert.Single(CapturePaulaDmaAccesses(bus), access => access.Request.Address == 0x1000u);
+	}
+
+	[Fact]
+	public void DmaReenableAfterActiveWordFinishesRestartsFromLocation()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0000);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1002, 0x1122);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1004, 0x3344);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1006, 0x5566);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0004, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x0001, 39);
+		SchedulePaulaWrite(bus, 0x096, 0x8001, 48);
+		var buffer = new float[4];
+
+		bus.Paula.RenderSample(38, buffer, 0, 2);
+		bus.Paula.RenderSample(46, buffer, 1, 2);
+		Assert.False(bus.Paula.GetChannelSnapshot(0).HasDataWord);
+
+		bus.Paula.AdvanceTo(48);
+
+		Assert.True(CapturePaulaDmaAccesses(bus).Count(access => access.Request.Address == 0x1000u) >= 2);
+		Assert.Equal(48, bus.Paula.GetChannelSnapshot(0).LastDmaEnableCycle);
+	}
+
+	[Fact]
+	public void TimedWriteOnlyCustomReadWritesSharedChipBusLatchIntoRegister()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0003);
+		var cycle = 0L;
+
+		Assert.Equal(0x0003, bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		Assert.Equal(0xFFFF, bus.ReadWord(0x00DFF0A6, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(3, bus.Paula.GetChannelSnapshot(0).Period);
+	}
+
+	[Fact]
+	public void TimedDff000ReadReturnsCurrentSharedChipBusLatch()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
+		var cycle = 0L;
+
+		Assert.Equal(0x1234, bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead));
+
+		Assert.Equal(0x1234, bus.ReadWord(0x00DFF000, ref cycle, AmigaBusAccessKind.CpuDataRead));
+	}
+
+	[Fact]
+	public void TimedWriteOnlyByteReadDuplicatesSelectedLatchByteForSideEffect()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1212);
+		var cycle = 0L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(0xFF, bus.ReadByte(0x00DFF0A8, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(0x12, bus.Paula.GetChannelSnapshot(0).Volume);
+	}
+
+	[Fact]
+	public void TimedWriteOnlyLongReadAppliesEachWordPhaseIndependently()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0003);
+		var cycle = 0L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(0xFFFF_FFFFu, bus.ReadLong(0x00DFF0A6, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(3, bus.Paula.GetChannelSnapshot(0).Period);
+		Assert.Equal(64, bus.Paula.GetChannelSnapshot(0).Volume);
+	}
+
+	[Fact]
+	public void WriteOnlyReadReturnsImmediatelyPrecedingDmaBusWord()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0005);
+		var dma = bus.ReadChipWordForDeviceWithResult(
+			AmigaBusRequester.Blitter,
+			AmigaBusAccessKind.Blitter,
+			0x1000,
+			34);
+		var cycle = dma.BusAccess.GrantedCycle + AgnusChipSlotScheduler.SlotCycles;
+
+		var value = bus.ReadWord(0x00DFF0A6, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(0x0005, value);
+		Assert.Equal(5, bus.Paula.GetChannelSnapshot(0).Period);
+	}
+
+	[Fact]
+	public void TimedWriteOnlyControlReadUsesNormalCustomWriteDispatch()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8201);
+		var cycle = 0L;
+
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+		Assert.Equal(0xFFFF, bus.ReadWord(0x00DFF096, ref cycle, AmigaBusAccessKind.CpuDataRead));
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(0x0201, bus.Paula.Dmacon & 0x0201);
+		Assert.True(bus.Paula.GetChannelSnapshot(0).DmaEnabled);
+	}
+
+	[Fact]
+	public void JitSlotAwareWriteOnlyReadMatchesInterpreterSideEffect()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x0005);
+		var cycle = 0L;
+
+		Assert.Equal(0x0005u, bus.ReadJitSlotAwareMemory(ref cycle, 0x00001000, M68kOperandSize.Word));
+		Assert.Equal(0xFFFFu, bus.ReadJitSlotAwareMemory(ref cycle, 0x00DFF0A6, M68kOperandSize.Word));
+		bus.Paula.AdvanceTo(cycle);
+
+		Assert.Equal(5, bus.Paula.GetChannelSnapshot(0).Period);
+	}
+
+	[Fact]
+	public void HardwareResetRestoresSharedChipBusLatchToAllOnes()
+	{
+		var bus = CreatePaulaComponentBus();
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
+		var cycle = 0L;
+		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		bus.ResetExternalDevices(cycle);
+		cycle = 0;
+
+		Assert.Equal(0xFFFF, bus.ReadWord(0x00DFF000, ref cycle, AmigaBusAccessKind.CpuDataRead));
+	}
+
+	[Fact]
+	public void HostCustomReadRemainsNonDestructive()
+	{
+		var bus = CreatePaulaComponentBus();
+		bus.WriteWord(0x00DFF0A6, 0x0007, 0);
+		bus.Paula.AdvanceTo(0);
+
+		Assert.Equal(0x0007, bus.ReadWord(0x00DFF0A6));
+		Assert.Equal(7, bus.Paula.GetChannelSnapshot(0).Period);
 	}
 
 	[Fact]
@@ -485,7 +897,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void ManualAudioDataRewriteAfterLowBoundaryIsCausal()
+	public void ManualAudioDataRewriteAfterLowBoundaryUpdatesHoldingLatchOnly()
 	{
 		var bus = CreatePaulaComponentBus();
 		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
@@ -502,26 +914,31 @@ public sealed class PaulaTests
 
 		Assert.Equal(0x7F, beforeBoundary.CurrentSample);
 		Assert.Equal(unchecked((sbyte)0x81), atBoundary.CurrentSample);
-		Assert.Equal(0x40, afterRewrite.CurrentSample);
-		Assert.Equal(9, afterRewrite.NextSampleCycle);
+		Assert.Equal(unchecked((sbyte)0x81), afterRewrite.CurrentSample);
+		Assert.Equal(0x4080, afterRewrite.DataLatch);
+		Assert.True(afterRewrite.DataLatchWritten);
+		Assert.Equal(8, afterRewrite.NextSampleCycle);
 	}
 
 	[Fact]
-	public void ManualAudioDataCanBeReplacedBeforeLowByteIsPlayed()
+	public void ManualAudioDataCanBeQueuedBeforeLowByteIsPlayed()
 	{
 		var bus = CreatePaulaComponentBus();
-		bus.WriteWord(0x00DFF0A6, 0x0004, 0);
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
-		bus.WriteWord(0x00DFF0AA, 0x4080, 4);
-		var buffer = new float[6];
+		SchedulePaulaWrite(bus, 0x0A6, 0x0004, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x09C, 0x0080, 1);
+		SchedulePaulaWrite(bus, 0x0AA, 0x4080, 1);
+		var buffer = new float[8];
 
 		bus.Paula.RenderSample(0, buffer, 0, 2);
-		bus.Paula.RenderSample(4, buffer, 1, 2);
-		bus.Paula.RenderSample(12, buffer, 2, 2);
+		bus.Paula.RenderSample(8, buffer, 1, 2);
+		bus.Paula.RenderSample(16, buffer, 2, 2);
+		bus.Paula.RenderSample(24, buffer, 3, 2);
 
 		Assert.True(buffer[0] > 0.20f);
-		Assert.True(buffer[2] > 0.10f);
-		Assert.True(buffer[4] < -0.20f);
+		Assert.True(buffer[2] < -0.20f);
+		Assert.True(buffer[4] > 0.10f);
+		Assert.True(buffer[6] < -0.20f);
 	}
 
 	[Fact]
@@ -530,14 +947,14 @@ public sealed class PaulaTests
 		var bus = CreatePaulaComponentBus();
 
 		bus.WriteWord(0x00DFF0AA, 0x0102, 0);
-		bus.Paula.AdvanceTo(0);
+		bus.Paula.AdvanceTo(1712);
 		Assert.Empty(bus.Paula.DrainInterrupts());
 		Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
 
-		bus.WriteWord(0x00DFF09C, 0x0080, 0);
-		bus.WriteWord(0x00DFF09A, 0xC080, 0);
-		bus.WriteWord(0x00DFF0AA, 0x0102, 0);
-		bus.Paula.AdvanceTo(0);
+		bus.WriteWord(0x00DFF09C, 0x0080, 1712);
+		bus.WriteWord(0x00DFF09A, 0xC080, 1712);
+		bus.WriteWord(0x00DFF0AA, 0x0102, 1712);
+		bus.Paula.AdvanceTo(1712);
 
 		Assert.Single(bus.Paula.DrainInterrupts());
 		Assert.True((bus.ReadWord(0x00DFF01C) & 0x4080) == 0x4080);
@@ -808,7 +1225,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void DmaLengthReloadInterruptsUseExactSampleBoundary()
+	public void DmaLengthReloadInterruptRemainsLatchedWhileIntreqIsPending()
 	{
 		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x20;
@@ -825,9 +1242,8 @@ public sealed class PaulaTests
 			.Where(interruptEvent => interruptEvent.Channel == 0)
 			.Select(interruptEvent => interruptEvent.Cycle)
 			.ToArray();
-		Assert.Contains(34, interruptCycles);
-		Assert.Contains(38, interruptCycles);
-		Assert.All(interruptCycles, cycle => Assert.Contains(cycle, new long[] { 34, 38, 42 }));
+		Assert.Equal(new long[] { 34 }, interruptCycles);
+		Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
 		Assert.Equal(50, bus.Paula.GetChannelSnapshot(0).NextSampleCycle);
 	}
 
@@ -848,7 +1264,8 @@ public sealed class PaulaTests
 
 		Assert.Equal(0x1002u, snapshot.CurrentAddress);
 		Assert.Equal(0, snapshot.RemainingWords);
-		Assert.True(bus.Paula.DrainInterrupts().Count >= 2);
+		Assert.Single(bus.Paula.DrainInterrupts());
+		Assert.True(snapshot.DelayedInterruptPending);
 	}
 
 	[Fact]

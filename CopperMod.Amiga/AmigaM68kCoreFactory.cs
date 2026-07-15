@@ -49,7 +49,8 @@ namespace CopperMod.Amiga
                 state,
                 instructionFrequency,
                 enableInstructionFetchWindow: false,
-                enableCpuBusPhaseTrace: false);
+                enableCpuBusPhaseTrace:
+                    ((IM68000BusCycleTiming)bus).RequiresExactM68000PipelineFallback);
         }
     }
 

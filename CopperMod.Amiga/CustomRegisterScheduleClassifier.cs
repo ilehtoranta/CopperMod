@@ -10,6 +10,9 @@ namespace CopperMod.Amiga
         public static ushort NormalizeOffset(ushort offset)
             => (ushort)(offset & 0x01FE);
 
+        public static bool IsOcsReadableRegister(ushort offset)
+            => NormalizeOffset(offset) <= 0x01E;
+
         public static bool IsScheduleAffectingCustomWrite(ushort offset)
         {
             offset = NormalizeOffset(offset);
@@ -39,6 +42,45 @@ namespace CopperMod.Amiga
             return offset is 0x02E or
                 0x080 or 0x082 or 0x084 or 0x086 or 0x088 or 0x08A or
                 0x092 or 0x094 or 0x096 or 0x100;
+        }
+
+        public static AgnusLiveDisplaySlotOwnerMask GetPreparedDisplaySlotOwnerChanges(
+            ushort offset,
+            ushort value)
+        {
+            offset = NormalizeOffset(offset);
+            if (offset == 0x096)
+            {
+                if ((value & 0x0200) != 0)
+                {
+                    return AgnusLiveDisplaySlotOwnerMask.All;
+                }
+
+                var owners = AgnusLiveDisplaySlotOwnerMask.None;
+                if ((value & 0x0100) != 0)
+                {
+                    owners |= AgnusLiveDisplaySlotOwnerMask.Bitplane;
+                }
+                if ((value & 0x0080) != 0)
+                {
+                    owners |= AgnusLiveDisplaySlotOwnerMask.Copper;
+                }
+                if ((value & 0x0020) != 0)
+                {
+                    owners |= AgnusLiveDisplaySlotOwnerMask.Sprite;
+                }
+
+                return owners;
+            }
+
+            if (offset is 0x092 or 0x094 or 0x100)
+            {
+                return AgnusLiveDisplaySlotOwnerMask.Bitplane;
+            }
+
+            return offset is 0x02E or 0x080 or 0x082 or 0x084 or 0x086 or 0x088 or 0x08A
+                ? AgnusLiveDisplaySlotOwnerMask.Copper
+                : AgnusLiveDisplaySlotOwnerMask.None;
         }
 
         public static bool IsPaulaBusScheduleAffectingWrite(ushort offset)
