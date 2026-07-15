@@ -332,6 +332,36 @@ public static class ExtF80Math
         return SquareRootFinite(value, context);
     }
 
+    internal static FloatingPointResult<ExtF80> SquareRootReference(ExtF80 value, ExtF80Context context)
+    {
+        if (IsNormal(value) && !value.Sign)
+        {
+            return SquareRootFiniteReference(value, context);
+        }
+
+        if (TryPropagateNaN(value, out var special))
+        {
+            return special;
+        }
+
+        if (value.Classification == ExtF80Class.Infinity)
+        {
+            return value.Sign ? InvalidResult() : Result(value);
+        }
+
+        if (value.Classification == ExtF80Class.Zero)
+        {
+            return Result(value);
+        }
+
+        if (value.Sign)
+        {
+            return InvalidResult();
+        }
+
+        return SquareRootFiniteReference(value, context);
+    }
+
     private static FloatingPointResult<ExtF80> SquareRootFinite(
         ExtF80 value,
         ExtF80Context context)
@@ -341,6 +371,37 @@ public static class ExtF80Math
         var exponent = doubled ? (unpacked.Exponent - 1) / 2 : unpacked.Exponent / 2;
         var radicand = (UInt128)unpacked.Significand << (doubled ? 64 : 63);
         var root = IntegerSquareRoot(radicand);
+        var remainder = radicand - (root * root);
+        for (var digit = 0; digit < 2; digit++)
+        {
+            remainder <<= 2;
+            var trial = (root << 2) | (UInt128)1;
+            root <<= 1;
+            if (remainder >= trial)
+            {
+                remainder -= trial;
+                root |= 1;
+            }
+        }
+
+        var significand = root << 1;
+        if (remainder != 0)
+        {
+            significand |= 1;
+        }
+
+        return RoundPack(false, exponent, significand, context);
+    }
+
+    private static FloatingPointResult<ExtF80> SquareRootFiniteReference(
+        ExtF80 value,
+        ExtF80Context context)
+    {
+        var unpacked = UnpackFinite(value);
+        var doubled = (unpacked.Exponent & 1) != 0;
+        var exponent = doubled ? (unpacked.Exponent - 1) / 2 : unpacked.Exponent / 2;
+        var radicand = (UInt128)unpacked.Significand << (doubled ? 64 : 63);
+        var root = IntegerSquareRootReference(radicand);
         var remainder = radicand - (root * root);
         for (var digit = 0; digit < 2; digit++)
         {
@@ -664,6 +725,13 @@ public static class ExtF80Math
             exponent -= shift;
         }
 
+        if (context.Precision == ExtF80Precision.Extended &&
+            context.RoundingMode == ExtF80RoundingMode.ToNearestEven &&
+            exponent >= MinimumExponent)
+        {
+            return RoundPackNearestExtended(sign, exponent, significand, flags);
+        }
+
         var tinyBeforeRounding = exponent < MinimumExponent;
         if (tinyBeforeRounding)
         {
@@ -715,6 +783,41 @@ public static class ExtF80Math
 
         var biasedExponent = subnormal ? 0 : exponent + ExtF80.ExponentBias;
         return Result(ExtF80.FromBits(SignExponent(sign, biasedExponent), packedSignificand), flags);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static FloatingPointResult<ExtF80> RoundPackNearestExtended(
+        bool sign,
+        int exponent,
+        UInt128 significand,
+        FloatingPointExceptionFlags flags)
+    {
+        var remainder = (byte)(significand & 7);
+        var rounded = significand >> 3;
+        if (remainder > 4 || (remainder == 4 && (rounded & 1) != 0))
+        {
+            rounded++;
+            if (rounded == ((UInt128)1 << 64))
+            {
+                rounded >>= 1;
+                exponent++;
+            }
+        }
+
+        if (remainder != 0)
+        {
+            flags |= FloatingPointExceptionFlags.Inexact;
+        }
+
+        if (exponent > MaximumExponent)
+        {
+            flags |= FloatingPointExceptionFlags.Overflow | FloatingPointExceptionFlags.Inexact;
+            return Result(sign ? ExtF80.NegativeInfinity : ExtF80.PositiveInfinity, flags);
+        }
+
+        return Result(
+            ExtF80.FromBits(SignExponent(sign, exponent + ExtF80.ExponentBias), (ulong)rounded),
+            flags);
     }
 
     private static FloatingPointResult<ulong> ToBinaryBits(
@@ -953,6 +1056,18 @@ public static class ExtF80Math
         => ShouldIncrement(sign, mode, (UInt128)remainder, half, odd);
 
     private static UInt128 IntegerSquareRoot(UInt128 value)
+    {
+        var root = (UInt128)Math.Sqrt((double)value);
+        root = (root + (value / root)) >> 1;
+        while (root * root > value)
+        {
+            root--;
+        }
+
+        return root;
+    }
+
+    private static UInt128 IntegerSquareRootReference(UInt128 value)
     {
         var bitLength = 128 - LeadingZeroCount(value);
         var root = (UInt128)1 << ((bitLength + 1) / 2);

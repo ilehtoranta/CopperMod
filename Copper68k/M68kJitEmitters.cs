@@ -90,6 +90,26 @@ namespace Copper68k
             typeof(int),
             typeof(int),
             typeof(ushort));
+        private static readonly MethodInfo ExecuteM68040FpuMoveRegister = RequiredM68040FpuRegisterMethod("Move");
+        private static readonly MethodInfo ExecuteM68040FpuSquareRootRegister = RequiredM68040FpuRegisterMethod("SquareRoot");
+        private static readonly MethodInfo ExecuteM68040FpuAbsoluteRegister = RequiredM68040FpuRegisterMethod("Absolute");
+        private static readonly MethodInfo ExecuteM68040FpuNegateRegister = RequiredM68040FpuRegisterMethod("Negate");
+        private static readonly MethodInfo ExecuteM68040FpuDivideRegister = RequiredM68040FpuRegisterMethod("Divide");
+        private static readonly MethodInfo ExecuteM68040FpuAddRegister = RequiredM68040FpuRegisterMethod("Add");
+        private static readonly MethodInfo ExecuteM68040FpuMultiplyRegister = RequiredM68040FpuRegisterMethod("Multiply");
+        private static readonly MethodInfo ExecuteM68040FpuSubtractRegister = RequiredM68040FpuRegisterMethod("Subtract");
+        private static readonly MethodInfo ExecuteM68040FpuCompareRegister = RequiredM68040FpuRegisterMethod("Compare");
+        private static readonly MethodInfo ExecuteM68040FpuTestRegister = RequiredM68040FpuRegisterMethod("Test");
+        private static readonly MethodInfo TryExecuteM68040FpuMoveRegisterFast = RequiredM68040FpuFastRegisterMethod("Move");
+        private static readonly MethodInfo TryExecuteM68040FpuSquareRootRegisterFast = RequiredM68040FpuFastRegisterMethod("SquareRoot");
+        private static readonly MethodInfo TryExecuteM68040FpuAbsoluteRegisterFast = RequiredM68040FpuFastRegisterMethod("Absolute");
+        private static readonly MethodInfo TryExecuteM68040FpuNegateRegisterFast = RequiredM68040FpuFastRegisterMethod("Negate");
+        private static readonly MethodInfo TryExecuteM68040FpuDivideRegisterFast = RequiredM68040FpuFastRegisterMethod("Divide");
+        private static readonly MethodInfo TryExecuteM68040FpuAddRegisterFast = RequiredM68040FpuFastRegisterMethod("Add");
+        private static readonly MethodInfo TryExecuteM68040FpuMultiplyRegisterFast = RequiredM68040FpuFastRegisterMethod("Multiply");
+        private static readonly MethodInfo TryExecuteM68040FpuSubtractRegisterFast = RequiredM68040FpuFastRegisterMethod("Subtract");
+        private static readonly MethodInfo TryExecuteM68040FpuCompareRegisterFast = RequiredM68040FpuFastRegisterMethod("Compare");
+        private static readonly MethodInfo TryExecuteM68040FpuTestRegisterFast = RequiredM68040FpuFastRegisterMethod("Test");
         private static readonly MethodInfo ExecuteMovem = RequiredMethod(
             typeof(M68kJitCore),
             "ExecuteCompiledMovem",
@@ -565,7 +585,7 @@ namespace Copper68k
                 il.Emit(OpCodes.Ldc_I4, instruction.Register);
                 il.Emit(OpCodes.Ldc_I4, instruction.Condition);
                 il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
-                il.Emit(OpCodes.Call, ExecuteM68040FpuRegister);
+                il.Emit(OpCodes.Call, GetM68040FpuRegisterMethod(instruction.Condition));
                 return;
             }
 
@@ -958,6 +978,56 @@ namespace Copper68k
             EmitWriteResolvedEa(il, context, instruction.Destination, instruction.Size, result, address, memory);
             EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Neg, instruction.Destination, instruction.Size));
         }
+
+        internal static MethodInfo GetM68040FpuRegisterMethod(int opmode)
+            => opmode switch
+            {
+                0x00 or 0x40 or 0x44 => ExecuteM68040FpuMoveRegister,
+                0x04 or 0x41 or 0x45 => ExecuteM68040FpuSquareRootRegister,
+                0x18 or 0x58 or 0x5C => ExecuteM68040FpuAbsoluteRegister,
+                0x1A or 0x5A or 0x5E => ExecuteM68040FpuNegateRegister,
+                0x20 or 0x60 or 0x64 or 0x24 => ExecuteM68040FpuDivideRegister,
+                0x22 or 0x62 or 0x66 => ExecuteM68040FpuAddRegister,
+                0x23 or 0x63 or 0x67 or 0x27 => ExecuteM68040FpuMultiplyRegister,
+                0x28 or 0x68 or 0x6C => ExecuteM68040FpuSubtractRegister,
+                0x38 => ExecuteM68040FpuCompareRegister,
+                0x3A => ExecuteM68040FpuTestRegister,
+                _ => ExecuteM68040FpuRegister
+            };
+
+        internal static MethodInfo? GetM68040FpuFastRegisterMethod(int opmode)
+            => opmode switch
+            {
+                0x00 or 0x40 or 0x44 => TryExecuteM68040FpuMoveRegisterFast,
+                0x04 or 0x41 or 0x45 => TryExecuteM68040FpuSquareRootRegisterFast,
+                0x18 or 0x58 or 0x5C => TryExecuteM68040FpuAbsoluteRegisterFast,
+                0x1A or 0x5A or 0x5E => TryExecuteM68040FpuNegateRegisterFast,
+                0x20 or 0x60 or 0x64 or 0x24 => TryExecuteM68040FpuDivideRegisterFast,
+                0x22 or 0x62 or 0x66 => TryExecuteM68040FpuAddRegisterFast,
+                0x23 or 0x63 or 0x67 or 0x27 => TryExecuteM68040FpuMultiplyRegisterFast,
+                0x28 or 0x68 or 0x6C => TryExecuteM68040FpuSubtractRegisterFast,
+                0x38 => TryExecuteM68040FpuCompareRegisterFast,
+                0x3A => TryExecuteM68040FpuTestRegisterFast,
+                _ => null
+            };
+
+        private static MethodInfo RequiredM68040FpuRegisterMethod(string operation)
+            => RequiredMethod(
+                typeof(M68kJitCore),
+                $"ExecuteCompiledM68040Fpu{operation}Register",
+                typeof(int),
+                typeof(int),
+                typeof(int),
+                typeof(ushort));
+
+        private static MethodInfo RequiredM68040FpuFastRegisterMethod(string operation)
+            => RequiredMethod(
+                typeof(M68kJitCore),
+                $"TryExecuteCompiledM68040Fpu{operation}RegisterFast",
+                typeof(int),
+                typeof(int),
+                typeof(int),
+                typeof(uint));
 
         private static void EmitNegx(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
         {

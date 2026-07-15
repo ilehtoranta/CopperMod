@@ -69,6 +69,10 @@ namespace Copper68k
         Pea,
         M68040Move16,
         M68040Fpu,
+        M68040Fbcc,
+        M68040Fdbcc,
+        M68040Fscc,
+        M68040Ftrapcc,
         M68040Fallback
     }
 
@@ -360,6 +364,83 @@ namespace Copper68k
             DecodeCursor cursor,
             out M68kDecodedInstruction instruction)
         {
+            if ((opcode & 0xFFC0) is 0xF280 or 0xF2C0)
+            {
+                var condition = opcode & 0x3F;
+                if (condition > 0x1F)
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                var conditionalCursor = cursor;
+                var longDisplacement = (opcode & 0xFFC0) == 0xF2C0;
+                var displacement = longDisplacement
+                    ? unchecked((int)(((uint)conditionalCursor.FetchWord() << 16) | conditionalCursor.FetchWord()))
+                    : unchecked((short)conditionalCursor.FetchWord());
+                instruction = Create(
+                    pc, opcode, M68kJitOperation.M68040Fbcc, M68kOperandSize.Word,
+                    M68kDecodedEa.None, M68kDecodedEa.None, 0, 0, condition, displacement,
+                    longDisplacement ? 1 : 0, 0, pc + 2, conditionalCursor, stopsTrace: true);
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0xF240)
+            {
+                var conditionalCursor = cursor;
+                var conditionalExtension = conditionalCursor.FetchWord();
+                var conditionalMode = (opcode >> 3) & 7;
+                var conditionalRegister = opcode & 7;
+                if ((conditionalExtension & 0x20) != 0)
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
+                var condition = conditionalExtension & 0x1F;
+                if (conditionalMode == 1)
+                {
+                    var branchBase = conditionalCursor.Address;
+                    var displacement = unchecked((short)conditionalCursor.FetchWord());
+                    instruction = Create(
+                        pc, opcode, M68kJitOperation.M68040Fdbcc, M68kOperandSize.Word,
+                        M68kDecodedEa.None, M68kDecodedEa.None, conditionalRegister, 0, condition, displacement,
+                        0, conditionalExtension, branchBase, conditionalCursor, stopsTrace: true);
+                    return true;
+                }
+
+                if (conditionalMode == 0)
+                {
+                    instruction = Create(
+                        pc, opcode, M68kJitOperation.M68040Fscc, M68kOperandSize.Byte,
+                        M68kDecodedEa.None, new M68kDecodedEa(M68kJitEaKind.DataRegister, conditionalRegister, 0, 0, 0, 0),
+                        conditionalRegister, 0, condition, 0, 0, conditionalExtension, pc + 2, conditionalCursor, stopsTrace: false);
+                    return true;
+                }
+
+                if (conditionalMode == 7 && conditionalRegister is >= 2 and <= 4)
+                {
+                    if (conditionalRegister == 2)
+                    {
+                        _ = conditionalCursor.FetchWord();
+                    }
+                    else if (conditionalRegister == 3)
+                    {
+                        _ = conditionalCursor.FetchWord();
+                        _ = conditionalCursor.FetchWord();
+                    }
+
+                    instruction = Create(
+                        pc, opcode, M68kJitOperation.M68040Ftrapcc, M68kOperandSize.Word,
+                        M68kDecodedEa.None, M68kDecodedEa.None, conditionalRegister, 0, condition, 0,
+                        0, conditionalExtension, pc + 2, conditionalCursor, stopsTrace: true);
+                    return true;
+                }
+
+                instruction = CreateM68040Fallback(pc, opcode, cursor);
+                return true;
+            }
+
             if ((opcode & 0xFFF8) == 0xF620)
             {
                 var move16Cursor = cursor;

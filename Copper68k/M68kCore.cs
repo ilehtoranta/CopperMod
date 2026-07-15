@@ -334,13 +334,13 @@ namespace Copper68k
     internal readonly struct M68kInstructionFetchWindow
     {
         public static M68kInstructionFetchWindow Empty { get; } = new(
-            Array.Empty<byte>(),
+            [],
             0,
             0,
             0,
             0,
             0,
-            Array.Empty<uint>(),
+            [],
             0);
 
         public M68kInstructionFetchWindow(
@@ -4548,7 +4548,7 @@ namespace Copper68k
         long IM68000InterruptRecognition.LastInterruptSampleCycle => _lastInterruptSampleCycle;
 
         bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
-            => pinAssertCycle <= _lastInterruptSampleCycle;
+            => State.Stopped || pinAssertCycle <= _lastInterruptSampleCycle;
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {

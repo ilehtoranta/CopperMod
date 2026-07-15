@@ -74,6 +74,21 @@ public sealed class M68kStoppedFastForwardTests
 		Assert.Equal(94, cpu.State.Cycles);
 	}
 
+	[Fact]
+	public void StoppedCpuRecognizesAssertedInterruptWithoutInstructionRetirement()
+	{
+		var cpu = new M68kInterpreter(new Copper68kTestBus());
+		cpu.Reset(FastCodeBase, 0x4000);
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+		var pinAssertCycle = cpu.State.Cycles + 10;
+
+		Assert.False(recognition.HasRecognizedInterrupt(pinAssertCycle));
+
+		cpu.State.Stopped = true;
+
+		Assert.True(recognition.HasRecognizedInterrupt(pinAssertCycle));
+	}
+
 	private class FastForwardBoundary : IM68kStoppedCpuFastForwardBoundary
 	{
 		public int BeforeCount { get; private set; }

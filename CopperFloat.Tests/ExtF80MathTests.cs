@@ -40,6 +40,32 @@ public sealed class ExtF80MathTests
     }
 
     [Fact]
+    public void AcceleratedSquareRootMatchesIntegerReferenceAcrossContexts()
+    {
+        var state = 0xD1B5_4A32_D192_ED03ul;
+        foreach (var rounding in Enum.GetValues<ExtF80RoundingMode>())
+        foreach (var precision in Enum.GetValues<ExtF80Precision>())
+        foreach (var tininess in Enum.GetValues<ExtF80TininessMode>())
+        {
+            var context = new ExtF80Context(rounding, precision, tininess);
+            for (var index = 0; index < 512; index++)
+            {
+                var bits = NextRandom(ref state);
+                var exponent = (ushort)(1 + (bits % 0x7ffe));
+                var normal = ExtF80.FromBits(exponent, NextRandom(ref state) | 0x8000_0000_0000_0000ul);
+                Assert.Equal(
+                    ExtF80Math.SquareRootReference(normal, context),
+                    ExtF80Math.SquareRoot(normal, context));
+
+                var subnormal = ExtF80.FromBits(0, NextRandom(ref state) & 0x7fff_ffff_ffff_fffful);
+                Assert.Equal(
+                    ExtF80Math.SquareRootReference(subnormal, context),
+                    ExtF80Math.SquareRoot(subnormal, context));
+            }
+        }
+    }
+
+    [Fact]
     public void PrecisionAndDirectedRoundingUseGuardRoundAndStickyBits()
     {
         var halfSingleUlp = F80(0x3fe7, 0x8000_0000_0000_0000); // 2^-24
@@ -151,6 +177,14 @@ public sealed class ExtF80MathTests
 
     private static ExtF80 F80(ushort signExponent, ulong significand)
         => ExtF80.FromBits(signExponent, significand);
+
+    private static ulong NextRandom(ref ulong state)
+    {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        return state * 0x2545_F491_4F6C_DD1Dul;
+    }
 
     private static void AssertResult(
         ExtF80 expected,

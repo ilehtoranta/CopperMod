@@ -439,16 +439,11 @@ namespace Copper68k
                 },
                 modifiers: null) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledM68040Fpu));
-        private static readonly MethodInfo ExecuteM68040FpuRegisterForV2BatchMethod =
+        private static readonly MethodInfo ExecuteM68040FallbackForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
-                nameof(ExecuteCompiledM68040FpuRegister),
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                new[] { typeof(int), typeof(int), typeof(int), typeof(ushort) },
-                modifiers: null) ??
-            throw new MissingMethodException(
-                typeof(M68kJitCore).FullName,
-                nameof(ExecuteCompiledM68040FpuRegister));
+                nameof(ExecuteCompiledM68040Fallback),
+                BindingFlags.Instance | BindingFlags.NonPublic) ??
+            throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(ExecuteCompiledM68040Fallback));
         private static readonly MethodInfo ExecuteM68040Move16ForV2BatchMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ExecuteCompiledM68040Move16),
@@ -539,6 +534,7 @@ namespace Copper68k
         private M68kJitCounters _counters;
         private long _compiledInstructionPreviousCycle;
         private bool _compiledInstructionCycleFloorActive;
+        private bool _compiledM68040FpuExceptionPending;
         private long _classicCompiledCpuBusCycle;
         private bool _classicCompiledBusSynchronized;
         private bool _classicCompiledTimingActive;
@@ -3188,6 +3184,18 @@ namespace Copper68k
             if (!plan.V2Trace.IsEmpty)
             {
                 RecordV2CompiledTrace(plan.V2Trace.Tier);
+                foreach (var instruction in plan.V2Trace.Instructions)
+                {
+                    if (instruction.Operation is
+                        M68kJitOperation.M68040Fbcc or
+                        M68kJitOperation.M68040Fdbcc or
+                        M68kJitOperation.M68040Fscc or
+                        M68kJitOperation.M68040Ftrapcc)
+                    {
+                        _counters.M68040NativeFpuConditionSites++;
+                    }
+                }
+
                 if (plan.V2Trace.WorkerGraphExpanded)
                 {
                     _counters.V2WorkerExpandedGraphs++;
@@ -3574,7 +3582,8 @@ namespace Copper68k
                             AddV2ExternalHandoffTarget(ref externalTargets, target);
                         }
 
-                        if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
+                        if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc or
+                            M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc)
                         {
                             var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
                             if (reader.ContainsRange(fallthrough, 2) &&
@@ -4131,7 +4140,8 @@ namespace Copper68k
                             AddV2ExternalHandoffTarget(ref externalTargets, target);
                         }
 
-                        if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
+                        if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc or
+                            M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc)
                         {
                             var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
                             if (CanIncludeV2GraphAddress(codeStart, codeEnd, fallthrough, maxBytes))
@@ -4575,6 +4585,8 @@ namespace Copper68k
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
                 M68kJitOperation.M68040Move16 => _cpuModel == M68kJitCpuModel.M68040 && _v2BusAccessEnabled,
                 M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction) || _v2BusAccessEnabled,
+                M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc or
+                M68kJitOperation.M68040Fscc or M68kJitOperation.M68040Ftrapcc => _cpuModel == M68kJitCpuModel.M68040,
                 _ => false
             };
             if (supported)
@@ -4673,6 +4685,8 @@ namespace Copper68k
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
                 M68kJitOperation.M68040Move16 => options.CpuModel == M68kJitCpuModel.M68040 && options.V2BusAccessEnabled,
                 M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction) || options.V2BusAccessEnabled,
+                M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc or
+                M68kJitOperation.M68040Fscc or M68kJitOperation.M68040Ftrapcc => options.CpuModel == M68kJitCpuModel.M68040,
                 _ => false
             };
             if (supported)
@@ -5010,7 +5024,9 @@ namespace Copper68k
                 M68kJitEaKind.PcIndex;
 
         private static bool IsV2BranchInstruction(M68kDecodedInstruction instruction)
-            => instruction.Operation is M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc or M68kJitOperation.Jmp;
+            => instruction.Operation is M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc or
+                M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc or
+                M68kJitOperation.Jmp;
 
         private static bool IsV2TerminalBusControlInstruction(M68kDecodedInstruction instruction)
             => instruction.Operation is M68kJitOperation.Jsr or
@@ -5176,6 +5192,10 @@ namespace Copper68k
 
                     return;
                 case M68kJitOperation.Dbcc:
+                case M68kJitOperation.M68040Fdbcc:
+                    MarkV2DataRegisterDirty(instruction.Register, ref dirtyDataRegisters);
+                    return;
+                case M68kJitOperation.M68040Fscc:
                     MarkV2DataRegisterDirty(instruction.Register, ref dirtyDataRegisters);
                     return;
             }
@@ -5306,6 +5326,10 @@ namespace Copper68k
 
                     return;
                 case M68kJitOperation.Dbcc:
+                case M68kJitOperation.M68040Fdbcc:
+                    MarkV2DataRegisterDirty(instruction.Register, ref loadDataRegisters);
+                    return;
+                case M68kJitOperation.M68040Fscc:
                     MarkV2DataRegisterDirty(instruction.Register, ref loadDataRegisters);
                     return;
             }
@@ -5493,6 +5517,7 @@ namespace Copper68k
             var returnZero = il.DefineLabel();
             var context = V2EmitContext.Create(il, minimalCycleTiming);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
+            context.SetFpuExceptionRegisterWriteback(dirtyDataRegisters, dirtyAddressRegisters);
             var fastReadFailureLabels = new List<(Label Label, uint ProgramCounter)>();
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
@@ -5527,7 +5552,8 @@ namespace Copper68k
                     codeStart,
                     byteLength,
                     recordOutOfBlockSideExit: false);
-                if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
+                if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc or
+                    M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc)
                 {
                     var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
                     EmitV2BranchToTarget(
@@ -5610,6 +5636,7 @@ namespace Copper68k
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
             context.SetM68040DirectRamEnabled(m68040DirectRamEnabled);
+            context.SetFpuExceptionRegisterWriteback(dirtyDataRegisters, dirtyAddressRegisters);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
             if (useGraph)
@@ -5640,7 +5667,8 @@ namespace Copper68k
                         codeStart,
                         byteLength,
                         recordOutOfBlockSideExit: false);
-                    if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc)
+                    if (instruction.Operation is M68kJitOperation.Bcc or M68kJitOperation.Dbcc or
+                        M68kJitOperation.M68040Fbcc or M68kJitOperation.M68040Fdbcc)
                     {
                         var fallthrough = Normalize(instruction.ProgramCounter + (uint)instruction.Length);
                         EmitV2BranchToTarget(
@@ -5855,6 +5883,18 @@ namespace Copper68k
                     return;
                 case M68kJitOperation.M68040Fpu:
                     EmitV2M68040Fpu(il, context, instruction, exit);
+                    return;
+                case M68kJitOperation.M68040Fbcc:
+                    EmitV2M68040Fbcc(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
+                    return;
+                case M68kJitOperation.M68040Fdbcc:
+                    EmitV2M68040Fdbcc(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
+                    return;
+                case M68kJitOperation.M68040Fscc:
+                    EmitV2M68040Fscc(il, context, instruction, exit);
+                    return;
+                case M68kJitOperation.M68040Ftrapcc:
+                    EmitV2M68040Ftrapcc(il, context, instruction, exit);
                     return;
                 case M68kJitOperation.Jmp:
                     EmitV2Jmp(il, context, instruction, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
@@ -6772,22 +6812,49 @@ namespace Copper68k
             M68kDecodedInstruction instruction,
             Label exit)
         {
-            context.EmitStoreState(recordLazyWriteback: false);
-            context.EmitBeginCoreInstructionCycleFloor();
             if ((M68040FpuJitKind)instruction.Variant == M68040FpuJitKind.Operation &&
                 instruction.Displacement == 0)
             {
+                var fastMethod = M68kOperationEmitter.GetM68040FpuFastRegisterMethod(instruction.Condition);
+                var exceptionalExit = il.DefineLabel();
+                var authoritative = il.DefineLabel();
+                var complete = il.DefineLabel();
+                if (fastMethod != null)
+                {
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
+                    il.Emit(OpCodes.Ldc_I4, instruction.Register);
+                    il.Emit(OpCodes.Ldc_I4, instruction.Condition);
+                    EmitLoadUIntConstant(il, instruction.ProgramCounter);
+                    il.Emit(OpCodes.Call, fastMethod);
+                    il.Emit(OpCodes.Brfalse, authoritative);
+                    context.EmitAddCycles(4);
+                    il.Emit(OpCodes.Br, complete);
+                    il.MarkLabel(authoritative);
+                }
+
+                context.EmitStoreFpuRegisterState();
+                context.EmitBeginCoreInstructionCycleFloor();
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
                 il.Emit(OpCodes.Ldc_I4, instruction.Register);
                 il.Emit(OpCodes.Ldc_I4, instruction.Condition);
                 il.Emit(OpCodes.Ldc_I4, instruction.RegisterMask);
-                il.Emit(OpCodes.Call, ExecuteM68040FpuRegisterForV2BatchMethod);
-                il.Emit(OpCodes.Brfalse, exit);
+                il.Emit(OpCodes.Call, M68kOperationEmitter.GetM68040FpuRegisterMethod(instruction.Condition));
+                il.Emit(OpCodes.Brfalse, exceptionalExit);
+                context.EmitBranchToFpuRegisterExceptionalExit(exceptionalExit);
+                context.EmitReloadFpuRegisterState();
+                il.Emit(OpCodes.Br, complete);
+
+                il.MarkLabel(exceptionalExit);
                 context.EmitReloadState();
+                il.Emit(OpCodes.Br, exit);
+                il.MarkLabel(complete);
                 return;
             }
 
+            context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, instruction.Variant);
             EmitV2EaArguments(il, instruction.Source);
@@ -6800,6 +6867,158 @@ namespace Copper68k
             il.Emit(OpCodes.Call, ExecuteM68040FpuForV2BatchMethod);
             il.Emit(OpCodes.Brfalse, exit);
             context.EmitReloadState();
+        }
+
+        private static void EmitV2M68040Fbcc(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label[] labels,
+            Dictionary<uint, int> addressToIndex,
+            Label exit,
+            uint root,
+            uint codeStart,
+            int byteLength,
+            bool recordOutOfBlockSideExit)
+        {
+            var evaluation = il.DeclareLocal(typeof(int));
+            var notExceptional = il.DefineLabel();
+            var notTaken = il.DefineLabel();
+            context.EmitEvaluateFpuCondition(instruction.Condition);
+            il.Emit(OpCodes.Stloc, evaluation);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_2);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brfalse, notExceptional);
+            EmitV2M68040ConditionalFallback(il, context, instruction, exit);
+
+            il.MarkLabel(notExceptional);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brfalse, notTaken);
+            var target = GetBranchTarget(instruction);
+            context.EmitAddCycles(10);
+            context.EmitSetProgramCounter(target);
+            EmitV2BranchToTarget(il, context, target, labels, addressToIndex, exit, root, codeStart, byteLength, false, recordOutOfBlockSideExit);
+            il.MarkLabel(notTaken);
+            context.EmitAddCycles(8);
+        }
+
+        private static void EmitV2M68040Fdbcc(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label[] labels,
+            Dictionary<uint, int> addressToIndex,
+            Label exit,
+            uint root,
+            uint codeStart,
+            int byteLength,
+            bool recordOutOfBlockSideExit)
+        {
+            var evaluation = il.DeclareLocal(typeof(int));
+            var conditionFalse = il.DefineLabel();
+            var expired = il.DefineLabel();
+            var done = il.DefineLabel();
+            var notExceptional = il.DefineLabel();
+            var counter = il.DeclareLocal(typeof(uint));
+            context.EmitEvaluateFpuCondition(instruction.Condition);
+            il.Emit(OpCodes.Stloc, evaluation);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_2);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brfalse, notExceptional);
+            EmitV2M68040ConditionalFallback(il, context, instruction, exit);
+
+            il.MarkLabel(notExceptional);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brfalse, conditionFalse);
+            context.EmitAddCycles(12);
+            il.Emit(OpCodes.Br, done);
+
+            il.MarkLabel(conditionFalse);
+            context.EmitLoadDataRegister(instruction.Register, M68kOperandSize.Word);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.Sub);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, counter);
+            context.EmitStoreDataRegister(instruction.Register, counter, M68kOperandSize.Word);
+            il.Emit(OpCodes.Ldloc, counter);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.Beq, expired);
+            var target = GetBranchTarget(instruction);
+            context.EmitAddCycles(10);
+            context.EmitSetProgramCounter(target);
+            EmitV2BranchToTarget(il, context, target, labels, addressToIndex, exit, root, codeStart, byteLength, false, recordOutOfBlockSideExit);
+            il.MarkLabel(expired);
+            context.EmitAddCycles(14);
+            il.MarkLabel(done);
+        }
+
+        private static void EmitV2M68040Fscc(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            var evaluation = il.DeclareLocal(typeof(int));
+            var value = il.DeclareLocal(typeof(uint));
+            var notExceptional = il.DefineLabel();
+            context.EmitEvaluateFpuCondition(instruction.Condition);
+            il.Emit(OpCodes.Stloc, evaluation);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_2);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brfalse, notExceptional);
+            EmitV2M68040ConditionalFallback(il, context, instruction, exit);
+            il.MarkLabel(notExceptional);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Neg);
+            il.Emit(OpCodes.Ldc_I4, 0xFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, value);
+            context.EmitStoreDataRegister(instruction.Register, value, M68kOperandSize.Byte);
+            context.EmitAddCycles(4);
+        }
+
+        private static void EmitV2M68040Ftrapcc(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            var evaluation = il.DeclareLocal(typeof(int));
+            var complete = il.DefineLabel();
+            context.EmitEvaluateFpuCondition(instruction.Condition);
+            il.Emit(OpCodes.Stloc, evaluation);
+            il.Emit(OpCodes.Ldloc, evaluation);
+            il.Emit(OpCodes.Brfalse, complete);
+            EmitV2M68040ConditionalFallback(il, context, instruction, exit);
+            il.MarkLabel(complete);
+            context.EmitAddCycles(4);
+            il.Emit(OpCodes.Br, exit);
+        }
+
+        private static void EmitV2M68040ConditionalFallback(
+            ILGenerator il,
+            V2EmitContext context,
+            M68kDecodedInstruction instruction,
+            Label exit)
+        {
+            context.EmitStoreState(recordLazyWriteback: false);
+            context.EmitBeginCoreInstructionCycleFloor();
+            il.Emit(OpCodes.Ldarg_0);
+            EmitLoadUIntConstant(il, instruction.ProgramCounter);
+            il.Emit(OpCodes.Call, ExecuteM68040FallbackForV2BatchMethod);
+            il.Emit(OpCodes.Pop);
+            context.EmitReloadState();
+            il.Emit(OpCodes.Br, exit);
         }
 
         private static void EmitV2M68040Move16(
@@ -9487,24 +9706,302 @@ namespace Copper68k
                 return false;
             }
 
-            _counters.NativeM68040FpuIlInstructions++;
-            var fpu = State.M68040Fpu;
-            fpu.Fpiar = State.LastInstructionProgramCounter;
-            var source = fpu.FP[sourceRegister];
-            var previousDestination = fpu.FP[destinationRegister];
+            var fpu = BeginCompiledM68040FpuRegister(
+                sourceRegister,
+                destinationRegister,
+                out var source,
+                out var previousDestination);
             var execution = M68040FpuHelpers.ApplyRegisterOperation(
                 fpu,
                 destinationRegister,
                 opmode,
                 source);
+            return CompleteCompiledM68040FpuRegister(
+                fpu,
+                command,
+                source,
+                previousDestination,
+                execution);
+        }
+
+        private bool TryExecuteCompiledM68040FpuMoveRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterMoveCanonical(fpu, destinationRegister, opmode, source));
+        }
+
+        private bool TryExecuteCompiledM68040FpuSquareRootRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterSquareRootCanonical(fpu, destinationRegister, opmode, source));
+        }
+
+        private bool TryExecuteCompiledM68040FpuAbsoluteRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterAbsoluteCanonical(fpu, destinationRegister, opmode, source));
+        }
+
+        private bool TryExecuteCompiledM68040FpuNegateRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterNegateCanonical(fpu, destinationRegister, opmode, source));
+        }
+
+        private bool TryExecuteCompiledM68040FpuDivideRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            var destination = sourceRegister == destinationRegister ? source : fpu.FP[destinationRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterDivideCanonical(fpu, destinationRegister, opmode, source, destination));
+        }
+
+        private bool TryExecuteCompiledM68040FpuAddRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            var destination = sourceRegister == destinationRegister ? source : fpu.FP[destinationRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterAddCanonical(fpu, destinationRegister, opmode, source, destination));
+        }
+
+        private bool TryExecuteCompiledM68040FpuMultiplyRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            var destination = sourceRegister == destinationRegister ? source : fpu.FP[destinationRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterMultiplyCanonical(fpu, destinationRegister, opmode, source, destination));
+        }
+
+        private bool TryExecuteCompiledM68040FpuSubtractRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            var destination = sourceRegister == destinationRegister ? source : fpu.FP[destinationRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterSubtractCanonical(fpu, destinationRegister, opmode, source, destination));
+        }
+
+        private bool TryExecuteCompiledM68040FpuCompareRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            _ = opmode;
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            var destination = sourceRegister == destinationRegister
+                ? source
+                : fpu.FP[destinationRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterCompareCanonical(fpu, source, destination));
+        }
+
+        private bool TryExecuteCompiledM68040FpuTestRegisterFast(
+            int sourceRegister, int destinationRegister, int opmode, uint instructionPc)
+        {
+            _ = destinationRegister;
+            _ = opmode;
+            var fpu = State.M68040Fpu;
+            var source = fpu.FP[sourceRegister];
+            return CompleteCompiledM68040FpuRegisterFast(
+                fpu,
+                instructionPc,
+                M68040FpuHelpers.TryApplyRegisterTestCanonical(fpu, source));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CompleteCompiledM68040FpuRegisterFast(
+            M68040FpuState fpu,
+            uint instructionPc,
+            bool success)
+        {
+            if (!success)
+            {
+                return false;
+            }
+
+            fpu.Fpiar = instructionPc;
+            _counters.NativeM68040FpuIlInstructions++;
+            return true;
+        }
+
+        private bool ExecuteCompiledM68040FpuMoveRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterMove(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuSquareRootRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterSquareRoot(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuAbsoluteRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterAbsolute(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuNegateRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterNegate(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuDivideRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterDivide(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuAddRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterAdd(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuMultiplyRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterMultiply(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuSubtractRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterSubtract(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuCompareRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterCompare(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        private bool ExecuteCompiledM68040FpuTestRegister(
+            int sourceRegister,
+            int destinationRegister,
+            int opmode,
+            ushort command)
+        {
+            var fpu = BeginCompiledM68040FpuRegister(sourceRegister, destinationRegister, out var source, out var previous);
+            var execution = M68040FpuHelpers.ApplyRegisterTest(fpu, destinationRegister, opmode, source, previous);
+            return CompleteCompiledM68040FpuRegister(fpu, command, source, previous, execution);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private M68040FpuState BeginCompiledM68040FpuRegister(
+            int sourceRegister,
+            int destinationRegister,
+            out ExtF80 source,
+            out ExtF80 previousDestination)
+        {
+            _counters.NativeM68040FpuIlInstructions++;
+            var fpu = State.M68040Fpu;
+            fpu.Fpiar = State.LastInstructionProgramCounter;
+            source = fpu.FP[sourceRegister];
+            previousDestination = fpu.FP[destinationRegister];
+            return fpu;
+        }
+
+        private bool CompleteCompiledM68040FpuRegister(
+            M68040FpuState fpu,
+            ushort command,
+            ExtF80 source,
+            ExtF80 previousDestination,
+            M68040FpuExecutionResult execution)
+        {
             if (!execution.Supported)
             {
+                _compiledM68040FpuExceptionPending = true;
                 RaiseM68040Format0Exception(11, State.LastInstructionProgramCounter, 34);
                 return true;
             }
 
             if (execution.ExceptionVector != 0)
             {
+                _compiledM68040FpuExceptionPending = true;
                 if (execution.ExceptionStage == M68040FpuExceptionStage.PreInstruction)
                 {
                     fpu.PrepareUnsupportedData(
@@ -10208,6 +10705,20 @@ namespace Copper68k
             if (IsM68040FpuOpcode(opcode))
             {
                 _counters.M68040FpuFallbackInstructions++;
+                if ((opcode & 0xFFC0) is 0xF280 or 0xF2C0 ||
+                    (opcode & 0xFFC0) == 0xF240)
+                {
+                    var mode = (opcode >> 3) & 7;
+                    var register = opcode & 7;
+                    if ((opcode & 0xFFC0) == 0xF240 && mode == 7 && register is >= 2 and <= 4)
+                    {
+                        _counters.M68040FpuTrapSlowPathExits++;
+                    }
+                    else
+                    {
+                        _counters.M68040FpuBsunSlowPathExits++;
+                    }
+                }
             }
 
             if (ShouldFlushM68040JitAfterFallback(instructionPc, opcode))
@@ -10318,6 +10829,42 @@ namespace Copper68k
 
             AddCycles(12 + GetEaOperandCyclesForTiming(source, M68kOperandSize.Word));
             return true;
+        }
+
+        private static int GetM68040FpuConditionTruthMask(int condition)
+        {
+            var mask = 0;
+            for (var status = 0; status < 16; status++)
+            {
+                var nan = (status & 0x1) != 0;
+                var zero = (status & 0x4) != 0;
+                var negative = (status & 0x8) != 0;
+                var matches = (condition & 0x0F) switch
+                {
+                    0x0 => false,
+                    0x1 => zero,
+                    0x2 => !(nan || zero || negative),
+                    0x3 => zero || !(nan || negative),
+                    0x4 => negative && !nan,
+                    0x5 => zero || (negative && !nan),
+                    0x6 => !zero && !nan,
+                    0x7 => !nan,
+                    0x8 => nan,
+                    0x9 => nan || zero,
+                    0xA => nan || !(zero || negative),
+                    0xB => nan || zero || !negative,
+                    0xC => nan || negative,
+                    0xD => nan || zero || negative,
+                    0xE => nan || !zero,
+                    _ => true
+                };
+                if (matches)
+                {
+                    mask |= 1 << status;
+                }
+            }
+
+            return mask;
         }
 
         private bool ExecuteCompiledM68040Move16(
@@ -12849,6 +13396,7 @@ namespace Copper68k
 
         private void ResetExecutionTransientState()
         {
+            _compiledM68040FpuExceptionPending = false;
             _directPseudoFastAccessCount = 0;
             _directPseudoFastLongAccessBits = 0;
             _directPseudoFastReplayCycle = State.Cycles;
@@ -13683,6 +14231,14 @@ namespace Copper68k
             private static readonly PropertyInfo LastInstructionProgramCounterProperty =
                 typeof(M68kCpuState).GetProperty(nameof(M68kCpuState.LastInstructionProgramCounter)) ??
                 throw new MissingMemberException(typeof(M68kCpuState).FullName, nameof(M68kCpuState.LastInstructionProgramCounter));
+            private static readonly PropertyInfo M68040FpuProperty =
+                typeof(M68kCpuState).GetProperty(
+                    nameof(M68kCpuState.M68040Fpu),
+                    BindingFlags.Instance | BindingFlags.NonPublic) ??
+                throw new MissingMemberException(typeof(M68kCpuState).FullName, nameof(M68kCpuState.M68040Fpu));
+            private static readonly PropertyInfo M68040FpsrProperty =
+                typeof(M68040FpuState).GetProperty(nameof(M68040FpuState.Fpsr)) ??
+                throw new MissingMemberException(typeof(M68040FpuState).FullName, nameof(M68040FpuState.Fpsr));
             private static readonly MethodInfo MaterializeFlags =
                 typeof(M68kJitCore).GetMethod(nameof(MaterializeV2Flags), BindingFlags.Instance | BindingFlags.NonPublic) ??
                 throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(MaterializeV2Flags));
@@ -13692,6 +14248,9 @@ namespace Copper68k
             private static readonly MethodInfo RecordZeroWaitTraceStats =
                 typeof(M68kJitCore).GetMethod(nameof(RecordV2ZeroWaitTraceStats), BindingFlags.Instance | BindingFlags.NonPublic) ??
                 throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(RecordV2ZeroWaitTraceStats));
+            private static readonly FieldInfo CompiledM68040FpuExceptionPendingField =
+                typeof(M68kJitCore).GetField(nameof(_compiledM68040FpuExceptionPending), BindingFlags.Instance | BindingFlags.NonPublic) ??
+                throw new MissingFieldException(typeof(M68kJitCore).FullName, nameof(_compiledM68040FpuExceptionPending));
             private static readonly MethodInfo RecordOutOfBlockSideExit =
                 typeof(M68kJitCore).GetMethod(
                     nameof(RecordV2OutOfBlockSideExit),
@@ -13826,6 +14385,10 @@ namespace Copper68k
 
             public bool M68000MemoryHelpers { get; private set; }
 
+            public int FpuExceptionDirtyDataRegisters { get; private set; }
+
+            public int FpuExceptionDirtyAddressRegisters { get; private set; }
+
             public bool ZeroWaitStatsUsed { get; private set; }
 
             public bool MinimalCycleTiming { get; }
@@ -13851,6 +14414,12 @@ namespace Copper68k
             public void SetM68000MemoryHelpers(bool enabled)
             {
                 M68000MemoryHelpers = enabled;
+            }
+
+            public void SetFpuExceptionRegisterWriteback(int dirtyDataRegisters, int dirtyAddressRegisters)
+            {
+                FpuExceptionDirtyDataRegisters = dirtyDataRegisters;
+                FpuExceptionDirtyAddressRegisters = dirtyAddressRegisters;
             }
 
             public void EmitBranchToSlowForM68040Translation(LocalBuilder address, bool write, Label slowPath)
@@ -13880,6 +14449,9 @@ namespace Copper68k
                 int loadDataRegisters = 0xFF,
                 int loadAddressRegisters = 0xFF)
             {
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldc_I4_0);
+                _il.Emit(OpCodes.Stfld, CompiledM68040FpuExceptionPendingField);
                 _il.Emit(OpCodes.Ldarg_0);
                 _il.Emit(OpCodes.Call, CoreStateProperty.GetMethod!);
                 _il.Emit(OpCodes.Stloc, State);
@@ -14014,6 +14586,12 @@ namespace Copper68k
             public void EmitStoreState(bool recordLazyWriteback)
                 => EmitStoreState(recordLazyWriteback, dirtyDataRegisters: 0xFF, dirtyAddressRegisters: 0xFF);
 
+            public void EmitStoreFpuRegisterState()
+                => EmitStoreState(
+                    recordLazyWriteback: false,
+                    FpuExceptionDirtyDataRegisters,
+                    FpuExceptionDirtyAddressRegisters);
+
             private void EmitStoreState(bool recordLazyWriteback, int dirtyDataRegisters, int dirtyAddressRegisters)
             {
                 EmitMaterializePendingFlags();
@@ -14087,6 +14665,73 @@ namespace Copper68k
                 _il.Emit(OpCodes.Call, LastInstructionProgramCounterProperty.GetMethod!);
                 _il.Emit(OpCodes.Stloc, LastInstructionProgramCounter);
                 EmitStoreInt(PendingKind, 0);
+            }
+
+            public void EmitReloadFpuRegisterState()
+            {
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, ProgramCounterProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, ProgramCounter);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, CyclesProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, Cycles);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, StatusRegisterProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, StatusRegister);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, LastOpcodeProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, LastOpcode);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, LastInstructionProgramCounterProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, LastInstructionProgramCounter);
+                EmitStoreInt(PendingKind, 0);
+            }
+
+            public void EmitEvaluateFpuCondition(int condition)
+            {
+                var fpsr = _il.DeclareLocal(typeof(uint));
+                var normal = _il.DefineLabel();
+                var done = _il.DefineLabel();
+
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, M68040FpuProperty.GetMethod!);
+                _il.Emit(OpCodes.Call, M68040FpsrProperty.GetMethod!);
+                _il.Emit(OpCodes.Stloc, fpsr);
+
+                if ((condition & 0x10) != 0)
+                {
+                    _il.Emit(OpCodes.Ldloc, fpsr);
+                    EmitLoadUIntConstant(_il, M68040FpuState.ConditionNan);
+                    _il.Emit(OpCodes.And);
+                    _il.Emit(OpCodes.Brfalse, normal);
+                    _il.Emit(OpCodes.Ldc_I4_2);
+                    _il.Emit(OpCodes.Br, done);
+                    _il.MarkLabel(normal);
+                }
+
+                _il.Emit(OpCodes.Ldc_I4, GetM68040FpuConditionTruthMask(condition));
+                _il.Emit(OpCodes.Ldc_I4_1);
+                _il.Emit(OpCodes.Ldloc, fpsr);
+                _il.Emit(OpCodes.Ldc_I4, 24);
+                _il.Emit(OpCodes.Shr_Un);
+                _il.Emit(OpCodes.Ldc_I4, 0x0F);
+                _il.Emit(OpCodes.And);
+                _il.Emit(OpCodes.Shl);
+                _il.Emit(OpCodes.And);
+                _il.Emit(OpCodes.Ldc_I4_0);
+                _il.Emit(OpCodes.Cgt_Un);
+                _il.MarkLabel(done);
+            }
+
+            public void EmitBranchToFpuRegisterExceptionalExit(Label exceptionalExit)
+            {
+                _il.Emit(OpCodes.Ldarg_0);
+                _il.Emit(OpCodes.Ldfld, CompiledM68040FpuExceptionPendingField);
+                _il.Emit(OpCodes.Brtrue, exceptionalExit);
+                _il.Emit(OpCodes.Ldloc, State);
+                _il.Emit(OpCodes.Call, ProgramCounterProperty.GetMethod!);
+                _il.Emit(OpCodes.Ldloc, ProgramCounter);
+                _il.Emit(OpCodes.Bne_Un, exceptionalExit);
             }
 
             public void EmitCheckCondition(int condition)
@@ -15757,6 +16402,12 @@ namespace Copper68k
         public long NativeM68040FpuIlInstructions { get; set; }
 
         public long M68040FpuFallbackInstructions { get; set; }
+
+        public long M68040NativeFpuConditionSites { get; set; }
+
+        public long M68040FpuBsunSlowPathExits { get; set; }
+
+        public long M68040FpuTrapSlowPathExits { get; set; }
 
         public long BlacklistCount { get; set; }
 

@@ -246,6 +246,64 @@ namespace Copper68k
 
         public ExtF80Context Context => _context;
 
+        internal bool InexactExceptionEnabled
+            => (_enabledExceptionMask & (ExceptionInexact1 | ExceptionInexact2)) != 0;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void CommitCanonicalNormal(int destination, ExtF80 value, bool inexact)
+        {
+            HasExecutedNonConditionalInstruction = true;
+            if (StateFrameKind == M68040FpuFrameKind.Null)
+            {
+                StateFrameKind = M68040FpuFrameKind.Idle;
+            }
+
+            var fpsr = Fpsr & ~(ConditionMask | ExceptionMask);
+            if (value.Sign)
+            {
+                fpsr |= ConditionNegative;
+            }
+
+            if (inexact)
+            {
+                fpsr |= ExceptionInexact2 | AccruedInexact;
+            }
+
+            Fpsr = fpsr;
+            FP[destination] = value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void CommitCanonicalCondition(bool negative)
+        {
+            HasExecutedNonConditionalInstruction = true;
+            if (StateFrameKind == M68040FpuFrameKind.Null)
+            {
+                StateFrameKind = M68040FpuFrameKind.Idle;
+            }
+
+            Fpsr = (Fpsr & ~(ConditionMask | ExceptionMask)) |
+                (negative ? ConditionNegative : 0u);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void CommitCanonicalComparison(ExtF80Comparison comparison)
+        {
+            HasExecutedNonConditionalInstruction = true;
+            if (StateFrameKind == M68040FpuFrameKind.Null)
+            {
+                StateFrameKind = M68040FpuFrameKind.Idle;
+            }
+
+            var condition = comparison switch
+            {
+                ExtF80Comparison.Less => ConditionNegative,
+                ExtF80Comparison.Equal => ConditionZero,
+                _ => 0u
+            };
+            Fpsr = (Fpsr & ~(ConditionMask | ExceptionMask)) | condition;
+        }
+
         public void SetCondition(ExtF80 value)
         {
             value = M68040FpuHelpers.CanonicalizeOperand(value);
@@ -787,6 +845,302 @@ namespace Copper68k
                 FloatingPointExceptionFlags.None,
                 unsupportedSource: false);
 
+        public static M68040FpuExecutionResult ApplyRegisterMove(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 previousDestination)
+        {
+            if (TryApplyRegisterMoveCanonical(fpu, destination, opmode, source))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, previousDestination, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterSquareRoot(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 previousDestination)
+        {
+            if (TryApplyRegisterSquareRootCanonical(fpu, destination, opmode, source))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, previousDestination, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterAbsolute(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 previousDestination)
+        {
+            if (TryApplyRegisterAbsoluteCanonical(fpu, destination, opmode, source))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, previousDestination, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterNegate(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 previousDestination)
+        {
+            if (TryApplyRegisterNegateCanonical(fpu, destination, opmode, source))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, previousDestination, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterDivide(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterDivideCanonical(fpu, destination, opmode, source, destinationValue))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterAdd(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterAddCanonical(fpu, destination, opmode, source, destinationValue))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterMultiply(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterMultiplyCanonical(fpu, destination, opmode, source, destinationValue))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterSubtract(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterSubtractCanonical(fpu, destination, opmode, source, destinationValue))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterCompare(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterCompareCanonical(fpu, source, destinationValue))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static M68040FpuExecutionResult ApplyRegisterTest(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue)
+        {
+            if (TryApplyRegisterTestCanonical(fpu, source))
+                return new M68040FpuExecutionResult(true, 0);
+
+            return ApplyOperationCore(fpu, destination, opmode, source, destinationValue, FloatingPointExceptionFlags.None, false);
+        }
+
+        public static bool TryApplyRegisterMoveCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source)
+        {
+            if (!IsCanonicalNormal(source)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            if (context.Precision == ExtF80Precision.Extended)
+            {
+                fpu.CommitCanonicalNormal(destination, source, inexact: false);
+                return true;
+            }
+
+            var operation = ConstrainPrecisionRange(ExtF80Math.Round(source, context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterSquareRootCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source)
+        {
+            if (!IsCanonicalNormal(source) || source.Sign) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            var operation = ConstrainPrecisionRange(ExtF80Math.SquareRoot(source, context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterAbsoluteCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source)
+        {
+            if (!IsCanonicalNormal(source)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            if (context.Precision == ExtF80Precision.Extended)
+            {
+                fpu.CommitCanonicalNormal(
+                    destination,
+                    ExtF80.FromBits((ushort)(source.SignExponent & 0x7FFF), source.Significand),
+                    inexact: false);
+                return true;
+            }
+
+            var operation = ConstrainPrecisionRange(RoundUnary(ExtF80Math.Absolute(source), context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterNegateCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source)
+        {
+            if (!IsCanonicalNormal(source)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            if (context.Precision == ExtF80Precision.Extended)
+            {
+                fpu.CommitCanonicalNormal(
+                    destination,
+                    ExtF80.FromBits((ushort)(source.SignExponent ^ 0x8000), source.Significand),
+                    inexact: false);
+                return true;
+            }
+
+            var operation = ConstrainPrecisionRange(RoundUnary(ExtF80Math.Negate(source), context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterDivideCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source, ExtF80 destinationValue)
+        {
+            if (!IsCanonicalNormal(source) || !IsCanonicalNormal(destinationValue)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            var operation = ExtF80Math.Divide(destinationValue, source, context);
+            if (opmode != 0x24) operation = ConstrainPrecisionRange(operation, context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterAddCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source, ExtF80 destinationValue)
+        {
+            if (!IsCanonicalNormal(source) || !IsCanonicalNormal(destinationValue)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            var operation = ConstrainPrecisionRange(ExtF80Math.Add(destinationValue, source, context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterMultiplyCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source, ExtF80 destinationValue)
+        {
+            if (!IsCanonicalNormal(source) || !IsCanonicalNormal(destinationValue)) return false;
+            if (opmode == 0x27)
+            {
+                source = TruncateSinglePrecisionOperand(source);
+                destinationValue = TruncateSinglePrecisionOperand(destinationValue);
+            }
+
+            var context = OperationContext(fpu.Context, opmode);
+            var operation = ExtF80Math.Multiply(destinationValue, source, context);
+            if (opmode != 0x27) operation = ConstrainPrecisionRange(operation, context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterSubtractCanonical(
+            M68040FpuState fpu, int destination, int opmode, ExtF80 source, ExtF80 destinationValue)
+        {
+            if (!IsCanonicalNormal(source) || !IsCanonicalNormal(destinationValue)) return false;
+            var context = OperationContext(fpu.Context, opmode);
+            var operation = ConstrainPrecisionRange(ExtF80Math.Subtract(destinationValue, source, context), context);
+            return TryCommitCanonicalNormal(fpu, destination, operation);
+        }
+
+        public static bool TryApplyRegisterCompareCanonical(
+            M68040FpuState fpu, ExtF80 source, ExtF80 destinationValue)
+        {
+            if (!IsCanonicalNormal(source) || !IsCanonicalNormal(destinationValue)) return false;
+            fpu.CommitCanonicalComparison(CompareCanonicalNormal(destinationValue, source));
+            return true;
+        }
+
+        public static bool TryApplyRegisterTestCanonical(M68040FpuState fpu, ExtF80 source)
+        {
+            if (!IsCanonicalNormal(source)) return false;
+            fpu.CommitCanonicalCondition(source.Sign);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ExtF80Comparison CompareCanonicalNormal(ExtF80 left, ExtF80 right)
+        {
+            if (left.Sign != right.Sign)
+            {
+                return left.Sign ? ExtF80Comparison.Less : ExtF80Comparison.Greater;
+            }
+
+            var magnitude = (left.SignExponent & 0x7FFF).CompareTo(right.SignExponent & 0x7FFF);
+            if (magnitude == 0)
+            {
+                magnitude = left.Significand.CompareTo(right.Significand);
+            }
+
+            if (left.Sign)
+            {
+                magnitude = -magnitude;
+            }
+
+            return magnitude < 0
+                ? ExtF80Comparison.Less
+                : magnitude > 0
+                    ? ExtF80Comparison.Greater
+                    : ExtF80Comparison.Equal;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryCommitCanonicalNormal(
+            M68040FpuState fpu,
+            int destination,
+            FloatingPointResult<ExtF80> operation)
+        {
+            const FloatingPointExceptionFlags allowedFlags = FloatingPointExceptionFlags.Inexact;
+            if (!IsCanonicalNormal(operation.Value) ||
+                (operation.Flags & ~allowedFlags) != 0 ||
+                ((operation.Flags & FloatingPointExceptionFlags.Inexact) != 0 && fpu.InexactExceptionEnabled))
+            {
+                return false;
+            }
+
+            fpu.CommitCanonicalNormal(
+                destination,
+                operation.Value,
+                (operation.Flags & FloatingPointExceptionFlags.Inexact) != 0);
+            return true;
+        }
+
         private static M68040FpuExecutionResult ApplyOperationCore(
             M68040FpuState fpu,
             int destination,
@@ -794,8 +1148,24 @@ namespace Copper68k
             ExtF80 source,
             FloatingPointExceptionFlags sourceFlags,
             bool unsupportedSource)
+            => ApplyOperationCore(
+                fpu,
+                destination,
+                opmode,
+                source,
+                fpu.FP[destination],
+                sourceFlags,
+                unsupportedSource);
+
+        private static M68040FpuExecutionResult ApplyOperationCore(
+            M68040FpuState fpu,
+            int destination,
+            int opmode,
+            ExtF80 source,
+            ExtF80 destinationValue,
+            FloatingPointExceptionFlags sourceFlags,
+            bool unsupportedSource)
         {
-            var destinationValue = fpu.FP[destination];
             if (sourceFlags == FloatingPointExceptionFlags.None &&
                 !unsupportedSource &&
                 IsCanonicalNormal(source) &&

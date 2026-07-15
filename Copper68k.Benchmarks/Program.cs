@@ -290,6 +290,40 @@ static BenchmarkWorkload[] CreateWorkloads()
             backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
             ChecksumFpu,
             IncludeByDefault: false),
+        CreateFpuRegisterLoop("fpu-add-loop", 0x00A2, SetupFpuArithmetic),
+        CreateFpuRegisterLoop("fpu-subtract-loop", 0x00A8, SetupFpuArithmetic),
+        CreateFpuRegisterLoop("fpu-multiply-loop", 0x00A3, SetupFpuArithmetic),
+        CreateFpuRegisterLoop("fpu-divide-loop", 0x00A0, SetupFpuArithmetic),
+        CreateFpuRegisterLoop("fpu-square-root-loop", 0x0084, SetupFpuSquareRoot),
+        CreateFpuRegisterLoop("fpu-absolute-loop", 0x0D98, SetupFpuUnary),
+        new BenchmarkWorkload(
+            "fpu-forced-single-arithmetic-loop",
+            [
+                0xF200, 0x0080, // FMOVE.X FP0,FP1
+                0xF200, 0x00E2, // FADD.S FP0,FP1
+                0xF200, 0x00E8, // FSUB.S FP0,FP1
+                0xF200, 0x00E3, // FMUL.S FP0,FP1
+                0x60EE          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuArithmetic,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-forced-single-divide-loop",
+            [
+                0xF200, 0x0080, // FMOVE.X FP0,FP1
+                0xF200, 0x00E0, // FDIV.S FP0,FP1
+                0x60F6          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuForcedDivide,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
         new BenchmarkWorkload(
             "fpu-forced-double-divide-loop",
             [
@@ -302,8 +336,77 @@ static BenchmarkWorkload[] CreateWorkloads()
             1 << 20,
             backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
             ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-forced-double-arithmetic-loop",
+            [
+                0xF200, 0x0080, // FMOVE.X FP0,FP1
+                0xF200, 0x00E6, // FADD.D FP0,FP1
+                0xF200, 0x00EC, // FSUB.D FP0,FP1
+                0xF200, 0x00E7, // FMUL.D FP0,FP1
+                0x60EE          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuArithmetic,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-conditional-register-loop",
+            [
+                0xF240, 0x000F, // FST D0
+                0x60FA          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuArithmetic,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-compare-branch-loop",
+            [
+                0xF200, 0x08B8, // FCMP.X FP2,FP1
+                0xF281, 0xFFFA  // FBEQ.W loop
+            ],
+            SetupNone,
+            SetupFpuCompare,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "fpu-test-set-loop",
+            [
+                0xF200, 0x003A, // FTST.X FP0
+                0xF240, 0x0001, // FSEQ D0
+                0x60F6          // BRA.S loop
+            ],
+            SetupNone,
+            SetupFpuArithmetic,
+            1 << 20,
+            backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+            ChecksumFpu,
             IncludeByDefault: false)
     ];
+
+static BenchmarkWorkload CreateFpuRegisterLoop(
+    string name,
+    ushort command,
+    Action<M68kCpuState> setupState)
+    => new(
+        name,
+        [
+            0xF200, command,
+            0x60FA // BRA.S loop
+        ],
+        SetupNone,
+        setupState,
+        1 << 20,
+        backend => backend.Name.Contains("M68040", StringComparison.Ordinal),
+        ChecksumFpu,
+        IncludeByDefault: false);
 
 static void SetupNone(BenchmarkBus bus)
 {
@@ -325,16 +428,37 @@ static void SetupFpuArithmetic(M68kCpuState state)
     state.M68040Fpu.FP[1] = one;
 }
 
+static void SetupFpuCompare(M68kCpuState state)
+{
+    SetupFpuArithmetic(state);
+    state.M68040Fpu.FP[2] = ExtF80Math.FromInt32(1);
+}
+
 static void SetupFpuForcedDivide(M68kCpuState state)
 {
     state.M68040Fpu.FP[0] = ExtF80Math.FromInt32(3);
     state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
 }
 
+static void SetupFpuSquareRoot(M68kCpuState state)
+{
+    state.M68040Fpu.FP[0] = ExtF80Math.FromInt32(2);
+    state.M68040Fpu.FP[1] = ExtF80Math.FromInt32(1);
+}
+
+static void SetupFpuUnary(M68kCpuState state)
+    => state.M68040Fpu.FP[3] = ExtF80Math.FromInt32(-2);
+
 static uint ChecksumFpu(M68kCpuState state)
 {
-    var value = state.M68040Fpu.FP[1];
-    var checksum = ((uint)value.SignExponent << 16) ^ (uint)value.Significand ^ (uint)(value.Significand >> 32);
+    var checksum = 2166136261u;
+    foreach (var value in state.M68040Fpu.FP)
+    {
+        checksum = unchecked((checksum * 16777619u) ^ value.SignExponent);
+        checksum = unchecked((checksum * 16777619u) ^ (uint)value.Significand);
+        checksum = unchecked((checksum * 16777619u) ^ (uint)(value.Significand >> 32));
+    }
+
     checksum = unchecked((checksum * 16777619u) ^ state.M68040Fpu.Fpsr);
     return unchecked((checksum * 16777619u) ^ state.M68040Fpu.Fpiar);
 }
