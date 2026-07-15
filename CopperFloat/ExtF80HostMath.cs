@@ -19,6 +19,25 @@ internal enum ExtF80HostOperation
 
 internal static class ExtF80HostMath
 {
+    public static bool TrySquareRoot(
+        ExtF80 value,
+        ExtF80Context context,
+        out FloatingPointResult<ExtF80> result)
+    {
+        if (value.Sign || context.RoundingMode != ExtF80RoundingMode.ToNearestEven)
+        {
+            result = default;
+            return false;
+        }
+
+        return context.Precision switch
+        {
+            ExtF80Precision.Single => TrySquareRoot32(value, out result),
+            ExtF80Precision.Double => TrySquareRoot64(value, out result),
+            _ => Fail(out result)
+        };
+    }
+
     public static bool TryBinary(
         ExtF80 left,
         ExtF80 right,
@@ -112,6 +131,46 @@ internal static class ExtF80HostMath
         return true;
     }
 
+    private static bool TrySquareRoot32(
+        ExtF80 value,
+        out FloatingPointResult<ExtF80> result)
+    {
+        if (!TryEncodeBinary32Normal(value, out var valueBits))
+        {
+            result = default;
+            return false;
+        }
+
+        var root = MathF.Sqrt(BitConverter.Int32BitsToSingle(unchecked((int)valueBits)));
+        var rootBits = unchecked((uint)BitConverter.SingleToInt32Bits(root));
+        var converted = ExtF80Math.FromBinary32Bits(rootBits).Value;
+        var flags = IsExactSquareRoot(value, converted, 24)
+            ? FloatingPointExceptionFlags.None
+            : FloatingPointExceptionFlags.Inexact;
+        result = new FloatingPointResult<ExtF80>(converted, flags);
+        return true;
+    }
+
+    private static bool TrySquareRoot64(
+        ExtF80 value,
+        out FloatingPointResult<ExtF80> result)
+    {
+        if (!TryEncodeBinary64Normal(value, out var valueBits))
+        {
+            result = default;
+            return false;
+        }
+
+        var root = Math.Sqrt(BitConverter.Int64BitsToDouble(unchecked((long)valueBits)));
+        var rootBits = unchecked((ulong)BitConverter.DoubleToInt64Bits(root));
+        var converted = ExtF80Math.FromBinary64Bits(rootBits).Value;
+        var flags = IsExactSquareRoot(value, converted, 53)
+            ? FloatingPointExceptionFlags.None
+            : FloatingPointExceptionFlags.Inexact;
+        result = new FloatingPointResult<ExtF80>(converted, flags);
+        return true;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float ExecuteBinary32(uint leftBits, uint rightBits, ExtF80HostOperation operation)
     {
@@ -181,6 +240,33 @@ internal static class ExtF80HostMath
         var divisor = GreatestCommonDivisor(numerator, denominator);
         denominator /= divisor;
         return BitOperations.IsPow2(denominator);
+    }
+
+    private static bool IsExactSquareRoot(ExtF80 value, ExtF80 root, int precision)
+    {
+        var shift = 64 - precision;
+        var valueSignificand = value.Significand >> shift;
+        var rootSignificand = root.Significand >> shift;
+        var square = (UInt128)rootSignificand * rootSignificand;
+        var valueExponent = value.BiasedExponent - ExtF80.ExponentBias - (precision - 1);
+        var squareExponent = 2 * (root.BiasedExponent - ExtF80.ExponentBias - (precision - 1));
+
+        var valueTrailingZeros = BitOperations.TrailingZeroCount(valueSignificand);
+        valueSignificand >>= valueTrailingZeros;
+        valueExponent += valueTrailingZeros;
+
+        var squareTrailingZeros = TrailingZeroCount(square);
+        square >>= squareTrailingZeros;
+        squareExponent += squareTrailingZeros;
+        return square == valueSignificand && squareExponent == valueExponent;
+    }
+
+    private static int TrailingZeroCount(UInt128 value)
+    {
+        var low = (ulong)value;
+        return low != 0
+            ? BitOperations.TrailingZeroCount(low)
+            : 64 + BitOperations.TrailingZeroCount((ulong)(value >> 64));
     }
 
     private static bool IsExactBinary32Product(uint leftBits, uint rightBits)

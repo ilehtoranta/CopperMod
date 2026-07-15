@@ -306,6 +306,12 @@ public static class ExtF80Math
     {
         if (IsNormal(value) && !value.Sign)
         {
+            if (context.Precision is ExtF80Precision.Single or ExtF80Precision.Double &&
+                ExtF80HostMath.TrySquareRoot(value, context, out var accelerated))
+            {
+                return accelerated;
+            }
+
             return SquareRootFinite(value, context);
         }
 
@@ -725,13 +731,6 @@ public static class ExtF80Math
             exponent -= shift;
         }
 
-        if (context.Precision == ExtF80Precision.Extended &&
-            context.RoundingMode == ExtF80RoundingMode.ToNearestEven &&
-            exponent >= MinimumExponent)
-        {
-            return RoundPackNearestExtended(sign, exponent, significand, flags);
-        }
-
         var tinyBeforeRounding = exponent < MinimumExponent;
         if (tinyBeforeRounding)
         {
@@ -783,41 +782,6 @@ public static class ExtF80Math
 
         var biasedExponent = subnormal ? 0 : exponent + ExtF80.ExponentBias;
         return Result(ExtF80.FromBits(SignExponent(sign, biasedExponent), packedSignificand), flags);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static FloatingPointResult<ExtF80> RoundPackNearestExtended(
-        bool sign,
-        int exponent,
-        UInt128 significand,
-        FloatingPointExceptionFlags flags)
-    {
-        var remainder = (byte)(significand & 7);
-        var rounded = significand >> 3;
-        if (remainder > 4 || (remainder == 4 && (rounded & 1) != 0))
-        {
-            rounded++;
-            if (rounded == ((UInt128)1 << 64))
-            {
-                rounded >>= 1;
-                exponent++;
-            }
-        }
-
-        if (remainder != 0)
-        {
-            flags |= FloatingPointExceptionFlags.Inexact;
-        }
-
-        if (exponent > MaximumExponent)
-        {
-            flags |= FloatingPointExceptionFlags.Overflow | FloatingPointExceptionFlags.Inexact;
-            return Result(sign ? ExtF80.NegativeInfinity : ExtF80.PositiveInfinity, flags);
-        }
-
-        return Result(
-            ExtF80.FromBits(SignExponent(sign, exponent + ExtF80.ExponentBias), (ulong)rounded),
-            flags);
     }
 
     private static FloatingPointResult<ulong> ToBinaryBits(

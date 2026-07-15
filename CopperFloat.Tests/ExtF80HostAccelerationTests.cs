@@ -71,6 +71,24 @@ public sealed class ExtF80HostAccelerationTests
         Assert.True(accelerated > 10_000, $"Only {accelerated} binary64 cases used host arithmetic.");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HostSquareRootMatchesIntegerReference(bool binary64)
+    {
+        var random = new Random(binary64 ? 0x68060 : 0x68040);
+        var context = binary64 ? DoubleContext : SingleContext;
+        for (var index = 0; index < 20_000; index++)
+        {
+            var value = binary64
+                ? ExtF80Math.FromBinary64Bits(CreateNormalBinary64(random) & 0x7FFF_FFFF_FFFF_FFFFUL).Value
+                : ExtF80Math.FromBinary32Bits(CreateNormalBinary32(random) & 0x7FFF_FFFFu).Value;
+
+            Assert.True(ExtF80HostMath.TrySquareRoot(value, context, out var actual));
+            Assert.Equal(ExtF80Math.SquareRootReference(value, context), actual);
+        }
+    }
+
     [Fact]
     public void HostAccelerationRejectsContextsAndOperandsOutsideExactContract()
     {
@@ -102,6 +120,13 @@ public sealed class ExtF80HostAccelerationTests
             DoubleContext,
             ExtF80HostOperation.Add,
             out _));
+        Assert.False(ExtF80HostMath.TrySquareRoot(
+            one,
+            DoubleContext with { RoundingMode = ExtF80RoundingMode.TowardZero },
+            out _));
+        Assert.False(ExtF80HostMath.TrySquareRoot(one, ExtF80Context.Default, out _));
+        Assert.False(ExtF80HostMath.TrySquareRoot(ExtF80Math.FromInt32(-1), DoubleContext, out _));
+        Assert.False(ExtF80HostMath.TrySquareRoot(nonBinary64, DoubleContext, out _));
     }
 
     [Fact]
