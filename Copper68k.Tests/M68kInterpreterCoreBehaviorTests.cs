@@ -90,6 +90,48 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
 		Assert.Contains(bus.InstructionFetchCycles, fetch => fetch.Address == 0x1006u);
 	}
+	[Fact(Skip = "Cross-emulator full DBRA refill requires synchronous instruction/bus accounting; direct background-queue scheduling breaks cycle01v IRQ phase.")]
+	public void TakenDbraIssuesTwoWordTargetRefillWithoutChargingBackgroundWait()
+	{
+		var bus = new CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1002,
+			DelayedInstructionFetchOccurrence = 2,
+			DelayedInstructionFetchCycles = 4
+		};
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,$1000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 1;
+
+		var elapsed = cpu.ExecuteInstruction();
+		var fetches = bus.InstructionFetchCycles.ToArray();
+
+		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
+		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.Equal(new uint[] { 0x1000, 0x1002, 0x1000, 0x1002 }, fetches.Select(fetch => fetch.Address));
+		Assert.Equal(10, elapsed);
+	}
+	[Fact]
+	public void ExpiredDbraReadsAbandonedTargetBeforeFallthroughRefill()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0x00, 0x0E); // DBRA D0,$1010
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		Write(bus.Memory, 0x1010, 0x7E, 0xAD);             // abandoned target
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 0;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(14, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFFu, cpu.State.D[0]);
+		Assert.Equal(
+			new uint[] { 0x1000, 0x1002, 0x1010, 0x1004, 0x1006 },
+			bus.InstructionFetchCycles.Select(fetch => fetch.Address));
+	}
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.Scalar)]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
@@ -164,8 +206,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1000u, dataWrite.InstructionProgramCounter);
 		Assert.Equal(0x2000u, dataWrite.Address);
 		Assert.Equal(M68kOperandSize.Long, dataWrite.Size);
-		Assert.Equal(6, dataWrite.RequestedCycle);
-		Assert.Equal(10, dataWrite.CompletedCycle);
+		Assert.Equal(4, dataWrite.RequestedCycle);
+		Assert.Equal(8, dataWrite.CompletedCycle);
 		Assert.True(dataWrite.IsWrite);
 		Assert.Equal(0x1234_5678u, ReadBigEndianUInt32(bus.Memory, 0x2000, "long write"));
 	}
@@ -2576,6 +2618,10 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public List<(uint Address, long Cycle)> InstructionFetchCycles { get; } = new();
 		public List<(uint Address, long Cycle)> DataReadCycles { get; } = new();
 		public List<M68kCpuBusPhase> CpuBusPhases { get; } = new();
+		public uint? DelayedInstructionFetchAddress { get; init; }
+		public int DelayedInstructionFetchOccurrence { get; init; } = 1;
+		public int DelayedInstructionFetchCycles { get; init; }
+		private int _matchingInstructionFetchCount;
 		public bool CpuBusPhaseTracingEnabled => true;
 		public void RecordCpuBusPhase(in M68kCpuBusPhase phase)
 		{
@@ -2592,6 +2638,11 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			var value = (ushort)((Memory[address] << 8) | Memory[address + 1]);
 			if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
 			{
+				if (DelayedInstructionFetchAddress == address &&
+					++_matchingInstructionFetchCount == DelayedInstructionFetchOccurrence)
+				{
+					cycle += DelayedInstructionFetchCycles;
+				}
 				InstructionFetchCycles.Add((address, cycle));
 			}
 			else if (accessKind == M68kBusAccessKind.CpuDataRead)

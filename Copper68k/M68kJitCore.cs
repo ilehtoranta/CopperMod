@@ -143,6 +143,7 @@ namespace Copper68k
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
         private readonly IM68kCore _fallback;
         private readonly IM68kJitFallbackFetchSynchronization? _fallbackFetchSynchronization;
+        private readonly IM68000PipelineStateTransfer? _fallbackPipelineStateTransfer;
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -155,6 +156,7 @@ namespace Copper68k
         private readonly bool _v2BusGraphEnabled;
         private readonly bool _asyncJitEnabled;
         private readonly bool _asyncJitSyncFallbackEnabled;
+        private readonly bool _requiresExactM68000PipelineFallback;
         private readonly M68040Move16CopyStrategy _m68040Move16CopyStrategy;
         private readonly M68kAsyncJitCompiler? _asyncCompiler;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency = new M68kInstructionFrequencyMatrix();
@@ -539,6 +541,8 @@ namespace Copper68k
         private bool _classicCompiledBusSynchronized;
         private bool _classicCompiledTimingActive;
         private bool _classicCompiledPrefetchHandled;
+        private M68000PipelineState _m68000PipelineState;
+        private bool _m68000PipelineStateValid;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -688,6 +692,12 @@ namespace Copper68k
             _fallbackFetchSynchronization = _cpuModel == M68kJitCpuModel.M68000
                 ? _fallback as IM68kJitFallbackFetchSynchronization
                 : null;
+            _fallbackPipelineStateTransfer = _cpuModel == M68kJitCpuModel.M68000
+                ? _fallback as IM68000PipelineStateTransfer
+                : null;
+            _requiresExactM68000PipelineFallback =
+                _cpuModel == M68kJitCpuModel.M68000 &&
+                bus is IM68000BusCycleTiming { RequiresExactM68000PipelineFallback: true };
             if (_asyncJitEnabled)
             {
                 _asyncCompiler = new M68kAsyncJitCompiler(
@@ -990,6 +1000,7 @@ namespace Copper68k
         public void Reset(uint programCounter, uint stackPointer)
         {
             _fallback.Reset(programCounter, stackPointer);
+            CaptureFallbackM68000PipelineState();
             ResetExecutionStateBookkeeping();
             ClearRuntimeState();
         }
@@ -999,6 +1010,7 @@ namespace Copper68k
         internal void ResetForBenchmark(uint programCounter, uint stackPointer)
         {
             _fallback.Reset(programCounter, stackPointer);
+            CaptureFallbackM68000PipelineState();
             ResetExecutionStateBookkeeping();
             _counters = default;
         }
@@ -1006,6 +1018,7 @@ namespace Copper68k
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             _fallback.BeginSubroutine(address, stackPointer, returnAddress);
+            CaptureFallbackM68000PipelineState();
             ResetExecutionStateBookkeeping();
             ClearRuntimeState();
         }
@@ -1013,6 +1026,7 @@ namespace Copper68k
         public void RequestInterrupt(int level, uint vectorAddress)
         {
             _fallback.RequestInterrupt(level, vectorAddress);
+            CaptureFallbackM68000PipelineState();
         }
 
         long IM68000InterruptRecognition.LastInterruptSampleCycle
@@ -1031,6 +1045,12 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
+            if (_requiresExactM68000PipelineFallback)
+            {
+                _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;
+                return 0;
+            }
+
             if (!CanUseJitForCurrentCacheState())
             {
                 _pendingFallbackReason = M68kJitFallbackReason.CacheState;
@@ -2150,13 +2170,20 @@ namespace Copper68k
             var previousCycle = State.Cycles;
             var root = Normalize(State.ProgramCounter);
             var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
-            if (_fallbackFetchSynchronization != null &&
+            if (_requiresExactM68000PipelineFallback &&
+                _fallbackPipelineStateTransfer != null &&
+                _m68000PipelineStateValid)
+            {
+                _fallbackPipelineStateTransfer.ImportM68000PipelineState(in _m68000PipelineState);
+            }
+            else if (_fallbackFetchSynchronization != null &&
                 (!_fallbackFetchSynchronized || _fallbackExpectedProgramCounter != State.ProgramCounter))
             {
                 _fallbackFetchSynchronization.SynchronizeInstructionFetch();
             }
 
             _fallback.ExecuteInstruction();
+            CaptureFallbackM68000PipelineState();
             _fallbackFetchSynchronized = true;
             _fallbackExpectedProgramCounter = State.ProgramCounter;
             _classicCompiledBusSynchronized = false;
@@ -2176,6 +2203,18 @@ namespace Copper68k
 
             ObserveHotRoot(root);
             return true;
+        }
+
+        private void CaptureFallbackM68000PipelineState()
+        {
+            if (_fallbackPipelineStateTransfer == null)
+            {
+                _m68000PipelineStateValid = false;
+                return;
+            }
+
+            _m68000PipelineState = _fallbackPipelineStateTransfer.ExportM68000PipelineState();
+            _m68000PipelineStateValid = true;
         }
 
         private void RecordFallbackAttribution(
@@ -8598,6 +8637,7 @@ namespace Copper68k
                 M68kJitFallbackReason.NoCompiledDelegate => "no-compiled",
                 M68kJitFallbackReason.V2OnlyNoBatch => "v2-only-no-batch",
                 M68kJitFallbackReason.ClassicSideExit => "classic-side-exit",
+                M68kJitFallbackReason.ExactM68000Pipeline => "exact-68000-pipeline",
                 M68kJitFallbackReason.Stopped => "stopped",
                 _ => "unknown"
             };
@@ -15205,6 +15245,7 @@ namespace Copper68k
             NoCompiledDelegate,
             V2OnlyNoBatch,
             ClassicSideExit,
+            ExactM68000Pipeline,
             Stopped
         }
 

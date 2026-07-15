@@ -336,6 +336,25 @@ namespace Copper68k
         void RecordCpuBusPhase(in M68kCpuBusPhase phase);
     }
 
+    internal readonly record struct M68000BusAccessTiming(
+        long ReadyCycle,
+        long NextBusCycle);
+
+    internal interface IM68000BusCycleTiming
+    {
+        int M68000BusCycleStartDelay { get; }
+
+        bool RequiresExactM68000PipelineFallback { get; }
+
+        M68000BusAccessTiming GetM68000BusAccessTiming(
+            uint address,
+            M68kOperandSize size,
+            M68kBusAccessKind accessKind,
+            bool isWrite,
+            long requestedCycle,
+            long completedCycle);
+    }
+
     internal readonly struct M68kInstructionFetchWindow
     {
         public static M68kInstructionFetchWindow Empty { get; } = new(
@@ -544,6 +563,29 @@ namespace Copper68k
     internal interface IM68kJitFallbackFetchSynchronization
     {
         void SynchronizeInstructionFetch();
+    }
+
+    internal readonly record struct M68000PipelineState(
+        uint PrefetchAddress,
+        ushort Word0,
+        ushort Word1,
+        long ReadyCycle0,
+        long ReadyCycle1,
+        bool DeferredBatchEligible0,
+        bool DeferredBatchEligible1,
+        int PrefetchCount,
+        bool ConsumeWithoutPrefetch,
+        bool SkipRetirePrefetchTopUp,
+        long NextBusTransferCycle,
+        long LastBusReadyCycle,
+        long RetireBusCycle,
+        int PendingInternalCycles);
+
+    internal interface IM68000PipelineStateTransfer
+    {
+        M68000PipelineState ExportM68000PipelineState();
+
+        void ImportM68000PipelineState(in M68000PipelineState state);
     }
 
     internal enum M68kBackendKind
@@ -1429,6 +1471,7 @@ namespace Copper68k
         IM68kBatchCore,
         IM68kInstructionFrequencyProvider,
         IM68kJitFallbackFetchSynchronization,
+        IM68000PipelineStateTransfer,
         IM68000PrefetchDiagnostics,
         IM68000InterruptRecognition
         where TBus : IM68kBus
@@ -1449,6 +1492,7 @@ namespace Copper68k
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
         private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
         private readonly IM68kCpuBusPhaseTrace? _cpuBusPhaseTrace;
+        private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         private readonly M68kOpcodePlanDispatch _opcodePlanDispatch;
         private M68kInstructionFetchWindow _instructionFetchWindow;
@@ -1464,6 +1508,7 @@ namespace Copper68k
         private bool _consumeWithoutPrefetch;
         private bool _skipRetirePrefetchTopUp;
         private long _cpuBusCycle;
+        private long _cpuBusReadyCycle;
         private long _cpuRetireBusCycle;
         private int _pendingInternalCycles;
         private bool _instructionCycleFloorActive;
@@ -1517,6 +1562,7 @@ namespace Copper68k
                 ? bus as IM68kInstructionFetchWindowBus
                 : null;
             _deferredCpuInstructionTiming = bus as IM68kDeferredCpuInstructionTiming;
+            _m68000BusCycleTiming = bus as IM68000BusCycleTiming;
             _cpuBusPhaseTrace = enableCpuBusPhaseTrace &&
                 bus is IM68kCpuBusPhaseTrace { CpuBusPhaseTracingEnabled: true } trace
                     ? trace
@@ -2502,9 +2548,9 @@ namespace Copper68k
             {
                 var register = opcode & 7;
                 var counter = (ushort)((State.D[register] & 0xFFFF) - 1);
+                var target = unchecked((uint)(branchBase + displacement));
                 if (counter != 0xFFFF)
                 {
-                    var target = unchecked((uint)(branchBase + displacement));
                     if (_instructionFrequency.Enabled)
                     {
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
@@ -2518,6 +2564,7 @@ namespace Copper68k
 
                 State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
                 AddInstructionCycles(14);
+                CompleteExpiredDbccRefill(target, State.ProgramCounter);
                 return;
             }
 
@@ -2534,9 +2581,9 @@ namespace Copper68k
             _consumeWithoutPrefetch = false;
             var register = opcode & 7;
             var counter = (ushort)((State.D[register] & 0xFFFF) - 1);
+            var target = unchecked((uint)(branchBase + displacement));
             if (counter != 0xFFFF)
             {
-                var target = unchecked((uint)(branchBase + displacement));
                 if (_instructionFrequency.Enabled)
                 {
                     _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
@@ -2550,6 +2597,7 @@ namespace Copper68k
 
             State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
             AddInstructionCycles(14);
+            CompleteExpiredDbccRefill(target, State.ProgramCounter);
         }
 
         private void ExecutePlannedQuickRegister(ushort opcode)
@@ -3193,6 +3241,7 @@ namespace Copper68k
                 AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(20, 7, 1));
             }
 
+            PrefetchFallthroughBeforeMemoryWriteback();
             WriteLong(destinationAddress, value);
             PrefetchFallthroughAfterMoveSourceRead();
             AddInstructionCycles(20);
@@ -3584,9 +3633,9 @@ namespace Copper68k
             {
                 var register = plan.Register;
                 var counter = (ushort)((State.D[register] & 0xFFFF) - 1);
+                var target = unchecked((uint)(branchBase + displacement));
                 if (counter != 0xFFFF)
                 {
-                    var target = unchecked((uint)(branchBase + displacement));
                     if (_instructionFrequency.Enabled)
                     {
                         _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, State.LastOpcode, target, 4);
@@ -3600,6 +3649,7 @@ namespace Copper68k
 
                 State.D[register] = (State.D[register] & 0xFFFF_0000) | counter;
                 AddInstructionCycles(14);
+                CompleteExpiredDbccRefill(target, State.ProgramCounter);
                 return;
             }
 
@@ -4622,6 +4672,41 @@ namespace Copper68k
         void IM68kJitFallbackFetchSynchronization.SynchronizeInstructionFetch()
             => ResetPrefetchPipeline();
 
+        M68000PipelineState IM68000PipelineStateTransfer.ExportM68000PipelineState()
+            => new M68000PipelineState(
+                _prefetchAddress,
+                _prefetchWord0,
+                _prefetchWord1,
+                _prefetchCompletedCycle0,
+                _prefetchCompletedCycle1,
+                _prefetchDeferredCpuBusBatchEligible0,
+                _prefetchDeferredCpuBusBatchEligible1,
+                _prefetchCount,
+                _consumeWithoutPrefetch,
+                _skipRetirePrefetchTopUp,
+                _cpuBusCycle,
+                _cpuBusReadyCycle,
+                _cpuRetireBusCycle,
+                _pendingInternalCycles);
+
+        void IM68000PipelineStateTransfer.ImportM68000PipelineState(in M68000PipelineState state)
+        {
+            _prefetchAddress = state.PrefetchAddress;
+            _prefetchWord0 = state.Word0;
+            _prefetchWord1 = state.Word1;
+            _prefetchCompletedCycle0 = state.ReadyCycle0;
+            _prefetchCompletedCycle1 = state.ReadyCycle1;
+            _prefetchDeferredCpuBusBatchEligible0 = state.DeferredBatchEligible0;
+            _prefetchDeferredCpuBusBatchEligible1 = state.DeferredBatchEligible1;
+            _prefetchCount = state.PrefetchCount;
+            _consumeWithoutPrefetch = state.ConsumeWithoutPrefetch;
+            _skipRetirePrefetchTopUp = state.SkipRetirePrefetchTopUp;
+            _cpuBusCycle = state.NextBusTransferCycle;
+            _cpuBusReadyCycle = state.LastBusReadyCycle;
+            _cpuRetireBusCycle = state.RetireBusCycle;
+            _pendingInternalCycles = state.PendingInternalCycles;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AdvanceInterruptInternalCycles(int cycles)
         {
@@ -4649,11 +4734,11 @@ namespace Copper68k
             _prefetchCount = 0;
             _prefetchDeferredCpuBusBatchEligible0 = false;
             _prefetchDeferredCpuBusBatchEligible1 = false;
-            TopUpPrefetchOne();
-            State.Cycles = Math.Max(State.Cycles, _cpuBusCycle);
+            var firstReadyCycle = TopUpPrefetchOne();
+            State.Cycles = Math.Max(State.Cycles, firstReadyCycle);
             AdvanceInterruptInternalCycles(2);
-            TopUpPrefetchOne();
-            State.Cycles = Math.Max(State.Cycles, _cpuBusCycle);
+            var secondReadyCycle = TopUpPrefetchOne();
+            State.Cycles = Math.Max(State.Cycles, secondReadyCycle);
         }
 
         private bool DecodeMove(ushort opcode, uint instructionPc)
@@ -7596,9 +7681,32 @@ namespace Copper68k
 
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            TopUpPrefetchOne();
-            _instructionInterruptSampleCycle = _cpuBusCycle;
+            _instructionInterruptSampleCycle = TopUpPrefetchOne();
             _skipRetirePrefetchTopUp = true;
+        }
+
+        private void CompleteExpiredDbccRefill(uint abandonedTarget, uint stackedProgramCounter)
+        {
+            ValidateBranchTarget(abandonedTarget, stackedProgramCounter);
+            _ = ReadPrefetchWord(abandonedTarget, out _, out _);
+            var readyCycle = FullPrefetch(State.ProgramCounter);
+            _instructionInterruptSampleCycle = readyCycle;
+            _skipRetirePrefetchTopUp = true;
+        }
+
+        private void ValidateBranchTarget(uint target, uint stackedProgramCounter)
+        {
+            if ((target & 1) == 0)
+            {
+                return;
+            }
+
+            _dataAccessStackedProgramCounter = stackedProgramCounter;
+            ThrowOddAddressAccess(
+                target,
+                isWrite: false,
+                M68kBusAccessKind.CpuInstructionFetch,
+                useDataAccessStackedProgramCounter: true);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7616,8 +7724,7 @@ namespace Copper68k
 
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            TopUpPrefetchOne();
-            _instructionInterruptSampleCycle = _cpuBusCycle;
+            _instructionInterruptSampleCycle = TopUpPrefetchOne();
         }
 
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
@@ -7648,6 +7755,7 @@ namespace Copper68k
         {
             FlushPrefetch();
             _cpuBusCycle = State.Cycles;
+            _cpuBusReadyCycle = State.Cycles;
             _cpuRetireBusCycle = State.Cycles;
             _pendingInternalCycles = 0;
         }
@@ -7743,22 +7851,22 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void FullPrefetch(uint address)
+        private long FullPrefetch(uint address)
         {
             _prefetchAddress = address;
             _prefetchCount = 0;
             _prefetchDeferredCpuBusBatchEligible0 = false;
             _prefetchDeferredCpuBusBatchEligible1 = false;
             TopUpPrefetchOne();
-            TopUpPrefetchOne();
+            return TopUpPrefetchOne();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void TopUpPrefetchOne()
+        private long TopUpPrefetchOne()
         {
             if (_prefetchCount >= 2)
             {
-                return;
+                return _prefetchCompletedCycle1;
             }
 
             var slot = _prefetchCount;
@@ -7778,6 +7886,7 @@ namespace Copper68k
             }
 
             _prefetchCount = slot + 1;
+            return completedCycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7897,15 +8006,23 @@ namespace Copper68k
             var cycle = BeginPrefetchBusAccessCycle();
             var requestedCycle = cycle;
             var value = ReadInstructionFetchWord(busAddress, ref cycle, out deferredEligible);
-            _cpuBusCycle = cycle;
-            completedCycle = cycle;
+            var timing = GetM68000BusAccessTiming(
+                busAddress,
+                M68kOperandSize.Word,
+                M68kBusAccessKind.CpuInstructionFetch,
+                isWrite: false,
+                requestedCycle,
+                cycle);
+            _cpuBusCycle = timing.NextBusCycle;
+            _cpuBusReadyCycle = timing.ReadyCycle;
+            completedCycle = timing.ReadyCycle;
             if (_cpuBusPhaseTrace != null)
             {
                 RecordCpuBusPhase(
                     busAddress,
                     M68kOperandSize.Word,
                     requestedCycle,
-                    cycle,
+                    timing.ReadyCycle,
                     M68kBusAccessKind.CpuInstructionFetch,
                     isWrite: false);
             }
@@ -7976,7 +8093,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             var value = TCpuDataAccess.ReadByte(_typedBus, busAddress, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Byte,
+                M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Byte,
@@ -7999,7 +8122,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             var value = TCpuDataAccess.ReadWord(_typedBus, busAddress, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Word,
+                M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Word,
@@ -8022,7 +8151,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             var value = TCpuDataAccess.ReadLong(_typedBus, busAddress, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Long,
+                M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Long,
@@ -8047,7 +8182,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             TCpuDataAccess.WriteByte(_typedBus, busAddress, value, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Byte,
+                M68kBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Byte,
@@ -8064,7 +8205,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             TCpuDataAccess.WriteTasByte(_typedBus, busAddress, value, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Byte,
+                M68kBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Byte,
@@ -8086,7 +8233,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             TCpuDataAccess.WriteWord(_typedBus, busAddress, value, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Word,
+                M68kBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Word,
@@ -8108,7 +8261,13 @@ namespace Copper68k
             var cycle = BeginCpuBusAccessCycle();
             var requestedCycle = cycle;
             TCpuDataAccess.WriteLong(_typedBus, busAddress, value, ref cycle);
-            CompleteCpuBusAccess(cycle);
+            CompleteRequiredCpuBusAccess(
+                busAddress,
+                M68kOperandSize.Long,
+                M68kBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                requestedCycle,
+                cycle);
             RecordCpuBusPhase(
                 busAddress,
                 M68kOperandSize.Long,
@@ -8170,7 +8329,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long BeginCpuBusAccessCycle()
         {
-            var cycle = State.Cycles < _cpuBusCycle ? _cpuBusCycle : State.Cycles;
+            var cycle = State.Cycles;
             if (_pendingInternalCycles != 0)
             {
                 cycle += _pendingInternalCycles;
@@ -8184,7 +8343,12 @@ namespace Copper68k
                 _nextCpuDataAccessDelayCycles = 0;
             }
 
-            return cycle;
+            if (_m68000BusCycleTiming != null)
+            {
+                cycle += _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            }
+
+            return cycle < _cpuBusCycle ? _cpuBusCycle : cycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8201,6 +8365,11 @@ namespace Copper68k
                 _pendingInternalCycles = 0;
             }
 
+            if (_m68000BusCycleTiming != null)
+            {
+                cycle += _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            }
+
             return cycle < _cpuBusCycle ? _cpuBusCycle : cycle;
         }
 
@@ -8208,6 +8377,7 @@ namespace Copper68k
         private void CompleteCpuBusAccess(long completedCycle)
         {
             _cpuBusCycle = completedCycle;
+            _cpuBusReadyCycle = completedCycle;
             if (_cpuRetireBusCycle < completedCycle)
             {
                 _cpuRetireBusCycle = completedCycle;
@@ -8215,6 +8385,49 @@ namespace Copper68k
 
             State.Cycles = completedCycle;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteRequiredCpuBusAccess(
+            uint address,
+            M68kOperandSize size,
+            M68kBusAccessKind accessKind,
+            bool isWrite,
+            long requestedCycle,
+            long completedCycle)
+        {
+            var timing = GetM68000BusAccessTiming(
+                address,
+                size,
+                accessKind,
+                isWrite,
+                requestedCycle,
+                completedCycle);
+            _cpuBusCycle = timing.NextBusCycle;
+            _cpuBusReadyCycle = timing.ReadyCycle;
+            if (_cpuRetireBusCycle < timing.ReadyCycle)
+            {
+                _cpuRetireBusCycle = timing.ReadyCycle;
+            }
+
+            State.Cycles = timing.ReadyCycle;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private M68000BusAccessTiming GetM68000BusAccessTiming(
+            uint address,
+            M68kOperandSize size,
+            M68kBusAccessKind accessKind,
+            bool isWrite,
+            long requestedCycle,
+            long completedCycle)
+            => _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                address,
+                size,
+                accessKind,
+                isWrite,
+                requestedCycle,
+                completedCycle) ??
+                new M68000BusAccessTiming(completedCycle, completedCycle);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RecordCpuBusPhase(
             uint address,
@@ -8228,6 +8441,11 @@ namespace Copper68k
             if (trace == null)
             {
                 return;
+            }
+
+            if (_m68000BusCycleTiming != null)
+            {
+                requestedCycle -= _m68000BusCycleTiming.M68000BusCycleStartDelay;
             }
 
             var phase = new M68kCpuBusPhase(
@@ -8381,7 +8599,7 @@ namespace Copper68k
             _pendingInternalCycles = 0;
             if (_instructionInterruptSampleCycle == long.MinValue)
             {
-                _instructionInterruptSampleCycle = _cpuBusCycle;
+                _instructionInterruptSampleCycle = _cpuBusReadyCycle;
             }
             if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
             {
