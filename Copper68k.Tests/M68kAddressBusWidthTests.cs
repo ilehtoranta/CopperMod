@@ -11,6 +11,7 @@ public sealed class M68kAddressBusWidthTests
 	[Theory]
 	[InlineData(M68kCpuModel.M68000, 0x00000000u, 0x5Au)]
 	[InlineData(M68kCpuModel.M68010, 0x00000000u, 0x5Au)]
+	[InlineData(M68kCpuModel.M68EC020, 0x00000000u, 0x5Au)]
 	[InlineData(M68kCpuModel.M68020, WrappedAddress, 0xA5u)]
 	[InlineData(M68kCpuModel.M68030, WrappedAddress, 0xA5u)]
 	[InlineData(M68kCpuModel.M68040, WrappedAddress, 0xA5u)]

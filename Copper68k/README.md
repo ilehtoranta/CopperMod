@@ -89,6 +89,7 @@ Use `M68kCpuModel` to select the default interpreter backend:
 
 - `M68000`: base 68000 interpreter with 68000-style exception frames.
 - `M68020`: 68020-style core with VBR, format-zero exception frames, and native-cycle timing state.
+- `M68EC020`: 68020-style core with a 24-bit external address bus and full 32-bit registers.
 - `M68030`: 68030-oriented interpreter profile.
 - `M68040`: 68040-oriented interpreter with the current integer/FPU/MMU support used by CopperScreen.
 

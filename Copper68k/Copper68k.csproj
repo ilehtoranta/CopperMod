@@ -18,7 +18,7 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
-    <PackageTags>emulation;m68000;m68k;68000;68020;68030;68040;cpu;jit</PackageTags>
+    <PackageTags>emulation;m68000;m68k;68000;68ec020;68020;68030;68040;cpu;jit</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>copper68k-icon.png</PackageIcon>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>

@@ -51,6 +51,11 @@ namespace Copper68k
         M68020 = 1,
 
         /// <summary>
+        /// Motorola 68EC020-compatible execution with a 24-bit external address bus.
+        /// </summary>
+        M68EC020 = 11,
+
+        /// <summary>
         /// Motorola MC68030-compatible execution.
         /// </summary>
         M68030 = 2,
@@ -550,7 +555,8 @@ namespace Copper68k
         Cpu32 = 4,
         AccurateM68030 = 5,
         AccurateM68040 = 6,
-        JitM68040 = 7
+        JitM68040 = 7,
+        AccurateM68EC020 = 8
     }
 
     /// <summary>
@@ -620,6 +626,7 @@ namespace Copper68k
                 M68kCpuModel.M68000 => new M68kInterpreter(bus, opcodePlanDispatch: M68000OpcodePlanDispatch),
                 M68kCpuModel.M68010 => new M68010Interpreter(bus),
                 M68kCpuModel.M68020 => new M68020Interpreter(bus),
+                M68kCpuModel.M68EC020 => new M68EC020Interpreter(bus),
                 M68kCpuModel.M68030 => new M68030Interpreter(bus),
                 M68kCpuModel.M68040 => new M68040Interpreter(bus),
                 _ => throw new M68kEmulationException($"The requested M68k CPU model is not implemented: {model}.")
@@ -669,6 +676,11 @@ namespace Copper68k
             if (backend == M68kBackendKind.AccurateM68020)
             {
                 return new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+            }
+
+            if (backend == M68kBackendKind.AccurateM68EC020)
+            {
+                return new M68EC020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
             }
 
             if (backend == M68kBackendKind.AccurateM68030)
@@ -8203,7 +8215,6 @@ namespace Copper68k
 
             State.Cycles = completedCycle;
         }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RecordCpuBusPhase(
             uint address,

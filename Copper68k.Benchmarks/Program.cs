@@ -295,6 +295,8 @@ static BenchmarkWorkload[] CreateWorkloads()
         CreateFpuRegisterLoop("fpu-multiply-loop", 0x00A3, SetupFpuArithmetic),
         CreateFpuRegisterLoop("fpu-divide-loop", 0x00A0, SetupFpuArithmetic),
         CreateFpuRegisterLoop("fpu-square-root-loop", 0x0084, SetupFpuSquareRoot),
+        CreateFpuRegisterLoop("fpu-forced-single-square-root-loop", 0x00C1, SetupFpuSquareRoot),
+        CreateFpuRegisterLoop("fpu-forced-double-square-root-loop", 0x00C5, SetupFpuSquareRoot),
         CreateFpuRegisterLoop("fpu-absolute-loop", 0x0D98, SetupFpuUnary),
         new BenchmarkWorkload(
             "fpu-forced-single-arithmetic-loop",
