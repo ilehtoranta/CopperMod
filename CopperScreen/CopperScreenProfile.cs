@@ -239,7 +239,9 @@ internal sealed class CopperScreenProfile
 		var expansionRamSize = CheckedKilobytes(machine.PseudoFastRamKb, "machine.pseudoFastRamKb");
 		var expansionRamBase = ParseAddress(machine.PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase);
 		var realFastRamSize = CheckedKilobytes(machine.RealFastRamKb, "machine.realFastRamKb");
-		var realFastRamBase = ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
+		var realFastRamBase = string.IsNullOrWhiteSpace(machine.RealFastBase) && realFastRamSize > 0
+			? AutoconfigFastRamBoard.GetDefaultBase(realFastRamSize)
+			: ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
 		var rtcEnabled = machine.RtcEnabled ?? expansionRamSize > 0;
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);

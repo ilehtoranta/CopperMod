@@ -238,19 +238,36 @@ namespace CopperMod.Amiga
         private readonly uint[] _codePageGenerations;
         private readonly int _codeGenerationPageShift;
 
-        public AmigaLinearRamBackend(int size, uint baseAddress, int codeGenerationPageShift)
+        public AmigaLinearRamBackend(
+            int size,
+            uint baseAddress,
+            int codeGenerationPageShift,
+            bool initiallyMapped = true)
         {
-            _data = new byte[size];
+            try
+            {
+                _data = new byte[size];
+                _codePageGenerations = new uint[Math.Max(1, (size + (1 << codeGenerationPageShift) - 1) >> codeGenerationPageShift)];
+            }
+            catch (OutOfMemoryException ex)
+            {
+                throw new AmigaEmulationException(
+                    $"Could not allocate {size / (1024 * 1024)} MiB of Autoconfig fast RAM.",
+                    ex);
+            }
+
             BaseAddress = baseAddress;
+            IsMapped = initiallyMapped;
             _codeGenerationPageShift = codeGenerationPageShift;
-            _codePageGenerations = new uint[Math.Max(1, (size + (1 << codeGenerationPageShift) - 1) >> codeGenerationPageShift)];
         }
 
         public byte[] Data => _data;
 
         public int Length => _data.Length;
 
-        public uint BaseAddress { get; }
+        public uint BaseAddress { get; private set; }
+
+        public bool IsMapped { get; private set; }
 
         public byte this[int index]
         {
@@ -263,9 +280,21 @@ namespace CopperMod.Amiga
             Array.Clear(_data);
         }
 
+        public void Map(uint baseAddress)
+        {
+            BaseAddress = baseAddress;
+            IsMapped = true;
+        }
+
+        public void Unmap()
+        {
+            BaseAddress = 0;
+            IsMapped = false;
+        }
+
         public bool IsRange(uint address, int byteCount)
         {
-            if (_data.Length == 0 || address < BaseAddress)
+            if (!IsMapped || _data.Length == 0 || byteCount < 0 || address < BaseAddress)
             {
                 return false;
             }
@@ -276,7 +305,7 @@ namespace CopperMod.Amiga
 
         public bool TryGetOffset(uint address, out int offset)
         {
-            if (_data.Length != 0 && address >= BaseAddress)
+            if (IsMapped && _data.Length != 0 && address >= BaseAddress)
             {
                 var candidate = address - BaseAddress;
                 if (candidate < _data.Length)

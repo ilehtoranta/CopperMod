@@ -130,6 +130,10 @@ internal sealed class CopperScreenSettingsDraft
 
 	public CopperScreenProfile ToProfile(string? configPath = null)
 	{
+		var realFastRamSize = checked(RealFastRamKb * Kilobyte);
+		var realFastRamBase = string.IsNullOrWhiteSpace(RealFastBase) && realFastRamSize > 0
+			? AutoconfigFastRamBoard.GetDefaultBase(realFastRamSize)
+			: ParseAddress(RealFastBase, AmigaConstants.A500RealFastRamBase);
 		return CopperScreenProfile.Create(
 			Id,
 			DisplayName,
@@ -137,8 +141,8 @@ internal sealed class CopperScreenSettingsDraft
 			checked(ChipRamKb * Kilobyte),
 			checked(PseudoFastRamKb * Kilobyte),
 			ParseAddress(PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase),
-			checked(RealFastRamKb * Kilobyte),
-			ParseAddress(RealFastBase, AmigaConstants.A500RealFastRamBase),
+			realFastRamSize,
+			realFastRamBase,
 			RtcEnabled,
 			FloppyDriveCount,
 			CpuBackend,

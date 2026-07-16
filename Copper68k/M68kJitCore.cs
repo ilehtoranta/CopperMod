@@ -670,7 +670,14 @@ namespace Copper68k
             {
                 _directRamMap = directRamMap;
             }
-            _amigaBus = _jitBus == null ? null : new M68kJitHostAdapter(bus, _jitBus, _fastMemoryBus, _timedMemoryBus);
+            _amigaBus = _jitBus == null
+                ? null
+                : new M68kJitHostAdapter(
+                    bus,
+                    _jitBus,
+                    _fastMemoryBus,
+                    _timedMemoryBus,
+                    options.CpuModel == M68kJitCpuModel.M68040);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
             _cpuModel = options.CpuModel;
@@ -1045,6 +1052,14 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
+            if (_cpuModel == M68kJitCpuModel.M68000 &&
+                _m68000PipelineStateValid &&
+                _m68000PipelineState.HasPendingPrefetch)
+            {
+                _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;
+                return 0;
+            }
+
             if (_requiresExactM68000PipelineFallback)
             {
                 _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;
@@ -1705,7 +1720,26 @@ namespace Copper68k
         }
 
         private static ulong GetV2HandoffCacheKey(uint sourceRoot, uint target)
-            => ((ulong)Normalize(sourceRoot) << 24) | Normalize(target);
+        {
+            sourceRoot = Normalize(sourceRoot);
+            target = Normalize(target);
+            return sourceRoot >= 0x1000_0000u || target >= 0x1000_0000u
+                ? ((ulong)(sourceRoot | 0x8000_0000u) << 32) | target
+                : ((ulong)sourceRoot << 24) | target;
+        }
+
+        private static void DecodeV2HandoffCacheKey(ulong key, out uint source, out uint target)
+        {
+            if ((key & 0x8000_0000_0000_0000UL) != 0)
+            {
+                source = (uint)(key >> 32) & 0x7FFF_FFFFu;
+                target = (uint)key;
+                return;
+            }
+
+            source = (uint)(key >> 24);
+            target = (uint)(key & 0x00FF_FFFFu);
+        }
 
         private bool IsPendingV2GraphHoleTarget(uint target)
         {
@@ -2489,7 +2523,6 @@ namespace Copper68k
 
         private bool IsPhysicalJitCodeAddress(uint physicalAddress, int byteCount)
             => _amigaBus != null &&
-                physicalAddress <= 0x00FF_FFFFu &&
                 _amigaBus.IsJitCodeAddress(physicalAddress, byteCount, M68kBusAccessKind.CpuInstructionFetch);
 
         private bool CanUsePhysicalV2TraceCompilation(uint logicalRoot, int byteCount)
@@ -2635,48 +2668,54 @@ namespace Copper68k
             private readonly IM68kJitBus _jitBus;
             private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
             private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
+            private readonly bool _full32BitAddresses;
 
             public M68kJitHostAdapter(
                 IM68kBus bus,
                 IM68kJitBus jitBus,
                 IM68kJitFastMemoryBus? fastMemoryBus,
-                IM68kJitTimedMemoryBus? timedMemoryBus)
+                IM68kJitTimedMemoryBus? timedMemoryBus,
+                bool full32BitAddresses)
             {
                 _bus = bus;
                 _jitBus = jitBus;
                 _fastMemoryBus = fastMemoryBus;
                 _timedMemoryBus = timedMemoryBus;
+                _full32BitAddresses = full32BitAddresses;
             }
 
+            private uint NormalizeAddress(uint address)
+                => _full32BitAddresses ? address : address & 0x00FF_FFFFu;
+
             public bool HasHostTrapStub(uint address)
-                => _bus.HasHostTrapStub(Normalize(address));
+                => _bus.HasHostTrapStub(NormalizeAddress(address));
 
             public ushort ReadHostWord(uint address)
-                => _jitBus.ReadJitCodeWord(Normalize(address));
+                => _jitBus.ReadJitCodeWord(NormalizeAddress(address));
 
             public uint GetCodePageGeneration(uint address)
-                => _jitBus.GetJitCodePageGeneration(Normalize(address));
+                => _jitBus.GetJitCodePageGeneration(NormalizeAddress(address));
 
             public bool CodeRangeGenerationMatches(uint address, int byteCount, uint startGeneration, uint endGeneration)
-                => _jitBus.JitCodeRangeGenerationMatches(Normalize(address), byteCount, startGeneration, endGeneration);
+                => _jitBus.JitCodeRangeGenerationMatches(NormalizeAddress(address), byteCount, startGeneration, endGeneration);
 
             public bool IsChipRamAddress(uint address)
-                => !_jitBus.IsJitCodeAddress(Normalize(address), 2, M68kBusAccessKind.CpuInstructionFetch);
+                => !_jitBus.IsJitCodeAddress(NormalizeAddress(address), 2, M68kBusAccessKind.CpuInstructionFetch);
 
             public bool IsJitCodeAddress(uint address, int byteCount, M68kBusAccessKind accessKind)
-                => _jitBus.IsJitCodeAddress(Normalize(address), byteCount, accessKind);
+                => _jitBus.IsJitCodeAddress(NormalizeAddress(address), byteCount, accessKind);
 
             public bool IsJitReadOnlyCodeAddress(uint address, int byteCount, M68kBusAccessKind accessKind)
-                => _jitBus.IsJitReadOnlyCodeAddress(Normalize(address), byteCount, accessKind);
+                => _jitBus.IsJitReadOnlyCodeAddress(NormalizeAddress(address), byteCount, accessKind);
 
             public bool TryCaptureJitCodeSnapshot(uint root, int maxBytes, out M68kJitCodeSnapshot snapshot)
-                => _jitBus.TryCaptureJitCodeSnapshot(Normalize(root), maxBytes, out snapshot);
+                => _jitBus.TryCaptureJitCodeSnapshot(NormalizeAddress(root), maxBytes, out snapshot);
 
             public bool TryReadJitZeroWaitMemory(uint address, M68kOperandSize size, out uint value)
             {
                 if (_fastMemoryBus != null)
                 {
-                    return _fastMemoryBus.TryReadJitZeroWaitMemory(Normalize(address), size, out value);
+                    return _fastMemoryBus.TryReadJitZeroWaitMemory(NormalizeAddress(address), size, out value);
                 }
 
                 value = 0;
@@ -2685,7 +2724,7 @@ namespace Copper68k
 
             public bool TryWriteJitZeroWaitMemory(uint address, uint value, M68kOperandSize size)
                 => _fastMemoryBus != null &&
-                    _fastMemoryBus.TryWriteJitZeroWaitMemory(Normalize(address), value, size);
+                    _fastMemoryBus.TryWriteJitZeroWaitMemory(NormalizeAddress(address), value, size);
 
             public bool TryGetJitZeroWaitReadMemory(
                 uint address,
@@ -2697,7 +2736,7 @@ namespace Copper68k
                 if (_fastMemoryBus != null)
                 {
                     return _fastMemoryBus.TryGetJitZeroWaitReadMemory(
-                        Normalize(address),
+                        NormalizeAddress(address),
                         byteCount,
                         out memory,
                         out offset,
@@ -2720,7 +2759,7 @@ namespace Copper68k
                 if (_fastMemoryBus != null)
                 {
                     return _fastMemoryBus.TryGetJitZeroWaitWriteMemory(
-                        Normalize(address),
+                        NormalizeAddress(address),
                         byteCount,
                         out memory,
                         out offset,
@@ -2734,20 +2773,20 @@ namespace Copper68k
             }
 
             public void CompleteJitZeroWaitWrite(uint address, int byteCount)
-                => _fastMemoryBus?.CompleteJitZeroWaitWrite(Normalize(address), byteCount);
+                => _fastMemoryBus?.CompleteJitZeroWaitWrite(NormalizeAddress(address), byteCount);
 
             public uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
             {
                 if (_timedMemoryBus != null)
                 {
-                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, Normalize(address), size);
+                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, NormalizeAddress(address), size);
                 }
 
                 return size switch
                 {
-                    M68kOperandSize.Byte => _bus.ReadByte(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    M68kOperandSize.Word => _bus.ReadWord(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    _ => _bus.ReadLong(Normalize(address), ref cycle, M68kBusAccessKind.CpuDataRead)
+                    M68kOperandSize.Byte => _bus.ReadByte(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
+                    M68kOperandSize.Word => _bus.ReadWord(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
+                    _ => _bus.ReadLong(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead)
                 };
             }
 
@@ -2755,21 +2794,21 @@ namespace Copper68k
             {
                 if (_timedMemoryBus != null)
                 {
-                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, Normalize(address), value, size);
+                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, NormalizeAddress(address), value, size);
                     return;
                 }
 
                 if (size == M68kOperandSize.Byte)
                 {
-                    _bus.WriteByte(Normalize(address), (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteByte(NormalizeAddress(address), (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else if (size == M68kOperandSize.Word)
                 {
-                    _bus.WriteWord(Normalize(address), (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteWord(NormalizeAddress(address), (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else
                 {
-                    _bus.WriteLong(Normalize(address), value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteLong(NormalizeAddress(address), value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
             }
 
@@ -2777,7 +2816,7 @@ namespace Copper68k
             {
                 if (_timedMemoryBus != null)
                 {
-                    return _timedMemoryBus.TryReadJitMaxSpeedDeviceRegister(Normalize(address), size, out value);
+                    return _timedMemoryBus.TryReadJitMaxSpeedDeviceRegister(NormalizeAddress(address), size, out value);
                 }
 
                 value = 0;
@@ -2786,7 +2825,7 @@ namespace Copper68k
 
             public bool TryWriteJitMaxSpeedColorRegister(uint address, uint value, M68kOperandSize size, long cycle)
                 => _timedMemoryBus != null &&
-                    _timedMemoryBus.TryWriteJitMaxSpeedDeviceRegister(Normalize(address), value, size, cycle);
+                    _timedMemoryBus.TryWriteJitMaxSpeedDeviceRegister(NormalizeAddress(address), value, size, cycle);
         }
 
         private sealed class M68040JitCodeReader : IM68kCodeReader
@@ -7577,6 +7616,7 @@ namespace Copper68k
                         fastOffset,
                         fastTarget,
                         allowRom: true,
+                        normalize24Bit: context.M68000MemoryHelpers,
                         fastRead,
                         slowRead);
                     il.MarkLabel(fastRead);
@@ -7689,6 +7729,7 @@ namespace Copper68k
                         fastOffset,
                         fastTarget,
                         allowRom: false,
+                        normalize24Bit: context.M68000MemoryHelpers,
                         fastWrite,
                         slowWrite);
                     il.MarkLabel(fastWrite);
@@ -7793,13 +7834,17 @@ namespace Copper68k
             LocalBuilder offset,
             LocalBuilder targetKind,
             bool allowRom,
+            bool normalize24Bit,
             Label success,
             Label fail)
         {
             var normalizedAddress = il.DeclareLocal(typeof(uint));
             il.Emit(OpCodes.Ldloc, address);
-            EmitLoadUIntConstant(il, 0x00FF_FFFF);
-            il.Emit(OpCodes.And);
+            if (normalize24Bit)
+            {
+                EmitLoadUIntConstant(il, 0x00FF_FFFF);
+                il.Emit(OpCodes.And);
+            }
             il.Emit(OpCodes.Stloc, normalizedAddress);
             if (byteCount != 1)
             {
@@ -7812,9 +7857,9 @@ namespace Copper68k
             il.Emit(OpCodes.Ldloc, fastMemoryBus);
             il.Emit(OpCodes.Ldloc, normalizedAddress);
             il.Emit(OpCodes.Ldc_I4, byteCount);
-            il.Emit(OpCodes.Ldloca_S, memory);
-            il.Emit(OpCodes.Ldloca_S, offset);
-            il.Emit(OpCodes.Ldloca_S, targetKind);
+            il.Emit(OpCodes.Ldloca, memory);
+            il.Emit(OpCodes.Ldloca, offset);
+            il.Emit(OpCodes.Ldloca, targetKind);
             il.Emit(OpCodes.Callvirt, allowRom ? TryGetJitZeroWaitReadMemoryMethod : TryGetJitZeroWaitWriteMemoryMethod);
             il.Emit(OpCodes.Brtrue, success);
             il.Emit(OpCodes.Br, fail);
@@ -9456,8 +9501,7 @@ namespace Copper68k
             List<ulong>? keysToRemove = null;
             foreach (var key in _v2HandoffBlockCache.Keys)
             {
-                var source = (uint)(key >> 24);
-                var target = (uint)(key & 0x00FF_FFFF);
+                DecodeV2HandoffCacheKey(key, out var source, out var target);
                 if (!RangesOverlap(source, 2, address, byteCount) &&
                     !RangesOverlap(target, 2, address, byteCount))
                 {
@@ -12052,8 +12096,7 @@ namespace Copper68k
         {
             var map = _directRamMap;
             if (_directRamBus == null ||
-                !map.IsValid ||
-                address > 0x00FF_FFFFu)
+                !map.IsValid)
             {
                 memory = null!;
                 offset = 0;
@@ -12664,7 +12707,7 @@ namespace Copper68k
                 _minimalCycleTiming &&
                 _amigaBus != null &&
                 size == M68kOperandSize.Byte &&
-                (Normalize(physicalAddress) & 0x00FF_FFFFu) == 0x00BF_E001u;
+                Normalize(physicalAddress) == 0x00BF_E001u;
 
         private uint TranslateM68040DataAddress(uint address, bool write)
             => TranslateM68040DataAddress(address, write, M68kOperandSize.Byte);
@@ -13271,8 +13314,7 @@ namespace Copper68k
             List<ulong>? keysToRemove = null;
             foreach (var (key, trace) in _v2HandoffTraceCache)
             {
-                var source = (uint)(key >> 24);
-                var target = (uint)(key & 0x00FF_FFFF);
+                DecodeV2HandoffCacheKey(key, out var source, out var target);
                 if (source != root && target != root && trace.Root != root)
                 {
                     continue;
@@ -13304,8 +13346,7 @@ namespace Copper68k
             List<ulong>? keysToRemove = null;
             foreach (var key in _v2HandoffBlockCache.Keys)
             {
-                var source = (uint)(key >> 24);
-                var target = (uint)(key & 0x00FF_FFFF);
+                DecodeV2HandoffCacheKey(key, out var source, out var target);
                 if (source != root && target != root)
                 {
                     continue;
@@ -13337,8 +13378,7 @@ namespace Copper68k
             List<ulong>? keysToRemove = null;
             foreach (var key in _v2BranchPressureLimitedTargets)
             {
-                var source = (uint)(key >> 24);
-                var target = (uint)(key & 0x00FF_FFFF);
+                DecodeV2HandoffCacheKey(key, out var source, out var target);
                 if (source != root && target != root)
                 {
                     continue;
@@ -13955,9 +13995,7 @@ namespace Copper68k
         }
 
         private static uint Normalize(uint address)
-        {
-            return address & 0x00FF_FFFF;
-        }
+            => address >= 0x1000_0000u ? address : address & 0x00FF_FFFFu;
 
         private static uint GetBranchTarget(M68kDecodedInstruction instruction)
             => Normalize(instruction.BranchBase + unchecked((uint)instruction.Displacement));

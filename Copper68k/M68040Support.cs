@@ -2084,14 +2084,14 @@ namespace Copper68k
         }
 
         private static bool CanFastReadPhysical(uint physical)
-            => (physical & 0x00FF_FFFFu) == 0x00BF_E001u ||
+            => physical == 0x00BF_E001u ||
                 M68020CpuProfile.ClassifyTarget(physical) is
                 M68020MemoryTarget.ExpansionRam or
                 M68020MemoryTarget.RealFastRam or
                 M68020MemoryTarget.Rom;
 
         private static bool CanFastWritePhysical(uint physical)
-            => (physical & 0x00FF_FFFFu) == 0x00BF_E001u ||
+            => physical == 0x00BF_E001u ||
                 M68020CpuProfile.ClassifyTarget(physical) is
                 M68020MemoryTarget.ExpansionRam or
                 M68020MemoryTarget.RealFastRam;

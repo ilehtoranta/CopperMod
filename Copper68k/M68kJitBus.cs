@@ -42,7 +42,7 @@ namespace Copper68k
 
         public bool IsValid =>
             BankShift > 0 &&
-            BankShift < 24 &&
+            BankShift < 32 &&
             BankKinds != null &&
             BankOffsets != null &&
             BankKinds.Length == BankOffsets.Length;

@@ -1917,7 +1917,7 @@ namespace Copper68k
             => M68kIntegerSemantics.AddressIncrement(register, size);
 
         private static uint Normalize(uint address)
-            => address & 0x00FF_FFFF;
+            => address >= 0x1000_0000u ? address : address & 0x00FF_FFFFu;
 
         private static PropertyInfo RequiredProperty(Type type, string name)
             => type.GetProperty(name) ?? throw new MissingMemberException(type.FullName, name);

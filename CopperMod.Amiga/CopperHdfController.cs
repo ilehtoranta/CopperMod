@@ -3,11 +3,11 @@ using System.Collections.Generic;
 
 namespace CopperMod.Amiga
 {
-    internal sealed class CopperHdfController : IDisposable
+    internal sealed class CopperHdfController : AutoconfigBoard, IDisposable
     {
         public const string DeviceName = "copperhdf.device";
-        public const uint AutoConfigBase = 0x00E8_0000;
-        public const uint AutoConfigSize = 0x0001_0000;
+        public const uint AutoConfigBase = AutoconfigChain.ZorroIIConfigBase;
+        public const uint AutoConfigSize = AutoconfigChain.ConfigSize;
         public const uint BoardSize = 0x0001_0000;
         public const ushort ManufacturerId = 0x07DB;
         public const byte ProductId = 0x48;
@@ -113,9 +113,6 @@ namespace CopperMod.Amiga
 
         private readonly Dictionary<int, AmigaHardfile> _hardfiles = new Dictionary<int, AmigaHardfile>();
         private readonly byte[] _boardRom;
-        private uint _configuredBase;
-        private uint _pendingBase;
-        private bool _shutUp;
         private AmigaBus? _bootstrapBus;
         private bool _bootstrapInstalled;
         private uint _diagCopyBase;
@@ -126,6 +123,11 @@ namespace CopperMod.Amiga
         private readonly Dictionary<int, uint> _unitAddresses = new Dictionary<int, uint>();
 
         public CopperHdfController(IEnumerable<AmigaHardfileConfiguration> configurations)
+            : base(AutoconfigIdentity.CreateIoBoard(
+                checked((int)BoardSize),
+                ManufacturerId,
+                ProductId,
+                checked((ushort)DiagAreaOffset)))
         {
             ArgumentNullException.ThrowIfNull(configurations);
             foreach (var configuration in configurations)
@@ -143,11 +145,7 @@ namespace CopperMod.Amiga
             _boardRom = CreateBoardRom();
         }
 
-        public bool IsPresent => _hardfiles.Count != 0;
-
-        public bool IsConfigured => _configuredBase != 0;
-
-        public uint ConfiguredBase => _configuredBase;
+        public override bool IsPresent => _hardfiles.Count != 0;
 
         public bool BootstrapInstalled => _bootstrapInstalled;
 
@@ -169,63 +167,21 @@ namespace CopperMod.Amiga
 
         public IReadOnlyDictionary<int, AmigaHardfile> Hardfiles => _hardfiles;
 
-        public bool ContainsAutoConfigAddress(uint address)
+        public override bool ContainsBoardAddress(uint address)
         {
-            address &= 0x00FF_FFFF;
-            return IsPresent &&
-                !IsConfigured &&
-                !_shutUp &&
-                address >= AutoConfigBase &&
-                address < AutoConfigBase + AutoConfigSize;
-        }
-
-        public bool ContainsBoardAddress(uint address)
-        {
-            address &= 0x00FF_FFFF;
             return IsPresent &&
                 IsConfigured &&
-                address >= _configuredBase &&
-                address < _configuredBase + BoardSize;
+                address >= ConfiguredBase &&
+                address - ConfiguredBase < BoardSize;
         }
 
-        public byte ReadAutoConfigByte(uint address)
+        public override byte ReadBoardByte(uint address)
         {
-            var offset = (int)((address - AutoConfigBase) & 0xFF);
-            var value = ReadAutoConfigNibble(offset);
-            value <<= 4;
-            if (offset != 0 && offset != 2 && offset != 0x40 && offset != 0x42)
-            {
-                value ^= 0xFF;
-            }
-
-            return unchecked((byte)value);
-        }
-
-        public void WriteAutoConfigByte(uint address, byte value)
-        {
-            var offset = (int)((address - AutoConfigBase) & 0xFF);
-            switch (offset)
-            {
-                case 0x48:
-                    _pendingBase = (_pendingBase & 0x000F_FFFFu) | ((uint)(value & 0xF0) << 16);
-                    break;
-                case 0x4A:
-                    _pendingBase = (_pendingBase & 0x00F0_FFFFu) | ((uint)(value & 0xF0) << 12);
-                    Configure(_pendingBase);
-                    break;
-                case 0x4C:
-                    _shutUp = true;
-                    break;
-            }
-        }
-
-        public byte ReadBoardByte(uint address)
-        {
-            var offset = (int)((address - _configuredBase) & (BoardSize - 1));
+            var offset = (int)((address - ConfiguredBase) & (BoardSize - 1));
             return _boardRom[offset];
         }
 
-        public bool TryWriteBoardByte(uint address, byte value)
+        public override bool TryWriteBoardByte(uint address, byte value)
         {
             _ = address;
             _ = value;
@@ -330,11 +286,9 @@ namespace CopperMod.Amiga
             }
         }
 
-        public void Reset()
+        public override void ResetConfiguration()
         {
-            _configuredBase = 0;
-            _pendingBase = 0;
-            _shutUp = false;
+            base.ResetConfiguration();
             _bootstrapBus = null;
             _bootstrapInstalled = false;
             _diagCopyBase = 0;
@@ -360,23 +314,6 @@ namespace CopperMod.Amiga
             }
 
             _hardfiles.Clear();
-        }
-
-        private void Configure(uint baseAddress)
-        {
-            baseAddress &= 0x00FF_0000;
-            if (baseAddress is >= 0x0008_0000 and < 0x0010_0000)
-            {
-                baseAddress |= 0x00E0_0000;
-            }
-
-            if (baseAddress == 0)
-            {
-                _shutUp = true;
-                return;
-            }
-
-            _configuredBase = baseAddress;
         }
 
         private void HostDiagBootstrap(M68kCpuState state)
@@ -1547,28 +1484,6 @@ namespace CopperMod.Amiga
 
             public void Skip(int count, string fieldName)
                 => _ = ReadBytes(count, fieldName);
-        }
-
-        private byte ReadAutoConfigNibble(int offset)
-        {
-            return offset switch
-            {
-                0x00 => 0xD, // Zorro II, non-memory, link into expansion list, valid diagnostic ROM.
-                0x02 => 0x1, // 64 KB board.
-                0x04 => (byte)(ProductId >> 4),
-                0x06 => (byte)(ProductId & 0x0F),
-                0x10 => (byte)((ManufacturerId >> 12) & 0x0F),
-                0x12 => (byte)((ManufacturerId >> 8) & 0x0F),
-                0x14 => (byte)((ManufacturerId >> 4) & 0x0F),
-                0x16 => (byte)(ManufacturerId & 0x0F),
-                0x28 => 0x4, // Boot ROM vector high nibble.
-                0x2A => 0x0,
-                0x2C => 0x0,
-                0x2E => 0x0,
-                0x40 => 0x0,
-                0x42 => 0x0,
-                _ => 0x0
-            };
         }
 
         private static byte[] CreateBoardRom()

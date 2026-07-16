@@ -395,6 +395,8 @@ public sealed class M68kJitCoreTests
 		var slowBus = new AmigaBus(
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000);
+		directBus.ConfigureAutoconfigFastRamForHost();
+		slowBus.ConfigureAutoconfigFastRamForHost();
 		var data = (pseudoFast ? directBus.ExpansionRamBase : directBus.RealFastRamBase) + 0x1000;
 		var destination = data + 0x20;
 		var words = new ushort[]
@@ -430,6 +432,8 @@ public sealed class M68kJitCoreTests
 		Assert.True(slow.Counters.V2BusAccessBatchExecutions > 0);
 		directBus.ResetExternalDevices(0);
 		slowBus.ResetExternalDevices(0);
+		directBus.ConfigureAutoconfigFastRamForHost();
+		slowBus.ConfigureAutoconfigFastRamForHost();
 		directBus.WriteLong(data, 0x1234_5678);
 		slowBus.WriteLong(data, 0x1234_5678);
 		PrepareM68040CompiledMemoryLoop(direct, data, destination);
@@ -491,6 +495,9 @@ public sealed class M68kJitCoreTests
 		var directBus = new AmigaBus(expansionRamSize: 0x10000, realFastRamSize: 0x10000);
 		var fallbackBus = new AmigaBus(expansionRamSize: 0x10000, realFastRamSize: 0x10000);
 		var interpreterBus = new AmigaBus(expansionRamSize: 0x10000, realFastRamSize: 0x10000);
+		directBus.ConfigureAutoconfigFastRamForHost();
+		fallbackBus.ConfigureAutoconfigFastRamForHost();
+		interpreterBus.ConfigureAutoconfigFastRamForHost();
 		var source = (sourcePseudoFast ? directBus.ExpansionRamBase : directBus.RealFastRamBase) + 0x2000;
 		var destination = (destinationPseudoFast ? directBus.ExpansionRamBase : directBus.RealFastRamBase) + 0x2100;
 		var sourceAddress = source + 3;
@@ -531,6 +538,8 @@ public sealed class M68kJitCoreTests
 
 		directBus.ResetExternalDevices(0);
 		interpreterBus.ResetExternalDevices(0);
+		directBus.ConfigureAutoconfigFastRamForHost();
+		interpreterBus.ConfigureAutoconfigFastRamForHost();
 		PrepareM68040Move16State(direct.State);
 		PrepareM68040Move16State(interpreter.State);
 
@@ -574,6 +583,7 @@ public sealed class M68kJitCoreTests
 	public void M68040JitMove16SameRegisterAdvancesOnce(bool enableV2)
 	{
 		var bus = new AmigaBus(realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var source = bus.RealFastRamBase + 0x2000;
 		WriteWords(bus, RealFastCodeBase, CreateM68040Move16Loop(source, source, 0, 0));
 		using var cpu = M68kJitCore.CreateM68040ForTesting(
@@ -600,6 +610,7 @@ public sealed class M68kJitCoreTests
 		const uint source = 0x0000_2000;
 		const uint destination = 0x0000_2100;
 		var bus = new AmigaBus(realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		WriteWords(bus, RealFastCodeBase, CreateM68040Move16Loop(source, destination, 0, 1));
 		for (var offset = 0u; offset < 16; offset++)
 		{
@@ -630,7 +641,8 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = new AmigaBus(
 			expansionRamSize: 0x18000,
-			realFastRamSize: 0x18000);
+			realFastRamSize: 0x20000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var provider = Assert.IsAssignableFrom<IM68kJitDirectRamBus>(bus);
 
 		Assert.True(provider.TryGetJitDirectRamMap(out var map));
@@ -644,7 +656,7 @@ public sealed class M68kJitCoreTests
 			(byte)M68kJitDirectRamBankKind.RealFast,
 			map.BankKinds[bus.RealFastRamBase >> map.BankShift]);
 		Assert.Equal(
-			(byte)M68kJitDirectRamBankKind.None,
+			(byte)M68kJitDirectRamBankKind.RealFast,
 			map.BankKinds[(bus.RealFastRamBase + 0x10000) >> map.BankShift]);
 
 		var bankKinds = map.BankKinds;
@@ -664,6 +676,7 @@ public sealed class M68kJitCoreTests
 	public void M68040JitDirectRamAcceptsFinalByteOfCompleteBank()
 	{
 		var bus = new AmigaBus(realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var data = bus.RealFastRamBase + 0xFFFF;
 		WriteWords(bus, RealFastCodeBase, 0x1010, 0x60FC); // MOVE.B (A0),D0; BRA.S MOVE
 		bus.WriteByte(data, 0xA5, 0);
@@ -690,6 +703,7 @@ public sealed class M68kJitCoreTests
 	public void M68040JitDirectRamRejectsOddAndCrossBankLongAccess(int dataOffset)
 	{
 		var bus = new AmigaBus(realFastRamSize: 0x20000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var data = bus.RealFastRamBase + (uint)dataOffset;
 		var code = bus.RealFastRamBase + 0x18000;
 		WriteWords(bus, code, 0x2010, 0x60FC); // MOVE.L (A0),D0; BRA.S MOVE
@@ -723,6 +737,7 @@ public sealed class M68kJitCoreTests
 	public void M68040JitDirectRamRoutesOddLongWriteThroughGeneralPath()
 	{
 		var bus = new AmigaBus(realFastRamSize: 0x20000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var data = bus.RealFastRamBase + 0x1001;
 		var code = bus.RealFastRamBase + 0x18000;
 		WriteWords(bus, code, 0x2080, 0x5281, 0x60FA); // MOVE.L D0,(A0); ADDQ.L #1,D1; BRA.S MOVE
@@ -4650,6 +4665,8 @@ public sealed class M68kJitCoreTests
 		};
 		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, realFastRamSize: FastCodeSize);
 		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, realFastRamSize: FastCodeSize);
+		jitBus.ConfigureAutoconfigFastRamForHost();
+		interpreterBus.ConfigureAutoconfigFastRamForHost();
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
 		jitBus.WriteLong(realFastData, 0x1234_0000);
@@ -6716,6 +6733,92 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreterBus.ChipRam[0x2000..0x2008], jitBus.ChipRam[0x2000..0x2008]);
 	}
 
+	[Fact]
+	public void ExactM68000MovePostincrementLoopDocumentsFirstScalarJitCycleBoundary()
+	{
+		ushort[] words =
+		[
+			0x207C, 0x0000, 0x2000, // MOVEA.L #$2000,A0
+			0x7012,                 // MOVEQ #$12,D0
+			0x10C0,                 // MOVE.B D0,(A0)+
+			0x7034,                 // MOVEQ #$34,D0
+			0x10C0,                 // MOVE.B D0,(A0)+
+			0x207C, 0x0000, 0x2000, // MOVEA.L #$2000,A0
+			0x3210,                 // MOVE.W (A0),D1
+			0x60E8                  // BRA.S start
+		];
+		var interpreterBus = CreateCodeBus();
+		var jitBus = CreateCodeBus();
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+
+		for (var instruction = 0; instruction < 32; instruction++)
+		{
+			var interpreterStartPc = interpreter.State.ProgramCounter;
+			var jitStartPc = jit.State.ProgramCounter;
+			var interpreterCycles = interpreter.ExecuteInstruction();
+			var jitCycles = jit.ExecuteInstruction();
+			Assert.True(
+				interpreter.State.Cycles == jit.State.Cycles,
+				$"instruction={instruction}, scalarPc=0x{interpreterStartPc:X8}, jitPc=0x{jitStartPc:X8}, " +
+				$"scalarDelta={interpreterCycles}, jitDelta={jitCycles}, " +
+				$"scalarCycle={interpreter.State.Cycles}, jitCycle={jit.State.Cycles}, " +
+				$"jitTraces={jit.Counters.CompiledTraces}, jitHits={jit.Counters.TraceHits}, " +
+				$"jitFallback={jit.Counters.FallbackInstructions}");
+		}
+	}
+
+	[Fact(Skip = "Classic MC68000 JIT does not yet import committed prefetch phases; MOVE.W (A0),D1 requests chip RAM six clocks before scalar execution.")]
+	public void ExactM68000MovePostincrementLoopDocumentsFirstPostTraceMismatch()
+	{
+		ushort[] words =
+		[
+			0x207C, 0x0000, 0x2000,
+			0x7012,
+			0x10C0,
+			0x7034,
+			0x10C0,
+			0x207C, 0x0000, 0x2000,
+			0x3210,
+			0x60E8
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.ExecuteInstructions(488, null, new CountingBoundary());
+		jit.ExecuteInstructions(488, null, new CountingBoundary());
+		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+
+		for (var instruction = 488; instruction < 504; instruction++)
+		{
+			var interpreterStartPc = interpreter.State.ProgramCounter;
+			var jitStartPc = jit.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			var interpreterCycles = interpreter.ExecuteInstruction();
+			var jitCycles = jit.ExecuteInstruction();
+			var interpreterAccesses = string.Join(",", interpreterBus.BusAccesses.Skip(interpreterAccessStart).Select(access =>
+				$"{access.Request.Kind}:0x{access.Request.Address:X6}@{access.RequestedCycle}-{access.GrantedCycle}-{access.CompletedCycle}"));
+			var jitAccesses = string.Join(",", jitBus.BusAccesses.Skip(jitAccessStart).Select(access =>
+				$"{access.Request.Kind}:0x{access.Request.Address:X6}@{access.RequestedCycle}-{access.GrantedCycle}-{access.CompletedCycle}"));
+			Assert.True(
+				interpreter.State.Cycles == jit.State.Cycles,
+				$"instruction={instruction}, scalarPc=0x{interpreterStartPc:X8}, jitPc=0x{jitStartPc:X8}, " +
+				$"scalarDelta={interpreterCycles}, jitDelta={jitCycles}, " +
+				$"scalarCycle={interpreter.State.Cycles}, jitCycle={jit.State.Cycles}, " +
+				$"scalarBus={interpreterAccesses}, jitBus={jitAccesses}");
+		}
+	}
+
 	public static IEnumerable<object[]> RepresentativeGenericTracePrograms()
 	{
 		yield return new object[]
@@ -6855,7 +6958,11 @@ public sealed class M68kJitCoreTests
 			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cpu)!;
 
 	private static AmigaBus CreateRealFastCodeBus()
-		=> new AmigaBus(realFastRamSize: FastCodeSize);
+	{
+		var bus = new AmigaBus(realFastRamSize: FastCodeSize);
+		bus.ConfigureAutoconfigFastRamForHost();
+		return bus;
+	}
 
 	private static void EnableM68040InstructionCache(M68kJitCore cpu)
 		=> cpu.State.CacheControlRegister |= M68040InstructionCacheEnable;

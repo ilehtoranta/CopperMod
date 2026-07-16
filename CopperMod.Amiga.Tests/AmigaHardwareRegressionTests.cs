@@ -70,6 +70,7 @@ public sealed class AmigaHardwareRegressionTests
 	public void M68000CpuUsesTwentyFourBitAddressAliasesForCustomRegisters()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: false, realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x7F;
 		var pc = AmigaConstants.A500RealFastRamBase;

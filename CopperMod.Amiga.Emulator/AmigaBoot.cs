@@ -690,6 +690,7 @@ namespace CopperMod.Amiga
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -96), HostIconFindToolType);
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
             bus.RegisterHostTrapStub(DosResidentInitAddress, HostInitResident);
+            bus.ConfigureAutoconfigFastRamForHost();
             InstallKickstartMemoryList();
             InstallHostSupervisorStack();
         }

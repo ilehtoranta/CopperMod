@@ -38,6 +38,7 @@ public sealed class M68kInterpreterTests
 	public void AmigaAccurateM68000TasRealFastRamWritesBack()
 	{
 		var bus = new AmigaBus(realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var targetAddress = AmigaConstants.A500RealFastRamBase + 0x2000u;
 		Write(bus.ChipRam, 0x1000, 0x4A, 0xD0); // TAS (A0)
 		bus.WriteHostByte(targetAddress, 0x01);
@@ -65,7 +66,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
 	}
 	[Fact]
-	public void QueuedSecondFallthroughWordStaysFrozenAfterMemoryMutation()
+	public void UnstartedSecondFallthroughWordObservesMemoryMutation()
 	{
 		var bus = new CycleCountingBus();
 		Write(bus.Memory, 0x1000,
@@ -82,12 +83,12 @@ public sealed class M68kInterpreterTests
 		cpu.ExecuteInstruction();
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.Equal(7u, cpu.State.D[0]);
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 		Assert.Contains(bus.InstructionFetchCycles, fetch => fetch.Address == 0x1004);
 	}
 	[Fact]
-	public void NopBusSequencePrimesTwoPrefetchWordsAndTopsUpFallthrough()
+	public void InitialNopBusSequencePrimesTwoWordsWithoutCommittingTailPastRetirement()
 	{
 		var bus = new CycleCountingBus();
 		Write(bus.Memory, 0x1000,
@@ -104,8 +105,7 @@ public sealed class M68kInterpreterTests
 		AssertCpuPhaseSequence(
 			bus.CpuBusPhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L));
 	}
 	[Fact]
 	public void AndiWordMemoryDestinationBusSequencePrefetchesBetweenReadAndWrite()
@@ -128,10 +128,129 @@ public sealed class M68kInterpreterTests
 			bus.CpuBusPhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
-			(M68kBusAccessKind.CpuDataRead, 0x2000u, M68kOperandSize.Word, false, 24L, 26L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 26L, 28L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2000u, M68kOperandSize.Word, true, 28L, 30L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 30L, 32L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
+			(M68kBusAccessKind.CpuDataRead, 0x2000u, M68kOperandSize.Word, false, 26L, 28L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 28L, 30L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2000u, M68kOperandSize.Word, true, 30L, 32L));
+	}
+	[Fact]
+	public void InitialNopLeavesUnstartedTailPrefetchPendingAtRetirement()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		var diagnostics = Assert.IsAssignableFrom<IM68000PrefetchDiagnostics>(cpu);
+
+		cpu.ExecuteInstruction();
+		var state = diagnostics.CapturePrefetchDiagnosticState();
+
+		Assert.Equal(24, state.Cycles);
+		Assert.Equal(1, state.PrefetchCount);
+		Assert.True(state.HasPendingPrefetch);
+		Assert.Equal(0x1004u, state.PendingPrefetchAddress);
+		Assert.DoesNotContain(bus.CpuBusPhases, phase => phase.Address == 0x1004);
+	}
+	[Fact]
+	public void SequentialNopMaterializesPendingTailInsideItsPrefetchWindow()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		var diagnostics = Assert.IsAssignableFrom<IM68000PrefetchDiagnostics>(cpu);
+
+		cpu.ExecuteInstruction();
+		var phaseStart = bus.CpuBusPhases.Count;
+		cpu.ExecuteInstruction();
+		var state = diagnostics.CapturePrefetchDiagnosticState();
+
+		Assert.Contains(bus.CpuBusPhases.Skip(phaseStart), phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch && phase.Address == 0x1004);
+		Assert.False(state.HasPendingPrefetch);
+		Assert.Equal(2, state.PrefetchCount);
+		Assert.Equal(0x1004u, state.PrefetchAddress);
+	}
+	[Fact]
+	public void TakenBneCancelsUnstartedFallthroughBeforeFullTargetRefill()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71, // NOP creates pending fetch at $1004
+			0x66, 0x04, // BNE.S $1008
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		var diagnostics = Assert.IsAssignableFrom<IM68000PrefetchDiagnostics>(cpu);
+
+		cpu.ExecuteInstruction();
+		Assert.True(diagnostics.CapturePrefetchDiagnosticState().HasPendingPrefetch);
+		Assert.Contains(bus.CpuBusPhases, phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch && phase.Address == 0x1002);
+		var phaseStart = bus.CpuBusPhases.Count;
+		cpu.ExecuteInstruction();
+		var branchPhases = bus.CpuBusPhases.Skip(phaseStart).ToArray();
+
+		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
+		Assert.DoesNotContain(branchPhases, phase => phase.Address == 0x1004);
+		Assert.Contains(branchPhases, phase => phase.Address == 0x1008);
+		Assert.Contains(branchPhases, phase => phase.Address == 0x100A);
+		Assert.False(diagnostics.CapturePrefetchDiagnosticState().HasPendingPrefetch);
+	}
+	[Fact]
+	public void NotTakenBneMaterializesPendingFallthrough()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71,
+			0x66, 0x04,
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		cpu.State.SetFlag(M68kCpuState.Zero, true);
+
+		cpu.ExecuteInstruction();
+		var phaseStart = bus.CpuBusPhases.Count;
+		cpu.ExecuteInstruction();
+		var branchPhases = bus.CpuBusPhases.Skip(phaseStart).ToArray();
+
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Contains(branchPhases, phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch && phase.Address == 0x1004);
+	}
+	[Fact]
+	public void MutationBeforePendingPrefetchMaterializationIsObserved()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+
+		cpu.ExecuteInstruction();
+		bus.WriteWordRaw(0x1004, 0x7007); // MOVEQ #7,D0 before pending fetch starts
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(7u, cpu.State.D[0]);
 	}
 	[Theory]
 	[MemberData(nameof(M68000DispatchVariants))]
@@ -834,8 +953,7 @@ public sealed class M68kInterpreterTests
 		AssertCpuPhaseSequence(
 			bus.CpuBusPhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L));
 	}
 	[Fact]
 	public void NotTakenWordBranchQueuesFallthroughAfterExtensionFetch()
@@ -1392,6 +1510,7 @@ public sealed class M68kInterpreterTests
 	{
 		const int iterations = 32;
 		var bus = new AmigaBus(realFastRamSize: 0x10000, captureBusAccesses: true, enableLiveAgnusDma: true);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var programAddress = bus.RealFastRamBase + 0x1000u;
 		var dataAddress = bus.RealFastRamBase + 0x2000u;
 		WriteAmigaMemory(bus, programAddress,
@@ -1874,7 +1993,7 @@ public sealed class M68kInterpreterTests
 			nextIterationImmediateFetch.CpuPhase.CompletedCycle <= nextIterationDataRead.CpuPhase.RequestedCycle,
 			$"targetFetch=0x{nextIterationImmediateFetch.CpuPhase.Address:X6}@{nextIterationImmediateFetch.CpuPhase.RequestedCycle}-{nextIterationImmediateFetch.CpuPhase.CompletedCycle}, phases={string.Join(",", bus.CpuBusPhases.Select(phase => $"pc=0x{phase.CpuPhase.InstructionProgramCounter:X6}:{phase.CpuPhase.AccessKind}:0x{phase.CpuPhase.Address:X6}@{phase.CpuPhase.RequestedCycle}-{phase.CpuPhase.CompletedCycle}"))}");
 	}
-	[Fact(Skip = "Source-backed target sequence; current speculative bus cursor cannot yet place the second refill without retiring ANDI before its required write completes.")]
+	[Fact]
 	public void TakenBneToAndiMemoryTargetRefillsOpcodeAndImmediateWithinBranchFloor()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
@@ -1946,6 +2065,45 @@ public sealed class M68kInterpreterTests
 			nextAndiDataRead.CpuPhase.CompletedCycle <= followingFetch.CpuPhase.RequestedCycle &&
 			followingFetch.CpuPhase.CompletedCycle <= nextAndiDataWrite.CpuPhase.RequestedCycle,
 			diagnostic);
+	}
+	[Fact]
+	public void AndiCompletesRequiredWriteAfterBothFallthroughPrefetches()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		Write(bus.ChipRam, 0x1000,
+			0x02, 0x53, 0x00, 0x1F, // ANDI.W #$001F,(A3)
+			0x66, 0xFA,             // BNE.S back to ANDI
+			0x4E, 0x71);            // fallthrough NOP
+		Write(bus.ChipRam, 0x2000, 0x00, 0x11);
+		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 64;
+		cpu.State.A[3] = 0x2000;
+		var diagnostics = Assert.IsAssignableFrom<IM68000PrefetchDiagnostics>(cpu);
+
+		var instructionStart = cpu.State.Cycles;
+		cpu.ExecuteInstruction();
+		var boundary = diagnostics.CapturePrefetchDiagnosticState();
+		var futureFetches = bus.CpuBusPhases.Where(phase =>
+			phase.CpuPhase.InstructionProgramCounter == 0x1000 &&
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.CpuPhase.Address == 0x1006).ToArray();
+		var diagnostic = FormatPrefetchInstructionBoundary(
+			new M68000PrefetchDiagnosticState(
+				0x1000, instructionStart, 0, 0, 0, 0, 0, 0, instructionStart,
+				instructionStart, instructionStart, instructionStart, 0, false),
+			boundary,
+			bus.CpuBusPhases);
+
+		Assert.Equal(0x1004u, boundary.ProgramCounter);
+		var requiredWrite = Assert.Single(bus.CpuBusPhases.Where(phase =>
+			phase.CpuPhase.InstructionProgramCounter == 0x1000 &&
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite));
+		Assert.True(requiredWrite.CpuPhase.CompletedCycle <= boundary.Cycles, diagnostic);
+		Assert.Equal(2, boundary.PrefetchCount);
+		Assert.Equal(0x1004u, boundary.PrefetchAddress);
+		Assert.False(boundary.HasPendingPrefetch, diagnostic);
+		Assert.Single(futureFetches);
 	}
 	[Fact]
 	public void SyntheticSlotGrantSynccpu2LoopSeparatesCpuRequestsFromBusGrants()
@@ -2170,7 +2328,7 @@ public sealed class M68kInterpreterTests
 		Assert.Fail(string.Join(Environment.NewLine, reports));
 	}
 	[Fact]
-	public void WarmedAndiMemoryTargetDataReadPrecedesUnrelatedFallthroughPrefetch()
+	public void WarmedAndiMemoryTargetPrefetchesAroundRequiredDataAccesses()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
 		Write(bus.ChipRam, 0x1000,
@@ -2186,7 +2344,7 @@ public sealed class M68kInterpreterTests
 
 		cpu.ExecuteInstruction(); // MOVE.W
 		cpu.ExecuteInstruction(); // ANDI.W
-		cpu.ExecuteInstruction(); // BNE.S primes only the target opcode.
+		cpu.ExecuteInstruction(); // BNE.S refills the target opcode and immediate.
 
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 
@@ -2200,6 +2358,9 @@ public sealed class M68kInterpreterTests
 		var fallthroughFetch = phases.FirstOrDefault(phase =>
 			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
 			phase.CpuPhase.Address == 0x100A);
+		var followingFetch = phases.FirstOrDefault(phase =>
+			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.CpuPhase.Address == 0x100C);
 		var dataRead = phases.FirstOrDefault(phase =>
 			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
 			phase.CpuPhase.Address == 0x2000);
@@ -2211,17 +2372,15 @@ public sealed class M68kInterpreterTests
 			$"phases={FormatCpuBusPhases(phases)}";
 
 		Assert.Equal(16, retiredCycles);
-		Assert.True(immediateFetch.CpuPhase.Address == 0x1008, diagnostic);
+		Assert.True(immediateFetch.CpuPhase.Address == 0, diagnostic);
 		Assert.True(dataRead.CpuPhase.Address == 0x2000, diagnostic);
 		Assert.True(dataWrite.CpuPhase.Address == 0x2000, diagnostic);
 		Assert.True(
 			immediateFetch.CpuPhase.CompletedCycle <= dataRead.CpuPhase.RequestedCycle,
 			diagnostic);
-		Assert.True(
-			fallthroughFetch.CpuPhase.Address == 0 ||
-			dataRead.CpuPhase.CompletedCycle <= fallthroughFetch.CpuPhase.RequestedCycle,
-			diagnostic);
-		Assert.True(dataRead.CpuPhase.CompletedCycle <= dataWrite.CpuPhase.RequestedCycle, diagnostic);
+		Assert.True(fallthroughFetch.CpuPhase.CompletedCycle <= dataRead.CpuPhase.RequestedCycle, diagnostic);
+		Assert.True(dataRead.CpuPhase.CompletedCycle <= followingFetch.CpuPhase.RequestedCycle, diagnostic);
+		Assert.True(followingFetch.CpuPhase.CompletedCycle <= dataWrite.CpuPhase.RequestedCycle, diagnostic);
 	}
 	[Fact(Skip = "Documents unresolved synccpu3 loop bus-request phase: current chip-RAM reads use a 36/40-cycle cadence instead of a simple 38-cycle cadence.")]
 	public void Synccpu3LoopChipRamDataReadRequestPhaseStaysStableAcrossIterations()
@@ -3396,7 +3555,8 @@ public sealed class M68kInterpreterTests
 			};
 			return $"pc=0x{state.ProgramCounter:X4},c={state.Cycles},q=0x{state.PrefetchAddress:X4}[{state.PrefetchCount}]={words}," +
 				$"bus={state.BusCycle},ret={state.RetireBusCycle},is={state.InstructionStartCycle},floor={state.InstructionCycleFloor}," +
-				$"pending={state.PendingInternalCycles},skip={state.SkipRetirePrefetchTopUp}";
+				$"internal={state.PendingInternalCycles},skip={state.SkipRetirePrefetchTopUp}," +
+				$"pending={(state.HasPendingPrefetch ? $"0x{state.PendingPrefetchAddress:X4}@{state.PendingPrefetchEarliestCycle}" : "none")}";
 		}
 
 		var phaseText = string.Join(",", phases.Select(phase =>
@@ -3512,12 +3672,20 @@ public sealed class M68kInterpreterTests
 		return bus;
 	}
 	private static AmigaBus CreateExactCpuDataAmigaBus(int expansionRamSize = 0, int realFastRamSize = 0)
-		=> new AmigaBus(
+	{
+		var bus = new AmigaBus(
 			expansionRamSize: expansionRamSize,
 			captureBusAccesses: false,
 			enableLiveAgnusDma: false,
 			enableLiveDisplayDma: false,
 			realFastRamSize: realFastRamSize);
+		if (realFastRamSize != 0)
+		{
+			bus.ConfigureAutoconfigFastRamForHost();
+		}
+
+		return bus;
+	}
 	private sealed record ParityRun(M68kInterpreter Cpu, TestBus Bus);
 	private readonly struct ExactCpuDataTestAccess : IM68kCpuDataAccess<ExactCpuDataTestBus, ExactCpuDataTestAccess>
 	{

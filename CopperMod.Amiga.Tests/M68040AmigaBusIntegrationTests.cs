@@ -31,7 +31,8 @@ public sealed class M68040AmigaBusIntegrationTests
 	{
 		const uint RomBase = 0x00F8_0000;
 		const uint FastBase = 0x0020_0000;
-		var bus = new AmigaBus(realFastRamSize: 0x1000, realFastRamBase: FastBase);
+		var bus = new AmigaBus(realFastRamSize: 0x10000, realFastRamBase: FastBase);
+		bus.ConfigureAutoconfigFastRamForHost();
 		bus.MapReadOnlyMemory(
 			RomBase,
 			new byte[]

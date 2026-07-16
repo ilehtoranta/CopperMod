@@ -372,6 +372,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		var bus = new AmigaBus(
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		for (var i = 0; i < 4; i++)
 		{
 			WriteWord(bus, SourceA + (uint)(i * 2), (ushort)(0x1234 + i));

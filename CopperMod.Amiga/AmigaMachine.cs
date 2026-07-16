@@ -228,15 +228,24 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithRealFastRam(int size, uint baseAddress = AmigaConstants.A500RealFastRamBase)
+        public AmigaMachineOptions WithRealFastRam(int size, uint? baseAddress = null)
         {
             if (size < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(size), size, "Real fast RAM size cannot be negative.");
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Autoconfig fast RAM size cannot be negative.");
             }
 
+            if (size == 0)
+            {
+                RealFastRamSize = 0;
+                RealFastRamBase = baseAddress ?? AmigaConstants.A500RealFastRamBase;
+                return this;
+            }
+
+            var selectedBase = baseAddress ?? AutoconfigFastRamBoard.GetDefaultBase(size);
+            AutoconfigFastRamBoard.ValidateBase(size, selectedBase);
             RealFastRamSize = size;
-            RealFastRamBase = baseAddress;
+            RealFastRamBase = selectedBase;
             return this;
         }
 
@@ -280,6 +289,17 @@ namespace CopperMod.Amiga
         public AmigaMachine(AmigaMachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
+            if (options.RealFastRamSize > 8 * 1024 * 1024 &&
+                options.CpuBackend is not (
+                    M68kBackendKind.AccurateM68020 or
+                    M68kBackendKind.AccurateM68030 or
+                    M68kBackendKind.AccurateM68040 or
+                    M68kBackendKind.JitM68040))
+            {
+                throw new InvalidOperationException(
+                    $"{options.RealFastRamSize / (1024 * 1024)} MiB of Zorro III fast RAM requires a full 32-bit MC68020, MC68030, or MC68040 backend.");
+            }
+
             Bus = new AmigaBus(
                 options.ChipRamSize,
                 options.BusArbiter,

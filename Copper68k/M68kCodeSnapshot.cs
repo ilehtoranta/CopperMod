@@ -89,10 +89,12 @@ namespace Copper68k
     {
         private const int CodeGenerationPageSize = 1 << 8;
         private readonly M68kJitCodeSnapshot _snapshot;
+        private readonly bool _full32BitAddresses;
 
         public M68kSnapshotCodeReader(M68kJitCodeSnapshot snapshot)
         {
             _snapshot = snapshot;
+            _full32BitAddresses = snapshot.Root >= 0x1000_0000u;
         }
 
         public uint Root => _snapshot.Root;
@@ -221,7 +223,7 @@ namespace Copper68k
             return false;
         }
 
-        private static uint NormalizeAddress(uint address)
-            => address & 0x00FF_FFFF;
+        private uint NormalizeAddress(uint address)
+            => _full32BitAddresses ? address : address & 0x00FF_FFFFu;
     }
 }

@@ -204,6 +204,11 @@ namespace Copper68k
 
         internal static M68020MemoryTarget ClassifyTarget(uint address)
         {
+            if (address is >= 0x1000_0000u and < 0x8000_0000u)
+            {
+                return M68020MemoryTarget.RealFastRam;
+            }
+
             address &= 0x00FF_FFFF;
             if (address < 0x0020_0000)
             {

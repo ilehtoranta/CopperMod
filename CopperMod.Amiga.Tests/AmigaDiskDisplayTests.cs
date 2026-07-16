@@ -2957,6 +2957,7 @@ public sealed class AmigaDiskDisplayTests
         var nastyBus = new AmigaBus(
             expansionRamSize: 0x10000,
             realFastRamSize: 0x10000);
+        nastyBus.ConfigureAutoconfigFastRamForHost();
         BigEndian.WriteUInt16(nastyBus.ChipRam, 0x3000, 0x1234);
         ConfigureFourWordCopyBlit(nastyBus);
         nastyBus.WriteWord(0x00DFF096, 0x8640);

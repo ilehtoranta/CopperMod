@@ -76,6 +76,8 @@ public sealed class AmigaArchitectureTests
 			.WithRealFastRam(AmigaConstants.A500JitRealFastRamSize));
 
 		Assert.Equal(AmigaConstants.A500JitRealFastRamSize, machine.Bus.RealFastRam.Length);
+		Assert.False(machine.Bus.AutoconfigFastRam!.IsConfigured);
+		machine.Bus.ConfigureAutoconfigFastRamForHost();
 		Assert.Equal(AmigaConstants.A500RealFastRamBase, machine.Bus.RealFastRamBase);
 	}
 

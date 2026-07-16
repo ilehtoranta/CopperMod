@@ -95,6 +95,11 @@ public sealed class CopperScreenBootTests
 			var hdf = machine.Bus.CopperHdf;
 			var diagnostic = $"frames={framesRendered}, status='{emulator.StatusText}', pc=0x{state.ProgramCounter:X6}, lastPc=0x{state.LastInstructionProgramCounter:X6}, opcode=0x{state.LastOpcode:X4}, sr=0x{state.StatusRegister:X4}, configured={hdf.IsConfigured}, base=0x{hdf.ConfiguredBase:X6}, bootstrap={hdf.BootstrapInstalled}, diag={hdf.DiagBootstrapCalled}, boot={hdf.BootBootstrapCalled}, resident={hdf.ResidentInitCalled}, device={hdf.DeviceRegistered}, bootNode={hdf.BootNodeRegistered}";
 			Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+			Assert.True(machine.Bus.AutoconfigFastRam?.IsConfigured, diagnostic);
+			Assert.Equal(0x0020_0000u, machine.Bus.RealFastRamBase);
+			Assert.True(
+				ExecMemListContainsRange(machine.Bus, 0x0020_0000u, 0x00A0_0000u, out var memListDiagnostic),
+				$"{diagnostic}, memList={memListDiagnostic}");
 			Assert.True(hdf.IsConfigured, diagnostic);
 			Assert.True(hdf.BootstrapInstalled, diagnostic);
 			Assert.True(hdf.DiagBootstrapCalled, diagnostic);
@@ -115,6 +120,42 @@ public sealed class CopperScreenBootTests
 			{
 			}
 		}
+	}
+
+	private static bool ExecMemListContainsRange(
+		AmigaBus bus,
+		uint lower,
+		uint upper,
+		out string diagnostic)
+	{
+		var ranges = new List<string>();
+		var execBase = bus.ReadLong(4);
+		var list = execBase + 0x142u;
+		var header = bus.ReadLong(list);
+		for (var index = 0; index < 64 && header != 0 && header != list + 4; index++)
+		{
+			if (!bus.IsMappedMemoryRange(header, 0x20))
+			{
+				diagnostic = $"unmapped-header=0x{header:X8}; ranges={string.Join(",", ranges)}";
+				return false;
+			}
+
+			var headerLower = bus.ReadLong(header + 0x14);
+			var headerUpper = bus.ReadLong(header + 0x18);
+			ranges.Add($"0x{header:X8}:[0x{headerLower:X8},0x{headerUpper:X8})");
+			if (headerLower >= lower &&
+				headerLower < lower + AutoconfigChain.ConfigSize &&
+				headerUpper >= upper)
+			{
+				diagnostic = string.Join(",", ranges);
+				return true;
+			}
+
+			header = bus.ReadLong(header);
+		}
+
+		diagnostic = string.Join(",", ranges);
+		return false;
 	}
 
 	[Fact]

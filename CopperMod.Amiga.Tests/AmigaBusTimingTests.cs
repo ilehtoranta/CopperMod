@@ -441,6 +441,7 @@ public sealed class AmigaBusTimingTests
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000,
 			enableLiveAgnusDma: true);
+		bus.ConfigureAutoconfigFastRamForHost();
 
 		var pseudoFastCycle = 20L;
 		_ = bus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref pseudoFastCycle, AmigaBusAccessKind.CpuDataRead);
@@ -610,6 +611,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		bus.MapReadOnlyMemory(0x00FC0000, new byte[] { 0x12, 0x34 });
 		StartNastyBlit(bus);
 
@@ -3902,6 +3904,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			expansionRamSize: 0x10000,
 			realFastRamSize: 0x10000);
+		bus.ConfigureAutoconfigFastRamForHost();
 		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
 		bus.MapReadOnlyMemory(0x00FC0000, new byte[] { 0x12, 0x34 });
 		bus.WriteWord(0x00DFF096, 0x8300);

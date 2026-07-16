@@ -8,5 +8,10 @@ namespace CopperMod.Amiga
             : base(message)
         {
         }
+
+        public AmigaEmulationException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
     }
 }

@@ -1708,15 +1708,15 @@ internal sealed class MainWindow : Window
 		_pseudoFastRamBox = AddTextSetting(chipAndPseudoFast, "Pseudo-fast KB");
 		_pseudoFastBaseBox = AddTextSetting(chipAndPseudoFast, "Pseudo-fast base");
 		var realFast = CreateSettingsGroupForm();
-		_realFastRamBox = AddTextSetting(realFast, "Real fast KB");
-		_realFastBaseBox = AddTextSetting(realFast, "Real fast base");
+		_realFastRamBox = AddTextSetting(realFast, "Autoconfig fast RAM KB");
+		_realFastBaseBox = AddTextSetting(realFast, "Autoconfig assignment hint");
 		_rtcEnabledBox = new CheckBox { Content = "Enabled" };
 		_rtcEnabledBox.IsCheckedChanged += (_, _) => ApplyRtcEnabledSetting();
 		realFast.Children.Add(CreateSettingsRow("RTC clock", _rtcEnabledBox));
 
 		layout.Children.Add(CreateSettingsGroupPair(
 			CreateSettingsGroup("Chip and Pseudo-fast RAM", chipAndPseudoFast),
-			CreateSettingsGroup("Real Fast RAM", realFast)));
+			CreateSettingsGroup("Autoconfig Fast RAM", realFast)));
 
 		return CreateScrollableSettingsPage(layout);
 	}
@@ -2278,7 +2278,7 @@ internal sealed class MainWindow : Window
 		{
 			_ = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
 			_ = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
-			_ = ParseNonNegativeInt(_realFastRamBox.Text, "Real fast RAM KB");
+			_ = ParseNonNegativeInt(_realFastRamBox.Text, "Autoconfig fast RAM KB");
 			_ = ParseFloat(_floppySoundVolumeBox.Text, "Sound volume");
 		}
 		catch (InvalidOperationException ex)
@@ -2416,7 +2416,7 @@ internal sealed class MainWindow : Window
 			_settingsDraft.ChipRamKb = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
 			_settingsDraft.PseudoFastRamKb = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
 			_settingsDraft.PseudoFastBase = _pseudoFastBaseBox.Text?.Trim() ?? "$C00000";
-			_settingsDraft.RealFastRamKb = ParseNonNegativeInt(_realFastRamBox.Text, "Real fast RAM KB");
+			_settingsDraft.RealFastRamKb = ParseNonNegativeInt(_realFastRamBox.Text, "Autoconfig fast RAM KB");
 			_settingsDraft.RealFastBase = _realFastBaseBox.Text?.Trim() ?? "$200000";
 			_settingsDraft.RtcEnabled = _rtcEnabledBox.IsChecked == true;
 			_settingsDraft.FloppyDriveCount = ParseDriveCount(_floppyDriveCountBox.SelectedItem);

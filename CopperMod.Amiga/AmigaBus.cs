@@ -50,6 +50,7 @@ namespace CopperMod.Amiga
         private const int CpuBusBankShift = 16;
         private const int CpuBusBankSize = 1 << CpuBusBankShift;
         private const int CpuBusBankCount = 1 << (24 - CpuBusBankShift);
+        private const int JitDirectRamBankCount = 1 << (32 - CpuBusBankShift);
         private const uint CustomRegisterBaseAddress = 0x00DFF000;
         private const int MaxDeferredCpuDataAccesses = 64;
         private const long DeferredCpuBusBatchDefaultCycleWindow = 4096;
@@ -193,6 +194,8 @@ namespace CopperMod.Amiga
         private readonly int _chipRamMask;
         private readonly AmigaLinearRamBackend _expansionRam;
         private readonly AmigaLinearRamBackend _realFastRam;
+        private readonly AutoconfigFastRamBoard? _autoconfigFastRam;
+        private readonly AutoconfigChain _autoconfig;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
         private readonly Dictionary<ushort, Action<M68kCpuState>> _relocatableHostTrapStubs = new Dictionary<ushort, Action<M68kCpuState>>();
         private readonly List<uint> _hostTrapStubAddresses = new List<uint>();
@@ -218,7 +221,8 @@ namespace CopperMod.Amiga
         private readonly AmigaHardwareScheduler _hardwareScheduler;
         private readonly CpuBusBankKind[] _cpuBusBankKinds = new CpuBusBankKind[CpuBusBankCount];
         private readonly int[] _cpuBusBankOffsets = new int[CpuBusBankCount];
-        private readonly byte[] _jitDirectRamBankKinds = new byte[CpuBusBankCount];
+        private readonly byte[] _jitDirectRamBankKinds = new byte[JitDirectRamBankCount];
+        private readonly int[] _jitDirectRamBankOffsets = new int[JitDirectRamBankCount];
         private readonly bool _captureBusAccesses;
         private readonly bool _useFastZeroWaitAccesses;
         private readonly bool _useChipSlotScheduler;
@@ -396,9 +400,16 @@ namespace CopperMod.Amiga
             _chipRamData = _chipRam.Data;
             _chipRamMask = _chipRam.Length - 1;
             ExpansionRamBase = expansionRamBase;
-            RealFastRamBase = realFastRamBase;
+            RealFastRamPreferredBase = realFastRamBase;
             _expansionRam = new AmigaLinearRamBackend(expansionRamSize, ExpansionRamBase, CodeGenerationPageShift);
-            _realFastRam = new AmigaLinearRamBackend(realFastRamSize, RealFastRamBase, CodeGenerationPageShift);
+            _realFastRam = new AmigaLinearRamBackend(
+                realFastRamSize,
+                0,
+                CodeGenerationPageShift,
+                initiallyMapped: false);
+            _autoconfigFastRam = realFastRamSize == 0
+                ? null
+                : new AutoconfigFastRamBoard(_realFastRam);
             _hrmSlotEngine = new AgnusHrmSlotEngine(captureBusAccesses);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
@@ -430,6 +441,16 @@ namespace CopperMod.Amiga
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
+            var autoconfigBoards = new List<IAutoconfigBoard>(2);
+            if (_autoconfigFastRam != null)
+            {
+                autoconfigBoards.Add(_autoconfigFastRam);
+            }
+
+            autoconfigBoards.Add(CopperHdf);
+            _autoconfig = new AutoconfigChain(autoconfigBoards);
+            _autoconfig.BoardConfigured += OnAutoconfigBoardConfigured;
+            _autoconfig.AddressMapChanged += OnAutoconfigAddressMapChanged;
             Display = new OcsDisplay(this, enableLiveDisplayDma);
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
@@ -558,11 +579,17 @@ namespace CopperMod.Amiga
 
         public byte[] RealFastRam => _realFastRam.Data;
 
+        internal AutoconfigChain Autoconfig => _autoconfig;
+
+        internal AutoconfigFastRamBoard? AutoconfigFastRam => _autoconfigFastRam;
+
         public uint ChipDmaAddressMask { get; }
 
         public uint ExpansionRamBase { get; }
 
-        public uint RealFastRamBase { get; }
+        public uint RealFastRamBase => _realFastRam.BaseAddress;
+
+        public uint RealFastRamPreferredBase { get; }
 
         public bool RealTimeClockEnabled => _realTimeClock != null;
 
@@ -766,6 +793,34 @@ namespace CopperMod.Amiga
         public void Dispose()
             => CopperHdf.Dispose();
 
+        private void OnAutoconfigBoardConfigured(IAutoconfigBoard board)
+        {
+            if (ReferenceEquals(board, CopperHdf))
+            {
+                CopperHdf.InstallBootstrapTraps(this);
+            }
+        }
+
+        private void OnAutoconfigAddressMapChanged()
+        {
+            InvalidateInstructionFetchWindows();
+            RebuildCpuBusBankTable();
+        }
+
+        internal void ConfigureAutoconfigFastRamForHost()
+        {
+            if (_autoconfigFastRam == null)
+            {
+                return;
+            }
+
+            if (!_autoconfig.ConfigureBoardForHost(_autoconfigFastRam, RealFastRamPreferredBase))
+            {
+                throw new AmigaEmulationException(
+                    "CopperStart could not assign the Autoconfig fast-RAM board because it is not first in the configuration chain.");
+            }
+        }
+
         internal void EnableLiveAgnusDma()
         {
             LiveAgnusDmaEnabled = true;
@@ -803,7 +858,7 @@ namespace CopperMod.Amiga
         {
             _chipRam.ClearData();
             _expansionRam.ClearData();
-            _realFastRam.ClearData();
+            _autoconfig.ColdReset();
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
             _hostTrapStubAddresses.Clear();
@@ -834,7 +889,6 @@ namespace CopperMod.Amiga
 
             Paula.Reset();
             Disk.Reset();
-            CopperHdf.Reset();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -942,7 +996,7 @@ namespace CopperMod.Amiga
             UpdateCiaAPortAOutputSideEffects();
             Paula.Reset();
             Disk.Reset();
-            CopperHdf.Reset();
+            _autoconfig.ResetConfiguration();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -3584,22 +3638,61 @@ namespace CopperMod.Amiga
                 var kind = ClassifyCpuBusBank(bankAddress, out var offset);
                 _cpuBusBankKinds[bank] = kind;
                 _cpuBusBankOffsets[bank] = offset;
-                _jitDirectRamBankKinds[bank] = kind switch
-                {
-                    CpuBusBankKind.ExpansionRam => (byte)M68kJitDirectRamBankKind.PseudoFast,
-                    CpuBusBankKind.RealFastRam => (byte)M68kJitDirectRamBankKind.RealFast,
-                    _ => (byte)M68kJitDirectRamBankKind.None
-                };
             }
 
+            Array.Clear(_jitDirectRamBankKinds);
+            Array.Clear(_jitDirectRamBankOffsets);
+            PopulateJitDirectRamBanks(_expansionRam, M68kJitDirectRamBankKind.PseudoFast);
+            PopulateJitDirectRamBanks(_realFastRam, M68kJitDirectRamBankKind.RealFast);
+
             _cpuPhysicalAddressMapGeneration++;
+        }
+
+        private void PopulateJitDirectRamBanks(
+            AmigaLinearRamBackend memory,
+            M68kJitDirectRamBankKind kind)
+        {
+            if (!memory.IsMapped || memory.Length < CpuBusBankSize)
+            {
+                return;
+            }
+
+            var baseAddress = memory.BaseAddress;
+            var firstBank = (int)(baseAddress >> CpuBusBankShift);
+            var firstBankOffset = (int)(baseAddress & (CpuBusBankSize - 1u));
+            for (var bank = firstBank; bank < JitDirectRamBankCount; bank++)
+            {
+                var offset = ((long)(bank - firstBank) << CpuBusBankShift) - firstBankOffset;
+                if (offset < 0)
+                {
+                    continue;
+                }
+
+                if (offset + CpuBusBankSize > memory.Length)
+                {
+                    break;
+                }
+
+                var bankAddress = (uint)bank << CpuBusBankShift;
+                var expectedCpuKind = kind == M68kJitDirectRamBankKind.PseudoFast
+                    ? CpuBusBankKind.ExpansionRam
+                    : CpuBusBankKind.RealFastRam;
+                if (ClassifyCpuBusBank(bankAddress, out var classifiedOffset) != expectedCpuKind ||
+                    classifiedOffset != offset)
+                {
+                    continue;
+                }
+
+                _jitDirectRamBankKinds[bank] = (byte)kind;
+                _jitDirectRamBankOffsets[bank] = (int)offset;
+            }
         }
 
         bool IM68kJitDirectRamBus.TryGetJitDirectRamMap(out M68kJitDirectRamMap map)
         {
             map = new M68kJitDirectRamMap(
                 _jitDirectRamBankKinds,
-                _cpuBusBankOffsets,
+                _jitDirectRamBankOffsets,
                 _expansionRam.Data,
                 _realFastRam.Data,
                 CpuBusBankShift);
@@ -3742,10 +3835,10 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (CopperHdf.ContainsAutoConfigAddress(bankAddress) ||
-                CopperHdf.ContainsAutoConfigAddress(bankEndExclusive - 1u) ||
-                CopperHdf.ContainsBoardAddress(bankAddress) ||
-                CopperHdf.ContainsBoardAddress(bankEndExclusive - 1u))
+            if (_autoconfig.ContainsConfigurationAddress(bankAddress) ||
+                _autoconfig.ContainsConfigurationAddress(bankEndExclusive - 1u) ||
+                _autoconfig.ContainsConfiguredAddress(bankAddress, includeDirectRam: false) ||
+                _autoconfig.ContainsConfiguredAddress(bankEndExclusive - 1u, includeDirectRam: false))
             {
                 return true;
             }
@@ -3865,8 +3958,8 @@ namespace CopperMod.Amiga
                 return AmigaBusAccessTarget.HostTrap;
             }
 
-            if (CopperHdf.ContainsAutoConfigAddress(address) ||
-                CopperHdf.ContainsBoardAddress(address))
+            if (_autoconfig.ContainsConfigurationAddress(address) ||
+                _autoconfig.ContainsConfiguredAddress(address, includeDirectRam: false))
             {
                 return AmigaBusAccessTarget.Rom;
             }
@@ -3946,14 +4039,14 @@ namespace CopperMod.Amiga
                 return ReadCiaRegisterValue(cia, ciaRegister);
             }
 
-            if (CopperHdf.ContainsAutoConfigAddress(address))
+            if (_autoconfig.TryReadByte(address, out var autoconfigValue))
             {
-                return CopperHdf.ReadAutoConfigByte(address);
+                return autoconfigValue;
             }
 
-            if (CopperHdf.ContainsBoardAddress(address))
+            if (_autoconfig.TryReadConfiguredByte(address, out var boardValue))
             {
-                return CopperHdf.ReadBoardByte(address);
+                return boardValue;
             }
 
             if (_mappedMemory.TryReadMappedByte(address, out var value))
@@ -3976,8 +4069,8 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (CopperHdf.ContainsAutoConfigAddress(address) ||
-                CopperHdf.ContainsBoardAddress(address))
+            if (_autoconfig.ContainsConfigurationAddress(address) ||
+                _autoconfig.ContainsConfiguredAddress(address, includeDirectRam: true))
             {
                 return true;
             }
@@ -4389,7 +4482,7 @@ namespace CopperMod.Amiga
             value = 0;
             if (!_useChipSlotScheduler ||
                 size != M68kOperandSize.Byte ||
-                (physicalAddress & CpuAddressMask) != 0x00BF_E001u)
+                physicalAddress != 0x00BF_E001u)
             {
                 return false;
             }
@@ -5552,22 +5645,13 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (CopperHdf.ContainsAutoConfigAddress(address))
+            if (_autoconfig.TryWriteByte(address, value))
             {
-                var wasConfigured = CopperHdf.IsConfigured;
-                CopperHdf.WriteAutoConfigByte(address, value);
-                RebuildCpuBusBankTable();
-                if (!wasConfigured && CopperHdf.IsConfigured)
-                {
-                    CopperHdf.InstallBootstrapTraps(this);
-                }
-
                 return;
             }
 
-            if (CopperHdf.ContainsBoardAddress(address))
+            if (_autoconfig.TryWriteConfiguredByte(address, value))
             {
-                CopperHdf.TryWriteBoardByte(address, value);
                 return;
             }
 
@@ -5605,6 +5689,11 @@ namespace CopperMod.Amiga
             TPolicy policy)
             where TPolicy : struct, IBusWritePolicy
         {
+            if (_autoconfig.TryWriteWord(address, value))
+            {
+                return;
+            }
+
             if (address >= 0x00DFF000 && address + 1 < 0x00DFF200)
             {
                 WriteCustomWord(policy.Requester, (ushort)(address - 0x00DFF000), value, grantedCycle);
