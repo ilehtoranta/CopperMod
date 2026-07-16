@@ -40,6 +40,55 @@ public sealed class AmigaArchitectureTests
 	}
 
 	[Fact]
+	public void MachineProfilesDefaultToOcsPalChipset()
+	{
+		foreach (var profile in Enum.GetValues<MachineProfile>())
+		{
+			var options = MachineOptions.ForProfile(profile);
+
+			Assert.Equal(AmigaChipset.OcsPal, options.Chipset);
+		}
+	}
+
+	[Theory]
+	[InlineData(false, false)]
+	[InlineData(true, false)]
+	[InlineData(false, true)]
+	[InlineData(true, true)]
+	public void AgnusAndDeniseModelsCanBeSelectedIndependently(
+		bool ecsAgnus,
+		bool ecsDenise)
+	{
+		var agnus = ecsAgnus ? AgnusModel.Ecs : AgnusModel.Ocs;
+		var denise = ecsDenise ? DeniseModel.Ecs : DeniseModel.Ocs;
+		var chipset = new AmigaChipset(agnus, denise, VideoStandard.Pal);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithChipset(chipset);
+
+		Assert.Equal(agnus, options.Chipset.Agnus);
+		Assert.Equal(denise, options.Chipset.Denise);
+		Assert.Equal(VideoStandard.Pal, options.Chipset.VideoStandard);
+	}
+
+	[Fact]
+	public void ChipsetPresetsSelectExpectedModelsAndVideoStandards()
+	{
+		Assert.Equal(
+			new AmigaChipset(AgnusModel.Ocs, DeniseModel.Ocs, VideoStandard.Pal),
+			AmigaChipset.OcsPal);
+		Assert.Equal(
+			new AmigaChipset(AgnusModel.Ocs, DeniseModel.Ocs, VideoStandard.Ntsc),
+			AmigaChipset.OcsNtsc);
+		Assert.Equal(
+			new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ecs, VideoStandard.Pal),
+			AmigaChipset.EcsPal);
+		Assert.Equal(
+			new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ecs, VideoStandard.Ntsc),
+			AmigaChipset.EcsNtsc);
+	}
+
+	[Fact]
 	public void BootProfilesExposeChipOnlyAndDefaultPseudoFastMemoryLayouts()
 	{
 		var chipOnly = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot));

@@ -9,6 +9,50 @@ using System.Linq;
 
 namespace CopperMod.Amiga.Runtime
 {
+    internal enum AgnusModel
+    {
+        Ocs,
+        Ecs
+    }
+
+    internal enum DeniseModel
+    {
+        Ocs,
+        Ecs
+    }
+
+    internal enum VideoStandard
+    {
+        Pal,
+        Ntsc
+    }
+
+    internal readonly record struct AmigaChipset(
+        AgnusModel Agnus,
+        DeniseModel Denise,
+        VideoStandard VideoStandard)
+    {
+        public static AmigaChipset OcsPal { get; } = new(
+            AgnusModel.Ocs,
+            DeniseModel.Ocs,
+            VideoStandard.Pal);
+
+        public static AmigaChipset OcsNtsc { get; } = new(
+            AgnusModel.Ocs,
+            DeniseModel.Ocs,
+            VideoStandard.Ntsc);
+
+        public static AmigaChipset EcsPal { get; } = new(
+            AgnusModel.Ecs,
+            DeniseModel.Ecs,
+            VideoStandard.Pal);
+
+        public static AmigaChipset EcsNtsc { get; } = new(
+            AgnusModel.Ecs,
+            DeniseModel.Ecs,
+            VideoStandard.Ntsc);
+    }
+
     internal readonly record struct InterruptDispatchTrace(
         int Level,
         ushort ActiveInterruptBits,
@@ -44,6 +88,8 @@ namespace CopperMod.Amiga.Runtime
         }
 
         public MachineProfile Profile { get; }
+
+        public AmigaChipset Chipset { get; private set; } = AmigaChipset.OcsPal;
 
         public int ChipRamSize { get; private set; } = AmigaConstants.DefaultChipRamSize;
 
@@ -122,6 +168,12 @@ namespace CopperMod.Amiga.Runtime
         {
             CpuFactory = factory ?? throw new ArgumentNullException(nameof(factory));
             CpuBackend = backend;
+            return this;
+        }
+
+        public MachineOptions WithChipset(AmigaChipset chipset)
+        {
+            Chipset = chipset;
             return this;
         }
 
