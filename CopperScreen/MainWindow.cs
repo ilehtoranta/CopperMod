@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -47,7 +52,7 @@ internal sealed class MainWindow : Window
 	private readonly FramebufferPresenter _presenter;
 	private readonly Grid _root;
 	private readonly Border _toolbar;
-	private readonly Border _settingsPanel;
+	private readonly SettingsWindow _settingsWindow;
 	private readonly Border _benchPanel;
 	private readonly Border _debuggerPanel;
 	private readonly Border _gamepadAssignmentOverlay;
@@ -121,6 +126,7 @@ internal sealed class MainWindow : Window
 	private TextBox _pseudoFastBaseBox = null!;
 	private TextBox _realFastRamBox = null!;
 	private TextBox _realFastBaseBox = null!;
+	private TextBox _rtgVramBox = null!;
 	private CheckBox _rtcEnabledBox = null!;
 	private ComboBox _floppyDriveCountBox = null!;
 	private readonly TextBox[] _drivePathBoxes = new TextBox[4];
@@ -234,13 +240,12 @@ internal sealed class MainWindow : Window
 		_benchPanel = CreateCopperBenchPanel();
 		_debuggerPanel = CreateDebuggerPanel();
 		_toolbar = CreateToolbar();
-		_settingsPanel = CreateSettingsPanel();
+		_settingsWindow = CreateSettingsWindow();
 		_gamepadAssignmentOverlay = CreateGamepadAssignmentOverlay();
 		_root.Children.Add(_presenter);
 		_root.Children.Add(_benchPanel);
 		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
-		_root.Children.Add(_settingsPanel);
 		_root.Children.Add(_gamepadAssignmentOverlay);
 		Content = _root;
 		ApplyWindowPresentationMode();
@@ -257,7 +262,7 @@ internal sealed class MainWindow : Window
 			ApplyWindowPresentationMode();
 			if (_settingsVisible)
 			{
-				_settingsPanel.Focus();
+				ShowSettingsWindow();
 			}
 			else
 			{
@@ -307,6 +312,12 @@ internal sealed class MainWindow : Window
 			}
 		};
 		Deactivated += (_, _) => ReleaseInteractiveInput();
+		Closing += (_, _) =>
+		{
+			_isClosed = true;
+			_settingsWindow.AllowClose = true;
+			_settingsWindow.Close();
+		};
 		Closed += (_, _) =>
 		{
 			_isClosed = true;
@@ -1334,6 +1345,11 @@ internal sealed class MainWindow : Window
 		};
 	}
 
+	private SettingsWindow CreateSettingsWindow()
+	{
+		return new SettingsWindow(CreateSettingsPanel(), HideSettings);
+	}
+
 	private Border CreateSettingsPanel()
 	{
 		var panel = new Grid
@@ -1445,13 +1461,9 @@ internal sealed class MainWindow : Window
 			BorderBrush = new SolidColorBrush(Color.FromRgb(92, 108, 132)),
 			BorderThickness = new Thickness(1),
 			Padding = new Thickness(12),
-			Margin = new Thickness(12, 78, 12, 12),
-			MinWidth = 920,
-			MinHeight = 560,
-			MaxWidth = 1060,
+			Margin = new Thickness(0),
 			HorizontalAlignment = HorizontalAlignment.Stretch,
 			VerticalAlignment = VerticalAlignment.Stretch,
-			IsVisible = _settingsVisible,
 			Child = panel
 		};
 	}
@@ -1710,6 +1722,7 @@ internal sealed class MainWindow : Window
 		var realFast = CreateSettingsGroupForm();
 		_realFastRamBox = AddTextSetting(realFast, "Autoconfig fast RAM KB");
 		_realFastBaseBox = AddTextSetting(realFast, "Autoconfig assignment hint");
+		_rtgVramBox = AddTextSetting(realFast, "RTG VRAM MB");
 		_rtcEnabledBox = new CheckBox { Content = "Enabled" };
 		_rtcEnabledBox.IsCheckedChanged += (_, _) => ApplyRtcEnabledSetting();
 		realFast.Children.Add(CreateSettingsRow("RTC clock", _rtcEnabledBox));
@@ -1992,13 +2005,27 @@ internal sealed class MainWindow : Window
 
 	private void ToggleSettings()
 	{
-		_settingsVisible = !_settingsVisible;
 		if (_settingsVisible)
 		{
-			RefreshSettingsUi();
-			ReleaseInteractiveInput();
+			HideSettings();
+			return;
 		}
 
+		ShowSettingsWindow();
+	}
+
+	private void ShowSettingsWindow()
+	{
+		_settingsVisible = true;
+		RefreshSettingsUi();
+		ReleaseInteractiveInput();
+		if (!_settingsWindow.IsVisible)
+		{
+			_settingsWindow.Show(this);
+		}
+
+		_settingsWindow.Activate();
+		_settingsWindow.Focus();
 		RefreshCopperBenchUi();
 	}
 
@@ -2011,6 +2038,7 @@ internal sealed class MainWindow : Window
 		}
 
 		_settingsVisible = false;
+		_settingsWindow.Hide();
 		RefreshCopperBenchUi();
 		_presenter.Focus();
 	}
@@ -2139,7 +2167,6 @@ internal sealed class MainWindow : Window
 		_updatingSettingsUi = true;
 		try
 		{
-			_settingsPanel.IsVisible = _settingsVisible;
 			_settingsCloseButton.Content = _runtime == null ? "Exit" : "Close";
 			var profilesDirectory = CopperScreenProfileStore.FindProfilesDirectory(AppContext.BaseDirectory);
 			var profiles = CopperScreenProfileStore.ListProfiles(AppContext.BaseDirectory);
@@ -2157,6 +2184,7 @@ internal sealed class MainWindow : Window
 			_pseudoFastBaseBox.Text = _settingsDraft.PseudoFastBase;
 			_realFastRamBox.Text = _settingsDraft.RealFastRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_realFastBaseBox.Text = _settingsDraft.RealFastBase;
+			_rtgVramBox.Text = _settingsDraft.RtgVramMb.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_rtcEnabledBox.IsChecked = _settingsDraft.RtcEnabled;
 			_floppyDriveCountBox.SelectedItem = _settingsDraft.FloppyDriveCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
@@ -2279,6 +2307,11 @@ internal sealed class MainWindow : Window
 			_ = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
 			_ = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
 			_ = ParseNonNegativeInt(_realFastRamBox.Text, "Autoconfig fast RAM KB");
+			var rtgVramMb = ParseNonNegativeInt(_rtgVramBox.Text, "RTG VRAM MB");
+			if (rtgVramMb > 2048)
+			{
+				throw new InvalidOperationException("RTG VRAM MB must be between 0 and 2048.");
+			}
 			_ = ParseFloat(_floppySoundVolumeBox.Text, "Sound volume");
 		}
 		catch (InvalidOperationException ex)
@@ -2394,6 +2427,7 @@ internal sealed class MainWindow : Window
 		_presentedFrames = 0;
 		_settingsDraft.ClearRestartRequired();
 		_settingsVisible = false;
+		_settingsWindow.Hide();
 		_runtime.Start();
 		await _bench.RefreshAsync(_latestState.DiskPath).ConfigureAwait(true);
 		RefreshDebuggerUi(_latestState.DebugSnapshot);
@@ -2418,6 +2452,11 @@ internal sealed class MainWindow : Window
 			_settingsDraft.PseudoFastBase = _pseudoFastBaseBox.Text?.Trim() ?? "$C00000";
 			_settingsDraft.RealFastRamKb = ParseNonNegativeInt(_realFastRamBox.Text, "Autoconfig fast RAM KB");
 			_settingsDraft.RealFastBase = _realFastBaseBox.Text?.Trim() ?? "$200000";
+			_settingsDraft.RtgVramMb = ParseNonNegativeInt(_rtgVramBox.Text, "RTG VRAM MB");
+			if (_settingsDraft.RtgVramMb > 2048)
+			{
+				throw new InvalidOperationException("RTG VRAM MB must be between 0 and 2048.");
+			}
 			_settingsDraft.RtcEnabled = _rtcEnabledBox.IsChecked == true;
 			_settingsDraft.FloppyDriveCount = ParseDriveCount(_floppyDriveCountBox.SelectedItem);
 			for (var driveIndex = 0; driveIndex < _drivePathBoxes.Length; driveIndex++)
@@ -3345,8 +3384,7 @@ internal sealed class MainWindow : Window
 	{
 		if (_runtime == null)
 		{
-			_settingsVisible = true;
-			RefreshCopperBenchUi();
+			ShowSettingsWindow();
 			return;
 		}
 
@@ -3378,7 +3416,6 @@ internal sealed class MainWindow : Window
 		var fullscreen = WindowState == WindowState.FullScreen;
 		SizeToContent = fullscreen ? SizeToContent.Manual : SizeToContent.WidthAndHeight;
 		_toolbar.IsVisible = !fullscreen || _bench.IsToolbarVisible;
-		_settingsPanel.IsVisible = _settingsVisible;
 		_root.RowDefinitions[1].Height = fullscreen
 			? new GridLength(1, GridUnitType.Star)
 			: GridLength.Auto;
@@ -3389,9 +3426,6 @@ internal sealed class MainWindow : Window
 
 		Grid.SetRow(_toolbar, 0);
 		Grid.SetRowSpan(_toolbar, 1);
-		Grid.SetRow(_settingsPanel, 0);
-		Grid.SetRowSpan(_settingsPanel, 2);
-
 		if (fullscreen)
 		{
 			Grid.SetRow(_presenter, 0);

@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Globalization;
 using System.Text.Json;
 using CopperMod.Amiga;
@@ -32,6 +37,7 @@ internal sealed class CopperScreenProfile
 		uint expansionRamBase,
 		int realFastRamSize,
 		uint realFastRamBase,
+		long rtgVramSize,
 		bool rtcEnabled,
 		int floppyDriveCount,
 		M68kBackendKind cpuBackend,
@@ -53,6 +59,7 @@ internal sealed class CopperScreenProfile
 		ExpansionRamBase = expansionRamBase;
 		RealFastRamSize = realFastRamSize;
 		RealFastRamBase = realFastRamBase;
+		RtgVramSize = rtgVramSize;
 		RtcEnabled = rtcEnabled;
 		FloppyDriveCount = floppyDriveCount;
 		CpuBackend = cpuBackend;
@@ -83,6 +90,8 @@ internal sealed class CopperScreenProfile
 
 	public uint RealFastRamBase { get; }
 
+	public long RtgVramSize { get; }
+
 	public bool RtcEnabled { get; }
 
 	public int FloppyDriveCount { get; }
@@ -111,17 +120,18 @@ internal sealed class CopperScreenProfile
 
 	public bool BootsWithoutDisk => KickstartSource == CopperScreenKickstartSource.DiagRom;
 
-	public AmigaMachineProfile MachineProfile => ExpansionRamSize == 0
-		? AmigaMachineProfile.A500Pal512KChipOnlyBoot
-		: AmigaMachineProfile.A500Pal512KBoot;
+	public MachineProfile MachineProfile => ExpansionRamSize == 0
+		? MachineProfile.A500Pal512KChipOnlyBoot
+		: MachineProfile.A500Pal512KBoot;
 
-	public AmigaMachineOptions CreateMachineOptions()
+	public MachineOptions CreateMachineOptions()
 	{
-		return AmigaMachineOptions
+		return MachineOptions
 			.ForProfile(MachineProfile)
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
 			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
+			.WithRtgVram(RtgVramSize)
 			.WithRealTimeClock(RtcEnabled)
 			.WithFloppyDriveCount(FloppyDriveCount)
 			.WithHardfiles(HardDrives.Select(drive => new AmigaHardfileConfiguration(
@@ -242,6 +252,7 @@ internal sealed class CopperScreenProfile
 		var realFastRamBase = string.IsNullOrWhiteSpace(machine.RealFastBase) && realFastRamSize > 0
 			? AutoconfigFastRamBoard.GetDefaultBase(realFastRamSize)
 			: ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
+		var rtgVramSize = CheckedMegabytes(machine.RtgVramMb, "machine.rtgVramMb");
 		var rtcEnabled = machine.RtcEnabled ?? expansionRamSize > 0;
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
 		var cpuBackend = ParseCpuBackend(config.Cpu?.Backend);
@@ -270,6 +281,7 @@ internal sealed class CopperScreenProfile
 			expansionRamBase,
 			realFastRamSize,
 			realFastRamBase,
+			rtgVramSize,
 			rtcEnabled,
 			floppyDriveCount,
 			cpuBackend,
@@ -304,7 +316,8 @@ internal sealed class CopperScreenProfile
 		string? configPath = null,
 		CopperScreenPresentationOptions? presentationOptions = null,
 		string? kickstartRomPath = null,
-		bool autoStartWorkbenchStartupSequence = true)
+		bool autoStartWorkbenchStartupSequence = true,
+		long rtgVramSize = 0)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -320,6 +333,7 @@ internal sealed class CopperScreenProfile
 			expansionRamBase,
 			realFastRamSize,
 			realFastRamBase,
+			rtgVramSize,
 			rtcEnabled,
 			floppyDriveCount,
 			cpuBackend,
@@ -407,6 +421,16 @@ internal sealed class CopperScreenProfile
 		}
 
 		return checked(value * Kilobyte);
+	}
+
+	private static long CheckedMegabytes(int value, string name)
+	{
+		if (value < 0 || value > 2048)
+		{
+			throw new InvalidOperationException($"{name} must be between 0 and 2048.");
+		}
+
+		return checked((long)value * 1024 * 1024);
 	}
 
 	private static uint ParseAddress(string? value, uint defaultValue)
@@ -749,6 +773,7 @@ internal sealed class CopperScreenProfile
 			AmigaConstants.A500BootPseudoFastRamBase,
 			0,
 			AmigaConstants.A500RealFastRamBase,
+			0,
 			true,
 			2,
 			M68kBackendKind.AccurateM68000,
@@ -808,6 +833,8 @@ internal sealed class CopperScreenProfile
 		public int RealFastRamKb { get; set; }
 
 		public string? RealFastBase { get; set; }
+
+		public int RtgVramMb { get; set; }
 
 		public bool? RtcEnabled { get; set; }
 

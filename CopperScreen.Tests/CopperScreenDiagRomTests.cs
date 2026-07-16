@@ -492,9 +492,9 @@ public sealed class CopperScreenDiagRomTests
 		return null;
 	}
 
-	private static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+	private static Machine GetMachine(CopperScreenEmulator emulator)
 	{
-		return (AmigaMachine)typeof(CopperScreenEmulator)
+		return (Machine)typeof(CopperScreenEmulator)
 			.GetField("_machine", BindingFlags.NonPublic | BindingFlags.Instance)!
 			.GetValue(emulator)!;
 	}
@@ -584,7 +584,7 @@ public sealed class CopperScreenDiagRomTests
 			$"ciab=0x{disk.CiabPortB:X2}, hashes=[{hashTail}]";
 	}
 
-	private static string CaptureStackWords(AmigaMachine machine, uint stackPointer, int wordCount)
+	private static string CaptureStackWords(Machine machine, uint stackPointer, int wordCount)
 	{
 		var words = new string[wordCount];
 		for (var i = 0; i < words.Length; i++)
@@ -619,7 +619,7 @@ public sealed class CopperScreenDiagRomTests
 
 	private sealed class DiagRomHarness : IDisposable
 	{
-		public DiagRomHarness(CopperScreenEmulator emulator, AmigaMachine machine, string tempDirectory)
+		public DiagRomHarness(CopperScreenEmulator emulator, Machine machine, string tempDirectory)
 		{
 			Emulator = emulator;
 			Machine = machine;
@@ -628,7 +628,7 @@ public sealed class CopperScreenDiagRomTests
 
 		public CopperScreenEmulator Emulator { get; }
 
-		public AmigaMachine Machine { get; }
+		public Machine Machine { get; }
 
 		private string TempDirectory { get; }
 
@@ -657,7 +657,7 @@ public sealed class CopperScreenDiagRomTests
 
 	private sealed class DiagRomM68020CheckpointBoundary : IM68kInstructionBoundary
 	{
-		private readonly AmigaMachine _machine;
+		private readonly Machine _machine;
 		private readonly System.Text.StringBuilder _trace;
 		private byte? _lastRaster;
 		private byte? _lastNoDraw;
@@ -670,7 +670,7 @@ public sealed class CopperScreenDiagRomTests
 		private uint _currentPc;
 		private ushort _currentOpcode;
 
-		public DiagRomM68020CheckpointBoundary(AmigaMachine machine, System.Text.StringBuilder trace)
+		public DiagRomM68020CheckpointBoundary(Machine machine, System.Text.StringBuilder trace)
 		{
 			_machine = machine;
 			_trace = trace;

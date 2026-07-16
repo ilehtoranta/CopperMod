@@ -9,7 +9,7 @@ public sealed class CopperScreenPresentationFrameTests
 	public void PresentationFrameStopUsesVposwForcedShortPalCadence()
 	{
 		using var emulator = CopperScreenEmulator.CreateWithoutDisk();
-		var machine = GetPrivateField<AmigaMachine>(emulator, "_machine");
+		var machine = GetPrivateField<Machine>(emulator, "_machine");
 		var cycle = 0L;
 		machine.Bus.WriteWord(0x00DFF02A, 0x0001, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 

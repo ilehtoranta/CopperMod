@@ -642,7 +642,7 @@ public sealed class CopperScreenBootTests
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
 		var disk = AmigaDiskImage.Load(diskPath);
 
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
@@ -667,7 +667,7 @@ public sealed class CopperScreenBootTests
 	{
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
@@ -686,10 +686,10 @@ public sealed class CopperScreenBootTests
 		}
 
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
-		var machine = new AmigaMachine(options);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
+		var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
@@ -708,7 +708,7 @@ public sealed class CopperScreenBootTests
 
 		var disk = AmigaDiskImage.Load(diskPath);
 
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
@@ -728,10 +728,10 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
-		var machine = new AmigaMachine(options);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
+		var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
@@ -1164,7 +1164,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = BootFromDiskWithAdjacent(boot, machine, disk, diskPath, maxInstructions: 250_000);
@@ -1192,7 +1192,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
 		var boot = new AmigaBootController(machine);
 
 		var result = BootFromDiskWithAdjacent(boot, machine, disk, diskPath, maxInstructions: 250_000);
@@ -1470,7 +1470,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
 		var boot = new AmigaBootController(machine);
 		StartBootFromDiskWithAdjacent(boot, machine, disk, diskPath);
 		var targetCycle = 0L;
@@ -1527,7 +1527,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithFloppyDriveCount(1));
 		var boot = new AmigaBootController(machine);
 		var reachedDecodedLoader = false;
 
@@ -1567,7 +1567,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 		var decodedRawTrack = false;
 		var readRawHeader = false;
@@ -1678,7 +1678,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = BootFromDiskWithAdjacent(boot, machine, disk, diskPath, maxInstructions: 250_000);
@@ -1783,7 +1783,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 250_000, runMode: AmigaBootRunMode.ContinueAfterBootDiskRead);
@@ -1875,10 +1875,10 @@ public sealed class CopperScreenBootTests
 
 		var rom = File.ReadAllBytes(romPath);
 		var resetPc = BigEndian.ReadUInt32(rom, 4, "Kickstart reset program counter");
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
-		var machine = new AmigaMachine(options);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, rom));
+		var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
@@ -1898,10 +1898,10 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
-		var machine = new AmigaMachine(options);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
+		var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 		var disk = AmigaDiskImage.Load(diskPath);
 		var bootBlock = disk.BootBlock.ToArray();
@@ -1989,7 +1989,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 250_000, runMode: AmigaBootRunMode.ContinueAfterBootDiskRead);
@@ -2032,7 +2032,7 @@ public sealed class CopperScreenBootTests
 		}
 
 		var disk = AmigaDiskImage.Load(diskPath);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 		var result = BootFromDiskWithAdjacent(boot, machine, disk, diskPath, maxInstructions: 250_000);
 
@@ -2240,7 +2240,7 @@ public sealed class CopperScreenBootTests
 			emulator.RenderNextFrame();
 		}
 
-		var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+		var machine = (Machine)typeof(CopperScreenEmulator)
 			.GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
 			.GetValue(emulator)!;
 		var boot = (AmigaBootController)typeof(CopperScreenEmulator)
@@ -2776,16 +2776,16 @@ public sealed class CopperScreenBootTests
 		return directory;
 	}
 
-	private static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+	private static Machine GetMachine(CopperScreenEmulator emulator)
 	{
-		return (AmigaMachine)typeof(CopperScreenEmulator)
+		return (Machine)typeof(CopperScreenEmulator)
 			.GetField("_machine", BindingFlags.NonPublic | BindingFlags.Instance)!
 			.GetValue(emulator)!;
 	}
 
 	private static AmigaBootResult BootFromDiskWithAdjacent(
 		AmigaBootController boot,
-		AmigaMachine machine,
+		Machine machine,
 		AmigaDiskImage disk,
 		string diskPath,
 		int maxInstructions)
@@ -2796,7 +2796,7 @@ public sealed class CopperScreenBootTests
 
 	private static void StartBootFromDiskWithAdjacent(
 		AmigaBootController boot,
-		AmigaMachine machine,
+		Machine machine,
 		AmigaDiskImage disk,
 		string diskPath)
 	{
@@ -2804,7 +2804,7 @@ public sealed class CopperScreenBootTests
 		InsertAdjacentExternalDisks(machine, diskPath);
 	}
 
-	private static void InsertAdjacentExternalDisks(AmigaMachine machine, string diskPath)
+	private static void InsertAdjacentExternalDisks(Machine machine, string diskPath)
 	{
 		var adjacentPath = diskPath;
 		for (var driveIndex = 1; driveIndex < machine.Bus.Disk.ConnectedDriveCount; driveIndex++)
@@ -2845,7 +2845,7 @@ public sealed class CopperScreenBootTests
 		return true;
 	}
 
-	private static AmigaFloppyDrive GetDrive(AmigaMachine machine, int driveIndex)
+	private static AmigaFloppyDrive GetDrive(Machine machine, int driveIndex)
 	{
 		return driveIndex switch
 		{
@@ -2866,7 +2866,7 @@ public sealed class CopperScreenBootTests
 		return rom;
 	}
 
-	private static bool IsWaitingOnUnavailableExternalDrive(AmigaMachine machine)
+	private static bool IsWaitingOnUnavailableExternalDrive(Machine machine)
 	{
 		var disk = machine.Bus.Disk.CaptureSnapshot();
 		var selectedLine = GetSelectedDriveLine(disk.CiabPortB);
@@ -2879,7 +2879,7 @@ public sealed class CopperScreenBootTests
 			GetDrive(machine, selectedLine).Disk == null;
 	}
 
-	private static bool IsWaitingOnUnavailableOrNotReadyDrive(AmigaMachine machine)
+	private static bool IsWaitingOnUnavailableOrNotReadyDrive(Machine machine)
 	{
 		var disk = machine.Bus.Disk.CaptureSnapshot();
 		var selectedLine = GetSelectedDriveLine(disk.CiabPortB);

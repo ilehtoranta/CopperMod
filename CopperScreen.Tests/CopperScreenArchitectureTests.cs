@@ -38,14 +38,14 @@ public sealed class CopperScreenArchitectureTests
 	[Fact]
 	public void StartupProfilesExposeVanillaAndExpandedCopperStartAndKickstartCombinations()
 	{
-		AssertProfile("vanilla-copperstart", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.CopperStart, 0, 1);
-		AssertProfile("expanded-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
-		AssertProfile("vanilla-kickstart13", AmigaMachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0, 1);
-		AssertProfile("expanded-kickstart13", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
-		AssertProfile("expanded-diagrom", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.DiagRom, 512 * 1024, 2);
+		AssertProfile("vanilla-copperstart", MachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.CopperStart, 0, 1);
+		AssertProfile("expanded-copperstart", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
+		AssertProfile("vanilla-kickstart13", MachineProfile.A500Pal512KChipOnlyBoot, CopperScreenKickstartSource.Kickstart13Rom, 0, 1);
+		AssertProfile("expanded-kickstart13", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
+		AssertProfile("expanded-diagrom", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.DiagRom, 512 * 1024, 2);
 		AssertProfile(
 			"expanded-jit-realfast-copperstart",
-			AmigaMachineProfile.A500Pal512KBoot,
+			MachineProfile.A500Pal512KBoot,
 			CopperScreenKickstartSource.CopperStart,
 			512 * 1024,
 			2,
@@ -53,7 +53,7 @@ public sealed class CopperScreenArchitectureTests
 			2 * 1024 * 1024);
 		AssertProfile(
 			"expanded-jit-realfast-kickstart13",
-			AmigaMachineProfile.A500Pal512KBoot,
+			MachineProfile.A500Pal512KBoot,
 			CopperScreenKickstartSource.Kickstart13Rom,
 			512 * 1024,
 			2,
@@ -61,13 +61,13 @@ public sealed class CopperScreenArchitectureTests
 			2 * 1024 * 1024);
 		AssertProfile(
 			"expanded-m68040-jit-kickstart-rom",
-			AmigaMachineProfile.A500Pal512KBoot,
+			MachineProfile.A500Pal512KBoot,
 			CopperScreenKickstartSource.KickstartRom,
 			512 * 1024,
 			2,
 			M68kBackendKind.JitM68040,
 			8 * 1024 * 1024);
-		AssertProfile("diagnostic-hrm-copperstart", AmigaMachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
+		AssertProfile("diagnostic-hrm-copperstart", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
 		Assert.Equal("expanded-diagrom", diagRom.Id);
@@ -1032,14 +1032,14 @@ public sealed class CopperScreenArchitectureTests
 
 	private static void AssertProfile(
 		string id,
-		AmigaMachineProfile expectedMachineProfile,
+		MachineProfile expectedMachineProfile,
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize)
 		=> AssertProfile(id, expectedMachineProfile, expectedKickstartSource, expectedExpansionRamSize, expectedExpansionRamSize > 0 ? 2 : 1);
 
 	private static void AssertProfile(
 		string id,
-		AmigaMachineProfile expectedMachineProfile,
+		MachineProfile expectedMachineProfile,
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize,
 		int expectedFloppyDriveCount)
@@ -1054,7 +1054,7 @@ public sealed class CopperScreenArchitectureTests
 
 	private static void AssertProfile(
 		string id,
-		AmigaMachineProfile expectedMachineProfile,
+		MachineProfile expectedMachineProfile,
 		CopperScreenKickstartSource expectedKickstartSource,
 		int expectedExpansionRamSize,
 		int expectedFloppyDriveCount,

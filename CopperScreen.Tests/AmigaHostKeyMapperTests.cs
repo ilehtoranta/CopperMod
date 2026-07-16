@@ -52,9 +52,9 @@ public sealed class AmigaHostKeyMapperTests
 			interruptEvent.IcrBits == AmigaCia.SerialInterruptMask);
 	}
 
-	private static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+	private static Machine GetMachine(CopperScreenEmulator emulator)
 	{
-		return (AmigaMachine)typeof(CopperScreenEmulator)
+		return (Machine)typeof(CopperScreenEmulator)
 			.GetField("_machine", BindingFlags.NonPublic | BindingFlags.Instance)!
 			.GetValue(emulator)!;
 	}

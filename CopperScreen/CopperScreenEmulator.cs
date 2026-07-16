@@ -29,7 +29,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private const string RunningStatusText = "boot program running:";
 	private const string TraceBusAccessesEnvironmentVariable = "COPPER_AMIGA_TRACE_BUS_ACCESSES";
 	private const string VAmigaTsTraceWritesEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_WRITES";
-	private readonly AmigaMachine _machine;
+	private readonly Machine _machine;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
 	private readonly string _baseDirectory;
@@ -41,6 +41,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private readonly IReadOnlyList<CopperScreenHardfileSettings> _initialHardDrives;
 	private readonly float[] _frameAudio;
 	private readonly int[] _interlacePresentationFrame;
+	private uint[] _rtgCompositionBuffer = Array.Empty<uint>();
 	private readonly FrameExecutionBoundarySchedule _executionBoundarySchedule;
 	private bool _bootAttempted;
 	private bool _interlacePresentationFrameValid;
@@ -84,7 +85,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_initialDriveDiskPaths = startupOptions.DriveDiskPaths.ToArray();
 		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
 		_initialHardDrives = startupOptions.HardDrives;
-		_machine = new AmigaMachine(machineOptions);
+		_machine = new Machine(machineOptions);
 		_boot = new AmigaBootController(_machine);
 		var enableHostWorkbenchStartup = !_profile.UsesKickstartRom && _profile.AutoStartWorkbenchStartupSequence;
 		_boot.AutoStartWorkbenchDefaultTool = enableHostWorkbenchStartup;
@@ -292,7 +293,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return CopperScreenStartupOptions.Parse(args, baseDirectory).DiskPath;
 	}
 
-	private static AmigaMachineOptions CreateMachineOptions(CopperScreenStartupOptions startupOptions, out string? startupError)
+	private static MachineOptions CreateMachineOptions(CopperScreenStartupOptions startupOptions, out string? startupError)
 	{
 		startupError = startupOptions.Error;
 		var machineOptions = startupOptions.Profile.CreateMachineOptions();
@@ -367,8 +368,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		try
 		{
-			machineOptions.WithKickstart(AmigaKickstartConfiguration.FromRomImage(
-				AmigaKickstartVersion.Kickstart13,
+			machineOptions.WithKickstart(KickstartConfiguration.FromRomImage(
+				KickstartVersion.Kickstart13,
 				File.ReadAllBytes(romPath)));
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
@@ -1300,6 +1301,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 		{
 			var displayStart = Stopwatch.GetTimestamp();
 			RenderPresentationFrame(frameStartCycle, presentationFrameStopCycle, presentationFramebuffer);
+			if (_boot.TryGetRtgComposition(out var composition))
+			{
+				_ = TryRenderRtgPresentation(presentationFramebuffer, composition);
+			}
 			LastFrameTiming = LastFrameTiming with
 			{
 				DisplayMilliseconds = Stopwatch.GetElapsedTime(displayStart).TotalMilliseconds
@@ -1307,6 +1312,158 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_executionBoundarySchedule.CompleteFrame();
+	}
+
+	private bool TryRenderRtgPresentation(
+		Span<int> destination,
+		CyberGraphicsDisplayComposition composition)
+	{
+		if (composition.Width <= 0 || composition.Height <= 0)
+		{
+			return false;
+		}
+
+		var pixelCount = checked(composition.Width * composition.Height);
+		if (_rtgCompositionBuffer.Length < pixelCount)
+		{
+			_rtgCompositionBuffer = new uint[pixelCount];
+		}
+
+		var logical = _rtgCompositionBuffer.AsSpan(0, pixelCount);
+		ComposeRtgLogicalFrame(destination, Width, Height, composition, logical);
+
+		destination.Clear();
+		var scale = Math.Min(
+			(double)Width / composition.Width,
+			(double)Height / composition.Height);
+		var destinationWidth = Math.Max(1, Math.Min(Width, (int)Math.Round(composition.Width * scale)));
+		var destinationHeight = Math.Max(1, Math.Min(Height, (int)Math.Round(composition.Height * scale)));
+		var left = (Width - destinationWidth) / 2;
+		var top = (Height - destinationHeight) / 2;
+		for (var y = 0; y < destinationHeight; y++)
+		{
+			var sourceY = Math.Min(composition.Height - 1, y * composition.Height / destinationHeight);
+			var destinationRow = (top + y) * Width + left;
+			var sourceRow = sourceY * composition.Width;
+			for (var x = 0; x < destinationWidth; x++)
+			{
+				var sourceX = Math.Min(composition.Width - 1, x * composition.Width / destinationWidth);
+				destination[destinationRow + x] = unchecked((int)logical[sourceRow + sourceX]);
+			}
+		}
+
+		if (composition.TopIsRtg)
+		{
+			_boot.GetRtgPointerPosition(out var pointerX, out var pointerY);
+			var hostX = left + Math.Clamp(pointerX, 0, composition.Width - 1) * destinationWidth / composition.Width;
+			var hostY = top + Math.Clamp(pointerY, 0, composition.Height - 1) * destinationHeight / composition.Height;
+			CompositeRtgPointer(destination, hostX, hostY);
+		}
+
+		return true;
+	}
+
+	internal static void ComposeRtgLogicalFrame(
+		ReadOnlySpan<int> planar,
+		int planarWidth,
+		int planarHeight,
+		CyberGraphicsDisplayComposition composition,
+		Span<uint> logical)
+	{
+		var required = checked(composition.Width * composition.Height);
+		if (logical.Length < required)
+		{
+			throw new ArgumentException("The logical RTG composition buffer is too small.", nameof(logical));
+		}
+
+		logical = logical[..required];
+		var topBackground = composition.Layers.Count != 0 && composition.Layers[0].IsRtg
+			? composition.Layers[0].BackgroundColor
+			: 0xFF00_0000u;
+		logical.Fill(topBackground);
+		var copyWidth = Math.Min(planarWidth, composition.Width);
+		var copyHeight = Math.Min(planarHeight, composition.Height);
+		if (planarWidth > 0 && planarHeight > 0 && planar.Length >= checked(planarWidth * planarHeight))
+		{
+			for (var y = 0; y < copyHeight; y++)
+			{
+				for (var x = 0; x < copyWidth; x++)
+				{
+					logical[y * composition.Width + x] = unchecked((uint)planar[y * planarWidth + x]);
+				}
+			}
+		}
+
+		if (composition.TopDpmsOff)
+		{
+			logical.Fill(0xFF00_0000u);
+			return;
+		}
+
+		for (var y = 0; y < composition.Height; y++)
+		{
+			CyberGraphicsDisplayLayer? owner = null;
+			foreach (var layer in composition.Layers)
+			{
+				if ((long)y >= layer.Y && (long)y < (long)layer.Y + layer.Height)
+				{
+					owner = layer;
+					break;
+				}
+			}
+
+			if (!owner.HasValue || !owner.Value.IsRtg)
+			{
+				continue;
+			}
+
+			var rtg = owner.Value;
+			var row = logical.Slice(y * composition.Width, composition.Width);
+			row.Fill(rtg.DpmsOff ? 0xFF00_0000u : rtg.BackgroundColor);
+			if (rtg.DpmsOff || rtg.Bgra == null)
+			{
+				continue;
+			}
+
+			var sourceY = rtg.SourceY + (y - rtg.Y);
+			if ((uint)sourceY >= (uint)rtg.SourceHeight)
+			{
+				continue;
+			}
+
+			var destinationStart = Math.Max(0, rtg.X);
+			var destinationStop = (int)Math.Min(
+				composition.Width,
+				Math.Max((long)destinationStart, (long)rtg.X + rtg.Width));
+			for (var destinationX = destinationStart; destinationX < destinationStop; destinationX++)
+			{
+				var sourceX = rtg.SourceX + (destinationX - rtg.X);
+				if ((uint)sourceX < (uint)rtg.SourceWidth)
+				{
+					row[destinationX] = rtg.Bgra[sourceY * rtg.SourceWidth + sourceX];
+				}
+			}
+		}
+	}
+
+	private void CompositeRtgPointer(Span<int> destination, int originX, int originY)
+	{
+		for (var y = 0; y < 12; y++)
+		{
+			var width = Math.Min(8, 1 + (y / 2));
+			for (var x = 0; x < width; x++)
+			{
+				var px = originX + x;
+				var py = originY + y;
+				if ((uint)px >= Width || (uint)py >= Height)
+				{
+					continue;
+				}
+
+				var edge = x == 0 || x == width - 1 || y == 0 || y == 11;
+				destination[py * Width + px] = edge ? unchecked((int)0xFF00_0000u) : unchecked((int)0xFFFF_FFFFu);
+			}
+		}
 	}
 
 	private int GetBootMaxInstructionsPerFrame()

@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CopperMod.Amiga;
@@ -25,6 +30,8 @@ internal sealed class CopperScreenSettingsDraft
 	public int RealFastRamKb { get; set; }
 
 	public string RealFastBase { get; set; } = "$200000";
+
+	public int RtgVramMb { get; set; }
 
 	public bool RtcEnabled { get; set; } = true;
 
@@ -81,6 +88,7 @@ internal sealed class CopperScreenSettingsDraft
 			PseudoFastBase = FormatAddress(profile.ExpansionRamBase),
 			RealFastRamKb = profile.RealFastRamSize / Kilobyte,
 			RealFastBase = FormatAddress(profile.RealFastRamBase),
+			RtgVramMb = checked((int)(profile.RtgVramSize / (1024 * 1024))),
 			RtcEnabled = profile.RtcEnabled,
 			FloppyDriveCount = profile.FloppyDriveCount,
 			CpuBackend = profile.CpuBackend,
@@ -153,7 +161,8 @@ internal sealed class CopperScreenSettingsDraft
 			Input,
 			configPath,
 			PresentationOptions,
-			KickstartRomPath);
+			KickstartRomPath,
+			rtgVramSize: checked((long)RtgVramMb * 1024 * 1024));
 	}
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> CreateMediaDrives()
@@ -351,6 +360,7 @@ internal static class CopperScreenProfileStore
 					PseudoFastBase = draft.PseudoFastBase,
 					RealFastRamKb = draft.RealFastRamKb == 0 ? null : draft.RealFastRamKb,
 					RealFastBase = draft.RealFastRamKb == 0 ? null : draft.RealFastBase,
+					RtgVramMb = draft.RtgVramMb == 0 ? null : draft.RtgVramMb,
 					RtcEnabled = draft.RtcEnabled,
 					FloppyDriveCount = draft.FloppyDriveCount
 				},
@@ -479,6 +489,8 @@ internal static class CopperScreenProfileStore
 		public int? RealFastRamKb { get; set; }
 
 		public string? RealFastBase { get; set; }
+
+		public int? RtgVramMb { get; set; }
 
 		public bool? RtcEnabled { get; set; }
 

@@ -1273,7 +1273,7 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
     var advancePendingDiskInsert = type.GetMethod("AdvancePendingDiskInsert", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var handleBootResult = type.GetMethod("HandleBootResult", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var stabilizeInterlaceFrame = type.GetMethod("StabilizeInterlaceFrame", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var machine = (AmigaMachine)machineField.GetValue(emulator)!;
+    var machine = (Machine)machineField.GetValue(emulator)!;
     var boot = (AmigaBootController)bootField.GetValue(emulator)!;
     var executionBoundarySchedule = (IAmigaExecutionBoundarySchedule)executionBoundaryScheduleField.GetValue(emulator)!;
     var cpuTicks = 0L;
@@ -1399,9 +1399,9 @@ static OcsDisplay GetDisplay(CopperScreenEmulator emulator)
     return GetMachine(emulator).Bus.Display;
 }
 
-static AmigaMachine GetMachine(CopperScreenEmulator emulator)
+static Machine GetMachine(CopperScreenEmulator emulator)
 {
-    return (AmigaMachine)typeof(CopperScreenEmulator)
+    return (Machine)typeof(CopperScreenEmulator)
         .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
         .GetValue(emulator)!;
 }
@@ -1449,7 +1449,7 @@ static DiskSummary CaptureDiskSummary(CopperScreenEmulator emulator)
 
 static AmigaDiskTraceEvent[] CaptureDiskTrace(CopperScreenEmulator emulator)
 {
-    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+    var machine = (Machine)typeof(CopperScreenEmulator)
         .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
         .GetValue(emulator)!;
     return machine.Bus.Disk.CaptureDivergenceTrace();
@@ -1457,7 +1457,7 @@ static AmigaDiskTraceEvent[] CaptureDiskTrace(CopperScreenEmulator emulator)
 
 static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEmulator emulator)
 {
-    var machine = (AmigaMachine)typeof(CopperScreenEmulator)
+    var machine = (Machine)typeof(CopperScreenEmulator)
         .GetField("_machine", BindingFlags.Instance | BindingFlags.NonPublic)!
         .GetValue(emulator)!;
     var blitterSnapshot = machine.Bus.Blitter.CaptureSnapshot();

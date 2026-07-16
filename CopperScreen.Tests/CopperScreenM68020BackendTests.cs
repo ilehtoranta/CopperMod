@@ -186,4 +186,22 @@ public sealed class CopperScreenM68020BackendTests
 		Assert.Equal(8 * 1024 * 1024, profile.RealFastRamSize);
 		Assert.Equal(0x0020_0000u, profile.RealFastRamBase);
 	}
+
+	[Fact]
+	public void BundledM68040JitRtgProfileCreatesSparseLinearVramMachineOptions()
+	{
+		Assert.True(
+			CopperScreenProfile.TryLoad(
+				"expanded-m68040-jit-kickstart31-rtg",
+				AppContext.BaseDirectory,
+				out var profile,
+				out var error),
+			error);
+
+		Assert.Equal(CopperScreenKickstartSource.KickstartRom, profile.KickstartSource);
+		Assert.Equal(M68kBackendKind.JitM68040, profile.CpuBackend);
+		Assert.Equal(256L * 1024 * 1024, profile.RtgVramSize);
+		Assert.Equal(profile.RtgVramSize, profile.CreateMachineOptions().RtgVramSize);
+		Assert.Equal(256, CopperScreenSettingsDraft.FromProfile(profile).RtgVramMb);
+	}
 }
