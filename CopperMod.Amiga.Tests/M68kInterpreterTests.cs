@@ -320,6 +320,41 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuDataWrite, 0x2180u, M68kOperandSize.Word, true, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 30L, 32L));
 	}
+
+	[Theory]
+	[MemberData(nameof(M68000DispatchVariants))]
+	public void MoveWordDataRegisterToDisplacementDestinationBusSequencePrefetchesBeforeWrite(int dispatchValue)
+	{
+		var dispatch = (M68kOpcodePlanDispatch)dispatchValue;
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x33, 0x44, 0x01, 0x80, // MOVE.W D4,$0180(A1)
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: dispatch != M68kOpcodePlanDispatch.Scalar,
+			opcodePlanDispatch: dispatch);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		cpu.State.A[1] = 0x2000;
+		cpu.State.D[4] = 0x0F0F;
+
+		var cycles = cpu.ExecuteInstruction();
+
+		Assert.Equal(12, cycles);
+		Assert.Equal(0x0F0F, ReadWord(bus.Memory, 0x2180));
+		AssertCpuPhaseSequence(
+			bus.CpuBusPhases,
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2180u, M68kOperandSize.Word, true, 26L, 28L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 28L, 30L));
+	}
 	[Theory]
 	[MemberData(nameof(M68000DispatchVariants))]
 	public void MoveWordAddressIndirectToDataThenDataToPostincrementNoExtensionBusSequence(int dispatchValue)

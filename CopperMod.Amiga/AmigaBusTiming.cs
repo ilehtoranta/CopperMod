@@ -1536,7 +1536,9 @@ namespace CopperMod.Amiga
                     niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles;
+                candidate += existing.Owner == AgnusChipSlotOwner.Copper
+                    ? 2 * SlotCycles
+                    : SlotCycles;
             }
         }
 
@@ -2221,7 +2223,9 @@ namespace CopperMod.Amiga
                     _niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles;
+                candidate += existing.Owner == AgnusChipSlotOwner.Copper
+                    ? 2 * SlotCycles
+                    : SlotCycles;
             }
         }
 
@@ -2276,7 +2280,9 @@ namespace CopperMod.Amiga
                     _niceBlitterCpuMisses = 0;
                 }
 
-                candidate += SlotCycles;
+                candidate += existing.Owner == AgnusChipSlotOwner.Copper
+                    ? 2 * SlotCycles
+                    : SlotCycles;
             }
         }
 

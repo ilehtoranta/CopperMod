@@ -6447,6 +6447,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(jitBus, 0x2010, 0x0012, 0x0034, 0x0056, 0x0078);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		var jit = new M68kJitCore(jitBus);
+		jit.FallbackAttributionEnabled = true;
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.A[1] = jit.State.A[1] = 0x2000;
@@ -6704,8 +6705,8 @@ public sealed class M68kJitCoreTests
 	[MemberData(nameof(RepresentativeGenericTracePrograms))]
 	public void JitAndInterpreterAgreeForRepresentativeGenericTraces(ushort[] words, bool exactCycles)
 	{
-		var interpreterBus = CreateCodeBus();
-		var jitBus = CreateCodeBus();
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
 		WriteWords(interpreterBus, FastCodeBase, words);
 		WriteWords(jitBus, FastCodeBase, words);
 		var interpreter = new M68kInterpreter(interpreterBus);
@@ -6734,7 +6735,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void ExactM68000MovePostincrementLoopDocumentsFirstScalarJitCycleBoundary()
+	public void ExactM68000MovePostincrementLoopMatchesAtEveryCompiledBoundary()
 	{
 		ushort[] words =
 		[
@@ -6756,24 +6757,43 @@ public sealed class M68kJitCoreTests
 		interpreter.Reset(FastCodeBase, 0x4000);
 		jit.Reset(FastCodeBase, 0x4000);
 
-		for (var instruction = 0; instruction < 32; instruction++)
+		for (var instruction = 0; instruction < 256; instruction++)
 		{
 			var interpreterStartPc = interpreter.State.ProgramCounter;
 			var jitStartPc = jit.State.ProgramCounter;
+			var interpreterQueue = ((IM68000PrefetchDiagnostics)interpreter).CapturePrefetchDiagnosticState();
+			var jitQueue = ((IM68000PrefetchDiagnostics)jit).CapturePrefetchDiagnosticState();
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
 			var interpreterCycles = interpreter.ExecuteInstruction();
 			var jitCycles = jit.ExecuteInstruction();
+			var interpreterAccesses = string.Join(",", interpreterBus.BusAccesses.Skip(interpreterAccessStart).Select(access =>
+				$"{access.Request.Kind}:0x{access.Request.Address:X6}@{access.RequestedCycle}-{access.GrantedCycle}-{access.CompletedCycle}"));
+			var jitAccesses = string.Join(",", jitBus.BusAccesses.Skip(jitAccessStart).Select(access =>
+				$"{access.Request.Kind}:0x{access.Request.Address:X6}@{access.RequestedCycle}-{access.GrantedCycle}-{access.CompletedCycle}"));
+			if (interpreterStartPc is FastCodeBase + 0x14 or FastCodeBase + 0x16)
+			{
+				Assert.True(
+					interpreterAccesses == jitAccesses,
+					$"scalarQueue={FormatPrefetch(interpreterQueue)}, jitQueue={FormatPrefetch(jitQueue)}, " +
+					$"scalarBus={interpreterAccesses}, jitBus={jitAccesses}");
+			}
 			Assert.True(
 				interpreter.State.Cycles == jit.State.Cycles,
 				$"instruction={instruction}, scalarPc=0x{interpreterStartPc:X8}, jitPc=0x{jitStartPc:X8}, " +
 				$"scalarDelta={interpreterCycles}, jitDelta={jitCycles}, " +
 				$"scalarCycle={interpreter.State.Cycles}, jitCycle={jit.State.Cycles}, " +
 				$"jitTraces={jit.Counters.CompiledTraces}, jitHits={jit.Counters.TraceHits}, " +
-				$"jitFallback={jit.Counters.FallbackInstructions}");
+				$"jitFallback={jit.Counters.FallbackInstructions}, " +
+				$"scalarQueue={FormatPrefetch(interpreterQueue)}, jitQueue={FormatPrefetch(jitQueue)}, " +
+				$"scalarBus={interpreterAccesses}, jitBus={jitAccesses}");
 		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
 	}
 
-	[Fact(Skip = "Classic MC68000 JIT does not yet import committed prefetch phases; MOVE.W (A0),D1 requests chip RAM six clocks before scalar execution.")]
-	public void ExactM68000MovePostincrementLoopDocumentsFirstPostTraceMismatch()
+	[Fact]
+	public void ExactM68000MovePostincrementLoopPreservesQueueAcrossMemorySideExit()
 	{
 		ushort[] words =
 		[
@@ -6817,6 +6837,586 @@ public sealed class M68kJitCoreTests
 				$"scalarCycle={interpreter.State.Cycles}, jitCycle={jit.State.Cycles}, " +
 				$"scalarBus={interpreterAccesses}, jitBus={jitAccesses}");
 		}
+	}
+
+	[Fact]
+	public void ExactM68000MoveWordDataToPostincrementMatchesBusTimelineWhenCompiled()
+	{
+		ushort[] words =
+		[
+			0x34C5, // MOVE.W D5,(A2)+
+			0x60FC  // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[5] = jit.State.D[5] = 0x38C2;
+		interpreter.State.A[2] = jit.State.A[2] = 0x2000;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.A[2], jit.State.A[2]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Fact]
+	public void ExactM68000MoveWordDisplacementSourceConsumesCommittedExtensionWhenCompiled()
+	{
+		ushort[] words =
+		[
+			0x3228, 0x0000, // MOVE.W 0(A0),D1
+			0x60FA          // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		interpreterBus.WriteHostWord(0x2000, 0xA55A);
+		jitBus.WriteHostWord(0x2000, 0xA55A);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.D[1], jit.State.D[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Fact]
+	public void ExactM68000MoveWordDisplacementDestinationWritesBeforeFinalPrefetchWhenCompiled()
+	{
+		ushort[] words =
+		[
+			0x3545, 0x0000, // MOVE.W D5,0(A2)
+			0x60FA          // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[5] = jit.State.D[5] = 0x38C2;
+		interpreter.State.A[2] = jit.State.A[2] = 0x2000;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreterBus.ReadHostWord(0x2000), jitBus.ReadHostWord(0x2000));
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Fact]
+	public void ExactM68000MoveWordMemoryToMemoryReadsWritesThenPrefetchesWhenCompiled()
+	{
+		ushort[] words =
+		[
+			0x3290, // MOVE.W (A0),(A1)
+			0x60FC  // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		interpreterBus.WriteHostWord(0x2000, 0xA55A);
+		jitBus.WriteHostWord(0x2000, 0xA55A);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2100;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreterBus.ReadHostWord(0x2100), jitBus.ReadHostWord(0x2100));
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.Equal(0xA55A, interpreterBus.ReadHostWord(0x2100));
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x1010)] // MOVE.B (A0),D0
+	[InlineData(0x12C0)] // MOVE.B D0,(A1)+
+	[InlineData(0x1290)] // MOVE.B (A0),(A1)
+	public void ExactM68000MoveByteNoExtensionMatchesBusTimelineWhenCompiled(int opcode)
+	{
+		ushort[] words =
+		[
+			(ushort)opcode,
+			0x60FC // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		interpreterBus.WriteHostWord(0x2000, 0x5AA5);
+		jitBus.WriteHostWord(0x2000, 0x5AA5);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[0] = jit.State.D[0] = 0xA5;
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2100;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.D[0], jit.State.D[0]);
+			Assert.Equal(interpreter.State.A[0], jit.State.A[0]);
+			Assert.Equal(interpreter.State.A[1], jit.State.A[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x1228)] // MOVE.B 0(A0),D1
+	[InlineData(0x1340)] // MOVE.B D0,0(A1)
+	public void ExactM68000MoveByteDisplacementMatchesBusTimelineWhenCompiled(int opcode)
+	{
+		ushort[] words =
+		[
+			(ushort)opcode, 0x0000,
+			0x60FA // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		interpreterBus.WriteHostWord(0x2000, 0x5AA5);
+		jitBus.WriteHostWord(0x2000, 0x5AA5);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[0] = jit.State.D[0] = 0xA5;
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2100;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.D[1], jit.State.D[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x3218)] // MOVE.W (A0)+,D1
+	[InlineData(0x1218)] // MOVE.B (A0)+,D1
+	public void ExactM68000MovePostincrementSourceToDataRegisterMatchesBusTimelineWhenCompiled(int opcode)
+	{
+		ushort[] words =
+		[
+			(ushort)opcode,
+			0x60FC // BRA.S start
+		];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		for (var offset = 0; offset < 0x200; offset += 2)
+		{
+			interpreterBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x5000 + offset));
+			jitBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x5000 + offset));
+		}
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.D[1], jit.State.D[1]);
+			Assert.Equal(interpreter.State.A[0], jit.State.A[0]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x3298)] // MOVE.W (A0)+,(A1)
+	[InlineData(0x32D0)] // MOVE.W (A0),(A1)+
+	[InlineData(0x32D8)] // MOVE.W (A0)+,(A1)+
+	[InlineData(0x1298)] // MOVE.B (A0)+,(A1)
+	[InlineData(0x12D0)] // MOVE.B (A0),(A1)+
+	[InlineData(0x12D8)] // MOVE.B (A0)+,(A1)+
+	public void ExactM68000MoveMemoryPostincrementCombinationsMatchBusTimelineWhenCompiled(int opcode)
+	{
+		ushort[] words = [(ushort)opcode, 0x60FC];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		for (var offset = 0; offset < 0x200; offset += 2)
+		{
+			interpreterBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x6000 + offset));
+			jitBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x6000 + offset));
+		}
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2400;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.A[0], jit.State.A[0]);
+			Assert.Equal(interpreter.State.A[1], jit.State.A[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x3300)] // MOVE.W D0,-(A1)
+	[InlineData(0x1300)] // MOVE.B D0,-(A1)
+	public void ExactM68000MoveDataRegisterToPredecrementPrefetchesBeforeWriteWhenCompiled(int opcode)
+	{
+		ushort[] words = [(ushort)opcode, 0x60FC];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[0] = jit.State.D[0] = 0xA55A;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2400;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.A[1], jit.State.A[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var writeIndex = Array.FindIndex(interpreterAccesses, access => access.Kind == AmigaBusAccessKind.CpuDataWrite);
+				Assert.True(writeIndex > 0);
+				Assert.Equal(AmigaBusAccessKind.CpuInstructionFetch, interpreterAccesses[writeIndex - 1].Kind);
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x3310)] // MOVE.W (A0),-(A1)
+	[InlineData(0x3318)] // MOVE.W (A0)+,-(A1)
+	[InlineData(0x1310)] // MOVE.B (A0),-(A1)
+	[InlineData(0x1318)] // MOVE.B (A0)+,-(A1)
+	public void ExactM68000MoveMemoryToPredecrementReadsPrefetchesThenWritesWhenCompiled(int opcode)
+	{
+		ushort[] words = [(ushort)opcode, 0x60FC];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		for (var offset = 0; offset < 0x200; offset += 2)
+		{
+			interpreterBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x7000 + offset));
+			jitBus.WriteHostWord((uint)(0x2000 + offset), (ushort)(0x7000 + offset));
+		}
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2600;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.A[0], jit.State.A[0]);
+			Assert.Equal(interpreter.State.A[1], jit.State.A[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var readIndex = Array.FindIndex(interpreterAccesses, access => access.Kind == AmigaBusAccessKind.CpuDataRead);
+				var writeIndex = Array.FindIndex(interpreterAccesses, access => access.Kind == AmigaBusAccessKind.CpuDataWrite);
+				Assert.True(readIndex >= 0 && writeIndex > readIndex + 1);
+				Assert.Contains(
+					interpreterAccesses[(readIndex + 1)..writeIndex],
+					access => access.Kind == AmigaBusAccessKind.CpuInstructionFetch);
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x3328)] // MOVE.W 0(A0),-(A1)
+	[InlineData(0x1328)] // MOVE.B 0(A0),-(A1)
+	public void ExactM68000MoveDisplacementToPredecrementPreservesBothRefillsWhenCompiled(int opcode)
+	{
+		ushort[] words = [(ushort)opcode, 0x0000, 0x60FA];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		interpreterBus.WriteHostWord(0x2000, 0x7AA7);
+		jitBus.WriteHostWord(0x2000, 0x7AA7);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.A[0] = jit.State.A[0] = 0x2000;
+		interpreter.State.A[1] = jit.State.A[1] = 0x2600;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.A[1], jit.State.A[1]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle))
+					.ToArray();
+				var readIndex = Array.FindIndex(interpreterAccesses, access => access.Kind == AmigaBusAccessKind.CpuDataRead);
+				var writeIndex = Array.FindIndex(interpreterAccesses, access => access.Kind == AmigaBusAccessKind.CpuDataWrite);
+				Assert.True(readIndex > 0 && writeIndex > readIndex + 1);
+				Assert.Contains(interpreterAccesses[..readIndex], access => access.Kind == AmigaBusAccessKind.CpuInstructionFetch);
+				Assert.Contains(interpreterAccesses[(readIndex + 1)..writeIndex], access => access.Kind == AmigaBusAccessKind.CpuInstructionFetch);
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(0x303C, 0x0001)] // MOVE.W #1,D0
+	[InlineData(0x103C, 0x0001)] // MOVE.B #1,D0
+	[InlineData(0x0C40, 0x0001)] // CMPI.W #1,D0
+	[InlineData(0x0640, 0x0001)] // ADDI.W #1,D0
+	[InlineData(0x0440, 0x0001)] // SUBI.W #1,D0
+	[InlineData(0x0240, 0x00FF)] // ANDI.W #$FF,D0
+	[InlineData(0x0040, 0x0100)] // ORI.W #$100,D0
+	[InlineData(0x0A40, 0x0001)] // EORI.W #1,D0
+	[InlineData(0x0800, 0x0000)] // BTST #0,D0
+	public void ExactM68000OneExtensionRegisterOperationMatchesBusTimelineWhenCompiled(int opcode, int extension)
+	{
+		ushort[] words = [(ushort)opcode, (ushort)extension, 0x60FA];
+		var interpreterBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		var jitBus = new AmigaBus(expansionRamSize: FastCodeSize, captureBusAccesses: true);
+		WriteWords(interpreterBus, FastCodeBase, words);
+		WriteWords(jitBus, FastCodeBase, words);
+		var interpreter = new M68kInterpreter(interpreterBus);
+		var jit = new M68kJitCore(jitBus);
+		jit.FallbackAttributionEnabled = true;
+		interpreter.Reset(FastCodeBase, 0x4000);
+		jit.Reset(FastCodeBase, 0x4000);
+		interpreter.State.D[0] = jit.State.D[0] = 0x1234;
+
+		for (var instruction = 0; instruction < 256; instruction++)
+		{
+			var pc = interpreter.State.ProgramCounter;
+			var interpreterAccessStart = interpreterBus.BusAccesses.Count;
+			var jitAccessStart = jitBus.BusAccesses.Count;
+			interpreter.ExecuteInstruction();
+			jit.ExecuteInstruction();
+
+			Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+			Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+			Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+			Assert.Equal(interpreter.State.D[0], jit.State.D[0]);
+			if (pc == FastCodeBase)
+			{
+				var interpreterAccesses = interpreterBus.BusAccesses.Skip(interpreterAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				var jitAccesses = jitBus.BusAccesses.Skip(jitAccessStart)
+					.Select(access => (access.Request.Kind, access.Request.Address, access.RequestedCycle, access.CompletedCycle));
+				Assert.Equal(interpreterAccesses, jitAccesses);
+			}
+		}
+
+		Assert.True(
+			jit.Counters.TraceHits > 0,
+			$"fallbacks={jit.Counters.FallbackReasonTop}; instructions={jit.Counters.FallbackInstructionTop}");
 	}
 
 	public static IEnumerable<object[]> RepresentativeGenericTracePrograms()
@@ -6948,6 +7548,11 @@ public sealed class M68kJitCoreTests
 			false // One initial queue-refill cycle remains at the fallback-to-trace transition.
 		};
 	}
+
+	private static string FormatPrefetch(M68000PrefetchDiagnosticState state)
+		=> $"pc=0x{state.ProgramCounter:X8},addr=0x{state.PrefetchAddress:X8},count={state.PrefetchCount}," +
+			$"ready={state.ReadyCycle0}/{state.ReadyCycle1},bus={state.BusCycle}," +
+			$"pending={(state.HasPendingPrefetch ? $"0x{state.PendingPrefetchAddress:X8}@{state.PendingPrefetchEarliestCycle}" : "none")}";
 
 	private static AmigaBus CreateCodeBus()
 		=> new AmigaBus(expansionRamSize: FastCodeSize);
