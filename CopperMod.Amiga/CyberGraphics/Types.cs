@@ -185,11 +185,25 @@ namespace CopperMod.Amiga
 
         public uint GuestBaseAddress { get; }
 
-        public uint ColorMapAddress { get; set; }
+        public uint ColorMapAddress { get; private set; }
 
         public uint DrawColor { get; set; } = 0xFFFF_FFFFu;
 
-        public uint[] Palette { get; }
+        public uint[] Palette { get; private set; }
+
+        public void AssociateColorMap(uint colorMapAddress, uint[]? sharedPalette = null)
+        {
+            ColorMapAddress = colorMapAddress;
+            if (sharedPalette != null)
+            {
+                if (sharedPalette.Length != 256)
+                {
+                    throw new ArgumentException("A CyberGraphX palette must contain 256 entries.", nameof(sharedPalette));
+                }
+
+                Palette = sharedPalette;
+            }
+        }
 
         public bool Contains(int x, int y)
             => (uint)x < (uint)Width && (uint)y < (uint)Height;

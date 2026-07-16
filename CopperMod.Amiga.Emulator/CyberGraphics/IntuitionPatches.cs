@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System;
 using System.Collections.Generic;
 
 namespace CopperMod.Amiga
@@ -19,6 +20,7 @@ namespace CopperMod.Amiga
         private const int NewScreenTypeOffset = 0x0E;
         private const int NewScreenCustomBitMapOffset = 0x1C;
         private const int ExtNewScreenExtensionOffset = 0x20;
+        private const int ViewPortColorMapOffset = 0x04;
         private const ushort NewScreenExtended = 0x1000;
         private const ushort ScreenBehind = 0x0001;
 
@@ -232,6 +234,16 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (_machine.Bus.IsMappedMemoryRange(viewPort + ViewPortColorMapOffset, 4))
+            {
+                var colorMap = _machine.Bus.ReadLong(viewPort + ViewPortColorMapOffset);
+                if (colorMap != 0)
+                {
+                    surface.AssociateColorMap(colorMap);
+                    InitializeRtgPaletteFromColorMap(surface, colorMap);
+                }
+            }
+
             foreach (var bitMap in candidates)
             {
                 // Screen.BitMap and even RastPort.BitMap may only be opaque
@@ -251,6 +263,42 @@ namespace CopperMod.Amiga
             if ((request.ScreenType & ScreenBehind) == 0)
             {
                 CyberGraphics.SelectFrontViewPort(viewPort);
+            }
+        }
+
+        private void InitializeRtgPaletteFromColorMap(CyberGraphicsSurface surface, uint colorMap)
+        {
+            const int colorMapTypeOffset = 0x01;
+            const int colorMapCountOffset = 0x02;
+            const int colorMapColorTableOffset = 0x04;
+            const int colorMapLowColorBitsOffset = 0x0C;
+            if (!_machine.Bus.IsMappedMemoryRange(colorMap, colorMapLowColorBitsOffset + 4))
+            {
+                return;
+            }
+
+            var count = Math.Min(surface.Palette.Length, _machine.Bus.ReadWord(colorMap + colorMapCountOffset));
+            var highTable = _machine.Bus.ReadLong(colorMap + colorMapColorTableOffset);
+            var lowTable = _machine.Bus.ReadByte(colorMap + colorMapTypeOffset) != 0
+                ? _machine.Bus.ReadLong(colorMap + colorMapLowColorBitsOffset)
+                : 0;
+            if (count == 0 || highTable == 0 ||
+                !_machine.Bus.IsMappedMemoryRange(highTable, count * 2) ||
+                (lowTable != 0 && !_machine.Bus.IsMappedMemoryRange(lowTable, count * 2)))
+            {
+                return;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var high = _machine.Bus.ReadWord(highTable + (uint)(index * 2));
+                var low = lowTable != 0
+                    ? _machine.Bus.ReadWord(lowTable + (uint)(index * 2))
+                    : (ushort)0;
+                var red = (uint)(((high >> 8) & 0x0F) << 4) | ((uint)(low >> 8) & 0x0F);
+                var green = (uint)(((high >> 4) & 0x0F) << 4) | ((uint)(low >> 4) & 0x0F);
+                var blue = (uint)((high & 0x0F) << 4) | ((uint)low & 0x0F);
+                surface.Palette[index] = 0xFF00_0000u | (red << 16) | (green << 8) | blue;
             }
         }
 

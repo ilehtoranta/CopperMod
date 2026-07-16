@@ -14,10 +14,10 @@ namespace CopperMod.Amiga
             _ = vectorOffset;
             _ = state;
 
-            // Layer topology, damage regions and ClipRect ownership remain with
-            // Kickstart. The vectors are intercepted so individual operations
-            // can be promoted once a trace proves that they touch Planes[]
-            // directly; today every one performs an exact saved-vector chain.
+            // Layer topology, damage regions, backing stores and ClipRect
+            // ownership remain with Kickstart. RTG graphics gateways consume
+            // those live lists after native layer operations update them, so
+            // every topology vector continues through its exact saved target.
             return false;
         }
     }

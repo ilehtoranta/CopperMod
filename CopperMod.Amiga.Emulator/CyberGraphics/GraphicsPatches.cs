@@ -26,8 +26,9 @@ namespace CopperMod.Amiga
                     return true;
                 case -192: // LoadRGB4
                     if (!TryLoadRtgRgb4(state)) return false;
-                    state.D[0] = 0;
-                    return true;
+                    // Keep the real ColorMap authoritative; this hook mirrors
+                    // its public mutation into the associated RTG palette.
+                    return false;
                 case -222: // LoadView
                     // Observe the complete View, including RTG ViewPorts below a
                     // planar front screen, but let graphics.library perform the
@@ -51,8 +52,7 @@ namespace CopperMod.Amiga
                     return true;
                 case -288: // SetRGB4
                     if (!TrySetRtgRgb4(state)) return false;
-                    state.D[0] = 0;
-                    return true;
+                    return false;
                 case -306: // RectFill
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
                     HostGraphicsRectFill(state);
@@ -76,6 +76,12 @@ namespace CopperMod.Amiga
                     if (!CyberGraphics.TryGetMode(state.D[0], out _)) return false;
                     state.D[0] = 0;
                     return true;
+                case -852: // SetRGB32
+                    if (!TrySetRtgRgb32(state, colorMapArgument: false)) return false;
+                    return false;
+                case -882: // LoadRGB32
+                    if (!TryLoadRtgRgb32(state)) return false;
+                    return false;
                 case -918: // AllocBitMap
                     // AllocBitMap has no ModeID. A CyberGraphX friend bitmap is
                     // normally the unambiguous request for linear RTG storage.
@@ -101,12 +107,18 @@ namespace CopperMod.Amiga
                     return true;
                 case -942: // ChangeVPBitMap
                     if (!CyberGraphics.IsRtgBitMap(state.A[1])) return false;
-                    state.D[0] = CyberGraphics.ChangeViewPortBitMap(state.A[0], state.A[1]) ? 0u : 1u;
-                    return true;
+                    CyberGraphics.ChangeViewPortBitMap(state.A[0], state.A[1]);
+                    // graphics.library owns DBufInfo safe/display messages and
+                    // the viewport transition. We only mirror the selected RTG
+                    // surface, then tail-chain the original function.
+                    return false;
                 case -960: // GetBitMapAttr
                     if (!CyberGraphics.IsRtgBitMap(state.A[0])) return false;
                     state.D[0] = HostGraphicsGetBitMapAttr(state.A[0], state.D[1]);
                     return true;
+                case -996: // SetRGB32CM
+                    if (!TrySetRtgRgb32(state, colorMapArgument: true)) return false;
+                    return false;
                 case -1050: // BestModeIDA
                     state.D[0] = FindBestRtgDisplayMode(state.A[0]);
                     return state.D[0] != CyberGraphicsLibrary.InvalidDisplayId;
@@ -344,9 +356,11 @@ namespace CopperMod.Amiga
 
             if (!destinationIsRtg)
             {
-                // RTG-to-planar needs a format-aware chunky-to-planar path. Do
-                // not let Kickstart interpret linear VRAM as bitplane pointers.
-                state.D[0] = 0;
+                var planarPixels = CyberGraphics.BlitRtgToPlanar(
+                    state.A[0], S(state.D[0]), S(state.D[1]),
+                    state.A[1], S(state.D[2]), S(state.D[3]),
+                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], (byte)state.D[7]);
+                state.D[0] = planarPixels == 0 ? 0u : 1u;
                 return true;
             }
 
@@ -365,72 +379,43 @@ namespace CopperMod.Amiga
 
         private bool TryPatchClipBlit(M68kCpuState state)
         {
-            if (!TryGetRastPortBitMap(state.A[0], out var source) ||
-                !TryGetRastPortBitMap(state.A[1], out var destination) ||
-                (!CyberGraphics.IsRtgBitMap(source) && !CyberGraphics.IsRtgBitMap(destination)))
+            if (!TryGetRastPortBitMap(state.A[0], out _) ||
+                !TryGetRastPortBitMap(state.A[1], out _) ||
+                (!CyberGraphics.IsRtgRastPort(state.A[0]) &&
+                    !CyberGraphics.IsRtgRastPort(state.A[1])))
             {
                 return false;
             }
 
-            return TryPatchBitMapToRastPort(state, source, destination, ReadRastPortMask(state.A[1]));
-        }
-
-        private bool TryPatchBltBitMapRastPort(M68kCpuState state)
-        {
-            if (!TryGetRastPortBitMap(state.A[1], out var destination) ||
-                (!CyberGraphics.IsRtgBitMap(state.A[0]) && !CyberGraphics.IsRtgBitMap(destination)))
-            {
-                return false;
-            }
-
-            return TryPatchBitMapToRastPort(state, state.A[0], destination, ReadRastPortMask(state.A[1]));
-        }
-
-        private bool TryPatchMaskedBitMapRastPort(M68kCpuState state)
-        {
-            if (!TryGetRastPortBitMap(state.A[1], out var destination) ||
-                !CyberGraphics.IsRtgBitMap(destination))
-            {
-                return false;
-            }
-
-            if (CyberGraphics.IsRtgBitMap(state.A[0]))
-            {
-                state.D[0] = 0;
-                return true;
-            }
-
-            var pixels = CyberGraphics.BlitPlanarToRtg(
-                state.A[0], S(state.D[0]), S(state.D[1]),
-                destination, S(state.D[2]), S(state.D[3]),
-                S(state.D[4]), S(state.D[5]), (byte)state.D[6],
-                ReadRastPortMask(state.A[1]), state.A[2]);
+            var pixels = BlitRastPortToRastPortClipped(state, state.A[0], state.A[1]);
             state.D[0] = pixels == 0 ? 0u : 1u;
             return true;
         }
 
-        private bool TryPatchBitMapToRastPort(
-            M68kCpuState state,
-            uint source,
-            uint destination,
-            byte writeMask = 0xFF)
+        private bool TryPatchBltBitMapRastPort(M68kCpuState state)
         {
-            var sourceIsRtg = CyberGraphics.IsRtgBitMap(source);
-            if (!CyberGraphics.IsRtgBitMap(destination))
+            if (!TryGetRastPortBitMap(state.A[1], out _) ||
+                (!CyberGraphics.IsRtgBitMap(state.A[0]) &&
+                    !CyberGraphics.IsRtgRastPort(state.A[1])))
             {
-                state.D[0] = 0;
-                return true;
+                return false;
             }
 
-            var pixels = sourceIsRtg
-                ? CyberGraphics.BlitRtgToRtg(
-                    source, S(state.D[0]), S(state.D[1]),
-                    destination, S(state.D[2]), S(state.D[3]),
-                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], writeMask)
-                : CyberGraphics.BlitPlanarToRtg(
-                    source, S(state.D[0]), S(state.D[1]),
-                    destination, S(state.D[2]), S(state.D[3]),
-                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], writeMask);
+            var pixels = BlitBitMapToRastPortClipped(state, state.A[0], state.A[1]);
+            state.D[0] = pixels == 0 ? 0u : 1u;
+            return true;
+        }
+
+        private bool TryPatchMaskedBitMapRastPort(M68kCpuState state)
+        {
+            if (!TryGetRastPortBitMap(state.A[1], out _) ||
+                (!CyberGraphics.IsRtgBitMap(state.A[0]) &&
+                    !CyberGraphics.IsRtgRastPort(state.A[1])))
+            {
+                return false;
+            }
+
+            var pixels = BlitBitMapToRastPortClipped(state, state.A[0], state.A[1], state.A[2]);
             state.D[0] = pixels == 0 ? 0u : 1u;
             return true;
         }
@@ -474,6 +459,83 @@ namespace CopperMod.Amiga
                 var green = (state.D[2] & 0x0F) * 17;
                 var blue = (state.D[3] & 0x0F) * 17;
                 surface.Palette[index] = 0xFF00_0000u | (red << 16) | (green << 8) | blue;
+            }
+
+            return true;
+        }
+
+        private bool TrySetRtgRgb32(M68kCpuState state, bool colorMapArgument)
+        {
+            uint[] palette;
+            if (colorMapArgument)
+            {
+                if (!CyberGraphics.TryGetColorMapPalette(state.A[0], out palette))
+                {
+                    return false;
+                }
+            }
+            else if (!CyberGraphics.TryGetViewPortSurface(state.A[0], out var surface))
+            {
+                return false;
+            }
+            else
+            {
+                palette = surface.Palette;
+            }
+
+            var index = (int)state.D[0];
+            if ((uint)index < (uint)palette.Length)
+            {
+                palette[index] = 0xFF00_0000u |
+                    ((state.D[1] >> 24) << 16) |
+                    ((state.D[2] >> 24) << 8) |
+                    (state.D[3] >> 24);
+            }
+
+            return true;
+        }
+
+        private bool TryLoadRtgRgb32(M68kCpuState state)
+        {
+            if (!CyberGraphics.TryGetViewPortSurface(state.A[0], out var surface))
+            {
+                return false;
+            }
+
+            var table = state.A[1];
+            for (var block = 0; block < 256; block++)
+            {
+                if (table == 0 || !_machine.Bus.IsMappedMemoryRange(table, 4))
+                {
+                    break;
+                }
+
+                var header = _machine.Bus.ReadLong(table);
+                table += 4;
+                if (header == 0)
+                {
+                    break;
+                }
+
+                var count = (int)(header >> 16);
+                var first = (int)(header & 0xFFFF);
+                if (count <= 0 || count > 256 || !_machine.Bus.IsMappedMemoryRange(table, checked(count * 12)))
+                {
+                    break;
+                }
+
+                for (var offset = 0; offset < count; offset++)
+                {
+                    var red = _machine.Bus.ReadLong(table) >> 24;
+                    var green = _machine.Bus.ReadLong(table + 4) >> 24;
+                    var blue = _machine.Bus.ReadLong(table + 8) >> 24;
+                    table += 12;
+                    var index = first + offset;
+                    if ((uint)index < (uint)surface.Palette.Length)
+                    {
+                        surface.Palette[index] = 0xFF00_0000u | (red << 16) | (green << 8) | blue;
+                    }
+                }
             }
 
             return true;

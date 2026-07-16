@@ -825,6 +825,201 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void RtgRectFillUsesLayerClipRectsAndObscuredBackingBitMapCoordinates()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(256L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var patches = Assert.IsAssignableFrom<ICyberGraphicsGuestServices>(boot);
+
+		static uint AllocateBitMap(AmigaBus bus, int width, int height)
+		{
+			var alloc = new M68kCpuState();
+			alloc.D[0] = (uint)width;
+			alloc.D[1] = (uint)height;
+			alloc.D[2] = 8;
+			alloc.D[3] = 1;
+			Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -918), alloc));
+			return alloc.D[0];
+		}
+
+		var screenBitMap = AllocateBitMap(bus, 32, 16);
+		var backingBitMap = AllocateBitMap(bus, 3, 4);
+		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(screenBitMap, out var screen));
+		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(backingBitMap, out var backing));
+		const uint rastPort = 0x2800;
+		const uint layer = 0x2900;
+		const uint obscured = 0x2A00;
+		const uint visible = 0x2A40;
+		bus.WriteLong(rastPort + 0x00, layer);
+		bus.WriteLong(rastPort + RastPortBitMapOffset, screenBitMap);
+		bus.WriteByte(rastPort + 0x18, 0xFF, 0);
+		bus.WriteByte(rastPort + 0x19, 7, 0);
+		bus.WriteLong(layer + 0x08, obscured);
+		bus.WriteWord(layer + 0x10, 10);
+		bus.WriteWord(layer + 0x12, 4);
+		bus.WriteWord(layer + 0x14, 17);
+		bus.WriteWord(layer + 0x16, 7);
+		bus.WriteLong(obscured + 0x00, visible);
+		bus.WriteLong(obscured + 0x0C, backingBitMap);
+		bus.WriteWord(obscured + 0x10, 10);
+		bus.WriteWord(obscured + 0x12, 4);
+		bus.WriteWord(obscured + 0x14, 12);
+		bus.WriteWord(obscured + 0x16, 7);
+		bus.WriteWord(visible + 0x10, 15);
+		bus.WriteWord(visible + 0x12, 4);
+		bus.WriteWord(visible + 0x14, 17);
+		bus.WriteWord(visible + 0x16, 7);
+		boot.CyberGraphics.RegisterRastPort(rastPort, screen);
+
+		var fill = new M68kCpuState();
+		fill.A[1] = rastPort;
+		fill.D[0] = 0;
+		fill.D[1] = 0;
+		fill.D[2] = 7;
+		fill.D[3] = 3;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-306, fill));
+
+		for (var y = 0; y < 4; y++)
+		{
+			Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(0, 3)
+				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
+		}
+		for (var y = 4; y <= 7; y++)
+		{
+			Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(15, 3)
+				.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)(y * screen.BytesPerRow + x))));
+			Assert.All(Enumerable.Range(10, 5), x =>
+				Assert.Equal((byte)0, bus.ReadByte(screen.GuestBaseAddress + (uint)(y * screen.BytesPerRow + x))));
+		}
+
+		bus.ClearMemory(screen.GuestBaseAddress, screen.BytesPerRow * screen.Height);
+		bus.ClearMemory(backing.GuestBaseAddress, backing.BytesPerRow * backing.Height);
+		var move = new M68kCpuState();
+		move.A[1] = rastPort;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-240, move));
+		var draw = new M68kCpuState();
+		draw.A[1] = rastPort;
+		draw.D[0] = 7;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-246, draw));
+		Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(0, 3)
+			.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)x)));
+		Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(15, 3)
+			.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)(4 * screen.BytesPerRow + x))));
+		bus.ClearMemory(screen.GuestBaseAddress, screen.BytesPerRow * screen.Height);
+		bus.ClearMemory(backing.GuestBaseAddress, backing.BytesPerRow * backing.Height);
+		const uint sourceBitMap = 0x2B00;
+		const uint sourcePlane = 0x2C00;
+		bus.WriteWord(sourceBitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(sourceBitMap + BitMapRowsOffset, 4);
+		bus.WriteByte(sourceBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteLong(sourceBitMap + BitMapPlanesOffset, sourcePlane);
+		for (var y = 0; y < 4; y++)
+		{
+			bus.WriteByte(sourcePlane + (uint)(y * 2), 0xFF, 0);
+		}
+
+		var blit = new M68kCpuState();
+		blit.A[0] = sourceBitMap;
+		blit.A[1] = rastPort;
+		blit.D[4] = 8;
+		blit.D[5] = 4;
+		blit.D[6] = 0xC0;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-606, blit));
+		Assert.Equal(1u, blit.D[0]);
+		for (var y = 0; y < 4; y++)
+		{
+			Assert.Equal(new byte[] { 1, 1, 1 }, Enumerable.Range(0, 3)
+				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
+			Assert.Equal(new byte[] { 1, 1, 1 }, Enumerable.Range(15, 3)
+				.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)((y + 4) * screen.BytesPerRow + x))));
+		}
+
+		var copyBitMap = AllocateBitMap(bus, 8, 4);
+		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(copyBitMap, out var copy));
+		const uint copyRastPort = 0x2D00;
+		bus.WriteLong(copyRastPort + RastPortBitMapOffset, copyBitMap);
+		bus.WriteByte(copyRastPort + 0x18, 0xFF, 0);
+		boot.CyberGraphics.RegisterRastPort(copyRastPort, copy);
+		var clipBlit = new M68kCpuState();
+		clipBlit.A[0] = rastPort;
+		clipBlit.A[1] = copyRastPort;
+		clipBlit.D[4] = 8;
+		clipBlit.D[5] = 4;
+		clipBlit.D[6] = 0xC0;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-552, clipBlit));
+		Assert.Equal(1u, clipBlit.D[0]);
+		for (var y = 0; y < 4; y++)
+		{
+			Assert.Equal(
+				new byte[] { 1, 1, 1, 0, 0, 1, 1, 1 },
+				Enumerable.Range(0, 8)
+					.Select(x => bus.ReadByte(copy.GuestBaseAddress + (uint)(y * copy.BytesPerRow + x))));
+		}
+	}
+
+	[Fact]
+	public void RtgToPlanarBltBitMapRastPortUsesLayerClipRectCoordinates()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(16L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var patches = Assert.IsAssignableFrom<ICyberGraphicsGuestServices>(boot);
+		const uint sourceBitMap = 0x2500;
+		var source = Assert.IsType<CyberGraphicsSurface>(
+			boot.CyberGraphics.AllocateRtgSurface(2, 1, CyberGraphicsPixelFormat.Lut8));
+		boot.CyberGraphics.RegisterBitMap(sourceBitMap, source);
+		bus.WriteByte(source.GuestBaseAddress, 1, 0);
+		bus.WriteByte(source.GuestBaseAddress + 1, 2, 0);
+
+		const uint destinationBitMap = 0x2B00;
+		const uint plane0 = 0x2C00;
+		const uint plane1 = 0x2D00;
+		bus.WriteWord(destinationBitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(destinationBitMap + BitMapRowsOffset, 1);
+		bus.WriteByte(destinationBitMap + BitMapDepthOffset, 2, 0);
+		bus.WriteLong(destinationBitMap + BitMapPlanesOffset, plane0);
+		bus.WriteLong(destinationBitMap + BitMapPlanesOffset + 4, plane1);
+		const uint rastPort = 0x2800;
+		const uint layer = 0x2900;
+		const uint clipRect = 0x2A00;
+		bus.WriteLong(rastPort, layer);
+		bus.WriteLong(rastPort + RastPortBitMapOffset, destinationBitMap);
+		bus.WriteByte(rastPort + 0x18, 0xFF, 0);
+		bus.WriteLong(layer + 0x08, clipRect);
+		bus.WriteWord(layer + 0x10, 10);
+		bus.WriteWord(layer + 0x12, 4);
+		bus.WriteWord(layer + 0x14, 11);
+		bus.WriteWord(layer + 0x16, 4);
+		bus.WriteLong(clipRect + 0x0C, destinationBitMap);
+		bus.WriteWord(clipRect + 0x10, 10);
+		bus.WriteWord(clipRect + 0x12, 4);
+		bus.WriteWord(clipRect + 0x14, 11);
+		bus.WriteWord(clipRect + 0x16, 4);
+
+		var blit = new M68kCpuState();
+		blit.A[0] = sourceBitMap;
+		blit.A[1] = rastPort;
+		blit.D[4] = 2;
+		blit.D[5] = 1;
+		blit.D[6] = 0xC0;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-606, blit));
+		Assert.Equal(1u, blit.D[0]);
+		Assert.Equal(0x80, bus.ReadByte(plane0));
+		Assert.Equal(0x40, bus.ReadByte(plane1));
+	}
+
+	[Fact]
 	public void GraphicsPatchesPublishRtgDisplayDatabaseAndBestMode()
 	{
 		var machine = new Machine(MachineOptions
@@ -929,12 +1124,64 @@ public sealed class AmigaBootMemoryTests
 		const uint rasInfo = 0x3400;
 		bus.WriteLong(screen + ScreenViewPortOffset + ViewPortRasInfoOffset, rasInfo);
 		bus.WriteLong(rasInfo + 4, screenBitMapShell);
+		const uint colorMap = 0x3700;
+		const uint highColors = 0x3740;
+		const uint lowColors = 0x3780;
+		bus.WriteLong(screen + ScreenViewPortOffset + 4, colorMap);
+		bus.WriteByte(colorMap + 1, 1, 0); // V36+ ColorMap with LowColorBits
+		bus.WriteWord(colorMap + 2, 2);
+		bus.WriteLong(colorMap + 4, highColors);
+		bus.WriteLong(colorMap + 0x0C, lowColors);
+		bus.WriteWord(highColors + 2, 0x0123);
+		bus.WriteWord(lowColors + 2, 0x0456);
 		Assert.Equal(0u, bus.ReadLong(screenBitMapShell + BitMapPlanesOffset));
 		var completed = new M68kCpuState();
 		completed.A[7] = stack + 4;
 		completed.D[0] = screen;
 		Assert.True(InvokeHostTrap(bus, continuation, completed));
 		Assert.Equal(callerReturn, completed.ProgramCounter);
+		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(screenBitMapShell, out var screenSurface));
+		Assert.Equal(colorMap, screenSurface.ColorMapAddress);
+		Assert.Equal(0xFF14_2536u, screenSurface.Palette[1]);
+		var setRgb32 = new M68kCpuState();
+		setRgb32.A[0] = screen + ScreenViewPortOffset;
+		setRgb32.D[0] = 1;
+		setRgb32.D[1] = 0xAA00_0000;
+		setRgb32.D[2] = 0xBB00_0000;
+		setRgb32.D[3] = 0xCC00_0000;
+		Assert.False(patches.TryInvokeGraphicsLibraryPatch(-852, setRgb32));
+		Assert.Equal(0xFFAA_BBCCu, screenSurface.Palette[1]);
+
+		var friendAlloc = new M68kCpuState();
+		friendAlloc.A[0] = screenBitMapShell;
+		friendAlloc.D[0] = 16;
+		friendAlloc.D[1] = 1;
+		friendAlloc.D[2] = 8;
+		friendAlloc.D[3] = 1;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-918, friendAlloc));
+		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(friendAlloc.D[0], out var friendSurface));
+		Assert.Equal(colorMap, friendSurface.ColorMapAddress);
+		Assert.Same(screenSurface.Palette, friendSurface.Palette);
+
+		// Intuition must retain ownership of ScreenBuffer allocation,
+		// freeing, swap refusal, and DBufInfo message-port signalling.
+		var screenBufferCall = new M68kCpuState();
+		screenBufferCall.A[0] = screen;
+		Assert.False(patches.TryInvokeIntuitionLibraryPatch(-768, originalTarget, screenBufferCall));
+		Assert.False(patches.TryInvokeIntuitionLibraryPatch(-774, originalTarget, screenBufferCall));
+		Assert.False(patches.TryInvokeIntuitionLibraryPatch(-780, originalTarget, screenBufferCall));
+
+		var changeBuffer = new M68kCpuState();
+		changeBuffer.A[0] = screen + ScreenViewPortOffset;
+		changeBuffer.A[1] = friendAlloc.D[0];
+		changeBuffer.A[2] = 0x37C0; // Native graphics.library DBufInfo remains untouched.
+		Assert.False(patches.TryInvokeGraphicsLibraryPatch(-942, changeBuffer));
+		Assert.True(boot.CyberGraphics.TryGetViewPortSurface(changeBuffer.A[0], out var selectedSurface));
+		Assert.Same(friendSurface, selectedSurface);
+		changeBuffer.A[1] = screenBitMapShell;
+		Assert.False(patches.TryInvokeGraphicsLibraryPatch(-942, changeBuffer));
+		Assert.True(boot.CyberGraphics.TryGetViewPortSurface(changeBuffer.A[0], out selectedSurface));
+		Assert.Same(screenSurface, selectedSurface);
 		const uint view = 0x3600;
 		bus.WriteLong(view, screen + ScreenViewPortOffset);
 		bus.WriteWord(screen + ScreenViewPortOffset + ViewPortDWidthOffset, 640);

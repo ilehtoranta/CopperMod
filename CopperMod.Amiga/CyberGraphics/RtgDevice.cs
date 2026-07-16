@@ -54,7 +54,8 @@ namespace CopperMod.Amiga
         [
             (CyberGraphicsPixelFormat.Lut8, 8, 1, "LUT8"),
             (CyberGraphicsPixelFormat.Rgb16, 16, 2, "RGB16"),
-            (CyberGraphicsPixelFormat.Argb32, 32, 3, "ARGB32")
+            (CyberGraphicsPixelFormat.Argb32, 32, 3, "ARGB32"),
+            (CyberGraphicsPixelFormat.Rgb15, 15, 4, "RGB15")
         ];
 
         private readonly AmigaBus _bus;
@@ -261,10 +262,15 @@ namespace CopperMod.Amiga
         {
             var offset = checked(y * surface.BytesPerRow + x * surface.BytesPerPixel);
             byte B(int relative) => _bus.ReadByte(surface.GuestBaseAddress + (uint)(offset + relative));
-            ushort W() => (ushort)((B(0) << 8) | B(1));
+            ushort W(bool littleEndian = false)
+                => littleEndian ? (ushort)(B(0) | (B(1) << 8)) : (ushort)((B(0) << 8) | B(1));
             return surface.PixelFormat switch
             {
                 CyberGraphicsPixelFormat.Lut8 => surface.Palette[B(0)],
+                CyberGraphicsPixelFormat.Rgb15 => DecodeRgb15(W(), bgr: false, shifted: false),
+                CyberGraphicsPixelFormat.Rgb15X => DecodeRgb15(W(), bgr: false, shifted: true),
+                CyberGraphicsPixelFormat.Rgb15Pc => DecodeRgb15(W(littleEndian: true), bgr: false, shifted: false),
+                CyberGraphicsPixelFormat.Bgr15Pc => DecodeRgb15(W(littleEndian: true), bgr: true, shifted: false),
                 CyberGraphicsPixelFormat.Rgb16 => DecodeRgb16(W()),
                 CyberGraphicsPixelFormat.Argb32 => ((uint)B(0) << 24) | ((uint)B(1) << 16) | ((uint)B(2) << 8) | B(3),
                 _ => 0xFF00_0000u
@@ -281,5 +287,23 @@ namespace CopperMod.Amiga
             var blue = (blue5 << 3) | (blue5 >> 2);
             return 0xFF00_0000u | (red << 16) | (green << 8) | blue;
         }
+
+        private static uint DecodeRgb15(ushort value, bool bgr, bool shifted)
+        {
+            if (shifted)
+            {
+                value >>= 1;
+            }
+
+            var first = Expand5((value >> 10) & 0x1F);
+            var green = Expand5((value >> 5) & 0x1F);
+            var last = Expand5(value & 0x1F);
+            return bgr
+                ? 0xFF00_0000u | (last << 16) | (green << 8) | first
+                : 0xFF00_0000u | (first << 16) | (green << 8) | last;
+        }
+
+        private static uint Expand5(int value)
+            => (uint)((value << 3) | (value >> 2));
     }
 }

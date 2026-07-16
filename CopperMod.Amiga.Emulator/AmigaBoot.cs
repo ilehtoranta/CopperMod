@@ -2905,13 +2905,14 @@ namespace CopperMod.Amiga
             var depth = (int)state.D[2];
 
             CyberGraphicsPixelFormat pixelFormat;
+            CyberGraphicsSurface? friendSurface = null;
             if (requestedPixelFormat.HasValue)
             {
                 pixelFormat = requestedPixelFormat.Value;
             }
-            else if (state.A[0] != 0 && CyberGraphics.TryGetBitMapSurface(state.A[0], out var friend))
+            else if (state.A[0] != 0 && CyberGraphics.TryGetBitMapSurface(state.A[0], out friendSurface))
             {
-                pixelFormat = friend.PixelFormat;
+                pixelFormat = friendSurface.PixelFormat;
             }
             else
             {
@@ -2926,6 +2927,11 @@ namespace CopperMod.Amiga
             if (surface == null)
             {
                 return 0;
+            }
+
+            if (friendSurface != null && friendSurface.ColorMapAddress != 0)
+            {
+                surface.AssociateColorMap(friendSurface.ColorMapAddress, friendSurface.Palette);
             }
 
             const int bitMapSize = BitMapPlanesOffset + 8 * 4;
@@ -3326,7 +3332,7 @@ namespace CopperMod.Amiga
         private void HostGraphicsDraw(M68kCpuState state)
         {
             var rastPort = state.A[1];
-            if (!TryGetRastPortBitMap(rastPort, out var bitMap))
+            if (!TryGetRastPortBitMap(rastPort, out _))
             {
                 return;
             }
@@ -3335,7 +3341,7 @@ namespace CopperMod.Amiga
             var y0 = ReadSignedWordOrDefault(rastPort + RastPortCurrentYOffset, 0);
             var x1 = unchecked((short)(ushort)state.D[0]);
             var y1 = unchecked((short)(ushort)state.D[1]);
-            DrawBitMapLine(bitMap, x0, y0, x1, y1, ReadRastPortFgPen(rastPort));
+            DrawRastPortLine(rastPort, x0, y0, x1, y1, ReadRastPortFgPen(rastPort));
             _machine.Bus.WriteWord(rastPort + RastPortCurrentXOffset, unchecked((ushort)x1));
             _machine.Bus.WriteWord(rastPort + RastPortCurrentYOffset, unchecked((ushort)y1));
         }
@@ -3343,7 +3349,7 @@ namespace CopperMod.Amiga
         private void HostGraphicsText(M68kCpuState state)
         {
             var rastPort = state.A[1];
-            if (!TryGetRastPortBitMap(rastPort, out var bitMap))
+            if (!TryGetRastPortBitMap(rastPort, out _))
             {
                 return;
             }
@@ -3364,7 +3370,7 @@ namespace CopperMod.Amiga
             for (var index = 0; index < length; index++)
             {
                 var character = (char)_machine.Bus.ReadByte(textAddress + (uint)index);
-                DrawBitMapGlyph(bitMap, character, x + (index * 8), y, foreground, background, drawMode);
+                DrawRastPortGlyph(rastPort, character, x + (index * 8), y, foreground, background, drawMode);
             }
 
             _machine.Bus.WriteWord(
@@ -3374,18 +3380,18 @@ namespace CopperMod.Amiga
 
         private void HostGraphicsSetRast(M68kCpuState state)
         {
-            if (TryGetRastPortBitMap(state.A[1], out var bitMap))
+            if (TryGetRastPortExtent(state.A[1], out var width, out var height))
             {
-                FillBitMapRect(bitMap, 0, 0, int.MaxValue, int.MaxValue, (int)(state.D[0] & 0xFF));
+                FillRastPortRect(state.A[1], 0, 0, width - 1, height - 1, (int)(state.D[0] & 0xFF));
             }
         }
 
         private void HostGraphicsRectFill(M68kCpuState state)
         {
-            if (TryGetRastPortBitMap(state.A[1], out var bitMap))
+            if (TryGetRastPortBitMap(state.A[1], out _))
             {
-                FillBitMapRect(
-                    bitMap,
+                FillRastPortRect(
+                    state.A[1],
                     unchecked((short)(ushort)state.D[0]),
                     unchecked((short)(ushort)state.D[1]),
                     unchecked((short)(ushort)state.D[2]),
@@ -4157,7 +4163,14 @@ namespace CopperMod.Amiga
         private int ReadSignedWordOrDefault(uint address, int defaultValue)
             => TryReadWord(address, out var value) ? unchecked((short)value) : defaultValue;
 
-        private void FillBitMapRect(uint bitMap, int xMin, int yMin, int xMax, int yMax, int color)
+        private void FillBitMapRect(
+            uint bitMap,
+            int xMin,
+            int yMin,
+            int xMax,
+            int yMax,
+            int color,
+            byte writeMask = 0xFF)
         {
             if (!TryReadBitMapInfo(bitMap, out var info))
             {
@@ -4172,7 +4185,7 @@ namespace CopperMod.Amiga
             {
                 for (var x = left; x <= right; x++)
                 {
-                    WriteBitMapPixel(info, x, y, color);
+                    WriteBitMapPixel(info, x, y, color, writeMask);
                 }
             }
         }
@@ -4279,7 +4292,12 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private void WriteBitMapPixel(HostBitMapInfo info, int x, int y, int color)
+        private void WriteBitMapPixel(
+            HostBitMapInfo info,
+            int x,
+            int y,
+            int color,
+            byte writeMask = 0xFF)
         {
             if (x < 0 || y < 0 || x >= info.Width || y >= info.Height)
             {
@@ -4289,12 +4307,7 @@ namespace CopperMod.Amiga
             if (info.RtgSurface != null)
             {
                 var surface = info.RtgSurface;
-                var offset = checked(y * surface.BytesPerRow + x * surface.BytesPerPixel);
-                if (surface.PixelFormat == CyberGraphicsPixelFormat.Lut8)
-                {
-                    surface.WriteByte(_machine.Bus, offset, (byte)color);
-                }
-
+                CyberGraphics.WriteSurfacePen(surface, x, y, (byte)color, writeMask);
                 return;
             }
 
@@ -4302,6 +4315,11 @@ namespace CopperMod.Amiga
             var mask = (byte)(0x80 >> (x & 7));
             for (var plane = 0; plane < info.Depth; plane++)
             {
+                if ((writeMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
                 var planeAddress = info.Planes[plane];
                 if (planeAddress == 0 ||
                     !_machine.Bus.IsMappedMemoryRange(planeAddress + (uint)byteOffset, 1))

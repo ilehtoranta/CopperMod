@@ -314,14 +314,26 @@ namespace CopperMod.Amiga
 
         internal bool IsRtgRastPort(uint rastPortAddress)
         {
-            if (_rastPorts.ContainsKey(rastPortAddress))
+            if (rastPortAddress != 0 &&
+                _bus.IsMappedMemoryRange(rastPortAddress, 8) &&
+                TryResolveBitMapSurface(_bus.ReadLong(rastPortAddress + 4), out _))
             {
                 return true;
             }
 
-            return rastPortAddress != 0 &&
+            return _rastPorts.ContainsKey(rastPortAddress);
+        }
+
+        private bool TryGetRastPortSurface(uint rastPortAddress, out CyberGraphicsSurface surface)
+        {
+            if (rastPortAddress != 0 &&
                 _bus.IsMappedMemoryRange(rastPortAddress, 8) &&
-                IsRtgBitMap(_bus.ReadLong(rastPortAddress + 4));
+                TryResolveBitMapSurface(_bus.ReadLong(rastPortAddress + 4), out surface!))
+            {
+                return true;
+            }
+
+            return _rastPorts.TryGetValue(rastPortAddress, out surface!);
         }
 
         internal bool IsRtgViewPort(uint viewPortAddress)
@@ -340,9 +352,33 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (_viewPorts.TryGetValue(viewPortAddress, out var previousSurface) &&
+                previousSurface.ColorMapAddress != 0)
+            {
+                surface.AssociateColorMap(previousSurface.ColorMapAddress, previousSurface.Palette);
+            }
+
             _viewPorts[viewPortAddress] = surface;
             _rtgDevice?.RegisterViewPort(viewPortAddress, bitMapAddress);
             return true;
+        }
+
+        internal bool TryGetColorMapPalette(uint colorMapAddress, out uint[] palette)
+        {
+            if (colorMapAddress != 0)
+            {
+                foreach (var surface in _viewPorts.Values.Concat(_bitmaps.Values))
+                {
+                    if (surface.ColorMapAddress == colorMapAddress)
+                    {
+                        palette = surface.Palette;
+                        return true;
+                    }
+                }
+            }
+
+            palette = null!;
+            return false;
         }
 
         internal bool TryRenderRtgFrame(out CyberGraphicsRtgFrame frame)
@@ -570,11 +606,20 @@ namespace CopperMod.Amiga
             int width,
             int height,
             byte minterm,
-            byte writeMask)
+            byte writeMask,
+            uint maskPlane = 0)
         {
             if (!_bitmaps.TryGetValue(sourceBitMap, out var source) ||
                 !_bitmaps.TryGetValue(destinationBitMap, out var destination) ||
                 width <= 0 || height <= 0)
+            {
+                return 0;
+            }
+
+            var sourceIsIndexed = source.PixelFormat == CyberGraphicsPixelFormat.Lut8;
+            var destinationIsIndexed = destination.PixelFormat == CyberGraphicsPixelFormat.Lut8;
+            var maskBytesPerRow = ((source.Width + 15) / 16) * 2;
+            if (maskPlane != 0 && !_bus.IsMappedMemoryRange(maskPlane, checked(maskBytesPerRow * source.Height)))
             {
                 return 0;
             }
@@ -588,9 +633,12 @@ namespace CopperMod.Amiga
                     var sx = sourceX + x;
                     var sy = sourceY + y;
                     var index = y * width + x;
-                    if (source.Contains(sx, sy))
+                    if (source.Contains(sx, sy) &&
+                        IsRtgMaskSet(maskPlane, maskBytesPerRow, sx, sy))
                     {
-                        pixels[index] = ReadSurfaceArgb(source, sx, sy);
+                        pixels[index] = sourceIsIndexed
+                            ? source.ReadByte(_bus, checked(sy * source.BytesPerRow + sx))
+                            : ReadSurfaceArgb(source, sx, sy);
                         valid[index] = true;
                     }
                 }
@@ -610,7 +658,23 @@ namespace CopperMod.Amiga
                         continue;
                     }
 
-                    var sourceColor = pixels[index];
+                    if (sourceIsIndexed && destinationIsIndexed)
+                    {
+                        var sourcePen = (byte)pixels[index];
+                        var offset = checked(dy * destination.BytesPerRow + dx);
+                        var destinationPen = destination.ReadByte(_bus, offset);
+                        var resultPen = (byte)ApplyRtgMinterm(sourcePen, destinationPen, operation);
+                        destination.WriteByte(
+                            _bus,
+                            offset,
+                            (byte)((resultPen & writeMask) | (destinationPen & ~writeMask)));
+                        written++;
+                        continue;
+                    }
+
+                    var sourceColor = sourceIsIndexed
+                        ? source.Palette[(byte)pixels[index]]
+                        : pixels[index];
                     var destinationColor = ReadSurfaceArgb(destination, dx, dy);
                     var result = ApplyRtgMinterm(sourceColor, destinationColor, operation);
                     if (destination.PixelFormat == CyberGraphicsPixelFormat.Lut8 && writeMask != 0xFF)
@@ -626,6 +690,131 @@ namespace CopperMod.Amiga
             }
 
             return written;
+        }
+
+        internal int BlitRtgToPlanar(
+            uint sourceBitMap,
+            int sourceX,
+            int sourceY,
+            uint destinationBitMap,
+            int destinationX,
+            int destinationY,
+            int width,
+            int height,
+            byte minterm,
+            byte planeMask,
+            uint maskPlane = 0)
+        {
+            const int bitMapBytesPerRowOffset = 0;
+            const int bitMapRowsOffset = 2;
+            const int bitMapDepthOffset = 5;
+            const int bitMapPlanesOffset = 8;
+            const int maximumPlanes = 8;
+            if (!_bitmaps.TryGetValue(sourceBitMap, out var source) ||
+                destinationBitMap == 0 || width <= 0 || height <= 0 ||
+                !_bus.IsMappedMemoryRange(destinationBitMap, bitMapPlanesOffset + maximumPlanes * 4))
+            {
+                return 0;
+            }
+
+            var sourceIsIndexed = source.PixelFormat == CyberGraphicsPixelFormat.Lut8;
+            if (!sourceIsIndexed && source.ColorMapAddress == 0)
+            {
+                // A native planar BitMap carries no ColorMap. Deep pixels can
+                // only be reduced to pens through the CyberGraphX bitmap's
+                // screen-derived associated palette.
+                return 0;
+            }
+
+            var maskBytesPerRow = ((source.Width + 15) / 16) * 2;
+            if (maskPlane != 0 && !_bus.IsMappedMemoryRange(maskPlane, checked(maskBytesPerRow * source.Height)))
+            {
+                return 0;
+            }
+
+            var bytesPerRow = _bus.ReadWord(destinationBitMap + bitMapBytesPerRowOffset);
+            var rows = _bus.ReadWord(destinationBitMap + bitMapRowsOffset);
+            var depth = Math.Min(maximumPlanes, (int)_bus.ReadByte(destinationBitMap + bitMapDepthOffset));
+            if (bytesPerRow == 0 || rows == 0 || depth == 0)
+            {
+                return 0;
+            }
+
+            Span<uint> planes = stackalloc uint[maximumPlanes];
+            for (var plane = 0; plane < depth; plane++)
+            {
+                planes[plane] = _bus.ReadLong(destinationBitMap + bitMapPlanesOffset + (uint)(plane * 4));
+            }
+
+            var operation = (byte)((minterm >> 4) & 0x0F);
+            var written = 0;
+            for (var y = 0; y < height; y++)
+            {
+                var sy = sourceY + y;
+                var dy = destinationY + y;
+                if ((uint)sy >= (uint)source.Height || (uint)dy >= rows)
+                {
+                    continue;
+                }
+
+                for (var x = 0; x < width; x++)
+                {
+                    var sx = sourceX + x;
+                    var dx = destinationX + x;
+                    if (!source.Contains(sx, sy) || dx < 0 || dx >= bytesPerRow * 8 ||
+                        !IsRtgMaskSet(maskPlane, maskBytesPerRow, sx, sy))
+                    {
+                        continue;
+                    }
+
+                    var sourcePen = sourceIsIndexed
+                        ? source.ReadByte(_bus, checked(sy * source.BytesPerRow + sx))
+                        : FindNearestPaletteIndex(source.Palette, ReadSurfaceArgb(source, sx, sy));
+                    var byteOffset = checked((uint)(dy * bytesPerRow + (dx >> 3)));
+                    var bit = (byte)(0x80 >> (dx & 7));
+                    var destinationPen = 0;
+                    for (var plane = 0; plane < depth; plane++)
+                    {
+                        var planeAddress = planes[plane];
+                        if (planeAddress == uint.MaxValue ||
+                            (planeAddress != 0 && (_bus.ReadByte(planeAddress + byteOffset) & bit) != 0))
+                        {
+                            destinationPen |= 1 << plane;
+                        }
+                    }
+
+                    var resultPen = (byte)ApplyRtgMinterm(sourcePen, (byte)destinationPen, operation);
+                    for (var plane = 0; plane < depth; plane++)
+                    {
+                        if ((planeMask & (1 << plane)) == 0 || planes[plane] is 0 or uint.MaxValue)
+                        {
+                            continue;
+                        }
+
+                        var address = planes[plane] + byteOffset;
+                        var value = _bus.ReadByte(address);
+                        value = ((resultPen >> plane) & 1) != 0
+                            ? (byte)(value | bit)
+                            : (byte)(value & (byte)~bit);
+                        _bus.WriteByte(address, value, 0);
+                    }
+
+                    written++;
+                }
+            }
+
+            return written;
+        }
+
+        private bool IsRtgMaskSet(uint maskPlane, int maskBytesPerRow, int x, int y)
+        {
+            if (maskPlane == 0)
+            {
+                return true;
+            }
+
+            var offset = checked((uint)(y * maskBytesPerRow + (x >> 3)));
+            return ((_bus.ReadByte(maskPlane + offset) >> (7 - (x & 7))) & 1) != 0;
         }
 
         private static uint ApplyRtgMinterm(uint source, uint destination, byte operation)
@@ -1007,7 +1196,7 @@ namespace CopperMod.Amiga
         private void DoCDrawMethod(uint hook, uint rastPort)
         {
             if (_guestServices == null ||
-                !_rastPorts.TryGetValue(rastPort, out var surface) ||
+                !TryGetRastPortSurface(rastPort, out var surface) ||
                 surface.GuestBaseAddress == 0 ||
                 hook == 0 ||
                 !_bus.IsMappedMemoryRange(hook, 12))

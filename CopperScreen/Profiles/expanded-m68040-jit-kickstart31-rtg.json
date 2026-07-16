@@ -1,0 +1,23 @@
+{
+  "id": "expanded-m68040-jit-kickstart31-rtg",
+  "displayName": "Expanded A500 + MC68040 JIT + Kickstart 3.1 + RTG",
+  "description": "A500 PAL with 8 MB Autoconfig fast RAM, 256 MB sparse linear RTG VRAM, Kickstart 3.1, and the MC68040 JIT backend.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "realFastRamKb": 8192,
+    "realFastBase": "$200000",
+    "rtgVramMb": 256,
+    "rtcEnabled": true,
+    "floppyDriveCount": 1
+  },
+  "cpu": {
+    "backend": "JitM68040"
+  },
+  "kickstart": {
+    "source": "KickstartRom",
+    "version": "3.1",
+    "path": "ROM/kickstart-3.1-a500.rom"
+  }
+}

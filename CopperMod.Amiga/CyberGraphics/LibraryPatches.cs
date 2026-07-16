@@ -69,10 +69,13 @@ namespace CopperMod.Amiga
             -732, // NextDisplayInfo
             -756, // GetDisplayInfoData
             -798, // ModeNotAvailable
+            -852, // SetRGB32
+            -882, // LoadRGB32
             -918, // AllocBitMap
             -924, // FreeBitMap
             -942, // ChangeVPBitMap
             -960, // GetBitMapAttr
+            -996, // SetRGB32CM
             -1050 // BestModeIDA
         ];
 

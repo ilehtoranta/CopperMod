@@ -30,6 +30,12 @@ public sealed class CyberGraphicsLibraryTests
 		state.D[0] = 0x4350_0113u;
 		Assert.True(library.Invoke(-54, state));
 		Assert.Equal(1u, state.D[0]);
+		state.D[0] = 0x4350_0014u;
+		Assert.True(library.Invoke(-54, state));
+		Assert.Equal(1u, state.D[0]);
+		Assert.True(library.TryGetMode(0x4350_0014u, out var rgb15Mode));
+		Assert.Equal(15, rgb15Mode.Depth);
+		Assert.Equal(CyberGraphicsPixelFormat.Rgb15, rgb15Mode.PixelFormat);
 	}
 
 	[Theory]
@@ -93,6 +99,184 @@ public sealed class CyberGraphicsLibraryTests
 		library.BlitPlanarToRtg(sourceBitMap, 0, 0, destinationBitMap, 0, 0, 1, 1, 0xC0, 0xFF);
 
 		Assert.Equal(0xF800, bus.ReadWord(surface.GuestBaseAddress));
+	}
+
+	[Theory]
+	[InlineData(1, 0x7C, 0x00)]
+	[InlineData(2, 0xF8, 0x00)]
+	[InlineData(3, 0x00, 0x7C)]
+	[InlineData(4, 0x1F, 0x00)]
+	public void PlanarToRtgMapsPensToEveryRgb15MemoryLayout(
+		int formatValue,
+		byte firstByte,
+		byte secondByte)
+	{
+		var format = (CyberGraphicsPixelFormat)formatValue;
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		const uint sourceBitMap = 0x1000;
+		const uint destinationBitMap = 0x3000;
+		bus.WriteWord(sourceBitMap, 2);
+		bus.WriteWord(sourceBitMap + 2, 1);
+		bus.WriteByte(sourceBitMap + 5, 1, 0);
+		bus.WriteLong(sourceBitMap + 8, uint.MaxValue);
+		var surface = Assert.IsType<CyberGraphicsSurface>(library.AllocateRtgSurface(1, 1, format));
+		surface.Palette[1] = 0xFFFF_0000u;
+		library.RegisterBitMap(destinationBitMap, surface);
+
+		Assert.Equal(1, library.BlitPlanarToRtg(
+			sourceBitMap, 0, 0, destinationBitMap, 0, 0, 1, 1, 0xC0, 0xFF));
+
+		Assert.Equal(firstByte, bus.ReadByte(surface.GuestBaseAddress));
+		Assert.Equal(secondByte, bus.ReadByte(surface.GuestBaseAddress + 1));
+	}
+
+	[Theory]
+	[InlineData(1, 0x7C, 0x00)]
+	[InlineData(2, 0xF8, 0x00)]
+	[InlineData(3, 0x00, 0x7C)]
+	[InlineData(4, 0x1F, 0x00)]
+	public void HostPresentationDecodesEveryRgb15MemoryLayout(
+		int formatValue,
+		byte firstByte,
+		byte secondByte)
+	{
+		var format = (CyberGraphicsPixelFormat)formatValue;
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = Assert.IsType<CyberGraphicsSurface>(library.AllocateRtgSurface(1, 1, format));
+		const uint bitMap = 0x3000;
+		const uint viewPort = 0x4000;
+		library.RegisterBitMap(bitMap, surface);
+		Assert.True(library.ChangeViewPortBitMap(viewPort, bitMap));
+		library.SelectFrontViewPort(viewPort);
+		bus.WriteByte(surface.GuestBaseAddress, firstByte, 0);
+		bus.WriteByte(surface.GuestBaseAddress + 1, secondByte, 0);
+
+		Assert.True(library.TryRenderRtgFrame(out var frame));
+		Assert.Equal(0xFFFF_0000u, frame.Bgra[0]);
+	}
+
+	[Fact]
+	public void RtgLut8ToPlanarCopiesPenBitsWithoutPaletteConversion()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var source = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		library.RegisterBitMap(0x1000, source);
+		bus.WriteByte(source.GuestBaseAddress, 5, 0);
+		source.Palette[5] = 0xFFFF_0000;
+		source.Palette[2] = 0xFFFF_0000;
+		WritePlanarBitMap(bus, 0x2000, 3, 0x3000);
+
+		Assert.Equal(0, library.BlitRtgToPlanar(
+			0x1000, 0, 0, 0x2000, 0, 0, 1, 1, 0xC0, 0xFF, 0x4000));
+		bus.WriteByte(0x4000, 0x80, 0);
+		Assert.Equal(1, library.BlitRtgToPlanar(
+			0x1000, 0, 0, 0x2000, 0, 0, 1, 1, 0xC0, 0xFF, 0x4000));
+		Assert.Equal(0x80, bus.ReadByte(0x3000));
+		Assert.Equal(0x00, bus.ReadByte(0x3100));
+		Assert.Equal(0x80, bus.ReadByte(0x3200));
+	}
+
+	[Fact]
+	public void DeepRtgToPlanarUsesItsAssociatedScreenPalette()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var source = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Argb32));
+		library.RegisterBitMap(0x1000, source);
+		bus.WriteLong(source.GuestBaseAddress, 0xFF12_3456);
+		WritePlanarBitMap(bus, 0x2000, 3, 0x3000);
+
+		Assert.Equal(0, library.BlitRtgToPlanar(
+			0x1000, 0, 0, 0x2000, 0, 0, 1, 1, 0xC0, 0xFF));
+		source.AssociateColorMap(0x5000);
+		source.Palette[7] = 0xFF12_3456;
+		Assert.Equal(1, library.BlitRtgToPlanar(
+			0x1000, 0, 0, 0x2000, 0, 0, 1, 1, 0xC0, 0xFF));
+		Assert.Equal(0x80, bus.ReadByte(0x3000));
+		Assert.Equal(0x80, bus.ReadByte(0x3100));
+		Assert.Equal(0x80, bus.ReadByte(0x3200));
+	}
+
+	[Fact]
+	public void RtgLut8ToLut8PreservesIndicesAcrossDifferentPalettes()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var source = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		var destination = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		library.RegisterBitMap(0x1000, source);
+		library.RegisterBitMap(0x2000, destination);
+		source.Palette[7] = 0xFFFF_0000;
+		destination.Palette[3] = 0xFFFF_0000;
+		bus.WriteByte(source.GuestBaseAddress, 7, 0);
+
+		Assert.Equal(1, library.BlitRtgToRtg(0x1000, 0, 0, 0x2000, 0, 0, 1, 1, 0xC0, 0xFF));
+		Assert.Equal(7, bus.ReadByte(destination.GuestBaseAddress));
+	}
+
+	[Fact]
+	public void ViewPortBufferSwapInheritsAssociatedColorMapAndPalette()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var screen = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		var backBuffer = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		screen.AssociateColorMap(0x5000);
+		screen.Palette[9] = 0xFF12_3456;
+		library.RegisterBitMap(0x1000, screen);
+		library.RegisterBitMap(0x2000, backBuffer);
+		library.RegisterViewPort(0x3000, screen);
+
+		Assert.True(library.ChangeViewPortBitMap(0x3000, 0x2000));
+		Assert.Equal(0x5000u, backBuffer.ColorMapAddress);
+		Assert.Same(screen.Palette, backBuffer.Palette);
+		Assert.Equal(0xFF12_3456u, backBuffer.Palette[9]);
+	}
+
+	[Fact]
+	public void CyberGraphicsRastPortCallsFollowCurrentScreenBufferBitMap()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var front = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Argb32));
+		var back = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Argb32));
+		const uint frontBitMap = 0x1000;
+		const uint backBitMap = 0x2000;
+		const uint rastPort = 0x3000;
+		library.RegisterBitMap(frontBitMap, front);
+		library.RegisterBitMap(backBitMap, back);
+		library.RegisterRastPort(rastPort, front);
+		bus.WriteLong(rastPort + 4, frontBitMap);
+
+		var write = new M68kCpuState();
+		write.A[1] = rastPort;
+		write.D[2] = 0xFF11_2233;
+		Assert.True(library.Invoke(-114, write));
+		Assert.Equal(0xFF11_2233u, bus.ReadLong(front.GuestBaseAddress));
+
+		bus.WriteLong(rastPort + 4, backBitMap);
+		write.D[2] = 0xFFAA_BBCC;
+		Assert.True(library.Invoke(-114, write));
+		Assert.Equal(0xFF11_2233u, bus.ReadLong(front.GuestBaseAddress));
+		Assert.Equal(0xFFAA_BBCCu, bus.ReadLong(back.GuestBaseAddress));
 	}
 
 	[Fact]
@@ -260,6 +444,17 @@ public sealed class CyberGraphicsLibraryTests
 		if ((operation & 2) != 0) result |= ~source & destination;
 		if ((operation & 1) != 0) result |= ~source & ~destination;
 		return (byte)result;
+	}
+
+	private static void WritePlanarBitMap(AmigaBus bus, uint bitMap, byte depth, uint firstPlane)
+	{
+		bus.WriteWord(bitMap, 2);
+		bus.WriteWord(bitMap + 2, 1);
+		bus.WriteByte(bitMap + 5, depth, 0);
+		for (var plane = 0; plane < depth; plane++)
+		{
+			bus.WriteLong(bitMap + 8u + (uint)(plane * 4), firstPlane + (uint)(plane * 0x100));
+		}
 	}
     private const uint MemoryBase = 0x0001_0000;
     private const uint BitMap = 0x0000_4000;
@@ -602,16 +797,20 @@ public sealed class CyberGraphicsLibraryTests
         InitializeLibrary(bus, layersBase, 0x6080, "layers.library", 40);
         WriteLibraryVector(bus, graphicsBase, -30, graphicsOriginal);
         WriteLibraryVector(bus, graphicsBase, -918, graphicsOriginal + 4);
+        WriteLibraryVector(bus, graphicsBase, -942, graphicsOriginal + 8);
         WriteLibraryVector(bus, intuitionBase, -252, 0x7100);
+        WriteLibraryVector(bus, intuitionBase, -768, 0x7110);
+        WriteLibraryVector(bus, intuitionBase, -774, 0x7120);
+        WriteLibraryVector(bus, intuitionBase, -780, 0x7130);
         WriteLibraryVector(bus, layersBase, -72, 0x7200);
         var services = new GuestServices(0x8000);
         var library = new CyberGraphicsLibrary(bus, services);
 
-        Assert.Equal(4, library.InstallSystemPatches(execBase));
+        Assert.Equal(8, library.InstallSystemPatches(execBase));
         Assert.Equal(
             new[] { "graphics.library", "intuition.library", "layers.library" },
             library.SystemPatches.Modules.Select(module => module.LibraryName).OrderBy(name => name));
-        Assert.Equal(4, library.SystemPatches.InstalledVectors.Count);
+        Assert.Equal(8, library.SystemPatches.InstalledVectors.Count);
 
         var nativeState = new M68kCpuState();
         nativeState.ProgramCounter = graphicsBase - 30 + 4;
@@ -621,6 +820,21 @@ public sealed class CyberGraphicsLibraryTests
         Assert.Equal(graphicsOriginal, nativeState.ProgramCounter);
         Assert.Equal(0x1122_3344u, nativeState.D[0]);
         Assert.Equal(0x5566_7788u, nativeState.A[0]);
+
+        foreach (var (offset, original) in new[]
+        {
+            (-942, graphicsOriginal + 8),
+            (-768, 0x7110u),
+            (-774, 0x7120u),
+            (-780, 0x7130u)
+        })
+        {
+            var libraryBase = offset == -942 ? graphicsBase : intuitionBase;
+            var screenBufferState = new M68kCpuState();
+            screenBufferState.ProgramCounter = AddOffset(libraryBase, offset) + 4;
+            Assert.True(InvokeInstalledTrap(bus, AddOffset(libraryBase, offset), screenBufferState));
+            Assert.Equal(original, screenBufferState.ProgramCounter);
+        }
 
         services.HandledGraphicsOffset = -918;
         var rtgState = new M68kCpuState();

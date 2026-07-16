@@ -19,7 +19,7 @@ namespace CopperMod.Amiga
 
         private uint ReadRgbPixel(uint rastPort, int x, int y)
         {
-            if (!_rastPorts.TryGetValue(rastPort, out var surface) || !surface.Contains(x, y))
+            if (!TryGetRastPortSurface(rastPort, out var surface) || !surface.Contains(x, y))
             {
                 return InvalidDisplayId;
             }
@@ -30,7 +30,7 @@ namespace CopperMod.Amiga
 
         private uint WriteRgbPixel(uint rastPort, int x, int y, uint color)
         {
-            if (!_rastPorts.TryGetValue(rastPort, out var surface) || !surface.Contains(x, y))
+            if (!TryGetRastPortSurface(rastPort, out var surface) || !surface.Contains(x, y))
             {
                 return InvalidDisplayId;
             }
@@ -41,7 +41,7 @@ namespace CopperMod.Amiga
 
         private uint ReadPixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -91,7 +91,7 @@ namespace CopperMod.Amiga
 
         private uint WritePixelArray(M68kCpuState state, bool alpha)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -150,7 +150,7 @@ namespace CopperMod.Amiga
 
         private uint ScalePixelArray(M68kCpuState state, bool alpha)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -212,7 +212,7 @@ namespace CopperMod.Amiga
 
         private uint MovePixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -258,7 +258,7 @@ namespace CopperMod.Amiga
 
         private uint InvertPixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -274,7 +274,7 @@ namespace CopperMod.Amiga
 
         private uint FillPixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return 0;
             }
@@ -291,7 +291,7 @@ namespace CopperMod.Amiga
 
         private uint ExtractColor(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[0], out var source) ||
+            if (!TryGetRastPortSurface(state.A[0], out var source) ||
                 state.A[1] == 0 ||
                 !_bus.IsMappedMemoryRange(state.A[1], 12))
             {
@@ -337,7 +337,7 @@ namespace CopperMod.Amiga
 
         private uint WriteLutPixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var destination) || state.A[2] == 0)
+            if (!TryGetRastPortSurface(state.A[1], out var destination) || state.A[2] == 0)
             {
                 return 0;
             }
@@ -383,7 +383,7 @@ namespace CopperMod.Amiga
 
         private void BltTemplateAlpha(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var destination))
+            if (!TryGetRastPortSurface(state.A[1], out var destination))
             {
                 return;
             }
@@ -424,7 +424,7 @@ namespace CopperMod.Amiga
 
         private void ProcessPixelArray(M68kCpuState state)
         {
-            if (!_rastPorts.TryGetValue(state.A[1], out var surface))
+            if (!TryGetRastPortSurface(state.A[1], out var surface))
             {
                 return;
             }
@@ -506,7 +506,7 @@ namespace CopperMod.Amiga
             }
 
             var destinationFound = destinationIsRastPort
-                ? _rastPorts.TryGetValue(state.A[1], out var destination)
+                ? TryGetRastPortSurface(state.A[1], out var destination)
                 : _bitmaps.TryGetValue(state.A[1], out destination);
             if (!destinationFound || destination == null)
             {
@@ -555,7 +555,7 @@ namespace CopperMod.Amiga
         private uint ScaleMapRastPortAlpha(M68kCpuState state)
         {
             if (!_bitmaps.TryGetValue(state.A[0], out var source) ||
-                !_rastPorts.TryGetValue(state.A[1], out var destination))
+                !TryGetRastPortSurface(state.A[1], out var destination))
             {
                 return 0;
             }
@@ -772,6 +772,29 @@ namespace CopperMod.Amiga
                     B(0, red); B(1, green); B(2, blue); B(3, alpha);
                     break;
             }
+        }
+
+        internal void WriteSurfacePen(
+            CyberGraphicsSurface surface,
+            int x,
+            int y,
+            byte pen,
+            byte writeMask = 0xFF)
+        {
+            if (writeMask == 0)
+            {
+                return;
+            }
+
+            if (surface.PixelFormat == CyberGraphicsPixelFormat.Lut8 && writeMask != 0xFF)
+            {
+                var offset = checked(y * surface.BytesPerRow + x);
+                var current = surface.ReadByte(_bus, offset);
+                surface.WriteByte(_bus, offset, (byte)((pen & writeMask) | (current & ~writeMask)));
+                return;
+            }
+
+            WriteSurfaceArgb(surface, x, y, surface.Palette[pen]);
         }
 
         private uint ReadRectanglePixel(

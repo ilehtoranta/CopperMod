@@ -141,6 +141,37 @@ namespace CopperMod.Amiga
                     destination.WriteByte(bus, offset, (byte)((result & planeMask) | (current & ~planeMask)));
                     return;
                 }
+                case CyberGraphicsPixelFormat.Rgb15:
+                case CyberGraphicsPixelFormat.Rgb15X:
+                case CyberGraphicsPixelFormat.Rgb15Pc:
+                case CyberGraphicsPixelFormat.Bgr15Pc:
+                {
+                    var littleEndian = destination.PixelFormat is
+                        CyberGraphicsPixelFormat.Rgb15Pc or CyberGraphicsPixelFormat.Bgr15Pc;
+                    var shifted = destination.PixelFormat == CyberGraphicsPixelFormat.Rgb15X;
+                    var bgr = destination.PixelFormat == CyberGraphicsPixelFormat.Bgr15Pc;
+                    var current = littleEndian
+                        ? (ushort)(destination.ReadByte(bus, offset) |
+                            (destination.ReadByte(bus, offset + 1) << 8))
+                        : (ushort)((destination.ReadByte(bus, offset) << 8) |
+                            destination.ReadByte(bus, offset + 1));
+                    var mapped = EncodeRgb15(destination.Palette[sourcePen], bgr, shifted);
+                    var mask = shifted ? 0xFFFEu : 0x7FFFu;
+                    uint EncodePen(byte pen) => EncodeRgb15(destination.Palette[pen], bgr, shifted);
+                    var result = (ushort)(operation switch
+                    {
+                        0 => EncodePen(0),
+                        3 => EncodePen((byte)~sourcePen),
+                        5 => ~current & mask,
+                        10 => current & mask,
+                        12 => mapped,
+                        15 => EncodePen(255),
+                        _ => ApplyMinterm(mapped, current, operation, mask)
+                    });
+                    destination.WriteByte(bus, offset, littleEndian ? (byte)result : (byte)(result >> 8));
+                    destination.WriteByte(bus, offset + 1, littleEndian ? (byte)(result >> 8) : (byte)result);
+                    return;
+                }
                 case CyberGraphicsPixelFormat.Rgb16:
                 {
                     var current = (ushort)((destination.ReadByte(bus, offset) << 8) |
@@ -207,6 +238,17 @@ namespace CopperMod.Amiga
             var green = (argb >> 8) & 0xFF;
             var blue = argb & 0xFF;
             return (ushort)(((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3));
+        }
+
+        private static ushort EncodeRgb15(uint argb, bool bgr, bool shifted)
+        {
+            var red = (argb >> 16) & 0xFF;
+            var green = (argb >> 8) & 0xFF;
+            var blue = argb & 0xFF;
+            var first = bgr ? blue : red;
+            var last = bgr ? red : blue;
+            var value = (ushort)(((first >> 3) << 10) | ((green >> 3) << 5) | (last >> 3));
+            return shifted ? (ushort)(value << 1) : value;
         }
     }
 }
