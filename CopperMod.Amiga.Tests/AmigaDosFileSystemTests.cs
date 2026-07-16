@@ -107,7 +107,7 @@ public sealed class AmigaDosFileSystemTests
 	public void BootControllerLaunchProgramSetsStartupRegisters()
 	{
 		var disk = CreateWorkbenchDisk();
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 		var fileSystem = new AmigaDosFileSystem(disk);
 		Assert.True(fileSystem.TryCreateLaunchRequest("Project", out var request, out var requestMessage), requestMessage);
@@ -146,7 +146,7 @@ public sealed class AmigaDosFileSystemTests
 	public void BootControllerAutoRunStartupSequenceLaunchesLoadWbFromDiskWhenSystemWorkbenchExists()
 	{
 		var disk = CreateBootableWorkbenchStartupDisk();
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -174,7 +174,7 @@ public sealed class AmigaDosFileSystemTests
 	public void BootControllerAutoRunStartupSequenceLaunchesLoadWbWhenSystemWorkbenchIsAbsent()
 	{
 		var disk = CreateBootableWorkbenchStartupDisk(includeSystemWorkbench: false);
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -204,7 +204,7 @@ public sealed class AmigaDosFileSystemTests
 			includeSystemWorkbench: false,
 			"C:LoadWB\r\nEndCLI >NIL:\r\n",
 			CreateOpenWorkbenchLibraryHunk());
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -235,7 +235,7 @@ public sealed class AmigaDosFileSystemTests
 			includeSystemWorkbench: false,
 			"C:LoadWB\r\nEndCLI >NIL:\r\n",
 			CreateLoadWorkbenchReadArgsHunk());
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -268,7 +268,7 @@ public sealed class AmigaDosFileSystemTests
 			includeSystemWorkbench: false,
 			"C:LoadWB\r\nEndCLI >NIL:\r\n",
 			CreateLoadWorkbenchReadArgsHunk());
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -304,7 +304,7 @@ public sealed class AmigaDosFileSystemTests
 			C:LoadWB
 			EndCLI >NIL:
 			""");
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,
@@ -346,7 +346,7 @@ public sealed class AmigaDosFileSystemTests
 			CreateRtsHunk(),
 			includeM68040Library: false);
 		var installDisk = CreateWorkbenchInstallSupportDisk();
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine)
 		{
 			AutoRunStartupSequence = true,

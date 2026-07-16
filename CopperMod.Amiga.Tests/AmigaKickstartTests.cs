@@ -9,7 +9,7 @@ public sealed class AmigaKickstartTests
 	{
 		var bus = new AmigaBus();
 		var allocCalled = false;
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
 
 		host.Install(bus, CreateTrapTable(allocMem: state =>
 		{
@@ -31,7 +31,7 @@ public sealed class AmigaKickstartTests
 	public void HostShim13MapsMinimalRomFontForBootPrograms()
 	{
 		var bus = new AmigaBus();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
 
 		host.Install(bus, CreateTrapTable());
 
@@ -52,7 +52,7 @@ public sealed class AmigaKickstartTests
 	public void HostShim13OpenLibraryReturnsKnownFakeLibraryBases()
 	{
 		var bus = new AmigaBus();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
 		host.Install(bus, CreateTrapTable(openLibrary: state =>
 		{
 			var name = ReadString(bus, state.A[1]);
@@ -74,7 +74,7 @@ public sealed class AmigaKickstartTests
 	{
 		var bus = new AmigaBus();
 		var requestedSize = 0u;
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
 		host.Install(bus, CreateTrapTable(allocMemAndStore: state =>
 		{
 			requestedSize = state.D[0];
@@ -98,7 +98,7 @@ public sealed class AmigaKickstartTests
 	{
 		var bus = new AmigaBus();
 		var rom = Enumerable.Range(0, 256).Select(value => (byte)value).ToArray();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
+		var host = new AmigaKickstartHost(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, rom));
 		var baseAddress = 0x0100_0000u - (uint)rom.Length;
 
 		host.Install(bus, CreateTrapTable());
@@ -114,7 +114,7 @@ public sealed class AmigaKickstartTests
 	{
 		var bus = new AmigaBus();
 		var rom = Enumerable.Range(0, 256).Select(value => (byte)(0x80 | value)).ToArray();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
+		var host = new AmigaKickstartHost(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, rom));
 		host.Install(bus, CreateTrapTable());
 
 		bus.WriteByte(0x0000_0000, 0x42, 0);
@@ -144,7 +144,7 @@ public sealed class AmigaKickstartTests
 		var bus = new AmigaBus();
 		var ableCalls = new List<uint>();
 		var setCalls = new List<uint>();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.HostShim13);
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
 		host.Install(bus, CreateTrapTable(
 			ableIcr: state =>
 			{
@@ -173,7 +173,7 @@ public sealed class AmigaKickstartTests
 		Assert.Equal(0x22u, ciaBState.D[0]);
 	}
 
-	private static AmigaKickstartTrapTable CreateTrapTable(
+	private static KickstartTrapTable CreateTrapTable(
 		Action<M68kCpuState>? nullCallback = null,
 		Action<M68kCpuState>? ok = null,
 		Action<M68kCpuState>? openLibrary = null,
@@ -195,7 +195,7 @@ public sealed class AmigaKickstartTests
 			state.D[0] = 0;
 		}
 
-		return new AmigaKickstartTrapTable(
+		return new KickstartTrapTable(
 			0x00F0_0010,
 			nullCallback ?? Ok,
 			ok ?? Ok,

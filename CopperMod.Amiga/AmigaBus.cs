@@ -165,6 +165,18 @@ namespace CopperMod.Amiga
                 => bus.WriteCpuRealFastRamLong(address, value, firstWordCycle, secondWordCycle);
         }
 
+        private readonly struct RtgVramCpuWriteTarget : ICpuWriteTarget
+        {
+            public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
+                => bus.WriteCpuRtgVramByte(address, value, grantedCycle);
+
+            public void WriteWord(AmigaBus bus, uint address, ushort value, long grantedCycle)
+                => bus.WriteCpuRtgVramWord(address, value, grantedCycle);
+
+            public void WriteLong(AmigaBus bus, uint address, uint value, long firstWordCycle, long secondWordCycle)
+                => bus.WriteCpuRtgVramLong(address, value, firstWordCycle, secondWordCycle);
+        }
+
         private readonly struct CiaCpuWriteTarget : ICpuWriteTarget
         {
             public void WriteByte(AmigaBus bus, uint address, byte value, long grantedCycle)
@@ -195,6 +207,8 @@ namespace CopperMod.Amiga
         private readonly AmigaLinearRamBackend _expansionRam;
         private readonly AmigaLinearRamBackend _realFastRam;
         private readonly AutoconfigFastRamBoard? _autoconfigFastRam;
+        private readonly RtgVramBackend _rtgVram;
+        private readonly AutoconfigRtgBoard? _autoconfigRtg;
         private readonly AutoconfigChain _autoconfig;
         private readonly Dictionary<uint, HostTrapStub> _hostTrapStubs = new Dictionary<uint, HostTrapStub>();
         private readonly Dictionary<ushort, Action<M68kCpuState>> _relocatableHostTrapStubs = new Dictionary<ushort, Action<M68kCpuState>>();
@@ -362,7 +376,8 @@ namespace CopperMod.Amiga
             bool enableDeferredCpuBusBatch = false,
             bool verifyDeferredCpuBusBatch = false,
             bool enableCopperQuiescentDiagnostics = false,
-            bool forceCpuWaitSlotReference = false)
+            bool forceCpuWaitSlotReference = false,
+            long rtgVramSize = 0)
         {
             if (chipRamSize <= 0)
             {
@@ -389,6 +404,11 @@ namespace CopperMod.Amiga
                 throw new ArgumentOutOfRangeException(nameof(realFastRamSize), realFastRamSize, "Real fast RAM size cannot be negative.");
             }
 
+            if (rtgVramSize < 0 || rtgVramSize > 2L * 1024 * 1024 * 1024)
+            {
+                throw new ArgumentOutOfRangeException(nameof(rtgVramSize), rtgVramSize, "RTG VRAM size must be between 0 and 2 GiB.");
+            }
+
             if (audioDmaMinimumPeriod <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(audioDmaMinimumPeriod), audioDmaMinimumPeriod, "Audio DMA minimum period must be positive.");
@@ -410,6 +430,10 @@ namespace CopperMod.Amiga
             _autoconfigFastRam = realFastRamSize == 0
                 ? null
                 : new AutoconfigFastRamBoard(_realFastRam);
+            _rtgVram = new RtgVramBackend(rtgVramSize);
+            _autoconfigRtg = rtgVramSize == 0 ? null : new AutoconfigRtgBoard(_rtgVram);
+            _rtgVram.AddressMapChanged += OnRtgVramAddressMapChanged;
+            _rtgVram.Written += OnRtgVramWritten;
             _hrmSlotEngine = new AgnusHrmSlotEngine(captureBusAccesses);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
@@ -441,16 +465,22 @@ namespace CopperMod.Amiga
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
             CopperHdf = new CopperHdfController(hardfiles ?? Array.Empty<AmigaHardfileConfiguration>());
-            var autoconfigBoards = new List<IAutoconfigBoard>(2);
+            var autoconfigBoards = new List<IAutoconfigBoard>(3);
             if (_autoconfigFastRam != null)
             {
                 autoconfigBoards.Add(_autoconfigFastRam);
+            }
+
+            if (_autoconfigRtg != null)
+            {
+                autoconfigBoards.Add(_autoconfigRtg);
             }
 
             autoconfigBoards.Add(CopperHdf);
             _autoconfig = new AutoconfigChain(autoconfigBoards);
             _autoconfig.BoardConfigured += OnAutoconfigBoardConfigured;
             _autoconfig.AddressMapChanged += OnAutoconfigAddressMapChanged;
+            CyberGraphics = new CyberGraphicsLibrary(this);
             Display = new OcsDisplay(this, enableLiveDisplayDma);
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
@@ -533,6 +563,8 @@ namespace CopperMod.Amiga
 
         public CopperHdfController CopperHdf { get; }
 
+        internal CyberGraphicsLibrary CyberGraphics { get; }
+
         public OcsDisplay Display { get; }
 
         internal AgnusBeamDmaScheduler Agnus { get; }
@@ -579,9 +611,13 @@ namespace CopperMod.Amiga
 
         public byte[] RealFastRam => _realFastRam.Data;
 
+        internal RtgVramBackend RtgVram => _rtgVram;
+
         internal AutoconfigChain Autoconfig => _autoconfig;
 
         internal AutoconfigFastRamBoard? AutoconfigFastRam => _autoconfigFastRam;
+
+        internal AutoconfigRtgBoard? AutoconfigRtg => _autoconfigRtg;
 
         public uint ChipDmaAddressMask { get; }
 
@@ -795,6 +831,11 @@ namespace CopperMod.Amiga
 
         private void OnAutoconfigBoardConfigured(IAutoconfigBoard board)
         {
+            if (ReferenceEquals(board, _autoconfigRtg))
+            {
+                _autoconfigRtg!.InstallBootstrapTraps(this, CyberGraphics);
+            }
+
             if (ReferenceEquals(board, CopperHdf))
             {
                 CopperHdf.InstallBootstrapTraps(this);
@@ -803,8 +844,34 @@ namespace CopperMod.Amiga
 
         private void OnAutoconfigAddressMapChanged()
         {
+            UpdateRtgVramActivation();
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBankTable();
+        }
+
+        private void OnRtgVramAddressMapChanged()
+        {
+            InvalidateInstructionFetchWindows();
+            RebuildCpuBusBankTable();
+        }
+
+        private void OnRtgVramWritten(uint address, int byteCount)
+        {
+            TouchCodePages(address, byteCount);
+            NotifyJitEligibleMemoryWritten(address, byteCount);
+        }
+
+        private void UpdateRtgVramActivation()
+        {
+            var shouldBeActive = _autoconfigRtg?.IsConfigured == true;
+            if (shouldBeActive)
+            {
+                _rtgVram.Activate();
+            }
+            else if (_rtgVram.Active)
+            {
+                _rtgVram.Deactivate(clear: false);
+            }
         }
 
         internal void ConfigureAutoconfigFastRamForHost()
@@ -820,6 +887,26 @@ namespace CopperMod.Amiga
                     "CopperStart could not assign the Autoconfig fast-RAM board because it is not first in the configuration chain.");
             }
         }
+
+        internal void ConfigureAutoconfigRtgForHost(uint baseAddress = 0x00E9_0000u)
+        {
+            if (_autoconfigRtg == null)
+            {
+                return;
+            }
+
+            if (!_autoconfig.ConfigureBoardForHost(_autoconfigRtg, baseAddress))
+            {
+                throw new AmigaEmulationException(
+                    "CopperStart could not assign the RTG Autoconfig board because it is not next in the configuration chain.");
+            }
+        }
+
+        internal uint AllocateRtgVram(long byteCount)
+            => _rtgVram.Allocate(byteCount);
+
+        internal bool FreeRtgVram(uint address)
+            => _rtgVram.Free(address);
 
         internal void EnableLiveAgnusDma()
         {
@@ -859,6 +946,7 @@ namespace CopperMod.Amiga
             _chipRam.ClearData();
             _expansionRam.ClearData();
             _autoconfig.ColdReset();
+            CyberGraphics.ResetRtgState();
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
             _hostTrapStubAddresses.Clear();
@@ -997,6 +1085,7 @@ namespace CopperMod.Amiga
             Paula.Reset();
             Disk.Reset();
             _autoconfig.ResetConfiguration();
+            CyberGraphics.ResetRtgState();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -1213,7 +1302,7 @@ namespace CopperMod.Amiga
             var target = amigaAccessKind == AmigaBusAccessKind.CpuInstructionFetch
                 ? ClassifyInstructionFetchTarget(address)
                 : ClassifyTarget(address);
-            if (target is not (AmigaBusAccessTarget.Rom or AmigaBusAccessTarget.RealFastRam))
+            if (target is not (AmigaBusAccessTarget.Rom or AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram))
             {
                 return false;
             }
@@ -1239,13 +1328,14 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (ClassifyTarget(address) != AmigaBusAccessTarget.RealFastRam)
+            var target = ClassifyTarget(address);
+            if (target is not (AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram))
             {
                 return false;
             }
 
             var lastAddress = address + (uint)(byteCount - 1);
-            return ClassifyTarget(lastAddress) == AmigaBusAccessTarget.RealFastRam;
+            return ClassifyTarget(lastAddress) == target;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2528,7 +2618,8 @@ namespace CopperMod.Amiga
 
             return IsChipRamRange(address, byteCount) ||
                 IsExpansionRamRange(address, byteCount) ||
-                IsRealFastRamRange(address, byteCount);
+                IsRealFastRamRange(address, byteCount) ||
+                _rtgVram.IsAllocatedRange(address, byteCount);
         }
 
         public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, AmigaBusAccessKind accessKind)
@@ -3933,6 +4024,11 @@ namespace CopperMod.Amiga
                 return AmigaBusAccessTarget.RealFastRam;
             }
 
+            if (_rtgVram.IsAllocatedAddress(address))
+            {
+                return AmigaBusAccessTarget.RtgVram;
+            }
+
             if (_realTimeClock != null && AmigaRealTimeClock.ContainsAddress(address))
             {
                 return AmigaBusAccessTarget.RealTimeClock;
@@ -4029,6 +4125,11 @@ namespace CopperMod.Amiga
                 return _realFastRam[realFastOffset];
             }
 
+            if (_rtgVram.TryReadByte(address, out var rtgValue))
+            {
+                return rtgValue;
+            }
+
             if (_realTimeClock != null && _realTimeClock.TryReadByte(address, out var realTimeClockValue))
             {
                 return realTimeClockValue;
@@ -4075,6 +4176,11 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (_rtgVram.IsAllocatedAddress(address))
+            {
+                return true;
+            }
+
             if (_mappedMemory.ContainsMappedAddress(address))
             {
                 return true;
@@ -4092,6 +4198,7 @@ namespace CopperMod.Amiga
             }
 
             return IsRealFastRamAddress(address) ||
+                _rtgVram.IsAllocatedAddress(address) ||
                 (_realTimeClock != null && AmigaRealTimeClock.ContainsAddress(address)) ||
                 IsExpansionRamAddress(address) ||
                 (address >= 0x00DFF000 && address < 0x00DFF200) ||
@@ -4395,6 +4502,13 @@ namespace CopperMod.Amiga
                     return false;
                 }
             }
+            else if (target == AmigaBusAccessTarget.RtgVram)
+            {
+                if (!_rtgVram.IsAllocatedRange(address, byteCount))
+                {
+                    return false;
+                }
+            }
             else if (target == AmigaBusAccessTarget.Rom)
             {
                 var lastAddress = address + (uint)(byteCount - 1);
@@ -4428,6 +4542,34 @@ namespace CopperMod.Amiga
             }
 
             var byteCount = GetJitMemoryByteCount(size);
+            var target = ClassifyTarget(address);
+            if (target == AmigaBusAccessTarget.RtgVram)
+            {
+                if (!_rtgVram.IsAllocatedRange(address, byteCount))
+                {
+                    return false;
+                }
+
+                if (size == M68kOperandSize.Byte)
+                {
+                    _rtgVram.TryWriteByte(address, (byte)value);
+                }
+                else if (size == M68kOperandSize.Word)
+                {
+                    _rtgVram.TryWriteByte(address, (byte)(value >> 8));
+                    _rtgVram.TryWriteByte(address + 1, (byte)value);
+                }
+                else
+                {
+                    _rtgVram.TryWriteByte(address, (byte)(value >> 24));
+                    _rtgVram.TryWriteByte(address + 1, (byte)(value >> 16));
+                    _rtgVram.TryWriteByte(address + 2, (byte)(value >> 8));
+                    _rtgVram.TryWriteByte(address + 3, (byte)value);
+                }
+
+                return true;
+            }
+
             if (!IsRealFastRamRange(address, byteCount))
             {
                 return false;
@@ -4569,6 +4711,7 @@ namespace CopperMod.Amiga
             return ClassifyTarget(address) is
                 AmigaBusAccessTarget.ExpansionRam or
                 AmigaBusAccessTarget.RealFastRam or
+                AmigaBusAccessTarget.RtgVram or
                 AmigaBusAccessTarget.Rom;
         }
 
@@ -4622,6 +4765,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (_rtgVram.TryGetContiguousReadMemory(address, byteCount, out memory, out offset))
+            {
+                memoryKind = M68kJitMemoryKind.FastRam;
+                return true;
+            }
+
             if (TryGetJitRomOverlayReadMemory(address, byteCount, out memory, out offset))
             {
                 memoryKind = M68kJitMemoryKind.Overlay;
@@ -4665,6 +4814,12 @@ namespace CopperMod.Amiga
                 return false;
             }
 
+            if (_rtgVram.TryGetContiguousWriteMemory(address, byteCount, out memory, out offset))
+            {
+                memoryKind = M68kJitMemoryKind.FastRam;
+                return true;
+            }
+
             if (!TryGetRealFastRamOffset(address, out var realFastOffset) ||
                 realFastOffset + byteCount > _realFastRam.Length)
             {
@@ -4687,6 +4842,12 @@ namespace CopperMod.Amiga
 
         internal void CompleteJitZeroWaitWrite(uint address, int byteCount)
         {
+            if (_rtgVram.IsAllocatedRange(address, byteCount))
+            {
+                _rtgVram.CompleteDirectWrite(address, byteCount);
+                return;
+            }
+
             TouchCodePages(address, byteCount);
             NotifyJitEligibleMemoryWritten(address, byteCount);
         }
@@ -5073,6 +5234,9 @@ namespace CopperMod.Amiga
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuByteFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
                     break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuByteFast<RtgVramCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
                 case AmigaBusAccessTarget.Cia:
                     WriteCpuByteFast<CiaCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
                     break;
@@ -5104,6 +5268,9 @@ namespace CopperMod.Amiga
                     break;
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuByteArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuByteArbitrated<RtgVramCpuWriteTarget>(address, value, access.GrantedCycle);
                     break;
                 case AmigaBusAccessTarget.Cia:
                     WriteCpuByteArbitrated<CiaCpuWriteTarget>(address, value, access.GrantedCycle);
@@ -5138,6 +5305,9 @@ namespace CopperMod.Amiga
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuWordFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
                     break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuWordFast<RtgVramCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
                 default:
                     WriteCpuWordFast<FallbackCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
                     break;
@@ -5166,6 +5336,9 @@ namespace CopperMod.Amiga
                     break;
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuWordArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle);
+                    break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuWordArbitrated<RtgVramCpuWriteTarget>(address, value, access.GrantedCycle);
                     break;
                 default:
                     WriteCpuWordArbitrated<FallbackCpuWriteTarget>(address, value, access.GrantedCycle);
@@ -5196,6 +5369,9 @@ namespace CopperMod.Amiga
                     break;
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuLongFast<RealFastRamCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
+                    break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuLongFast<RtgVramCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
                     break;
                 default:
                     WriteCpuLongFast<FallbackCpuWriteTarget>(target, address, value, ref cycle, accessKind, requestedCycle);
@@ -5229,6 +5405,9 @@ namespace CopperMod.Amiga
                     break;
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteCpuLongArbitrated<RealFastRamCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteCpuLongArbitrated<RtgVramCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
                     break;
                 default:
                     WriteCpuLongArbitrated<FallbackCpuWriteTarget>(address, value, access.GrantedCycle, secondWordCycle);
@@ -5373,6 +5552,9 @@ namespace CopperMod.Amiga
                     break;
                 case AmigaBusAccessTarget.RealFastRam:
                     WriteJitCpuDataTarget<RealFastRamCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
+                    break;
+                case AmigaBusAccessTarget.RtgVram:
+                    WriteJitCpuDataTarget<RtgVramCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
                     break;
                 case AmigaBusAccessTarget.Cia when size == M68kOperandSize.Byte:
                     WriteJitCpuDataTarget<CiaCpuWriteTarget>(address, value, size, grantedCycle, secondWordCycle);
@@ -5556,6 +5738,33 @@ namespace CopperMod.Amiga
             WriteCpuRealFastRamWord(address + 2, (ushort)value, secondWordCycle);
         }
 
+        private void WriteCpuRtgVramByte(uint address, byte value, long grantedCycle)
+        {
+            _ = grantedCycle;
+            if (!_rtgVram.TryWriteByte(address, value))
+            {
+                WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+            }
+        }
+
+        private void WriteCpuRtgVramWord(uint address, ushort value, long grantedCycle)
+        {
+            if (!_rtgVram.IsAllocatedRange(address, 2))
+            {
+                WriteRawWord(address, value, grantedCycle, default(CpuWritePolicy));
+                return;
+            }
+
+            _rtgVram.TryWriteByte(address, (byte)(value >> 8));
+            _rtgVram.TryWriteByte(address + 1, (byte)value);
+        }
+
+        private void WriteCpuRtgVramLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
+        {
+            WriteCpuRtgVramWord(address, (ushort)(value >> 16), firstWordCycle);
+            WriteCpuRtgVramWord(address + 2, (ushort)value, secondWordCycle);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteRawByte(uint address, byte value, long grantedCycle)
             => WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
@@ -5614,6 +5823,11 @@ namespace CopperMod.Amiga
                 _realFastRam[realFastOffset] = value;
                 TouchCodePage(address);
                 NotifyJitEligibleMemoryWritten(address, 1);
+                return;
+            }
+
+            if (_rtgVram.TryWriteByte(address, value))
+            {
                 return;
             }
 
@@ -5743,6 +5957,13 @@ namespace CopperMod.Amiga
                 return;
             }
 
+            if (_rtgVram.IsAllocatedRange(address, 2))
+            {
+                _rtgVram.TryWriteByte(address, (byte)(value >> 8));
+                _rtgVram.TryWriteByte(address + 1, (byte)value);
+                return;
+            }
+
             WriteRawByte(address, (byte)(value >> 8), grantedCycle, policy);
             WriteRawByte(address + 1, (byte)value, grantedCycle, policy);
         }
@@ -5809,7 +6030,9 @@ namespace CopperMod.Amiga
                 return;
             }
 
-            if (IsExpansionRamRange(address, byteCount) || IsRealFastRamRange(address, byteCount))
+            if (IsExpansionRamRange(address, byteCount) ||
+                IsRealFastRamRange(address, byteCount) ||
+                _rtgVram.IsAllocatedRange(address, byteCount))
             {
                 handler(address, byteCount);
             }
@@ -5866,6 +6089,11 @@ namespace CopperMod.Amiga
                 return _realFastRam.GetCodePageGeneration(realFastOffset);
             }
 
+            if (_rtgVram.IsAllocatedAddress(address))
+            {
+                return _rtgVram.GetCodePageGeneration(address, CodeGenerationPageShift);
+            }
+
             return 0;
         }
 
@@ -5918,6 +6146,12 @@ namespace CopperMod.Amiga
             if (TryGetRealFastRamOffset(address, out var realFastOffset))
             {
                 _realFastRam.SetCodePageGeneration(realFastOffset, generation);
+                return;
+            }
+
+            if (_rtgVram.IsAllocatedAddress(address))
+            {
+                _rtgVram.SetCodePageGeneration(address, CodeGenerationPageShift, generation);
             }
         }
 
@@ -5932,6 +6166,7 @@ namespace CopperMod.Amiga
             _chipRam.ClearCodePageGenerations();
             _expansionRam.ClearCodePageGenerations();
             _realFastRam.ClearCodePageGenerations();
+            _rtgVram.ClearCodePageGenerations();
             _codeGenerationClock = 1;
             return _codeGenerationClock;
         }

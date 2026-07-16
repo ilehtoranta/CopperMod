@@ -2872,8 +2872,8 @@ public sealed class AmigaDiskDisplayTests
     [Fact]
     public void BlitterRequestsLevelThreeInterruptOnCompletion()
     {
-        var machine = new AmigaMachine(AmigaMachineOptions
-            .ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+        var machine = new Machine(MachineOptions
+            .ForProfile(MachineProfile.A500Pal512KBoot)
             .WithLiveAgnusDma(false));
         var bus = machine.Bus;
         BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
@@ -3786,8 +3786,8 @@ public sealed class AmigaDiskDisplayTests
     [Fact]
     public void EnabledDiskBlockInterruptDispatchesLevelOneAutovector()
     {
-        var machine = new AmigaMachine(AmigaMachineOptions
-            .ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+        var machine = new Machine(MachineOptions
+            .ForProfile(MachineProfile.A500Pal512KBoot)
             .WithLiveAgnusDma(false));
         machine.Bus.WriteLong(0x64, 0x0000_2000);
         machine.Cpu.Reset(0x1000, 0x3000);

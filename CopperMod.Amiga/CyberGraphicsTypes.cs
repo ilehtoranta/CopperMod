@@ -94,6 +94,21 @@ namespace CopperMod.Amiga
         void Free(uint address, int byteCount);
 
         bool InvokeHook(uint entryAddress, uint objectAddress, uint messageAddress);
+
+        bool TryInvokeGraphicsLibraryPatch(int vectorOffset, M68kCpuState state)
+            => false;
+
+        bool TryInvokeIntuitionLibraryPatch(int vectorOffset, M68kCpuState state)
+            => false;
+
+        bool TryInvokeIntuitionLibraryPatch(
+            int vectorOffset,
+            uint originalTarget,
+            M68kCpuState state)
+            => TryInvokeIntuitionLibraryPatch(vectorOffset, state);
+
+        bool TryInvokeLayersLibraryPatch(int vectorOffset, M68kCpuState state)
+            => false;
     }
 
     internal sealed class CyberGraphicsSurface

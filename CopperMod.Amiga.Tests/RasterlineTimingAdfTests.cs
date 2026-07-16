@@ -23,9 +23,9 @@ public sealed class RasterlineTimingAdfTests
 			return;
 		}
 
-		var machine = new AmigaMachine(
-			AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(
+			MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithFloppyDriveCount(1)
 				.WithLiveAgnusDma(true));
 		var boot = new AmigaBootController(machine);

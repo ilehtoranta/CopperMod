@@ -545,6 +545,7 @@ public sealed class CopperScreenArchitectureTests
 			draft.Id = "roundtrip-settings";
 			draft.DisplayName = "Roundtrip Settings";
 			draft.RtcEnabled = false;
+			draft.RtgVramMb = 256;
 			draft.FloppyDriveCount = 3;
 			draft.PresentationOptions = new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.StableWeave);
 			draft.DriveDiskPaths[1] = diskPath;
@@ -564,6 +565,7 @@ public sealed class CopperScreenArchitectureTests
 			Assert.True(CopperScreenProfile.TryLoad(savedPath, baseDirectory, out var loaded, out var error), error);
 			Assert.Equal("roundtrip-settings", loaded.Id);
 			Assert.False(loaded.RtcEnabled);
+			Assert.Equal(256L * 1024 * 1024, loaded.RtgVramSize);
 			Assert.Equal(3, loaded.FloppyDriveCount);
 			Assert.Equal(CopperScreenLacedPresentationMode.StableWeave, loaded.PresentationOptions.LacedMode);
 			Assert.Equal(2, loaded.Input.MousePort);

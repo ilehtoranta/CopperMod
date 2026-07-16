@@ -191,7 +191,7 @@ namespace CopperMod.Amiga
 
         private static bool IsDeferredCpuBusBatchEligibleTarget(AmigaBusAccessTarget target)
             => target == AmigaBusAccessTarget.Rom ||
-                target == AmigaBusAccessTarget.RealFastRam ||
+                target is AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram ||
                 target == AmigaBusAccessTarget.ExpansionRam;
 
         private bool CanKeepDeferredCpuBusBatchForAccess(
@@ -206,12 +206,12 @@ namespace CopperMod.Amiga
 
             if (isWrite)
             {
-                return target == AmigaBusAccessTarget.RealFastRam ||
+                return target is AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram ||
                     target == AmigaBusAccessTarget.ExpansionRam;
             }
 
             return target == AmigaBusAccessTarget.Rom ||
-                target == AmigaBusAccessTarget.RealFastRam ||
+                target is AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
                 (kind == AmigaBusAccessKind.CpuInstructionFetch &&
                     target == AmigaBusAccessTarget.HostTrap);

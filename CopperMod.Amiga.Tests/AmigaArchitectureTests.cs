@@ -7,7 +7,7 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void AmigaCoreDoesNotReferencePlayerOrCustAssemblies()
 	{
-		var references = typeof(AmigaMachine).Assembly.GetReferencedAssemblies().Select(reference => reference.Name).ToHashSet();
+		var references = typeof(Machine).Assembly.GetReferencedAssemblies().Select(reference => reference.Name).ToHashSet();
 
 		Assert.DoesNotContain("CopperMod", references);
 		Assert.DoesNotContain("CopperMod.Abstractions", references);
@@ -18,11 +18,11 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void MachineProfilesCreateA500PalZeroWaitHardwareSkeletons()
 	{
-		var custMachine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500PalCustPlayback));
-		var emulatorSkeleton = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500PalFullEmulationSkeleton));
+		var custMachine = new Machine(MachineOptions.ForProfile(MachineProfile.A500PalCustPlayback));
+		var emulatorSkeleton = new Machine(MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton));
 
-		Assert.Equal(AmigaMachineProfile.A500PalCustPlayback, custMachine.Profile);
-		Assert.Equal(AmigaMachineProfile.A500PalFullEmulationSkeleton, emulatorSkeleton.Profile);
+		Assert.Equal(MachineProfile.A500PalCustPlayback, custMachine.Profile);
+		Assert.Equal(MachineProfile.A500PalFullEmulationSkeleton, emulatorSkeleton.Profile);
 		Assert.IsType<ZeroWaitBusArbiter>(custMachine.Bus.Arbiter);
 		Assert.IsType<ZeroWaitBusArbiter>(emulatorSkeleton.Bus.Arbiter);
 		Assert.True(custMachine.Options.LiveAgnusDma);
@@ -36,14 +36,14 @@ public sealed class AmigaArchitectureTests
 		Assert.True(emulatorSkeleton.Bus.LiveDisplayDmaEnabled);
 		Assert.Equal(AmigaConstants.A500PalMinimumAudioDmaPeriod, emulatorSkeleton.Options.AudioDmaMinimumPeriod);
 		Assert.Equal(AmigaConstants.A500PalMinimumAudioDmaPeriod, emulatorSkeleton.Bus.AudioDmaMinimumPeriod);
-		Assert.Equal(AmigaKickstartConfiguration.HostShim13.Description, custMachine.Kickstart.Configuration.Description);
+		Assert.Equal(KickstartConfiguration.HostShim13.Description, custMachine.Kickstart.Configuration.Description);
 	}
 
 	[Fact]
 	public void BootProfilesExposeChipOnlyAndDefaultPseudoFastMemoryLayouts()
 	{
-		var chipOnly = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KChipOnlyBoot));
-		var defaultBoot = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var chipOnly = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot));
+		var defaultBoot = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 
 		Assert.Equal(AmigaConstants.A500BootChipRamSize, chipOnly.Bus.ChipRam.Length);
 		Assert.Empty(chipOnly.Bus.ExpansionRam);
@@ -60,8 +60,8 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void MachineOptionsCanDisableDefaultBootRealTimeClock()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithRealTimeClock(false));
 
 		Assert.False(machine.Options.RealTimeClockEnabled);
@@ -71,8 +71,8 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void MachineOptionsCanAddSeparateRealFastRam()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithRealFastRam(AmigaConstants.A500JitRealFastRamSize));
 
 		Assert.Equal(AmigaConstants.A500JitRealFastRamSize, machine.Bus.RealFastRam.Length);
@@ -84,7 +84,7 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void MachineProfilesEnableLiveAgnusAndDisplayDmaByDefault()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 
 		Assert.True(machine.Options.LiveAgnusDma);
 		Assert.True(machine.Bus.LiveAgnusDmaEnabled);

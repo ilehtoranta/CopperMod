@@ -62,6 +62,150 @@ public sealed class AutoconfigBusTests
 	}
 
 	[Fact]
+	public void RtgBoardExposesSparseLinearMemoryOnlyAfterAutoconfigCompletes()
+	{
+		var bus = new AmigaBus(rtgVramSize: 2L * 1024 * 1024 * 1024);
+		var map = (IM68kStablePhysicalAddressMap)bus;
+		var generation = map.CpuPhysicalAddressMapGeneration;
+
+		Assert.Equal(0xD0, bus.ReadByte(AutoconfigChain.ZorroIIConfigBase));
+		Assert.Equal(0x10, bus.ReadByte(AutoconfigChain.ZorroIIConfigBase + 2));
+		Assert.Equal(0, bus.RtgVram.CommittedPageCount);
+		bus.ConfigureAutoconfigRtgForHost();
+		var surface = bus.AllocateRtgVram(256 * 1024);
+
+		Assert.Equal(0x8000_0000u, surface);
+		Assert.True(bus.RtgVram.Active);
+		Assert.Equal(0, bus.RtgVram.CommittedPageCount);
+		Assert.True(map.CpuPhysicalAddressMapGeneration > generation);
+		Assert.Equal(0u, bus.ReadLong(surface));
+		bus.WriteLong(surface + 0xFFFF, 0x1122_3344u);
+		Assert.Equal(0x1122_3344u, bus.ReadLong(surface + 0xFFFF));
+		Assert.Equal(2, bus.RtgVram.CommittedPageCount);
+		Assert.Equal(0u, bus.ReadLong(0xFFFF_FFFCu));
+	}
+
+	[Fact]
+	public void CpuResetDestroysRtgAllocationsBeforeReopeningTheChain()
+	{
+		var bus = new AmigaBus(rtgVramSize: 256L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var surface = bus.AllocateRtgVram(64 * 1024);
+		bus.WriteLong(surface, 0xCAFE_BABEu);
+
+		bus.ResetExternalDevices(10);
+
+		Assert.False(bus.RtgVram.Active);
+		Assert.Equal(0, bus.RtgVram.ReservedBytes);
+		Assert.Equal(0u, bus.ReadLong(surface));
+		Assert.Same(bus.AutoconfigRtg, bus.Autoconfig.CurrentBoard);
+		bus.ConfigureAutoconfigRtgForHost();
+		Assert.Equal(surface, bus.AllocateRtgVram(64 * 1024));
+		Assert.Equal(0u, bus.ReadLong(surface));
+	}
+
+	[Fact]
+	public void RtgDiagnosticResidentInstallsCyberGraphicsLibraryFromItsCopiedArea()
+	{
+		var bus = new AmigaBus(rtgVramSize: 256L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+		var board = Assert.IsType<AutoconfigRtgBoard>(bus.AutoconfigRtg);
+		var diagBase = board.ConfiguredBase + (uint)AutoconfigRtgBoard.DiagAreaOffset;
+		const uint copyBase = 0x3000;
+		for (var offset = 0; offset < AutoconfigRtgBoard.DiagAreaCopySize; offset++)
+		{
+			bus.WriteByte(copyBase + (uint)offset, bus.ReadByte(diagBase + (uint)offset), 0);
+		}
+
+		const uint execBase = 0x1000;
+		bus.WriteLong(4, execBase);
+		var state = new M68kCpuState();
+		state.A[0] = board.ConfiguredBase;
+		state.A[2] = copyBase;
+		state.A[6] = execBase;
+		var diagPoint = copyBase + (uint)AutoconfigRtgBoard.DiagPointOffset;
+		Assert.True(bus.TryInvokeHostTrap(diagPoint, bus.ReadWord(diagPoint + 2), state));
+		Assert.Equal(1u, state.D[0]);
+
+		var resident = copyBase + (uint)AutoconfigRtgBoard.ResidentOffset;
+		var residentInit = bus.ReadLong(resident + 0x16);
+		Assert.True(bus.TryInvokeHostTrap(residentInit, bus.ReadWord(residentInit + 2), state));
+
+		var libraryBase = copyBase + (uint)AutoconfigRtgBoard.LibraryBaseOffset;
+		Assert.True(board.ResidentInstalled);
+		Assert.Equal(libraryBase, board.LibraryBase);
+		Assert.Equal(libraryBase, state.D[0]);
+		Assert.True(bus.HasHostTrapStub(unchecked(libraryBase - 54u)));
+		Assert.Equal(libraryBase, bus.ReadLong(execBase + 0x17A));
+	}
+
+	[Fact]
+	public void TwoGiBRtgArenaReachesTheLastLongwordWithOnlyTouchedPagesCommitted()
+	{
+		var bus = new AmigaBus(rtgVramSize: 2L * 1024 * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+
+		Assert.Equal(0x8000_0000u, bus.AllocateRtgVram(2L * 1024 * 1024 * 1024));
+		bus.WriteLong(0x8000_0000u, 0x1122_3344u);
+		bus.WriteLong(0xFFFF_FFFCu, 0xAABB_CCDDu);
+
+		Assert.Equal(0x1122_3344u, bus.ReadLong(0x8000_0000u));
+		Assert.Equal(0xAABB_CCDDu, bus.ReadLong(0xFFFF_FFFCu));
+		Assert.Equal(2, bus.RtgVram.CommittedPageCount);
+	}
+
+	[Fact]
+	public void RtgCodeRunsInInterpreterAndJitAndSelfModificationInvalidatesIt()
+	{
+		var interpreterBus = CreateConfiguredRtg();
+		var jitBus = CreateConfiguredRtg();
+		var interpreterCode = interpreterBus.AllocateRtgVram(128 * 1024);
+		var jitCode = jitBus.AllocateRtgVram(128 * 1024);
+		Assert.Equal(interpreterCode, jitCode);
+		WriteLoop(interpreterBus, interpreterCode);
+		WriteLoop(jitBus, jitCode);
+
+		var before = jitBus.GetCodePageGeneration(jitCode);
+		jitBus.WriteWord(jitCode, 0x7000);
+		Assert.NotEqual(before, jitBus.GetCodePageGeneration(jitCode));
+
+		using var interpreter = new M68040Interpreter(
+			interpreterBus,
+			M68020CpuProfile.Ocs68040JitMaxSpeed);
+		using var jit = M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: true);
+		jit.FallbackAttributionEnabled = true;
+		interpreter.Reset(interpreterCode, interpreterCode + 0x10000);
+		jit.Reset(jitCode, jitCode + 0x10000);
+		interpreter.State.CacheControlRegister |= 1;
+		jit.State.CacheControlRegister |= 1;
+
+		var interpreted = interpreter.ExecuteInstructions(512, null, new TestBoundary());
+		var compiled = jit.ExecuteInstructions(512, 1_000_000, new TestBoundary());
+
+		Assert.Equal(interpreted, compiled);
+		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
+		Assert.Equal(interpreter.State.D[0], jit.State.D[0]);
+		Assert.True(
+			jit.Counters.TraceHits + jit.Counters.V2TraceHits > 0,
+			$"compiled={jit.Counters.CompiledTraces}, trace={jit.Counters.TraceHits}, v2={jit.Counters.V2TraceHits}, fallback={jit.Counters.FallbackInstructions}, blacklist={jit.Counters.BlacklistCount}, reasons={jit.Counters.FallbackReasonTop}");
+	}
+
+	[Theory]
+	[InlineData((int)M68kBackendKind.AccurateM68000)]
+	[InlineData((int)M68kBackendKind.JitM68000)]
+	[InlineData((int)M68kBackendKind.AccurateM68EC020)]
+	public void LinearRtgRejectsTwentyFourBitCpuProfiles(int backendValue)
+	{
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot)
+			.WithRtgVram(256L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, (M68kBackendKind)backendValue);
+
+		var exception = Assert.Throws<InvalidOperationException>(() => new Machine(options));
+		Assert.Contains("full 32-bit", exception.Message, StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
 	public void HighAddressCodeRunsInInterpreterAndJitAndTracksWrites()
 	{
 		const uint code = 0x1000_0000u;
@@ -101,12 +245,12 @@ public sealed class AutoconfigBusTests
 	public void ZorroIIIRamRejectsTwentyFourBitCpuProfiles(int backendValue)
 	{
 		var backend = (M68kBackendKind)backendValue;
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KChipOnlyBoot)
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot)
 			.WithRealFastRam(16 * 1024 * 1024)
 			.WithCpu(AmigaM68kCoreFactory.Default, backend);
 
-		var exception = Assert.Throws<InvalidOperationException>(() => new AmigaMachine(options));
+		var exception = Assert.Throws<InvalidOperationException>(() => new Machine(options));
 		Assert.Contains("full 32-bit", exception.Message, StringComparison.OrdinalIgnoreCase);
 	}
 
@@ -136,10 +280,10 @@ public sealed class AutoconfigBusTests
 		Assert.Equal(0x2000_0000u, AutoconfigFastRamBoard.GetDefaultBase(512 * 1024 * 1024));
 		Assert.Equal(0x4000_0000u, AutoconfigFastRamBoard.GetDefaultBase(1024 * 1024 * 1024));
 		Assert.Throws<ArgumentOutOfRangeException>(() =>
-			AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KChipOnlyBoot)
+			MachineOptions.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot)
 				.WithRealFastRam(16 * 1024 * 1024, 0x1080_0000u));
 		Assert.Throws<ArgumentOutOfRangeException>(() =>
-			AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KChipOnlyBoot)
+			MachineOptions.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot)
 				.WithRealFastRam(1024 * 1024 * 1024, 0x8000_0000u));
 	}
 
@@ -181,6 +325,13 @@ public sealed class AutoconfigBusTests
 			realFastRamSize: 16 * 1024 * 1024,
 			realFastRamBase: 0x1000_0000u);
 		bus.ConfigureAutoconfigFastRamForHost();
+		return bus;
+	}
+
+	private static AmigaBus CreateConfiguredRtg()
+	{
+		var bus = new AmigaBus(rtgVramSize: 256L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
 		return bus;
 	}
 

@@ -288,8 +288,8 @@ public sealed class AmigaCiaTests
 	[Fact]
 	public void KeyboardSerialInterruptDispatchesPortsIntreqAfterRecognitionDelay()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		machine.Bus.WriteLong(0x68, 0x0000_2000);
 		machine.Cpu.Reset(0x1000, 0x3000);

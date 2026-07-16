@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,7 +17,7 @@ namespace CopperMod.Amiga
         ContinueAfterBootDiskRead
     }
 
-    internal sealed class AmigaBootController
+    internal sealed partial class AmigaBootController : ICyberGraphicsGuestServices
     {
         public const uint BootBlockAddress = 0x0007_C000;
         public const uint BootEntryAddress = BootBlockAddress + 0x0C;
@@ -149,6 +154,11 @@ namespace CopperMod.Amiga
         private const int BitMapRowsOffset = 0x02;
         private const int BitMapDepthOffset = 0x05;
         private const int BitMapPlanesOffset = 0x08;
+        private const uint BitMapAttributeHeight = 0;
+        private const uint BitMapAttributeDepth = 4;
+        private const uint BitMapAttributeWidth = 8;
+        private const uint BitMapAttributeFlags = 12;
+        private const uint BitMapFlagClear = 1;
         private const int NewScreenWidthOffset = 0x04;
         private const int NewScreenHeightOffset = 0x06;
         private const int NewScreenDepthOffset = 0x08;
@@ -169,7 +179,7 @@ namespace CopperMod.Amiga
         private const int InterruptDataOffset = 0x0E;
         private const int InterruptCodeOffset = 0x12;
 
-        private readonly AmigaMachine _machine;
+        private readonly Machine _machine;
         private readonly IAmigaDiskDmaEngine _diskDma;
         private readonly BootInstructionBoundary _instructionBoundary;
         private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>(16);
@@ -179,6 +189,7 @@ namespace CopperMod.Amiga
         private readonly Dictionary<string, string> _ramDirectorySources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly Queue<SyntheticIntuiMessage> _syntheticIntuiMessages = new Queue<SyntheticIntuiMessage>();
         private readonly List<SyntheticInterruptServer> _syntheticVBlankInterruptServers = new List<SyntheticInterruptServer>();
+        private readonly Dictionary<uint, int> _allocatedRtgBitMaps = new Dictionary<uint, int>();
         private bool _bootDiskReadCompleted;
         private bool _dosBootContinuationStarted;
         private bool _dosBootBlockHeaderProbeEnabled;
@@ -258,12 +269,13 @@ namespace CopperMod.Amiga
         private bool _kickstartRomBootActive;
         private readonly RuntimeInstructionBoundary _runtimeInstructionBoundary;
 
-        public AmigaBootController(AmigaMachine machine, IAmigaDiskDmaEngine? diskDma = null)
+        public AmigaBootController(Machine machine, IAmigaDiskDmaEngine? diskDma = null)
         {
             _machine = machine ?? throw new ArgumentNullException(nameof(machine));
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
             _instructionBoundary = new BootInstructionBoundary(this);
             _runtimeInstructionBoundary = new RuntimeInstructionBoundary(this);
+            _machine.Bus.CyberGraphics.AttachGuestServices(this);
         }
 
         public AmigaFloppyDrive Drive0 => _machine.Bus.Disk.Drive0;
@@ -275,6 +287,27 @@ namespace CopperMod.Amiga
         public AmigaFloppyDrive Drive3 => _machine.Bus.Disk.Drive3;
 
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
+
+        internal CyberGraphicsLibrary CyberGraphics => _machine.Bus.CyberGraphics;
+
+        internal bool TryRenderRtgFrame(out CyberGraphicsRtgFrame frame)
+            => CyberGraphics.TryRenderRtgFrame(out frame);
+
+        internal bool TryGetRtgComposition(out CyberGraphicsDisplayComposition composition)
+            => CyberGraphics.TryBuildDisplayComposition(
+                _currentViewAddress,
+                _machine.Bus.Display.Width,
+                _machine.Bus.Display.Height,
+                out composition);
+
+        internal bool RtgScanoutSelected
+            => TryGetRtgComposition(out _) || CyberGraphics.RtgScanoutSelected;
+
+        internal void GetRtgPointerPosition(out int x, out int y)
+        {
+            x = _syntheticMouseX;
+            y = _syntheticMouseY;
+        }
 
         public bool AutoStartWorkbenchDefaultTool { get; set; } = true;
 
@@ -382,7 +415,7 @@ namespace CopperMod.Amiga
 
         private void StartKickstartRomBootCore(AmigaDiskImage? disk)
         {
-            if (_machine.Kickstart.Configuration.Backend != AmigaKickstartBackendKind.RomImage)
+            if (_machine.Kickstart.Configuration.Backend != KickstartBackendKind.RomImage)
             {
                 throw new InvalidOperationException("Kickstart ROM boot requires a ROM-backed Kickstart configuration.");
             }
@@ -426,6 +459,10 @@ namespace CopperMod.Amiga
             _dosAssigns["ENVARC"] = "Prefs/Env-Archive";
             _dosAssigns["SYS"] = string.Empty;
             _syntheticVBlankInterruptServers.Clear();
+            _allocatedRtgBitMaps.Clear();
+            _rtgOpenScreenContexts.Clear();
+            _rtgIntuitionScreens.Clear();
+            _rtgOpenScreenContinuationAddress = 0;
             _bootDiskReadCompleted = false;
             _dosBootContinuationStarted = false;
             _dosBootBlockHeaderProbeEnabled = true;
@@ -691,6 +728,11 @@ namespace CopperMod.Amiga
             bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
             bus.RegisterHostTrapStub(DosResidentInitAddress, HostInitResident);
             bus.ConfigureAutoconfigFastRamForHost();
+            bus.ConfigureAutoconfigRtgForHost();
+            if (bus.RtgVram.IsPresent)
+            {
+                CyberGraphics.InstallTrapVectors(AmigaKickstartHost.CyberGraphicsLibraryBase);
+            }
             InstallKickstartMemoryList();
             InstallHostSupervisorStack();
         }
@@ -781,9 +823,9 @@ namespace CopperMod.Amiga
             return true;
         }
 
-        private AmigaKickstartTrapTable CreateHostTrapTable()
+        private KickstartTrapTable CreateHostTrapTable()
         {
-            return new AmigaKickstartTrapTable(
+            return new KickstartTrapTable(
                 0,
                 HostNullCallback,
                 HostOk,
@@ -1730,6 +1772,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "cybergraphics"))
+            {
+                libraryBase = AmigaKickstartHost.CyberGraphicsLibraryBase;
+                return _machine.Bus.RtgVram.Active;
+            }
+
             if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "dos"))
             {
                 libraryBase = AmigaKickstartHost.DosLibraryBase;
@@ -2671,6 +2719,28 @@ namespace CopperMod.Amiga
             LogUiCall("graphics.library", displacement);
             switch (displacement)
             {
+                case -30: // BltBitMap
+                    state.D[0] = HostGraphicsBltBitMap(state);
+                    return;
+                case -552: // ClipBlit
+                    state.D[0] = HostGraphicsClipBlit(state);
+                    return;
+                case -606: // BltBitMapRastPort
+                    state.D[0] = HostGraphicsBltBitMapRastPort(state);
+                    return;
+                case -918: // AllocBitMap (V39)
+                    state.D[0] = HostGraphicsAllocBitMap(state);
+                    return;
+                case -924: // FreeBitMap (V39)
+                    HostGraphicsFreeBitMap(state.A[0]);
+                    state.D[0] = 0;
+                    return;
+                case -942: // ChangeVPBitMap (V39)
+                    state.D[0] = CyberGraphics.ChangeViewPortBitMap(state.A[0], state.A[1]) ? 0u : 1u;
+                    return;
+                case -960: // GetBitMapAttr (V39)
+                    state.D[0] = HostGraphicsGetBitMapAttr(state.A[0], state.D[1]);
+                    return;
                 case -0xD2: // MrgCop
                     state.D[0] = HostGraphicsMrgCop(state);
                     return;
@@ -2764,6 +2834,151 @@ namespace CopperMod.Amiga
             return 0;
         }
 
+        private uint HostGraphicsBltBitMap(M68kCpuState state)
+        {
+            var pixels = CyberGraphics.BlitPlanarToRtg(
+                state.A[0],
+                unchecked((short)(ushort)state.D[0]),
+                unchecked((short)(ushort)state.D[1]),
+                state.A[1],
+                unchecked((short)(ushort)state.D[2]),
+                unchecked((short)(ushort)state.D[3]),
+                unchecked((short)(ushort)state.D[4]),
+                unchecked((short)(ushort)state.D[5]),
+                (byte)state.D[6],
+                (byte)state.D[7]);
+            return pixels == 0 ? 0u : 1u;
+        }
+
+        private uint HostGraphicsClipBlit(M68kCpuState state)
+        {
+            if (!TryGetRastPortBitMap(state.A[0], out var sourceBitMap) ||
+                !TryGetRastPortBitMap(state.A[1], out var destinationBitMap))
+            {
+                return 0;
+            }
+
+            return HostGraphicsBltBitMapToRastPort(state, sourceBitMap, destinationBitMap);
+        }
+
+        private uint HostGraphicsBltBitMapRastPort(M68kCpuState state)
+        {
+            if (!TryGetRastPortBitMap(state.A[1], out var destinationBitMap))
+            {
+                return 0;
+            }
+
+            return HostGraphicsBltBitMapToRastPort(state, state.A[0], destinationBitMap);
+        }
+
+        private uint HostGraphicsBltBitMapToRastPort(
+            M68kCpuState state,
+            uint sourceBitMap,
+            uint destinationBitMap)
+        {
+            var pixels = CyberGraphics.BlitPlanarToRtg(
+                sourceBitMap,
+                unchecked((short)(ushort)state.D[0]),
+                unchecked((short)(ushort)state.D[1]),
+                destinationBitMap,
+                unchecked((short)(ushort)state.D[2]),
+                unchecked((short)(ushort)state.D[3]),
+                unchecked((short)(ushort)state.D[4]),
+                unchecked((short)(ushort)state.D[5]),
+                (byte)state.D[6],
+                0xFF);
+            return pixels == 0 ? 0u : 1u;
+        }
+
+        private uint HostGraphicsAllocBitMap(
+            M68kCpuState state,
+            CyberGraphicsPixelFormat? requestedPixelFormat = null)
+        {
+            if (state.D[0] is 0 or > 32768 || state.D[1] is 0 or > 32768 ||
+                state.D[2] is 0 or > 32 || !_machine.Bus.RtgVram.Active)
+            {
+                return 0;
+            }
+
+            var width = (int)state.D[0];
+            var height = (int)state.D[1];
+            var depth = (int)state.D[2];
+
+            CyberGraphicsPixelFormat pixelFormat;
+            if (requestedPixelFormat.HasValue)
+            {
+                pixelFormat = requestedPixelFormat.Value;
+            }
+            else if (state.A[0] != 0 && CyberGraphics.TryGetBitMapSurface(state.A[0], out var friend))
+            {
+                pixelFormat = friend.PixelFormat;
+            }
+            else
+            {
+                pixelFormat = depth <= 8
+                    ? CyberGraphicsPixelFormat.Lut8
+                    : depth <= 16
+                        ? CyberGraphicsPixelFormat.Rgb16
+                        : CyberGraphicsPixelFormat.Argb32;
+            }
+
+            var surface = CyberGraphics.AllocateRtgSurface(width, height, pixelFormat);
+            if (surface == null)
+            {
+                return 0;
+            }
+
+            const int bitMapSize = BitMapPlanesOffset + 8 * 4;
+            var bitMap = ((ICyberGraphicsGuestServices)this).Allocate(bitMapSize);
+            if (bitMap == 0)
+            {
+                CyberGraphics.FreeRtgSurface(surface);
+                return 0;
+            }
+
+            WriteRtgBitMap(bitMap, surface);
+            CyberGraphics.RegisterBitMap(bitMap, surface);
+            _allocatedRtgBitMaps[bitMap] = bitMapSize;
+            if ((state.D[3] & BitMapFlagClear) != 0)
+            {
+                _machine.Bus.ClearMemory(surface.GuestBaseAddress, checked(surface.BytesPerRow * surface.Height));
+            }
+
+            return bitMap;
+        }
+
+        private void HostGraphicsFreeBitMap(uint bitMap)
+        {
+            if (!CyberGraphics.TryGetBitMapSurface(bitMap, out var surface))
+            {
+                return;
+            }
+
+            CyberGraphics.UnregisterSurface(surface);
+            CyberGraphics.FreeRtgSurface(surface);
+            if (_allocatedRtgBitMaps.Remove(bitMap, out var byteCount))
+            {
+                ((ICyberGraphicsGuestServices)this).Free(bitMap, byteCount);
+            }
+        }
+
+        private uint HostGraphicsGetBitMapAttr(uint bitMap, uint attribute)
+        {
+            if (!CyberGraphics.TryGetBitMapSurface(bitMap, out var surface))
+            {
+                return 0;
+            }
+
+            return attribute switch
+            {
+                BitMapAttributeHeight => checked((uint)surface.Height),
+                BitMapAttributeDepth => checked((uint)surface.Depth),
+                BitMapAttributeWidth => checked((uint)surface.Width),
+                BitMapAttributeFlags => 0,
+                _ => 0
+            };
+        }
+
         private void HostIntuitionGeneric(M68kCpuState state, int displacement)
         {
             LogUiCall("intuition.library", displacement);
@@ -2785,7 +3000,14 @@ namespace CopperMod.Amiga
                     state.D[0] = 1;
                     return;
                 case -234: // ReportMouse
+                    state.D[0] = 0;
+                    return;
                 case -252: // ScreenToFront
+                    if (state.A[0] != 0)
+                    {
+                        CyberGraphics.SelectFrontViewPort(state.A[0] + ScreenViewPortOffset);
+                    }
+
                     state.D[0] = 0;
                     return;
                 case -276: // SetWindowTitles(Window, WindowTitle, ScreenTitle)
@@ -3007,7 +3229,17 @@ namespace CopperMod.Amiga
             _currentViewAddress = state.A[1];
             if (_currentViewAddress == 0)
             {
+                CyberGraphics.SelectFrontViewPort(0);
                 return;
+            }
+
+            if (TryReadLong(_currentViewAddress + ViewViewPortOffset, out var viewPort))
+            {
+                CyberGraphics.SelectFrontViewPort(viewPort);
+                if (CyberGraphics.RtgDevice?.FrontViewPort == viewPort)
+                {
+                    return;
+                }
             }
 
             _ = TryPublishCopperListFromView(_currentViewAddress, state.Cycles);
@@ -3639,6 +3871,38 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (CyberGraphics.RtgDevice?.IsAvailable == true)
+            {
+                var surface = CyberGraphics.AllocateRtgSurface(
+                    _syntheticScreenWidth,
+                    _syntheticScreenHeight,
+                    CyberGraphicsPixelFormat.Lut8);
+                if (surface == null)
+                {
+                    return false;
+                }
+
+                _syntheticPlaneAddress = surface.GuestBaseAddress;
+                _syntheticRasInfoAddress = AllocateProgramMemory(0x10);
+                _syntheticBitMapAddress = AllocateProgramMemory(BitMapPlanesOffset + 8 * 4);
+                _machine.Bus.ClearMemory(_syntheticRasInfoAddress, 0x10);
+                _machine.Bus.WriteLong(_syntheticRasInfoAddress + RasInfoBitMapOffset, _syntheticBitMapAddress);
+                WriteRtgBitMap(_syntheticBitMapAddress, surface);
+                WriteRtgBitMap(_syntheticScreenAddress + ScreenBitMapOffset, surface);
+                CyberGraphics.RegisterBitMap(_syntheticBitMapAddress, surface);
+                CyberGraphics.RegisterBitMap(_syntheticScreenAddress + ScreenBitMapOffset, surface);
+                var viewPort = GetSyntheticScreenViewPortAddress();
+                _machine.Bus.WriteLong(viewPort + ViewPortRasInfoOffset, _syntheticRasInfoAddress);
+                InitializeSyntheticRastPort(_syntheticScreenAddress + ScreenRastPortOffset, GetSyntheticScreenBitMapAddress());
+                var rastPort = EnsureSyntheticRastPort();
+                CyberGraphics.RegisterRastPort(_syntheticScreenAddress + ScreenRastPortOffset, surface);
+                CyberGraphics.RegisterRastPort(rastPort, surface);
+                CyberGraphics.RegisterViewPort(viewPort, surface);
+                CyberGraphics.SelectFrontViewPort(viewPort);
+                RenderSyntheticScreenTitle("Loading");
+                return true;
+            }
+
             var planeBytes = GetSyntheticScreenPlaneSize() * _syntheticScreenDepth;
             _syntheticPlaneAddress = AllocateMemoryFromMemList(
                 planeBytes,
@@ -3662,6 +3926,15 @@ namespace CopperMod.Amiga
             _ = EnsureSyntheticRastPort();
             RenderSyntheticScreenTitle("Loading");
             return true;
+        }
+
+        private void WriteRtgBitMap(uint bitMap, CyberGraphicsSurface surface)
+        {
+            _machine.Bus.ClearMemory(bitMap, BitMapPlanesOffset + 8 * 4);
+            _machine.Bus.WriteWord(bitMap + BitMapBytesPerRowOffset, checked((ushort)surface.BytesPerRow));
+            _machine.Bus.WriteWord(bitMap + BitMapRowsOffset, checked((ushort)surface.Height));
+            _machine.Bus.WriteByte(bitMap + BitMapDepthOffset, checked((byte)surface.Depth), 0);
+            _machine.Bus.WriteLong(bitMap + BitMapPlanesOffset, surface.GuestBaseAddress);
         }
 
         private uint GetSyntheticScreenBitMapAddress()
@@ -3969,6 +4242,12 @@ namespace CopperMod.Amiga
         private bool TryReadBitMapInfo(uint bitMap, out HostBitMapInfo info)
         {
             info = default;
+            if (CyberGraphics.TryGetBitMapSurface(bitMap, out var rtgSurface))
+            {
+                info = new HostBitMapInfo(rtgSurface);
+                return true;
+            }
+
             if (bitMap == 0 || !_machine.Bus.IsMappedMemoryRange(bitMap, BitMapPlanesOffset + 4))
             {
                 return false;
@@ -4004,6 +4283,18 @@ namespace CopperMod.Amiga
         {
             if (x < 0 || y < 0 || x >= info.Width || y >= info.Height)
             {
+                return;
+            }
+
+            if (info.RtgSurface != null)
+            {
+                var surface = info.RtgSurface;
+                var offset = checked(y * surface.BytesPerRow + x * surface.BytesPerPixel);
+                if (surface.PixelFormat == CyberGraphicsPixelFormat.Lut8)
+                {
+                    surface.WriteByte(_machine.Bus, offset, (byte)color);
+                }
+
                 return;
             }
 
@@ -6580,6 +6871,18 @@ namespace CopperMod.Amiga
                 Height = height;
                 Depth = depth;
                 Planes = planes;
+                RtgSurface = null;
+                Width = bytesPerRow * 8;
+            }
+
+            public HostBitMapInfo(CyberGraphicsSurface surface)
+            {
+                RtgSurface = surface;
+                BytesPerRow = surface.BytesPerRow;
+                Height = surface.Height;
+                Depth = surface.Depth;
+                Planes = Array.Empty<uint>();
+                Width = surface.Width;
             }
 
             public int BytesPerRow { get; }
@@ -6590,7 +6893,9 @@ namespace CopperMod.Amiga
 
             public uint[] Planes { get; }
 
-            public int Width => BytesPerRow * 8;
+            public CyberGraphicsSurface? RtgSurface { get; }
+
+            public int Width { get; }
         }
 
         private readonly struct SyntheticIntuiMessage
@@ -6639,6 +6944,20 @@ namespace CopperMod.Amiga
             public uint InterruptAddress { get; }
 
             public uint DataAddress { get; }
+        }
+
+        uint ICyberGraphicsGuestServices.Allocate(int byteCount)
+            => AllocateMemoryFromMemList(Math.Max(4, byteCount), MemfPublic | MemfClear);
+
+        void ICyberGraphicsGuestServices.Free(uint address, int byteCount)
+            => FreeMemoryToMemList(address, byteCount);
+
+        bool ICyberGraphicsGuestServices.InvokeHook(uint entryAddress, uint objectAddress, uint messageAddress)
+        {
+            _ = entryAddress;
+            _ = objectAddress;
+            _ = messageAddress;
+            return false;
         }
 
         private sealed class BootDosHandle

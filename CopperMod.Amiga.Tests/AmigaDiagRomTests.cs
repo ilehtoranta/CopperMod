@@ -19,7 +19,7 @@ public sealed class AmigaDiagRomTests
 		}
 
 		var bus = new AmigaBus();
-		var host = new AmigaKickstartHost(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
+		var host = new AmigaKickstartHost(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, rom));
 		var resetVector = BigEndian.ReadUInt32(rom, 4, "DiagROM reset program counter");
 
 		host.Install(bus, CreateTrapTable());
@@ -48,10 +48,10 @@ public sealed class AmigaDiagRomTests
 			return;
 		}
 
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, rom));
-		var machine = new AmigaMachine(options);
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, rom));
+		var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 		var blankDisk = AmigaDiskImage.FromAdfBytes(new byte[AmigaDiskImage.StandardAdfSize], "diagrom-blank.adf");
 
@@ -106,14 +106,14 @@ public sealed class AmigaDiagRomTests
 		return null;
 	}
 
-	private static AmigaKickstartTrapTable CreateTrapTable()
+	private static KickstartTrapTable CreateTrapTable()
 	{
 		static void Ok(M68kCpuState state)
 		{
 			state.D[0] = 0;
 		}
 
-		return new AmigaKickstartTrapTable(
+		return new KickstartTrapTable(
 			0x00F0_0010,
 			Ok,
 			Ok,

@@ -1,25 +1,30 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 
 namespace CopperMod.Amiga
 {
-    internal enum AmigaKickstartBackendKind
+    internal enum KickstartBackendKind
     {
         HostShim,
         RomImage
     }
 
-    internal enum AmigaKickstartVersion
+    internal enum KickstartVersion
     {
         Kickstart13,
         Kickstart20
     }
 
-    internal sealed class AmigaKickstartConfiguration
+    internal sealed class KickstartConfiguration
     {
-        private AmigaKickstartConfiguration(
-            AmigaKickstartBackendKind backend,
-            AmigaKickstartVersion version,
+        private KickstartConfiguration(
+            KickstartBackendKind backend,
+            KickstartVersion version,
             byte[]? romImage)
         {
             Backend = backend;
@@ -27,28 +32,28 @@ namespace CopperMod.Amiga
             RomImage = romImage ?? Array.Empty<byte>();
         }
 
-        public static AmigaKickstartConfiguration HostShim13 { get; } = new AmigaKickstartConfiguration(
-            AmigaKickstartBackendKind.HostShim,
-            AmigaKickstartVersion.Kickstart13,
+        public static KickstartConfiguration HostShim13 { get; } = new KickstartConfiguration(
+            KickstartBackendKind.HostShim,
+            KickstartVersion.Kickstart13,
             null);
 
-        public static AmigaKickstartConfiguration HostShim20 { get; } = new AmigaKickstartConfiguration(
-            AmigaKickstartBackendKind.HostShim,
-            AmigaKickstartVersion.Kickstart20,
+        public static KickstartConfiguration HostShim20 { get; } = new KickstartConfiguration(
+            KickstartBackendKind.HostShim,
+            KickstartVersion.Kickstart20,
             null);
 
-        public AmigaKickstartBackendKind Backend { get; }
+        public KickstartBackendKind Backend { get; }
 
-        public AmigaKickstartVersion Version { get; }
+        public KickstartVersion Version { get; }
 
         public ReadOnlyMemory<byte> RomImage { get; }
 
-        public string Description => Backend == AmigaKickstartBackendKind.HostShim
-            ? Version == AmigaKickstartVersion.Kickstart13 ? "HostShim Kickstart 1.3" : "HostShim Kickstart 2.0"
-            : Version == AmigaKickstartVersion.Kickstart13 ? "ROM Kickstart 1.3" : "ROM Kickstart 2.0";
+        public string Description => Backend == KickstartBackendKind.HostShim
+            ? Version == KickstartVersion.Kickstart13 ? "HostShim Kickstart 1.3" : "HostShim Kickstart 2.0"
+            : Version == KickstartVersion.Kickstart13 ? "ROM Kickstart 1.3" : "ROM Kickstart 2.0";
 
-        public static AmigaKickstartConfiguration FromRomImage(
-            AmigaKickstartVersion version,
+        public static KickstartConfiguration FromRomImage(
+            KickstartVersion version,
             ReadOnlySpan<byte> romImage)
         {
             if (romImage.IsEmpty)
@@ -56,16 +61,16 @@ namespace CopperMod.Amiga
                 throw new ArgumentException("A Kickstart ROM image is required.", nameof(romImage));
             }
 
-            return new AmigaKickstartConfiguration(
-                AmigaKickstartBackendKind.RomImage,
+            return new KickstartConfiguration(
+                KickstartBackendKind.RomImage,
                 version,
                 romImage.ToArray());
         }
     }
 
-    internal sealed class AmigaKickstartTrapTable
+    internal sealed class KickstartTrapTable
     {
-        public AmigaKickstartTrapTable(
+        public KickstartTrapTable(
             uint okCallbackAddress,
             Action<M68kCpuState> nullCallback,
             Action<M68kCpuState> ok,
@@ -147,26 +152,27 @@ namespace CopperMod.Amiga
         public const uint GraphicsLibraryBase = 0x00F9_0000;
         public const uint IntuitionLibraryBase = 0x00FA_0000;
         public const uint ExpansionLibraryBase = 0x00FB_0000;
+        public const uint CyberGraphicsLibraryBase = 0x00FC_0000;
         public const uint ExecStructAddress = 0x0000_2000;
         public const uint HostPathBufferAddress = 0x0000_3000;
         public const int HostPathBufferLength = 512;
 
         private const uint KickstartRomEndAddress = 0x0100_0000;
-        private readonly AmigaKickstartConfiguration _configuration;
+        private readonly KickstartConfiguration _configuration;
 
-        public AmigaKickstartHost(AmigaKickstartConfiguration? configuration = null)
+        public AmigaKickstartHost(KickstartConfiguration? configuration = null)
         {
-            _configuration = configuration ?? AmigaKickstartConfiguration.HostShim13;
+            _configuration = configuration ?? KickstartConfiguration.HostShim13;
         }
 
-        public AmigaKickstartConfiguration Configuration => _configuration;
+        public KickstartConfiguration Configuration => _configuration;
 
-        public void Install(AmigaBus bus, AmigaKickstartTrapTable traps)
+        public void Install(AmigaBus bus, KickstartTrapTable traps)
         {
             ArgumentNullException.ThrowIfNull(bus);
             ArgumentNullException.ThrowIfNull(traps);
 
-            if (_configuration.Backend == AmigaKickstartBackendKind.RomImage)
+            if (_configuration.Backend == KickstartBackendKind.RomImage)
             {
                 InstallRomImage(bus);
                 return;
@@ -175,7 +181,7 @@ namespace CopperMod.Amiga
             InstallHostShim(bus, traps);
         }
 
-        public void InstallHostShim(AmigaBus bus, AmigaKickstartTrapTable traps)
+        public void InstallHostShim(AmigaBus bus, KickstartTrapTable traps)
         {
             ArgumentNullException.ThrowIfNull(bus);
             ArgumentNullException.ThrowIfNull(traps);
@@ -199,7 +205,7 @@ namespace CopperMod.Amiga
         public void InstallRomImage(AmigaBus bus)
         {
             ArgumentNullException.ThrowIfNull(bus);
-            if (_configuration.Backend != AmigaKickstartBackendKind.RomImage)
+            if (_configuration.Backend != KickstartBackendKind.RomImage)
             {
                 throw new InvalidOperationException("InstallRomImage requires a ROM-backed Kickstart configuration.");
             }
@@ -218,7 +224,7 @@ namespace CopperMod.Amiga
             bus.MapReadOnlyMemory(KickstartRomEndAddress - (uint)image.Length, image.Span);
         }
 
-        private static void RegisterExecLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterExecLibrary(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, ExecLibraryBase, -408, traps.OpenLibrary);
             RegisterLibraryCallback(bus, ExecLibraryBase, -498, traps.OpenLibrary);
@@ -232,7 +238,7 @@ namespace CopperMod.Amiga
             RegisterLibraryCallback(bus, ExecLibraryBase, -396, traps.AllocMemAndStore);
         }
 
-        private static void RegisterDosLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterDosLibrary(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, DosLibraryBase, -30, traps.DosOpen);
             RegisterLibraryCallback(bus, DosLibraryBase, -36, traps.DosClose);
@@ -244,13 +250,13 @@ namespace CopperMod.Amiga
             RegisterLibraryCallback(bus, DosLibraryBase, -408, traps.OpenLibrary);
         }
 
-        private static void RegisterCiaResource(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterCiaResource(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterCiaResource(bus, CiaAResourceBase, traps);
             RegisterCiaResource(bus, CiaBResourceBase, traps);
         }
 
-        private static void RegisterCiaResource(AmigaBus bus, uint resourceBase, AmigaKickstartTrapTable traps)
+        private static void RegisterCiaResource(AmigaBus bus, uint resourceBase, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, resourceBase, -6, traps.AddInterrupt);
             RegisterLibraryCallback(bus, resourceBase, -12, traps.RemoveInterrupt);
@@ -258,7 +264,7 @@ namespace CopperMod.Amiga
             RegisterLibraryCallback(bus, resourceBase, -24, traps.SetIcr);
         }
 
-        private static void RegisterReqLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterReqLibrary(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, ReqLibraryBase, -6, traps.Ok);
             RegisterLibraryCallback(bus, ReqLibraryBase, -12, traps.Ok);
@@ -268,13 +274,13 @@ namespace CopperMod.Amiga
             RegisterLibraryCallback(bus, ReqLibraryBase, -408, traps.OpenLibrary);
         }
 
-        private static void RegisterIntuitionLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterIntuitionLibrary(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, IntuitionLibraryBase, -396, traps.AllocMemAndStore);
             RegisterLibraryCallback(bus, IntuitionLibraryBase, -408, traps.Ok);
         }
 
-        private static void RegisterDummyLibrary(AmigaBus bus, AmigaKickstartTrapTable traps)
+        private static void RegisterDummyLibrary(AmigaBus bus, KickstartTrapTable traps)
         {
             RegisterLibraryCallback(bus, DummyLibraryBase, -6, traps.Ok);
             RegisterLibraryCallback(bus, DummyLibraryBase, -12, traps.Ok);

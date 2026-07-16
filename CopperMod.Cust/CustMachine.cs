@@ -68,7 +68,7 @@ namespace CopperMod.Cust
         }
 
         public CustMachine(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext, IM68kBackendCoreFactory cpuFactory, M68kBackendKind cpuBackend)
-            : this(hunk, tags, loadContext, cpuFactory, cpuBackend, AmigaKickstartConfiguration.HostShim13)
+            : this(hunk, tags, loadContext, cpuFactory, cpuBackend, KickstartConfiguration.HostShim13)
         {
         }
 
@@ -78,16 +78,16 @@ namespace CopperMod.Cust
             ModuleLoadContext? loadContext,
             IM68kBackendCoreFactory cpuFactory,
             M68kBackendKind cpuBackend,
-            AmigaKickstartConfiguration kickstartConfiguration)
+            KickstartConfiguration kickstartConfiguration)
         {
             _hunk = hunk ?? throw new ArgumentNullException(nameof(hunk));
             _rawTags = tags ?? throw new ArgumentNullException(nameof(tags));
             _loadContext = loadContext;
             _segmentBases = new uint[hunk.Segments.Count];
             _listDataSegmentIndex = ResolveListDataSegmentIndex(hunk, tags);
-            Machine = new AmigaMachine(
-                AmigaMachineOptions
-                    .ForProfile(AmigaMachineProfile.A500PalCustPlayback)
+            Machine = new Machine(
+                MachineOptions
+                    .ForProfile(MachineProfile.A500PalCustPlayback)
                     .WithCpu(cpuFactory ?? throw new ArgumentNullException(nameof(cpuFactory)), cpuBackend)
                     .WithKickstart(kickstartConfiguration));
             Bus = Machine.Bus;
@@ -95,7 +95,7 @@ namespace CopperMod.Cust
             Reset(0);
         }
 
-        public AmigaMachine Machine { get; }
+        public Machine Machine { get; }
 
         public AmigaBus Bus { get; }
 
@@ -373,7 +373,7 @@ namespace CopperMod.Cust
             Bus.RegisterHostTrapStub(_hostNoOpAddress, HostNoOp);
             Machine.Kickstart.Install(
                 Bus,
-                new AmigaKickstartTrapTable(
+                new KickstartTrapTable(
                     _hostOkAddress,
                     HostNullCallback,
                     HostOk,

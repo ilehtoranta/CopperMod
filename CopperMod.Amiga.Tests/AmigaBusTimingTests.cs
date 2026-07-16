@@ -198,6 +198,28 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void CpuRetryAfterCopperCollisionPreservesM68000BusPhase()
+	{
+		var engine = new AgnusHrmSlotEngine();
+		const long collisionCycle = 20;
+		var copper = engine.ReserveCopperDmaSlot(0x1000, collisionCycle);
+
+		engine.GrantCpuDataSingleSlot(
+			AmigaBusAccessKind.CpuInstructionFetch,
+			AmigaBusAccessTarget.ChipRam,
+			0x2000,
+			AmigaBusAccessSize.Word,
+			collisionCycle,
+			isWrite: false,
+			out var grantedCycle,
+			out var completedCycle);
+
+		Assert.Equal(collisionCycle, copper.GrantedCycle);
+		Assert.Equal(collisionCycle + (2 * AgnusChipSlotScheduler.SlotCycles), grantedCycle);
+		Assert.Equal(grantedCycle + AgnusChipSlotScheduler.SlotCycles, completedCycle);
+	}
+
+	[Fact]
 	public void DmaWordReservationSamplesChipRamAtCommitGrantCycle()
 	{
 		var bus = new AmigaBus(captureBusAccesses: false);
@@ -2427,8 +2449,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void LiveCopperIntreqDispatchesAtCpuBoundaryAfterRecognitionDelay()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -2491,8 +2513,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void VAmigaTsProbe10Irq1PrologueDocumentsCurrentVhposrCadence()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -2576,8 +2598,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void VAmigaTsProbe10Irq1AtRasterLine38DocumentsDisplayDmaCadence()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -2694,8 +2716,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void VAmigaTsProbe10Irq1AtRasterLine38StoresVhposrResultBuffer()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -2790,8 +2812,8 @@ public sealed class AmigaBusTimingTests
 			string Boundaries,
 			string Phases) Run(bool enableBitplaneDma)
 		{
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithLiveAgnusDma(true)
 				.WithBusAccessLogging(true));
 			var bus = machine.Bus;
@@ -2909,8 +2931,8 @@ public sealed class AmigaBusTimingTests
 	[InlineData(0x07035E, 0x07060C)]
 	public void VAmigaTsProbe10IdleLoopCopperIrq1BoundaryIsIndependentOfHandlerAddress(int handlerAddress, int valuesAddress)
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -3079,8 +3101,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000LongRunningBraIrqAtRetirementWaitsForNextIplSample()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -3143,8 +3165,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000Probe10IntreqAtWinUaePhaseEntersHandlerAtHaa()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -3211,8 +3233,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000Probe10Irq1MicrosequenceDocumentsWinUaeEcsDifference()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -3425,8 +3447,8 @@ public sealed class AmigaBusTimingTests
 	[Fact(Skip = "Hardware reference contract from vAmigaTS probe10; current IRQ1 result buffer is late relative to expected values.")]
 	public void VAmigaTsProbe10Irq1AtRasterLine38ResultBufferMatchesReference()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -6332,13 +6354,14 @@ public sealed class AmigaBusTimingTests
 		_ = diagnostic;
 	}
 
-	[Fact(Skip = "WinUAE reference: active Copper contention still adds 162 fewer clocks after correcting CPU bus-cycle duration.")]
-	public void AccurateM68000Cycle01vPostRteDbraCadenceMatchesWinUaeReference()
+	[Fact]
+	public void AccurateM68000Cycle01vActiveCopperDbraExpiresAtWinUaeBeamPosition()
 	{
 		var result = RunCycle01vDelayLoopProbe(
 			startLine: 232,
 			startOffset: 56,
 			markerCount: 1,
+			enableCycleCopper: true,
 			inlineLoop2: true,
 			enableSyntheticVblankIrq: true,
 			useCycle01vIrq3Handler: true,
@@ -6347,8 +6370,26 @@ public sealed class AmigaBusTimingTests
 			cycle01vPostRteD3Override: 0x24DB);
 		var postRte = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete");
 		var delayStop = result.Boundaries.Single(boundary => boundary.Name == "afterDelayLoop");
+		var afterMove300 = result.Boundaries.Single(boundary => boundary.Name == "afterMove300");
+		var afterMoveF0f = result.Boundaries.Single(boundary => boundary.Name == "afterMoveF0f");
+		var afterMoveZero = result.Boundaries.Single(boundary => boundary.Name == "afterMoveZero");
+		var firstStripe = result.Writes.First(write => write.Cycle >= result.Loop2EntryCycle && write.Value == 0x0F0F);
 		var postRteBeam = result.Bus.GetPalBeamPosition(postRte.Cycle);
 		var delayStopBeam = result.Bus.GetPalBeamPosition(delayStop.Cycle);
+		var afterMove300Beam = result.Bus.GetPalBeamPosition(afterMove300.Cycle);
+		var afterMoveF0fBeam = result.Bus.GetPalBeamPosition(afterMoveF0f.Cycle);
+		var afterMoveZeroBeam = result.Bus.GetPalBeamPosition(afterMoveZero.Cycle);
+		var firstStripeBeam = result.Bus.GetPalBeamPosition(firstStripe.Cycle);
+		var stripePhases = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.InstructionProgramCounter is >= 0x109A and <= 0x10A6)
+			.ToArray();
+		var stripePhaseDiagnostic = string.Join(",", stripePhases.Select(phase =>
+		{
+			var request = phase.BusAccess?.Request.RequestedCycle ?? phase.CpuPhase.RequestedCycle;
+			var grant = phase.BusAccess?.GrantedCycle ?? request;
+			result.Bus.TryGetCommittedAgnusSlotOwner(grant, out var owner);
+			return $"pc{phase.CpuPhase.InstructionProgramCounter:X4}/{phase.CpuPhase.AccessKind}/a{phase.CpuPhase.Address:X6}/r{result.Bus.GetPalBeamPosition(request).BeamHorizontal}/g{result.Bus.GetPalBeamPosition(grant).BeamHorizontal}/{owner}";
+		}));
 		var dbraPhases = result.Bus.CpuBusPhases
 			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
 				phase.CpuPhase.RequestedCycle >= postRte.Cycle &&
@@ -6372,6 +6413,11 @@ public sealed class AmigaBusTimingTests
 		var diagnostic =
 			$"d3={postRte.D3:X4}, postRte=v{postRteBeam.BeamLine}h{postRteBeam.BeamHorizontal}, " +
 			$"delayStop=v{delayStopBeam.BeamLine}h{delayStopBeam.BeamHorizontal}, " +
+			$"move300=v{afterMove300Beam.BeamLine}h{afterMove300Beam.BeamHorizontal}, " +
+			$"moveF0f=v{afterMoveF0fBeam.BeamLine}h{afterMoveF0fBeam.BeamHorizontal}, " +
+			$"moveZero=v{afterMoveZeroBeam.BeamLine}h{afterMoveZeroBeam.BeamHorizontal}, " +
+			$"stripe=v{firstStripeBeam.BeamLine}h{firstStripeBeam.BeamHorizontal}, " +
+			$"stripePhases=[{stripePhaseDiagnostic}], " +
 			$"elapsed={delayStop.Cycle - postRte.Cycle}, phases={dbraPhases.Length}, " +
 			$"waits={waits.Length}/{waits.Sum(phase => phase.BusAccess!.Value.WaitCycles)}, " +
 			$"stageWaits={firstFetchWaits}/{secondFetchWaits}, " +
@@ -6380,10 +6426,31 @@ public sealed class AmigaBusTimingTests
 
 		Assert.True(
 			postRte.D3 == 0x24DB &&
-			(postRteBeam.BeamLine, postRteBeam.BeamHorizontal) == (2, 67) &&
 			(delayStopBeam.BeamLine, delayStopBeam.BeamHorizontal) == (212, 80) &&
-			delayStop.Cycle - postRte.Cycle == 95_366,
+			(afterMove300Beam.BeamLine, afterMove300Beam.BeamHorizontal) == (212, 84) &&
+			(afterMoveF0fBeam.BeamLine, afterMoveF0fBeam.BeamHorizontal) == (212, 88) &&
+			(afterMoveZeroBeam.BeamLine, afterMoveZeroBeam.BeamHorizontal) == (212, 92),
 			diagnostic);
+	}
+
+	[Fact(Skip = "WinUAE enters the first post-RTE DBRA at v2h67; the focused model currently enters at v2h65.")]
+	public void AccurateM68000Cycle01vPostRteBoundaryMatchesWinUaeReference()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var postRte = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete");
+		var postRteBeam = result.Bus.GetPalBeamPosition(postRte.Cycle);
+
+		Assert.Equal((2, 67), (postRteBeam.BeamLine, postRteBeam.BeamHorizontal));
 	}
 
 	[Fact(Skip = "Rebaseline after the two-CCK CPU bus cursor; current probe is v256h83 and the remaining pre-loop phase shift is under investigation.")]
@@ -7546,8 +7613,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000VAmigaTsVprobe2SourceVposrMacroDocumentsInterruptEntryBusAllocation()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -7625,8 +7692,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000VAmigaTsVprobe2CpuVisibleIrqEntryMatchesSourceCopperPhase()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -7703,8 +7770,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000VAmigaTsVprobe2HandlerPrologueDocumentsFirstVposrReadPhase()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -7753,8 +7820,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000LeaAbsoluteLongBeforeVposrReadDocumentsPrefetchPhase()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -7800,8 +7867,8 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void VAmigaTsVprobe2SourceCopperIrq1DocumentsInterruptEntryBusAllocation()
 	{
-		using var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(true)
 			.WithBusAccessLogging(true));
 		var bus = machine.Bus;
@@ -10470,11 +10537,11 @@ public sealed class AmigaBusTimingTests
 		const int mainAddress = 0x1000;
 		const int irq2Address = 0x1200;
 		const int synccpuAddress = 0x1400;
-		var options = AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var options = MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithBusAccessLogging(captureBusAccesses)
 			.WithHardwareSpecialization(true);
-		using var machine = new AmigaMachine(options);
+		using var machine = new Machine(options);
 		var bus = machine.Bus;
 		bus.CaptureCustomRegisterReadTrace(0x006, 2, 65536);
 		StartCopperListAtFrameStart(

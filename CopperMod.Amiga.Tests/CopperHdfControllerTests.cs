@@ -87,8 +87,8 @@ public sealed class CopperHdfControllerTests
 			WriteBlock(image, 4, CreatePart(NullBlock, flags: 2, "Hidden", CreateEnvironment(Dos0, bootPri: 0)));
 			File.WriteAllBytes(path, image);
 
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 			var (_, execBase, expansionBase, _) = InvokeBootstrap(bus);
@@ -141,8 +141,8 @@ public sealed class CopperHdfControllerTests
 			WriteBlock(image, 8, CreateLseg(NullBlock, hunk));
 			File.WriteAllBytes(path, image);
 
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 			var (_, execBase, _, _) = InvokeBootstrap(bus);
@@ -177,8 +177,8 @@ public sealed class CopperHdfControllerTests
 		try
 		{
 			AmigaHardfile.CreateBlank(path, 2 * AmigaHardfile.SectorSize);
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 
@@ -206,8 +206,8 @@ public sealed class CopperHdfControllerTests
 		try
 		{
 			AmigaHardfile.CreateBlank(path, 2 * AmigaHardfile.SectorSize);
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 
@@ -231,8 +231,8 @@ public sealed class CopperHdfControllerTests
 		try
 		{
 			AmigaHardfile.CreateBlank(path, 2 * AmigaHardfile.SectorSize);
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 
@@ -310,8 +310,8 @@ public sealed class CopperHdfControllerTests
 		try
 		{
 			AmigaHardfile.CreateBlank(path, 2 * AmigaHardfile.SectorSize);
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 			var unitAddress = 0x1000u;
@@ -351,8 +351,8 @@ public sealed class CopperHdfControllerTests
 		try
 		{
 			AmigaHardfile.CreateBlank(path, 4L * 1024L * 1024L * 1024L + AmigaHardfile.SectorSize);
-			using var machine = new AmigaMachine(AmigaMachineOptions
-				.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+			using var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
 			var bus = machine.Bus;
 			var unitAddress = 0x1000u;

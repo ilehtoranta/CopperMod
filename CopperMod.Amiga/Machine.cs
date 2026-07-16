@@ -9,7 +9,7 @@ using System.Linq;
 
 namespace CopperMod.Amiga
 {
-    internal readonly record struct AmigaInterruptDispatchTrace(
+    internal readonly record struct InterruptDispatchTrace(
         int Level,
         ushort ActiveInterruptBits,
         long CpuVisibleCycle,
@@ -21,13 +21,13 @@ namespace CopperMod.Amiga
 		M68000PrefetchDiagnosticState? PrefetchBefore,
 		M68000PrefetchDiagnosticState? PrefetchAfter);
 
-    internal sealed record AmigaInterruptBusPhaseTrace(
+    internal sealed record InterruptBusPhaseTrace(
         int Level,
         long CpuVisibleCycle,
         long AcceptanceCycle,
         List<AmigaCpuBusPhaseTrace> Phases);
 
-    internal enum AmigaMachineProfile
+    internal enum MachineProfile
     {
         A500PalCustPlayback,
         A500PalFullEmulationSkeleton,
@@ -35,14 +35,14 @@ namespace CopperMod.Amiga
         A500Pal512KBoot
     }
 
-    internal sealed class AmigaMachineOptions
+    internal sealed class MachineOptions
     {
-        private AmigaMachineOptions(AmigaMachineProfile profile)
+        private MachineOptions(MachineProfile profile)
         {
             Profile = profile;
         }
 
-        public AmigaMachineProfile Profile { get; }
+        public MachineProfile Profile { get; }
 
         public int ChipRamSize { get; private set; } = AmigaConstants.DefaultChipRamSize;
 
@@ -53,6 +53,8 @@ namespace CopperMod.Amiga
         public int RealFastRamSize { get; private set; }
 
         public uint RealFastRamBase { get; private set; } = AmigaConstants.A500RealFastRamBase;
+
+        public long RtgVramSize { get; private set; }
 
         public int FloppyDriveCount { get; private set; } = 1;
 
@@ -86,25 +88,25 @@ namespace CopperMod.Amiga
 
         public M68kBackendKind CpuBackend { get; private set; } = M68kBackendKind.AccurateM68000;
 
-        public AmigaKickstartConfiguration KickstartConfiguration { get; private set; } = AmigaKickstartConfiguration.HostShim13;
+        public KickstartConfiguration KickstartConfiguration { get; private set; } = KickstartConfiguration.HostShim13;
 
         public IReadOnlyList<AmigaHardfileConfiguration> Hardfiles { get; private set; } = Array.Empty<AmigaHardfileConfiguration>();
 
-        public static AmigaMachineOptions ForProfile(AmigaMachineProfile profile)
+        public static MachineOptions ForProfile(MachineProfile profile)
         {
-            var options = new AmigaMachineOptions(profile);
-            if (profile == AmigaMachineProfile.A500PalCustPlayback)
+            var options = new MachineOptions(profile);
+            if (profile == MachineProfile.A500PalCustPlayback)
             {
                 options.CaptureBusAccesses = false;
                 options.LiveDisplayDma = false;
                 options.ExpansionRamSize = 0x0001_0000;
                 options.AudioDmaMinimumPeriod = AmigaConstants.A500PalMinimumAudioDmaPeriod;
             }
-            else if (profile == AmigaMachineProfile.A500Pal512KChipOnlyBoot)
+            else if (profile == MachineProfile.A500Pal512KChipOnlyBoot)
             {
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
             }
-            else if (profile == AmigaMachineProfile.A500Pal512KBoot)
+            else if (profile == MachineProfile.A500Pal512KBoot)
             {
                 options.ChipRamSize = AmigaConstants.A500BootChipRamSize;
                 options.ExpansionRamSize = AmigaConstants.A500BootPseudoFastRamSize;
@@ -115,76 +117,76 @@ namespace CopperMod.Amiga
             return options;
         }
 
-        public AmigaMachineOptions WithCpu(IM68kBackendCoreFactory factory, M68kBackendKind backend)
+        public MachineOptions WithCpu(IM68kBackendCoreFactory factory, M68kBackendKind backend)
         {
             CpuFactory = factory ?? throw new ArgumentNullException(nameof(factory));
             CpuBackend = backend;
             return this;
         }
 
-        public AmigaMachineOptions WithKickstart(AmigaKickstartConfiguration configuration)
+        public MachineOptions WithKickstart(KickstartConfiguration configuration)
         {
             KickstartConfiguration = configuration ?? throw new ArgumentNullException(nameof(configuration));
             return this;
         }
 
-        public AmigaMachineOptions WithBusArbiter(IAmigaBusArbiter arbiter)
+        public MachineOptions WithBusArbiter(IAmigaBusArbiter arbiter)
         {
             BusArbiter = arbiter ?? throw new ArgumentNullException(nameof(arbiter));
             return this;
         }
 
-        public AmigaMachineOptions WithBusAccessLogging(bool enabled)
+        public MachineOptions WithBusAccessLogging(bool enabled)
         {
             CaptureBusAccesses = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithLiveAgnusDma(bool enabled)
+        public MachineOptions WithLiveAgnusDma(bool enabled)
         {
             LiveAgnusDma = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithLiveDisplayDma(bool enabled)
+        public MachineOptions WithLiveDisplayDma(bool enabled)
         {
             LiveDisplayDma = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithHardwareSpecialization(bool enabled)
+        public MachineOptions WithHardwareSpecialization(bool enabled)
         {
             HardwareSpecializationEnabled = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithCopperQuiescentFastPath(bool enabled, bool verify)
+        public MachineOptions WithCopperQuiescentFastPath(bool enabled, bool verify)
         {
             CopperQuiescentFastPathEnabled = enabled;
             CopperQuiescentFastPathVerifyEnabled = verify;
             return this;
         }
 
-        public AmigaMachineOptions WithCopperQuiescentDiagnostics(bool enabled)
+        public MachineOptions WithCopperQuiescentDiagnostics(bool enabled)
         {
             CopperQuiescentDiagnosticsEnabled = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithDeferredCpuBusBatch(bool enabled, bool verify)
+        public MachineOptions WithDeferredCpuBusBatch(bool enabled, bool verify)
         {
             DeferredCpuBusBatchEnabled = enabled;
             DeferredCpuBusBatchVerifyEnabled = verify;
             return this;
         }
 
-        public AmigaMachineOptions WithCpuWaitSlotReferencePath(bool enabled)
+        public MachineOptions WithCpuWaitSlotReferencePath(bool enabled)
         {
             CpuWaitSlotReferencePathEnabled = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithAudioDmaMinimumPeriod(int period)
+        public MachineOptions WithAudioDmaMinimumPeriod(int period)
         {
             if (period <= 0)
             {
@@ -195,7 +197,7 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithChipRam(int size)
+        public MachineOptions WithChipRam(int size)
         {
             if (size <= 0)
             {
@@ -216,7 +218,7 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithExpansionRam(int size, uint baseAddress = AmigaConstants.A500BootPseudoFastRamBase)
+        public MachineOptions WithExpansionRam(int size, uint baseAddress = AmigaConstants.A500BootPseudoFastRamBase)
         {
             if (size < 0)
             {
@@ -228,7 +230,7 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithRealFastRam(int size, uint? baseAddress = null)
+        public MachineOptions WithRealFastRam(int size, uint? baseAddress = null)
         {
             if (size < 0)
             {
@@ -249,7 +251,18 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithFloppyDriveCount(int count)
+        public MachineOptions WithRtgVram(long size)
+        {
+            if (size < 0 || size > 2L * 1024 * 1024 * 1024)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "RTG VRAM size must be between 0 and 2 GiB.");
+            }
+
+            RtgVramSize = size;
+            return this;
+        }
+
+        public MachineOptions WithFloppyDriveCount(int count)
         {
             if (count is < 1 or > 4)
             {
@@ -260,13 +273,13 @@ namespace CopperMod.Amiga
             return this;
         }
 
-        public AmigaMachineOptions WithRealTimeClock(bool enabled)
+        public MachineOptions WithRealTimeClock(bool enabled)
         {
             RealTimeClockEnabled = enabled;
             return this;
         }
 
-        public AmigaMachineOptions WithHardfiles(IEnumerable<AmigaHardfileConfiguration> hardfiles)
+        public MachineOptions WithHardfiles(IEnumerable<AmigaHardfileConfiguration> hardfiles)
         {
             Hardfiles = hardfiles?.ToArray() ?? Array.Empty<AmigaHardfileConfiguration>();
             return this;
@@ -278,15 +291,15 @@ namespace CopperMod.Amiga
         }
     }
 
-    internal sealed class AmigaMachine : IDisposable
+    internal sealed class Machine : IDisposable
     {
-        private List<AmigaInterruptDispatchTrace>? _interruptDispatchTrace;
+        private List<InterruptDispatchTrace>? _interruptDispatchTrace;
         private int _interruptDispatchTraceCapacity;
-        private List<AmigaInterruptBusPhaseTrace>? _interruptBusPhaseTrace;
-        private AmigaInterruptBusPhaseTrace? _activeInterruptBusPhaseTrace;
+        private List<InterruptBusPhaseTrace>? _interruptBusPhaseTrace;
+        private InterruptBusPhaseTrace? _activeInterruptBusPhaseTrace;
         private int _interruptBusPhaseWindowCycles;
 
-        public AmigaMachine(AmigaMachineOptions options)
+        public Machine(MachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
             if (options.RealFastRamSize > 8 * 1024 * 1024 &&
@@ -298,6 +311,17 @@ namespace CopperMod.Amiga
             {
                 throw new InvalidOperationException(
                     $"{options.RealFastRamSize / (1024 * 1024)} MiB of Zorro III fast RAM requires a full 32-bit MC68020, MC68030, or MC68040 backend.");
+            }
+
+            if (options.RtgVramSize != 0 &&
+                options.CpuBackend is not (
+                    M68kBackendKind.AccurateM68020 or
+                    M68kBackendKind.AccurateM68030 or
+                    M68kBackendKind.AccurateM68040 or
+                    M68kBackendKind.JitM68040))
+            {
+                throw new InvalidOperationException(
+                    "Linear RTG VRAM requires a full 32-bit MC68020, MC68030, or MC68040 backend.");
             }
 
             Bus = new AmigaBus(
@@ -321,7 +345,8 @@ namespace CopperMod.Amiga
                 options.DeferredCpuBusBatchEnabled,
                 options.DeferredCpuBusBatchVerifyEnabled,
                 options.CopperQuiescentDiagnosticsEnabled,
-                options.CpuWaitSlotReferencePathEnabled);
+                options.CpuWaitSlotReferencePathEnabled,
+                options.RtgVramSize);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {
@@ -337,9 +362,9 @@ namespace CopperMod.Amiga
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
         }
 
-        public AmigaMachineOptions Options { get; }
+        public MachineOptions Options { get; }
 
-        public AmigaMachineProfile Profile => Options.Profile;
+        public MachineProfile Profile => Options.Profile;
 
         public AmigaBus Bus { get; }
 
@@ -347,11 +372,11 @@ namespace CopperMod.Amiga
 
         public AmigaKickstartHost Kickstart { get; }
 
-        internal IReadOnlyList<AmigaInterruptDispatchTrace> InterruptDispatchTrace
-            => _interruptDispatchTrace ?? (IReadOnlyList<AmigaInterruptDispatchTrace>)Array.Empty<AmigaInterruptDispatchTrace>();
+        internal IReadOnlyList<InterruptDispatchTrace> InterruptDispatchTrace
+            => _interruptDispatchTrace ?? (IReadOnlyList<InterruptDispatchTrace>)Array.Empty<InterruptDispatchTrace>();
 
-        internal IReadOnlyList<AmigaInterruptBusPhaseTrace> InterruptBusPhaseTrace
-            => _interruptBusPhaseTrace ?? (IReadOnlyList<AmigaInterruptBusPhaseTrace>)Array.Empty<AmigaInterruptBusPhaseTrace>();
+        internal IReadOnlyList<InterruptBusPhaseTrace> InterruptBusPhaseTrace
+            => _interruptBusPhaseTrace ?? (IReadOnlyList<InterruptBusPhaseTrace>)Array.Empty<InterruptBusPhaseTrace>();
 
         internal void CaptureInterruptDispatchTrace(int capacity, int busPhaseWindowCycles = 0)
         {
@@ -360,11 +385,11 @@ namespace CopperMod.Amiga
                 throw new ArgumentOutOfRangeException(nameof(capacity));
             }
 
-            _interruptDispatchTrace = new List<AmigaInterruptDispatchTrace>(capacity);
+            _interruptDispatchTrace = new List<InterruptDispatchTrace>(capacity);
             _interruptDispatchTraceCapacity = capacity;
             _interruptBusPhaseWindowCycles = busPhaseWindowCycles;
             _interruptBusPhaseTrace = busPhaseWindowCycles > 0
-                ? new List<AmigaInterruptBusPhaseTrace>(capacity)
+                ? new List<InterruptBusPhaseTrace>(capacity)
                 : null;
             Bus.SetCpuBusPhaseObserver(busPhaseWindowCycles > 0 ? RecordInterruptBusPhase : null);
         }
@@ -443,7 +468,7 @@ namespace CopperMod.Amiga
 			if (_interruptBusPhaseTrace != null &&
 				_interruptBusPhaseTrace.Count < _interruptDispatchTraceCapacity)
 			{
-				var window = new AmigaInterruptBusPhaseTrace(
+				var window = new InterruptBusPhaseTrace(
 					level,
 					cpuVisibleCycle,
 					acceptanceCycle,
@@ -456,7 +481,7 @@ namespace CopperMod.Amiga
             var trace = _interruptDispatchTrace;
             if (trace != null && trace.Count < _interruptDispatchTraceCapacity)
             {
-                trace.Add(new AmigaInterruptDispatchTrace(
+                trace.Add(new InterruptDispatchTrace(
                     level,
                     activeInterruptBits,
                     cpuVisibleCycle,

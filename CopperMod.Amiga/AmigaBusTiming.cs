@@ -46,6 +46,7 @@ namespace CopperMod.Amiga
         ChipRam,
         ExpansionRam,
         RealFastRam,
+        RtgVram,
         RealTimeClock,
         CustomRegisters,
         Cia,

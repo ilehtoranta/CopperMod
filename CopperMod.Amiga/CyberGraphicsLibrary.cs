@@ -121,24 +121,39 @@ namespace CopperMod.Amiga
         ];
 
         private readonly AmigaBus _bus;
-        private readonly ICyberGraphicsGuestServices? _guestServices;
+        private ICyberGraphicsGuestServices? _guestServices;
+        private readonly CyberGraphicsRtgDevice? _rtgDevice;
         private readonly Dictionary<int, CyberGraphicsVector> _vectorsByOffset;
         private readonly Dictionary<uint, CyberGraphicsMode> _modes = new Dictionary<uint, CyberGraphicsMode>();
         private readonly Dictionary<uint, CyberGraphicsSurface> _bitmaps = new Dictionary<uint, CyberGraphicsSurface>();
         private readonly Dictionary<uint, CyberGraphicsSurface> _rastPorts = new Dictionary<uint, CyberGraphicsSurface>();
         private readonly Dictionary<uint, CyberGraphicsSurface> _viewPorts = new Dictionary<uint, CyberGraphicsSurface>();
+        private readonly Dictionary<uint, CyberGraphicsMode> _viewPortModes = new Dictionary<uint, CyberGraphicsMode>();
         private readonly Dictionary<uint, CyberGraphicsSurface> _locks = new Dictionary<uint, CyberGraphicsSurface>();
         private readonly Dictionary<uint, int> _modeListAllocations = new Dictionary<uint, int>();
         private readonly Dictionary<uint, uint> _viewPortDpmsLevels = new Dictionary<uint, uint>();
+        private readonly CyberGraphicsLibraryPatchManager _systemPatches;
         private uint _libraryBase;
         private uint _nextLockHandle = 1;
         private ushort _openCount;
 
-        public CyberGraphicsLibrary(AmigaBus bus, ICyberGraphicsGuestServices? guestServices = null)
+        public CyberGraphicsLibrary(
+            AmigaBus bus,
+            ICyberGraphicsGuestServices? guestServices = null,
+            CyberGraphicsRtgDevice? rtgDevice = null)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _guestServices = guestServices;
+            _rtgDevice = rtgDevice ?? (bus.RtgVram.IsPresent ? new CyberGraphicsRtgDevice(bus) : null);
+            _systemPatches = new CyberGraphicsLibraryPatchManager(bus, () => _guestServices);
             _vectorsByOffset = AllVectorArray.ToDictionary(vector => vector.Offset);
+            if (_rtgDevice != null)
+            {
+                foreach (var mode in _rtgDevice.CreateModes())
+                {
+                    RegisterMode(mode);
+                }
+            }
         }
 
         public static IReadOnlyList<CyberGraphicsVector> ApiVectors => ApiVectorArray;
@@ -149,7 +164,19 @@ namespace CopperMod.Amiga
 
         public ushort OpenCount => _openCount;
 
+        internal CyberGraphicsRtgDevice? RtgDevice => _rtgDevice;
+
+        internal CyberGraphicsLibraryPatchManager SystemPatches => _systemPatches;
+
+        internal IReadOnlyList<CyberGraphicsMode> RegisteredModes
+            => _modes.Values.OrderBy(mode => mode.DisplayId).ToArray();
+
+        internal bool RtgScanoutSelected => _rtgDevice?.FrontViewPort != 0;
+
         public Action<CyberGraphicsFunction>? CallObserved { get; set; }
+
+        internal void AttachGuestServices(ICyberGraphicsGuestServices guestServices)
+            => _guestServices = guestServices ?? throw new ArgumentNullException(nameof(guestServices));
 
         public void RegisterMode(CyberGraphicsMode mode)
         {
@@ -165,10 +192,14 @@ namespace CopperMod.Amiga
         public bool UnregisterMode(uint displayId)
             => _modes.Remove(displayId);
 
+        internal bool TryGetMode(uint displayId, out CyberGraphicsMode mode)
+            => _modes.TryGetValue(displayId, out mode);
+
         public void RegisterBitMap(uint bitMapAddress, CyberGraphicsSurface surface)
         {
             ValidateObjectAddress(bitMapAddress, nameof(bitMapAddress));
             _bitmaps[bitMapAddress] = surface ?? throw new ArgumentNullException(nameof(surface));
+            _rtgDevice?.RegisterBitMap(bitMapAddress, surface);
         }
 
         public void RegisterRastPort(uint rastPortAddress, CyberGraphicsSurface surface)
@@ -177,14 +208,34 @@ namespace CopperMod.Amiga
             _rastPorts[rastPortAddress] = surface ?? throw new ArgumentNullException(nameof(surface));
         }
 
-        public void RegisterViewPort(uint viewPortAddress, CyberGraphicsSurface surface)
+        public void RegisterViewPort(
+            uint viewPortAddress,
+            CyberGraphicsSurface surface,
+            CyberGraphicsMode? mode = null)
         {
             ValidateObjectAddress(viewPortAddress, nameof(viewPortAddress));
             _viewPorts[viewPortAddress] = surface ?? throw new ArgumentNullException(nameof(surface));
+            if (mode.HasValue)
+            {
+                _viewPortModes[viewPortAddress] = mode.Value;
+            }
+            else if (TryInferMode(surface, out var inferredMode))
+            {
+                _viewPortModes[viewPortAddress] = inferredMode;
+            }
+
+            var bitMap = _bitmaps.FirstOrDefault(pair => ReferenceEquals(pair.Value, surface)).Key;
+            if (bitMap != 0)
+            {
+                _rtgDevice?.RegisterViewPort(viewPortAddress, bitMap);
+            }
         }
 
         public bool UnregisterBitMap(uint address)
-            => _bitmaps.Remove(address);
+        {
+            _rtgDevice?.UnregisterBitMap(address);
+            return _bitmaps.Remove(address);
+        }
 
         public bool UnregisterRastPort(uint address)
             => _rastPorts.Remove(address);
@@ -192,11 +243,400 @@ namespace CopperMod.Amiga
         public bool UnregisterViewPort(uint address)
         {
             _viewPortDpmsLevels.Remove(address);
+            _viewPortModes.Remove(address);
+            _rtgDevice?.UnregisterViewPort(address);
             return _viewPorts.Remove(address);
+        }
+
+        internal void UnregisterSurface(CyberGraphicsSurface surface)
+        {
+            foreach (var address in _bitmaps
+                .Where(pair => ReferenceEquals(pair.Value, surface))
+                .Select(pair => pair.Key)
+                .ToArray())
+            {
+                _rtgDevice?.UnregisterBitMap(address);
+                _bitmaps.Remove(address);
+            }
+
+            foreach (var address in _rastPorts
+                .Where(pair => ReferenceEquals(pair.Value, surface))
+                .Select(pair => pair.Key)
+                .ToArray())
+            {
+                _rastPorts.Remove(address);
+            }
+
+            foreach (var address in _viewPorts
+                .Where(pair => ReferenceEquals(pair.Value, surface))
+                .Select(pair => pair.Key)
+                .ToArray())
+            {
+                UnregisterViewPort(address);
+            }
         }
 
         public uint GetViewPortDpmsLevel(uint address)
             => _viewPortDpmsLevels.TryGetValue(address, out var level) ? level : 0;
+
+        internal CyberGraphicsSurface? AllocateRtgSurface(
+            int width,
+            int height,
+            CyberGraphicsPixelFormat pixelFormat)
+            => _rtgDevice?.AllocateSurface(width, height, pixelFormat);
+
+        internal bool FreeRtgSurface(CyberGraphicsSurface surface)
+            => _rtgDevice?.FreeSurface(surface) == true;
+
+        internal bool TryGetBitMapSurface(uint bitMapAddress, out CyberGraphicsSurface surface)
+            => _bitmaps.TryGetValue(bitMapAddress, out surface!);
+
+        internal bool TryResolveBitMapSurface(uint bitMapAddress, out CyberGraphicsSurface surface)
+        {
+            if (_bitmaps.TryGetValue(bitMapAddress, out surface!))
+            {
+                return true;
+            }
+
+            if (bitMapAddress != 0 &&
+                _bus.IsMappedMemoryRange(bitMapAddress + 8, 4) &&
+                _rtgDevice?.TryGetSurfaceByBase(_bus.ReadLong(bitMapAddress + 8), out surface!) == true)
+            {
+                return true;
+            }
+
+            surface = null!;
+            return false;
+        }
+
+        internal bool IsRtgBitMap(uint bitMapAddress)
+            => _bitmaps.ContainsKey(bitMapAddress);
+
+        internal bool IsRtgRastPort(uint rastPortAddress)
+        {
+            if (_rastPorts.ContainsKey(rastPortAddress))
+            {
+                return true;
+            }
+
+            return rastPortAddress != 0 &&
+                _bus.IsMappedMemoryRange(rastPortAddress, 8) &&
+                IsRtgBitMap(_bus.ReadLong(rastPortAddress + 4));
+        }
+
+        internal bool IsRtgViewPort(uint viewPortAddress)
+            => _viewPorts.ContainsKey(viewPortAddress);
+
+        internal bool TryGetViewPortSurface(uint viewPortAddress, out CyberGraphicsSurface surface)
+            => _viewPorts.TryGetValue(viewPortAddress, out surface!);
+
+        internal void SelectFrontViewPort(uint viewPortAddress)
+            => _rtgDevice?.SelectFrontViewPort(viewPortAddress);
+
+        internal bool ChangeViewPortBitMap(uint viewPortAddress, uint bitMapAddress)
+        {
+            if (!_bitmaps.TryGetValue(bitMapAddress, out var surface))
+            {
+                return false;
+            }
+
+            _viewPorts[viewPortAddress] = surface;
+            _rtgDevice?.RegisterViewPort(viewPortAddress, bitMapAddress);
+            return true;
+        }
+
+        internal bool TryRenderRtgFrame(out CyberGraphicsRtgFrame frame)
+        {
+            if (_rtgDevice != null &&
+                GetViewPortDpmsLevel(_rtgDevice.FrontViewPort) == 0 &&
+                _rtgDevice.TryRenderFrontFrame(out frame))
+            {
+                return true;
+            }
+
+            frame = default;
+            return false;
+        }
+
+        internal bool TryBuildDisplayComposition(
+            uint viewAddress,
+            int planarWidth,
+            int planarHeight,
+            out CyberGraphicsDisplayComposition composition)
+        {
+            const int viewPortSize = 0x28;
+            const int nextOffset = 0x00;
+            const int widthOffset = 0x18;
+            const int heightOffset = 0x1A;
+            const int xOffset = 0x1C;
+            const int yOffset = 0x1E;
+            const int modesOffset = 0x20;
+            const int rasInfoOffset = 0x24;
+            const int rasInfoRxOffset = 0x08;
+            const int rasInfoRyOffset = 0x0A;
+            const int maximumViewPorts = 128;
+            const ushort viewPortHidden = 0x2000;
+
+            composition = null!;
+            if (viewAddress == 0 || planarWidth <= 0 || planarHeight <= 0 ||
+                !_bus.IsMappedMemoryRange(viewAddress, 4))
+            {
+                return false;
+            }
+
+            var viewPort = _bus.ReadLong(viewAddress);
+            var visited = new HashSet<uint>();
+            var layers = new List<CyberGraphicsDisplayLayer>();
+            var hasRtg = false;
+            var topIsRtg = false;
+            var topDpmsOff = false;
+            var outputWidth = planarWidth;
+            var outputHeight = planarHeight;
+            for (var count = 0;
+                viewPort != 0 && count < maximumViewPorts && visited.Add(viewPort);
+                count++)
+            {
+                if ((viewPort & 1) != 0 || !_bus.IsMappedMemoryRange(viewPort, viewPortSize))
+                {
+                    break;
+                }
+
+                var nextViewPort = _bus.ReadLong(viewPort + nextOffset);
+                if ((_bus.ReadWord(viewPort + modesOffset) & viewPortHidden) != 0)
+                {
+                    viewPort = nextViewPort;
+                    continue;
+                }
+
+                var isRtg = _viewPorts.TryGetValue(viewPort, out var surface);
+                _viewPortModes.TryGetValue(viewPort, out var mode);
+                if (isRtg && mode.DisplayId == 0)
+                {
+                    _ = TryInferMode(surface!, out mode);
+                }
+
+                if (layers.Count == 0 && isRtg)
+                {
+                    topIsRtg = true;
+                    topDpmsOff = GetViewPortDpmsLevel(viewPort) != 0;
+                    outputWidth = mode.Width != 0 ? mode.Width : surface!.Width;
+                    outputHeight = mode.Height != 0 ? mode.Height : surface!.Height;
+                }
+
+                var width = _bus.ReadWord(viewPort + widthOffset);
+                var height = _bus.ReadWord(viewPort + heightOffset);
+                if (width == 0)
+                {
+                    width = checked((ushort)Math.Min(ushort.MaxValue,
+                        isRtg ? surface!.Width : outputWidth));
+                }
+
+                if (height == 0)
+                {
+                    height = checked((ushort)Math.Min(ushort.MaxValue,
+                        isRtg ? surface!.Height : outputHeight));
+                }
+
+                var sourceX = 0;
+                var sourceY = 0;
+                var rasInfo = _bus.ReadLong(viewPort + rasInfoOffset);
+                if (rasInfo != 0 && _bus.IsMappedMemoryRange(rasInfo, rasInfoRyOffset + 2))
+                {
+                    sourceX = unchecked((short)_bus.ReadWord(rasInfo + rasInfoRxOffset));
+                    sourceY = unchecked((short)_bus.ReadWord(rasInfo + rasInfoRyOffset));
+                }
+
+                uint[]? pixels = null;
+                var sourceWidth = (int)width;
+                var sourceHeight = (int)height;
+                var background = 0xFF00_0000u;
+                var dpmsOff = false;
+                if (isRtg)
+                {
+                    hasRtg = true;
+                    sourceWidth = surface!.Width;
+                    sourceHeight = surface.Height;
+                    background = surface.PixelFormat == CyberGraphicsPixelFormat.Lut8
+                        ? surface.Palette[0]
+                        : 0xFF00_0000u;
+                    dpmsOff = GetViewPortDpmsLevel(viewPort) != 0;
+                    pixels = _rtgDevice?.GetSurfacePixels(surface);
+                }
+
+                layers.Add(new CyberGraphicsDisplayLayer(
+                    viewPort,
+                    isRtg,
+                    unchecked((short)_bus.ReadWord(viewPort + xOffset)),
+                    unchecked((short)_bus.ReadWord(viewPort + yOffset)),
+                    width,
+                    height,
+                    sourceX,
+                    sourceY,
+                    sourceWidth,
+                    sourceHeight,
+                    background,
+                    dpmsOff,
+                    pixels));
+                viewPort = nextViewPort;
+            }
+
+            if (!hasRtg || layers.Count == 0 || outputWidth <= 0 || outputHeight <= 0)
+            {
+                return false;
+            }
+
+            composition = new CyberGraphicsDisplayComposition(
+                outputWidth,
+                outputHeight,
+                topIsRtg,
+                topDpmsOff,
+                layers);
+            return true;
+        }
+
+        internal void ResetRtgState()
+        {
+            _bitmaps.Clear();
+            _rastPorts.Clear();
+            _viewPorts.Clear();
+            _viewPortModes.Clear();
+            _locks.Clear();
+            _viewPortDpmsLevels.Clear();
+            _systemPatches.Reset();
+            _rtgDevice?.Reset();
+        }
+
+        private bool TryInferMode(CyberGraphicsSurface surface, out CyberGraphicsMode mode)
+        {
+            foreach (var candidate in _modes.Values)
+            {
+                if (candidate.Width == surface.Width &&
+                    candidate.Height == surface.Height &&
+                    candidate.PixelFormat == surface.PixelFormat)
+                {
+                    mode = candidate;
+                    return true;
+                }
+            }
+
+            mode = default;
+            return false;
+        }
+
+        internal int InstallSystemPatches(uint execBase)
+            => _systemPatches.TryInstallAvailable(execBase);
+
+        internal int BlitPlanarToRtg(
+            uint sourceBitMap,
+            int sourceX,
+            int sourceY,
+            uint destinationBitMap,
+            int destinationX,
+            int destinationY,
+            int width,
+            int height,
+            byte minterm,
+            byte planeMask,
+            uint maskPlane = 0)
+        {
+            if (!_bitmaps.TryGetValue(destinationBitMap, out var destination) ||
+                destination.GuestBaseAddress == 0)
+            {
+                return 0;
+            }
+
+            return CyberGraphicsPlanarBlitter.Blit(
+                _bus,
+                sourceBitMap,
+                sourceX,
+                sourceY,
+                destination,
+                destinationX,
+                destinationY,
+                width,
+                height,
+                minterm,
+                planeMask,
+                maskPlane);
+        }
+
+        internal int BlitRtgToRtg(
+            uint sourceBitMap,
+            int sourceX,
+            int sourceY,
+            uint destinationBitMap,
+            int destinationX,
+            int destinationY,
+            int width,
+            int height,
+            byte minterm,
+            byte writeMask)
+        {
+            if (!_bitmaps.TryGetValue(sourceBitMap, out var source) ||
+                !_bitmaps.TryGetValue(destinationBitMap, out var destination) ||
+                width <= 0 || height <= 0)
+            {
+                return 0;
+            }
+
+            var pixels = new uint[checked(width * height)];
+            var valid = new bool[pixels.Length];
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var sx = sourceX + x;
+                    var sy = sourceY + y;
+                    var index = y * width + x;
+                    if (source.Contains(sx, sy))
+                    {
+                        pixels[index] = ReadSurfaceArgb(source, sx, sy);
+                        valid[index] = true;
+                    }
+                }
+            }
+
+            var operation = (byte)((minterm >> 4) & 0x0F);
+            var written = 0;
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var index = y * width + x;
+                    var dx = destinationX + x;
+                    var dy = destinationY + y;
+                    if (!valid[index] || !destination.Contains(dx, dy))
+                    {
+                        continue;
+                    }
+
+                    var sourceColor = pixels[index];
+                    var destinationColor = ReadSurfaceArgb(destination, dx, dy);
+                    var result = ApplyRtgMinterm(sourceColor, destinationColor, operation);
+                    if (destination.PixelFormat == CyberGraphicsPixelFormat.Lut8 && writeMask != 0xFF)
+                    {
+                        var sourcePen = FindNearestPaletteIndex(destination.Palette, result);
+                        var destinationPen = FindNearestPaletteIndex(destination.Palette, destinationColor);
+                        result = destination.Palette[(sourcePen & writeMask) | (destinationPen & ~writeMask)];
+                    }
+
+                    WriteSurfaceArgb(destination, dx, dy, result);
+                    written++;
+                }
+            }
+
+            return written;
+        }
+
+        private static uint ApplyRtgMinterm(uint source, uint destination, byte operation)
+        {
+            var result = 0u;
+            if ((operation & 0x8) != 0) result |= source & destination;
+            if ((operation & 0x4) != 0) result |= source & ~destination;
+            if ((operation & 0x2) != 0) result |= ~source & destination;
+            if ((operation & 0x1) != 0) result |= ~source & ~destination;
+            return result;
+        }
 
         public void InstallTrapVectors(uint libraryBase)
         {
@@ -225,6 +665,7 @@ namespace CopperMod.Amiga
             switch (vector.Function)
             {
                 case CyberGraphicsFunction.Open:
+                    _systemPatches.TryInstallAvailable(_bus.ReadLong(4));
                     _openCount++;
                     state.D[0] = _libraryBase;
                     break;

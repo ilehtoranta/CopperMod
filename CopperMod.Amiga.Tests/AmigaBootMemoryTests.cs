@@ -50,6 +50,7 @@ public sealed class AmigaBootMemoryTests
 	private const int ScreenWidthOffset = 0x0C;
 	private const int ScreenHeightOffset = 0x0E;
 	private const int ScreenViewPortOffset = 0x2C;
+	private const int ScreenRastPortOffset = 0x54;
 	private const int WindowRPortOffset = 0x32;
 	private const int WindowIdcmpFlagsOffset = 0x52;
 	private const int WindowUserPortOffset = 0x56;
@@ -86,6 +87,7 @@ public sealed class AmigaBootMemoryTests
 	private const int ViewPortDWidthOffset = 0x18;
 	private const int ViewPortDHeightOffset = 0x1A;
 	private const int ViewPortModesOffset = 0x20;
+	private const int ViewPortRasInfoOffset = 0x24;
 	private const ushort ViewModeHires = 0x8000;
 	private const uint IdcmpGadgetDown = 0x0000_0020;
 	private const uint IdcmpGadgetUp = 0x0000_0040;
@@ -121,7 +123,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void BootShimBuildsKickstartStyleMemListWithPseudoFastFirst()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
 		var fastHeader = bus.ExpansionRamBase;
@@ -150,8 +152,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void BootShimAddsRealFastBeforePseudoFastInKickstartMemList()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithRealFastRam(8 * 1024 * 1024)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
@@ -181,11 +183,11 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void KickstartRomBootReservesLowPseudoFastAlreadyUsedByRom()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithRealFastRam(8 * 1024 * 1024)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(
-				AmigaKickstartVersion.Kickstart20,
+			.WithKickstart(KickstartConfiguration.FromRomImage(
+				KickstartVersion.Kickstart20,
 				CreateMinimalKickstartRom()))
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
@@ -215,15 +217,15 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void WorkbenchSessionInstallsHostShimForRomConfiguredMachine()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
-			.WithKickstart(AmigaKickstartConfiguration.FromRomImage(AmigaKickstartVersion.Kickstart13, new byte[8]))
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, new byte[8]))
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 
 		boot.StartWorkbenchSession(CreateBootableDisk());
 
-		Assert.Equal(AmigaKickstartBackendKind.RomImage, machine.Kickstart.Configuration.Backend);
+		Assert.Equal(KickstartBackendKind.RomImage, machine.Kickstart.Configuration.Backend);
 		Assert.Equal(AmigaKickstartHost.ExecStructAddress, machine.Bus.ReadLong(0));
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Bus.ReadLong(4));
 		Assert.Equal(AmigaKickstartHost.ExecLibraryBase, machine.Cpu.State.A[6]);
@@ -235,7 +237,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void ChipOnlyBootProfileKeepsMemListMetadataOutOfPublicLowMemory()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KChipOnlyBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KChipOnlyBoot);
 		var bus = machine.Bus;
 		var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
 		var privateBase = (uint)bus.ChipRam.Length - PrivateMetadataSize;
@@ -257,7 +259,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void AllocMemAvailMemAndFreeMemUseKickstartMemListChunks()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var fastHeader = bus.ExpansionRamBase;
 		var chipHeader = fastHeader + 0x40;
@@ -288,7 +290,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void ChipOnlyAllocMemCanReturnLowChipMemoryAboveSupervisorStack()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KChipOnlyBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KChipOnlyBoot);
 		var bus = machine.Bus;
 		var chipHeader = (uint)bus.ChipRam.Length - PrivateMetadataSize + ChipOnlyMemHeaderOffset;
 		var allocatableBytes = bus.ReadLong(chipHeader + MemHeaderFreeOffset);
@@ -303,7 +305,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void ExecBaseCaptureVectorsAreWritableRuntimeState()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var execBase = AmigaKickstartHost.ExecLibraryBase;
 
@@ -319,7 +321,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void AllocMemOnlyClearsMemoryWhenMemfClearIsRequested()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var expectedAddress = ChipPublicLowerAddress;
 		bus.WriteLong(expectedAddress, 0xAABBCCDD);
@@ -329,7 +331,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(expectedAddress, allocation);
 		Assert.Equal(0xAABBCCDDu, bus.ReadLong(allocation));
 
-		machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		bus = machine.Bus;
 		bus.WriteLong(expectedAddress, 0xAABBCCDD);
 
@@ -342,7 +344,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void AllocAbsReservesFixedAddressFromKickstartMemList()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var chipHeader = bus.ExpansionRamBase + 0x40;
 		var initialChipFree = bus.ReadLong(chipHeader + MemHeaderFreeOffset);
@@ -369,7 +371,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void DoIoReadClearsIoErrorAndReportsActualLength()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var io = AmigaBootController.BootIoRequestAddress;
 		var state = new M68kCpuState();
@@ -391,7 +393,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void SuperStateReturnsSupervisorStackAndKeepsUserStackActive()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var state = new M68kCpuState();
 		state.ResetStackPointers(supervisorStackPointer: 0x400, userStackPointer: 0x2000, supervisorMode: false);
 		state.SetActiveStackPointer(0x1FFC);
@@ -413,7 +415,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void FindTaskAndTrapAllocationUseCurrentTask()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var state = new M68kCpuState();
 
 		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -294), state));
@@ -443,7 +445,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void BootRunnerExecutesTrapVectorCodeAtSupervisorStackPage()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(
@@ -461,7 +463,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void DefaultTrapVectorDispatchesThroughCurrentTaskTrapCode()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(
@@ -477,7 +479,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostTaskTrapVectorsRefreshAfterGuestClearsProbeVectors()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
 		var bus = machine.Bus;
@@ -501,7 +503,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostLineFTaskTrapSkipsDecodedM68040FpuProbe()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2000;
 		const uint stackTop = 0x0000_7000;
@@ -528,7 +530,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostTaskTrapRecoversZeroVectorLineFProbeFrame()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions.ForProfile(AmigaMachineProfile.A500Pal512KBoot));
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
 		var bus = machine.Bus;
@@ -556,7 +558,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostLineATaskTrapSkipsProbeOpcode()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2200;
 		const uint stackTop = 0x0000_7200;
@@ -582,7 +584,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostIllegalInstructionTaskTrapSkipsIllegalProbeOpcode()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2400;
 		const uint stackTop = 0x0000_7400;
@@ -608,7 +610,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostBusErrorTaskTrapSkipsDecodedProbeInstruction()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2500;
 		const uint stackTop = 0x0000_7500;
@@ -635,7 +637,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostBusErrorTaskTrapPopsLegacyBusFrame()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2700;
 		const uint stackTop = 0x0000_7700;
@@ -664,7 +666,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostDefaultTaskTrapPopsLegacyBusFrameThatLooksLikeVectorPrefix()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0002_2300;
 		const uint stackTop = 0x0000_7800;
@@ -692,7 +694,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostBusErrorTaskTrapReturnsFromUnmappedFetchProbe()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint faultAddress = 0x0008_0004;
 		const uint returnAddress = 0x0000_2800;
@@ -722,7 +724,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void HostPrivilegeTaskTrapSkipsMovecProbeOpcode()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint codeAddress = 0x0000_2600;
 		const uint stackTop = 0x0000_7600;
@@ -749,7 +751,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void RethinkDisplayPublishesCurrentViewCopperList()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		WriteCopperColorList(bus, 0x2400, 0x0F00);
 		WriteCopperColorList(bus, 0x2600, 0x00F0);
@@ -768,9 +770,230 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void GraphicsV39AllocatesLinearRtgBitMapsAndBltBitMapRastPortCopiesPlanarPixels()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(256L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+
+		var alloc = new M68kCpuState();
+		alloc.D[0] = 16;
+		alloc.D[1] = 1;
+		alloc.D[2] = 8;
+		alloc.D[3] = 1;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -918), alloc));
+		var destinationBitMap = alloc.D[0];
+		Assert.NotEqual(0u, destinationBitMap);
+		var destination = bus.ReadLong(destinationBitMap + BitMapPlanesOffset);
+		Assert.Equal(0x8000_0000u, destination);
+
+		var getWidth = new M68kCpuState();
+		getWidth.A[0] = destinationBitMap;
+		getWidth.D[1] = 8;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -960), getWidth));
+		Assert.Equal(16u, getWidth.D[0]);
+
+		const uint sourceBitMap = 0x2600;
+		const uint sourcePlane = 0x2700;
+		const uint destinationRastPort = 0x2800;
+		bus.WriteWord(sourceBitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(sourceBitMap + BitMapRowsOffset, 1);
+		bus.WriteByte(sourceBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteLong(sourceBitMap + BitMapPlanesOffset, sourcePlane);
+		bus.WriteWord(sourcePlane, 0x8000);
+		bus.WriteLong(destinationRastPort + RastPortBitMapOffset, destinationBitMap);
+		bus.WriteByte(destinationRastPort + 0x18, 0xFF, 0);
+		var blit = new M68kCpuState();
+		blit.A[0] = sourceBitMap;
+		blit.A[1] = destinationRastPort;
+		blit.D[4] = 1;
+		blit.D[5] = 1;
+		blit.D[6] = 0xC0;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -606), blit));
+		Assert.Equal(1u, blit.D[0]);
+		Assert.Equal((byte)1, bus.ReadByte(destination));
+
+		var free = new M68kCpuState();
+		free.A[0] = destinationBitMap;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -924), free));
+		Assert.False(bus.RtgVram.IsAllocatedAddress(destination));
+	}
+
+	[Fact]
+	public void GraphicsPatchesPublishRtgDisplayDatabaseAndBestMode()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(256L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var patches = Assert.IsAssignableFrom<ICyberGraphicsGuestServices>(boot);
+		var next = new M68kCpuState();
+		next.D[0] = uint.MaxValue;
+
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-732, next));
+		Assert.Equal(0x4350_0011u, next.D[0]);
+		var find = new M68kCpuState();
+		find.D[0] = next.D[0];
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-726, find));
+		Assert.Equal(next.D[0], find.D[0]);
+
+		const uint nameInfo = 0x2800;
+		var info = new M68kCpuState();
+		info.A[0] = next.D[0];
+		info.A[1] = nameInfo;
+		info.D[0] = 0x38;
+		info.D[1] = 0x8000_3000;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-756, info));
+		Assert.Equal(0x38u, info.D[0]);
+		Assert.Equal(0x8000_3000u, machine.Bus.ReadLong(nameInfo));
+		Assert.Equal(0x4350_0011u, machine.Bus.ReadLong(nameInfo + 4));
+		Assert.StartsWith("Copper RTG 640x480 LUT8", ReadCString(machine.Bus, nameInfo + 0x10, 32));
+
+		const uint bestTags = 0x2900;
+		machine.Bus.WriteLong(bestTags + 0x00, 0x8000_0004);
+		machine.Bus.WriteLong(bestTags + 0x04, 640);
+		machine.Bus.WriteLong(bestTags + 0x08, 0x8000_0005);
+		machine.Bus.WriteLong(bestTags + 0x0C, 480);
+		machine.Bus.WriteLong(bestTags + 0x10, 0x8000_0008);
+		machine.Bus.WriteLong(bestTags + 0x14, 8);
+		machine.Bus.WriteLong(bestTags + 0x18, 0);
+		var best = new M68kCpuState();
+		best.A[0] = bestTags;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-1050, best));
+		Assert.Equal(0x4350_0011u, best.D[0]);
+
+		var available = new M68kCpuState();
+		available.D[0] = best.D[0];
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-798, available));
+		Assert.Equal(0u, available.D[0]);
+	}
+
+	[Fact]
+	public void OpenScreenTagListOnlyWrapsRegisteredRtgModeAndAssociatesIntuitionObjects()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(256L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var patches = Assert.IsAssignableFrom<ICyberGraphicsGuestServices>(boot);
+		const uint tags = 0x2200;
+		const uint stack = 0x2300;
+		const uint originalTarget = 0x0001_8000;
+		const uint callerReturn = 0x0001_9000;
+		const uint screen = 0x3000;
+		const uint screenBitMapShell = 0x3500;
+
+		bus.WriteLong(tags, 0x8000_0032); // SA_DisplayID
+		bus.WriteLong(tags + 4, 0x0002_1000); // PAL_MONITOR_ID: native
+		bus.WriteLong(tags + 8, 0);
+		bus.WriteLong(stack, callerReturn);
+		var open = new M68kCpuState();
+		open.A[1] = tags;
+		open.A[7] = stack;
+		Assert.False(patches.TryInvokeIntuitionLibraryPatch(-612, originalTarget, open));
+		Assert.Equal(callerReturn, bus.ReadLong(stack));
+
+		bus.WriteLong(tags + 4, 0x4350_0011); // Copper RTG 640x480 LUT8
+		Assert.True(patches.TryInvokeIntuitionLibraryPatch(-612, originalTarget, open));
+		Assert.Equal(originalTarget, open.ProgramCounter);
+		var continuation = bus.ReadLong(stack);
+		Assert.NotEqual(callerReturn, continuation);
+		Assert.True(bus.HasHostTrapStub(continuation));
+
+		var alloc = new M68kCpuState();
+		alloc.D[0] = 640;
+		alloc.D[1] = 480;
+		alloc.D[2] = 8;
+		alloc.D[3] = 1;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-918, alloc));
+		var bitMap = alloc.D[0];
+		Assert.NotEqual(0u, bitMap);
+		var vram = bus.ReadLong(bitMap + BitMapPlanesOffset);
+		Assert.Equal(0x8000_0000u, vram);
+
+		// A CyberGraphX screen may expose only an opaque/empty BitMap shell.
+		// Association must not depend on Planes[0] containing the VRAM address.
+		bus.WriteLong(screen + ScreenRastPortOffset + RastPortBitMapOffset, screenBitMapShell);
+		const uint rasInfo = 0x3400;
+		bus.WriteLong(screen + ScreenViewPortOffset + ViewPortRasInfoOffset, rasInfo);
+		bus.WriteLong(rasInfo + 4, screenBitMapShell);
+		Assert.Equal(0u, bus.ReadLong(screenBitMapShell + BitMapPlanesOffset));
+		var completed = new M68kCpuState();
+		completed.A[7] = stack + 4;
+		completed.D[0] = screen;
+		Assert.True(InvokeHostTrap(bus, continuation, completed));
+		Assert.Equal(callerReturn, completed.ProgramCounter);
+		const uint view = 0x3600;
+		bus.WriteLong(view, screen + ScreenViewPortOffset);
+		bus.WriteWord(screen + ScreenViewPortOffset + ViewPortDWidthOffset, 640);
+		bus.WriteWord(screen + ScreenViewPortOffset + ViewPortDHeightOffset, 480);
+		var loadView = new M68kCpuState();
+		loadView.A[1] = view;
+		Assert.False(patches.TryInvokeGraphicsLibraryPatch(-222, loadView));
+		Assert.True(boot.TryGetRtgComposition(out var composition));
+		Assert.Equal(640, composition.Width);
+		Assert.Equal(480, composition.Height);
+		var getShellWidth = new M68kCpuState();
+		getShellWidth.A[0] = screenBitMapShell;
+		getShellWidth.D[1] = 8; // BMA_WIDTH
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-960, getShellWidth));
+		Assert.Equal(640u, getShellWidth.D[0]);
+
+		bus.WriteLong(vram, 0x2A00_0000);
+		Assert.True(boot.TryRenderRtgFrame(out var frame));
+		Assert.Equal(screen + ScreenViewPortOffset, frame.ViewPortAddress);
+		Assert.Equal((byte)0x2A, bus.ReadByte(vram));
+	}
+
+	[Fact]
+	public void LegacyOpenScreenRequiresNsExtendedDisplayIdForRtgSelection()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithRtgVram(16L * 1024 * 1024)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var patches = Assert.IsAssignableFrom<ICyberGraphicsGuestServices>(boot);
+		const uint newScreen = 0x2200;
+		const uint extension = 0x2300;
+		const uint stack = 0x2400;
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 480);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 8, 0);
+		bus.WriteLong(newScreen + 0x20, extension);
+		bus.WriteLong(extension, 0x8000_0032); // SA_DisplayID
+		bus.WriteLong(extension + 4, 0x4350_0011);
+		bus.WriteLong(extension + 8, 0);
+		bus.WriteLong(stack, 0x0001_9000);
+		var open = new M68kCpuState();
+		open.A[0] = newScreen;
+		open.A[7] = stack;
+
+		Assert.False(patches.TryInvokeIntuitionLibraryPatch(-198, 0x0001_8000, open));
+		bus.WriteWord(newScreen + 0x0E, 0x1000); // NS_EXTENDED
+		Assert.True(patches.TryInvokeIntuitionLibraryPatch(-198, 0x0001_8000, open));
+		Assert.Equal(0x0001_8000u, open.ProgramCounter);
+	}
+
+	[Fact]
 	public void LoadViewPublishesCopperListFromKickstartViewOffsets()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint view = 0x2200;
 		const uint lofCprList = 0x2300;
@@ -798,7 +1021,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void ExecFindNameResolvesHostBridgeLibraryBases()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 
 		Assert.Equal(AmigaKickstartHost.DosLibraryBase, InvokeFindName(bus, "dos.library"));
@@ -815,7 +1038,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void SetWindowTitlesPublishesSyntheticIntuitionTitleBitmap()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var openScreenState = new M68kCpuState();
 		var openWindowState = new M68kCpuState();
@@ -859,7 +1082,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void LoadRgb4UpdatesSyntheticScreenCopperPalette()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var openScreenState = new M68kCpuState();
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198), openScreenState));
@@ -884,7 +1107,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void OpenScreenHonorsHighResolutionNewScreenGeometry()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
@@ -912,8 +1135,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void SyntheticMouseClickQueuesGadgetUpIntuiMessage()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -953,8 +1176,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void SyntheticMouseClickQueuesGadgetDownAndUpWhenIdcmpRequestsBoth()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -996,8 +1219,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void EmptySyntheticWaitPortRetriesTrapAtNextFrame()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1020,8 +1243,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void ExecAddIntServerTicksSyntheticVBlankCounterAtFrameBoundaries()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1063,8 +1286,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void GraphicsWaitTofAdvancesToNextFrameBoundary()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1080,8 +1303,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void GraphicsOpenFontReturnsSyntheticFontWithMetrics()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1099,8 +1322,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void SyntheticPresentationClickMapsToHighResolutionGadgetCoordinates()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1146,8 +1369,8 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void OpenWindowPublishesSyntheticUserPortAndModifyIdcmpFlags()
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
-			.ForProfile(AmigaMachineProfile.A500Pal512KBoot)
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
 		boot.StartBootFromDisk(CreateBootableDisk());
@@ -1178,7 +1401,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void MakeVPortWritesCprListsToKickstartViewOffsets()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint view = 0x2200;
 		const uint viewPort = 0x2300;
@@ -1204,7 +1427,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void MakeVPortHonorsRasInfoSourceOffsetsInBitplanePointers()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint view = 0x2200;
 		const uint viewPort = 0x2300;
@@ -1235,7 +1458,7 @@ public sealed class AmigaBootMemoryTests
 	[Fact]
 	public void InitViewClearsKickstartViewHeaderOnly()
 	{
-		var machine = StartBootShim(AmigaMachineProfile.A500Pal512KBoot);
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint view = 0x2200;
 		for (var offset = 0; offset < 0x20; offset++)
@@ -1256,9 +1479,9 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal((byte)0xAA, bus.ReadByte(view + 0x15));
 	}
 
-	private static AmigaMachine StartBootShim(AmigaMachineProfile profile)
+	private static Machine StartBootShim(MachineProfile profile)
 	{
-		var machine = new AmigaMachine(AmigaMachineOptions
+		var machine = new Machine(MachineOptions
 			.ForProfile(profile)
 			.WithLiveAgnusDma(false));
 		var boot = new AmigaBootController(machine);
