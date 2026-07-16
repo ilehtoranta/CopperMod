@@ -2777,6 +2777,11 @@ namespace Copper68k
                     (sourceMode is 0 or 1 && destinationMode is 2 or 3));
             var addressErrorStackedProgramCounterOffset =
                 GetMoveDestinationAddressErrorStackedProgramCounterOffset(size, sourceMode, destinationMode, destinationRegister);
+            if (moveWritesMemory && destinationMode == 4)
+            {
+                PrefetchFallthroughAfterMoveSourceRead();
+            }
+
             var destination = moveWritesMemory
                 ? ResolvePlannedEaWithoutPrefetchTopUp(
                     destinationMode,
@@ -2852,7 +2857,7 @@ namespace Copper68k
             }
 
             WritePlannedEaValue(in destination, value);
-            if (moveWritesMemory && !destination.IsRegister)
+            if (moveWritesMemory && destinationMode != 4 && !destination.IsRegister)
             {
                 PrefetchFallthroughAfterMoveSourceRead();
             }

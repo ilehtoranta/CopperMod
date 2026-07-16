@@ -161,6 +161,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x3001u, cpu.State.A[0]);
 		Assert.Equal(0x7EC5, ReadWord(bus.Memory, 0x7FF8));
 	}
+
 	[Fact]
 	public void CpuDataReadWaitsBehindPendingPrefetch()
 	{
@@ -566,6 +567,76 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Overflow | M68kCpuState.Carry,
 			cpu.State.StatusRegister);
 		Assert.DoesNotContain(bus.Accesses, access => access.Kind == M68kBusAccessKind.CpuDataRead);
+	}
+
+	[Theory]
+	[InlineData(0x4E71, (int)M68000MicrosequenceClass.SequentialFinalPrefetch)]
+	[InlineData(0x7001, (int)M68000MicrosequenceClass.SequentialFinalPrefetch)]
+	[InlineData(0x60FE, (int)M68000MicrosequenceClass.TakenShortBranchFullRefill)]
+	[InlineData(0x3A13, (int)M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch)]
+	[InlineData(0x34C5, (int)M68000MicrosequenceClass.MoveWriteThenFinalPrefetch)]
+	[InlineData(0x3545, (int)M68000MicrosequenceClass.MoveWriteThenFinalPrefetch)]
+	[InlineData(0x3290, (int)M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch)]
+	[InlineData(0x1010, (int)M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch)]
+	[InlineData(0x12C0, (int)M68000MicrosequenceClass.MoveWriteThenFinalPrefetch)]
+	[InlineData(0x1290, (int)M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch)]
+	[InlineData(0x1228, (int)M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch)]
+	[InlineData(0x1340, (int)M68000MicrosequenceClass.MoveWriteThenFinalPrefetch)]
+	[InlineData(0x3218, (int)M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch)]
+	[InlineData(0x1218, (int)M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch)]
+	[InlineData(0x3298, (int)M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch)]
+	[InlineData(0x12D8, (int)M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch)]
+	[InlineData(0x3300, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x1300, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x3310, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x1318, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x3328, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x1328, (int)M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite)]
+	[InlineData(0x0253, (int)M68000MicrosequenceClass.ImmediateMemoryReadPrefetchWrite)]
+	public void PackedPlansClassifyProvenMicrosequences(int opcode, int expectedClass)
+	{
+		Assert.Equal(
+			(M68000MicrosequenceClass)expectedClass,
+			M68kOpcodePlanTable.PackedPlans[opcode].Microsequence);
+	}
+
+	[Theory]
+	[InlineData(0x0C40, 0x0001)]
+	[InlineData(0x0640, 0x0001)]
+	[InlineData(0x0440, 0x0001)]
+	[InlineData(0x0240, 0x00FF)]
+	[InlineData(0x0040, 0x0100)]
+	[InlineData(0x0A40, 0x0001)]
+	[InlineData(0x0800, 0x0000)]
+	public void OneExtensionRegisterOperationsUseTypedExactDescriptor(int opcode, int extension)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words((ushort)opcode, (ushort)extension));
+
+		Assert.True(M68kDecoder.TryDecode(bus, 0x1000, out var instruction, out var reason));
+		Assert.Equal(M68kJitBailoutReason.None, reason);
+		var descriptor = M68kJitCore.GetClassicM68000Microsequence(in instruction);
+
+		Assert.Equal(M68000CompiledMicrosequenceKind.SequentialOneExtension, descriptor.Kind);
+		Assert.Equal(1, descriptor.ExtensionWordsToConsume);
+		Assert.True(descriptor.CanCompileExactly);
+		Assert.NotEqual(M68kInstructionFamily.Unknown, descriptor.Family);
+	}
+
+	[Theory]
+	[InlineData(0x303C, 0x0001, (int)M68000CompiledMicrosequenceKind.MoveWordImmediateToData)]
+	[InlineData(0x103C, 0x0001, (int)M68000CompiledMicrosequenceKind.MoveByteImmediateToData)]
+	public void ImmediateToDataMoveUsesDedicatedTwoPrefetchDescriptor(int opcode, int extension, int expectedKind)
+	{
+		var bus = new TestBus();
+		Write(bus.Memory, 0x1000, Words((ushort)opcode, (ushort)extension));
+
+		Assert.True(M68kDecoder.TryDecode(bus, 0x1000, out var instruction, out _));
+		var descriptor = M68kJitCore.GetClassicM68000Microsequence(in instruction);
+
+		Assert.Equal((M68000CompiledMicrosequenceKind)expectedKind, descriptor.Kind);
+		Assert.Equal(1, descriptor.ExtensionWordsToConsume);
+		Assert.Equal(2, descriptor.MoveFinalPrefetchCount);
 	}
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
@@ -2405,7 +2476,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				Memory[address + 3] = (byte)value;
 			}
 		}
-	private sealed class TestBus : IM68kBus
+	private sealed class TestBus : IM68kBus, IM68kCodeReader
 	{
 		public byte[] Memory { get; } = new byte[0x0100_0000];
 		public List<(uint Address, byte Value, long Cycle)> Writes { get; } = new();
@@ -2464,6 +2535,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			_ = address;
 			return false;
 		}
+		public ushort ReadHostWord(uint address)
+			=> (ushort)((Memory[address] << 8) | Memory[address + 1]);
 		public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
 		{
 			_ = instructionProgramCounter;

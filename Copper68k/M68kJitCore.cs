@@ -92,7 +92,7 @@ namespace Copper68k
         public M68040Move16CopyStrategy Move16CopyStrategy { get; }
     }
 
-    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition
+    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition, IM68000PrefetchDiagnostics
     {
         private const int CompileThreshold = 16;
         private const int MaxTraceInstructions = 64;
@@ -144,6 +144,7 @@ namespace Copper68k
         private readonly IM68kCore _fallback;
         private readonly IM68kJitFallbackFetchSynchronization? _fallbackFetchSynchronization;
         private readonly IM68000PipelineStateTransfer? _fallbackPipelineStateTransfer;
+        private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -543,6 +544,8 @@ namespace Copper68k
         private bool _classicCompiledPrefetchHandled;
         private M68000PipelineState _m68000PipelineState;
         private bool _m68000PipelineStateValid;
+        private bool _compiledM68000PipelineActive;
+        private M68000MicrosequenceDescriptor _compiledM68000Microsequence;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -701,6 +704,9 @@ namespace Copper68k
                 : null;
             _fallbackPipelineStateTransfer = _cpuModel == M68kJitCpuModel.M68000
                 ? _fallback as IM68000PipelineStateTransfer
+                : null;
+            _m68000BusCycleTiming = _cpuModel == M68kJitCpuModel.M68000
+                ? bus as IM68000BusCycleTiming
                 : null;
             _requiresExactM68000PipelineFallback =
                 _cpuModel == M68kJitCpuModel.M68000 &&
@@ -1052,14 +1058,6 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
-            if (_cpuModel == M68kJitCpuModel.M68000 &&
-                _m68000PipelineStateValid &&
-                _m68000PipelineState.HasPendingPrefetch)
-            {
-                _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;
-                return 0;
-            }
-
             if (_requiresExactM68000PipelineFallback)
             {
                 _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;
@@ -1092,7 +1090,10 @@ namespace Copper68k
                 return 0;
             }
 
-            var v2BatchExecuted = TryExecuteV2TraceBatch(trace, maxInstructions, targetCycle, boundary, allowV2TraceHandoff);
+            var hasTransferredM68000Pipeline = _cpuModel == M68kJitCpuModel.M68000 && _m68000PipelineStateValid;
+            var v2BatchExecuted = hasTransferredM68000Pipeline
+                ? null
+                : TryExecuteV2TraceBatch(trace, maxInstructions, targetCycle, boundary, allowV2TraceHandoff);
             if (v2BatchExecuted.HasValue)
             {
                 if (v2BatchExecuted.Value == 0)
@@ -2204,8 +2205,7 @@ namespace Copper68k
             var previousCycle = State.Cycles;
             var root = Normalize(State.ProgramCounter);
             var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
-            if (_requiresExactM68000PipelineFallback &&
-                _fallbackPipelineStateTransfer != null &&
+            if (_fallbackPipelineStateTransfer != null &&
                 _m68000PipelineStateValid)
             {
                 _fallbackPipelineStateTransfer.ImportM68000PipelineState(in _m68000PipelineState);
@@ -2250,6 +2250,26 @@ namespace Copper68k
             _m68000PipelineState = _fallbackPipelineStateTransfer.ExportM68000PipelineState();
             _m68000PipelineStateValid = true;
         }
+
+        public M68000PrefetchDiagnosticState CapturePrefetchDiagnosticState()
+            => new(
+                State.ProgramCounter,
+                State.Cycles,
+                _m68000PipelineState.PrefetchAddress,
+                _m68000PipelineState.PrefetchCount,
+                _m68000PipelineState.Word0,
+                _m68000PipelineState.Word1,
+                _m68000PipelineState.ReadyCycle0,
+                _m68000PipelineState.ReadyCycle1,
+                _m68000PipelineState.NextBusTransferCycle,
+                _m68000PipelineState.RetireBusCycle,
+                _compiledInstructionPreviousCycle,
+                State.Cycles,
+                _m68000PipelineState.PendingInternalCycles,
+                _m68000PipelineState.SkipRetirePrefetchTopUp,
+                _m68000PipelineState.HasPendingPrefetch,
+                _m68000PipelineState.PendingPrefetchAddress,
+                _m68000PipelineState.PendingPrefetchEarliestCycle);
 
         private void RecordFallbackAttribution(
             uint pc,
@@ -3185,6 +3205,11 @@ namespace Copper68k
                 return M68kTraceDelegatePolicy.Default;
             }
 
+            if (options.CpuModel == M68kJitCpuModel.M68000)
+            {
+                return M68kTraceDelegatePolicy.Default;
+            }
+
             if (options.CpuModel == M68kJitCpuModel.M68040 ||
                 reason is M68kJitCompileReason.Handoff or
                 M68kJitCompileReason.GraphHole or
@@ -3910,9 +3935,9 @@ namespace Copper68k
                 ? nameof(CanEnterCompiledInstruction)
                 : nameof(CanEnterPureCompiledInstruction));
             var begin = GetInstanceMethod(nameof(BeginCompiledInstruction));
-            var finish = emitBoundaryCalls
-                ? GetInstanceMethod(nameof(FinishCompiledInstruction))
-                : null;
+            var finish = GetInstanceMethod(emitBoundaryCalls
+                ? nameof(FinishCompiledInstruction)
+                : nameof(FinishPureCompiledInstruction));
             var emitContext = M68kOperationEmitter.EmitTraceLocals(il);
 
             for (var i = 0; i < instructions.Length; i++)
@@ -3934,18 +3959,21 @@ namespace Copper68k
                 il.Emit(OpCodes.Ldc_I4, unchecked((int)instruction.ProgramCounter));
                 il.Emit(OpCodes.Ldc_I4, instruction.Opcode);
                 il.Emit(OpCodes.Ldc_I4, unchecked((int)Normalize(instruction.ProgramCounter + (uint)instruction.Length)));
+                il.Emit(OpCodes.Ldc_I4, (int)GetClassicM68000Microsequence(in instruction).Kind);
+                il.Emit(OpCodes.Ldc_I4, instruction.ExtensionCount);
+                il.Emit(OpCodes.Ldc_I4, instruction.Extension0);
                 il.Emit(OpCodes.Call, begin);
                 il.Emit(OpCodes.Brfalse, returnLabels[i]);
 
                 _ = M68kOperationEmitter.Emit(il, instruction, emitContext);
                 il.Emit(OpCodes.Brfalse, returnLabels[i]);
 
+                il.Emit(OpCodes.Ldarg_0);
                 if (emitBoundaryCalls)
                 {
-                    il.Emit(OpCodes.Ldarg_0);
                     il.Emit(OpCodes.Ldarg_3);
-                    il.Emit(OpCodes.Call, finish!);
                 }
+                il.Emit(OpCodes.Call, finish);
             }
 
             il.Emit(OpCodes.Ldc_I4, instructions.Length);
@@ -5141,6 +5169,260 @@ namespace Copper68k
             loadDataRegisters |= dirtyDataRegisters;
             loadAddressRegisters |= dirtyAddressRegisters;
         }
+
+        internal static M68000MicrosequenceDescriptor GetClassicM68000Microsequence(in M68kDecodedInstruction instruction)
+            => GetClassicM68000MicrosequenceCore(in instruction)
+                .WithFamily(M68kInstructionClassifier.GetFamily(instruction.Opcode));
+
+        private static M68000MicrosequenceDescriptor GetClassicM68000MicrosequenceCore(in M68kDecodedInstruction instruction)
+        {
+            var microsequence = M68kOpcodePlanTable.PackedPlans[instruction.Opcode].Microsequence;
+            if (instruction.ExtensionCount == 0 && instruction.Size == M68kOperandSize.Word)
+            {
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressIndirect &&
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveWordIndirectToData);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressPostincrement &&
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveWordPostincrementToData);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveWriteThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressPostincrement)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveWordDataToPostincrement);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressIndirect &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressIndirect)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveWordIndirectToIndirect);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch &&
+                    instruction.Source.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement &&
+                    instruction.Destination.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveWordMemoryPostincrement);
+                }
+            }
+
+            if (instruction.ExtensionCount == 0 && instruction.Size == M68kOperandSize.Byte)
+            {
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressIndirect &&
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveByteIndirectToData);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressPostincrement &&
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveBytePostincrementToData);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveWriteThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressPostincrement)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveByteDataToPostincrement);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch &&
+                    instruction.Source.Kind == M68kJitEaKind.AddressIndirect &&
+                    instruction.Destination.Kind == M68kJitEaKind.AddressIndirect)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveByteIndirectToIndirect);
+                }
+
+                if (microsequence == M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch &&
+                    instruction.Source.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement &&
+                    instruction.Destination.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement)
+                {
+                    return new(M68000CompiledMicrosequenceKind.MoveByteMemoryPostincrement);
+                }
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Word &&
+                microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveWordDisplacementToData);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Word &&
+                microsequence == M68000MicrosequenceClass.MoveWriteThenFinalPrefetch &&
+                instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressDisplacement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Byte &&
+                microsequence == M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch &&
+                instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind == M68kJitEaKind.DataRegister)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveByteDisplacementToData);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Byte &&
+                microsequence == M68000MicrosequenceClass.MoveWriteThenFinalPrefetch &&
+                instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressDisplacement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement);
+            }
+
+            if (instruction.ExtensionCount == 0 &&
+                instruction.Size == M68kOperandSize.Word &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 0 &&
+                instruction.Size == M68kOperandSize.Byte &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 0 &&
+                instruction.Size == M68kOperandSize.Word &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 0 &&
+                instruction.Size == M68kOperandSize.Byte &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Word &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Size == M68kOperandSize.Byte &&
+                microsequence == M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite &&
+                instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement)
+            {
+                return new(M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement);
+            }
+
+            if (instruction.ExtensionCount == 0 &&
+                !instruction.Source.IsMemory &&
+                !instruction.Destination.IsMemory &&
+                IsClassicM68000SequentialRegisterOperation(instruction.Operation))
+            {
+                return new(M68000CompiledMicrosequenceKind.Sequential);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                !instruction.Source.IsMemory &&
+                !instruction.Destination.IsMemory &&
+                IsClassicM68000SequentialExtensionOperation(instruction.Operation))
+            {
+                return new(M68000CompiledMicrosequenceKind.SequentialOneExtension);
+            }
+
+            if (instruction.ExtensionCount == 1 &&
+                instruction.Operation == M68kJitOperation.Move &&
+                instruction.Source.Kind == M68kJitEaKind.Immediate &&
+                instruction.Destination.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Size is M68kOperandSize.Byte or M68kOperandSize.Word)
+            {
+                return new(instruction.Size == M68kOperandSize.Word
+                    ? M68000CompiledMicrosequenceKind.MoveWordImmediateToData
+                    : M68000CompiledMicrosequenceKind.MoveByteImmediateToData);
+            }
+
+            if (instruction.ExtensionCount != 0 || instruction.Source.IsMemory || instruction.Destination.IsMemory)
+            {
+                return new(M68000CompiledMicrosequenceKind.ScalarFallback);
+            }
+
+            if (microsequence == M68000MicrosequenceClass.TakenShortBranchFullRefill)
+            {
+                return new(M68000CompiledMicrosequenceKind.TakenShortBranch);
+            }
+
+            return new(microsequence == M68000MicrosequenceClass.SequentialFinalPrefetch
+                ? M68000CompiledMicrosequenceKind.Sequential
+                : M68000CompiledMicrosequenceKind.ScalarFallback);
+        }
+
+        private static bool IsClassicM68000SequentialRegisterOperation(M68kJitOperation operation)
+            => operation is
+                M68kJitOperation.Nop or
+                M68kJitOperation.Moveq or
+                M68kJitOperation.Move or
+                M68kJitOperation.Movea or
+                M68kJitOperation.Tst or
+                M68kJitOperation.Clr or
+                M68kJitOperation.Negx or
+                M68kJitOperation.Neg or
+                M68kJitOperation.Not or
+                M68kJitOperation.Cmp or
+                M68kJitOperation.Cmpa or
+                M68kJitOperation.Add or
+                M68kJitOperation.Addq or
+                M68kJitOperation.Sub or
+                M68kJitOperation.Subq or
+                M68kJitOperation.Abcd or
+                M68kJitOperation.Sbcd or
+                M68kJitOperation.And or
+                M68kJitOperation.Or or
+                M68kJitOperation.Eor or
+                M68kJitOperation.ExtWord or
+                M68kJitOperation.ExtLong or
+                M68kJitOperation.Swap or
+                M68kJitOperation.Exg or
+                M68kJitOperation.ShiftRegister or
+                M68kJitOperation.BitDynamic;
+
+        private static bool IsClassicM68000SequentialExtensionOperation(M68kJitOperation operation)
+            => operation is
+                M68kJitOperation.Cmpi or
+                M68kJitOperation.Addi or
+                M68kJitOperation.Subi or
+                M68kJitOperation.Andi or
+                M68kJitOperation.Ori or
+                M68kJitOperation.Eori or
+                M68kJitOperation.BitImmediate;
 
         private static void MarkV2DirtyRegisterMasks(
             M68kDecodedInstruction instruction,
@@ -9393,13 +9675,40 @@ namespace Copper68k
         private bool BeginCompiledInstruction(
             uint programCounter,
             ushort expectedOpcode,
-            uint nextProgramCounter)
+            uint nextProgramCounter,
+            M68000CompiledMicrosequenceKind microsequenceKind,
+            int extensionCount,
+            ushort expectedExtension0)
         {
             programCounter = Normalize(programCounter);
             _compiledInstructionPreviousCycle = State.Cycles;
             if (State.ProgramCounter != programCounter)
             {
                 return false;
+            }
+
+            _compiledM68000PipelineActive = false;
+            _compiledM68000Microsequence = default;
+            if (_cpuModel == M68kJitCpuModel.M68000 && _m68000PipelineStateValid)
+            {
+                var microsequence = new M68000MicrosequenceDescriptor(microsequenceKind);
+                if (!microsequence.CanCompileExactly ||
+                    !TryConsumeCompiledM68000Instruction(
+                        programCounter,
+                        expectedOpcode,
+                        microsequence.ExtensionWordsToConsume == 0 ? 0 : extensionCount,
+                        expectedExtension0))
+                {
+                    return false;
+                }
+
+                _compiledM68000PipelineActive = true;
+                _compiledM68000Microsequence = microsequence;
+                if (microsequence.UsesClassicBusCursor)
+                {
+                    _classicCompiledCpuBusCycle = _m68000PipelineState.NextBusTransferCycle;
+                    _classicCompiledBusSynchronized = true;
+                }
             }
 
             State.LastOpcode = expectedOpcode;
@@ -9426,7 +9735,302 @@ namespace Copper68k
 
         private void FinishCompiledInstruction(IM68kInstructionBoundary boundary)
         {
+            FinishCompiledM68000Pipeline();
             boundary.AfterInstruction(_compiledInstructionPreviousCycle, State.Cycles);
+        }
+
+        private void FinishPureCompiledInstruction()
+        {
+            FinishCompiledM68000Pipeline();
+        }
+
+        private void FinishCompiledM68000Pipeline()
+        {
+            if (!_compiledM68000PipelineActive)
+            {
+                return;
+            }
+
+            TopUpCompiledM68000PrefetchAtRetirement(
+                _compiledInstructionPreviousCycle,
+                State.Cycles);
+            _compiledM68000PipelineActive = false;
+            _compiledM68000Microsequence = default;
+        }
+
+        private void CompleteCompiledShortBraMicrosequence()
+        {
+            if (_compiledM68000PipelineActive &&
+                _compiledM68000Microsequence.Kind == M68000CompiledMicrosequenceKind.TakenShortBranch)
+            {
+                var target = State.ProgramCounter;
+                var pipeline = _m68000PipelineState with
+                {
+                    PrefetchAddress = target,
+                    PrefetchCount = 0,
+                    HasPendingPrefetch = false,
+                    PendingPrefetchAddress = 0,
+                    PendingPrefetchEarliestCycle = 0,
+                    DeferredBatchEligible0 = false,
+                    DeferredBatchEligible1 = false
+                };
+
+                // SYNC(2), read target opcode, prefetch target + 2.
+                pipeline = TopUpCompiledM68000PrefetchOne(
+                    pipeline,
+                    _compiledInstructionPreviousCycle + 2);
+                pipeline = TopUpCompiledM68000PrefetchOne(
+                    pipeline,
+                    _compiledInstructionPreviousCycle + 2);
+                _m68000PipelineState = pipeline;
+
+                _compiledM68000PipelineActive = false;
+                _compiledM68000Microsequence = default;
+            }
+
+            CompleteCompiledInstructionCycles(10);
+        }
+
+        private void PrepareCompiledMoveWriteMicrosequence()
+        {
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.PreparesMoveWrite)
+            {
+                if (_compiledM68000Microsequence.PrefetchesBeforeMoveWrite)
+                {
+                    var pipeline = _m68000PipelineState with
+                    {
+                        NextBusTransferCycle = Math.Max(
+                            _m68000PipelineState.NextBusTransferCycle,
+                            _classicCompiledCpuBusCycle)
+                    };
+                    pipeline = TopUpCompiledM68000PrefetchOne(
+                        pipeline,
+                        _compiledInstructionPreviousCycle);
+                    _m68000PipelineState = pipeline;
+                    _classicCompiledCpuBusCycle = pipeline.NextBusTransferCycle;
+                }
+
+                // MOVE-to-memory performs the write before its final prefetch.
+                _classicCompiledPrefetchHandled = true;
+            }
+        }
+
+        private void PrepareCompiledMoveReadMicrosequence()
+        {
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.PreparesMoveRead)
+            {
+                var pipeline = TopUpCompiledM68000PrefetchOne(
+                    _m68000PipelineState,
+                    _compiledInstructionPreviousCycle);
+                _m68000PipelineState = pipeline;
+                _classicCompiledCpuBusCycle = pipeline.NextBusTransferCycle;
+            }
+        }
+
+        private void CompleteCompiledMoveMicrosequence(int cycles)
+        {
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.UsesClassicBusCursor)
+            {
+                var pipeline = _m68000PipelineState with
+                {
+                    NextBusTransferCycle = Math.Max(
+                        _m68000PipelineState.NextBusTransferCycle,
+                        _classicCompiledCpuBusCycle)
+                };
+                _m68000PipelineState = pipeline;
+                if (_compiledM68000Microsequence.CompletesMoveWithoutFinalPrefetch)
+                {
+                    // Destination predecrement performs its sole prefetch before the write.
+                }
+                else if (_compiledM68000Microsequence.UsesPendingAwareMoveRetirement)
+                {
+                    TopUpCompiledM68000PrefetchAtRetirement(
+                        _compiledInstructionPreviousCycle,
+                        _compiledInstructionPreviousCycle + cycles);
+                }
+                else
+                {
+                    _m68000PipelineState = TopUpCompiledM68000PrefetchOne(
+                        _m68000PipelineState,
+                        _compiledInstructionPreviousCycle);
+                    if (_compiledM68000Microsequence.MoveFinalPrefetchCount > 1)
+                    {
+                        _m68000PipelineState = TopUpCompiledM68000PrefetchOne(
+                            _m68000PipelineState,
+                            _compiledInstructionPreviousCycle);
+                    }
+                }
+                _classicCompiledPrefetchHandled = true;
+                _classicCompiledTimingActive = false;
+                _compiledM68000PipelineActive = false;
+                _compiledM68000Microsequence = default;
+            }
+
+            CompleteCompiledInstructionCycles(cycles);
+        }
+
+        private bool TryConsumeCompiledM68000Instruction(
+            uint programCounter,
+            ushort expectedOpcode,
+            int extensionCount,
+            ushort expectedExtension0)
+        {
+            var pipeline = _m68000PipelineState;
+            if (!TryConsumeCompiledM68000QueuedWord(
+                    ref pipeline,
+                    programCounter,
+                    expectedOpcode,
+                    out var readyCycle))
+            {
+                return false;
+            }
+
+            var extensionReadyCycle = 0L;
+            if (extensionCount != 0 &&
+                !TryConsumeCompiledM68000QueuedWord(
+                    ref pipeline,
+                    unchecked(programCounter + 2),
+                    expectedExtension0,
+                    out extensionReadyCycle))
+            {
+                return false;
+            }
+
+            if (extensionCount != 0)
+            {
+                readyCycle = Math.Max(readyCycle, extensionReadyCycle);
+            }
+
+            if (State.Cycles < readyCycle)
+            {
+                State.Cycles = readyCycle;
+            }
+
+            _m68000PipelineState = pipeline;
+            return true;
+        }
+
+        private static bool TryConsumeCompiledM68000QueuedWord(
+            ref M68000PipelineState pipeline,
+            uint address,
+            ushort expectedWord,
+            out long readyCycle)
+        {
+            if (pipeline.PrefetchCount == 0 ||
+                pipeline.PrefetchAddress != address ||
+                pipeline.Word0 != expectedWord)
+            {
+                readyCycle = 0;
+                return false;
+            }
+
+            readyCycle = pipeline.ReadyCycle0;
+            pipeline = pipeline.PrefetchCount > 1
+                ? pipeline with
+                {
+                    PrefetchAddress = unchecked(address + 2),
+                    Word0 = pipeline.Word1,
+                    ReadyCycle0 = pipeline.ReadyCycle1,
+                    DeferredBatchEligible0 = pipeline.DeferredBatchEligible1,
+                    PrefetchCount = 1,
+                    DeferredBatchEligible1 = false
+                }
+                : pipeline with
+                {
+                    PrefetchAddress = unchecked(address + 2),
+                    PrefetchCount = 0,
+                    DeferredBatchEligible0 = false,
+                    DeferredBatchEligible1 = false
+                };
+            return true;
+        }
+
+        private M68000PipelineState TopUpCompiledM68000PrefetchOne(
+            M68000PipelineState pipeline,
+            long instructionStartCycle)
+        {
+            if (pipeline.PrefetchCount >= 2)
+            {
+                return pipeline;
+            }
+
+            var slot = pipeline.PrefetchCount;
+            var address = unchecked(pipeline.PrefetchAddress + (uint)(slot * 2));
+            var cycle = pipeline.HasPendingPrefetch
+                ? Math.Max(pipeline.NextBusTransferCycle, pipeline.PendingPrefetchEarliestCycle)
+                : Math.Max(
+                    pipeline.NextBusTransferCycle,
+                    instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0));
+            var requestedCycle = cycle;
+            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                address,
+                M68kOperandSize.Word,
+                M68kBusAccessKind.CpuInstructionFetch,
+                isWrite: false,
+                requestedCycle,
+                cycle) ?? new M68000BusAccessTiming(cycle, cycle);
+
+            pipeline = pipeline with
+            {
+                NextBusTransferCycle = timing.NextBusCycle,
+                LastBusReadyCycle = timing.ReadyCycle,
+                RetireBusCycle = Math.Max(pipeline.RetireBusCycle, timing.ReadyCycle),
+                HasPendingPrefetch = false,
+                PendingPrefetchAddress = 0,
+                PendingPrefetchEarliestCycle = 0,
+                PrefetchCount = slot + 1
+            };
+            return slot == 0
+                ? pipeline with { Word0 = value, ReadyCycle0 = timing.ReadyCycle, DeferredBatchEligible0 = false }
+                : pipeline with { Word1 = value, ReadyCycle1 = timing.ReadyCycle, DeferredBatchEligible1 = false };
+        }
+
+        private void TopUpCompiledM68000PrefetchAtRetirement(long instructionStartCycle, long instructionFloor)
+        {
+            var pipeline = _m68000PipelineState;
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                return;
+            }
+
+            if (pipeline.PrefetchCount == 0)
+            {
+                pipeline = pipeline with { PrefetchAddress = State.ProgramCounter };
+            }
+
+            if (pipeline.PrefetchAddress != State.ProgramCounter)
+            {
+                _m68000PipelineState = pipeline;
+                return;
+            }
+
+            while (pipeline.PrefetchCount < 2)
+            {
+                var earliestCycle = pipeline.HasPendingPrefetch
+                    ? Math.Max(pipeline.PendingPrefetchEarliestCycle, pipeline.NextBusTransferCycle)
+                    : Math.Max(
+                        instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0),
+                        pipeline.NextBusTransferCycle);
+                if (earliestCycle + 2 > instructionFloor)
+                {
+                    if (!pipeline.HasPendingPrefetch)
+                    {
+                        pipeline = pipeline with
+                        {
+                            HasPendingPrefetch = true,
+                            PendingPrefetchAddress = unchecked(
+                                pipeline.PrefetchAddress + (uint)(pipeline.PrefetchCount * 2)),
+                            PendingPrefetchEarliestCycle = earliestCycle
+                        };
+                    }
+                    break;
+                }
+
+                pipeline = TopUpCompiledM68000PrefetchOne(pipeline, instructionStartCycle);
+            }
+
+            _m68000PipelineState = pipeline;
         }
 
         private void InvalidateSource(uint programCounter)
@@ -13024,7 +13628,26 @@ namespace Copper68k
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
+            var requestedCycle = cycle;
             var value = _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead);
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.TimesByteRead)
+            {
+                var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                    address,
+                    M68kOperandSize.Byte,
+                    M68kBusAccessKind.CpuDataRead,
+                    isWrite: false,
+                    requestedCycle,
+                    cycle) ?? new M68000BusAccessTiming(cycle, cycle);
+                _classicCompiledCpuBusCycle = timing.NextBusCycle;
+                cycle = timing.ReadyCycle;
+                if (State.Cycles < cycle)
+                {
+                    State.Cycles = cycle;
+                }
+                return value;
+            }
+
             _classicCompiledCpuBusCycle = cycle;
             CompleteClassicCompiledBusPhase();
             return value;
@@ -13040,8 +13663,29 @@ namespace Copper68k
             }
 
             var cycle = _classicCompiledCpuBusCycle;
+            var requestedCycle = cycle;
             var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead);
-            _classicCompiledCpuBusCycle = cycle;
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.TimesWordRead)
+            {
+                var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                    address,
+                    M68kOperandSize.Word,
+                    M68kBusAccessKind.CpuDataRead,
+                    isWrite: false,
+                    requestedCycle,
+                    cycle) ?? new M68000BusAccessTiming(cycle, cycle);
+                _classicCompiledCpuBusCycle = timing.NextBusCycle;
+                cycle = timing.ReadyCycle;
+                if (State.Cycles < cycle)
+                {
+                    State.Cycles = cycle;
+                }
+                return value;
+            }
+            else
+            {
+                _classicCompiledCpuBusCycle = cycle;
+            }
             CompleteClassicCompiledBusPhase();
             return value;
         }
@@ -13089,7 +13733,26 @@ namespace Copper68k
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
+            var requestedCycle = cycle;
             _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.TimesByteWrite)
+            {
+                var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                    address,
+                    M68kOperandSize.Byte,
+                    M68kBusAccessKind.CpuDataWrite,
+                    isWrite: true,
+                    requestedCycle,
+                    cycle) ?? new M68000BusAccessTiming(cycle, cycle);
+                _classicCompiledCpuBusCycle = timing.NextBusCycle;
+                cycle = timing.ReadyCycle;
+                if (State.Cycles < cycle)
+                {
+                    State.Cycles = cycle;
+                }
+                return;
+            }
+
             _classicCompiledCpuBusCycle = cycle;
             CompleteClassicCompiledBusPhase();
         }
@@ -13104,8 +13767,29 @@ namespace Copper68k
             }
 
             var cycle = _classicCompiledCpuBusCycle;
+            var requestedCycle = cycle;
             _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
-            _classicCompiledCpuBusCycle = cycle;
+            if (_compiledM68000PipelineActive && _compiledM68000Microsequence.TimesWordWrite)
+            {
+                var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
+                    address,
+                    M68kOperandSize.Word,
+                    M68kBusAccessKind.CpuDataWrite,
+                    isWrite: true,
+                    requestedCycle,
+                    cycle) ?? new M68000BusAccessTiming(cycle, cycle);
+                _classicCompiledCpuBusCycle = timing.NextBusCycle;
+                cycle = timing.ReadyCycle;
+                if (State.Cycles < cycle)
+                {
+                    State.Cycles = cycle;
+                }
+                return;
+            }
+            else
+            {
+                _classicCompiledCpuBusCycle = cycle;
+            }
             CompleteClassicCompiledBusPhase();
         }
 

@@ -181,6 +181,19 @@ namespace Copper68k
             typeof(M68kJitCore),
             "CompleteCompiledInstructionCycles",
             typeof(int));
+        private static readonly MethodInfo CompleteCompiledShortBraMicrosequence = RequiredMethod(
+            typeof(M68kJitCore),
+            "CompleteCompiledShortBraMicrosequence");
+        private static readonly MethodInfo PrepareCompiledMoveWriteMicrosequence = RequiredMethod(
+            typeof(M68kJitCore),
+            "PrepareCompiledMoveWriteMicrosequence");
+        private static readonly MethodInfo PrepareCompiledMoveReadMicrosequence = RequiredMethod(
+            typeof(M68kJitCore),
+            "PrepareCompiledMoveReadMicrosequence");
+        private static readonly MethodInfo CompleteCompiledMoveMicrosequence = RequiredMethod(
+            typeof(M68kJitCore),
+            "CompleteCompiledMoveMicrosequence",
+            typeof(int));
         private static readonly MethodInfo Negx = RequiredStaticMethod(
             typeof(M68kIntegerSemantics),
             nameof(M68kIntegerSemantics.Negx),
@@ -708,11 +721,41 @@ namespace Copper68k
         private static void EmitMove(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
         {
             var value = il.DeclareLocal(typeof(uint));
+            if (instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressPredecrement &&
+                instruction.Size is M68kOperandSize.Byte or M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Call, PrepareCompiledMoveReadMicrosequence);
+            }
             EmitLoadEaValue(il, context, instruction.Source, instruction.Size, applySideEffects: true);
             il.Emit(OpCodes.Stloc, value);
+            if (instruction.Source.Kind == M68kJitEaKind.DataRegister &&
+                instruction.Destination.Kind is M68kJitEaKind.AddressPostincrement or M68kJitEaKind.AddressPredecrement or M68kJitEaKind.AddressDisplacement &&
+                instruction.Size is M68kOperandSize.Byte or M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Call, PrepareCompiledMoveWriteMicrosequence);
+            }
+            else if (instruction.Source.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement &&
+                instruction.Destination.Kind is M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement or M68kJitEaKind.AddressPredecrement &&
+                instruction.Size is M68kOperandSize.Byte or M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Call, PrepareCompiledMoveWriteMicrosequence);
+            }
+            else if (instruction.Source.Kind == M68kJitEaKind.AddressDisplacement &&
+                instruction.Destination.Kind == M68kJitEaKind.AddressPredecrement &&
+                instruction.Size is M68kOperandSize.Byte or M68kOperandSize.Word)
+            {
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Call, PrepareCompiledMoveWriteMicrosequence);
+            }
             EmitStoreEaValue(il, context, instruction.Destination, instruction.Size, value);
             EmitSetLogicFlags(il, context, value, instruction.Size);
-            EmitAddCycles(il, context, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            il.Emit(OpCodes.Call, CompleteCompiledMoveMicrosequence);
         }
 
         private static void EmitMovea(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -1166,7 +1209,8 @@ namespace Copper68k
         private static void EmitBra(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
         {
             EmitSetProgramCounter(il, context, GetBranchTarget(instruction));
-            EmitAddCycles(il, context, 10);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, CompleteCompiledShortBraMicrosequence);
         }
 
         private static void EmitBcc(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)

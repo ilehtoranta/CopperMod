@@ -35,6 +35,194 @@ namespace Copper68k
         DataRegisterLongAddToRegister
     }
 
+    internal enum M68000MicrosequenceClass : byte
+    {
+        Unsupported = 0,
+        SequentialFinalPrefetch,
+        TakenShortBranchFullRefill,
+        MoveSourceReadThenFinalPrefetch,
+        MoveWriteThenFinalPrefetch,
+        ImmediateMemoryReadPrefetchWrite,
+        MoveSourceReadWriteThenFinalPrefetch,
+        MovePrefetchThenPredecrementWrite
+    }
+
+    internal enum M68000CompiledMicrosequenceKind : byte
+    {
+        Unsupported = 0,
+        ScalarFallback,
+        Sequential,
+        SequentialOneExtension,
+        TakenShortBranch,
+        MoveWordIndirectToData,
+        MoveWordDataToPostincrement,
+        MoveWordDisplacementToData,
+        MoveWordDataToDisplacement,
+        MoveWordIndirectToIndirect,
+        MoveByteIndirectToData,
+        MoveByteDataToPostincrement,
+        MoveByteIndirectToIndirect,
+        MoveByteDisplacementToData,
+        MoveByteDataToDisplacement,
+        MoveWordPostincrementToData,
+        MoveBytePostincrementToData,
+        MoveWordMemoryPostincrement,
+        MoveByteMemoryPostincrement,
+        MoveWordDataToPredecrement,
+        MoveByteDataToPredecrement,
+        MoveWordMemoryToPredecrement,
+        MoveByteMemoryToPredecrement,
+        MoveWordDisplacementToPredecrement,
+        MoveByteDisplacementToPredecrement,
+        MoveWordImmediateToData,
+        MoveByteImmediateToData
+    }
+
+    internal readonly struct M68000MicrosequenceDescriptor
+    {
+        public M68000MicrosequenceDescriptor(
+            M68000CompiledMicrosequenceKind kind,
+            M68kInstructionFamily family = M68kInstructionFamily.Unknown)
+        {
+            Kind = kind;
+            Family = family;
+        }
+
+        public M68000CompiledMicrosequenceKind Kind { get; }
+
+        public M68kInstructionFamily Family { get; }
+
+        public M68000MicrosequenceDescriptor WithFamily(M68kInstructionFamily family)
+            => new(Kind, family);
+
+        public bool IsClassified => Kind != M68000CompiledMicrosequenceKind.Unsupported;
+
+        public bool CanCompileExactly => Kind is not
+            M68000CompiledMicrosequenceKind.Unsupported and not
+            M68000CompiledMicrosequenceKind.ScalarFallback;
+
+        public bool UsesClassicBusCursor => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToData or
+            M68000CompiledMicrosequenceKind.MoveWordDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToData or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
+            M68000CompiledMicrosequenceKind.MoveBytePostincrementToData or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordImmediateToData or
+            M68000CompiledMicrosequenceKind.MoveByteImmediateToData;
+
+        public int ExtensionWordsToConsume => Kind is
+            M68000CompiledMicrosequenceKind.SequentialOneExtension or
+            M68000CompiledMicrosequenceKind.MoveWordImmediateToData or
+            M68000CompiledMicrosequenceKind.MoveByteImmediateToData or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement ? 1 : 0;
+
+        public bool PreparesMoveRead => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool PreparesMoveWrite => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool PrefetchesBeforeMoveWrite => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool CompletesMoveWithoutFinalPrefetch => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool UsesPendingAwareMoveRetirement => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
+            M68000CompiledMicrosequenceKind.MoveBytePostincrementToData;
+
+        public int MoveFinalPrefetchCount => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordImmediateToData or
+            M68000CompiledMicrosequenceKind.MoveByteImmediateToData ? 2 : 1;
+
+        public bool TimesByteRead => Kind is
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToData or
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveBytePostincrementToData or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool TimesWordRead => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToData or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement;
+
+        public bool TimesByteWrite => Kind is
+            M68000CompiledMicrosequenceKind.MoveByteDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveByteDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveByteDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
+
+        public bool TimesWordWrite => Kind is
+            M68000CompiledMicrosequenceKind.MoveWordDataToPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToDisplacement or
+            M68000CompiledMicrosequenceKind.MoveWordIndirectToIndirect or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryPostincrement or
+            M68000CompiledMicrosequenceKind.MoveWordDataToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordMemoryToPredecrement or
+            M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement;
+    }
+
     internal readonly struct M68kPackedOpcodePlan
     {
         private const int KindShift = 0;
@@ -49,12 +237,14 @@ namespace Copper68k
         private const int VariantShift = 30;
         private const int DisplacementShift = 38;
         private const int ExtensionDisplacementShift = 46;
+        private const int MicrosequenceShift = 47;
 
         private const ulong FiveBitMask = 0x1F;
         private const ulong FourBitMask = 0x0F;
         private const ulong ThreeBitMask = 0x07;
         private const ulong TwoBitMask = 0x03;
         private const ulong ByteMask = 0xFF;
+        private const ulong SixBitMask = 0x3F;
 
         private readonly ulong _bits;
 
@@ -110,6 +300,17 @@ namespace Copper68k
         public short Displacement => unchecked((sbyte)((_bits >> DisplacementShift) & ByteMask));
 
         public bool ExtensionDisplacement => ((_bits >> ExtensionDisplacementShift) & 1) != 0;
+
+        public M68000MicrosequenceClass Microsequence =>
+            (M68000MicrosequenceClass)((_bits >> MicrosequenceShift) & SixBitMask);
+
+        public M68kPackedOpcodePlan WithMicrosequence(M68000MicrosequenceClass microsequence)
+            => new(_bits | ((ulong)microsequence << MicrosequenceShift));
+
+        private M68kPackedOpcodePlan(ulong bits)
+        {
+            _bits = bits;
+        }
 
         private static byte EncodeSize(M68kOperandSize size)
             => size switch
@@ -168,10 +369,68 @@ namespace Copper68k
             var plans = new M68kPackedOpcodePlan[0x1_0000];
             for (var opcode = 0; opcode <= 0xFFFF; opcode++)
             {
-                plans[opcode] = CreatePackedPlan((ushort)opcode);
+                var word = (ushort)opcode;
+                plans[opcode] = CreatePackedPlan(word).WithMicrosequence(CreateMicrosequence(word));
             }
 
             return plans;
+        }
+
+        private static M68000MicrosequenceClass CreateMicrosequence(ushort opcode)
+        {
+            if (opcode == 0x4E71 || (opcode & 0xF100) == 0x7000)
+            {
+                return M68000MicrosequenceClass.SequentialFinalPrefetch;
+            }
+
+            if ((opcode & 0xFF00) == 0x6000 && (opcode & 0x00FF) != 0)
+            {
+                return M68000MicrosequenceClass.TakenShortBranchFullRefill;
+            }
+
+            if ((opcode & 0xC000) == 0 && (opcode & 0x3000) != 0)
+            {
+                var sourceMode = (opcode >> 3) & 7;
+                var destinationMode = (opcode >> 6) & 7;
+                if (destinationMode == 4)
+                {
+                    return M68000MicrosequenceClass.MovePrefetchThenPredecrementWrite;
+                }
+
+                if (destinationMode == 0)
+                {
+                    return M68000MicrosequenceClass.MoveSourceReadThenFinalPrefetch;
+                }
+
+                if (sourceMode == 0 && destinationMode is 2 or 3 or 5)
+                {
+                    return M68000MicrosequenceClass.MoveWriteThenFinalPrefetch;
+                }
+
+                if (sourceMode is 2 or 3 && destinationMode is 2 or 3)
+                {
+                    return M68000MicrosequenceClass.MoveSourceReadWriteThenFinalPrefetch;
+                }
+            }
+
+            if ((opcode & 0xFF00) is 0x0000 or 0x0200 or 0x0400 or 0x0600 or 0x0A00 &&
+                ((opcode >> 3) & 7) is >= 2 and <= 6)
+            {
+                return M68000MicrosequenceClass.ImmediateMemoryReadPrefetchWrite;
+            }
+
+            if (CreateKind(opcode) is
+                M68kOpcodePlanKind.QuickRegister or
+                M68kOpcodePlanKind.QuickLongDataRegister or
+                M68kOpcodePlanKind.DataRegisterLongOrToRegister or
+                M68kOpcodePlanKind.DataRegisterLongEorToDestination or
+                M68kOpcodePlanKind.DataRegisterLongAndToRegister or
+                M68kOpcodePlanKind.DataRegisterLongAddToRegister)
+            {
+                return M68000MicrosequenceClass.SequentialFinalPrefetch;
+            }
+
+            return M68000MicrosequenceClass.Unsupported;
         }
 
         private static M68kOpcodePlanKind CreateKind(ushort opcode)
