@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
+    <ProjectReference Include="..\CopperFloat\CopperFloat.csproj" />
   </ItemGroup>
 
 </Project>

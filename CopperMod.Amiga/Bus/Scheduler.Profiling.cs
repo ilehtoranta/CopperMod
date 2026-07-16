@@ -5,11 +5,11 @@
 
 using System.Diagnostics;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
     using System;
 
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         public bool HostProfilingEnabled { get; set; }
 

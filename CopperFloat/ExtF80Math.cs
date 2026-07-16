@@ -222,7 +222,8 @@ public static class ExtF80Math
             ? result
             : DivideReference(left, right, context);
 
-    internal static FloatingPointResult<ExtF80> DivideReference(
+    /// <summary>Executes the software reference division path.</summary>
+    public static FloatingPointResult<ExtF80> DivideReference(
         ExtF80 left,
         ExtF80 right,
         ExtF80Context context)

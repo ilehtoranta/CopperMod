@@ -7,12 +7,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Runtime
 {
     internal readonly record struct InterruptDispatchTrace(
         int Level,
         ushort ActiveInterruptBits,
         long CpuVisibleCycle,
+		long CpuSampleCycle,
         long AcceptanceCycle,
 		long EntryCompletedCycle,
 		uint InterruptedProgramCounter,
@@ -458,7 +459,8 @@ namespace CopperMod.Amiga
             var savedStatusRegister = Cpu.State.StatusRegister;
 			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
 			var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
-			if (Cpu is IM68000InterruptRecognition interruptRecognition &&
+			var interruptRecognition = Cpu as IM68000InterruptRecognition;
+			if (interruptRecognition != null &&
 				!interruptRecognition.HasRecognizedInterrupt(cpuVisibleCycle))
 			{
 				return false;
@@ -485,6 +487,7 @@ namespace CopperMod.Amiga
                     level,
                     activeInterruptBits,
                     cpuVisibleCycle,
+					interruptRecognition?.LastInterruptSampleCycle ?? acceptanceCycle,
                     acceptanceCycle,
                     Cpu.State.Cycles,
 					interruptedProgramCounter,

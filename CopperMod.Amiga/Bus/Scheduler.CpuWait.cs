@@ -7,7 +7,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
     internal enum CpuWaitGrantAdvanceResult : byte
     {
@@ -29,7 +29,7 @@ namespace CopperMod.Amiga
         Unstable
     }
 
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         internal void RecordDeferredCpuWaitBlitterOverlap(bool supported, bool nasty)
         {

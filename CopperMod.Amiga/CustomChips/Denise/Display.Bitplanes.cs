@@ -6,9 +6,9 @@
 using System;
 using System.Numerics;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         private void RenderBitplanes(Span<uint> bgra, int bandStart, int bandStop, int xClipStart = 0, int xClipStop = -1)
         {

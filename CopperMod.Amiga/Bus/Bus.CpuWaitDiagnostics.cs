@@ -6,9 +6,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaBus
+    internal sealed partial class Bus
     {
         private const int DeferredCpuWaitSlotShadowMaxSamples = 20000;
         private const int DeferredCpuWaitSlotShadowLiveMaxSamples = 256;

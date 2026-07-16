@@ -6,7 +6,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Blitter
 {
     internal readonly struct BlitterSpecializationCounters
     {
@@ -714,7 +714,7 @@ namespace CopperMod.Amiga
                 : $"bltscratch=unsupported:{UnsupportedReason}";
     }
 
-    internal sealed class AmigaBlitter
+    internal sealed class Blitter
     {
         private const ushort DmaMasterEnable = 0x0200;
         private const ushort DmaBlitterEnable = 0x0040;
@@ -855,7 +855,7 @@ namespace CopperMod.Amiga
         private long _aToDRowWords;
         private long _rowPipelineFallbacks;
 
-        public AmigaBlitter(AmigaBus bus, bool enableSpecialization = false)
+        public Blitter(AmigaBus bus, bool enableSpecialization = false)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _specializationEnabled = enableSpecialization;

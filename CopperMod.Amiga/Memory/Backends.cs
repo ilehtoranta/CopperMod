@@ -6,7 +6,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Memory
 {
     internal enum AmigaMemoryBackendKind
     {

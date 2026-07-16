@@ -294,6 +294,11 @@ namespace Copper68k
     {
         public M68kCpuBusPhase(
             uint instructionProgramCounter,
+            long instructionStartCycle,
+            long instructionEntryBusCycle,
+            int instructionEntryPrefetchCount,
+            long instructionEntryReadyCycle0,
+            long instructionEntryReadyCycle1,
             uint address,
             M68kOperandSize size,
             long requestedCycle,
@@ -303,6 +308,11 @@ namespace Copper68k
             ushort statusRegister)
         {
             InstructionProgramCounter = instructionProgramCounter;
+            InstructionStartCycle = instructionStartCycle;
+            InstructionEntryBusCycle = instructionEntryBusCycle;
+            InstructionEntryPrefetchCount = instructionEntryPrefetchCount;
+            InstructionEntryReadyCycle0 = instructionEntryReadyCycle0;
+            InstructionEntryReadyCycle1 = instructionEntryReadyCycle1;
             Address = address;
             Size = size;
             RequestedCycle = requestedCycle;
@@ -313,6 +323,16 @@ namespace Copper68k
         }
 
         public uint InstructionProgramCounter { get; }
+
+        public long InstructionStartCycle { get; }
+
+        public long InstructionEntryBusCycle { get; }
+
+        public int InstructionEntryPrefetchCount { get; }
+
+        public long InstructionEntryReadyCycle0 { get; }
+
+        public long InstructionEntryReadyCycle1 { get; }
 
         public uint Address { get; }
 
@@ -1527,6 +1547,10 @@ namespace Copper68k
         private bool? _addressErrorIsWriteOverride;
         private M68kBusAccessKind _dataReadFaultAccessKind;
         private long _instructionCycleStart;
+        private long _instructionEntryBusCycle;
+        private int _instructionEntryPrefetchCount;
+        private long _instructionEntryReadyCycle0;
+        private long _instructionEntryReadyCycle1;
         private long _instructionCycleFloor;
         private long _instructionInterruptSampleCycle;
         private long _lastInterruptSampleCycle;
@@ -5966,9 +5990,9 @@ namespace Copper68k
                 if (!conditionTrue)
                 {
                     var counter = (ushort)((State.D[reg] & 0xFFFF) - 1);
+                    var target = unchecked((uint)(branchBase + displacement));
                     if (counter != 0xFFFF)
                     {
-                        var target = (uint)(branchBase + displacement);
                         if (_instructionFrequency.Enabled)
                         {
                             _instructionFrequency.RecordTakenBranch(State.LastInstructionProgramCounter, opcode, target, 4);
@@ -5982,6 +6006,7 @@ namespace Copper68k
                     {
                         State.D[reg] = (State.D[reg] & 0xFFFF_0000) | counter;
                         AddInstructionCycles(14);
+                        CompleteExpiredDbccRefill(target, State.ProgramCounter);
                     }
                 }
                 else
@@ -7701,6 +7726,8 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
+
+
         private void CompleteExpiredDbccRefill(uint abandonedTarget, uint stackedProgramCounter)
         {
             ValidateBranchTarget(abandonedTarget, stackedProgramCounter);
@@ -7921,6 +7948,7 @@ namespace Copper68k
             _prefetchCount = slot + 1;
             return completedCycle;
         }
+
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()
@@ -8522,6 +8550,11 @@ namespace Copper68k
 
             var phase = new M68kCpuBusPhase(
                 _activeInstructionProgramCounter,
+                _instructionCycleStart,
+                _instructionEntryBusCycle,
+                _instructionEntryPrefetchCount,
+                _instructionEntryReadyCycle0,
+                _instructionEntryReadyCycle1,
                 address,
                 size,
                 requestedCycle,
@@ -8652,6 +8685,10 @@ namespace Copper68k
         {
             _instructionCycleFloorActive = true;
             _instructionCycleStart = startCycle;
+            _instructionEntryBusCycle = _cpuBusCycle;
+            _instructionEntryPrefetchCount = _prefetchCount;
+            _instructionEntryReadyCycle0 = _prefetchCompletedCycle0;
+            _instructionEntryReadyCycle1 = _prefetchCompletedCycle1;
             _instructionInterruptSampleCycle = long.MinValue;
             _instructionCycleFloor = startCycle;
             _cpuBusCycle = Math.Max(_cpuBusCycle, startCycle);

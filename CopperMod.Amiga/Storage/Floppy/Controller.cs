@@ -9,7 +9,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Storage.Floppy
 {
     internal sealed class AmigaPreparedTrack
     {

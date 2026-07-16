@@ -7,9 +7,9 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaBus
+    internal sealed partial class Bus
     {
         private const int DeferredCpuBusBatchMinimumHorizonCycles = 16;
         // The CPU wait-slot executor remains shadow-only until its display and

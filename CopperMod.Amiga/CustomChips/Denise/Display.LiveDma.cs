@@ -5,7 +5,7 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal enum OcsCpuWaitLiveSlotResult : byte
     {
@@ -13,7 +13,7 @@ namespace CopperMod.Amiga
         CopperBarrier
     }
 
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         internal bool HasLiveDmaCapturedThrough(long cycle)
         {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Core
 {
     internal static class AmigaConstants
     {

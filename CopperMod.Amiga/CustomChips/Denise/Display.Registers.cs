@@ -5,9 +5,9 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         public bool TryReadByte(ushort offset, out byte value)
         {

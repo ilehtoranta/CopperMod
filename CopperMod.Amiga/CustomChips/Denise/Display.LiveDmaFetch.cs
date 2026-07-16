@@ -5,9 +5,9 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         private void CaptureLiveLineState(int row, bool recordTimeline = true)
         {

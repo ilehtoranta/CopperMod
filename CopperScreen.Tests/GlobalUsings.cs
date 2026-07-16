@@ -1,1 +1,17 @@
 global using Copper68k;
+global using CopperMod.Amiga.Bus;
+global using CopperMod.Amiga.Core;
+global using CopperMod.Amiga.CustomChips.Agnus;
+global using CopperMod.Amiga.CustomChips.Cia;
+global using CopperMod.Amiga.CustomChips.Denise;
+global using CopperMod.Amiga.Diagnostics;
+global using CopperMod.Amiga.Expansion;
+global using CopperMod.Amiga.Firmware;
+global using CopperMod.Amiga.Input;
+global using CopperMod.Amiga.Runtime;
+global using CopperMod.Amiga.Storage.Floppy;
+global using CopperMod.Amiga.Storage.Hardfile;
+global using CopperMod.Amiga.Video.Rtg.CyberGraphics;
+global using AmigaBus = CopperMod.Amiga.Bus.Bus;
+global using AmigaCia = CopperMod.Amiga.CustomChips.Cia.Cia;
+global using OcsDisplay = CopperMod.Amiga.CustomChips.Denise.Display;

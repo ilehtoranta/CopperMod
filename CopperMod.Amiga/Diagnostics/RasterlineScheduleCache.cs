@@ -6,7 +6,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga;
+namespace CopperMod.Amiga.Diagnostics;
 
 internal readonly record struct AmigaRasterlineScheduleCacheSnapshot(
     long HitCount,

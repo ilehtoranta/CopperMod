@@ -6,9 +6,9 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         private void RenderSprites(Span<uint> bgra)
         {

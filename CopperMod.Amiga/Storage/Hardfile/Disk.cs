@@ -1,8 +1,13 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Storage.Hardfile
 {
     internal enum AmigaHardfileMountMode
     {

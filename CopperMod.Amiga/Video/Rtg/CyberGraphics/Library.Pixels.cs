@@ -5,7 +5,7 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 {
     internal sealed partial class CyberGraphicsLibrary
     {

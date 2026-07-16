@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
     using System.Runtime.InteropServices;
 

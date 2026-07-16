@@ -6,7 +6,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal enum CpuWaitFixedSlotOwner : byte
     {
@@ -70,7 +70,7 @@ namespace CopperMod.Amiga
             => $"{SlotCount}@{FirstSlotCycle}->{LastSlotCycle}/0x{Hash:X16}/{FirstOwner}->{LastOwner}";
     }
 
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         private const int CpuWaitFixedSlotsPerLine = PalLineCycles / AgnusChipSlotScheduler.SlotCycles;
         private readonly byte[] _cpuWaitFixedSlotOwners =

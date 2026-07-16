@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         private AmigaHardwareEventMask GetCpuAccessMask(
             AmigaBusAccessTarget target,

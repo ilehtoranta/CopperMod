@@ -1,6 +1,6 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Diagnostics
 {
     internal sealed class ChipPresentationWriteHistory
     {

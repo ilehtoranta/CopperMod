@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Storage.Floppy
 {
     internal static class AmigaDiskGeometry
     {

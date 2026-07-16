@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
     using System;
 
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         private long GetNextDiskEventCycle(long currentCycle, long targetCycle, AmigaHardwareEventMask mask)
         {

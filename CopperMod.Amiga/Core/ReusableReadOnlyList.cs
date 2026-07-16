@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Core
 {
     internal sealed class ReusableReadOnlyList<T> : IReadOnlyList<T>
     {

@@ -5,9 +5,9 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         private struct WakeAgendaEntry
         {

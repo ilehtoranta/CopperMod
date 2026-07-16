@@ -1,2 +1,11 @@
 global using Copper68k;
 global using HotPathGuard;
+global using CopperMod.Amiga.Core;
+global using CopperMod.Amiga.CustomChips.Denise;
+global using CopperMod.Amiga.Expansion;
+global using CopperMod.Amiga.Firmware;
+global using CopperMod.Amiga.Input;
+global using CopperMod.Amiga.Runtime;
+global using CopperMod.Amiga.Storage.Floppy;
+global using CopperMod.Amiga.Storage.Hardfile;
+global using CopperMod.Amiga.Video.Rtg.CyberGraphics;

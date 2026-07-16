@@ -1,8 +1,8 @@
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Copper
 {
-    internal sealed class AmigaCopper
+    internal sealed class Copper
     {
         private const ushort CopconCopperDanger = 0x0002;
 

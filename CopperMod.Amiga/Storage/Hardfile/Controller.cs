@@ -1,7 +1,12 @@
+/*
+ * Copyright (C) 2026 Ilkka Lehtoranta
+ * SPDX-License-Identifier: MIT
+ */
+
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Storage.Hardfile
 {
     internal sealed class CopperHdfController : AutoconfigBoard, IDisposable
     {

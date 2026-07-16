@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Paula
 {
     internal sealed class Paula
     {

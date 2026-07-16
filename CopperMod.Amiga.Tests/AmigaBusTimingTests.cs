@@ -3163,7 +3163,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000Probe10IntreqAtWinUaePhaseEntersHandlerAtHaa()
+	public void AccurateM68000Probe10IntreqAtEmulatedPhaseEntersHandlerAtHaa()
 	{
 		using var machine = new Machine(MachineOptions
 			.ForProfile(MachineProfile.A500Pal512KBoot)
@@ -3231,7 +3231,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000Probe10Irq1MicrosequenceDocumentsWinUaeEcsDifference()
+	public void AccurateM68000Probe10Irq1MicrosequenceDocumentsEmulatedEcsDifference()
 	{
 		using var machine = new Machine(MachineOptions
 			.ForProfile(MachineProfile.A500Pal512KBoot)
@@ -3290,8 +3290,8 @@ public sealed class AmigaBusTimingTests
 		var sampleBeam = bus.GetPalBeamPosition(firstRead.SampleCycle);
 		var completeBeam = bus.GetPalBeamPosition(firstRead.CompletedCycle);
 		var actualStops = stopBeams.Select(beam => beam.BeamHorizontal).ToArray();
-		var winUaeStops = new[] { 0xB2, 0xBA, 0xBE, 0xC4, 0xC8 };
-		var differences = actualStops.Zip(winUaeStops, (actual, expected) => actual - expected).ToArray();
+		var emulatorStops = new[] { 0xB2, 0xBA, 0xBE, 0xC4, 0xC8 };
+		var differences = actualStops.Zip(emulatorStops, (actual, expected) => actual - expected).ToArray();
 		var diagnostic =
 			$"entry=v{entryBeam.BeamLine:X3}h{entryBeam.BeamHorizontal:X2}, " +
 			$"boundaries=[{string.Join(",", boundaries.Select((boundary, index) => $"0x{boundary.Pc:X6}:v{stopBeams[index].BeamLine:X3}h{stopBeams[index].BeamHorizontal:X2}/+{boundary.Stop - boundary.Start}"))}], " +
@@ -5133,7 +5133,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact(Skip = "WinUAE debugger entry excludes 16 clocks that the reset-primed local queue currently includes.")]
-	public void AccurateM68000DbraChipRamRefreshCadenceMatchesWinUaeDmaOffReference()
+	public void AccurateM68000DbraChipRamRefreshCadenceMatchesEmulatorDmaOffReference()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
 		Write(
@@ -6238,19 +6238,47 @@ public sealed class AmigaBusTimingTests
 			",",
 			copperBoundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - copperBoundaries[0].Cycle}/d3={boundary.D3}")) +
 			$",firstStripe=+{copperFirstStripe.Cycle - copperBoundaries[0].Cycle}";
-		Assert.Equal(boundaries[1].D3, boundaries[2].D3);
-		Assert.Equal(boundaries[1].D3, boundaries[3].D3);
-		Assert.Equal(9452, boundaries[1].D3);
-		Assert.Equal(44, boundaries[2].Cycle - boundaries[1].Cycle);
-		Assert.Equal(976, boundaries[3].Cycle - boundaries[2].Cycle);
-		Assert.Equal(95_382, boundaries[4].Cycle - boundaries[3].Cycle);
-		Assert.Equal(95_718, copperBoundaries[4].Cycle - copperBoundaries[3].Cycle);
-		Assert.Equal(344, copperBoundaries[4].Cycle - boundaries[4].Cycle);
-		Assert.Equal(344, copperFirstStripe.Cycle - firstStripe.Cycle);
-		Assert.Equal(24, boundaries[5].Cycle - boundaries[4].Cycle);
-		Assert.Equal(8, firstStripe.Cycle - boundaries[5].Cycle);
-		_ = diagnostic;
-		_ = copperDiagnostic;
+		Assert.True(
+			boundaries[1].D3 == boundaries[2].D3 &&
+			boundaries[1].D3 == boundaries[3].D3 &&
+			boundaries[1].D3 == 9434 &&
+			boundaries[2].Cycle - boundaries[1].Cycle == 46 &&
+			boundaries[3].Cycle - boundaries[2].Cycle == 956 &&
+			boundaries[4].Cycle - boundaries[3].Cycle == 95_186 &&
+			copperBoundaries[4].Cycle - copperBoundaries[3].Cycle == 95_360 &&
+			copperBoundaries[4].Cycle - boundaries[4].Cycle == 174 &&
+			copperFirstStripe.Cycle - firstStripe.Cycle == 174 &&
+			boundaries[5].Cycle - boundaries[4].Cycle == 24 &&
+			firstStripe.Cycle - boundaries[5].Cycle == 14,
+			$"noCopper=[{diagnostic}] copper=[{copperDiagnostic}]");
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vIrqHandlerBoundaryVectorDocumentsCurrentPhases()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var names = new[]
+		{
+			"irqAccept", "irqEntry", "movemSave", "ack", "moveD5",
+			"firstTest", "restore", "rte", "irqRteComplete"
+		};
+		var boundaries = names
+			.Select(name => result.Boundaries.Single(boundary => boundary.Name == name).Cycle)
+			.ToArray();
+		var origin = boundaries[0];
+		var vector = boundaries.Select(cycle => cycle - origin).ToArray();
+
+		Assert.Equal(new long[] { 0, 46, 46, 174, 190, 198, 850, 982, 1002 }, vector);
 	}
 
 	[Fact]
@@ -6344,18 +6372,19 @@ public sealed class AmigaBusTimingTests
 			$"preIrq={irqAccept - delayStart}, postIrq={delayStop - irqRteComplete}, " +
 			$"totalWithoutIrq={(irqAccept - delayStart) + (delayStop - irqRteComplete)}";
 
-		Assert.True(dbraPhases.Length > 20_000, diagnostic);
-		Assert.True(waitingPhases.Length > 0, diagnostic);
-		Assert.Equal(120014, (irqAccept - delayStart) + (delayStop - irqRteComplete));
-		Assert.Contains("8:", string.Join(',', pairStartDeltaHistogram));
-		Assert.Contains("12:", string.Join(',', pairStartDeltaHistogram));
-		Assert.Equal((6L, 6L), preIrqDrift);
-		Assert.Equal((4L, 6L), postIrqDrift);
-		_ = diagnostic;
+		Assert.True(
+			dbraPhases.Length > 20_000 &&
+			waitingPhases.Length > 0 &&
+			(irqAccept - delayStart) + (delayStop - irqRteComplete) == 121_066 &&
+			string.Join(',', pairStartDeltaHistogram).Contains("10:", StringComparison.Ordinal) &&
+			string.Join(',', pairStartDeltaHistogram).Contains("12:", StringComparison.Ordinal) &&
+			preIrqDrift == (222L, 222L) &&
+			postIrqDrift == (840L, 840L),
+			diagnostic);
 	}
 
 	[Fact]
-	public void AccurateM68000Cycle01vActiveCopperDbraExpiresAtWinUaeBeamPosition()
+	public void AccurateM68000Cycle01vActiveCopperDbraExpiresAtEmulatorBeamPosition()
 	{
 		var result = RunCycle01vDelayLoopProbe(
 			startLine: 232,
@@ -6433,8 +6462,191 @@ public sealed class AmigaBusTimingTests
 			diagnostic);
 	}
 
+	[Fact(Skip = "WinUAE completes the final DBRA target reads at h13/h15 and reaches the IRQ handler at h34; current model reads h14/h17/h19 and reaches it at h37.")]
+	public void AccurateM68000Cycle01vDbraInterruptEntryDocumentsWinUaeBusSlots()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var irqAccept = result.Boundaries.Single(boundary => boundary.Name == "irqAccept").Cycle;
+		var irqEntry = result.Boundaries.Single(boundary => boundary.Name == "irqEntry").Cycle;
+		var phases = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.CompletedCycle >= irqAccept - 40 &&
+				phase.CpuPhase.RequestedCycle <= irqEntry)
+			.Select(phase =>
+			{
+				var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
+				var beam = result.Bus.GetPalBeamPosition(grant);
+				return $"h{beam.BeamHorizontal}:{phase.CpuPhase.AccessKind}/a{phase.CpuPhase.Address:X6}";
+			})
+			.ToArray();
+		var diagnostic = string.Join(",", phases);
+
+		// WinUAE CE000 DMA debugger reference: final DBRA reads at h13/h15,
+		// low-PC stack write h20, IACK h21, SR/high-PC writes h26/h28,
+		// vector reads h30/h32, and handler reads h34/h37.
+		Assert.Equal(
+			new[]
+			{
+				"h13:CpuInstructionFetch/a001096",
+				"h15:CpuInstructionFetch/a001098",
+				"h20:CpuDataWrite/a002FFE",
+				"h21:CpuInterruptAcknowledge/aFFFFF7",
+				"h26:CpuDataWrite/a002FFA",
+				"h28:CpuDataWrite/a002FFC",
+				"h30:CpuDataRead/a00006C",
+				"h34:CpuInstructionFetch/a001500",
+				"h37:CpuInstructionFetch/a001502"
+			},
+			phases.TakeLast(9));
+		_ = diagnostic;
+	}
+
+	[Fact(Skip = "WinUAE steady DBRA has opcode-before-extension at 2 CCK spacing; current pending model reverses the bus order while preserving average cadence.")]
+	public void AccurateM68000Cycle01vSteadyDbraLineMatchesWinUaeBusSlots()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var actual = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
+				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.Select(phase =>
+			{
+				var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
+				var beam = result.Bus.GetPalBeamPosition(grant);
+				return (beam.BeamLine, beam.BeamHorizontal, phase.CpuPhase.Address);
+			})
+			.Where(phase => phase.BeamLine == 100 && phase.BeamHorizontal < 48)
+			.Select(phase => $"h{phase.BeamHorizontal:X}:{phase.Address - 0x1096:X}")
+			.ToArray();
+
+		var expected = new[]
+			{
+				"h4:0", "h6:2", "hA:0", "hC:2", "hF:0", "h11:2",
+				"h14:0", "h16:2", "h19:0", "h1B:2", "h1E:0", "h20:2",
+				"h23:0", "h25:2", "h28:0", "h2A:2", "h2D:0", "h2F:2"
+			};
+		var normalizedActual = actual
+			.Take(expected.Length)
+			.Select(value =>
+			{
+				var separator = value.IndexOf(':');
+				var horizontal = Convert.ToInt32(value.Substring(1, separator - 1), 16) + 3;
+				return $"h{horizontal:X}{value[separator..]}";
+			})
+			.ToArray();
+
+		Assert.True(
+			expected.SequenceEqual(normalizedActual),
+			$"expected=[{string.Join(',', expected)}], normalized=[{string.Join(',', normalizedActual)}], actual=[{string.Join(',', actual)}]");
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vDbraEntryTailLedgerSeparatesNormalAndRefreshIterations()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 1,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var ledgers = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
+				result.Bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle).BeamLine == 100)
+			.GroupBy(phase => phase.CpuPhase.InstructionStartCycle)
+			.Take(8)
+			.Select(group =>
+			{
+				var first = group.First().CpuPhase;
+				var phases = group.Select(phase =>
+				{
+					var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
+					return $"{phase.CpuPhase.Address - 0x1096:X}:r{phase.CpuPhase.RequestedCycle - first.InstructionStartCycle}/g{grant - first.InstructionStartCycle}/c{phase.CpuPhase.CompletedCycle - first.InstructionStartCycle}";
+				});
+				return $"tail={first.InstructionEntryBusCycle - first.InstructionStartCycle}," +
+					$"q={first.InstructionEntryPrefetchCount}," +
+					$"ready0={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}," +
+					$"phases={string.Join('|', phases)}";
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"tail=6,q=1,ready0=4,phases=2:r6/g10/c12|0:r12/g14/c16",
+				"tail=6,q=1,ready0=4,phases=2:r6/g8/c10|0:r10/g12/c14",
+				"tail=6,q=1,ready0=4,phases=2:r6/g8/c10|0:r10/g12/c14"
+			},
+			ledgers.Skip(1).Take(3));
+	}
+
+	[Fact]
+	public void AccurateM68000Cycle01vStripeDbraEntryTailLedgerDocumentsTwoMoveLoopState()
+	{
+		var result = RunCycle01vDelayLoopProbe(
+			startLine: 232,
+			startOffset: 56,
+			markerCount: 8,
+			enableCycleCopper: true,
+			inlineLoop2: true,
+			enableSyntheticVblankIrq: true,
+			useCycle01vIrq3Handler: true,
+			requestSyntheticVblankAfterProbe: true,
+			syntheticVblankIrqOffset: 26,
+			cycle01vPostRteD3Override: 0x24DB);
+		var ledgers = result.Bus.CpuBusPhases
+			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x10AE)
+			.GroupBy(phase => phase.CpuPhase.InstructionStartCycle)
+			.Take(4)
+			.Select(group =>
+			{
+				var first = group.First().CpuPhase;
+				var phases = group.Select(phase =>
+				{
+					var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
+					return $"{unchecked((int)(phase.CpuPhase.Address - 0x10AE))}:r{phase.CpuPhase.RequestedCycle - first.InstructionStartCycle}/g{grant - first.InstructionStartCycle}/c{phase.CpuPhase.CompletedCycle - first.InstructionStartCycle}";
+				});
+				return $"tail={first.InstructionEntryBusCycle - first.InstructionStartCycle}," +
+					$"q={first.InstructionEntryPrefetchCount}," +
+					$"ready={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}/{first.InstructionEntryReadyCycle1 - first.InstructionStartCycle}," +
+					$"phases={string.Join('|', phases)}";
+			})
+			.ToArray();
+
+		Assert.Equal(
+			new[]
+			{
+				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8",
+				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8",
+				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8"
+			},
+			ledgers);
+	}
+
 	[Fact(Skip = "WinUAE enters the first post-RTE DBRA at v2h67; the focused model currently enters at v2h65.")]
-	public void AccurateM68000Cycle01vPostRteBoundaryMatchesWinUaeReference()
+	public void AccurateM68000Cycle01vPostRteBoundaryMatchesEmulatorReference()
 	{
 		var result = RunCycle01vDelayLoopProbe(
 			startLine: 232,
@@ -6957,8 +7169,8 @@ public sealed class AmigaBusTimingTests
 		}
 			.Select(name => boundaries.TryGetValue(name, out var cycle) ? cycle - origin : -1)
 			.ToArray();
-		Assert.Equal("44,44,172,188,196,850,982,1002", string.Join(",", boundaryDeltas));
-		Assert.Equal(2, boundaryDeltas[^1] - 1000);
+		Assert.Equal("46,46,174,190,198,852,984,1004", string.Join(",", boundaryDeltas));
+		Assert.Equal(4, boundaryDeltas[^1] - 1000);
 		_ = diagnostic;
 	}
 

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Cia
 {
     internal enum AmigaCiaId
     {
@@ -25,7 +25,7 @@ namespace CopperMod.Amiga
         public long Cycle { get; }
     }
 
-    internal sealed class AmigaCia
+    internal sealed class Cia
     {
         public const byte TimerAInterruptMask = 0x01;
         public const byte TimerBInterruptMask = 0x02;
@@ -45,7 +45,7 @@ namespace CopperMod.Amiga
         private byte _icrPending;
         private ulong _wakeVersion;
 
-        public AmigaCia(AmigaCiaId id)
+        public Cia(AmigaCiaId id)
         {
             Id = id;
         }

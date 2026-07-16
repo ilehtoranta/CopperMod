@@ -8,9 +8,9 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         public void RenderFrame(Span<uint> bgra)
         {

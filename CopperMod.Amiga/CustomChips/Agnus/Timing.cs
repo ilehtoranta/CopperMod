@@ -9,7 +9,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Agnus
 {
     internal enum AmigaBusRequester
     {

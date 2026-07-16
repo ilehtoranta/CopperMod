@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Diagnostics
 {
     internal static class CustomRegisterScheduleClassifier
     {

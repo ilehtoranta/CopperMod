@@ -6,9 +6,9 @@ using CopperDisk;
 using CopperDiskEncodedTrack = CopperDisk.AmigaEncodedTrack;
 using CopperDiskTrackFeatures = CopperDisk.AmigaTrackFeatures;
 using CopperDiskTrackRegion = CopperDisk.AmigaTrackRegion;
-using CoreEncodedTrack = CopperMod.Amiga.AmigaEncodedTrack;
-using CoreTrackFeatures = CopperMod.Amiga.AmigaTrackFeatures;
-using CoreTrackRegion = CopperMod.Amiga.AmigaTrackRegion;
+using CoreEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
+using CoreTrackFeatures = CopperMod.Amiga.Storage.Floppy.AmigaTrackFeatures;
+using CoreTrackRegion = CopperMod.Amiga.Storage.Floppy.AmigaTrackRegion;
 
 namespace CopperMod.Amiga
 {

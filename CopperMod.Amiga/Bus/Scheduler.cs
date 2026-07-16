@@ -6,9 +6,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         // v1 caches only the hot INTREQR poll path; live Agnus/display stays
         // on explicit advancement until every display invalidation source is queryable.
@@ -112,7 +112,7 @@ namespace CopperMod.Amiga
         private long _copperQuiescentWindowCacheEndCycle = -1;
         private bool _copperQuiescentFastPathDisabledByVerification;
 
-        public AmigaHardwareScheduler(AmigaBus bus)
+        public Scheduler(AmigaBus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         }

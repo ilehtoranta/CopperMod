@@ -5,7 +5,7 @@
 
 using System;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Expansion
 {
     internal sealed class AutoconfigFastRamBoard : AutoconfigBoard
     {

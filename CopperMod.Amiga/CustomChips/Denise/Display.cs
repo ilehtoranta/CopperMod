@@ -8,9 +8,9 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.CustomChips.Denise
 {
-    internal sealed partial class OcsDisplay
+    internal sealed partial class Display
     {
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
@@ -349,7 +349,7 @@ namespace CopperMod.Amiga
         private int _lastRowDmaPlanInvalidationRows;
         private int _lastRowDmaPlanMismatchRows;
 
-        public OcsDisplay(AmigaBus bus, bool liveDmaEnabled = true)
+        public Display(AmigaBus bus, bool liveDmaEnabled = true)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _liveDmaEnabled = liveDmaEnabled;

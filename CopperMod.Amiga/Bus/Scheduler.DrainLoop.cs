@@ -6,9 +6,9 @@
 using System;
 using System.Diagnostics;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
-    internal sealed partial class AmigaHardwareScheduler
+    internal sealed partial class Scheduler
     {
         private void DrainToCore(long targetCycle, AmigaHardwareEventMask mask)
         {

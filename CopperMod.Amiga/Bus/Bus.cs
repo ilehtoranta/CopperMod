@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Bus
 {
     internal readonly struct HostTrapStub
     {
@@ -26,7 +26,7 @@ namespace CopperMod.Amiga
         public Action<M68kCpuState> Callback { get; }
     }
 
-    internal sealed partial class AmigaBus :
+    internal sealed partial class Bus :
         IM68kBus,
         IM68kCodeReader,
         IM68kStablePhysicalAddressMap,
@@ -355,7 +355,7 @@ namespace CopperMod.Amiga
             remove => JitEligibleMemoryWritten -= value;
         }
 
-        public AmigaBus(
+        public Bus(
             int chipRamSize = AmigaConstants.DefaultChipRamSize,
             IAmigaBusArbiter? arbiter = null,
             int expansionRamSize = 0,

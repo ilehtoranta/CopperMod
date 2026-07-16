@@ -5,7 +5,7 @@
 
 using System.Runtime.CompilerServices;
 
-namespace CopperMod.Amiga
+namespace CopperMod.Amiga.Runtime
 {
     internal sealed class AmigaM68kCoreFactory : IM68kBackendCoreFactory
     {
