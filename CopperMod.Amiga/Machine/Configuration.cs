@@ -63,6 +63,7 @@ namespace CopperMod.Amiga.Runtime
 		uint InterruptedProgramCounter,
 		uint HandlerProgramCounter,
 		ushort SavedStatusRegister,
+		uint DataRegister3,
 		M68000PrefetchDiagnosticState? PrefetchBefore,
 		M68000PrefetchDiagnosticState? PrefetchAfter);
 
@@ -506,7 +507,7 @@ namespace CopperMod.Amiga.Runtime
                 return false;
             }
 
-            var acceptanceCycle = Cpu.State.Cycles;
+			var acceptanceCycle = Cpu.State.Cycles;
             var interruptedProgramCounter = Cpu.State.ProgramCounter;
             var savedStatusRegister = Cpu.State.StatusRegister;
 			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
@@ -545,6 +546,7 @@ namespace CopperMod.Amiga.Runtime
 					interruptedProgramCounter,
 					Cpu.State.ProgramCounter,
 					savedStatusRegister,
+					Cpu.State.D[3],
 					prefetchBefore,
 					prefetchAfter));
             }

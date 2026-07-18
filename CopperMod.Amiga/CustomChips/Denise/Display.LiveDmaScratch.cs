@@ -368,11 +368,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return false;
                     }
 
-                    if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
-                    {
-                        continue;
-                    }
-
                     if (_slots.TryGrantCpuDataSingleExactSlot(
                             kind,
                             target,

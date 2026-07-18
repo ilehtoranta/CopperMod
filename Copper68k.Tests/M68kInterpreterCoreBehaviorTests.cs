@@ -90,8 +90,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
 		Assert.Contains(bus.InstructionFetchCycles, fetch => fetch.Address == 0x1006u);
 	}
-	[Fact(Skip = "Cross-emulator full DBRA refill requires synchronous instruction/bus accounting; direct background-queue scheduling breaks cycle01v IRQ phase.")]
-	public void TakenDbraIssuesTwoWordTargetRefillWithoutChargingBackgroundWait()
+	[Fact]
+	public void TakenDbraTargetExtensionWaitBlocksRetirement()
 	{
 		var bus = new CycleCountingBus
 		{
@@ -110,7 +110,119 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
 		Assert.Equal(0u, cpu.State.D[0]);
 		Assert.Equal(new uint[] { 0x1000, 0x1002, 0x1000, 0x1002 }, fetches.Select(fetch => fetch.Address));
-		Assert.Equal(10, elapsed);
+		Assert.Equal(12, elapsed);
+	}
+	[Fact]
+	public void TakenDbraCommittedTargetExtensionBlocksRetirementAndInterruptEntry()
+	{
+		var bus = new CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1002,
+			DelayedInstructionFetchOccurrence = 2,
+			DelayedInstructionFetchCycles = 16
+		};
+		Write(bus.Memory, 0x0064, 0x00, 0x00, 0x20, 0x00);
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE);
+		Write(bus.Memory, 0x2000, 0x4E, 0x71, 0x4E, 0x71);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.State.D[0] = 1;
+
+		var elapsed = cpu.ExecuteInstruction();
+		var transition = ((IM68000PipelineStateTransfer)cpu).ExportM68000PipelineState();
+		var extensionReadyCycle = transition.ReadyCycle1;
+
+		Assert.Equal(extensionReadyCycle, elapsed);
+		Assert.Equal(24, elapsed);
+		Assert.Equal(2, transition.PrefetchCount);
+		Assert.Equal(extensionReadyCycle, transition.ExceptionEntryNotBeforeCycle);
+
+		var interruptPhaseStart = bus.CpuBusPhases.Count;
+		cpu.RequestInterrupt(1, 0x0064);
+		var lowPcWrite = bus.CpuBusPhases
+			.Skip(interruptPhaseStart)
+			.First(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+
+		Assert.Equal(extensionReadyCycle + 6, lowPcWrite.RequestedCycle);
+	}
+	[Theory]
+	[InlineData(1, 2L, 12)]
+	[InlineData(2, 6L, 10)]
+	public void TakenDbraKeepsImportedPhysicalBusTailAcrossQueueReplacement(
+		int entryQueueCount,
+		long secondWordReadyCycle,
+		int expectedElapsed)
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,$1000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 1;
+
+		var pipeline = (IM68000PipelineStateTransfer)cpu;
+		pipeline.ImportM68000PipelineState(new M68000PipelineState(
+			PrefetchAddress: 0x1000,
+			Word0: 0x51C8,
+			Word1: 0xFFFE,
+			ReadyCycle0: 0,
+			ReadyCycle1: secondWordReadyCycle,
+			DeferredBatchEligible0: false,
+			DeferredBatchEligible1: false,
+			PrefetchCount: entryQueueCount,
+			ConsumeWithoutPrefetch: false,
+			SkipRetirePrefetchTopUp: false,
+			NextBusTransferCycle: 6,
+			LastBusReadyCycle: 6,
+			RetireBusCycle: 0,
+			PendingInternalCycles: 0));
+
+		var elapsed = cpu.ExecuteInstruction();
+		var after = pipeline.ExportM68000PipelineState();
+
+		Assert.Equal(expectedElapsed, elapsed);
+		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
+		Assert.Equal(0u, cpu.State.D[0]);
+		Assert.True(after.NextBusTransferCycle >= 6, $"tail moved backwards: {after.NextBusTransferCycle}");
+		Assert.True(after.LastBusReadyCycle >= 6, $"ready moved backwards: {after.LastBusReadyCycle}");
+		Assert.True(after.PrefetchCount >= 1, "taken DBRA must leave its target opcode available");
+		Assert.Equal(0x1000u, after.PrefetchAddress);
+	}
+	[Fact]
+	public void TakenDbraCancelsOnlyCancellablePendingPrefetch()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,$1000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 1;
+
+		var pipeline = (IM68000PipelineStateTransfer)cpu;
+		pipeline.ImportM68000PipelineState(new M68000PipelineState(
+			PrefetchAddress: 0x1000,
+			Word0: 0x51C8,
+			Word1: 0xFFFE,
+			ReadyCycle0: 0,
+			ReadyCycle1: 2,
+			DeferredBatchEligible0: false,
+			DeferredBatchEligible1: false,
+			PrefetchCount: 2,
+			ConsumeWithoutPrefetch: false,
+			SkipRetirePrefetchTopUp: false,
+			NextBusTransferCycle: 6,
+			LastBusReadyCycle: 6,
+			RetireBusCycle: 0,
+			PendingInternalCycles: 0,
+			HasPendingPrefetch: true,
+			PendingPrefetchAddress: 0x1004,
+			PendingPrefetchEarliestCycle: 10));
+
+		cpu.ExecuteInstruction();
+		var after = pipeline.ExportM68000PipelineState();
+
+		Assert.False(after.HasPendingPrefetch);
+		Assert.Equal(0x1000u, after.PrefetchAddress);
+		Assert.True(after.NextBusTransferCycle >= 6, $"tail moved backwards: {after.NextBusTransferCycle}");
 	}
 	[Fact]
 	public void ExpiredDbraReadsAbandonedTargetBeforeFallthroughRefill()
@@ -131,6 +243,27 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(
 			new uint[] { 0x1000, 0x1002, 0x1010, 0x1004, 0x1006 },
 			bus.InstructionFetchCycles.Select(fetch => fetch.Address));
+	}
+	[Fact]
+	public void ExpiredDbraWaitsForCommittedFallthroughExtensionRead()
+	{
+		var bus = new CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1006,
+			DelayedInstructionFetchCycles = 8
+		};
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0x00, 0x0E); // DBRA D0,$1010
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		Write(bus.Memory, 0x1010, 0x7E, 0xAD);             // abandoned target
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.D[0] = 0;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(18, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0x1006u, bus.InstructionFetchCycles[^1].Address);
 	}
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.Scalar)]
@@ -788,10 +921,10 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			((IM68000PrefetchDiagnostics)planned).CapturePrefetchDiagnosticState());
 		Assert.Equal(70, scalarBoundary.BeforeInstructionCalls);
 		Assert.Equal(70, scalarBoundary.AfterInstructionCalls);
-		Assert.Equal(2, plannedBoundary.BeforeInstructionCalls);
-		Assert.Equal(1, plannedBoundary.AfterInstructionCalls);
+		Assert.Equal(3, plannedBoundary.BeforeInstructionCalls);
+		Assert.Equal(2, plannedBoundary.AfterInstructionCalls);
 		Assert.Equal(1, plannedBoundary.BusAccessBatchCalls);
-		Assert.Equal(69, plannedBoundary.BusAccessBatchInstructions);
+		Assert.Equal(68, plannedBoundary.BusAccessBatchInstructions);
 		var counters = planned.CapturePlannedInterpreterCounters();
 		Assert.Equal(70, counters.FastInstructions);
 		Assert.Equal(0, counters.ScalarFallbackInstructions);
@@ -982,7 +1115,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			"Expected at least two DMACONR reads; data reads were " +
 			string.Join(", ", bus.DataReadCycles.Select(read => $"0x{read.Address:X8}@{read.Cycle}")));
 		Assert.Equal(60, dmaconrReadCycles[0]);
-		Assert.Equal(36, dmaconrReadCycles[1] - dmaconrReadCycles[0]);
+		// MOVE.W d16(An),Dn (12), BTST #imm,Dn (10), BNE taken (10).
+		Assert.Equal(32, dmaconrReadCycles[1] - dmaconrReadCycles[0]);
 	}
 	[Fact]
 	public void MoveaDoesNotAlterConditionCodes()

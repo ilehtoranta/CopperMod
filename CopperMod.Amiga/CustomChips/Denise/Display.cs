@@ -40,7 +40,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int CopperSkipHpUnits = 6;
         // A satisfied WAIT is observed on the following Copper phase. The next
         // instruction's first DMA word is available one Copper memory cycle later.
-        private const int CopperWaitWakeHpUnits = 4;
+        private const int CopperWaitWakeHpUnits = 5;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
         private const ushort CopconCopperDanger = 0x0002;
         private const int PalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
@@ -1789,6 +1789,38 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 IsTimelineUnsafeDisplayWrite(offset),
                 offset,
                 isCopper);
+
+            // The 358-pixel presentation row begins at h=$38 and therefore
+            // extends eight color clocks past the 227-clock physical raster
+            // boundary.  A write during those first clocks of the new beam
+            // line both establishes that line's x=0 state and changes the
+            // trailing pixels of the preceding presentation row.  Keep the
+            // normal clamped x=0 record above, then stitch the same physical
+            // state change into the preceding row at its unwrapped position.
+            GetCopperBeamPositionForCycle(
+                _liveFrameStartCycle,
+                cycle,
+                out _,
+                out var horizontal);
+            var wrappedX = ((horizontal + CopperHorizontalUnitsPerLine - DefaultDdfStart) * 2) + pixelDelay;
+            var wrappedRow = row - 1;
+            if ((uint)wrappedRow < (uint)LowResOutputHeight &&
+                (uint)wrappedX < (uint)AmigaConstants.PalLowResWidth &&
+                IsLiveLineValid(wrappedRow) &&
+                _displayTimeline.HasLine(wrappedRow))
+            {
+                var wrappedSnapshotIndex = CaptureTimelineStateSnapshot(
+                    wrappedRow,
+                    _liveLineStates[row]);
+                _displayTimeline.RecordDisplayChange(
+                    wrappedRow,
+                    wrappedX,
+                    wrappedSnapshotIndex,
+                    IsTimelineUnsafeDisplayWrite(offset),
+                    offset,
+                    isCopper);
+            }
+
             if (_displayTimeline.SegmentCount > MaxTimelineSegmentsPerFrame)
             {
                 _liveTimelineUnsafeForFrame = true;

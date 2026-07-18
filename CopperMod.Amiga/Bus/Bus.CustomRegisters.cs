@@ -176,16 +176,11 @@ namespace CopperMod.Amiga.Bus
         private static int EncodeVhposrHorizontal(int beamHorizontal)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-            // Internal RGA slot coordinates and the externally visible HPOS counter
-            // use different origins around horizontal sync.
-            var offset = physicalHorizontal >= 0xE1
-                ? 3
-                : physicalHorizontal >= 0xDF
-                    ? 4
-                    : physicalHorizontal >= 0xB7
-                        ? 3
-                    : 8;
-            return (physicalHorizontal + offset) % AmigaConstants.A500PalColorClocksPerRasterLine;
+            // Internal RGA slot coordinates precede externally visible Agnus
+            // HPOS by three CCKs. VHPOSR then returns the position after the
+            // access (WinUAE: GETHPOS followed by one incpos()).
+            return (physicalHorizontal + 4) %
+                AmigaConstants.A500PalColorClocksPerRasterLine;
         }
 
         private uint ReadRawLong(uint address)
@@ -420,10 +415,25 @@ namespace CopperMod.Amiga.Bus
             ApplyBeamControlWrite(write.Offset, write.Value, write.Cycle);
             Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
             Paula.AdvanceRegisterWritesTo(write.Cycle);
-            Display.ScheduleWrite(write.Cycle, write.Offset, write.Value);
+            Display.ScheduleWrite(GetDisplayWriteCycle(in write), write.Offset, write.Value);
             Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
             Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
             _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetDisplayWriteCycle(in CustomRegisterWriteContext write)
+        {
+            if (write.Requester != AmigaBusRequester.Cpu ||
+                !CustomRegisterScheduleClassifier.IsColorRegister(write.Offset))
+            {
+                return write.Cycle;
+            }
+
+            // The HRM slot engine uses Agnus-internal coordinates, three CCKs
+            // before the externally visible bus hpos. A CPU palette write then
+            // reaches Denise three CCKs after that physical bus transfer.
+            return write.Cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 
         private void ApplyBeamControlWrite(ushort offset, ushort value, long cycle)

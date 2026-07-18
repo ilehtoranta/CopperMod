@@ -1038,6 +1038,14 @@ namespace Copper68k
 
         public void RequestInterrupt(int level, uint vectorAddress)
         {
+            // A compiled slice owns the current 68000 prefetch/bus state. An
+            // exception is executed by the accurate fallback, so import that
+            // state before it performs stack, vector, and handler prefetches.
+            if (_fallbackPipelineStateTransfer != null && _m68000PipelineStateValid)
+            {
+                _fallbackPipelineStateTransfer.ImportM68000PipelineState(in _m68000PipelineState);
+            }
+
             _fallback.RequestInterrupt(level, vectorAddress);
             CaptureFallbackM68000PipelineState();
         }
@@ -9704,6 +9712,14 @@ namespace Copper68k
 
                 _compiledM68000PipelineActive = true;
                 _compiledM68000Microsequence = microsequence;
+                // Beginning the successor instruction consumes any DBcc-owned
+                // exception-entry barrier normally. If an interrupt had been
+                // accepted, RequestInterrupt would have imported and consumed
+                // this state before reaching this point.
+                _m68000PipelineState = _m68000PipelineState with
+                {
+                    ExceptionEntryNotBeforeCycle = 0
+                };
                 if (microsequence.UsesClassicBusCursor)
                 {
                     _classicCompiledCpuBusCycle = _m68000PipelineState.NextBusTransferCycle;

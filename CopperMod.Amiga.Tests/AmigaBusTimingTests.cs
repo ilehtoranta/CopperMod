@@ -1268,8 +1268,8 @@ public sealed class AmigaBusTimingTests
 
 		var diagnostic = result.ToDetailString();
 		Assert.True(supported, diagnostic);
-		Assert.Equal(requestCycle + AgnusChipSlotScheduler.SlotCycles, result.GrantedCycle);
-		Assert.Equal(2, result.CopperSteps);
+		Assert.Equal(requestCycle, result.GrantedCycle);
+		Assert.Equal(1, result.CopperSteps);
 	}
 
 	[Fact]
@@ -1301,11 +1301,16 @@ public sealed class AmigaBusTimingTests
 				access.Request.Kind == AmigaBusAccessKind.CpuDataRead &&
 				access.Request.Address == 0x00001000);
 
-		var diagnostic = result.ToDetailString();
+		var nearbyAccesses = string.Join(
+			" | ",
+			bus.BusAccesses
+				.Where(access => Math.Abs(access.GrantedCycle - requestCycle) <= 8)
+				.Select(access => $"{access.Request.Requester}/{access.Request.Kind}/{access.Request.Target}@{access.GrantedCycle}->{access.CompletedCycle}"));
+		var diagnostic = $"scratch={result.ToDetailString()}, reference={reference.GrantedCycle}->{reference.CompletedCycle}, accesses={nearbyAccesses}";
 		Assert.True(supported, diagnostic);
 		Assert.True(result.BitplaneFetches > 0, diagnostic);
-		Assert.Equal(reference.GrantedCycle, result.GrantedCycle);
-		Assert.Equal(reference.CompletedCycle, result.CompletedCycle);
+		Assert.True(reference.GrantedCycle == result.GrantedCycle, diagnostic);
+		Assert.True(reference.CompletedCycle == result.CompletedCycle, diagnostic);
 	}
 
 	[Fact]
@@ -6462,7 +6467,7 @@ public sealed class AmigaBusTimingTests
 			diagnostic);
 	}
 
-	[Fact(Skip = "WinUAE completes the final DBRA target reads at h13/h15 and reaches the IRQ handler at h34; current model reads h14/h17/h19 and reaches it at h37.")]
+	[Fact]
 	public void AccurateM68000Cycle01vDbraInterruptEntryDocumentsWinUaeBusSlots()
 	{
 		var result = RunCycle01vDelayLoopProbe(
@@ -6510,7 +6515,7 @@ public sealed class AmigaBusTimingTests
 		_ = diagnostic;
 	}
 
-	[Fact(Skip = "WinUAE steady DBRA has opcode-before-extension at 2 CCK spacing; current pending model reverses the bus order while preserving average cadence.")]
+	[Fact]
 	public void AccurateM68000Cycle01vSteadyDbraLineMatchesWinUaeBusSlots()
 	{
 		var result = RunCycle01vDelayLoopProbe(
@@ -6645,7 +6650,7 @@ public sealed class AmigaBusTimingTests
 			ledgers);
 	}
 
-	[Fact(Skip = "WinUAE enters the first post-RTE DBRA at v2h67; the focused model currently enters at v2h65.")]
+	[Fact]
 	public void AccurateM68000Cycle01vPostRteBoundaryMatchesEmulatorReference()
 	{
 		var result = RunCycle01vDelayLoopProbe(
