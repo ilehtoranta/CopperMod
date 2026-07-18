@@ -1,0 +1,28 @@
+{
+  "id": "a500-plus-ecs-pal",
+  "displayName": "A500 Plus ECS PAL",
+  "description": "A500 Plus ECS PAL, 1 MB chip RAM, RTC, two floppy drives, and deterministic CopperStart Kickstart 2.x shim.",
+  "machine": {
+    "model": "A500Plus",
+    "agnus": "ECS",
+    "denise": "ECS",
+    "videoStandard": "PAL",
+    "chipRamKb": 1024,
+    "pseudoFastRamKb": 0,
+    "rtcEnabled": true,
+    "floppyDriveCount": 2
+  },
+  "cpu": {
+    "backend": "M68000"
+  },
+  "kickstart": {
+    "source": "CopperStart",
+    "version": "2.04"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "synthetic"
+    }
+  }
+}
