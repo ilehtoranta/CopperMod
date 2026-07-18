@@ -16,6 +16,12 @@ namespace Copper6510
         OpcodeFetch,
 
         /// <summary>
+        /// The CPU performed an electrically real opcode read whose byte was discarded because
+        /// an interrupt or reset sequence was accepted. Normal read side effects still apply.
+        /// </summary>
+        DiscardedOpcodeFetch,
+
+        /// <summary>
         /// The CPU is fetching an operand byte.
         /// </summary>
         OperandFetch,
@@ -31,7 +37,8 @@ namespace Copper6510
         Write,
 
         /// <summary>
-        /// The CPU is performing a dummy read cycle.
+        /// The CPU is performing an electrically real read whose value is discarded internally.
+        /// The bus callback must still apply normal memory-mapped read side effects.
         /// </summary>
         DummyRead,
 
@@ -41,7 +48,8 @@ namespace Copper6510
         DummyWrite,
 
         /// <summary>
-        /// The CPU is reading from the stack page.
+        /// The CPU is performing an electrically real read from the stack page. This includes
+        /// discarded stack-address reads as well as reads whose value is consumed.
         /// </summary>
         StackRead,
 
@@ -53,11 +61,6 @@ namespace Copper6510
         /// <summary>
         /// The CPU is reading an interrupt or reset vector.
         /// </summary>
-        VectorRead,
-
-        /// <summary>
-        /// The CPU consumed a bus cycle without a data transfer.
-        /// </summary>
-        Idle
+        VectorRead
     }
 }

@@ -1,24 +1,12 @@
 # Copper6510
 
-Copper6510 is a reusable C# MOS 6510 CPU emulation core extracted from
-CopperMod.Sid. It provides a cycle-aware interpreter with official and common
-undocumented opcode support behind a small bus/core API.
+Copper6510 is a cycle-stepped NMOS 6510 CPU core for C64-class emulators. It
+supports official and common undocumented opcodes, observable bus cycles,
+hardware IRQ/NMI/RESET inputs, and RDY/AEC bus arbitration.
 
-The package is intended for emulator projects that want to supply their own
-memory map, devices, interrupt sources, and host integration.
+The package targets .NET 10.
 
-## Install
-
-```powershell
-dotnet add package Copper6510
-```
-
-Copper6510 currently targets `.NET 10`.
-
-## Quick Start
-
-Implement `IMos6510Bus`, create a `Mos6510`, reset it with an initial program
-counter, then execute instructions.
+## Quick start
 
 ```csharp
 using Copper6510;
@@ -28,7 +16,7 @@ bus.Memory[0x1000] = 0xA9; // LDA #$42
 bus.Memory[0x1001] = 0x42;
 
 var cpu = new Mos6510(bus);
-cpu.Reset(0x1000);
+cpu.InitializeState(0x1000); // deterministic host state injection
 cpu.ExecuteInstruction();
 
 Console.WriteLine(cpu.A); // 66
@@ -37,41 +25,64 @@ sealed class RamBus : IMos6510Bus
 {
     public byte[] Memory { get; } = new byte[65536];
 
-    public byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read)
+    public byte Read(ushort address, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read)
         => Memory[address];
 
-    public void Write(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write)
+    public void Write(
+        ushort address,
+        byte value,
+        Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write)
         => Memory[address] = value;
-
-    public void Idle(ushort address, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle)
-    {
-    }
 }
 ```
 
-## Bus Contract
+`ExecuteInstruction()` is a convenience wrapper. Cycle-driven hosts should
+call `StepCycle()` once per PHI2 cycle and inspect its allocation-free
+`Mos6510CycleResult`.
 
-`IMos6510Bus` receives every CPU byte read, byte write, and idle cycle with the
-16-bit address, the cycle offset within the current instruction, and the bus
-access kind.
+Opcode fetch selects a static microprogram descriptor. Addressing operands,
+effective addresses, page-cross state, and intermediate data remain in CPU
+microstate between calls; instructions are not executed atomically and replayed.
 
-`Mos6510BusAccessKind` distinguishes opcode fetches, operand fetches, data
-reads and writes, stack accesses, vector reads, dummy cycles, and idle cycles.
-Hosts can use this to model devices whose side effects depend on precise CPU
-cycle timing.
+## Pins and bus arbitration
 
-## State and Interrupts
+Drive hardware inputs before the cycle on which they are sampled:
 
-`Mos6510` exposes the accumulator, index registers, stack pointer, program
-counter, status register, cycle counter, halt state, and last fetched opcode.
+```csharp
+cpu.SetIrqLine(ciaIrq || vicIrq); // level-sensitive
+cpu.SetNmiLine(cia2Nmi);          // rising-edge latched
+cpu.SetReadyLine(baHigh);         // low stalls reads; writes complete
+cpu.SetBusAvailable(aecHigh);     // low freezes the CPU without a bus callback
+var result = cpu.StepCycle();
+```
 
-Use `TryRequestIrq` or `RequestIrq` for maskable interrupts and `TryRequestNmi`
-or `RequestNmi` for non-maskable interrupts. `BeginSubroutine` is provided for
-hosts that need to call machine-code routines directly and detect sentinel
-returns.
+Drive `SetResetLine(true)` for at least two cycles, then release it. The core
+performs the seven-cycle NMOS reset sequence through `$FFFC/$FFFD`. Use
+`InitializeState()` only when a host intentionally injects CPU state without
+emulating RESET.
 
-## Status
+Every CPU-owned cycle calls exactly one `Read` or `Write`. Access kinds identify
+executed and discarded opcode fetches, operands, dummy reads/writes, stack
+accesses, and vector reads. RDY-low reads repeat; AEC-low cycles make no bus
+callback.
 
-Copper6510 1.1 is an accuracy-oriented emulator core with a stable,
-intentionally small public API. Applications should depend on `Mos6510`,
-`IMos6510Bus`, and `Mos6510BusAccessKind`.
+`DummyRead`, `StackRead`, and `DiscardedOpcodeFetch` are real electrical reads,
+not notifications. A bus implementation must return its normal value and apply
+memory-mapped side effects on every callback, including every RDY-stalled repeat.
+The callback address is the address observed on the NMOS 6510 bus, which can be
+a sequential PC, current stack address, or partially corrected indexed/branch
+address whose value the CPU ultimately discards.
+
+## Migrating from 1.1
+
+| Copper6510 1.1 | Copper6510 2.0 |
+| --- | --- |
+| Bus callbacks receive `cycleOffset` | Host owns the clock; one callback represents the current cycle |
+| `IMos6510Bus.Idle` | Removed; unused CPU cycles are real dummy reads |
+| `RequestIrq` / `TryRequestIrq` | `SetIrqLine(bool)` |
+| `RequestNmi` / `TryRequestNmi` | `SetNmiLine(bool)` |
+| `Reset(pc)` | `InitializeState(pc)` for injection or `SetResetLine` for hardware reset |
+| Instruction-only execution | `StepCycle()` plus the `ExecuteInstruction()` convenience wrapper |
+
+`BeginSubroutine` remains a synthetic, zero-time host helper. It is not a
+hardware JSR and should not be used when every setup bus cycle must be modeled.

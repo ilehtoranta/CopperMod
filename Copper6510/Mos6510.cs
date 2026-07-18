@@ -8,7 +8,7 @@ using System;
 namespace Copper6510
 {
     /// <summary>
-    /// Bus interface used by the MOS 6510 CPU core to access memory, devices, and idle bus cycles.
+    /// Bus interface used by the MOS 6510 CPU core to access memory and devices one cycle at a time.
     /// </summary>
     public interface IMos6510Bus
     {
@@ -16,34 +16,24 @@ namespace Copper6510
         /// Reads one byte from the emulated bus.
         /// </summary>
         /// <param name="address">The 16-bit CPU address.</param>
-        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
         /// <param name="kind">The reason for the bus access.</param>
         /// <returns>The byte read from the bus.</returns>
-        byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read);
+        byte Read(ushort address, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read);
 
         /// <summary>
         /// Writes one byte to the emulated bus.
         /// </summary>
         /// <param name="address">The 16-bit CPU address.</param>
         /// <param name="value">The byte to write.</param>
-        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
         /// <param name="kind">The reason for the bus access.</param>
-        void Write(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write);
-
-        /// <summary>
-        /// Notifies the host that the CPU consumed a bus cycle without a data transfer.
-        /// </summary>
-        /// <param name="address">The address associated with the idle cycle.</param>
-        /// <param name="cycleOffset">The cycle offset within the current CPU instruction.</param>
-        /// <param name="kind">The reason for the idle cycle.</param>
-        void Idle(ushort address, int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle);
+        void Write(ushort address, byte value, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Write);
     }
 
     /// <summary>
     /// Cycle-aware MOS 6510 CPU core with official and common undocumented opcode support.
     /// </summary>
     [HotPath]
-    public sealed class Mos6510
+    public sealed partial class Mos6510
     {
         private const byte Carry = 0x01;
         private const byte Zero = 0x02;
@@ -55,7 +45,23 @@ namespace Copper6510
         private const byte Negative = 0x80;
 
         private readonly IMos6510Bus _bus;
-        private readonly bool[] _busCycleUsed = new bool[16];
+        private Mos6510OperationKind _activeOperation;
+        private Mos6510OperationKind _interruptVectorKind;
+        private int _operationCycle;
+        private ushort _interruptVectorBase;
+        private byte _interruptVectorLow;
+        private bool _irqLine;
+        private bool _nmiLine;
+        private bool _nmiPending;
+        private bool _irqAccepted;
+        private bool _blockIrqOnce;
+        private bool _blockNmiOnce;
+        private bool _readyLine = true;
+        private bool _busAvailable = true;
+        private bool _resetLine;
+        private int _resetAssertedCycles;
+        private bool _resetArmed;
+        private bool _unstableStoreRdyStall;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Mos6510"/> class.
@@ -64,7 +70,7 @@ namespace Copper6510
         public Mos6510(IMos6510Bus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-            Reset();
+            InitializeState();
         }
 
         /// <summary>
@@ -113,10 +119,10 @@ namespace Copper6510
         public byte LastOpcode { get; private set; }
 
         /// <summary>
-        /// Resets CPU registers and starts execution at the supplied program counter.
+        /// Initializes deterministic CPU state without executing the hardware RESET sequence.
         /// </summary>
-        /// <param name="programCounter">The reset program counter.</param>
-        public void Reset(ushort programCounter = 0)
+        /// <param name="programCounter">The program counter to install.</param>
+        public void InitializeState(ushort programCounter = 0)
         {
             A = 0;
             X = 0;
@@ -126,6 +132,68 @@ namespace Copper6510
             Status = Unused | InterruptDisable;
             Cycles = 0;
             Halted = false;
+            LastOpcode = 0;
+            _activeOperation = Mos6510OperationKind.None;
+            _operationCycle = 0;
+            _interruptVectorBase = 0;
+            _interruptVectorKind = Mos6510OperationKind.None;
+            _nmiPending = false;
+            _irqAccepted = false;
+            _blockIrqOnce = false;
+            _blockNmiOnce = false;
+            _irqLine = false;
+            _nmiLine = false;
+            _resetLine = false;
+            _resetAssertedCycles = 0;
+            _resetArmed = false;
+            _unstableStoreRdyStall = false;
+            _readyLine = true;
+            _busAvailable = true;
+        }
+
+        /// <summary>
+        /// Sets the asserted state of the level-sensitive IRQ input.
+        /// </summary>
+        public void SetIrqLine(bool asserted)
+        {
+            _irqLine = asserted;
+        }
+
+        /// <summary>
+        /// Sets the asserted state of the edge-sensitive NMI input.
+        /// </summary>
+        public void SetNmiLine(bool asserted)
+        {
+            if (asserted && !_nmiLine)
+            {
+                _nmiPending = true;
+            }
+
+            _nmiLine = asserted;
+        }
+
+        /// <summary>
+        /// Sets the asserted state of the RESET input.
+        /// </summary>
+        public void SetResetLine(bool asserted)
+        {
+            _resetLine = asserted;
+        }
+
+        /// <summary>
+        /// Sets whether read cycles may advance. Write cycles are not stopped by RDY.
+        /// </summary>
+        public void SetReadyLine(bool ready)
+        {
+            _readyLine = ready;
+        }
+
+        /// <summary>
+        /// Sets whether the CPU owns the external bus (AEC high).
+        /// </summary>
+        public void SetBusAvailable(bool available)
+        {
+            _busAvailable = available;
         }
 
         /// <summary>
@@ -169,476 +237,332 @@ namespace Copper6510
         /// <param name="y">The Y register value to use at entry.</param>
         public void BeginSubroutine(ushort address, byte accumulator, byte x = 0, byte y = 0)
         {
+            _activeOperation = Mos6510OperationKind.None;
+            _operationCycle = 0;
+            _irqAccepted = false;
+            _blockIrqOnce = false;
+            _blockNmiOnce = false;
             A = accumulator;
             X = x;
             Y = y;
             StackPointer = 0xFD;
             ProgramCounter = address;
             Halted = false;
-            PushWord(0xFFFE, 0);
+            _bus.Write(0x01FD, 0xFF, Mos6510BusAccessKind.StackWrite);
+            _bus.Write(0x01FC, 0xFE, Mos6510BusAccessKind.StackWrite);
+            StackPointer = 0xFB;
         }
 
         /// <summary>
-        /// Requests a maskable interrupt.
+        /// Executes one CPU cycle.
         /// </summary>
-        public void RequestIrq()
+        public Mos6510CycleResult StepCycle()
         {
-            _ = TryRequestIrq();
+            if (_resetLine)
+            {
+                _resetAssertedCycles++;
+                if (_resetAssertedCycles == 2)
+                {
+                    _resetArmed = true;
+                    AbortActiveOperation();
+                    Halted = false;
+                }
+
+                Cycles++;
+                return new Mos6510CycleResult(Mos6510OperationKind.None, Mos6510OperationKind.None, false);
+            }
+
+            if (!_resetArmed && _resetAssertedCycles != 0)
+            {
+                _resetAssertedCycles = 0;
+            }
+
+            Mos6510OperationKind started = Mos6510OperationKind.None;
+            if (_activeOperation == Mos6510OperationKind.None)
+            {
+                if (_resetArmed)
+                {
+                    _resetArmed = false;
+                    _resetAssertedCycles = 0;
+                    StartDirectOperation(Mos6510OperationKind.Reset, 0xFFFC);
+                }
+                else if (Halted)
+                {
+                    Cycles++;
+                    return new Mos6510CycleResult(
+                        Mos6510OperationKind.Halted,
+                        Mos6510OperationKind.Halted,
+                        false);
+                }
+                else if (_nmiPending && !_blockNmiOnce)
+                {
+                    _nmiPending = false;
+                    StartDirectOperation(Mos6510OperationKind.Nmi, 0xFFFA);
+                }
+                else if (!_blockIrqOnce && (_irqAccepted || (_irqLine && !GetFlag(InterruptDisable))))
+                {
+                    _irqAccepted = false;
+                    StartDirectOperation(Mos6510OperationKind.Irq, 0xFFFE);
+                }
+                else
+                {
+                    StartInstructionOperation();
+                }
+
+                started = _activeOperation;
+                _blockNmiOnce = false;
+                _blockIrqOnce = false;
+            }
+
+            return _activeOperation == Mos6510OperationKind.Instruction
+                ? StepInstructionCycle(started)
+                : StepDirectOperation(started);
         }
 
         /// <summary>
-        /// Requests a non-maskable interrupt.
+        /// Executes through interrupt/reset entry, if any, and then one logical instruction.
         /// </summary>
-        public void RequestNmi()
+        /// <returns>The number of elapsed CPU cycles.</returns>
+        public int ExecuteInstruction()
         {
-            ServiceInterrupt(0xFFFA);
+            var start = Cycles;
+            while (true)
+            {
+                var result = StepCycle();
+                if (result.CompletedOperation == Mos6510OperationKind.Instruction ||
+                    result.CompletedOperation == Mos6510OperationKind.Halted)
+                {
+                    return checked((int)(Cycles - start));
+                }
+            }
         }
 
-        /// <summary>
-        /// Requests a maskable interrupt if the interrupt-disable flag is clear.
-        /// </summary>
-        /// <returns><see langword="true"/> when the interrupt was serviced.</returns>
-        public bool TryRequestIrq()
+        private void StartInstructionOperation()
         {
-            if (GetFlag(InterruptDisable))
+            _activeOperation = Mos6510OperationKind.Instruction;
+            _operationCycle = 0;
+            _interruptVectorBase = 0;
+            _interruptVectorKind = Mos6510OperationKind.None;
+            _unstableStoreRdyStall = false;
+        }
+
+        private void StartDirectOperation(Mos6510OperationKind operation, ushort vectorBase)
+        {
+            _activeOperation = operation;
+            _interruptVectorKind = operation;
+            _interruptVectorBase = vectorBase;
+            _operationCycle = 0;
+            _interruptVectorLow = 0;
+            if (operation == Mos6510OperationKind.Reset)
+            {
+                _nmiPending = false;
+                _irqAccepted = false;
+                Halted = false;
+            }
+        }
+
+        private Mos6510CycleResult StepInstructionCycle(Mos6510OperationKind started)
+        {
+            return StepMicrocodedInstructionCycle(started);
+        }
+
+        private Mos6510CycleResult StepDirectOperation(Mos6510OperationKind started)
+        {
+            var operation = _activeOperation;
+            var advanced = operation == Mos6510OperationKind.Reset
+                ? StepResetBusCycle()
+                : StepInterruptBusCycle();
+            Cycles++;
+            if (!advanced)
+            {
+                return new Mos6510CycleResult(started, Mos6510OperationKind.None, false);
+            }
+
+            _operationCycle++;
+            if (_operationCycle < 7)
+            {
+                return new Mos6510CycleResult(started, Mos6510OperationKind.None, true);
+            }
+
+            var completed = operation == Mos6510OperationKind.Reset
+                ? Mos6510OperationKind.Reset
+                : _interruptVectorKind;
+            if (operation != Mos6510OperationKind.Reset &&
+                _interruptVectorBase != 0xFFFA &&
+                _nmiPending)
+            {
+                _blockNmiOnce = true;
+            }
+
+            _activeOperation = Mos6510OperationKind.None;
+            _operationCycle = 0;
+            return new Mos6510CycleResult(started, completed, true);
+        }
+
+        private bool StepInterruptBusCycle()
+        {
+            switch (_operationCycle)
+            {
+                case 0:
+                    return TryDirectRead(ProgramCounter, Mos6510BusAccessKind.DiscardedOpcodeFetch, out _);
+                case 1:
+                    return TryDirectRead(ProgramCounter, Mos6510BusAccessKind.DummyRead, out _);
+                case 2:
+                    if (!TryDirectWrite(
+                        (ushort)(0x0100 | StackPointer),
+                        (byte)(ProgramCounter >> 8),
+                        Mos6510BusAccessKind.StackWrite))
+                    {
+                        return false;
+                    }
+
+                    StackPointer--;
+                    return true;
+                case 3:
+                    if (!TryDirectWrite(
+                        (ushort)(0x0100 | StackPointer),
+                        (byte)ProgramCounter,
+                        Mos6510BusAccessKind.StackWrite))
+                    {
+                        return false;
+                    }
+
+                    StackPointer--;
+                    return true;
+                case 4:
+                    if (!TryDirectWrite(
+                        (ushort)(0x0100 | StackPointer),
+                        (byte)((Status & ~Break) | Unused),
+                        Mos6510BusAccessKind.StackWrite))
+                    {
+                        return false;
+                    }
+
+                    StackPointer--;
+                    return true;
+                case 5:
+                    if (_activeOperation == Mos6510OperationKind.Irq && _nmiPending)
+                    {
+                        _nmiPending = false;
+                        _interruptVectorBase = 0xFFFA;
+                        _interruptVectorKind = Mos6510OperationKind.Nmi;
+                    }
+
+                    return TryDirectRead(_interruptVectorBase, Mos6510BusAccessKind.VectorRead, out _interruptVectorLow);
+                default:
+                    if (!TryDirectRead(
+                        (ushort)(_interruptVectorBase + 1),
+                        Mos6510BusAccessKind.VectorRead,
+                        out var high))
+                    {
+                        return false;
+                    }
+
+                    ProgramCounter = (ushort)(_interruptVectorLow | (high << 8));
+                    SetFlag(InterruptDisable, true);
+                    return true;
+            }
+        }
+
+        private bool StepResetBusCycle()
+        {
+            switch (_operationCycle)
+            {
+                case 0:
+                    return TryDirectRead(ProgramCounter, Mos6510BusAccessKind.DiscardedOpcodeFetch, out _);
+                case 1:
+                    return TryDirectRead(ProgramCounter, Mos6510BusAccessKind.DummyRead, out _);
+                case 2:
+                case 3:
+                case 4:
+                    if (!TryDirectRead(
+                        (ushort)(0x0100 | StackPointer),
+                        Mos6510BusAccessKind.StackRead,
+                        out _))
+                    {
+                        return false;
+                    }
+
+                    StackPointer--;
+                    return true;
+                case 5:
+                    return TryDirectRead(0xFFFC, Mos6510BusAccessKind.VectorRead, out _interruptVectorLow);
+                default:
+                    if (!TryDirectRead(0xFFFD, Mos6510BusAccessKind.VectorRead, out var high))
+                    {
+                        return false;
+                    }
+
+                    ProgramCounter = (ushort)(_interruptVectorLow | (high << 8));
+                    SetFlag(InterruptDisable, true);
+                    Halted = false;
+                    _nmiPending = false;
+                    _irqAccepted = false;
+                    return true;
+            }
+        }
+
+        private bool TryDirectRead(ushort address, Mos6510BusAccessKind kind, out byte value)
+        {
+            value = 0;
+            if (!_busAvailable)
             {
                 return false;
             }
 
-            ServiceInterrupt(0xFFFE);
+            value = _bus.Read(address, kind);
+            return _readyLine;
+        }
+
+        private bool TryDirectWrite(ushort address, byte value, Mos6510BusAccessKind kind)
+        {
+            if (!_busAvailable)
+            {
+                return false;
+            }
+
+            _bus.Write(address, value, kind);
             return true;
         }
 
-        /// <summary>
-        /// Requests a non-maskable interrupt.
-        /// </summary>
-        /// <returns><see langword="true"/> when the interrupt was serviced.</returns>
-        public bool TryRequestNmi()
+        private void SampleInterruptsAfterInstruction(byte initialStatus, byte opcode, int cycles)
         {
-            ServiceInterrupt(0xFFFA);
-            return true;
-        }
-
-        private void ServiceInterrupt(ushort vectorAddress)
-        {
-            BeginInstructionBus();
-            Idle(1);
-            Idle(2);
-            PushWord(ProgramCounter, 3);
-            Push((byte)(Status & ~Break), 5);
-            SetFlag(InterruptDisable, true);
-            ProgramCounter = ReadWord(vectorAddress, cycleOffset: 6);
-            Cycles += 8;
-        }
-
-        /// <summary>
-        /// Executes one logical CPU instruction or one idle cycle while halted.
-        /// </summary>
-        /// <returns>The number of CPU cycles advanced by the instruction.</returns>
-        public int ExecuteInstruction()
-        {
-            if (Halted)
+            var branchTaken = (opcode & 0x1F) == 0x10 && cycles > 2;
+            if (branchTaken)
             {
-                Cycles++;
-                return 1;
+                _blockNmiOnce = _nmiPending;
+                _blockIrqOnce = _irqLine;
+                return;
             }
 
-            var start = Cycles;
-            BeginInstructionBus();
-            var opcode = FetchOpcode();
-            LastOpcode = opcode;
-            switch (opcode)
+            var useInitialInterruptMask = opcode == 0x28 || opcode == 0x58 || opcode == 0x78;
+            var sampledStatus = useInitialInterruptMask ? initialStatus : Status;
+            if (_irqLine && (sampledStatus & InterruptDisable) == 0)
             {
-                case 0x00: Brk(); AddCycles(7); break;
-                case 0x01: Ora(ReadData(IndirectX(), 6), 6); break;
-                case 0x02: Jam(); break;
-                case 0x03: Slo(IndirectX(), 8); break;
-                case 0x04: NopMemory(ZeroPage(), 3); break;
-                case 0x05: Ora(ReadData(ZeroPage(), 3), 3); break;
-                case 0x06: AslMemory(ZeroPage(), 5); break;
-                case 0x07: Slo(ZeroPage(), 5); break;
-                case 0x08: Push((byte)(Status | Break | Unused), 2); AddCycles(3); break;
-                case 0x09: Ora(FetchByte(), 2); break;
-                case 0x0A: A = Asl(A); AddCycles(2); break;
-                case 0x0B: Anc(FetchByte()); AddCycles(2); break;
-                case 0x0C: NopMemory(Absolute(), 4); break;
-                case 0x0D: Ora(ReadData(Absolute(), 4), 4); break;
-                case 0x0E: AslMemory(Absolute(), 6); break;
-                case 0x0F: Slo(Absolute(), 6); break;
-                case 0x10: Branch(!GetFlag(Negative)); break;
-                case 0x11: Ora(ReadData(IndirectY(out var p11), 5 + p11), 5 + p11); break;
-                case 0x12: Jam(); break;
-                case 0x13: Slo(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0x14: NopMemory(ZeroPageX(), 4); break;
-                case 0x15: Ora(ReadData(ZeroPageX(), 4), 4); break;
-                case 0x16: AslMemory(ZeroPageX(), 6); break;
-                case 0x17: Slo(ZeroPageX(), 6); break;
-                case 0x18: SetFlag(Carry, false); AddCycles(2); break;
-                case 0x19: Ora(ReadData(AbsoluteY(out var p19), 4 + p19), 4 + p19); break;
-                case 0x1A: AddCycles(2); break;
-                case 0x1B: Slo(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0x1C: NopMemory(AbsoluteX(out var p1c), 4 + p1c); break;
-                case 0x1D: Ora(ReadData(AbsoluteX(out var p1d), 4 + p1d), 4 + p1d); break;
-                case 0x1E: AslMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x1F: Slo(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x20: Jsr(); AddCycles(6); break;
-                case 0x21: And(ReadData(IndirectX(), 6), 6); break;
-                case 0x22: Jam(); break;
-                case 0x23: Rla(IndirectX(), 8); break;
-                case 0x24: Bit(ReadData(ZeroPage(), 3), 3); break;
-                case 0x25: And(ReadData(ZeroPage(), 3), 3); break;
-                case 0x26: RolMemory(ZeroPage(), 5); break;
-                case 0x27: Rla(ZeroPage(), 5); break;
-                case 0x28: Status = (byte)((Pull(3) & ~Break) | Unused); AddCycles(4); break;
-                case 0x29: And(FetchByte(), 2); break;
-                case 0x2A: A = Rol(A); AddCycles(2); break;
-                case 0x2B: Anc(FetchByte()); AddCycles(2); break;
-                case 0x2C: Bit(ReadData(Absolute(), 4), 4); break;
-                case 0x2D: And(ReadData(Absolute(), 4), 4); break;
-                case 0x2E: RolMemory(Absolute(), 6); break;
-                case 0x2F: Rla(Absolute(), 6); break;
-                case 0x30: Branch(GetFlag(Negative)); break;
-                case 0x31: And(ReadData(IndirectY(out var p31), 5 + p31), 5 + p31); break;
-                case 0x32: Jam(); break;
-                case 0x33: Rla(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0x34: NopMemory(ZeroPageX(), 4); break;
-                case 0x35: And(ReadData(ZeroPageX(), 4), 4); break;
-                case 0x36: RolMemory(ZeroPageX(), 6); break;
-                case 0x37: Rla(ZeroPageX(), 6); break;
-                case 0x38: SetFlag(Carry, true); AddCycles(2); break;
-                case 0x39: And(ReadData(AbsoluteY(out var p39), 4 + p39), 4 + p39); break;
-                case 0x3A: AddCycles(2); break;
-                case 0x3B: Rla(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0x3C: NopMemory(AbsoluteX(out var p3c), 4 + p3c); break;
-                case 0x3D: And(ReadData(AbsoluteX(out var p3d), 4 + p3d), 4 + p3d); break;
-                case 0x3E: RolMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x3F: Rla(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x40: Rti(); AddCycles(6); break;
-                case 0x41: Eor(ReadData(IndirectX(), 6), 6); break;
-                case 0x42: Jam(); break;
-                case 0x43: Sre(IndirectX(), 8); break;
-                case 0x44: NopMemory(ZeroPage(), 3); break;
-                case 0x45: Eor(ReadData(ZeroPage(), 3), 3); break;
-                case 0x46: LsrMemory(ZeroPage(), 5); break;
-                case 0x47: Sre(ZeroPage(), 5); break;
-                case 0x48: Push(A, 2); AddCycles(3); break;
-                case 0x49: Eor(FetchByte(), 2); break;
-                case 0x4A: A = Lsr(A); AddCycles(2); break;
-                case 0x4B: Alr(FetchByte()); AddCycles(2); break;
-                case 0x4C: ProgramCounter = Absolute(); AddCycles(3); break;
-                case 0x4D: Eor(ReadData(Absolute(), 4), 4); break;
-                case 0x4E: LsrMemory(Absolute(), 6); break;
-                case 0x4F: Sre(Absolute(), 6); break;
-                case 0x50: Branch(!GetFlag(Overflow)); break;
-                case 0x51: Eor(ReadData(IndirectY(out var p51), 5 + p51), 5 + p51); break;
-                case 0x52: Jam(); break;
-                case 0x53: Sre(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0x54: NopMemory(ZeroPageX(), 4); break;
-                case 0x55: Eor(ReadData(ZeroPageX(), 4), 4); break;
-                case 0x56: LsrMemory(ZeroPageX(), 6); break;
-                case 0x57: Sre(ZeroPageX(), 6); break;
-                case 0x58: SetFlag(InterruptDisable, false); AddCycles(2); break;
-                case 0x59: Eor(ReadData(AbsoluteY(out var p59), 4 + p59), 4 + p59); break;
-                case 0x5A: AddCycles(2); break;
-                case 0x5B: Sre(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0x5C: NopMemory(AbsoluteX(out var p5c), 4 + p5c); break;
-                case 0x5D: Eor(ReadData(AbsoluteX(out var p5d), 4 + p5d), 4 + p5d); break;
-                case 0x5E: LsrMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x5F: Sre(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x60: Rts(); AddCycles(6); break;
-                case 0x61: Adc(ReadData(IndirectX(), 6), 6); break;
-                case 0x62: Jam(); break;
-                case 0x63: Rra(IndirectX(), 8); break;
-                case 0x64: NopMemory(ZeroPage(), 3); break;
-                case 0x65: Adc(ReadData(ZeroPage(), 3), 3); break;
-                case 0x66: RorMemory(ZeroPage(), 5); break;
-                case 0x67: Rra(ZeroPage(), 5); break;
-                case 0x68: A = Pull(3); SetZn(A); AddCycles(4); break;
-                case 0x69: Adc(FetchByte(), 2); break;
-                case 0x6A: A = Ror(A); AddCycles(2); break;
-                case 0x6B: Arr(FetchByte()); AddCycles(2); break;
-                case 0x6C: ProgramCounter = ReadWord(Absolute(), wrapPage: true, cycleOffset: 3); AddCycles(5); break;
-                case 0x6D: Adc(ReadData(Absolute(), 4), 4); break;
-                case 0x6E: RorMemory(Absolute(), 6); break;
-                case 0x6F: Rra(Absolute(), 6); break;
-                case 0x70: Branch(GetFlag(Overflow)); break;
-                case 0x71: Adc(ReadData(IndirectY(out var p71), 5 + p71), 5 + p71); break;
-                case 0x72: Jam(); break;
-                case 0x73: Rra(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0x74: NopMemory(ZeroPageX(), 4); break;
-                case 0x75: Adc(ReadData(ZeroPageX(), 4), 4); break;
-                case 0x76: RorMemory(ZeroPageX(), 6); break;
-                case 0x77: Rra(ZeroPageX(), 6); break;
-                case 0x78: SetFlag(InterruptDisable, true); AddCycles(2); break;
-                case 0x79: Adc(ReadData(AbsoluteY(out var p79), 4 + p79), 4 + p79); break;
-                case 0x7A: AddCycles(2); break;
-                case 0x7B: Rra(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0x7C: NopMemory(AbsoluteX(out var p7c), 4 + p7c); break;
-                case 0x7D: Adc(ReadData(AbsoluteX(out var p7d), 4 + p7d), 4 + p7d); break;
-                case 0x7E: RorMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x7F: Rra(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0x80: Nop(FetchByte(), 2); break;
-                case 0x81: Write(IndirectX(), A, 6); break;
-                case 0x82: Nop(FetchByte(), 2); break;
-                case 0x83: Write(IndirectX(), (byte)(A & X), 6); break;
-                case 0x84: Write(ZeroPage(), Y, 3); break;
-                case 0x85: Write(ZeroPage(), A, 3); break;
-                case 0x86: Write(ZeroPage(), X, 3); break;
-                case 0x87: Write(ZeroPage(), (byte)(A & X), 3); break;
-                case 0x88: Y--; SetZn(Y); AddCycles(2); break;
-                case 0x89: Nop(FetchByte(), 2); break;
-                case 0x8A: A = X; SetZn(A); AddCycles(2); break;
-                case 0x8B: A = (byte)(X & FetchByte()); SetZn(A); AddCycles(2); break;
-                case 0x8C: Write(Absolute(), Y, 4); break;
-                case 0x8D: Write(Absolute(), A, 4); break;
-                case 0x8E: Write(Absolute(), X, 4); break;
-                case 0x8F: Write(Absolute(), (byte)(A & X), 4); break;
-                case 0x90: Branch(!GetFlag(Carry)); break;
-                case 0x91: Write(IndirectY(out _, forceDummyRead: true), A, 6); break;
-                case 0x92: Jam(); break;
-                case 0x93: Ahx(IndirectY(out _, forceDummyRead: true), 6); break;
-                case 0x94: Write(ZeroPageX(), Y, 4); break;
-                case 0x95: Write(ZeroPageX(), A, 4); break;
-                case 0x96: Write(ZeroPageY(), X, 4); break;
-                case 0x97: Write(ZeroPageY(), (byte)(A & X), 4); break;
-                case 0x98: A = Y; SetZn(A); AddCycles(2); break;
-                case 0x99: Write(AbsoluteY(out _, forceDummyRead: true), A, 5); break;
-                case 0x9A: StackPointer = X; AddCycles(2); break;
-                case 0x9B: Tas(AbsoluteY(out _, forceDummyRead: true), 5); break;
-                case 0x9C: Shy(AbsoluteX(out _, forceDummyRead: true), 5); break;
-                case 0x9D: Write(AbsoluteX(out _, forceDummyRead: true), A, 5); break;
-                case 0x9E: Shx(AbsoluteY(out _, forceDummyRead: true), 5); break;
-                case 0x9F: Ahx(AbsoluteY(out _, forceDummyRead: true), 5); break;
-                case 0xA0: Ldy(FetchByte(), 2); break;
-                case 0xA1: Lda(ReadData(IndirectX(), 6), 6); break;
-                case 0xA2: Ldx(FetchByte(), 2); break;
-                case 0xA3: Lax(ReadData(IndirectX(), 6), 6); break;
-                case 0xA4: Ldy(ReadData(ZeroPage(), 3), 3); break;
-                case 0xA5: Lda(ReadData(ZeroPage(), 3), 3); break;
-                case 0xA6: Ldx(ReadData(ZeroPage(), 3), 3); break;
-                case 0xA7: Lax(ReadData(ZeroPage(), 3), 3); break;
-                case 0xA8: Y = A; SetZn(Y); AddCycles(2); break;
-                case 0xA9: Lda(FetchByte(), 2); break;
-                case 0xAA: X = A; SetZn(X); AddCycles(2); break;
-                case 0xAB: Lax((byte)(A & FetchByte()), 2); break;
-                case 0xAC: Ldy(ReadData(Absolute(), 4), 4); break;
-                case 0xAD: Lda(ReadData(Absolute(), 4), 4); break;
-                case 0xAE: Ldx(ReadData(Absolute(), 4), 4); break;
-                case 0xAF: Lax(ReadData(Absolute(), 4), 4); break;
-                case 0xB0: Branch(GetFlag(Carry)); break;
-                case 0xB1: Lda(ReadData(IndirectY(out var pb1), 5 + pb1), 5 + pb1); break;
-                case 0xB2: Jam(); break;
-                case 0xB3: Lax(ReadData(IndirectY(out var pb3), 5 + pb3), 5 + pb3); break;
-                case 0xB4: Ldy(ReadData(ZeroPageX(), 4), 4); break;
-                case 0xB5: Lda(ReadData(ZeroPageX(), 4), 4); break;
-                case 0xB6: Ldx(ReadData(ZeroPageY(), 4), 4); break;
-                case 0xB7: Lax(ReadData(ZeroPageY(), 4), 4); break;
-                case 0xB8: SetFlag(Overflow, false); AddCycles(2); break;
-                case 0xB9: Lda(ReadData(AbsoluteY(out var pb9), 4 + pb9), 4 + pb9); break;
-                case 0xBA: X = StackPointer; SetZn(X); AddCycles(2); break;
-                case 0xBB: Las(ReadData(AbsoluteY(out var pbb), 4 + pbb)); AddCycles(4 + pbb); break;
-                case 0xBC: Ldy(ReadData(AbsoluteX(out var pbc), 4 + pbc), 4 + pbc); break;
-                case 0xBD: Lda(ReadData(AbsoluteX(out var pbd), 4 + pbd), 4 + pbd); break;
-                case 0xBE: Ldx(ReadData(AbsoluteY(out var pbe), 4 + pbe), 4 + pbe); break;
-                case 0xBF: Lax(ReadData(AbsoluteY(out var pbf), 4 + pbf), 4 + pbf); break;
-                case 0xC0: Compare(Y, FetchByte(), 2); break;
-                case 0xC1: Compare(A, ReadData(IndirectX(), 6), 6); break;
-                case 0xC2: Nop(FetchByte(), 2); break;
-                case 0xC3: Dcp(IndirectX(), 8); break;
-                case 0xC4: Compare(Y, ReadData(ZeroPage(), 3), 3); break;
-                case 0xC5: Compare(A, ReadData(ZeroPage(), 3), 3); break;
-                case 0xC6: DecMemory(ZeroPage(), 5); break;
-                case 0xC7: Dcp(ZeroPage(), 5); break;
-                case 0xC8: Y++; SetZn(Y); AddCycles(2); break;
-                case 0xC9: Compare(A, FetchByte(), 2); break;
-                case 0xCA: X--; SetZn(X); AddCycles(2); break;
-                case 0xCB: Axs(FetchByte()); AddCycles(2); break;
-                case 0xCC: Compare(Y, ReadData(Absolute(), 4), 4); break;
-                case 0xCD: Compare(A, ReadData(Absolute(), 4), 4); break;
-                case 0xCE: DecMemory(Absolute(), 6); break;
-                case 0xCF: Dcp(Absolute(), 6); break;
-                case 0xD0: Branch(!GetFlag(Zero)); break;
-                case 0xD1: Compare(A, ReadData(IndirectY(out var pd1), 5 + pd1), 5 + pd1); break;
-                case 0xD2: Jam(); break;
-                case 0xD3: Dcp(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0xD4: NopMemory(ZeroPageX(), 4); break;
-                case 0xD5: Compare(A, ReadData(ZeroPageX(), 4), 4); break;
-                case 0xD6: DecMemory(ZeroPageX(), 6); break;
-                case 0xD7: Dcp(ZeroPageX(), 6); break;
-                case 0xD8: SetFlag(Decimal, false); AddCycles(2); break;
-                case 0xD9: Compare(A, ReadData(AbsoluteY(out var pd9), 4 + pd9), 4 + pd9); break;
-                case 0xDA: AddCycles(2); break;
-                case 0xDB: Dcp(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0xDC: NopMemory(AbsoluteX(out var pdc), 4 + pdc); break;
-                case 0xDD: Compare(A, ReadData(AbsoluteX(out var pdd), 4 + pdd), 4 + pdd); break;
-                case 0xDE: DecMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0xDF: Dcp(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0xE0: Compare(X, FetchByte(), 2); break;
-                case 0xE1: Sbc(ReadData(IndirectX(), 6), 6); break;
-                case 0xE2: Nop(FetchByte(), 2); break;
-                case 0xE3: Isc(IndirectX(), 8); break;
-                case 0xE4: Compare(X, ReadData(ZeroPage(), 3), 3); break;
-                case 0xE5: Sbc(ReadData(ZeroPage(), 3), 3); break;
-                case 0xE6: IncMemory(ZeroPage(), 5); break;
-                case 0xE7: Isc(ZeroPage(), 5); break;
-                case 0xE8: X++; SetZn(X); AddCycles(2); break;
-                case 0xE9: Sbc(FetchByte(), 2); break;
-                case 0xEA: AddCycles(2); break;
-                case 0xEB: Sbc(FetchByte(), 2); break;
-                case 0xEC: Compare(X, ReadData(Absolute(), 4), 4); break;
-                case 0xED: Sbc(ReadData(Absolute(), 4), 4); break;
-                case 0xEE: IncMemory(Absolute(), 6); break;
-                case 0xEF: Isc(Absolute(), 6); break;
-                case 0xF0: Branch(GetFlag(Zero)); break;
-                case 0xF1: Sbc(ReadData(IndirectY(out var pf1), 5 + pf1), 5 + pf1); break;
-                case 0xF2: Jam(); break;
-                case 0xF3: Isc(IndirectY(out _, forceDummyRead: true), 8); break;
-                case 0xF4: NopMemory(ZeroPageX(), 4); break;
-                case 0xF5: Sbc(ReadData(ZeroPageX(), 4), 4); break;
-                case 0xF6: IncMemory(ZeroPageX(), 6); break;
-                case 0xF7: Isc(ZeroPageX(), 6); break;
-                case 0xF8: SetFlag(Decimal, true); AddCycles(2); break;
-                case 0xF9: Sbc(ReadData(AbsoluteY(out var pf9), 4 + pf9), 4 + pf9); break;
-                case 0xFA: AddCycles(2); break;
-                case 0xFB: Isc(AbsoluteY(out _, forceDummyRead: true), 7); break;
-                case 0xFC: NopMemory(AbsoluteX(out var pfc), 4 + pfc); break;
-                case 0xFD: Sbc(ReadData(AbsoluteX(out var pfd), 4 + pfd), 4 + pfd); break;
-                case 0xFE: IncMemory(AbsoluteX(out _, forceDummyRead: true), 7); break;
-                case 0xFF: Isc(AbsoluteX(out _, forceDummyRead: true), 7); break;
+                _irqAccepted = true;
+            }
+            else if (useInitialInterruptMask &&
+                     (initialStatus & InterruptDisable) != 0 &&
+                     (Status & InterruptDisable) == 0)
+            {
+                _blockIrqOnce = true;
             }
 
-            return (int)(Cycles - start);
-        }
-
-        private void BeginInstructionBus()
-        {
-            Array.Clear(_busCycleUsed, 0, _busCycleUsed.Length);
-        }
-
-        private byte FetchOpcode()
-        {
-            return FetchByteAt(0, Mos6510BusAccessKind.OpcodeFetch);
-        }
-
-        private byte FetchByte()
-        {
-            return FetchByteAt(NextFetchCycleOffset(), Mos6510BusAccessKind.OperandFetch);
-        }
-
-        private byte FetchByteAt(int cycleOffset, Mos6510BusAccessKind kind)
-        {
-            var value = Read(ProgramCounter, cycleOffset, kind);
-            ProgramCounter++;
-            return value;
-        }
-
-        private ushort FetchWord()
-        {
-            var low = FetchByte();
-            var high = FetchByte();
-            return (ushort)(low | (high << 8));
-        }
-
-        private int NextFetchCycleOffset()
-        {
-            for (var i = 1; i < _busCycleUsed.Length; i++)
+            if (opcode == 0x00 && _interruptVectorBase == 0xFFFE && _nmiPending)
             {
-                if (!_busCycleUsed[i])
-                {
-                    return i;
-                }
-            }
-
-            return _busCycleUsed.Length - 1;
-        }
-
-        private byte Read(ushort address, int cycleOffset = 0, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Read)
-        {
-            FillIdleCyclesBefore(cycleOffset);
-            MarkBusCycle(cycleOffset);
-            return _bus.Read(address, cycleOffset, kind);
-        }
-
-        private byte ReadData(ushort address, int totalCycles)
-        {
-            return Read(address, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Read);
-        }
-
-        private byte ReadForReadModifyWrite(ushort address, int totalCycles)
-        {
-            return Read(address, Math.Max(0, totalCycles - 3), Mos6510BusAccessKind.Read);
-        }
-
-        private void Write(ushort address, byte value, int totalCycles)
-        {
-            WriteBus(address, value, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Write);
-            AddCycles(totalCycles);
-        }
-
-        private void WriteReadModifyWrite(ushort address, byte original, byte value, int totalCycles)
-        {
-            WriteBus(address, original, Math.Max(0, totalCycles - 2), Mos6510BusAccessKind.DummyWrite);
-            WriteBus(address, value, Math.Max(0, totalCycles - 1), Mos6510BusAccessKind.Write);
-            AddCycles(totalCycles);
-        }
-
-        private void DummyRead(ushort address, int cycleOffset)
-        {
-            _ = Read(address, cycleOffset, Mos6510BusAccessKind.DummyRead);
-        }
-
-        private void StackDummyRead(int cycleOffset)
-        {
-            _ = Read((ushort)(0x0100 | StackPointer), cycleOffset, Mos6510BusAccessKind.StackRead);
-        }
-
-        private void Idle(int cycleOffset, Mos6510BusAccessKind kind = Mos6510BusAccessKind.Idle)
-        {
-            MarkBusCycle(cycleOffset);
-            _bus.Idle(ProgramCounter, cycleOffset, kind);
-        }
-
-        private void WriteBus(ushort address, byte value, int cycleOffset, Mos6510BusAccessKind kind)
-        {
-            FillIdleCyclesBefore(cycleOffset);
-            MarkBusCycle(cycleOffset);
-            _bus.Write(address, value, cycleOffset, kind);
-        }
-
-        private void AddCycles(int cycles)
-        {
-            FillIdleCycles(cycles);
-            Cycles += cycles;
-        }
-
-        private void FillIdleCycles(int cycles)
-        {
-            for (var i = 1; i < cycles && i < _busCycleUsed.Length; i++)
-            {
-                if (!_busCycleUsed[i])
-                {
-                    Idle(i);
-                }
+                _blockNmiOnce = true;
             }
         }
 
-        private void FillIdleCyclesBefore(int cycleOffset)
+        private void AbortActiveOperation()
         {
-            for (var i = 1; i < cycleOffset && i < _busCycleUsed.Length; i++)
-            {
-                if (!_busCycleUsed[i])
-                {
-                    Idle(i);
-                }
-            }
-        }
-
-        private void MarkBusCycle(int cycleOffset)
-        {
-            if ((uint)cycleOffset < (uint)_busCycleUsed.Length)
-            {
-                _busCycleUsed[cycleOffset] = true;
-            }
+            _activeOperation = Mos6510OperationKind.None;
+            _operationCycle = 0;
+            _interruptVectorBase = 0;
+            _interruptVectorKind = Mos6510OperationKind.None;
+            _irqAccepted = false;
+            _blockIrqOnce = false;
+            _nmiPending = false;
         }
 
         private bool GetFlag(byte flag)
@@ -655,78 +579,6 @@ namespace Copper6510
         {
             SetFlag(Zero, value == 0);
             SetFlag(Negative, (value & 0x80) != 0);
-        }
-
-        private void Ora(byte value, int cycles)
-        {
-            A |= value;
-            SetZn(A);
-            AddCycles(cycles);
-        }
-
-        private void And(byte value, int cycles)
-        {
-            A &= value;
-            SetZn(A);
-            AddCycles(cycles);
-        }
-
-        private void Eor(byte value, int cycles)
-        {
-            A ^= value;
-            SetZn(A);
-            AddCycles(cycles);
-        }
-
-        private void Lda(byte value, int cycles)
-        {
-            A = value;
-            SetZn(A);
-            AddCycles(cycles);
-        }
-
-        private void Ldx(byte value, int cycles)
-        {
-            X = value;
-            SetZn(X);
-            AddCycles(cycles);
-        }
-
-        private void Ldy(byte value, int cycles)
-        {
-            Y = value;
-            SetZn(Y);
-            AddCycles(cycles);
-        }
-
-        private void Lax(byte value, int cycles)
-        {
-            A = value;
-            X = value;
-            SetZn(value);
-            AddCycles(cycles);
-        }
-
-        private void Compare(byte register, byte value, int cycles)
-        {
-            var result = register - value;
-            SetFlag(Carry, register >= value);
-            SetZn((byte)result);
-            AddCycles(cycles);
-        }
-
-        private void Adc(byte value, int cycles)
-        {
-            if (GetFlag(Decimal))
-            {
-                DecimalAdc(value);
-            }
-            else
-            {
-                BinaryAdc(value);
-            }
-
-            AddCycles(cycles);
         }
 
         private void BinaryAdc(byte value)
@@ -762,20 +614,6 @@ namespace Copper6510
             SetFlag(Overflow, (~(A ^ value) & (A ^ binary) & 0x80) != 0);
             A = output;
             SetZn(A);
-        }
-
-        private void Sbc(byte value, int cycles)
-        {
-            if (GetFlag(Decimal))
-            {
-                DecimalSbc(value);
-            }
-            else
-            {
-                BinaryAdc((byte)~value);
-            }
-
-            AddCycles(cycles);
         }
 
         private void DecimalSbc(byte value)
@@ -836,191 +674,6 @@ namespace Copper6510
             return value;
         }
 
-        private void AslMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            WriteReadModifyWrite(address, original, Asl(original), cycles);
-        }
-
-        private void LsrMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            WriteReadModifyWrite(address, original, Lsr(original), cycles);
-        }
-
-        private void RolMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            WriteReadModifyWrite(address, original, Rol(original), cycles);
-        }
-
-        private void RorMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            WriteReadModifyWrite(address, original, Ror(original), cycles);
-        }
-
-        private void IncMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = (byte)(original + 1);
-            SetZn(value);
-            WriteReadModifyWrite(address, original, value, cycles);
-        }
-
-        private void DecMemory(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = (byte)(original - 1);
-            SetZn(value);
-            WriteReadModifyWrite(address, original, value, cycles);
-        }
-
-        private void Bit(byte value, int cycles)
-        {
-            SetFlag(Zero, (A & value) == 0);
-            SetFlag(Overflow, (value & Overflow) != 0);
-            SetFlag(Negative, (value & Negative) != 0);
-            AddCycles(cycles);
-        }
-
-        private void Branch(bool take)
-        {
-            var offset = unchecked((sbyte)FetchByte());
-            if (!take)
-            {
-                AddCycles(2);
-                return;
-            }
-
-            var old = ProgramCounter;
-            ProgramCounter = (ushort)(ProgramCounter + offset);
-            AddCycles(3 + (PageCrossed(old, ProgramCounter) ? 1 : 0));
-        }
-
-        private void Jsr()
-        {
-            var low = FetchByte();
-            Idle(2);
-            PushWord(ProgramCounter, 3);
-            var high = FetchByteAt(5, Mos6510BusAccessKind.OperandFetch);
-            var target = (ushort)(low | (high << 8));
-            ProgramCounter = target;
-        }
-
-        private void Rts()
-        {
-            Idle(1);
-            StackDummyRead(2);
-            ProgramCounter = (ushort)(PullWord(3) + 1);
-        }
-
-        private void Rti()
-        {
-            DummyRead(ProgramCounter, 1);
-            StackDummyRead(2);
-            Status = (byte)((Pull(3) & ~Break) | Unused);
-            ProgramCounter = PullWord(4);
-        }
-
-        private void Brk()
-        {
-            _ = FetchByteAt(1, Mos6510BusAccessKind.OperandFetch);
-            PushWord(ProgramCounter, 2);
-            Push((byte)(Status | Break | Unused), 4);
-            SetFlag(InterruptDisable, true);
-            ProgramCounter = ReadWord(0xFFFE, cycleOffset: 5);
-        }
-
-        private void Jam()
-        {
-            Halted = true;
-            AddCycles(1);
-        }
-
-        private void Nop(byte ignored, int cycles)
-        {
-            _ = ignored;
-            AddCycles(cycles);
-        }
-
-        private void Nop(ushort ignored, int cycles)
-        {
-            _ = ignored;
-            AddCycles(cycles);
-        }
-
-        private void NopMemory(ushort address, int cycles)
-        {
-            _ = ReadData(address, cycles);
-            AddCycles(cycles);
-        }
-
-        private void Slo(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = Asl(original);
-            WriteReadModifyWrite(address, original, value, cycles);
-            A |= value;
-            SetZn(A);
-        }
-
-        private void Rla(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = Rol(original);
-            WriteReadModifyWrite(address, original, value, cycles);
-            A &= value;
-            SetZn(A);
-        }
-
-        private void Sre(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = Lsr(original);
-            WriteReadModifyWrite(address, original, value, cycles);
-            A ^= value;
-            SetZn(A);
-        }
-
-        private void Rra(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = Ror(original);
-            WriteReadModifyWrite(address, original, value, cycles);
-            if (GetFlag(Decimal))
-            {
-                DecimalAdc(value);
-            }
-            else
-            {
-                BinaryAdc(value);
-            }
-        }
-
-        private void Dcp(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = (byte)(original - 1);
-            WriteReadModifyWrite(address, original, value, cycles);
-            Compare(A, value, 0);
-        }
-
-        private void Isc(ushort address, int cycles)
-        {
-            var original = ReadForReadModifyWrite(address, cycles);
-            var value = (byte)(original + 1);
-            WriteReadModifyWrite(address, original, value, cycles);
-            if (GetFlag(Decimal))
-            {
-                DecimalSbc(value);
-            }
-            else
-            {
-                BinaryAdc((byte)~value);
-            }
-        }
-
         private void Anc(byte value)
         {
             A &= value;
@@ -1060,144 +713,9 @@ namespace Copper6510
             SetZn(result);
         }
 
-        private void Ahx(ushort address, int cycles)
+        private static bool IsUnstableStore(byte opcode)
         {
-            var value = (byte)(A & X & (((address >> 8) + 1) & 0xFF));
-            Write(address, value, cycles);
-        }
-
-        private void Shx(ushort address, int cycles)
-        {
-            var value = (byte)(X & (((address >> 8) + 1) & 0xFF));
-            Write(address, value, cycles);
-        }
-
-        private void Shy(ushort address, int cycles)
-        {
-            var value = (byte)(Y & (((address >> 8) + 1) & 0xFF));
-            Write(address, value, cycles);
-        }
-
-        private void Tas(ushort address, int cycles)
-        {
-            StackPointer = (byte)(A & X);
-            var value = (byte)(StackPointer & (((address >> 8) + 1) & 0xFF));
-            Write(address, value, cycles);
-        }
-
-        private void Push(byte value, int cycleOffset)
-        {
-            WriteBus((ushort)(0x0100 | StackPointer), value, cycleOffset, Mos6510BusAccessKind.StackWrite);
-            StackPointer--;
-        }
-
-        private byte Pull(int cycleOffset)
-        {
-            _ = cycleOffset;
-            StackPointer++;
-            return Read((ushort)(0x0100 | StackPointer), cycleOffset, Mos6510BusAccessKind.StackRead);
-        }
-
-        private void PushWord(ushort value, int cycleOffset)
-        {
-            Push((byte)(value >> 8), cycleOffset);
-            Push((byte)value, cycleOffset + 1);
-        }
-
-        private ushort PullWord(int cycleOffset)
-        {
-            var low = Pull(cycleOffset);
-            var high = Pull(cycleOffset + 1);
-            return (ushort)(low | (high << 8));
-        }
-
-        private ushort ReadWord(
-            ushort address,
-            bool wrapPage = false,
-            int cycleOffset = 0,
-            Mos6510BusAccessKind kind = Mos6510BusAccessKind.VectorRead)
-        {
-            var highAddress = wrapPage
-                ? (ushort)((address & 0xFF00) | ((address + 1) & 0x00FF))
-                : (ushort)(address + 1);
-            return (ushort)(Read(address, cycleOffset, kind) | (Read(highAddress, cycleOffset + 1, kind) << 8));
-        }
-
-        private ushort ZeroPage()
-        {
-            return FetchByte();
-        }
-
-        private ushort ZeroPageX()
-        {
-            var operand = FetchByte();
-            DummyRead(operand, 2);
-            return (byte)(operand + X);
-        }
-
-        private ushort ZeroPageY()
-        {
-            var operand = FetchByte();
-            DummyRead(operand, 2);
-            return (byte)(operand + Y);
-        }
-
-        private ushort Absolute()
-        {
-            return FetchWord();
-        }
-
-        private ushort AbsoluteX(out int pagePenalty, bool forceDummyRead = false)
-        {
-            var baseAddress = FetchWord();
-            var address = (ushort)(baseAddress + X);
-            pagePenalty = PageCrossed(baseAddress, address) ? 1 : 0;
-            if (forceDummyRead || pagePenalty != 0)
-            {
-                DummyRead(IndexedDummyAddress(baseAddress, X), 3);
-            }
-
-            return address;
-        }
-
-        private ushort AbsoluteY(out int pagePenalty, bool forceDummyRead = false)
-        {
-            var baseAddress = FetchWord();
-            var address = (ushort)(baseAddress + Y);
-            pagePenalty = PageCrossed(baseAddress, address) ? 1 : 0;
-            if (forceDummyRead || pagePenalty != 0)
-            {
-                DummyRead(IndexedDummyAddress(baseAddress, Y), 3);
-            }
-
-            return address;
-        }
-
-        private ushort IndirectX()
-        {
-            var operand = FetchByte();
-            DummyRead(operand, 2);
-            var pointer = (byte)(operand + X);
-            return (ushort)(Read(pointer, 3, Mos6510BusAccessKind.Read) | (Read((byte)(pointer + 1), 4, Mos6510BusAccessKind.Read) << 8));
-        }
-
-        private ushort IndirectY(out int pagePenalty, bool forceDummyRead = false)
-        {
-            var pointer = FetchByte();
-            var baseAddress = (ushort)(Read(pointer, 2, Mos6510BusAccessKind.Read) | (Read((byte)(pointer + 1), 3, Mos6510BusAccessKind.Read) << 8));
-            var address = (ushort)(baseAddress + Y);
-            pagePenalty = PageCrossed(baseAddress, address) ? 1 : 0;
-            if (forceDummyRead || pagePenalty != 0)
-            {
-                DummyRead(IndexedDummyAddress(baseAddress, Y), 4);
-            }
-
-            return address;
-        }
-
-        private static ushort IndexedDummyAddress(ushort baseAddress, byte index)
-        {
-            return (ushort)((baseAddress & 0xFF00) | ((baseAddress + index) & 0x00FF));
+            return opcode == 0x93 || opcode == 0x9B || opcode == 0x9C || opcode == 0x9E || opcode == 0x9F;
         }
 
         private static bool PageCrossed(int a, int b)

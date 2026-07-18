@@ -8,8 +8,8 @@
     <PackageId>Copper6510</PackageId>
     <Title>Copper6510</Title>
     <Authors>Ilkka Lehtoranta</Authors>
-    <Description>Reusable MOS 6510 CPU emulation core with cycle-aware bus callbacks and common undocumented opcode support.</Description>
-    <PackageVersion>1.1.0</PackageVersion>
+    <Description>Cycle-stepped MOS 6510 CPU emulation core with hardware interrupt lines and common undocumented opcode support.</Description>
+    <PackageVersion>2.0.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
