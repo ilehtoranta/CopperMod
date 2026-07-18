@@ -98,7 +98,7 @@ namespace CopperMod.Amiga.Diagnostics
         public static bool IsBlitterBusScheduleAffectingWrite(ushort offset)
         {
             offset = NormalizeOffset(offset);
-            return offset == 0x058;
+            return offset is 0x058 or 0x05E;
         }
 
         public static bool IsDiskBusScheduleAffectingWrite(ushort offset)
@@ -112,7 +112,7 @@ namespace CopperMod.Amiga.Diagnostics
             offset = NormalizeOffset(offset);
             return offset < 0x020 ||
                 IsCopperControlFlowWrite(offset) ||
-                offset is 0x020 or 0x022 or 0x024 or 0x058 or
+                offset is 0x020 or 0x022 or 0x024 or 0x058 or 0x05E or
                     0x088 or 0x08A or 0x096 or 0x09A or 0x09C or 0x09E ||
                 GetAudioChannelRegister(offset) is 0x00 or 0x02 or 0x04 or 0x06 or 0x0A;
         }

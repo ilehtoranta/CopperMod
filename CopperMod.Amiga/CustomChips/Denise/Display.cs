@@ -15,10 +15,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
         private const int StandardVStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
-        private const ushort DefaultDiwStart = 0x2C81;
-        private const ushort DefaultDiwStop = 0x2CC1;
-        private const ushort DefaultDdfStart = 0x0038;
-        private const ushort DefaultDdfStop = 0x00D0;
+        private const ushort DefaultDiwStart = AgnusRegisterBank.DefaultDiwStart;
+        private const ushort DefaultDiwStop = AgnusRegisterBank.DefaultDiwStop;
+        private const ushort DefaultDdfStart = AgnusRegisterBank.DefaultDdfStart;
+        private const ushort DefaultDdfStop = AgnusRegisterBank.DefaultDdfStop;
         private const ushort DefaultHighResDdfStart = 0x003C;
         private const ushort DmaconMasterEnable = 0x0200;
         private const ushort DmaconBitplaneEnable = 0x0100;
@@ -42,7 +42,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         // instruction's first DMA word is available one Copper memory cycle later.
         private const int CopperWaitWakeHpUnits = 5;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
-        private const ushort CopconCopperDanger = 0x0002;
         private const int LineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
@@ -69,6 +68,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static readonly sbyte[] LowResBitplanePlanesByFetchSlot = [-1, 3, 5, 1, -1, 2, 4, 0];
         private static readonly sbyte[] HighResBitplanePlanesByFetchSlot = [3, 1, 2, 0];
         private readonly AmigaBus _bus;
+        private readonly AgnusRegisterBank _agnusRegisters;
         private readonly bool _liveDmaEnabled;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private readonly ushort[] _colors = new ushort[32];
@@ -349,9 +349,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastRowDmaPlanInvalidationRows;
         private int _lastRowDmaPlanMismatchRows;
 
-        public Display(AmigaBus bus, bool liveDmaEnabled = true)
+        public Display(AmigaBus bus, AgnusRegisterBank agnusRegisters, bool liveDmaEnabled = true)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _agnusRegisters = agnusRegisters ?? throw new ArgumentNullException(nameof(agnusRegisters));
             _liveDmaEnabled = liveDmaEnabled;
             for (var i = 0; i < _sprites.Length; i++)
             {
@@ -543,19 +544,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             Array.Clear(_bitplaneDataRegisters);
             Array.Clear(_bitplaneDataRegisterWritten);
             _bitplaneDataSpans.Clear();
-            _copperListPointer = 0;
-            _copperListPointer2 = 0;
-            _diwStart = DefaultDiwStart;
-            _diwStop = DefaultDiwStop;
-            _ddfStart = DefaultDdfStart;
-            _ddfStop = DefaultDdfStop;
+            _copperListPointer = _agnusRegisters.CopperListPointer1;
+            _copperListPointer2 = _agnusRegisters.CopperListPointer2;
+            _diwStart = _agnusRegisters.DiwStart;
+            _diwStop = _agnusRegisters.DiwStop;
+            _ddfStart = _agnusRegisters.DdfStart;
+            _ddfStop = _agnusRegisters.DdfStop;
             _bplcon0 = 0;
             _bplcon1 = 0;
             _bplcon2 = 0;
-            _copcon = 0;
+            _copcon = _agnusRegisters.CopperControl;
             _dmacon = 0;
-            _bpl1mod = 0;
-            _bpl2mod = 0;
+            _bpl1mod = _agnusRegisters.BitplaneModulo1;
+            _bpl2mod = _agnusRegisters.BitplaneModulo2;
             _renderWidth = Width;
             _renderHeight = Height;
             _renderInterlaceField = 0;
@@ -1641,6 +1642,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 ApplyWrite(write.Offset, write.Value, write.Cycle);
+                CommitLiveBitplanePointersToAgnus(write.Cycle);
                 RefreshLiveFrameInitialStateAfterFrameStartWrite(write.Cycle);
                 if (_advancingLiveDma)
                 {

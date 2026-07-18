@@ -4,8 +4,6 @@ namespace CopperMod.Amiga.CustomChips.Copper
 {
     internal sealed class Copper
     {
-        private const ushort CopconCopperDanger = 0x0002;
-
         public void ExecuteList(AmigaBus bus, uint listAddress, int maxInstructions = 1024, Action<ushort, ushort>? onMove = null)
         {
             ArgumentNullException.ThrowIfNull(bus);
@@ -27,7 +25,7 @@ namespace CopperMod.Amiga.CustomChips.Copper
                     var register = (ushort)(first & 0x01FE);
                     var suppressMove = suppressNextMove;
                     suppressNextMove = false;
-                    if (IsCopperDangerStopRegister(register, copcon))
+                    if (AgnusCopperRegisterAccess.StopsCopper(register, copcon))
                     {
                         return;
                     }
@@ -37,7 +35,7 @@ namespace CopperMod.Amiga.CustomChips.Copper
                         continue;
                     }
 
-                    if (!CanCopperWriteRegister(register, copcon))
+                    if (!AgnusCopperRegisterAccess.CanWrite(register, copcon))
                     {
                         continue;
                     }
@@ -58,26 +56,6 @@ namespace CopperMod.Amiga.CustomChips.Copper
                     continue;
                 }
             }
-        }
-
-        private static bool CanCopperWriteRegister(ushort offset, ushort copcon)
-        {
-            if (offset < 0x010)
-            {
-                return false;
-            }
-
-            return offset >= 0x020 || (copcon & CopconCopperDanger) != 0;
-        }
-
-        private static bool IsCopperDangerStopRegister(ushort offset, ushort copcon)
-        {
-            if (offset < 0x010)
-            {
-                return true;
-            }
-
-            return offset < 0x020 && (copcon & CopconCopperDanger) == 0;
         }
 
         private static bool IsCopperComparisonSatisfiedAtResetBeam(ushort first, ushort second)

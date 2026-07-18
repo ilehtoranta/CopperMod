@@ -65,7 +65,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 var mod = (plane & 1) == 0 ? state.Bpl1Mod : state.Bpl2Mod;
                 var rowStride = (state.FetchWords * 2) + mod;
-                state.BitplaneRowAddresses[plane] = unchecked(state.BitplanePointers[plane] + (uint)(displaySourceY * rowStride));
+                state.BitplaneRowAddresses[plane] = AddDmaPointerOffset(
+                    state.BitplanePointers[plane],
+                    displaySourceY * rowStride);
                 state.PlaneHasRowMask |= (byte)(1 << plane);
             }
 
@@ -155,7 +157,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         var cycleOffset = fetchHorizontal * CopperHpCycles;
                         var rowPresent = (state.PlaneHasRowMask & (1 << plane)) != 0;
                         var address = rowPresent
-                            ? unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2))
+                            ? AddDmaPointerOffset(state.BitplaneRowAddresses[plane], word * 2)
                             : 0u;
                         _rowDmaBitplaneEntries[bitplaneStart + bitplaneCount++] =
                             new RowDmaBitplaneEntry(cycleOffset, plane, word, slot, address, rowPresent);
@@ -848,7 +850,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                     if ((state.PlaneHasRowMask & (1 << _livePreparedFetchPlane)) != 0)
                     {
-                        var address = unchecked(state.BitplaneRowAddresses[_livePreparedFetchPlane] + (uint)(_livePreparedFetchWord * 2));
+                        var address = AddDmaPointerOffset(
+                            state.BitplaneRowAddresses[_livePreparedFetchPlane],
+                            _livePreparedFetchWord * 2);
                         if (TryGetValidRowDmaPlan(
                                 _livePreparedFetchRow,
                                 state,
@@ -966,7 +970,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             BitplaneDmaReadLatch latch;
             if ((state.PlaneHasRowMask & (1 << plane)) != 0)
             {
-                var address = unchecked(state.BitplaneRowAddresses[plane] + (uint)(word * 2));
+                var address = AddDmaPointerOffset(state.BitplaneRowAddresses[plane], word * 2);
                 latch = LoadLiveBitplaneDmaLatch(row, plane, word, address, fetchCycle);
             }
             else
@@ -1107,6 +1111,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var mod = (plane & 1) == 0 ? state.Bpl1Mod : state.Bpl2Mod;
                 var rowStride = (state.FetchWords * 2) + mod;
                 _bitplanePointers[plane] = AddDmaPointerOffset(state.BitplaneRowAddresses[plane], rowStride);
+                _agnusRegisters.SetBitplanePointerFromDma(plane, _bitplanePointers[plane], _liveCycle);
                 _bitplaneBaseRows[plane] = row + 1;
             }
         }

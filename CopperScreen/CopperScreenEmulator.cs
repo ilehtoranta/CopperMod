@@ -1482,13 +1482,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 	}
 
 	internal long GetPresentationFrameStopCycle(long frameStartCycle)
-		=> _machine.Bus.GetPalFrameStopCycle(frameStartCycle);
+		=> _machine.Bus.GetFrameStopCycle(frameStartCycle);
 
 	private int GetPresentationFrameNumber(long frameStartCycle)
-		=> _machine.Bus.GetPalBeamPosition(frameStartCycle).FrameNumber;
+		=> _machine.Bus.GetBeamPosition(frameStartCycle).FrameNumber;
 
 	private int GetCompletedPresentationFrameNumber(long frameStopCycle)
-		=> _machine.Bus.GetPalBeamPosition(Math.Max(0, frameStopCycle - 1)).FrameNumber;
+		=> _machine.Bus.GetBeamPosition(Math.Max(0, frameStopCycle - 1)).FrameNumber;
 
 	private long GetCompletedPresentationFrameStopCycle(long frameStartCycle, long predictedFrameStopCycle)
 	{

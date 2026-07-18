@@ -50,9 +50,11 @@ namespace CopperMod.Amiga.Core
         public const ushort IntreqExternal = 0x2000;
         public const int PaulaChannelCount = 4;
         public const int A500PalMinimumAudioDmaPeriod = 124;
-        public const int DefaultChipRamSize = 2 * 1024 * 1024;
-        public const int MaxChipRamSize = 8 * 1024 * 1024;
-        public const uint A500OcsChipDmaAddressMask = 0x0007_FFFEu;
+        public const int DefaultChipRamSize = 1 * 1024 * 1024;
+        public const int MaxChipRamSize = 2 * 1024 * 1024;
+        public const uint ChipRamCpuDecodeSize = 0x0020_0000;
+        public const uint OcsChipDmaAddressMask = 0x000F_FFFEu;
+        public const uint EcsChipDmaAddressMask = 0x001F_FFFEu;
         public const int A500BootChipRamSize = 512 * 1024;
         public const int A500BootPseudoFastRamSize = 512 * 1024;
         public const uint A500BootPseudoFastRamBase = 0x00C0_0000;

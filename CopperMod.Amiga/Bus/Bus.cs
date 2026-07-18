@@ -57,7 +57,6 @@ namespace CopperMod.Amiga.Bus
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const int HostTrapStubPageCount = 1 << (24 - CodeGenerationPageShift);
-        private const uint MinimumChipRamDecodeSize = 0x0020_0000;
         private const string ExactCpuChipSlotFastPathSwitch = "CopperMod.Amiga.ExactCpuChipSlotFastPath";
         private const string ExactCpuChipSlotFastPathEnvironmentVariable = "COPPER_AMIGA_EXACT_CPU_CHIP_SLOT_FAST";
         private const bool ExactCpuChipSlotFastPathDefault = true;
@@ -257,6 +256,7 @@ namespace CopperMod.Amiga.Bus
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly RasterTiming _rasterTiming;
         private readonly AgnusBeamClock _beamClock;
+        private readonly ChipDmaAddressing _chipDmaAddressing;
         private readonly AgnusRegisterBank _agnusRegisters;
         private long _lineCycles;
         private int _customRegisterWriteContextDepth;
@@ -382,19 +382,21 @@ namespace CopperMod.Amiga.Bus
             long rtgVramSize = 0,
             AmigaChipset? chipset = null)
         {
-            if (chipRamSize <= 0)
+            var selectedChipset = chipset ?? AmigaChipset.OcsPal;
+            if (!ChipDmaAddressing.IsStandardPhysicalSize(chipRamSize))
             {
-                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be positive.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(chipRamSize),
+                    chipRamSize,
+                    "Chip RAM size must be 512 KiB, 1 MiB, or 2 MiB.");
             }
 
-            if (chipRamSize > AmigaConstants.MaxChipRamSize)
+            if (!ChipDmaAddressing.SupportsPhysicalSize(selectedChipset.Agnus, chipRamSize))
             {
-                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size cannot exceed the custom-chip DMA address space.");
-            }
-
-            if (!IsPowerOfTwo(chipRamSize))
-            {
-                throw new ArgumentOutOfRangeException(nameof(chipRamSize), chipRamSize, "Chip RAM size must be a power of two so custom-chip DMA address masking is well-defined.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(chipRamSize),
+                    chipRamSize,
+                    "OCS Agnus supports at most 1 MiB of Chip RAM; select ECS Agnus for 2 MiB.");
             }
 
             if (expansionRamSize < 0)
@@ -417,13 +419,14 @@ namespace CopperMod.Amiga.Bus
                 throw new ArgumentOutOfRangeException(nameof(audioDmaMinimumPeriod), audioDmaMinimumPeriod, "Audio DMA minimum period must be positive.");
             }
 
-            var selectedChipset = chipset ?? AmigaChipset.OcsPal;
             _rasterTiming = RasterTiming.Pal;
             _beamClock = new AgnusBeamClock(_rasterTiming);
-            _agnusRegisters = new AgnusRegisterBank(selectedChipset.Agnus);
-            var chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
-            var chipDmaAddressMask = (((uint)chipRamSize - 1u) & AmigaConstants.A500OcsChipDmaAddressMask) & 0x00FF_FFFEu;
-            _chipRam = new AmigaChipRamBackend(chipRamSize, chipRamDecodeSize, chipDmaAddressMask, CodeGenerationPageShift);
+            _chipDmaAddressing = new ChipDmaAddressing(selectedChipset.Agnus);
+            _agnusRegisters = new AgnusRegisterBank(selectedChipset.Agnus, _chipDmaAddressing);
+            _chipRam = new AmigaChipRamBackend(
+                chipRamSize,
+                AmigaConstants.ChipRamCpuDecodeSize,
+                CodeGenerationPageShift);
             _chipRamData = _chipRam.Data;
             _chipRamMask = _chipRam.Length - 1;
             ExpansionRamBase = expansionRamBase;
@@ -446,7 +449,7 @@ namespace CopperMod.Amiga.Bus
             _liveAgnusDmaDefault = enableLiveAgnusDma;
             _hardwareSpecializationEnabled = enableHardwareSpecialization;
             _realTimeClock = realTimeClockEnabled ? new AmigaRealTimeClock(realTimeClockNowProvider) : null;
-            ChipDmaAddressMask = chipDmaAddressMask;
+            ChipDmaAddressMask = _chipDmaAddressing.AddressMask;
             Arbiter = arbiter ?? new ZeroWaitBusArbiter();
             _useChipSlotScheduler = Arbiter is ZeroWaitBusArbiter zeroWaitForSlots &&
                 zeroWaitForSlots.BaseAccessCycles == 0;
@@ -488,7 +491,7 @@ namespace CopperMod.Amiga.Bus
             _autoconfig.BoardConfigured += OnAutoconfigBoardConfigured;
             _autoconfig.AddressMapChanged += OnAutoconfigAddressMapChanged;
             CyberGraphics = new CyberGraphicsLibrary(this);
-            Display = new OcsDisplay(this, enableLiveDisplayDma);
+            Display = new OcsDisplay(this, _agnusRegisters, enableLiveDisplayDma);
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
             Blitter = new AmigaBlitter(this, enableHardwareSpecialization);
@@ -573,6 +576,8 @@ namespace CopperMod.Amiga.Bus
         internal CyberGraphicsLibrary CyberGraphics { get; }
 
         public OcsDisplay Display { get; }
+
+        internal AgnusRegisterBank AgnusRegisters => _agnusRegisters;
 
         internal AgnusBeamDmaScheduler Agnus { get; }
 
@@ -984,10 +989,10 @@ namespace CopperMod.Amiga.Bus
 
             Paula.Reset();
             Disk.Reset();
+            _agnusRegisters.Reset();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _agnusRegisters.Reset();
             _beamClock.Reset();
             _lineCycles = _beamClock.LineCycles;
             _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
@@ -1095,10 +1100,10 @@ namespace CopperMod.Amiga.Bus
             Disk.Reset();
             _autoconfig.ResetConfiguration();
             CyberGraphics.ResetRtgState();
+            _agnusRegisters.Reset();
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _agnusRegisters.Reset();
             _beamClock.Reset();
             _lineCycles = _beamClock.LineCycles;
             _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
@@ -2670,26 +2675,34 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public uint MaskChipDmaAddress(uint address)
         {
-            return address & ChipDmaAddressMask;
+            return _chipDmaAddressing.Mask(address);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public uint WriteChipDmaPointerHigh(uint pointer, ushort highWord)
         {
-            return (((uint)highWord << 16) | (pointer & 0x0000_FFFEu)) & ChipDmaAddressMask;
+            return _chipDmaAddressing.WritePointerHigh(pointer, highWord);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public uint WriteChipDmaPointerLow(uint pointer, ushort lowWord)
         {
-            return ((pointer & 0x00FF_0000u) | (uint)(lowWord & 0xFFFE)) & ChipDmaAddressMask;
+            return _chipDmaAddressing.WritePointerLow(pointer, lowWord);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public uint AddChipDmaPointerOffset(uint pointer, int byteOffset)
         {
-            return (pointer + unchecked((uint)byteOffset)) & ChipDmaAddressMask;
+            return _chipDmaAddressing.AddPointerOffset(pointer, byteOffset);
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal int GetChipRamPhysicalOffset(uint address)
+            => _chipRam.GetPhysicalOffset(address);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal int AddChipRamPhysicalOffset(int offset, int byteOffset)
+            => _chipRam.AddPhysicalOffset(offset, byteOffset);
 
         public PaulaDmaReadResult ReadPaulaDmaWord(uint address, long requestedCycle)
         {
@@ -6076,11 +6089,6 @@ namespace CopperMod.Amiga.Bus
 
             var nextSlotCycle = grantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles);
             return completedCycle >= nextSlotCycle ? nextSlotCycle : completedCycle;
-        }
-
-        private static bool IsPowerOfTwo(int value)
-        {
-            return value > 0 && (value & (value - 1)) == 0;
         }
 
         internal uint GetCodePageGeneration(uint address)

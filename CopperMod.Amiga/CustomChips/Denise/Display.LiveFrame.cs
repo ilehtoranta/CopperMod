@@ -103,14 +103,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long GetNextFrameStartCycle(long cycle)
             => _bus.GetNextFrameStartCycle(cycle);
 
-        public void ScheduleWrite(long cycle, ushort offset, ushort value)
+        public void ScheduleWrite(AgnusDisplayRegisterWrite registerWrite)
         {
             if (!_liveDmaEnabled)
             {
                 return;
             }
 
-            offset = (ushort)(offset & 0x01FE);
+            registerWrite = registerWrite.Normalize();
+            var cycle = registerWrite.Cycle;
+            var offset = registerWrite.Offset;
+            var value = registerWrite.Value;
             if (!IsDisplayRegisterWrite(offset))
             {
                 return;
@@ -151,6 +154,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 InvalidateLiveCaptureFrom(cycle, offset);
             }
         }
+
+        internal void ScheduleWrite(long cycle, ushort offset, ushort value)
+            => ScheduleWrite(new AgnusDisplayRegisterWrite(cycle, offset, value));
 
         internal bool HasLiveDisplayWork()
         {

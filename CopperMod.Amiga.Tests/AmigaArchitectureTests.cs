@@ -50,6 +50,69 @@ public sealed class AmigaArchitectureTests
 		}
 	}
 
+	[Fact]
+	public void OcsProfilesDefaultToOneMegUnlessTheySelectTheHalfMegBootLayout()
+	{
+		Assert.Equal(
+			1024 * 1024,
+			MachineOptions.ForProfile(MachineProfile.A500PalCustPlayback).ChipRamSize);
+		Assert.Equal(
+			1024 * 1024,
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton).ChipRamSize);
+		Assert.Equal(
+			512 * 1024,
+			MachineOptions.ForProfile(MachineProfile.A500Pal512KChipOnlyBoot).ChipRamSize);
+		Assert.Equal(
+			512 * 1024,
+			MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).ChipRamSize);
+	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(256 * 1024)]
+	[InlineData(1536 * 1024)]
+	[InlineData(8 * 1024 * 1024)]
+	public void MachineOptionsRejectNonstandardChipRamSizes(int size)
+	{
+		Assert.Throws<ArgumentOutOfRangeException>(() =>
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton).WithChipRam(size));
+	}
+
+	[Fact]
+	public void TwoMegChipRamRequiresEcsAgnusAtConstruction()
+	{
+		var sizeFirst = MachineOptions
+			.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithChipRam(2 * 1024 * 1024)
+			.WithChipset(AmigaChipset.OcsPal);
+		var chipsetFirst = MachineOptions
+			.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithChipset(AmigaChipset.OcsPal)
+			.WithChipRam(2 * 1024 * 1024);
+
+		Assert.Throws<InvalidOperationException>(() => new Machine(sizeFirst));
+		Assert.Throws<InvalidOperationException>(() => new Machine(chipsetFirst));
+		Assert.Throws<ArgumentOutOfRangeException>(() => new AmigaBus(2 * 1024 * 1024));
+	}
+
+	[Fact]
+	public void EcsTwoMegConfigurationIsIndependentOfFluentCallOrder()
+	{
+		using var sizeFirst = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithChipRam(2 * 1024 * 1024)
+			.WithChipset(AmigaChipset.EcsPal));
+		using var chipsetFirst = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithChipset(AmigaChipset.EcsPal)
+			.WithChipRam(2 * 1024 * 1024));
+
+		Assert.Equal(2 * 1024 * 1024, sizeFirst.Bus.ChipRam.Length);
+		Assert.Equal(2 * 1024 * 1024, chipsetFirst.Bus.ChipRam.Length);
+		Assert.Equal(AmigaConstants.EcsChipDmaAddressMask, sizeFirst.Bus.ChipDmaAddressMask);
+		Assert.Equal(AmigaConstants.EcsChipDmaAddressMask, chipsetFirst.Bus.ChipDmaAddressMask);
+	}
+
 	[Theory]
 	[InlineData(false, false)]
 	[InlineData(true, false)]

@@ -96,7 +96,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             ? _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(y, plane)]
                             : 0UL;
                         planeHasRow[plane] = bitplaneDmaEnabled && (displaySourceY >= 0 || liveCapturedMask != 0);
-                        var rowAddress = unchecked(_bitplanePointers[plane] + (uint)(planeSourceY * rowStride));
+                        var rowAddress = AddDmaPointerOffset(
+                            _bitplanePointers[plane],
+                            planeSourceY * rowStride);
                         for (var word = 0; word < fetchWords; word++)
                         {
                             if (!planeHasRow[plane])
@@ -114,7 +116,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 continue;
                             }
 
-                            var address = unchecked(rowAddress + (uint)(word * 2));
+                            var address = AddDmaPointerOffset(rowAddress, word * 2);
                             planeWords[plane, word] = ReadBitplaneWordForPresentation(address, y, plane, word);
                             _lastBitplaneWords++;
                         }

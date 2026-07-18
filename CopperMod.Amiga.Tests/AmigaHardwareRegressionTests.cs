@@ -122,7 +122,7 @@ public sealed class AmigaHardwareRegressionTests
 	}
 
 	[Fact]
-	public void FullTwoMegChipRamKeepsUpperLowChipAddressesDistinct()
+	public void DefaultOneMegChipRamKeepsItsUpperHalfDistinct()
 	{
 		var bus = new AmigaBus(AmigaConstants.DefaultChipRamSize);
 
@@ -133,6 +133,37 @@ public sealed class AmigaHardwareRegressionTests
 		Assert.Equal(0x22, bus.ChipRam[0x80000]);
 		Assert.Equal(0x11, bus.ReadByte(0x00000000));
 		Assert.Equal(0x22, bus.ReadByte(0x00080000));
+		Assert.Equal(1024 * 1024, bus.ChipRam.Length);
+	}
+
+	[Fact]
+	public void OneMegChipRamMirrorsAcrossTheUpperHalfOfTheCpuDecodeWindow()
+	{
+		var bus = new AmigaBus(1024 * 1024);
+
+		bus.WriteByte(0x00100000, 0x5A, 0);
+		bus.WriteByte(0x001FFFFF, 0xC3, 0);
+
+		Assert.Equal(0x5A, bus.ChipRam[0x00000]);
+		Assert.Equal(0x5A, bus.ReadByte(0x00000000));
+		Assert.Equal(0xC3, bus.ChipRam[0xFFFFF]);
+		Assert.Equal(0xC3, bus.ReadByte(0x000FFFFF));
+	}
+
+	[Fact]
+	public void EcsTwoMegChipRamKeepsBothMegabytesDistinct()
+	{
+		var bus = new AmigaBus(
+			2 * 1024 * 1024,
+			chipset: AmigaChipset.EcsPal);
+
+		bus.WriteByte(0x00000000, 0x11, 0);
+		bus.WriteByte(0x00100000, 0x22, 0);
+
+		Assert.Equal(0x11, bus.ChipRam[0x000000]);
+		Assert.Equal(0x22, bus.ChipRam[0x100000]);
+		Assert.Equal(0x11, bus.ReadByte(0x00000000));
+		Assert.Equal(0x22, bus.ReadByte(0x00100000));
 	}
 
 	[Fact]

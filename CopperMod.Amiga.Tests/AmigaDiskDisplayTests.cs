@@ -1269,6 +1269,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.AdvanceDmaTo(disableCycle);
         Assert.Equal(0x1002u, bus.Display.CaptureSnapshot().BitplanePointers[0]);
+        Assert.Equal(0x1002u, bus.AgnusRegisters.GetBitplanePointer(0));
 
         bus.AdvanceDmaTo(frameCycles - 1);
         bus.Display.RenderFrame(frame, 0, frameCycles);

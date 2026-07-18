@@ -288,7 +288,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ApplyCopperMove(ushort offset, ushort value, long cycle, bool applyHardwareSideEffects)
         {
+            if (applyHardwareSideEffects)
+            {
+                _agnusRegisters.Write(offset, value, cycle);
+            }
+
             ApplyWrite(offset, value, cycle);
+            if (applyHardwareSideEffects)
+            {
+                CommitLiveBitplanePointersToAgnus(cycle);
+            }
+
             if (!applyHardwareSideEffects || !HasCopperHardwareSideEffect(offset))
             {
                 return;
@@ -303,24 +313,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private bool CanCopperWriteRegister(ushort offset)
-        {
-            if (offset < 0x010)
-            {
-                return false;
-            }
-
-            return offset >= 0x020 || (_copcon & CopconCopperDanger) != 0;
-        }
+            => AgnusCopperRegisterAccess.CanWrite(offset, _copcon);
 
         private bool IsCopperDangerStopRegister(ushort offset)
-        {
-            if (offset < 0x010)
-            {
-                return true;
-            }
-
-            return offset < 0x020 && (_copcon & CopconCopperDanger) == 0;
-        }
+            => AgnusCopperRegisterAccess.StopsCopper(offset, _copcon);
 
         private static bool HasCopperHardwareSideEffect(ushort offset)
         {
@@ -422,6 +418,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var byteOffset = displaySourceY * rowStride;
                 _bitplanePointers[plane] = AddDmaPointerOffset(_bitplanePointers[plane], byteOffset);
                 _bitplaneBaseRows[plane] = row;
+            }
+        }
+
+        private void CommitLiveBitplanePointersToAgnus(long cycle)
+        {
+            if (!_advancingLiveDma)
+            {
+                return;
+            }
+
+            for (var plane = 0; plane < _bitplanePointers.Length; plane++)
+            {
+                _agnusRegisters.SetBitplanePointerFromDma(plane, _bitplanePointers[plane], cycle);
             }
         }
 

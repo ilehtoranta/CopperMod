@@ -808,7 +808,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 if (_pendingCpuWrite.Target == AmigaBusAccessTarget.ChipRam)
                 {
                     return WriteScratchChipWord(
-                        _display.AddDmaPointerOffset(_pendingCpuWrite.Address, 2),
+                        _pendingCpuWrite.Address + 2,
                         (ushort)_pendingCpuWrite.Value,
                         grantedCycle);
                 }
@@ -886,7 +886,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             (ushort)(_pendingCpuWrite.Value >> 16),
                             grantedCycle) &&
                         WriteScratchChipWord(
-                            _display.AddDmaPointerOffset(_pendingCpuWrite.Address, 2),
+                            _pendingCpuWrite.Address + 2,
                             (ushort)_pendingCpuWrite.Value,
                             secondWordCycle);
                 }
@@ -931,16 +931,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             private bool WriteScratchChipWord(uint address, ushort value, long cycle)
-                => WriteScratchChipByte(
-                        address,
+            {
+                var physicalOffset = _display._bus.GetChipRamPhysicalOffset(address);
+                return WriteScratchChipByteAtPhysicalOffset(
+                        physicalOffset,
                         (byte)(value >> 8),
                         cycle) &&
-                    WriteScratchChipByte(
-                        _display.AddDmaPointerOffset(address, 1),
+                    WriteScratchChipByteAtPhysicalOffset(
+                        _display._bus.AddChipRamPhysicalOffset(physicalOffset, 1),
                         (byte)value,
                         cycle);
+            }
 
             private bool WriteScratchChipByte(uint address, byte value, long cycle)
+                => WriteScratchChipByteAtPhysicalOffset(
+                    _display._bus.GetChipRamPhysicalOffset(address),
+                    value,
+                    cycle);
+
+            private bool WriteScratchChipByteAtPhysicalOffset(int physicalOffset, byte value, long cycle)
             {
                 if (_chipWriteOverlayCount >= _chipWriteOverlay.Length)
                 {
@@ -948,15 +957,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
-                address = _display._bus.MaskChipDmaAddress(address & 0x00FF_FFFEu);
-                _chipWriteOverlay[_chipWriteOverlayCount++] = new ScratchChipByteWrite(address, value, cycle);
+                _chipWriteOverlay[_chipWriteOverlayCount++] = new ScratchChipByteWrite(
+                    (uint)physicalOffset,
+                    value,
+                    cycle);
                 return true;
             }
 
             private ushort ReadScratchChipWordForPresentation(uint address, long cycle)
             {
-                address = _display._bus.MaskChipDmaAddress(address & 0x00FF_FFFEu);
-                var lowAddress = _display.AddDmaPointerOffset(address, 1);
+                address = _display._bus.MaskChipDmaAddress(address);
+                var physicalOffset = _display._bus.GetChipRamPhysicalOffset(address);
+                var lowPhysicalOffset = _display._bus.AddChipRamPhysicalOffset(physicalOffset, 1);
                 var value = _display._bus.ReadChipWordForPresentation(address, cycle);
                 for (var i = _chipWriteOverlayCount - 1; i >= 0; i--)
                 {
@@ -966,7 +978,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         continue;
                     }
 
-                    if (write.Address == address)
+                    if (write.Address == (uint)physicalOffset)
                     {
                         value = (ushort)((write.Value << 8) | (value & 0x00FF));
                         break;
@@ -981,7 +993,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         continue;
                     }
 
-                    if (write.Address == lowAddress)
+                    if (write.Address == (uint)lowPhysicalOffset)
                     {
                         value = (ushort)((value & 0xFF00) | write.Value);
                         break;
@@ -2461,7 +2473,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                     var mod = (plane & 1) == 0 ? state.Bpl1Mod : state.Bpl2Mod;
                     var rowStride = (state.FetchWords * 2) + mod;
-                    state.BitplaneRowAddresses[plane] = unchecked(state.BitplanePointers[plane] + (uint)(displaySourceY * rowStride));
+                    state.BitplaneRowAddresses[plane] = _display.AddDmaPointerOffset(
+                        state.BitplanePointers[plane],
+                        displaySourceY * rowStride);
                     state.PlaneHasRowMask |= (byte)(1 << plane);
                 }
             }
@@ -2680,24 +2694,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             private bool CanCopperWriteRegister(ushort offset)
-            {
-                if (offset < 0x010)
-                {
-                    return false;
-                }
-
-                return offset >= 0x020 || (_copcon & CopconCopperDanger) != 0;
-            }
+                => AgnusCopperRegisterAccess.CanWrite(offset, _copcon);
 
             private bool IsCopperDangerStopRegister(ushort offset)
-            {
-                if (offset < 0x010)
-                {
-                    return true;
-                }
-
-                return offset < 0x020 && (_copcon & CopconCopperDanger) == 0;
-            }
+                => AgnusCopperRegisterAccess.StopsCopper(offset, _copcon);
 
             private void RecordDma(long cycle)
             {

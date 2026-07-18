@@ -253,19 +253,12 @@ namespace CopperMod.Amiga.Runtime
 
         public MachineOptions WithChipRam(int size)
         {
-            if (size <= 0)
+            if (!ChipDmaAddressing.IsStandardPhysicalSize(size))
             {
-                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size must be positive.");
-            }
-
-            if (size > AmigaConstants.MaxChipRamSize)
-            {
-                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size cannot exceed the custom-chip DMA address space.");
-            }
-
-            if (!IsPowerOfTwo(size))
-            {
-                throw new ArgumentOutOfRangeException(nameof(size), size, "Chip RAM size must be a power of two so custom-chip DMA address masking is well-defined.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(size),
+                    size,
+                    "Chip RAM size must be 512 KiB, 1 MiB, or 2 MiB.");
             }
 
             ChipRamSize = size;
@@ -339,10 +332,6 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
-        private static bool IsPowerOfTwo(int value)
-        {
-            return value > 0 && (value & (value - 1)) == 0;
-        }
     }
 
     internal sealed class Machine : IDisposable
@@ -356,6 +345,12 @@ namespace CopperMod.Amiga.Runtime
         public Machine(MachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
+            if (!ChipDmaAddressing.SupportsPhysicalSize(options.Chipset.Agnus, options.ChipRamSize))
+            {
+                throw new InvalidOperationException(
+                    "OCS Agnus supports at most 1 MiB of Chip RAM; select ECS Agnus for 2 MiB.");
+            }
+
             if (options.RealFastRamSize > 8 * 1024 * 1024 &&
                 options.CpuBackend is not (
                     M68kBackendKind.AccurateM68020 or

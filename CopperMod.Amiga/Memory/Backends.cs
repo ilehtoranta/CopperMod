@@ -46,6 +46,7 @@ namespace CopperMod.Amiga.Memory
     internal sealed class AmigaChipRamBackend
     {
         private readonly byte[] _data;
+        private readonly uint _physicalAddressMask;
         private readonly uint[] _codePageGenerations;
         private readonly int _codeGenerationPageShift;
         private readonly ChipPresentationWriteHistory _presentationWriteHistory;
@@ -53,12 +54,11 @@ namespace CopperMod.Amiga.Memory
         public AmigaChipRamBackend(
             int size,
             uint decodeSize,
-            uint dmaAddressMask,
             int codeGenerationPageShift)
         {
             _data = new byte[size];
+            _physicalAddressMask = (uint)size - 1u;
             DecodeSize = decodeSize;
-            DmaAddressMask = dmaAddressMask;
             _codeGenerationPageShift = codeGenerationPageShift;
             _codePageGenerations = new uint[Math.Max(1, (size + (1 << codeGenerationPageShift) - 1) >> codeGenerationPageShift)];
             _presentationWriteHistory = new ChipPresentationWriteHistory(size);
@@ -69,8 +69,6 @@ namespace CopperMod.Amiga.Memory
         public int Length => _data.Length;
 
         public uint DecodeSize { get; }
-
-        public uint DmaAddressMask { get; }
 
         public ChipPresentationWriteHistory PresentationWriteHistory => _presentationWriteHistory;
 
@@ -134,6 +132,12 @@ namespace CopperMod.Amiga.Memory
             return offset;
         }
 
+        public int GetPhysicalOffset(uint address)
+            => (int)(address & _physicalAddressMask);
+
+        public int AddPhysicalOffset(int offset, int byteOffset)
+            => (int)(((uint)offset + unchecked((uint)byteOffset)) & _physicalAddressMask);
+
         public bool TryGetContiguousMemory(uint address, int byteCount, out byte[] memory, out int offset)
         {
             if (!IsContiguousRange(address, byteCount))
@@ -150,14 +154,14 @@ namespace CopperMod.Amiga.Memory
 
         public ushort ReadDmaWord(uint address)
         {
-            var offset = (int)(address & DmaAddressMask);
+            var offset = GetPhysicalOffset(address);
             var nextOffset = (offset + 1) & (_data.Length - 1);
             return (ushort)((_data[offset] << 8) | _data[nextOffset]);
         }
 
         public void WriteDmaWord(uint address, ushort value, long grantedCycle)
         {
-            var offset = (int)(address & DmaAddressMask);
+            var offset = GetPhysicalOffset(address);
             var nextOffset = (offset + 1) & (_data.Length - 1);
             WriteByteAtOffset(offset, (byte)(value >> 8), grantedCycle);
             WriteByteAtOffset(nextOffset, (byte)value, grantedCycle);
@@ -171,14 +175,13 @@ namespace CopperMod.Amiga.Memory
 
         public ushort ReadWordForPresentation(uint address, long cycle)
         {
-            address &= DmaAddressMask;
             if (!_presentationWriteHistory.HasWrites ||
                 !_presentationWriteHistory.MayNeedPresentationRead(cycle))
             {
                 return ReadDmaWord(address);
             }
 
-            var offset = (int)(address & (uint)(_data.Length - 1));
+            var offset = GetPhysicalOffset(address);
             var nextOffset = (offset + 1) & (_data.Length - 1);
             if (!_presentationWriteHistory.NeedsPresentationRead(offset, cycle) &&
                 !_presentationWriteHistory.NeedsPresentationRead(nextOffset, cycle))

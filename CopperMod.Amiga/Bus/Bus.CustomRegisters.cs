@@ -419,10 +419,13 @@ namespace CopperMod.Amiga.Bus
 
         private void DispatchCustomRegisterWrite(in CustomRegisterWriteContext write)
         {
-            ApplyBeamControlWrite(write.Offset, write.Value, write.Cycle);
+            ApplyAgnusRegisterWrite(write.Offset, write.Value, write.Cycle);
             Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
             Paula.AdvanceRegisterWritesTo(write.Cycle);
-            Display.ScheduleWrite(GetDisplayWriteCycle(in write), write.Offset, write.Value);
+            Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
+                GetDisplayWriteCycle(in write),
+                write.Offset,
+                write.Value));
             Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
             Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
             _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
@@ -443,17 +446,17 @@ namespace CopperMod.Amiga.Bus
             return write.Cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 
-        private void ApplyBeamControlWrite(ushort offset, ushort value, long cycle)
+        private void ApplyAgnusRegisterWrite(ushort offset, ushort value, long cycle)
         {
             var writeCycle = Math.Max(0, cycle);
-            var result = _agnusRegisters.Write(offset, value);
-            if (!result.Handled)
+            var result = _agnusRegisters.Write(offset, value, writeCycle);
+            if (!result.BeamStateChanged)
             {
                 return;
             }
 
             AdvanceRasterCoreTo(writeCycle);
-            if (offset == 0x02A)
+            if (offset == AgnusRegisterBank.Vposw)
             {
                 _beamClock.ApplyVposw(value, writeCycle);
             }

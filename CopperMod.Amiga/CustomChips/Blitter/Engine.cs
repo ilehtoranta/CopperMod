@@ -731,6 +731,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private const ushort Bltcon1LineSul = 0x0008;
         private const ushort Bltcon1LineAul = 0x0004;
         private const ushort Bltcon1LineSign = 0x0040;
+        private const ushort BltSize = 0x058;
+        private const ushort BltSizeVertical = 0x05C;
+        private const ushort BltSizeHorizontal = 0x05E;
+        private const int LegacyMaximumWidthWords = 64;
+        private const int LegacyMaximumHeight = 1024;
+        private const int EcsMaximumWidthWords = 2048;
+        private const int EcsMaximumHeight = 32768;
         private const int ChipSlotCycles = AgnusChipSlotScheduler.SlotCycles;
         private readonly AmigaBus _bus;
         private readonly bool _specializationEnabled;
@@ -781,6 +788,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private int _step;
         private int _widthWords;
         private int _height;
+        private int _storedWidthWords;
+        private int _storedHeight;
         private int _wordX;
         private int _rowY;
         private uint _workSourceA;
@@ -814,7 +823,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private ulong _schedulerWakeVersion;
         private readonly List<DeferredRegisterWrite> _deferredRegisterWrites = new List<DeferredRegisterWrite>();
         private bool _deferredRestartPending;
-        private ushort _deferredRestartBltsize;
+        private int _deferredRestartWidthWords;
+        private int _deferredRestartHeight;
         private BlitterCompiledKernel _activeKernel;
         private BlitterAreaKernelState _areaKernelState;
         private BlitterDmaReadLatch _sourceALatch;
@@ -921,6 +931,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _step = 2;
             _widthWords = 0;
             _height = 0;
+            _storedWidthWords = 0;
+            _storedHeight = 0;
             _wordX = 0;
             _rowY = 0;
             _workSourceA = 0;
@@ -953,7 +965,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _wakeVersion++;
             _deferredRegisterWrites.Clear();
             _deferredRestartPending = false;
-            _deferredRestartBltsize = 0;
+            _deferredRestartWidthWords = 0;
+            _deferredRestartHeight = 0;
             _activeKernel = default;
             _areaKernelState = default;
             _sourceALatch = default;
@@ -1034,6 +1047,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         public void WriteRegister(ushort offset, ushort value, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
+            offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            if ((offset is BltSizeVertical or BltSizeHorizontal) && !_bus.AgnusRegisters.IsEcs)
+            {
+                return;
+            }
+
             if (CustomRegisterScheduleClassifier.IsBlitterBusScheduleAffectingWrite(offset))
             {
                 _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
@@ -1043,17 +1062,31 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             AdvanceTo(cycle);
             try
             {
-                if (offset == 0x058)
+                if (offset == BltSize)
                 {
-                    if (_busy)
+                    _storedWidthWords = DecodeLegacyWidth(value);
+                    _storedHeight = DecodeLegacyHeight(value);
+                    TriggerBlit(_storedWidthWords, _storedHeight, cycle);
+                    _wakeVersion++;
+                    return;
+                }
+
+                if (offset == BltSizeVertical)
+                {
+                    _storedHeight = DecodeEcsHeight(value);
+                    _wakeVersion++;
+                    return;
+                }
+
+                if (offset == BltSizeHorizontal)
+                {
+                    _storedWidthWords = DecodeEcsWidth(value);
+                    if (_storedHeight == 0)
                     {
-                        _deferredRestartPending = true;
-                        _deferredRestartBltsize = value;
-                        _wakeVersion++;
-                        return;
+                        _storedHeight = EcsMaximumHeight;
                     }
 
-                    StartBlit(value, cycle);
+                    TriggerBlit(_storedWidthWords, _storedHeight, cycle);
                     _wakeVersion++;
                     return;
                 }
@@ -1419,9 +1452,24 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
-        private void StartBlit(ushort bltsize, long cycle)
+        private void TriggerBlit(int widthWords, int height, long cycle)
+        {
+            if (_busy)
+            {
+                _deferredRestartPending = true;
+                _deferredRestartWidthWords = widthWords;
+                _deferredRestartHeight = height;
+                return;
+            }
+
+            StartBlit(widthWords, height, cycle);
+        }
+
+        private void StartBlit(int widthWords, int height, long cycle)
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter start cycles must be non-negative.");
+            System.Diagnostics.Debug.Assert(widthWords > 0, "Blitter width must be positive.");
+            System.Diagnostics.Debug.Assert(height > 0, "Blitter height must be positive.");
             AdvanceTo(cycle);
             if (_busy)
             {
@@ -1449,7 +1497,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (_lineMode)
             {
-                StartLineBlit(bltsize);
+                StartLineBlit(widthWords, height);
                 _activeKernel = _specializationEnabled
                     ? _kernelCache.GetOrCreate(CreateLineKernelKey())
                     : default;
@@ -1457,17 +1505,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
-            _widthWords = bltsize & 0x3F;
-            if (_widthWords == 0)
-            {
-                _widthWords = 64;
-            }
-
-            _height = (bltsize >> 6) & 0x03FF;
-            if (_height == 0)
-            {
-                _height = 1024;
-            }
+            _widthWords = widthWords;
+            _height = height;
 
             _wordX = 0;
             _rowY = 0;
@@ -1706,19 +1745,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _shiftB = (_bltcon1 >> 12) & 0x0F;
         }
 
-        private void StartLineBlit(ushort bltsize)
+        private void StartLineBlit(int widthWords, int height)
         {
-            _widthWords = bltsize & 0x3F;
-            if (_widthWords == 0)
-            {
-                _widthWords = 64;
-            }
-
-            _height = (bltsize >> 6) & 0x03FF;
-            if (_height == 0)
-            {
-                _height = 1024;
-            }
+            _widthWords = widthWords;
+            _height = height;
 
             _lineLength = _height;
             _lineIndex = 0;
@@ -2616,10 +2646,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
-            var bltsize = _deferredRestartBltsize;
+            var widthWords = _deferredRestartWidthWords;
+            var height = _deferredRestartHeight;
             _deferredRestartPending = false;
-            _deferredRestartBltsize = 0;
-            StartBlit(bltsize, _currentCycle);
+            _deferredRestartWidthWords = 0;
+            _deferredRestartHeight = 0;
+            StartBlit(widthWords, height, _currentCycle);
         }
 
         private bool IsActiveRowPipeline()
@@ -3003,6 +3035,30 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return _bus.MaskChipDmaAddress(pointer);
         }
 
+        private static int DecodeLegacyWidth(ushort value)
+        {
+            var width = value & 0x003F;
+            return width == 0 ? LegacyMaximumWidthWords : width;
+        }
+
+        private static int DecodeLegacyHeight(ushort value)
+        {
+            var height = (value >> 6) & 0x03FF;
+            return height == 0 ? LegacyMaximumHeight : height;
+        }
+
+        private static int DecodeEcsWidth(ushort value)
+        {
+            var width = value & 0x07FF;
+            return width == 0 ? EcsMaximumWidthWords : width;
+        }
+
+        private static int DecodeEcsHeight(ushort value)
+        {
+            var height = value & 0x7FFF;
+            return height == 0 ? EcsMaximumHeight : height;
+        }
+
         private sealed class CpuWaitScratchState
         {
             private readonly AmigaBlitter _owner;
@@ -3025,7 +3081,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             private int _rowY;
             private bool _busy;
             private bool _deferredRestartPending;
-            private ushort _deferredRestartBltsize;
+            private int _deferredRestartWidthWords;
+            private int _deferredRestartHeight;
 
             public CpuWaitScratchState(AmigaBlitter owner)
             {
@@ -3041,7 +3098,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _rowY = owner._rowY;
                 _busy = owner._busy;
                 _deferredRestartPending = owner._deferredRestartPending;
-                _deferredRestartBltsize = owner._deferredRestartBltsize;
+                _deferredRestartWidthWords = owner._deferredRestartWidthWords;
+                _deferredRestartHeight = owner._deferredRestartHeight;
                 FirstDmaCycle = -1;
                 LastDmaCycle = -1;
                 if (owner._areaMicroOpActive)
@@ -3281,19 +3339,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     }
 
                     _deferredRestartPending = false;
-                    _widthWords = _deferredRestartBltsize & 0x3F;
-                    if (_widthWords == 0)
-                    {
-                        _widthWords = 64;
-                    }
-
-                    _height = (_deferredRestartBltsize >> 6) & 0x03FF;
-                    if (_height == 0)
-                    {
-                        _height = 1024;
-                    }
-
-                    _deferredRestartBltsize = 0;
+                    _widthWords = _deferredRestartWidthWords;
+                    _height = _deferredRestartHeight;
+                    _deferredRestartWidthWords = 0;
+                    _deferredRestartHeight = 0;
                     _wordX = 0;
                     _rowY = 0;
                     CurrentCycle = _owner._bus.NextChipSlotCycle(CurrentCycle + ChipSlotCycles);
