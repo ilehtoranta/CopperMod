@@ -260,6 +260,25 @@ The release scripts use GitHub CLI (`gh`) when it is installed. Without `gh`,
 run the release script with `-TagOnly`, then create the GitHub release manually
 and upload the generated zip files plus `SHA256SUMS.txt`.
 
+## NuGet Packages
+
+Copper6510 2.0.0 is a breaking API release. Build, test, pack, and validate it
+with:
+
+```powershell
+.\scripts\nuget\pack-copper6510.ps1 -Version 2.0.0
+```
+
+After reviewing the generated package, publish it and its symbols with:
+
+```powershell
+.\scripts\nuget\publish-copper6510.ps1 `
+    -PackagePath .\artifacts\packages\Copper6510.2.0.0.nupkg
+```
+
+The publisher requires `NUGET_API_KEY` or an explicit `-ApiKey`; use `-WhatIf`
+to inspect the push operations without publishing.
+
 ## Projects
 
 - `CopperMod` - terminal player application.
