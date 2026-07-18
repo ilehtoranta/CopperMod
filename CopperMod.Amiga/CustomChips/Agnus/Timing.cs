@@ -443,9 +443,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         void PruneBefore(long cycle);
     }
 
-    internal readonly struct AgnusPalBeamPosition
+    internal readonly struct AgnusBeamPosition
     {
-        public AgnusPalBeamPosition(
+        public AgnusBeamPosition(
             long currentCycle,
             long frameStartCycle,
             int frameNumber,
@@ -481,7 +481,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
         public bool IsLongFrame { get; }
 
-        public static AgnusPalBeamPosition FromCycle(long cycle)
+        public static AgnusBeamPosition FromCycle(long cycle)
         {
             cycle = Math.Max(0, cycle);
             var cycleInFrame = cycle % AmigaConstants.A500PalCpuCyclesPerFrame;
@@ -496,27 +496,42 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 0,
                 AmigaConstants.A500PalColorClocksPerRasterLine - 1);
             var frame = (int)Math.Min(int.MaxValue, cycle / AmigaConstants.A500PalCpuCyclesPerFrame);	// Max 81 years
-            return new AgnusPalBeamPosition(cycle, frameStartCycle, frame, line, horizontal);
+            return new AgnusBeamPosition(cycle, frameStartCycle, frame, line, horizontal);
         }
     }
 
-    internal sealed class AgnusPalBeamClock
+    internal sealed class AgnusBeamClock
     {
-        private const int LineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-        private const int LongRasterLines = AmigaConstants.A500PalLongRasterLines;
-        private const int ShortRasterLines = AmigaConstants.A500PalShortRasterLines;
+        private readonly RasterTiming _timing;
+        private int _lineCycles;
+        private int _longRasterLines;
+        private int _shortRasterLines;
         private long _frameStartCycle;
         private int _frameNumber;
-        private int _rasterLines = LongRasterLines;
+        private int _rasterLines;
+
+        public AgnusBeamClock(RasterTiming timing)
+        {
+            _timing = timing;
+            _lineCycles = timing.CpuCyclesPerLine;
+            _longRasterLines = timing.LongFrameLines;
+            _shortRasterLines = timing.ShortFrameLines;
+            _rasterLines = _longRasterLines;
+        }
+
+        public int LineCycles => _lineCycles;
 
         public void Reset()
         {
             _frameStartCycle = 0;
             _frameNumber = 0;
-            _rasterLines = LongRasterLines;
+            _lineCycles = _timing.CpuCyclesPerLine;
+            _longRasterLines = _timing.LongFrameLines;
+            _shortRasterLines = _timing.ShortFrameLines;
+            _rasterLines = _longRasterLines;
         }
 
-        public AgnusPalBeamPosition GetPosition(long cycle)
+        public AgnusBeamPosition GetPosition(long cycle)
         {
             cycle = Math.Max(0, cycle);
             if (cycle < _frameStartCycle)
@@ -531,7 +546,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return CreatePosition(cycle, _frameStartCycle, _frameNumber, _rasterLines);
         }
 
-        private static AgnusPalBeamPosition CreatePosition(
+        private AgnusBeamPosition CreatePosition(
             long cycle,
             long frameStartCycle,
             int frameNumber,
@@ -539,13 +554,13 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             var frameCycles = GetFrameCycles(rasterLines);
             var cycleInFrame = cycle - frameStartCycle;
-            var line = Math.Clamp((int)(cycleInFrame / LineCycles), 0, rasterLines - 1);
-            var lineCycle = cycleInFrame - ((long)line * LineCycles);
+            var line = Math.Clamp((int)(cycleInFrame / _lineCycles), 0, rasterLines - 1);
+            var lineCycle = cycleInFrame - ((long)line * _lineCycles);
             var horizontal = Math.Clamp(
-                (int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock),
+                (int)(lineCycle / _timing.CpuCyclesPerColorClock),
                 0,
-                AmigaConstants.A500PalColorClocksPerRasterLine - 1);
-            return new AgnusPalBeamPosition(
+                (_lineCycles / _timing.CpuCyclesPerColorClock) - 1);
+            return new AgnusBeamPosition(
                 cycle,
                 frameStartCycle,
                 frameNumber,
@@ -553,15 +568,40 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 horizontal,
                 rasterLines,
                 frameCycles,
-                rasterLines == LongRasterLines);
+                rasterLines == _longRasterLines);
         }
 
         public void ApplyVposw(ushort value, long cycle)
         {
             cycle = Math.Max(0, cycle);
             _ = GetPosition(cycle);
-            _rasterLines = (value & 0x8000) != 0 ? LongRasterLines : ShortRasterLines;
+            _rasterLines = (value & 0x8000) != 0 ? _longRasterLines : _shortRasterLines;
             EnsureFrameContains(cycle);
+        }
+
+        public void ApplyGeometry(int colorClocksPerLine, int frameLines, long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            var position = GetPosition(cycle);
+            _lineCycles = Math.Max(_timing.CpuCyclesPerColorClock, colorClocksPerLine * _timing.CpuCyclesPerColorClock);
+            _longRasterLines = Math.Max(1, frameLines);
+            _shortRasterLines = _longRasterLines;
+            _rasterLines = _longRasterLines;
+            _frameStartCycle = cycle -
+                ((long)Math.Min(position.BeamLine, _rasterLines - 1) * _lineCycles) -
+                ((long)Math.Min(position.BeamHorizontal, colorClocksPerLine - 1) * _timing.CpuCyclesPerColorClock);
+            _frameNumber = position.FrameNumber;
+        }
+
+        public void ApplyHorizontalPosition(int horizontal, long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            var position = GetPosition(cycle);
+            var clocksPerLine = _lineCycles / _timing.CpuCyclesPerColorClock;
+            horizontal = Math.Clamp(horizontal, 0, clocksPerLine - 1);
+            _frameStartCycle = cycle - ((long)position.BeamLine * _lineCycles) -
+                ((long)horizontal * _timing.CpuCyclesPerColorClock);
+            _frameNumber = position.FrameNumber;
         }
 
         public long GetNextFrameStartCycle(long cycle)
@@ -593,8 +633,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             }
         }
 
-        private static long GetFrameCycles(int rasterLines)
-            => (long)rasterLines * LineCycles;
+        private long GetFrameCycles(int rasterLines)
+            => (long)rasterLines * _lineCycles;
     }
 
     internal sealed class ZeroWaitBusArbiter : IAmigaBusArbiter
@@ -782,7 +822,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private long _currentCycle;
         private long _nextRefreshCommitCycle =
             AgnusHrmOcsSlotTable.FirstRefreshHorizontal * AgnusChipSlotScheduler.SlotCycles;
-        private AgnusPalBeamPosition _beam;
+        private AgnusBeamPosition _beam;
         private bool _beamValid;
         private AgnusSlotAuditSource _slotScheduleAuditSource;
         private int _slotScheduleAuditSourceA = -1;
@@ -848,7 +888,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
         public bool BlitterPriorityEnabled { get; set; }
 
-        public Func<long, AgnusPalBeamPosition>? BeamPositionProvider { get; set; }
+        public Func<long, AgnusBeamPosition>? BeamPositionProvider { get; set; }
 
         internal AgnusSlotAuditSource SlotScheduleAuditSource
         {
@@ -1944,13 +1984,13 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _ = cycle;
         }
 
-        private AgnusPalBeamPosition CurrentBeam
+        private AgnusBeamPosition CurrentBeam
         {
             get
             {
                 if (!_beamValid)
                 {
-                    _beam = BeamPositionProvider?.Invoke(_currentCycle) ?? AgnusPalBeamPosition.FromCycle(_currentCycle);
+                    _beam = BeamPositionProvider?.Invoke(_currentCycle) ?? AgnusBeamPosition.FromCycle(_currentCycle);
                     _beamValid = true;
                 }
 

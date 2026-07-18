@@ -3545,12 +3545,12 @@ public sealed class M68kInterpreterTests
 			"; ",
 			reads.Select(phase =>
 			{
-				var request = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
-				var complete = bus.GetPalBeamPosition(phase.CpuPhase.CompletedCycle);
+				var request = bus.GetBeamPosition(phase.CpuPhase.RequestedCycle);
+				var complete = bus.GetBeamPosition(phase.CpuPhase.CompletedCycle);
 				var grantCycle = phase.BusAccess.HasValue
 					? phase.BusAccess.GetValueOrDefault().GrantedCycle
 					: phase.CpuPhase.CompletedCycle;
-				var grant = bus.GetPalBeamPosition(grantCycle);
+				var grant = bus.GetBeamPosition(grantCycle);
 				var wait = phase.BusAccess.HasValue
 					? phase.BusAccess.GetValueOrDefault().WaitCycles
 					: 0;
@@ -3565,10 +3565,10 @@ public sealed class M68kInterpreterTests
 			"; ",
 			phases.Select(phase =>
 			{
-				var request = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
+				var request = bus.GetBeamPosition(phase.CpuPhase.RequestedCycle);
 				var grantCycle = GetGrantCycle(phase);
-				var grant = bus.GetPalBeamPosition(grantCycle);
-				var complete = bus.GetPalBeamPosition(phase.CpuPhase.CompletedCycle);
+				var grant = bus.GetBeamPosition(grantCycle);
+				var complete = bus.GetBeamPosition(phase.CpuPhase.CompletedCycle);
 				var wait = phase.BusAccess.HasValue
 					? phase.BusAccess.GetValueOrDefault().WaitCycles
 					: 0;

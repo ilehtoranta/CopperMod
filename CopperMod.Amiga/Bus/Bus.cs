@@ -255,8 +255,10 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _hardwareSpecializationEnabled;
         private readonly AmigaRealTimeClock? _realTimeClock;
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
-        private readonly AgnusPalBeamClock _palBeamClock = new();
-        private readonly long _palLineCycles;
+        private readonly RasterTiming _rasterTiming;
+        private readonly AgnusBeamClock _beamClock;
+        private readonly AgnusRegisterBank _agnusRegisters;
+        private long _lineCycles;
         private int _customRegisterWriteContextDepth;
         private AmigaBusRequester _customRegisterWriteRequester;
         private ushort _customRegisterWriteOffset;
@@ -377,7 +379,8 @@ namespace CopperMod.Amiga.Bus
             bool verifyDeferredCpuBusBatch = false,
             bool enableCopperQuiescentDiagnostics = false,
             bool forceCpuWaitSlotReference = false,
-            long rtgVramSize = 0)
+            long rtgVramSize = 0,
+            AmigaChipset? chipset = null)
         {
             if (chipRamSize <= 0)
             {
@@ -414,6 +417,10 @@ namespace CopperMod.Amiga.Bus
                 throw new ArgumentOutOfRangeException(nameof(audioDmaMinimumPeriod), audioDmaMinimumPeriod, "Audio DMA minimum period must be positive.");
             }
 
+            var selectedChipset = chipset ?? AmigaChipset.OcsPal;
+            _rasterTiming = RasterTiming.Pal;
+            _beamClock = new AgnusBeamClock(_rasterTiming);
+            _agnusRegisters = new AgnusRegisterBank(selectedChipset.Agnus);
             var chipRamDecodeSize = Math.Max(MinimumChipRamDecodeSize, (uint)chipRamSize);
             var chipDmaAddressMask = (((uint)chipRamSize - 1u) & AmigaConstants.A500OcsChipDmaAddressMask) & 0x00FF_FFFEu;
             _chipRam = new AmigaChipRamBackend(chipRamSize, chipRamDecodeSize, chipDmaAddressMask, CodeGenerationPageShift);
@@ -490,10 +497,10 @@ namespace CopperMod.Amiga.Bus
             Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
             _rasterlineScheduleCache = new AmigaRasterlineScheduleCache(this);
             _hardwareScheduler = new AmigaHardwareScheduler(this);
-            _hrmSlotEngine.BeamPositionProvider = GetPalBeamPosition;
-            _palLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-            _palBeamClock.Reset();
-            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
+            _hrmSlotEngine.BeamPositionProvider = GetBeamPosition;
+            _lineCycles = _beamClock.LineCycles;
+            _beamClock.Reset();
+            _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             ResetCiaAForHardwareReset();
@@ -980,8 +987,10 @@ namespace CopperMod.Amiga.Bus
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _palBeamClock.Reset();
-            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
+            _agnusRegisters.Reset();
+            _beamClock.Reset();
+            _lineCycles = _beamClock.LineCycles;
+            _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
@@ -1089,8 +1098,10 @@ namespace CopperMod.Amiga.Bus
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
-            _palBeamClock.Reset();
-            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(0);
+            _agnusRegisters.Reset();
+            _beamClock.Reset();
+            _lineCycles = _beamClock.LineCycles;
+            _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();

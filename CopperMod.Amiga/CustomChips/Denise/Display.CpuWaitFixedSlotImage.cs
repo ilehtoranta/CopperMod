@@ -72,7 +72,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
     internal sealed partial class Display
     {
-        private const int CpuWaitFixedSlotsPerLine = PalLineCycles / AgnusChipSlotScheduler.SlotCycles;
+        private const int CpuWaitFixedSlotsPerLine = LineCycles / AgnusChipSlotScheduler.SlotCycles;
         private readonly byte[] _cpuWaitFixedSlotOwners =
             new byte[AmigaConstants.A500PalRasterLines * CpuWaitFixedSlotsPerLine];
         private readonly int[] _cpuWaitFixedSlotGenerations = new int[AmigaConstants.A500PalRasterLines];
@@ -161,13 +161,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var frameCycle = cycle - _liveFrameStartCycle;
-            beamLine = (int)(frameCycle / PalLineCycles);
+            beamLine = (int)(frameCycle / LineCycles);
             if ((uint)beamLine >= AmigaConstants.A500PalRasterLines)
             {
                 return false;
             }
 
-            lineStart = _liveFrameStartCycle + ((long)beamLine * PalLineCycles);
+            lineStart = _liveFrameStartCycle + ((long)beamLine * LineCycles);
             row = beamLine - StandardVStart;
             return (uint)row < LowResOutputHeight;
         }
@@ -178,7 +178,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int row,
             out CpuWaitFixedSlotImageUnsupported unsupported)
         {
-            var lineStop = lineStart + PalLineCycles - 1;
+            var lineStop = lineStart + LineCycles - 1;
             if (GetNextLiveCopperBarrierCycle() <= lineStop)
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.Copper;

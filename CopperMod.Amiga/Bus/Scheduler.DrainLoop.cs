@@ -275,7 +275,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             var cursor = Math.Min(GetMaskDrainedThroughCycle(mask), targetCycle);
-            var targetLineStartCycle = targetCycle - (targetCycle % _bus.PalLineCycles);
+            var targetLineStartCycle = targetCycle - (targetCycle % _bus.LineCycles);
             if (cursor < targetLineStartCycle - 1)
             {
                 return false;

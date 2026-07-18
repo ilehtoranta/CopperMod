@@ -37,9 +37,7 @@ namespace CopperMod.Amiga.Bus
             {
                 CiaB.IncrementTod(_nextHorizontalSyncCycle, _pendingCiaInterrupts);
                 _nextHorizontalSyncIndex++;
-                _nextHorizontalSyncCycle = Math.Max(
-                    _nextHorizontalSyncCycle + 1,
-                    _nextHorizontalSyncIndex * _palLineCycles);
+                _nextHorizontalSyncCycle += _lineCycles;
             }
 
             if (targetCycle < _nextVerticalBlankCycle)
@@ -51,13 +49,13 @@ namespace CopperMod.Amiga.Bus
             {
                 CiaA.IncrementTod(_nextVerticalBlankCycle, _pendingCiaInterrupts);
                 RequestHardwareInterrupt(AmigaConstants.IntreqVerticalBlank, _nextVerticalBlankCycle);
-                _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(_nextVerticalBlankCycle);
+                _nextVerticalBlankCycle = GetNextVerticalBlankCycle(_nextVerticalBlankCycle);
             }
         }
 
         private void UpdateBeamPosition(long targetCycle)
         {
-            var beam = _palBeamClock.GetPosition(targetCycle);
+            var beam = _beamClock.GetPosition(targetCycle);
             var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
             Paula.SetBeamPosition(beam.BeamLine, horizontal, beam.IsLongFrame);
         }
@@ -65,17 +63,47 @@ namespace CopperMod.Amiga.Bus
         private void ResetHorizontalSyncCounter()
         {
             _nextHorizontalSyncIndex = 1;
-            _nextHorizontalSyncCycle = Math.Max(1, _palLineCycles);
+            _nextHorizontalSyncCycle = Math.Max(1, _lineCycles);
         }
 
-        internal AgnusPalBeamPosition GetPalBeamPosition(long cycle)
-            => _palBeamClock.GetPosition(cycle);
+        private void RecalculateRasterEvents(long cycle)
+        {
+            var beam = _beamClock.GetPosition(cycle);
+            var lineStart = beam.FrameStartCycle + ((long)beam.BeamLine * _lineCycles);
+            var hsyncOffset = _agnusRegisters.VariableHSyncEnabled
+                ? (long)_agnusRegisters.HSyncStart * _rasterTiming.CpuCyclesPerColorClock
+                : _lineCycles;
+            _nextHorizontalSyncCycle = lineStart + hsyncOffset;
+            if (_nextHorizontalSyncCycle <= cycle)
+                _nextHorizontalSyncCycle = cycle + _lineCycles;
+            _nextHorizontalSyncIndex = beam.BeamLine + 1;
+            _nextVerticalBlankCycle = GetNextVerticalBlankCycle(cycle);
+            _rasterlineScheduleCache.Reset();
+        }
 
-        internal long GetPalFrameStopCycle(long frameStartCycle)
-            => _palBeamClock.GetFrameStopCycle(frameStartCycle);
+        private long GetNextVerticalBlankCycle(long cycle)
+        {
+            var beam = _beamClock.GetPosition(cycle);
+            if (!_agnusRegisters.VariableVBlankEnabled && !_agnusRegisters.VariableVSyncEnabled)
+                return _beamClock.GetNextFrameStartCycle(cycle);
 
-        internal long GetNextPalFrameStartCycle(long cycle)
-            => _palBeamClock.GetNextFrameStartCycle(cycle);
+            var line = _agnusRegisters.VariableVBlankEnabled
+                ? _agnusRegisters.VBlankStart
+                : _agnusRegisters.VSyncStart;
+            var candidate = beam.FrameStartCycle + ((long)line * _lineCycles);
+            if (candidate <= cycle)
+                candidate = _beamClock.GetNextFrameStartCycle(cycle) + ((long)line * _lineCycles);
+            return candidate;
+        }
+
+        internal AgnusBeamPosition GetBeamPosition(long cycle)
+            => _beamClock.GetPosition(cycle);
+
+        internal long GetFrameStopCycle(long frameStartCycle)
+            => _beamClock.GetFrameStopCycle(frameStartCycle);
+
+        internal long GetNextFrameStartCycle(long cycle)
+            => _beamClock.GetNextFrameStartCycle(cycle);
 
         public void AdvanceCiasTo(long targetCycle)
             => _hardwareScheduler.DrainTo(
@@ -349,7 +377,7 @@ namespace CopperMod.Amiga.Bus
 
         internal long NextHorizontalSyncCycle => _nextHorizontalSyncCycle;
 
-        internal long PalLineCycles => _palLineCycles;
+        internal long LineCycles => _lineCycles;
 
         public long GetNextStoppedCpuWakeCandidateCycle(long currentCycle, long targetCycle)
             => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle);

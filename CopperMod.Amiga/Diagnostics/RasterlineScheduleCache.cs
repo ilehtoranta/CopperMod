@@ -128,7 +128,7 @@ internal sealed class AmigaRasterlineScheduleCache
 
         var lineCycle = GetLineCycle(cycle);
         var lineStartCycle = cycle - lineCycle;
-        var lineEndCycle = lineStartCycle + _bus.PalLineCycles - 1;
+        var lineEndCycle = lineStartCycle + _bus.LineCycles - 1;
 
         _valid = true;
         _lineStartCycle = lineStartCycle;
@@ -140,7 +140,7 @@ internal sealed class AmigaRasterlineScheduleCache
 
     private long GetLineCycle(long cycle)
     {
-        var lineCycles = _bus.PalLineCycles;
+        var lineCycles = _bus.LineCycles;
         var lineCycle = cycle % lineCycles;
         return lineCycle < 0 ? lineCycle + lineCycles : lineCycle;
     }

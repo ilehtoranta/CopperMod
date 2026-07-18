@@ -33,6 +33,12 @@ namespace CopperMod.Amiga.Bus
         private ushort ReadCustomWord(ushort offset, long sampleCycle)
         {
             offset = (ushort)(offset & 0x01FE);
+            var beamCycle = sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle;
+            if (_agnusRegisters.TryRead(offset, _beamClock.GetPosition(beamCycle), out var agnusValue))
+            {
+                return agnusValue;
+            }
+
             switch (offset)
             {
                 case 0x002:
@@ -80,7 +86,8 @@ namespace CopperMod.Amiga.Bus
             {
                 value = capturedLatch;
             }
-            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(offset))
+            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(offset) &&
+                !_agnusRegisters.IsReadable(offset))
             {
                 WriteCustomWord(AmigaBusRequester.Cpu, offset, capturedLatch, grantedCycle);
                 value = dmaValueVisible ? capturedLatch : (ushort)0xFFFF;
@@ -107,7 +114,8 @@ namespace CopperMod.Amiga.Bus
             {
                 value = capturedByte;
             }
-            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(wordOffset))
+            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(wordOffset) &&
+                !_agnusRegisters.IsReadable(wordOffset))
             {
                 WriteCustomByte(AmigaBusRequester.Cpu, offset, capturedByte, grantedCycle);
                 value = dmaValueVisible ? capturedByte : (byte)0xFF;
@@ -166,21 +174,20 @@ namespace CopperMod.Amiga.Bus
 
         private void CalculateBeamPosition(long targetCycle, out ushort vposr, out ushort vhposr)
         {
-            var beam = _palBeamClock.GetPosition(targetCycle);
+            var beam = _beamClock.GetPosition(targetCycle);
             var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
             var registerLine = beam.BeamLine;
             vposr = (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((registerLine >> 8) & 0x0001));
             vhposr = (ushort)(((registerLine & 0x00FF) << 8) | horizontal);
         }
 
-        private static int EncodeVhposrHorizontal(int beamHorizontal)
+        private int EncodeVhposrHorizontal(int beamHorizontal)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
             // Internal RGA slot coordinates precede externally visible Agnus
             // HPOS by three CCKs. VHPOSR then returns the position after the
             // access (WinUAE: GETHPOS followed by one incpos()).
-            return (physicalHorizontal + 4) %
-                AmigaConstants.A500PalColorClocksPerRasterLine;
+            return (int)((physicalHorizontal + 4) % Math.Max(1, _lineCycles / _rasterTiming.CpuCyclesPerColorClock));
         }
 
         private uint ReadRawLong(uint address)
@@ -206,8 +213,8 @@ namespace CopperMod.Amiga.Bus
                 _deferredCpuWaitSlotShadowLiveAttempts < DeferredCpuWaitSlotShadowLiveMaxSamples &&
                 LiveAgnusDmaEnabled &&
                 Display.HasLiveDisplayWork() &&
-                Display.GetNextLiveDisplayWakeCandidateCycle(grantRequestCycle, grantRequestCycle + PalLineCycles).HasValue &&
-                IsDeferredCpuWaitSlotShadowGrantSupported(target, AmigaBusAccessSize.Long, grantRequestCycle + PalLineCycles))
+                Display.GetNextLiveDisplayWakeCandidateCycle(grantRequestCycle, grantRequestCycle + LineCycles).HasValue &&
+                IsDeferredCpuWaitSlotShadowGrantSupported(target, AmigaBusAccessSize.Long, grantRequestCycle + LineCycles))
             {
                 liveScratchAttempted = true;
                 var scratchSlots = _hrmSlotEngine.CreateShadowCopy();
@@ -438,15 +445,37 @@ namespace CopperMod.Amiga.Bus
 
         private void ApplyBeamControlWrite(ushort offset, ushort value, long cycle)
         {
-            if (offset != 0x02A)
+            var writeCycle = Math.Max(0, cycle);
+            var result = _agnusRegisters.Write(offset, value);
+            if (!result.Handled)
             {
                 return;
             }
 
-            var writeCycle = Math.Max(0, cycle);
             AdvanceRasterCoreTo(writeCycle);
-            _palBeamClock.ApplyVposw(value, writeCycle);
-            _nextVerticalBlankCycle = _palBeamClock.GetNextFrameStartCycle(writeCycle);
+            if (offset == 0x02A)
+            {
+                _beamClock.ApplyVposw(value, writeCycle);
+            }
+            else if (result.TimingChanged)
+            {
+                if (offset == AgnusRegisterBank.Hhposw)
+                {
+                    _beamClock.ApplyHorizontalPosition(_agnusRegisters.HhposWrite, writeCycle);
+                }
+                else
+                {
+                    var oldBeam = _beamClock.GetPosition(writeCycle);
+                    _beamClock.ApplyGeometry(
+                        _agnusRegisters.EffectiveColorClocksPerLine(_rasterTiming),
+                        _agnusRegisters.EffectiveFrameLines(_rasterTiming, oldBeam.IsLongFrame),
+                        writeCycle);
+                }
+                _lineCycles = _beamClock.LineCycles;
+                RecalculateRasterEvents(writeCycle);
+            }
+
+            _nextVerticalBlankCycle = GetNextVerticalBlankCycle(writeCycle);
             _hardwareScheduler.NotifyWorkScheduled(_nextVerticalBlankCycle);
             NotifyCustomRegisterScheduleChanged(offset, writeCycle);
         }

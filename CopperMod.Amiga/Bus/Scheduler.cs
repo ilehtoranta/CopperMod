@@ -563,7 +563,7 @@ namespace CopperMod.Amiga.Bus
                 candidate,
                 currentCycle,
                 targetCycle,
-                _bus.CiaB.GetNextTodInterruptCycle(targetCycle, _bus.NextHorizontalSyncCycle, _bus.PalLineCycles),
+                _bus.CiaB.GetNextTodInterruptCycle(targetCycle, _bus.NextHorizontalSyncCycle, _bus.LineCycles),
                 M68kTraceBatchWakeSource.HorizontalSyncTod,
                 ref wakeSource);
             candidate = MinWakeCandidate(

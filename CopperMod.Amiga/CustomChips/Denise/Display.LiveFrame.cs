@@ -95,13 +95,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private long GetFrameStopCycle(long frameStartCycle)
-            => _bus.GetPalFrameStopCycle(frameStartCycle);
+            => _bus.GetFrameStopCycle(frameStartCycle);
 
         private long GetLiveFrameStopCycle()
             => GetFrameStopCycle(_liveFrameStartCycle);
 
         private long GetNextFrameStartCycle(long cycle)
-            => _bus.GetNextPalFrameStartCycle(cycle);
+            => _bus.GetNextFrameStartCycle(cycle);
 
         public void ScheduleWrite(long cycle, ushort offset, ushort value)
         {
@@ -1131,7 +1131,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 FinalizeLiveRasterlinePlanLine();
                 _liveRasterlinePlanRow = row;
                 _liveRasterlinePlanLineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
-                _liveRasterlinePlanLineStopCycle = _liveRasterlinePlanLineStartCycle + PalLineCycles - 1;
+                _liveRasterlinePlanLineStopCycle = _liveRasterlinePlanLineStartCycle + LineCycles - 1;
                 _liveRasterlinePlanLastCycle = long.MinValue;
                 _liveRasterlinePlanLineEventCount = 0;
                 _liveRasterlinePlanLineValid = true;
@@ -1179,7 +1179,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            row = (int)((cycle - _liveFrameStartCycle) / PalLineCycles) - StandardVStart;
+            row = (int)((cycle - _liveFrameStartCycle) / LineCycles) - StandardVStart;
             return (uint)row < (uint)LowResOutputHeight;
         }
 
@@ -1260,7 +1260,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var lineStart = GetOutputRowStartCycle(_liveFrameStartCycle, row);
-            var lineStop = lineStart + PalLineCycles - 1;
+            var lineStop = lineStart + LineCycles - 1;
             if (IsLiveCopperDmaEnabled())
             {
                 MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedCopper);

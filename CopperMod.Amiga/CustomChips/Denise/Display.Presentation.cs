@@ -158,7 +158,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private int GetInterlaceField(long frameStartCycle)
-            => _bus.GetPalBeamPosition(frameStartCycle).FrameNumber & 1;
+            => _bus.GetBeamPosition(frameStartCycle).FrameNumber & 1;
 
         private bool TryRenderTimelineFrame(
             Span<uint> bgra,
@@ -2486,7 +2486,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private static long GetLineStartCycle(long frameStartCycle, int line)
         {
-            return frameStartCycle + ((long)line * PalLineCycles);
+            return frameStartCycle + ((long)line * LineCycles);
         }
 
         private static long GetCycleForCopperBeam(long frameStartCycle, int line, int horizontal)
@@ -2501,7 +2501,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return 0;
             }
 
-            var line = Math.Clamp((int)((cycle - frameStartCycle) / PalLineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
+            var line = Math.Clamp((int)((cycle - frameStartCycle) / LineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
             while (line + 1 < AmigaConstants.A500PalRasterLines && GetLineStartCycle(frameStartCycle, line + 1) <= cycle)
             {
                 line++;
@@ -2531,13 +2531,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var frameCycle = cycle - frameStartCycle;
-            line = (int)(frameCycle / PalLineCycles);
+            line = (int)(frameCycle / LineCycles);
             if (line >= AmigaConstants.A500PalRasterLines)
             {
                 line = AmigaConstants.A500PalRasterLines - 1;
             }
 
-            var lineCycle = frameCycle - ((long)line * PalLineCycles);
+            var lineCycle = frameCycle - ((long)line * LineCycles);
             horizontal = (int)(lineCycle / CopperHpCycles);
             if (horizontal > LastCopperHorizontal)
             {

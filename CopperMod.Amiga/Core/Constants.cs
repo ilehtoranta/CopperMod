@@ -5,6 +5,23 @@
 
 namespace CopperMod.Amiga.Core
 {
+    internal readonly record struct RasterTiming(
+        int CpuCyclesPerColorClock,
+        int ColorClocksPerLine,
+        int ShortFrameLines,
+        int LongFrameLines,
+        long MasterClockHz)
+    {
+        public static RasterTiming Pal { get; } = new(
+            AmigaConstants.A500PalCpuCyclesPerColorClock,
+            AmigaConstants.A500PalColorClocksPerRasterLine,
+            AmigaConstants.A500PalShortRasterLines,
+            AmigaConstants.A500PalLongRasterLines,
+            28_375_160);
+
+        public int CpuCyclesPerLine => CpuCyclesPerColorClock * ColorClocksPerLine;
+    }
+
     internal static class AmigaConstants
     {
         public const int A500PalPaulaTicksPerSecond = 3_546_895;

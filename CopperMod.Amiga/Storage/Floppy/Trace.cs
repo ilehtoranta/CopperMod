@@ -284,7 +284,7 @@ namespace CopperMod.Amiga.Storage.Floppy
         public void Add(in AmigaDiskTraceEventBuilder builder)
         {
             var cpu = _cpuContextProvider?.Invoke() ?? default;
-            var beam = AgnusPalBeamPosition.FromCycle(builder.Cycle);
+            var beam = AgnusBeamPosition.FromCycle(builder.Cycle);
             var entry = new AmigaDiskTraceEvent(
                 _nextSequence++,
                 _backend,

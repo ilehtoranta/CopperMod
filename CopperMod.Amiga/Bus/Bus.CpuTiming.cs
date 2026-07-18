@@ -858,7 +858,7 @@ namespace CopperMod.Amiga.Bus
                     }
                 }
                 else if (HasUnsupportedCpuWaitSlotWorkThrough(
-                    grantRequestCycle + PalLineCycles))
+                    grantRequestCycle + LineCycles))
                 {
                     _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
                     if (Display.HasLiveDisplayWork())
@@ -941,7 +941,7 @@ namespace CopperMod.Amiga.Bus
                     AmigaBusAccessTarget.RealTimeClock) &&
                 Blitter.Busy &&
                 Blitter.CanUseCpuWaitAreaMicroOps &&
-                !HasUnsupportedCpuWaitSlotWorkThrough(grantRequestCycle + PalLineCycles))
+                !HasUnsupportedCpuWaitSlotWorkThrough(grantRequestCycle + LineCycles))
             {
                 if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
                 {

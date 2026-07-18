@@ -43,7 +43,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int CopperWaitWakeHpUnits = 5;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
         private const ushort CopconCopperDanger = 0x0002;
-        private const int PalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        private const int LineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
         private const int MaxPaletteFrameSpans = MaxPendingWrites;

@@ -177,7 +177,7 @@ namespace CopperMod.Amiga.Bus
 
         private long GetLineEndCycle(long targetCycle)
         {
-            var lineCycles = _bus.PalLineCycles;
+            var lineCycles = _bus.LineCycles;
             if (lineCycles <= 1)
             {
                 return targetCycle;

@@ -474,7 +474,7 @@ namespace CopperMod.Amiga.Bus
             OcsLiveDmaScratchCpuWrite scratchWrite,
             ref DeferredCpuWaitScratchAudit audit)
         {
-            var searchHorizon = grantRequestCycle + PalLineCycles;
+            var searchHorizon = grantRequestCycle + LineCycles;
             if (_deferredCpuWaitFixedImageAttempts < DeferredCpuWaitFixedImageMaxSamples &&
                 LiveAgnusDmaEnabled &&
                 Display.HasLiveDisplayWork() &&
@@ -862,7 +862,7 @@ namespace CopperMod.Amiga.Bus
             if (Blitter.Busy &&
                 !Display.HasLiveDisplayWork() &&
                 !Disk.ActiveDma &&
-                !Paula.HasDmaWorkThrough(requestedCycle + PalLineCycles))
+                !Paula.HasDmaWorkThrough(requestedCycle + LineCycles))
             {
                 var scratchSlots = _hrmSlotEngine.CreateShadowCopy();
                 _ = Blitter.TryRunCpuWaitSlotScratch(
@@ -1275,7 +1275,7 @@ namespace CopperMod.Amiga.Bus
                 var display = Display.CaptureSnapshot();
                 var nextCopper = Display.GetNextLiveCopperWakeCandidateCycle(
                     grantRequestCycle,
-                    grantRequestCycle + PalLineCycles);
+                    grantRequestCycle + LineCycles);
                 displayDetail =
                     $"/display=live:{Display.HasLiveDisplayWork()},copSteps:{Display.LiveCopperStepCount},nextCop:{(nextCopper.HasValue ? nextCopper.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none")},dma:{display.LastBitplaneDmaFetches}/{display.LastSpriteDmaFetches}/{display.LastMissedSpriteDmaSlots},firstLast:{display.LastFirstDisplayDmaCycle}->{display.LastLastDisplayDmaCycle},rowPlan:{display.LastRowDmaPlansBuilt}/{display.LastRowDmaPlannedRowsExecuted}/{display.LastRowDmaBitplaneEntriesExecuted}/{display.LastRowDmaSpriteEntriesExecuted}/{display.LastRowDmaScalarFallbackRows}/{display.LastRowDmaPlanInvalidationRows}/{display.LastRowDmaPlanMismatchRows},bplcon:{display.Bplcon0:X4}/{display.Bplcon1:X4}/{display.Bplcon2:X4}";
             }

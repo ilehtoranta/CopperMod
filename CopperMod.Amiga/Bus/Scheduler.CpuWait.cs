@@ -95,7 +95,7 @@ namespace CopperMod.Amiga.Bus
                 DrainSlotContendedAccess(requestedCycle - 1);
             }
 
-            if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(requestedCycle + _bus.PalLineCycles))
+            if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(requestedCycle + _bus.LineCycles))
             {
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;
             }
@@ -116,7 +116,7 @@ namespace CopperMod.Amiga.Bus
                             out _,
                             out _,
                             out _);
-                        if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(candidate + _bus.PalLineCycles) ||
+                        if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(candidate + _bus.LineCycles) ||
                             liveResult == OcsCpuWaitLiveSlotResult.CopperBarrier)
                         {
                             return CpuWaitGrantAdvanceResult.ReferenceContinuation;
@@ -190,7 +190,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             if (!_bus.Display.HasLiveDisplayWork() ||
-                _bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(requestedCycle + _bus.PalLineCycles))
+                _bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(requestedCycle + _bus.LineCycles))
             {
                 _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.DynamicDma);
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;

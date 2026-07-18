@@ -400,7 +400,8 @@ namespace CopperMod.Amiga.Runtime
                 options.DeferredCpuBusBatchVerifyEnabled,
                 options.CopperQuiescentDiagnosticsEnabled,
                 options.CpuWaitSlotReferencePathEnabled,
-                options.RtgVramSize);
+                options.RtgVramSize,
+                options.Chipset);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {

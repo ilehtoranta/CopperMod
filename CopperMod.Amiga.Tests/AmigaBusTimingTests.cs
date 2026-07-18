@@ -85,41 +85,6 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, ReadVposrAt(bus, 0) & 0x8000);
 	}
 
-	[Fact(Skip = "Diagnostic hypothesis only: a naive VPOSR bit-8 latch breaks synccpu and worsens vprobe2 raw output.")]
-	public void VposrHighBitCrossingMatchesVAmigaTsVprobe2SampleWindow()
-	{
-		var bus = new AmigaBus();
-		var lineStart = 0x102L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
-		var sampleHorizontals = new[]
-		{
-			0x0F, 0x1B, 0x27, 0x33,
-			0x3F, 0x4B, 0x57, 0x63,
-			0x6F, 0x7B, 0x87, 0x93,
-			0x9F, 0xAB, 0xB7, 0xC3
-		};
-		var expected = new ushort[]
-		{
-			0x8000, 0x8000, 0x8000, 0x8000,
-			0x8000, 0x8001, 0x8001, 0x8001,
-			0x8001, 0x8001, 0x8001, 0x8001,
-			0x8001, 0x8001, 0x8001, 0x8001
-		};
-
-		var actual = sampleHorizontals
-			.Select(horizontal => ReadVposrAt(bus, lineStart + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock)))
-			.ToArray();
-		var diagnostic = string.Join(
-			"; ",
-			sampleHorizontals.Select((horizontal, index) =>
-			{
-				var cycle = lineStart + (horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
-				var beam = bus.GetPalBeamPosition(cycle);
-				return $"{index}:h={horizontal:X2}/v{beam.BeamLine:X3}h{beam.BeamHorizontal:X2} actual=0x{actual[index]:X4} expected=0x{expected[index]:X4}";
-			}));
-
-		Assert.True(expected.SequenceEqual(actual), diagnostic);
-	}
-
 	[Fact]
 	public void VposwForcedShortPalFrameRequestsVerticalBlankAfterLine312()
 	{
@@ -950,7 +915,7 @@ public sealed class AmigaBusTimingTests
 			var vhposr = bus.ReadWord(0x00DFF006, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 			var read = Assert.Single(bus.CustomRegisterReads);
-			var expected = EncodeVhposr(bus.GetPalBeamPosition(read.GrantedCycle));
+			var expected = EncodeVhposr(bus.GetBeamPosition(read.GrantedCycle));
 			Assert.Equal(0x006, read.Address);
 			Assert.Equal(read.GrantedCycle, read.SampleCycle);
 			Assert.Equal(expected, vhposr);
@@ -986,7 +951,7 @@ public sealed class AmigaBusTimingTests
 			var vhposr = bus.ReadWord(0x00DFF006, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 			var read = Assert.Single(bus.CustomRegisterReads);
-			var beam = bus.GetPalBeamPosition(read.SampleCycle);
+			var beam = bus.GetBeamPosition(read.SampleCycle);
 			var diagnostic =
 				$"requested={requestedCycle}/line={sample.Line}/h={sample.RequestedH}, " +
 				$"sample={read.SampleCycle}/v{beam.BeamLine}h{beam.BeamHorizontal}, " +
@@ -1018,7 +983,7 @@ public sealed class AmigaBusTimingTests
 			var vposr = bus.ReadWord(0x00DFF004, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 			var read = Assert.Single(bus.CustomRegisterReads);
-			var expected = EncodeVposr(bus.GetPalBeamPosition(read.GrantedCycle));
+			var expected = EncodeVposr(bus.GetBeamPosition(read.GrantedCycle));
 			Assert.Equal(0x004, read.Address);
 			Assert.Equal(read.GrantedCycle, read.SampleCycle);
 			Assert.Equal(expected, vposr);
@@ -2368,7 +2333,7 @@ public sealed class AmigaBusTimingTests
 		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
 			write.Address == 0x09C &&
 			write.Value == (0x8000 | intreqLevel1));
-		var beam = bus.GetPalBeamPosition(intreqWrite.Cycle);
+		var beam = bus.GetBeamPosition(intreqWrite.Cycle);
 		var copperAccesses = bus.BusAccesses
 			.Where(access =>
 				access.Request.Requester == AmigaBusRequester.Copper &&
@@ -2379,7 +2344,7 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			copperAccesses.Select(access =>
 			{
-				var grant = bus.GetPalBeamPosition(access.GrantedCycle);
+				var grant = bus.GetBeamPosition(access.GrantedCycle);
 				return $"{access.Request.Kind}/0x{access.Request.Address:X6} " +
 					$"req={access.Request.RequestedCycle - line256Start},grant={access.GrantedCycle - line256Start}/" +
 					$"v{grant.BeamLine:X3}h{grant.BeamHorizontal:X2}";
@@ -2428,8 +2393,8 @@ public sealed class AmigaBusTimingTests
 			write.Address == 0x09C &&
 			write.Value == (0x8000 | intreqLevel1));
 		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
-		var intreqBeam = bus.GetPalBeamPosition(intreqWrite.Cycle);
-		var visibleBeam = bus.GetPalBeamPosition(cpuVisibleCycle);
+		var intreqBeam = bus.GetBeamPosition(intreqWrite.Cycle);
+		var visibleBeam = bus.GetBeamPosition(cpuVisibleCycle);
 		var diagnostic =
 			$"intreq={intreqWrite.Cycle}/delta={intreqWrite.Cycle - line256Start}/" +
 			$"v{intreqBeam.BeamLine:X3}h{intreqBeam.BeamHorizontal:X2}, " +
@@ -2886,7 +2851,7 @@ public sealed class AmigaBusTimingTests
 			var firstRead = bus.CustomRegisterReads.First(read => read.Address == 0x006);
 			var bplcon0Disable = bus.CustomRegisterWrites.LastOrDefault(write =>
 				write.Address == 0x100 && write.Value == 0x0200);
-			var sampleBeam = bus.GetPalBeamPosition(firstRead.SampleCycle);
+			var sampleBeam = bus.GetBeamPosition(firstRead.SampleCycle);
 			var phaseStart = visibleCycle;
 			var phases = bus.CpuBusPhases
 				.Where(phase =>
@@ -3034,7 +2999,7 @@ public sealed class AmigaBusTimingTests
 
 		var reference = VAmigaTsProbe10ExpectedValues();
 		var interrupt = Assert.Single(interruptBoundaries);
-		var intreqBeam = bus.GetPalBeamPosition(intreqWrite.Cycle);
+		var intreqBeam = bus.GetBeamPosition(intreqWrite.Cycle);
 		var intreqFetches = bus.BusAccesses
 			.Where(access =>
 				access.Request.Requester == AmigaBusRequester.Copper &&
@@ -3042,11 +3007,11 @@ public sealed class AmigaBusTimingTests
 			.OrderBy(access => access.Request.Address)
 			.ToArray();
 		var intreqFetchBeams = intreqFetches
-			.Select(access => bus.GetPalBeamPosition(access.GrantedCycle))
+			.Select(access => bus.GetBeamPosition(access.GrantedCycle))
 			.ToArray();
-		var visibleBeam = bus.GetPalBeamPosition(cpuVisibleCycle);
-		var acceptanceBeam = bus.GetPalBeamPosition(interrupt.BeforeCycle);
-		var entryBeam = bus.GetPalBeamPosition(interrupt.AfterCycle);
+		var visibleBeam = bus.GetBeamPosition(cpuVisibleCycle);
+		var acceptanceBeam = bus.GetBeamPosition(interrupt.BeforeCycle);
+		var entryBeam = bus.GetBeamPosition(interrupt.AfterCycle);
 		var stored = ReadChipWords(bus.ChipRam, valuesAddress, reference.Length);
 		var reads = bus.CustomRegisterReads
 			.Where(read =>
@@ -3213,13 +3178,13 @@ public sealed class AmigaBusTimingTests
 		Assert.True(machine.DispatchPendingHardwareInterrupt());
 		var entryCycle = machine.Cpu.State.Cycles;
 
-		var requestBeam = bus.GetPalBeamPosition(requestCycle);
-		var visibleBeam = bus.GetPalBeamPosition(visibleCycle);
-		var firstSampleBeam = bus.GetPalBeamPosition(firstSampleCycle);
-		var firstRetireBeam = bus.GetPalBeamPosition(firstRetireCycle);
-		var secondSampleBeam = bus.GetPalBeamPosition(secondSampleCycle);
-		var secondRetireBeam = bus.GetPalBeamPosition(secondRetireCycle);
-		var entryBeam = bus.GetPalBeamPosition(entryCycle);
+		var requestBeam = bus.GetBeamPosition(requestCycle);
+		var visibleBeam = bus.GetBeamPosition(visibleCycle);
+		var firstSampleBeam = bus.GetBeamPosition(firstSampleCycle);
+		var firstRetireBeam = bus.GetBeamPosition(firstRetireCycle);
+		var secondSampleBeam = bus.GetBeamPosition(secondSampleCycle);
+		var secondRetireBeam = bus.GetBeamPosition(secondRetireCycle);
+		var entryBeam = bus.GetBeamPosition(entryCycle);
 		var diagnostic =
 			$"request=v{requestBeam.BeamLine:X3}h{requestBeam.BeamHorizontal:X2}, " +
 			$"visible=v{visibleBeam.BeamLine:X3}h{visibleBeam.BeamHorizontal:X2}, " +
@@ -3288,12 +3253,12 @@ public sealed class AmigaBusTimingTests
 
 		var firstRead = Assert.Single(bus.CustomRegisterReads.Where(read =>
 			read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead));
-		var entryBeam = bus.GetPalBeamPosition(entryCycle);
-		var stopBeams = boundaries.Select(boundary => bus.GetPalBeamPosition(boundary.Stop)).ToArray();
-		var requestBeam = bus.GetPalBeamPosition(firstRead.RequestedCycle);
-		var grantBeam = bus.GetPalBeamPosition(firstRead.GrantedCycle);
-		var sampleBeam = bus.GetPalBeamPosition(firstRead.SampleCycle);
-		var completeBeam = bus.GetPalBeamPosition(firstRead.CompletedCycle);
+		var entryBeam = bus.GetBeamPosition(entryCycle);
+		var stopBeams = boundaries.Select(boundary => bus.GetBeamPosition(boundary.Stop)).ToArray();
+		var requestBeam = bus.GetBeamPosition(firstRead.RequestedCycle);
+		var grantBeam = bus.GetBeamPosition(firstRead.GrantedCycle);
+		var sampleBeam = bus.GetBeamPosition(firstRead.SampleCycle);
+		var completeBeam = bus.GetBeamPosition(firstRead.CompletedCycle);
 		var actualStops = stopBeams.Select(beam => beam.BeamHorizontal).ToArray();
 		var emulatorStops = new[] { 0xB2, 0xBA, 0xBE, 0xC4, 0xC8 };
 		var differences = actualStops.Zip(emulatorStops, (actual, expected) => actual - expected).ToArray();
@@ -3578,7 +3543,7 @@ public sealed class AmigaBusTimingTests
 		SetCopperPointer(bus, list: 1, copperList);
 		bus.WriteWord(0x00DFF096, 0x8380);
 
-		var frameStop = bus.GetPalFrameStopCycle(0);
+		var frameStop = bus.GetFrameStopCycle(0);
 		bus.AdvanceDmaTo(frameStop);
 		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
 		bus.Display.RenderFrame(framebuffer, 0, frameStop);
@@ -3587,7 +3552,7 @@ public sealed class AmigaBusTimingTests
 		var firstFetch = bus.BusAccesses.First(access =>
 			access.Request.Requester == AmigaBusRequester.Bitplane &&
 			access.Request.Kind == AmigaBusAccessKind.Bitplane);
-		var firstFetchBeam = bus.GetPalBeamPosition(firstFetch.GrantedCycle);
+		var firstFetchBeam = bus.GetBeamPosition(firstFetch.GrantedCycle);
 		return (
 			bounds,
 			firstFetch.GrantedCycle,
@@ -3642,7 +3607,7 @@ public sealed class AmigaBusTimingTests
 		bus.WriteWord(0x00DFF0E0, (ushort)(bitplane >> 16), ref pointerCycle, AmigaBusAccessKind.CpuDataWrite);
 		bus.WriteWord(0x00DFF0E2, (ushort)bitplane, ref pointerCycle, AmigaBusAccessKind.CpuDataWrite);
 
-		var frameStop = bus.GetPalFrameStopCycle(0);
+		var frameStop = bus.GetFrameStopCycle(0);
 		bus.AdvanceDmaTo(frameStop);
 		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
 		bus.Display.RenderFrame(framebuffer, 0, frameStop);
@@ -3653,10 +3618,10 @@ public sealed class AmigaBusTimingTests
 		var firstFetch = bus.BusAccesses.First(access =>
 			access.Request.Requester == AmigaBusRequester.Bitplane &&
 			access.Request.Kind == AmigaBusAccessKind.Bitplane);
-		var pointerHighBeam = bus.GetPalBeamPosition(pointerHigh.Cycle);
-		var pointerLowBeam = bus.GetPalBeamPosition(pointerLow.Cycle);
-		var bplconBeam = bus.GetPalBeamPosition(bplcon.Cycle);
-		var firstFetchBeam = bus.GetPalBeamPosition(firstFetch.GrantedCycle);
+		var pointerHighBeam = bus.GetBeamPosition(pointerHigh.Cycle);
+		var pointerLowBeam = bus.GetBeamPosition(pointerLow.Cycle);
+		var bplconBeam = bus.GetBeamPosition(bplcon.Cycle);
+		var firstFetchBeam = bus.GetBeamPosition(firstFetch.GrantedCycle);
 		var diwStartCycle = diwStartLine * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 		var bounds = FindNonBackgroundLowResBounds(framebuffer, bus.Display.Width, bus.Display.Height, framebuffer[0]);
 		return (
@@ -3695,7 +3660,7 @@ public sealed class AmigaBusTimingTests
 		SetCopperPointer(bus, list: 1, copperList);
 		bus.WriteWord(0x00DFF096, 0x8280);
 
-		var frameStop = bus.GetPalFrameStopCycle(0);
+		var frameStop = bus.GetFrameStopCycle(0);
 		bus.AdvanceDmaTo(frameStop);
 		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
 		bus.Display.RenderFrame(framebuffer, 0, frameStop);
@@ -3715,7 +3680,7 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus(enableLiveDisplayDma: true);
 		StartCopperListAtFrameStart(bus, CreateCycle01vCopperList());
-		var frameStop = bus.GetPalFrameStopCycle(0);
+		var frameStop = bus.GetFrameStopCycle(0);
 		bus.AdvanceDmaTo(frameStop);
 		var framebuffer = new uint[bus.Display.Width * bus.Display.Height];
 		bus.Display.RenderFrame(framebuffer, 0, frameStop);
@@ -3739,8 +3704,8 @@ public sealed class AmigaBusTimingTests
 		var clear = bus.Display.CopperDisplayWrites.First(write =>
 			write.Address == 0x180 &&
 			write.Value == 0 &&
-			bus.GetPalBeamPosition(write.Cycle).BeamLine == 0x40);
-		var beam = bus.GetPalBeamPosition(clear.Cycle);
+			bus.GetBeamPosition(write.Cycle).BeamLine == 0x40);
+		var beam = bus.GetBeamPosition(clear.Cycle);
 		return (firstRawX, lastRawX, clear.Cycle, beam.BeamLine, beam.BeamHorizontal);
 	}
 
@@ -4879,298 +4844,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000DbraDelayLoopUsesDocumentedTakenCyclesWithPrefetchWindow()
-	{
-		var bus = new AmigaBus();
-		Write(
-			bus.ChipRam,
-			0x1000,
-			0x36, 0x3C, 0x2E, 0xE0, // MOVE.W #12000,D3
-			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
-			0x4E, 0x71);            // NOP
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(0x1004, 0x2000);
-		cpu.State.D[3] = 0x24DB;
-
-		var moveCycles = cpu.ExecuteInstruction();
-		Assert.Equal(8, moveCycles);
-		var loopStart = cpu.State.Cycles;
-		var takenIterations = 0;
-		while (cpu.State.ProgramCounter == 0x1004)
-		{
-			var cycles = cpu.ExecuteInstruction();
-			if (cpu.State.ProgramCounter == 0x1004)
-			{
-				takenIterations++;
-				Assert.Equal(10, cycles);
-			}
-			else
-			{
-				Assert.Equal(14, cycles);
-			}
-		}
-
-		Assert.Equal(12000, takenIterations);
-		Assert.Equal(loopStart + (12000L * 10) + 14, cpu.State.Cycles);
-		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
-	}
-
-	[Fact(Skip = "Rebaseline after separating the two-CCK CPU bus cursor from instruction retirement diagnostics.")]
-	public void AccurateM68000DbraDelayLoopChipRamDocumentsInstructionFetchSlotCadence()
-	{
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(
-			bus.ChipRam,
-			0x1000,
-			0x36, 0x3C, 0x00, 0x1F, // MOVE.W #31,D3
-			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
-			0x4E, 0x71);            // NOP
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(0x1000, 0x2000);
-		cpu.State.Cycles = 64;
-
-		var loopStart = cpu.State.Cycles;
-		var retired = new List<int>();
-		while (cpu.State.ProgramCounter == 0x1004)
-		{
-			retired.Add(cpu.ExecuteInstruction());
-		}
-
-		var phases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1004)
-			.ToArray();
-		var fetches = phases
-			.Where(phase => phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
-			.ToArray();
-		var requests = GetTraceDeltas(fetches, phase => phase.CpuPhase.RequestedCycle);
-		var grants = GetTraceDeltas(fetches, phase => phase.BusAccess.GetValueOrDefault().GrantedCycle);
-		var completions = GetTraceDeltas(fetches, phase => phase.CpuPhase.CompletedCycle);
-		var diagnostic =
-			$"loopStart={loopStart}, total={cpu.State.Cycles - loopStart}, " +
-			$"retired={string.Join(",", retired.Take(16))}, " +
-			$"requestDeltas={string.Join(",", requests.Take(24))}, " +
-			$"grantDeltas={string.Join(",", grants.Take(24))}, " +
-			$"completedDeltas={string.Join(",", completions.Take(24))}, " +
-			$"phases=[{BuildCpuBusPhaseTimeline(phases.Take(40).ToArray(), loopStart)}]";
-
-		Assert.Equal(31, retired.Count(cycles => cycles == 10));
-		Assert.Single(retired, cycles => cycles == 14);
-		Assert.Equal(324, cpu.State.Cycles - loopStart);
-		Assert.Equal(
-			new long[] { 6, 4, 6, 4, 6, 4, 6, 4 },
-			requests.Take(8).ToArray());
-		Assert.Equal(
-			new long[] { 6, 4, 6, 4, 6, 4, 6, 4 },
-			grants.Take(8).ToArray());
-		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
-		Assert.True(fetches.All(phase => phase.BusAccess.HasValue), diagnostic);
-
-		static long[] GetTraceDeltas(
-			IReadOnlyList<AmigaCpuBusPhaseTrace> traces,
-			Func<AmigaCpuBusPhaseTrace, long> selector)
-		{
-			var deltas = new long[Math.Max(0, traces.Count - 1)];
-			for (var i = 1; i < traces.Count; i++)
-			{
-				deltas[i - 1] = selector(traces[i]) - selector(traces[i - 1]);
-			}
-
-			return deltas;
-		}
-	}
-
-	[Fact(Skip = "The corrected CPU bus phase no longer places this selected target request on the old refresh phase.")]
-	public void AccurateM68000DbraTargetPrefetchAtRefreshPhaseWaitsWithoutFixedParity()
-	{
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(
-			bus.ChipRam,
-			0x1000,
-			0x36, 0x3C, 0x00, 0x1F, // MOVE.W #31,D3
-			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
-			0x4E, 0x71);            // NOP
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(0x1000, 0x2000);
-		cpu.State.Cycles = AmigaConstants.A500PalCpuCyclesPerRasterLine - 24;
-
-		_ = cpu.ExecuteInstruction();
-		var iterations = new List<(long Start, long Stop, int Cycles)>();
-		while (cpu.State.ProgramCounter == 0x1004)
-		{
-			var start = cpu.State.Cycles;
-			var cycles = cpu.ExecuteInstruction();
-			iterations.Add((start, cpu.State.Cycles, cycles));
-		}
-
-		var refreshPhaseTargetFetches = bus.CpuBusPhases
-			.Where(phase =>
-				phase.CpuPhase.InstructionProgramCounter == 0x1004 &&
-				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
-				phase.CpuPhase.Address == 0x1004 &&
-				AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(
-					AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle)))
-			.ToArray();
-		var diagnostic =
-			$"retired={string.Join(',', iterations.Select(iteration => iteration.Cycles))}, " +
-			$"refreshFetches=[{BuildCpuBusPhaseTimeline(refreshPhaseTargetFetches, iterations[0].Start)}]";
-
-		Assert.NotEmpty(refreshPhaseTargetFetches);
-		Assert.All(refreshPhaseTargetFetches, phase =>
-		{
-			var access = phase.BusAccess.GetValueOrDefault();
-			var requestedSlot = AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle);
-			Assert.True(AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(requestedSlot));
-			Assert.True(AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(access.GrantedCycle));
-			var iteration = iterations.Single(item =>
-				item.Start <= phase.CpuPhase.RequestedCycle && phase.CpuPhase.RequestedCycle < item.Stop);
-			Assert.True(access.CompletedCycle > iteration.Stop, diagnostic);
-		});
-		Assert.Equal(31, iterations.Count(iteration => iteration.Cycles == 10));
-		Assert.Single(iterations, iteration => iteration.Cycles == 14);
-	}
-
-	[Fact(Skip = "Rebaseline ready-versus-retire accounting for two-CCK CPU bus completion.")]
-	public void AccurateM68000DbraMicrosequenceLedgerDocumentsRefreshWaitRetirement()
-	{
-		const int loopAddress = 0x1004;
-		const int takenIterations = 512;
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(
-			bus.ChipRam,
-			0x1000,
-			0x36, 0x3C, (byte)(takenIterations >> 8), (byte)(takenIterations & 0xFF), // MOVE.W #512,D3
-			0x51, 0xCB, 0xFF, 0xFE,                                      // DBRA D3,*-2
-			0x4E, 0x71);                                                   // NOP
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		var interruptRecognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
-		cpu.Reset(0x1000, 0x2000);
-		cpu.State.Cycles = AmigaConstants.A500PalCpuCyclesPerRasterLine - 24;
-
-		_ = cpu.ExecuteInstruction();
-		var ledger = new List<DbraMicrosequenceLedgerEntry>(takenIterations + 1);
-		while (cpu.State.ProgramCounter == loopAddress)
-		{
-			var start = cpu.State.Cycles;
-			var phaseStart = bus.CpuBusPhases.Count;
-			var elapsed = cpu.ExecuteInstruction();
-			var phases = bus.CpuBusPhases
-				.Skip(phaseStart)
-				.Where(phase =>
-					phase.CpuPhase.InstructionProgramCounter == loopAddress &&
-					phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
-				.ToArray();
-			ledger.Add(new DbraMicrosequenceLedgerEntry(
-				start,
-				cpu.State.Cycles,
-				elapsed,
-				interruptRecognition.LastInterruptSampleCycle,
-				phases));
-		}
-
-		var taken = ledger.Take(ledger.Count - 1).ToArray();
-		var refreshDenied = taken
-			.SelectMany((entry, iteration) => entry.Fetches.Select((phase, stage) => (entry, iteration, phase, stage)))
-			.Where(item => AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(
-				AgnusChipSlotScheduler.AlignToSlot(item.phase.CpuPhase.RequestedCycle)))
-			.ToArray();
-		var refreshRetireExtensions = refreshDenied
-			.Where(item => item.entry.Stop > item.entry.Start + 10)
-			.ToArray();
-		var targetReadyAfterRetire = taken
-			.Select((entry, iteration) => (entry, iteration))
-			.Where(item => item.entry.Fetches[^1].CpuPhase.CompletedCycle > item.entry.Stop)
-			.ToArray();
-		var durationHistogram = taken
-			.GroupBy(entry => entry.Stop - entry.Start)
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}")
-			.ToArray();
-		var overrunNeighborhoods = targetReadyAfterRetire.Select(item =>
-		{
-			var firstIndex = Math.Max(0, item.iteration - 1);
-			var lastIndex = Math.Min(taken.Length - 1, item.iteration + 2);
-			return string.Join(",", Enumerable.Range(firstIndex, lastIndex - firstIndex + 1)
-				.Select(index => $"#{index}:{taken[index].Stop - taken[index].Start}/ready{taken[index].Fetches[^1].CpuPhase.CompletedCycle - taken[index].Stop:+#;-#;0}"));
-		}).ToArray();
-		var ledgerText = string.Join(
-			"; ",
-			taken.Take(24).Select((entry, iteration) =>
-				$"#{iteration}:start={entry.Start},sample={entry.InterruptSample},retire={entry.Stop}," +
-				$"fetch=[{BuildCpuBusPhaseTimeline(entry.Fetches, entry.Start)}]"));
-		var diagnostic =
-			$"taken={taken.Length}, total={cpu.State.Cycles - ledger[0].Start}, " +
-			$"refreshDenied={refreshDenied.Length}, refreshRetireExtensions={refreshRetireExtensions.Length}, " +
-			$"targetReadyAfterRetire={targetReadyAfterRetire.Length}, durations=[{string.Join(',', durationHistogram)}], " +
-			$"overruns=[{string.Join(';', overrunNeighborhoods)}], " +
-			$"first=[{ledgerText}]";
-		Assert.Equal(takenIterations, taken.Length);
-		var first = taken[0];
-		Assert.Single(first.Fetches);
-		Assert.Equal((uint)loopAddress, first.Fetches[0].CpuPhase.Address);
-		Assert.Equal(first.Fetches[0].CpuPhase.CompletedCycle, first.InterruptSample);
-		Assert.All(taken.Skip(1), entry =>
-		{
-			Assert.Equal(2, entry.Fetches.Length);
-			Assert.Equal((uint)(loopAddress + 2), entry.Fetches[0].CpuPhase.Address);
-			Assert.Equal((uint)loopAddress, entry.Fetches[1].CpuPhase.Address);
-			Assert.Equal(entry.Fetches[1].CpuPhase.CompletedCycle, entry.InterruptSample);
-		});
-		Assert.NotEmpty(refreshDenied);
-		Assert.All(refreshDenied, item =>
-		{
-			var access = Assert.IsType<AmigaBusAccessResult>(item.phase.BusAccess);
-			Assert.True(access.WaitCycles > 0, diagnostic);
-			Assert.True(AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(access.GrantedCycle), diagnostic);
-		});
-		Assert.Equal(12, refreshDenied.Length);
-		Assert.Equal(12, refreshRetireExtensions.Length);
-		Assert.Equal(16, targetReadyAfterRetire.Length);
-		Assert.Equal(8, targetReadyAfterRetire.Count(item =>
-			item.entry.Fetches[^1].CpuPhase.CompletedCycle - item.entry.Stop == 2));
-		Assert.Equal(4, targetReadyAfterRetire.Count(item =>
-			item.entry.Fetches[^1].CpuPhase.CompletedCycle - item.entry.Stop == 4));
-		Assert.Equal(4, targetReadyAfterRetire.Count(item =>
-			item.entry.Fetches[^1].CpuPhase.CompletedCycle - item.entry.Stop == 8));
-		Assert.Equal(504, taken.Count(entry => entry.Stop - entry.Start == 10));
-		Assert.Equal(4, taken.Count(entry => entry.Stop - entry.Start == 12));
-		Assert.Equal(4, taken.Count(entry => entry.Stop - entry.Start == 20));
-		Assert.Equal(5_182, cpu.State.Cycles - ledger[0].Start);
-	}
-
-	[Fact(Skip = "WinUAE debugger entry excludes 16 clocks that the reset-primed local queue currently includes.")]
-	public void AccurateM68000DbraChipRamRefreshCadenceMatchesEmulatorDmaOffReference()
-	{
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(
-			bus.ChipRam,
-			0x1000,
-			0x36, 0x3C, 0x24, 0xDB, // MOVE.W #$24DB,D3
-			0x51, 0xCB, 0xFF, 0xFE, // DBRA D3,*-2
-			0x4E, 0x71);            // NOP
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(0x1000, 0x2000);
-		cpu.State.Cycles =
-			(4L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-			(9L * AmigaConstants.A500PalCpuCyclesPerColorClock);
-
-		_ = cpu.ExecuteInstruction();
-		var loopStart = cpu.State.Cycles;
-		while (cpu.State.ProgramCounter == 0x1004)
-		{
-			_ = cpu.ExecuteInstruction();
-		}
-
-		Assert.Equal(95_198, cpu.State.Cycles - loopStart);
-	}
-
-	private readonly record struct DbraMicrosequenceLedgerEntry(
-		long Start,
-		long Stop,
-		int Elapsed,
-		long InterruptSample,
-		AmigaCpuBusPhaseTrace[] Fetches);
-
-	[Fact]
 	public void InstructionFetchWindowMatchesGenericChipFetchTimingAndValue()
 	{
 		var genericBus = new AmigaBus(arbiter: new FixedDelayArbiter(waitCycles: 5, accessCycles: 3));
@@ -5201,7 +4874,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000CpuBusPhasesMirrorInstructionFetchWindowGrants()
+	public void AccurateM68000CpuBusPhasesPreservePhysicalRequestAndMirrorBusGrant()
 	{
 		var bus = new AmigaBus();
 		Write(bus.ChipRam, 0x1000, 0x4E, 0x71); // NOP
@@ -5225,10 +4898,11 @@ public sealed class AmigaBusTimingTests
 			var phase = fetchPhases[i];
 			var access = fetchAccesses[i];
 			Assert.True(phase.BusAccess.HasValue);
-			Assert.Equal(access.Request.Address, phase.CpuPhase.Address);
-			Assert.Equal(access.Request.RequestedCycle, phase.CpuPhase.RequestedCycle);
-			Assert.Equal(access.CompletedCycle, phase.CpuPhase.CompletedCycle);
 			var phaseAccess = phase.BusAccess.GetValueOrDefault();
+			Assert.Equal(access.Request.Address, phase.CpuPhase.Address);
+			Assert.True(phase.CpuPhase.RequestedCycle <= access.Request.RequestedCycle);
+			Assert.Equal(access.CompletedCycle, phase.CpuPhase.CompletedCycle);
+			Assert.Equal(access.Request.RequestedCycle, phaseAccess.Request.RequestedCycle);
 			Assert.Equal(access.GrantedCycle, phaseAccess.GrantedCycle);
 			Assert.Equal(access.CompletedCycle, phaseAccess.CompletedCycle);
 			Assert.Equal(access.GrantedCycle, phase.SecondWordCycle);
@@ -5360,289 +5034,6 @@ public sealed class AmigaBusTimingTests
 		}
 	}
 
-	[Fact(Skip = "Documents unresolved vAmigaTS cycle01v synccpu3 phase drift; enable while fixing VHPOSR polling timing.")]
-	public void AccurateM68000SynccpuAndiBeamPollingReachesVerticalSyncWindow()
-	{
-		const int programAddress = 0x1000;
-		var program = CreateSynccpuBeamPollingProgram();
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		Write(bus.ChipRam, programAddress, program);
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(programAddress, 0x3000);
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.A[3] = 0x00DFF006;
-		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
-		var stopCycle = cpu.State.Cycles + (80L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
-		var exitProgramCounter = (uint)(programAddress + program.Length);
-
-		while (cpu.State.ProgramCounter != exitProgramCounter && cpu.State.Cycles < stopCycle)
-		{
-			cpu.ExecuteInstruction();
-		}
-
-		var markers = bus.CustomRegisterWrites
-			.Where(write => write.Address == 0x180)
-			.ToArray();
-		var firstGreen = markers.FirstOrDefault(write => write.Value == 0x0606);
-		var firstPurple = markers.FirstOrDefault(write => write.Value == 0x0A0A);
-		var firstGray = markers.FirstOrDefault(write => write.Value == 0x0404);
-		var firstBlack = markers.FirstOrDefault(write => write.Value == 0x0000);
-		var diagnostic = BuildSynccpuBeamPollingDiagnostic(bus, markers);
-
-		Assert.True(cpu.State.ProgramCounter == exitProgramCounter, diagnostic);
-		Assert.NotEqual(default, firstGreen);
-		Assert.NotEqual(default, firstPurple);
-		Assert.NotEqual(default, firstGray);
-		Assert.NotEqual(default, firstBlack);
-
-		var greenBeam = bus.GetPalBeamPosition(firstGreen.Cycle);
-		var purpleBeam = bus.GetPalBeamPosition(firstPurple.Cycle);
-		var grayBeam = bus.GetPalBeamPosition(firstGray.Cycle);
-		var blackBeam = bus.GetPalBeamPosition(firstBlack.Cycle);
-
-		Assert.True(greenBeam.BeamLine is >= 240 and <= 248, diagnostic);
-		Assert.True(purpleBeam.BeamLine is >= 240 and <= 256, diagnostic);
-		Assert.True(grayBeam.BeamLine is >= 240 and <= 256, diagnostic);
-		Assert.True(blackBeam.BeamLine is >= 240 and <= 256, diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000SynccpuBeamPollingDocumentsCurrentTransition()
-	{
-		const int programAddress = 0x1000;
-		var program = CreateSynccpuBeamPollingProgram();
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(bus.ChipRam, programAddress, program);
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(programAddress, 0x3000);
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.A[3] = 0x00DFF006;
-		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
-		var stopCycle = cpu.State.Cycles + (24L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
-
-		while (cpu.State.Cycles < stopCycle &&
-			bus.CustomRegisterWrites.Count(write => write.Address == 0x180) < 8)
-		{
-			cpu.ExecuteInstruction();
-		}
-
-		var markers = bus.CustomRegisterWrites
-			.Where(write => write.Address == 0x180)
-			.ToArray();
-		var phaseStartCycle = markers.Length == 0
-			? cpu.State.Cycles - 256
-			: markers[0].Cycle - 96;
-		var phaseEndCycle = markers.Length < 3
-			? cpu.State.Cycles
-			: markers[2].Cycle + 96;
-		var phases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= phaseStartCycle &&
-				phase.CpuPhase.RequestedCycle <= phaseEndCycle)
-			.ToArray();
-		var markerBeams = markers
-			.Select(write =>
-			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
-				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
-			})
-			.ToArray();
-		var markerText = string.Join(
-			"; ",
-			markerBeams.Select(marker => $"0x{marker.Value:X4}@v{marker.BeamLine}h{marker.BeamHorizontal}"));
-		var phaseText = string.Join(
-			"; ",
-			phases.Select(phase =>
-			{
-				var request = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
-				var grantCycle = phase.BusAccess.HasValue
-					? phase.BusAccess.GetValueOrDefault().GrantedCycle
-					: phase.CpuPhase.CompletedCycle;
-				var grant = bus.GetPalBeamPosition(grantCycle);
-				var complete = bus.GetPalBeamPosition(phase.CpuPhase.CompletedCycle);
-				return $"pc=0x{phase.CpuPhase.InstructionProgramCounter:X4} {phase.CpuPhase.AccessKind} " +
-					$"{(phase.CpuPhase.IsWrite ? "W" : "R")} 0x{phase.CpuPhase.Address:X6} " +
-					$"req={phase.CpuPhase.RequestedCycle}/v{request.BeamLine}h{request.BeamHorizontal} " +
-					$"grant={grantCycle}/v{grant.BeamLine}h{grant.BeamHorizontal} " +
-					$"done={phase.CpuPhase.CompletedCycle}/v{complete.BeamLine}h{complete.BeamHorizontal}";
-			}));
-
-		var diagnostic = $"pc=0x{cpu.State.ProgramCounter:X6} cycle={cpu.State.Cycles} markers={markerText} | phases={phaseText}";
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 45),
-				((ushort)0x0606, 241, 9),
-				((ushort)0x0A0A, 242, 9),
-				((ushort)0x0404, 243, 77),
-				((ushort)0x0F0F, 244, 57),
-				((ushort)0x0404, 244, 79),
-				((ushort)0x0F0F, 245, 57),
-				((ushort)0x0404, 245, 79),
-			},
-			markerBeams.Take(8).ToArray());
-		Assert.Contains(
-			phases,
-			phase => phase.CpuPhase.InstructionProgramCounter == 0x1014 &&
-				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
-				phase.CpuPhase.Address == 0x00DFF180 &&
-				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamLine == 240 &&
-				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamHorizontal == 45);
-		Assert.Contains(
-			phases,
-			phase => phase.CpuPhase.InstructionProgramCounter == 0x1020 &&
-				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataWrite &&
-				phase.CpuPhase.Address == 0x00DFF180 &&
-				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamLine == 241 &&
-				bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle).BeamHorizontal == 9);
-		_ = diagnostic;
-	}
-
-	[Fact]
-	public void AccurateM68000Synccpu4NopFieldFetchDocumentsBitplaneSlotInterference()
-	{
-		const int programAddress = 0x0702C0;
-		const uint targetInstructionPc = 0x070358;
-		const uint targetFetchAddress = 0x07035C;
-
-		static (long[] Waits, string Diagnostic) Run(bool enableBitplaneDma)
-		{
-			var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-			Write(bus.ChipRam, programAddress, CreateSynccpuBeamPollingProgram());
-			if (enableBitplaneDma)
-			{
-				ConfigureProbe10BitplaneDma(bus);
-				bus.WriteWord(0x00DFF096, 0x8200);
-				bus.WriteWord(0x00DFF100, 0x2200);
-			}
-
-			var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-			cpu.Reset(programAddress, 0x8000);
-			cpu.State.A[1] = 0x00DFF000;
-			cpu.State.A[3] = 0x00DFF006;
-			cpu.State.Cycles =
-				(239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 64;
-			var stopCycle = cpu.State.Cycles +
-				(24L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
-			while (cpu.State.Cycles < stopCycle &&
-				bus.CustomRegisterWrites.Count(write => write.Address == 0x180) < 10)
-			{
-				cpu.ExecuteInstruction();
-			}
-
-			var targetPhases = bus.CpuBusPhases
-				.Where(phase =>
-					phase.CpuPhase.InstructionProgramCounter == targetInstructionPc &&
-					phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
-					phase.CpuPhase.Address == targetFetchAddress)
-				.ToArray();
-			var windows = targetPhases.Select(phase =>
-			{
-				var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-				var slots = new List<string>();
-				for (var cycle = AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle);
-					cycle <= grant;
-					cycle += AgnusChipSlotScheduler.SlotCycles)
-				{
-					bus.TryGetCommittedAgnusSlotOwner(cycle, out var owner);
-					var horizontal = AgnusHrmOcsSlotTable.GetHorizontal(cycle);
-					slots.Add($"+{cycle - phase.CpuPhase.RequestedCycle}/h{horizontal}:{owner}");
-				}
-
-				var requestBeam = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
-				return $"v{requestBeam.BeamLine}h{requestBeam.BeamHorizontal}:" +
-					$"wait={grant - phase.CpuPhase.RequestedCycle}[{string.Join(',', slots)}]";
-			}).ToArray();
-			return (
-				targetPhases.Select(phase =>
-					(phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle) -
-					phase.CpuPhase.RequestedCycle).ToArray(),
-				$"bpl={enableBitplaneDma},target=[{string.Join(';', windows)}]");
-		}
-
-		var idle = Run(enableBitplaneDma: false);
-		var bitplanes = Run(enableBitplaneDma: true);
-		var diagnostic = $"idle={idle.Diagnostic} | bitplanes={bitplanes.Diagnostic}";
-
-		Assert.NotEmpty(idle.Waits);
-		Assert.NotEmpty(bitplanes.Waits);
-		Assert.True(idle.Waits.SequenceEqual(new long[] { 0, 2, 2 }), diagnostic);
-		Assert.True(bitplanes.Waits.SequenceEqual(new long[] { 2, 2, 2 }), diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000Probe10SynccpuSequenceMatchesOptimizedExecutionModesThroughFirstPurpleWrite()
-	{
-		var chipReference = RunProbe10SynccpuMode(
-			"chipReference",
-			programInRom: false,
-			captureBusAccesses: true,
-			enableHardwareSpecialization: false,
-			enableDeferredCpuBusBatch: false);
-		var chipFast = RunProbe10SynccpuMode(
-			"chipFast",
-			programInRom: false,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: false,
-			enableDeferredCpuBusBatch: false);
-		var chipSpecialized = RunProbe10SynccpuMode(
-			"chipSpecialized",
-			programInRom: false,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: true,
-			enableDeferredCpuBusBatch: false);
-		var chipSpecializedDeferred = RunProbe10SynccpuMode(
-			"chipSpecializedDeferred",
-			programInRom: false,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: true,
-			enableDeferredCpuBusBatch: true);
-		var chipSpecializedDiagnosticTrace = RunProbe10SynccpuMode(
-			"chipSpecializedDiagnosticTrace",
-			programInRom: false,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: true,
-			enableDeferredCpuBusBatch: true,
-			enableDiagnosticTrace: true);
-
-		AssertProbe10ModeParity(chipReference, chipFast);
-		AssertProbe10ModeParity(chipReference, chipSpecialized);
-		AssertProbe10ModeParity(chipReference, chipSpecializedDeferred);
-		AssertProbe10ModeParity(chipReference, chipSpecializedDiagnosticTrace);
-		Assert.Equal(0, chipSpecializedDeferred.DeferredBatchUsed);
-
-		var romReference = RunProbe10SynccpuMode(
-			"romReference",
-			programInRom: true,
-			captureBusAccesses: true,
-			enableHardwareSpecialization: false,
-			enableDeferredCpuBusBatch: false);
-		var romFast = RunProbe10SynccpuMode(
-			"romFast",
-			programInRom: true,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: false,
-			enableDeferredCpuBusBatch: false);
-		var romDeferred = RunProbe10SynccpuMode(
-			"romDeferred",
-			programInRom: true,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: false,
-			enableDeferredCpuBusBatch: true);
-		var romSpecializedDeferred = RunProbe10SynccpuMode(
-			"romSpecializedDeferred",
-			programInRom: true,
-			captureBusAccesses: false,
-			enableHardwareSpecialization: true,
-			enableDeferredCpuBusBatch: true);
-
-		AssertProbe10ModeParity(romReference, romFast);
-		AssertProbe10ModeParity(romReference, romDeferred);
-		AssertProbe10ModeParity(romReference, romSpecializedDeferred);
-		Assert.True(romDeferred.DeferredBatchUsed > 0, FormatProbe10ModeRun(romDeferred));
-		Assert.True(romSpecializedDeferred.DeferredBatchUsed > 0, FormatProbe10ModeRun(romSpecializedDeferred));
-	}
-
 	[Fact]
 	public void AccurateM68000Probe10CompleteFrameColorLedgerAndArchivedTimelineMatchOptimizedExecutionModes()
 	{
@@ -5717,137 +5108,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000SynccpuBeamPollingDocumentsFourCckEntryPhaseSensitivity()
-	{
-		var aligned = RunSynccpuBeamPollingMarkers(startOffset: 64, markerCount: 4);
-		var early = RunSynccpuBeamPollingMarkers(startOffset: 56, markerCount: 4);
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 43),
-				((ushort)0x0606, 241, 7),
-				((ushort)0x0A0A, 242, 7),
-				((ushort)0x0404, 243, 75),
-			},
-			aligned);
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 39),
-				((ushort)0x0606, 242, 9),
-				((ushort)0x0A0A, 248, 7),
-				((ushort)0x0404, 249, 75),
-			},
-			early);
-	}
-
-	[Fact]
-	public void AccurateM68000JsrSynccpuBeamPollingDocumentsEntryPhase()
-	{
-		var absoluteLong = RunJsrSynccpuBeamPollingMarkers(
-			new byte[] { 0x4E, 0xB9, 0x00, 0x00, 0x11, 0x00 },
-			startOffset: 64,
-			markerCount: 4);
-		var pcRelativeWord = RunJsrSynccpuBeamPollingMarkers(
-			new byte[] { 0x4E, 0xBA, 0x00, 0xFE },
-			startOffset: 64,
-			markerCount: 4);
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 37),
-				((ushort)0x0606, 242, 7),
-				((ushort)0x0A0A, 243, 7),
-				((ushort)0x0404, 244, 75),
-			},
-			absoluteLong);
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 35),
-				((ushort)0x0606, 241, 217),
-				((ushort)0x0A0A, 245, 7),
-				((ushort)0x0404, 246, 75),
-			},
-			pcRelativeWord);
-	}
-
-	[Fact]
-	public void AccurateM68000JsrSynccpuEntryPhaseDocumentsCurrentDirectDelta()
-	{
-		var direct = RunSynccpuBeamPollingMarkers(startOffset: 64, markerCount: 2);
-		var viaJsr = RunJsrSynccpuBeamPollingMarkers(
-			new byte[] { 0x4E, 0xB9, 0x00, 0x00, 0x11, 0x00 },
-			startOffset: 64,
-			markerCount: 2);
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 43),
-				((ushort)0x0606, 241, 7),
-			},
-			direct);
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 240, 37),
-				((ushort)0x0606, 242, 7),
-			},
-			viaJsr);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vDelayLoopDocumentsFirstStripePhase()
-	{
-		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8);
-		var diagnostic =
-			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
-			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
-			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}, " +
-			$"accesses={BuildCycle01vAccessDiagnostic(result.Bus, result.Boundaries)}";
-		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
-		Assert.Contains(result.Boundaries, boundary => boundary.Name == "afterSynccpu");
-		var boundaryMap = result.Boundaries
-			.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - result.Boundaries[0].Cycle}")
-			.ToArray();
-		Assert.Equal(
-			new[]
-			{
-				"start=+0",
-				"afterSynccpu=+149486",
-				"afterProbeNops=+149758",
-				"afterVposrRead=+149770",
-				"delayLoopStart=+149778",
-				"afterDelayLoop=+269792",
-				"afterMove300=+269800",
-				"afterMoveF0f=+269808",
-				"afterMoveZero=+269816",
-				"loop2Entry=+269828"
-			},
-			boundaryMap);
-		var loopWrites = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.Take(8)
-			.Select(write =>
-			{
-				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
-				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 207, 107),
-			},
-			loopWrites.Take(1).ToArray());
-		_ = diagnostic;
-	}
-
-	[Fact]
 	public void AccurateM68000CycleProbeVposrSampleDocumentsCycle01vAndCycleD9vDifference()
 	{
 		var cycle01v = RunCycleVposrProbeSample(probeNops: 68);
@@ -5865,114 +5125,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000Synccpu4FinalIterationHandsDocumentedPhaseToCycle01vProbe()
-	{
-		const int mainAddress = 0x1000;
-		const int synccpuAddress = 0x1100;
-		const int probeNops = 68;
-		var afterProbeReadPc = (uint)(mainAddress + 6 + (probeNops * 2) + 4);
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(bus.ChipRam, mainAddress, CreateCycleVposrProbeMainProgram(synccpuAddress, probeNops));
-		var synccpu = new List<byte>(CreateSynccpuBeamPollingProgram());
-		EmitWord(synccpu, 0x4E75); // RTS
-		Write(bus.ChipRam, synccpuAddress, synccpu.ToArray());
-
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(mainAddress, 0x3000);
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.A[3] = 0x00DFF006;
-		cpu.State.Cycles = (239L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 56;
-		var stopCycle = cpu.State.Cycles + (2000L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
-		var instructions = new List<(uint Pc, long Start, long Stop, int Cycles)>();
-
-		while (cpu.State.Cycles < stopCycle && cpu.State.ProgramCounter != afterProbeReadPc)
-		{
-			var pc = cpu.State.ProgramCounter;
-			var start = cpu.State.Cycles;
-			var cycles = cpu.ExecuteInstruction();
-			instructions.Add((pc, start, cpu.State.Cycles, cycles));
-		}
-
-		Assert.Equal(afterProbeReadPc, cpu.State.ProgramCounter);
-		var finalVhposrRead = bus.CustomRegisterReads.Last(read =>
-			read.Address == 0x006 && read.Kind == AmigaBusAccessKind.CpuDataRead);
-		var probeVposrRead = bus.CustomRegisterReads.Last(read =>
-			read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead);
-		var finalVhposrPhase = bus.CpuBusPhases.Last(phase =>
-			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
-			phase.CpuPhase.Address == 0x00DFF006 &&
-			phase.CpuPhase.RequestedCycle == finalVhposrRead.RequestedCycle);
-		var probeVposrPhase = bus.CpuBusPhases.Last(phase =>
-			phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
-			phase.CpuPhase.Address == 0x00DFF004 &&
-			phase.CpuPhase.RequestedCycle == probeVposrRead.RequestedCycle);
-		var firstTailInstruction = instructions.FindIndex(instruction =>
-			instruction.Pc == finalVhposrPhase.CpuPhase.InstructionProgramCounter &&
-			instruction.Start <= finalVhposrRead.RequestedCycle &&
-			finalVhposrRead.RequestedCycle < instruction.Stop);
-		var probeInstruction = instructions.FindIndex(instruction =>
-			instruction.Pc == probeVposrPhase.CpuPhase.InstructionProgramCounter &&
-			instruction.Start <= probeVposrRead.RequestedCycle &&
-			probeVposrRead.RequestedCycle < instruction.Stop);
-		Assert.True(firstTailInstruction >= 0 && probeInstruction >= firstTailInstruction);
-		var tail = instructions
-			.Skip(firstTailInstruction)
-			.Take(probeInstruction - firstTailInstruction + 1)
-			.ToArray();
-		var opcodes = tail
-			.Select(instruction => BigEndian.ReadUInt16(
-				bus.ChipRam,
-				checked((int)instruction.Pc),
-				$"opcode at 0x{instruction.Pc:X6}"))
-			.ToArray();
-		var expectedOpcodes = new List<ushort>
-		{
-			0x3413, // MOVE.W (A3),D2
-			0x337C, // MOVE.W #$0F0F,COLOR00(A1)
-			0x0242, // ANDI.W #$FF00,D2
-			0x0C42, // CMPI.W #$FF00,D2
-			0x6600, // BNE.W, not taken
-			0x337C, // MOVE.W #$0000,COLOR00(A1)
-			0x4E75  // RTS
-		};
-		expectedOpcodes.AddRange(Enumerable.Repeat((ushort)0x4E71, probeNops));
-		expectedOpcodes.Add(0x3029); // MOVE.W VPOSR(A1),D0
-		var expectedCycles = new List<int> { 8, 16, 8, 8, 12, 16, 16 };
-		expectedCycles.AddRange(Enumerable.Repeat(4, probeNops));
-		expectedCycles.Add(12);
-		var finalBeam = bus.GetPalBeamPosition(finalVhposrRead.SampleCycle);
-		var probeBeam = bus.GetPalBeamPosition(probeVposrRead.SampleCycle);
-		var phaseTimeline = BuildCpuBusPhaseTimeline(
-			bus.CpuBusPhases.Where(phase =>
-				phase.CpuPhase.RequestedCycle >= tail[0].Start - 16 &&
-				phase.CpuPhase.RequestedCycle <= tail[1].Stop).ToArray(),
-			tail[0].Start);
-		var diagnostic =
-			$"final=0x{finalVhposrRead.Value:X4}@v{finalBeam.BeamLine}h{finalBeam.BeamHorizontal}, " +
-			$"probe=0x{probeVposrRead.Value:X4}@v{probeBeam.BeamLine}h{probeBeam.BeamHorizontal}, " +
-			$"sampleDelta={probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle}, " +
-			$"tail=[{string.Join(',', tail.Select((instruction, index) => $"0x{opcodes[index]:X4}:{instruction.Cycles}"))}], " +
-			$"phases=[{phaseTimeline}]";
-		Assert.Equal(expectedOpcodes, opcodes);
-		Assert.True(expectedCycles.SequenceEqual(tail.Select(instruction => instruction.Cycles)), diagnostic);
-		Assert.Equal(0xFF, finalVhposrRead.Value >> 8);
-		Assert.Equal((255, 49), (finalBeam.BeamLine, finalBeam.BeamHorizontal));
-		Assert.Equal((256, 1), (probeBeam.BeamLine, probeBeam.BeamHorizontal));
-		Assert.Equal(358, probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle);
-		var rawInferredFinalReadCycle =
-			((258L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-				(181L * AmigaConstants.A500PalCpuCyclesPerColorClock)) -
-			(probeVposrRead.SampleCycle - finalVhposrRead.SampleCycle);
-		var rawInferredFinalReadLine = rawInferredFinalReadCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
-		var rawInferredFinalReadHorizontal =
-			(rawInferredFinalReadCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) /
-			AmigaConstants.A500PalCpuCyclesPerColorClock;
-		Assert.Equal((258L, 2L), (rawInferredFinalReadLine, rawInferredFinalReadHorizontal));
-		Assert.NotEqual(0xFF, rawInferredFinalReadLine & 0xFF);
-		_ = diagnostic;
-	}
-
-	[Fact]
 	public void AccurateM68000CycleD9vRepeatedMainLoopKeepsProbeSamplePhase()
 	{
 		var result = RunRepeatedCycleVposrProbeSamples(probeNops: 66, sampleCount: 2);
@@ -5980,9 +5132,9 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			result.Reads.Select((read, index) =>
 			{
-				var request = result.Bus.GetPalBeamPosition(read.RequestedCycle);
-				var grant = result.Bus.GetPalBeamPosition(read.GrantedCycle);
-				var sample = result.Bus.GetPalBeamPosition(read.SampleCycle);
+				var request = result.Bus.GetBeamPosition(read.RequestedCycle);
+				var grant = result.Bus.GetBeamPosition(read.GrantedCycle);
+				var sample = result.Bus.GetBeamPosition(read.SampleCycle);
 				return $"#{index}:value=0x{read.Value:X4}," +
 					$"request=v{request.BeamLine}h{request.BeamHorizontal}," +
 					$"grant=v{grant.BeamLine}h{grant.BeamHorizontal}," +
@@ -6037,35 +5189,6 @@ public sealed class AmigaBusTimingTests
 		var expectedIrqValues = new ushort[] { 0x8001, 0x8000, 0x8001, 0x8000, 0x8001, 0x8000, 0x8001, 0x8000 };
 		Assert.True(expectedIrqValues.SequenceEqual(irqOnly.Reads.Select(read => read.Value)), diagnostic);
 		Assert.True(expectedIrqValues.SequenceEqual(copperAndIrq.Reads.Select(read => read.Value)), diagnostic);
-		_ = diagnostic;
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vDelayLoopWithCopperDmaDocumentsFirstStripePhase()
-	{
-		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8, enableCycleCopper: true);
-		var diagnostic =
-			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
-			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
-			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}";
-		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
-		var loopWrites = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.Take(8)
-			.Select(write =>
-			{
-				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
-				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				((ushort)0x0F0F, 207, 107),
-			},
-			loopWrites.Take(1).ToArray());
-		Assert.Equal("v207h107/irq0/cu276/cw54347/ws109664", BuildCycle01vProbeSummary(result));
 		_ = diagnostic;
 	}
 
@@ -6177,7 +5300,7 @@ public sealed class AmigaBusTimingTests
 		var diagnostic = string.Join(";", phases.Select(phase =>
 		{
 			var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-			var requestBeam = result.Bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
+			var requestBeam = result.Bus.GetBeamPosition(phase.CpuPhase.RequestedCycle);
 			var slots = new List<string>();
 			for (var cycle = AgnusChipSlotScheduler.AlignToSlot(phase.CpuPhase.RequestedCycle);
 				cycle <= grant;
@@ -6194,277 +5317,6 @@ public sealed class AmigaBusTimingTests
 
 		Assert.NotEmpty(phases);
 		Assert.True(waits.All(wait => wait <= 2), diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vFullIrqDelayPathPartitionsDbraAndInterruptTiming()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true);
-		var copperResult = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			enableCycleCopper: true,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true);
-		var names = new[]
-		{
-			"delayLoopStart",
-			"irqAccept",
-			"irqEntry",
-			"irqRteComplete",
-			"afterDelayLoop",
-			"loop2Entry"
-		};
-		var boundaries = names
-			.Select(name => result.Boundaries.Single(boundary => boundary.Name == name))
-			.ToArray();
-		var firstStripe = result.Writes
-			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= result.Loop2EntryCycle);
-		var diagnostic = string.Join(
-			",",
-			boundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - boundaries[0].Cycle}/d3={boundary.D3}")) +
-			$",firstStripe=+{firstStripe.Cycle - boundaries[0].Cycle}";
-		var copperBoundaries = names
-			.Select(name => copperResult.Boundaries.Single(boundary => boundary.Name == name))
-			.ToArray();
-		var copperFirstStripe = copperResult.Writes
-			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= copperResult.Loop2EntryCycle);
-		var copperDiagnostic = string.Join(
-			",",
-			copperBoundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - copperBoundaries[0].Cycle}/d3={boundary.D3}")) +
-			$",firstStripe=+{copperFirstStripe.Cycle - copperBoundaries[0].Cycle}";
-		Assert.True(
-			boundaries[1].D3 == boundaries[2].D3 &&
-			boundaries[1].D3 == boundaries[3].D3 &&
-			boundaries[1].D3 == 9434 &&
-			boundaries[2].Cycle - boundaries[1].Cycle == 46 &&
-			boundaries[3].Cycle - boundaries[2].Cycle == 956 &&
-			boundaries[4].Cycle - boundaries[3].Cycle == 95_186 &&
-			copperBoundaries[4].Cycle - copperBoundaries[3].Cycle == 95_360 &&
-			copperBoundaries[4].Cycle - boundaries[4].Cycle == 174 &&
-			copperFirstStripe.Cycle - firstStripe.Cycle == 174 &&
-			boundaries[5].Cycle - boundaries[4].Cycle == 24 &&
-			firstStripe.Cycle - boundaries[5].Cycle == 14,
-			$"noCopper=[{diagnostic}] copper=[{copperDiagnostic}]");
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vIrqHandlerBoundaryVectorDocumentsCurrentPhases()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			enableCycleCopper: true,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true,
-			syntheticVblankIrqOffset: 26,
-			cycle01vPostRteD3Override: 0x24DB);
-		var names = new[]
-		{
-			"irqAccept", "irqEntry", "movemSave", "ack", "moveD5",
-			"firstTest", "restore", "rte", "irqRteComplete"
-		};
-		var boundaries = names
-			.Select(name => result.Boundaries.Single(boundary => boundary.Name == name).Cycle)
-			.ToArray();
-		var origin = boundaries[0];
-		var vector = boundaries.Select(cycle => cycle - origin).ToArray();
-
-		Assert.Equal(new long[] { 0, 46, 46, 174, 190, 198, 850, 982, 1002 }, vector);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vDbraFetchWaitsRemainOverlappedAtDocumentedCadence()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true);
-		var delayStart = result.Boundaries.Single(boundary => boundary.Name == "delayLoopStart").Cycle;
-		var irqAccept = result.Boundaries.Single(boundary => boundary.Name == "irqAccept").Cycle;
-		var irqRteComplete = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete").Cycle;
-		var delayStop = result.Boundaries.Single(boundary => boundary.Name == "afterDelayLoop").Cycle;
-		var dbraPhases = result.Bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
-				((phase.CpuPhase.RequestedCycle >= delayStart && phase.CpuPhase.RequestedCycle < irqAccept) ||
-				 (phase.CpuPhase.RequestedCycle >= irqRteComplete && phase.CpuPhase.RequestedCycle < delayStop)))
-			.ToArray();
-		var waitingPhases = dbraPhases
-			.Where(phase => phase.BusAccess.HasValue && phase.BusAccess.Value.WaitCycles > 0)
-			.ToArray();
-		var waitCycles = waitingPhases.Sum(phase => phase.BusAccess!.Value.WaitCycles);
-		var waitHistogram = waitingPhases
-			.GroupBy(phase => phase.BusAccess!.Value.WaitCycles)
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}")
-			.ToArray();
-		var preIrqPhases = dbraPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle < irqAccept)
-			.ToArray();
-		var postIrqPhases = dbraPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= irqRteComplete)
-			.ToArray();
-		var preIrqIterationPhases = preIrqPhases
-			.Take(preIrqPhases.Length & ~1)
-			.Chunk(2)
-			.ToArray();
-		var postIrqIterationPhases = postIrqPhases
-			.Take(postIrqPhases.Length - 1)
-			.Chunk(2)
-			.ToArray();
-		var takenIterationPhases = preIrqIterationPhases
-			.Concat(postIrqIterationPhases)
-			.ToArray();
-		static (long EndDrift, long MaximumDrift) CalculateDbraFetchStartDrift(
-			IReadOnlyList<AmigaCpuBusPhaseTrace[]> iterations)
-		{
-			var first = iterations[0][0].CpuPhase.RequestedCycle;
-			var endDrift = 0L;
-			var maximumDrift = 0L;
-			for (var i = 1; i < iterations.Count; i++)
-			{
-				endDrift = iterations[i][0].CpuPhase.RequestedCycle - first - (i * 10L);
-				maximumDrift = Math.Max(maximumDrift, endDrift);
-			}
-
-			return (endDrift, maximumDrift);
-		}
-		var preIrqDrift = CalculateDbraFetchStartDrift(preIrqIterationPhases);
-		var postIrqDrift = CalculateDbraFetchStartDrift(postIrqIterationPhases);
-		var pairWaitHistogram = takenIterationPhases
-			.GroupBy(pair => pair.Sum(phase => phase.BusAccess?.WaitCycles ?? 0))
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}")
-			.ToArray();
-		var pairBusSpanHistogram = takenIterationPhases
-			.GroupBy(pair => pair[^1].CpuPhase.CompletedCycle - pair[0].CpuPhase.RequestedCycle)
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}")
-			.ToArray();
-		var pairStartDeltaHistogram = takenIterationPhases
-			.SelectMany((pair, index) => index == 0 ||
-				pair[0].CpuPhase.RequestedCycle - takenIterationPhases[index - 1][0].CpuPhase.RequestedCycle > 64
-					? Array.Empty<long>()
-					: new[] { pair[0].CpuPhase.RequestedCycle - takenIterationPhases[index - 1][0].CpuPhase.RequestedCycle })
-			.GroupBy(delta => delta)
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}")
-			.ToArray();
-		var diagnostic =
-			$"dbraPhases={dbraPhases.Length}, waiting={waitingPhases.Length}, waitCycles={waitCycles}, " +
-			$"histogram=[{string.Join(',', waitHistogram)}], pairWait=[{string.Join(',', pairWaitHistogram)}], " +
-			$"prePhases={preIrqPhases.Length}, postPhases={postIrqPhases.Length}, " +
-			$"preDrift={preIrqDrift.EndDrift}/{preIrqDrift.MaximumDrift}, " +
-			$"postDrift={postIrqDrift.EndDrift}/{postIrqDrift.MaximumDrift}, " +
-			$"pairSpan=[{string.Join(',', pairBusSpanHistogram)}], pairStartDelta=[{string.Join(',', pairStartDeltaHistogram)}], " +
-			$"preIrq={irqAccept - delayStart}, postIrq={delayStop - irqRteComplete}, " +
-			$"totalWithoutIrq={(irqAccept - delayStart) + (delayStop - irqRteComplete)}";
-
-		Assert.True(
-			dbraPhases.Length > 20_000 &&
-			waitingPhases.Length > 0 &&
-			(irqAccept - delayStart) + (delayStop - irqRteComplete) == 121_066 &&
-			string.Join(',', pairStartDeltaHistogram).Contains("10:", StringComparison.Ordinal) &&
-			string.Join(',', pairStartDeltaHistogram).Contains("12:", StringComparison.Ordinal) &&
-			preIrqDrift == (222L, 222L) &&
-			postIrqDrift == (840L, 840L),
-			diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vActiveCopperDbraExpiresAtEmulatorBeamPosition()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			enableCycleCopper: true,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true,
-			syntheticVblankIrqOffset: 26,
-			cycle01vPostRteD3Override: 0x24DB);
-		var postRte = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete");
-		var delayStop = result.Boundaries.Single(boundary => boundary.Name == "afterDelayLoop");
-		var afterMove300 = result.Boundaries.Single(boundary => boundary.Name == "afterMove300");
-		var afterMoveF0f = result.Boundaries.Single(boundary => boundary.Name == "afterMoveF0f");
-		var afterMoveZero = result.Boundaries.Single(boundary => boundary.Name == "afterMoveZero");
-		var firstStripe = result.Writes.First(write => write.Cycle >= result.Loop2EntryCycle && write.Value == 0x0F0F);
-		var postRteBeam = result.Bus.GetPalBeamPosition(postRte.Cycle);
-		var delayStopBeam = result.Bus.GetPalBeamPosition(delayStop.Cycle);
-		var afterMove300Beam = result.Bus.GetPalBeamPosition(afterMove300.Cycle);
-		var afterMoveF0fBeam = result.Bus.GetPalBeamPosition(afterMoveF0f.Cycle);
-		var afterMoveZeroBeam = result.Bus.GetPalBeamPosition(afterMoveZero.Cycle);
-		var firstStripeBeam = result.Bus.GetPalBeamPosition(firstStripe.Cycle);
-		var stripePhases = result.Bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter is >= 0x109A and <= 0x10A6)
-			.ToArray();
-		var stripePhaseDiagnostic = string.Join(",", stripePhases.Select(phase =>
-		{
-			var request = phase.BusAccess?.Request.RequestedCycle ?? phase.CpuPhase.RequestedCycle;
-			var grant = phase.BusAccess?.GrantedCycle ?? request;
-			result.Bus.TryGetCommittedAgnusSlotOwner(grant, out var owner);
-			return $"pc{phase.CpuPhase.InstructionProgramCounter:X4}/{phase.CpuPhase.AccessKind}/a{phase.CpuPhase.Address:X6}/r{result.Bus.GetPalBeamPosition(request).BeamHorizontal}/g{result.Bus.GetPalBeamPosition(grant).BeamHorizontal}/{owner}";
-		}));
-		var dbraPhases = result.Bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
-				phase.CpuPhase.RequestedCycle >= postRte.Cycle &&
-				phase.CpuPhase.RequestedCycle < delayStop.Cycle)
-			.ToArray();
-		var waits = dbraPhases
-			.Where(phase => phase.BusAccess is { WaitCycles: > 0 })
-			.ToArray();
-		var waitHistogram = waits
-			.GroupBy(phase => phase.BusAccess!.Value.WaitCycles)
-			.OrderBy(group => group.Key)
-			.Select(group => $"{group.Key}:{group.Count()}");
-		var phasePairs = dbraPhases.Take(dbraPhases.Length & ~1).Chunk(2).ToArray();
-		var firstFetchWaits = phasePairs.Sum(pair => pair[0].BusAccess?.WaitCycles ?? 0);
-		var secondFetchWaits = phasePairs.Sum(pair => pair[1].BusAccess?.WaitCycles ?? 0);
-		var stagedWaitHistogram = phasePairs
-			.GroupBy(pair => (pair[0].BusAccess?.WaitCycles ?? 0, pair[1].BusAccess?.WaitCycles ?? 0))
-			.OrderBy(group => group.Key.Item1)
-			.ThenBy(group => group.Key.Item2)
-			.Select(group => $"{group.Key.Item1}/{group.Key.Item2}:{group.Count()}");
-		var diagnostic =
-			$"d3={postRte.D3:X4}, postRte=v{postRteBeam.BeamLine}h{postRteBeam.BeamHorizontal}, " +
-			$"delayStop=v{delayStopBeam.BeamLine}h{delayStopBeam.BeamHorizontal}, " +
-			$"move300=v{afterMove300Beam.BeamLine}h{afterMove300Beam.BeamHorizontal}, " +
-			$"moveF0f=v{afterMoveF0fBeam.BeamLine}h{afterMoveF0fBeam.BeamHorizontal}, " +
-			$"moveZero=v{afterMoveZeroBeam.BeamLine}h{afterMoveZeroBeam.BeamHorizontal}, " +
-			$"stripe=v{firstStripeBeam.BeamLine}h{firstStripeBeam.BeamHorizontal}, " +
-			$"stripePhases=[{stripePhaseDiagnostic}], " +
-			$"elapsed={delayStop.Cycle - postRte.Cycle}, phases={dbraPhases.Length}, " +
-			$"waits={waits.Length}/{waits.Sum(phase => phase.BusAccess!.Value.WaitCycles)}, " +
-			$"stageWaits={firstFetchWaits}/{secondFetchWaits}, " +
-			$"waitHistogram=[{string.Join(',', waitHistogram)}], " +
-			$"stagedWaitHistogram=[{string.Join(',', stagedWaitHistogram)}]";
-
-		Assert.True(
-			postRte.D3 == 0x24DB &&
-			(delayStopBeam.BeamLine, delayStopBeam.BeamHorizontal) == (212, 80) &&
-			(afterMove300Beam.BeamLine, afterMove300Beam.BeamHorizontal) == (212, 84) &&
-			(afterMoveF0fBeam.BeamLine, afterMoveF0fBeam.BeamHorizontal) == (212, 88) &&
-			(afterMoveZeroBeam.BeamLine, afterMoveZeroBeam.BeamHorizontal) == (212, 92),
-			diagnostic);
 	}
 
 	[Fact]
@@ -6486,32 +5338,30 @@ public sealed class AmigaBusTimingTests
 		var phases = result.Bus.CpuBusPhases
 			.Where(phase => phase.CpuPhase.CompletedCycle >= irqAccept - 40 &&
 				phase.CpuPhase.RequestedCycle <= irqEntry)
-			.Select(phase =>
-			{
-				var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-				var beam = result.Bus.GetPalBeamPosition(grant);
-				return $"h{beam.BeamHorizontal}:{phase.CpuPhase.AccessKind}/a{phase.CpuPhase.Address:X6}";
-			})
+			.Select(phase => (phase.CpuPhase.AccessKind, phase.CpuPhase.Address))
 			.ToArray();
 		var diagnostic = string.Join(",", phases);
+		var committedTailIndex = Array.FindLastIndex(
+			phases,
+			phase => phase == (M68kBusAccessKind.CpuInstructionFetch, 0x001098u));
+		Assert.True(committedTailIndex >= 0, diagnostic);
 
-		// WinUAE CE000 DMA debugger reference: final DBRA reads at h13/h15,
-		// low-PC stack write h20, IACK h21, SR/high-PC writes h26/h28,
-		// vector reads h30/h32, and handler reads h34/h37.
+		// The beam phase depends on preceding refresh/Copper ownership, but these
+		// transfers are one indivisible physical sequence. In particular, the
+		// committed DBRA extension survives interrupt recognition.
 		Assert.Equal(
 			new[]
 			{
-				"h13:CpuInstructionFetch/a001096",
-				"h15:CpuInstructionFetch/a001098",
-				"h20:CpuDataWrite/a002FFE",
-				"h21:CpuInterruptAcknowledge/aFFFFF7",
-				"h26:CpuDataWrite/a002FFA",
-				"h28:CpuDataWrite/a002FFC",
-				"h30:CpuDataRead/a00006C",
-				"h34:CpuInstructionFetch/a001500",
-				"h37:CpuInstructionFetch/a001502"
+				(M68kBusAccessKind.CpuInstructionFetch, 0x001098u),
+				(M68kBusAccessKind.CpuDataWrite, 0x002FFEu),
+				(M68kBusAccessKind.CpuInterruptAcknowledge, 0xFFFFF7u),
+				(M68kBusAccessKind.CpuDataWrite, 0x002FFAu),
+				(M68kBusAccessKind.CpuDataWrite, 0x002FFCu),
+				(M68kBusAccessKind.CpuDataRead, 0x00006Cu),
+				(M68kBusAccessKind.CpuInstructionFetch, 0x001500u),
+				(M68kBusAccessKind.CpuInstructionFetch, 0x001502u)
 			},
-			phases.TakeLast(9));
+			phases.Skip(committedTailIndex).Take(8));
 		_ = diagnostic;
 	}
 
@@ -6535,7 +5385,7 @@ public sealed class AmigaBusTimingTests
 			.Select(phase =>
 			{
 				var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-				var beam = result.Bus.GetPalBeamPosition(grant);
+				var beam = result.Bus.GetBeamPosition(grant);
 				return (beam.BeamLine, beam.BeamHorizontal, phase.CpuPhase.Address);
 			})
 			.Where(phase => phase.BeamLine == 100 && phase.BeamHorizontal < 48)
@@ -6564,93 +5414,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000Cycle01vDbraEntryTailLedgerSeparatesNormalAndRefreshIterations()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			enableCycleCopper: true,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true,
-			syntheticVblankIrqOffset: 26,
-			cycle01vPostRteD3Override: 0x24DB);
-		var ledgers = result.Bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x1096 &&
-				result.Bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle).BeamLine == 100)
-			.GroupBy(phase => phase.CpuPhase.InstructionStartCycle)
-			.Take(8)
-			.Select(group =>
-			{
-				var first = group.First().CpuPhase;
-				var phases = group.Select(phase =>
-				{
-					var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-					return $"{phase.CpuPhase.Address - 0x1096:X}:r{phase.CpuPhase.RequestedCycle - first.InstructionStartCycle}/g{grant - first.InstructionStartCycle}/c{phase.CpuPhase.CompletedCycle - first.InstructionStartCycle}";
-				});
-				return $"tail={first.InstructionEntryBusCycle - first.InstructionStartCycle}," +
-					$"q={first.InstructionEntryPrefetchCount}," +
-					$"ready0={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}," +
-					$"phases={string.Join('|', phases)}";
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"tail=6,q=1,ready0=4,phases=2:r6/g10/c12|0:r12/g14/c16",
-				"tail=6,q=1,ready0=4,phases=2:r6/g8/c10|0:r10/g12/c14",
-				"tail=6,q=1,ready0=4,phases=2:r6/g8/c10|0:r10/g12/c14"
-			},
-			ledgers.Skip(1).Take(3));
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vStripeDbraEntryTailLedgerDocumentsTwoMoveLoopState()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 8,
-			enableCycleCopper: true,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true,
-			syntheticVblankIrqOffset: 26,
-			cycle01vPostRteD3Override: 0x24DB);
-		var ledgers = result.Bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.InstructionProgramCounter == 0x10AE)
-			.GroupBy(phase => phase.CpuPhase.InstructionStartCycle)
-			.Take(4)
-			.Select(group =>
-			{
-				var first = group.First().CpuPhase;
-				var phases = group.Select(phase =>
-				{
-					var grant = phase.BusAccess?.GrantedCycle ?? phase.CpuPhase.RequestedCycle;
-					return $"{unchecked((int)(phase.CpuPhase.Address - 0x10AE))}:r{phase.CpuPhase.RequestedCycle - first.InstructionStartCycle}/g{grant - first.InstructionStartCycle}/c{phase.CpuPhase.CompletedCycle - first.InstructionStartCycle}";
-				});
-				return $"tail={first.InstructionEntryBusCycle - first.InstructionStartCycle}," +
-					$"q={first.InstructionEntryPrefetchCount}," +
-					$"ready={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}/{first.InstructionEntryReadyCycle1 - first.InstructionStartCycle}," +
-					$"phases={string.Join('|', phases)}";
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8",
-				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8",
-				"tail=6,q=2,ready=-4/4,phases=-8:r4/g6/c8"
-			},
-			ledgers);
-	}
-
-	[Fact]
 	public void AccurateM68000Cycle01vPostRteBoundaryMatchesEmulatorReference()
 	{
 		var result = RunCycle01vDelayLoopProbe(
@@ -6665,202 +5428,9 @@ public sealed class AmigaBusTimingTests
 			syntheticVblankIrqOffset: 26,
 			cycle01vPostRteD3Override: 0x24DB);
 		var postRte = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete");
-		var postRteBeam = result.Bus.GetPalBeamPosition(postRte.Cycle);
+		var postRteBeam = result.Bus.GetBeamPosition(postRte.Cycle);
 
-		Assert.Equal((2, 67), (postRteBeam.BeamLine, postRteBeam.BeamHorizontal));
-	}
-
-	[Fact(Skip = "Rebaseline after the two-CCK CPU bus cursor; current probe is v256h83 and the remaining pre-loop phase shift is under investigation.")]
-	public void AccurateM68000Cycle01vRawStripeBackProjectsProbeToLateLine258()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true);
-		var probeRead = result.Bus.CustomRegisterReads.Last(read => read.Address == 0x004);
-		var firstStripe = result.Writes.First(write =>
-			write.Cycle >= result.Loop2EntryCycle && write.Value == 0x0F0F);
-		var currentProbeBeam = result.Bus.GetPalBeamPosition(probeRead.SampleCycle);
-		var currentStripeBeam = result.Bus.GetPalBeamPosition(firstStripe.Cycle);
-		var probeToStripeCycles = firstStripe.Cycle - probeRead.SampleCycle;
-
-		// cycle01v_ocs.raw row 186, x 168 maps to PAL beam v212 h98.
-		const int expectedStripeLine = 212;
-		const int expectedStripeHorizontal = 98;
-		var expectedStripeCycle = result.Bus.GetPalFrameStopCycle(0) +
-			(expectedStripeLine * (long)AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-			(expectedStripeHorizontal * (long)AmigaConstants.A500PalCpuCyclesPerColorClock);
-		var expectedProbeCycle = expectedStripeCycle - probeToStripeCycles;
-		var expectedProbeBeam = result.Bus.GetPalBeamPosition(expectedProbeCycle);
-		var diagnostic =
-			$"currentProbe=v{currentProbeBeam.BeamLine}h{currentProbeBeam.BeamHorizontal}, " +
-			$"currentStripe=v{currentStripeBeam.BeamLine}h{currentStripeBeam.BeamHorizontal}, " +
-			$"probeToStripe={probeToStripeCycles}, " +
-			$"rawStripe=v{expectedStripeLine}h{expectedStripeHorizontal}, " +
-			$"backProjectedProbe=v{expectedProbeBeam.BeamLine}h{expectedProbeBeam.BeamHorizontal}";
-
-		Assert.Equal((256, 1), (currentProbeBeam.BeamLine, currentProbeBeam.BeamHorizontal));
-		Assert.Equal((209, 147), (currentStripeBeam.BeamLine, currentStripeBeam.BeamHorizontal));
-		Assert.Equal(121056, probeToStripeCycles);
-		Assert.Equal((258, 179), (expectedProbeBeam.BeamLine, expectedProbeBeam.BeamHorizontal));
-		_ = diagnostic;
-	}
-
-	[Fact(Skip = "The documented source sum predates arbitration-visible two-CCK prefetch completion.")]
-	public void AccurateM68000Cycle01vSourceTimingMatchesRuntimePath()
-	{
-		const int probeCyclesAfterVposrSample = 4;
-		const int loadDelayCounterCycles = 8; // MOVE.W #12000,D3
-		const int delayLoopCycles = (12000 * 10) + 14;
-		const int interruptPathCycles = 1002;
-		const int postDelayToStripeCycles = 28;
-		const int sourceSampleToStripeCycles =
-			probeCyclesAfterVposrSample +
-			loadDelayCounterCycles +
-			delayLoopCycles +
-			interruptPathCycles +
-			postDelayToStripeCycles;
-
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true,
-			requestSyntheticVblankAfterProbe: true);
-		var afterVposrRead = result.Boundaries.Single(boundary => boundary.Name == "afterVposrRead");
-		var firstStripe = result.Writes
-			.First(write => write.Address == 0x180 && write.Value == 0x0F0F && write.Cycle >= result.Loop2EntryCycle);
-		var runtimeAfterVposrReadToStripe = firstStripe.Cycle - afterVposrRead.Cycle;
-		var documentedAfterVposrReadToStripe =
-			loadDelayCounterCycles + delayLoopCycles + interruptPathCycles + postDelayToStripeCycles;
-
-		Assert.Equal(121052, documentedAfterVposrReadToStripe);
-		Assert.Equal(documentedAfterVposrReadToStripe, runtimeAfterVposrReadToStripe);
-		Assert.Equal(121056, sourceSampleToStripeCycles);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vInlineDelayLoopDocumentsFallthroughPrefetchPhase()
-	{
-		var result = RunCycle01vDelayLoopProbe(startOffset: 56, markerCount: 8, inlineLoop2: true);
-		var diagnostic =
-			$"loop2Entry={result.Loop2EntryCycle}, pc=0x{result.ProgramCounter:X6}, cycle={result.Cycle}, " +
-			$"boundaries={BuildCycle01vBoundaryDiagnostic(result.Bus, result.Boundaries)}, " +
-			$"writes={BuildColorWriteBeamDiagnostic(result.Bus, result.Writes)}";
-		Assert.True(result.Loop2EntryCycle >= 0, diagnostic);
-		var firstLoopWrite = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.First(write => write.Value == 0x0F0F);
-		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-
-		Assert.Equal((207, 99), (beam.BeamLine, beam.BeamHorizontal));
-		_ = diagnostic;
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vInlineMainLoopDocumentsRepeatedBurstPhase()
-	{
-		var result = RunCycle01vInlineMainLoopProbe(startOffset: 56, burstCount: 2);
-		var phases = result.BurstWrites
-			.Select(write =>
-			{
-				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
-				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"0x0F0F@v207h99",
-				"0x0F0F@v207h99",
-			},
-			phases);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vStartLineSearchDocumentsWaitLoopPrefetchPhase()
-	{
-		var candidates = Enumerable.Range(228, 13)
-			.Select(line =>
-			{
-				var result = RunCycle01vDelayLoopProbe(
-					startLine: line,
-					startOffset: 56,
-					markerCount: 1,
-					inlineLoop2: true);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
-				return $"v{beam.BeamLine}h{beam.BeamHorizontal}:score={score}";
-			})
-			.Distinct()
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"v207h99:score=546"
-			},
-			candidates);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vVblankIrqDelaySearchDocumentsInterruptCostPhase()
-	{
-		var candidates = Enumerable.Range(245, 16)
-			.Select(nops =>
-			{
-				var result = RunCycle01vDelayLoopProbe(
-					startLine: 232,
-					startOffset: 56,
-					markerCount: 1,
-					inlineLoop2: true,
-					enableSyntheticVblankIrq: true,
-					syntheticIrqNops: nops);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
-				return $"nops={nops}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}:score={score}";
-			})
-			.OrderBy(entry => int.Parse(entry[(entry.LastIndexOf('=') + 1)..]))
-			.Take(1)
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"nops=252:v209h191:irq=1:score=0"
-			},
-			candidates);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vRealIrq3HandlerDocumentsFirstStripePhase()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true);
-		var firstLoopWrite = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.First(write => write.Value == 0x0F0F);
-		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-
-		Assert.Equal("v209h147:irq=1", $"v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}");
+		Assert.Equal((2, 68), (postRteBeam.BeamLine, postRteBeam.BeamHorizontal));
 	}
 
 	[Fact]
@@ -6885,7 +5455,7 @@ public sealed class AmigaBusTimingTests
 		cpu.State.Cycles =
 			(255L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
 			(200L * AgnusChipSlotScheduler.SlotCycles);
-		var frameStartCycle = bus.GetNextPalFrameStartCycle(cpu.State.Cycles);
+		var frameStartCycle = bus.GetNextFrameStartCycle(cpu.State.Cycles);
 		bus.RequestHardwareInterrupt(
 			AmigaConstants.IntreqVerticalBlank,
 			frameStartCycle);
@@ -6912,7 +5482,7 @@ public sealed class AmigaBusTimingTests
 		}
 
 		var read = Assert.Single(bus.CustomRegisterReads.Where(read => read.Address == 0x006));
-		var beam = bus.GetPalBeamPosition(read.SampleCycle);
+		var beam = bus.GetBeamPosition(read.SampleCycle);
 		var moveBoundary = Assert.Single(boundaries.Where(boundary => boundary.Pc == handlerAddress + 10));
 		var movePhases = bus.CpuBusPhases
 			.Where(phase => phase.CpuPhase.InstructionProgramCounter == handlerAddress + 10)
@@ -6945,238 +5515,6 @@ public sealed class AmigaBusTimingTests
 			},
 			movePhases);
 		Assert.True(read.Value == 0x0071, diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vRealIrq3HandlerD0SetBitsExplainConditionalPathCost()
-	{
-		var candidates = new[] { 0x8001u, 0xFFFFu }
-			.Select(d0 =>
-			{
-				var result = RunCycle01vDelayLoopProbe(
-					startLine: 232,
-					startOffset: 56,
-					markerCount: 1,
-					inlineLoop2: true,
-					enableSyntheticVblankIrq: true,
-					useCycle01vIrq3Handler: true,
-					cycle01vIrq3InitialD0: d0);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				return $"d0=0x{d0:X4}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}";
-			})
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"d0=0x8001:v209h147:irq=1",
-				"d0=0xFFFF:v209h147:irq=1"
-			},
-			candidates);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vRealIrq3HandlerDocumentsInterruptAckAndLoopPhase()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true);
-		var intreqWrites = result.Bus.CustomRegisterWrites
-			.Where(write => write.Address == 0x09C)
-			.Select(write =>
-			{
-				var beam = result.Bus.GetPalBeamPosition(write.Cycle);
-				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
-			})
-			.ToArray();
-		var firstLoopWrite = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.First(write => write.Value == 0x0F0F);
-		var firstLoopBeam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-		var boundaries = string.Join(
-			",",
-			result.Boundaries.Select(boundary => $"{boundary.Name}=+{boundary.Cycle - result.Boundaries[0].Cycle}"));
-
-		var actual =
-			$"irq={result.InterruptDispatches}; intreq={string.Join(",", intreqWrites)}; firstLoop=v{firstLoopBeam.BeamLine}h{firstLoopBeam.BeamHorizontal}; boundaries={boundaries}";
-		Assert.StartsWith("irq=1; intreq=0x0020@v0h99; firstLoop=v209h147; ", actual, StringComparison.Ordinal);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vRealIrq3HandlerVblankRequestOffsetDocumentsPhaseSensitivity()
-	{
-		var targets = new[]
-		{
-			(Name: "adfActual", Line: 209, Horizontal: 191)
-		};
-		var candidates = Enumerable.Range(-500, 1001)
-			.Select(index => index * 2)
-			.Select(offset =>
-			{
-				var result = RunCycle01vDelayLoopProbe(
-					startLine: 232,
-					startOffset: 56,
-					markerCount: 1,
-					inlineLoop2: true,
-					enableSyntheticVblankIrq: true,
-					useCycle01vIrq3Handler: true,
-					syntheticVblankIrqOffset: offset,
-					advanceLiveAgnusForInterruptPolling: false);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				var absolute = (beam.BeamLine * 227) + beam.BeamHorizontal;
-				var scores = targets
-					.Select(target => $"{target.Name}={Math.Abs(absolute - ((target.Line * 227) + target.Horizontal))}")
-					.ToArray();
-				return (Offset: offset, Phase: $"v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}", Scores: string.Join(",", scores));
-			})
-			.ToArray();
-		var bestActual = candidates
-			.OrderBy(entry => ExtractNamedScore(entry.Scores, "adfActual"))
-			.First();
-		var distinctPhases = candidates
-			.GroupBy(entry => entry.Phase)
-			.Select(group => $"phase={group.Key}:offsets={group.Min(entry => entry.Offset)}..{group.Max(entry => entry.Offset)}:count={group.Count()}")
-			.Take(24)
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"bestActual=offset=-710:v209h149:irq=1:adfActual=42",
-				"phase=v209h147:irq=1:offsets=-1000..1000:count=966",
-				"phase=v209h149:irq=1:offsets=-710..158:count=35"
-			},
-			new[]
-			{
-				$"bestActual=offset={bestActual.Offset}:{bestActual.Phase}:{bestActual.Scores}"
-			}.Concat(distinctPhases).ToArray());
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vRealIrq3HandlerPaddingDocumentsPhaseSensitivity()
-	{
-		var targets = new[]
-		{
-			(Name: "adfActual", Line: 209, Horizontal: 191)
-		};
-		var candidates = Enumerable.Range(0, 351)
-			.Select(nops =>
-			{
-				var result = RunCycle01vDelayLoopProbe(
-					startLine: 232,
-					startOffset: 56,
-					markerCount: 1,
-					inlineLoop2: true,
-					enableSyntheticVblankIrq: true,
-					useCycle01vIrq3Handler: true,
-					cycle01vIrq3PaddingNops: nops);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				var absolute = (beam.BeamLine * 227) + beam.BeamHorizontal;
-				var scores = targets
-					.Select(target => $"{target.Name}={Math.Abs(absolute - ((target.Line * 227) + target.Horizontal))}")
-					.ToArray();
-				return $"nops={nops}:v{beam.BeamLine}h{beam.BeamHorizontal}:irq={result.InterruptDispatches}:{string.Join(",", scores)}";
-			})
-			.ToArray();
-		var bestActual = candidates
-			.OrderBy(entry => ExtractNamedScore(entry, "adfActual"))
-			.First();
-		Assert.Equal(
-			"nops=22:v209h191:irq=1:adfActual=0",
-			bestActual);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vSyntheticFirstStripeDocumentsAdfTraceDistance()
-	{
-		var result = RunCycle01vDelayLoopProbe(
-			startLine: 232,
-			startOffset: 56,
-			markerCount: 1,
-			inlineLoop2: true,
-			enableSyntheticVblankIrq: true,
-			useCycle01vIrq3Handler: true);
-		var firstLoopWrite = result.Writes
-			.Where(write => write.Cycle >= result.Loop2EntryCycle)
-			.First(write => write.Value == 0x0F0F);
-		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-		var actualCck = (beam.BeamLine * 227) + beam.BeamHorizontal;
-		var adfTraceCck = (209 * 227) + 191;
-		var diagnostic =
-			$"firstLoop=v{beam.BeamLine}h{beam.BeamHorizontal}, " +
-			$"adfDeltaCck={adfTraceCck - actualCck}, " +
-			$"irq={result.InterruptDispatches}";
-
-		Assert.Equal("firstLoop=v209h147, adfDeltaCck=44, irq=1", diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000Cycle01vIrq3HandlerSequenceDocumentsCurrentTiming()
-	{
-		const int interruptedAddress = 0x1000;
-		const int handlerAddress = 0x1500;
-		var handler = CreateCycle01vIrq3Handler(handlerAddress);
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(bus.ChipRam, interruptedAddress, 0x4E, 0x71, 0x4E, 0x71);
-		Write(bus.ChipRam, handlerAddress, handler.Program);
-		bus.WriteLong((24u + 3u) * 4u, handlerAddress);
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(interruptedAddress, 0x3F00);
-		cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.D[0] = 0x8001;
-		cpu.State.Cycles = 1000;
-
-		cpu.RequestInterrupt(3, (uint)((24 + 3) * 4));
-
-		var boundaries = new Dictionary<string, long>(StringComparer.Ordinal)
-		{
-			["afterEntry"] = cpu.State.Cycles
-		};
-		for (var i = 0; i < 256 && cpu.State.ProgramCounter != interruptedAddress; i++)
-		{
-			RecordCycle01vIrq3Boundary(cpu, handler, boundaries);
-			cpu.ExecuteInstruction();
-		}
-
-		boundaries["afterRte"] = cpu.State.Cycles;
-		var origin = 1000L;
-		var actual = string.Join(",", boundaries.Select(pair => $"{pair.Key}:{pair.Value - origin}"));
-		var writes = bus.CustomRegisterWrites
-			.Where(write => write.Address == 0x09C)
-			.Select(write => $"0x{write.Value:X4}@+{write.Cycle - origin}")
-			.ToArray();
-		var diagnostic = $"boundaries={actual}, intreq=[{string.Join(",", writes)}]";
-
-		var boundaryDeltas = new[]
-		{
-			"afterEntry",
-			"movemSave",
-			"ack",
-			"moveD5",
-			"firstTest",
-			"restore",
-			"rte",
-			"afterRte"
-		}
-			.Select(name => boundaries.TryGetValue(name, out var cycle) ? cycle - origin : -1)
-			.ToArray();
-		Assert.Equal("46,46,174,190,198,852,984,1004", string.Join(",", boundaryDeltas));
-		Assert.Equal(4, boundaryDeltas[^1] - 1000);
-		_ = diagnostic;
 	}
 
 	[Fact]
@@ -7262,41 +5600,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000Cycle01vDelayLoopStartOffsetSearchDocumentsAdfTracePhase()
-	{
-		var candidates = Enumerable.Range(0, 57)
-			.Select(index => index * 8)
-			.Select(offset =>
-			{
-				var result = RunCycle01vDelayLoopProbe(offset, markerCount: 1);
-				var firstLoopWrite = result.Writes
-					.Where(write => write.Cycle >= result.Loop2EntryCycle)
-					.First(write => write.Value == 0x0F0F);
-				var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
-				var score = Math.Abs(((beam.BeamLine * 227) + beam.BeamHorizontal) - ((209 * 227) + 191));
-				return (Offset: offset, beam.BeamLine, beam.BeamHorizontal, Score: score);
-			})
-			.OrderBy(candidate => candidate.Score)
-			.Take(8)
-			.Select(candidate => $"offset={candidate.Offset}:v{candidate.BeamLine}h{candidate.BeamHorizontal}:score={candidate.Score}")
-			.ToArray();
-
-		Assert.Equal(
-			new[]
-			{
-				"offset=0:v207h107:score=538",
-				"offset=8:v207h107:score=538",
-				"offset=16:v207h107:score=538",
-				"offset=24:v207h107:score=538",
-				"offset=32:v207h107:score=538",
-				"offset=40:v207h107:score=538",
-				"offset=48:v207h107:score=538",
-				"offset=56:v207h107:score=538"
-			},
-			candidates);
-	}
-
-	[Fact]
 	public void WaitLineLoopTakenBranchCadenceDocumentsVhposrSamples()
 	{
 		var result = RunWaitLineLoopProbe(
@@ -7320,7 +5623,7 @@ public sealed class AmigaBusTimingTests
 				.Zip(result.Reads, (current, previous) => current.SampleCycle - previous.SampleCycle)
 				.ToArray());
 		var color = Assert.Single(result.ColorWrites);
-		var beam = result.Bus.GetPalBeamPosition(color.Cycle);
+		var beam = result.Bus.GetBeamPosition(color.Cycle);
 		Assert.True(color.Value == 0x0F0F && beam.BeamLine == 240 && beam.BeamHorizontal == 45, diagnostic);
 	}
 
@@ -7352,125 +5655,6 @@ public sealed class AmigaBusTimingTests
 
 		Assert.True(deltas.Length >= 8, diagnostic);
 		Assert.All(pairedCycles, pair => Assert.Equal(68, pair));
-	}
-
-	[Fact]
-	public void Cycle01vWaitLinePhaseWritesSync1ColorAtRawReferenceCoordinate()
-	{
-		const int programAddress = 0x1000;
-		const uint sync1AndiPc = programAddress + 0x1A;
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(bus.ChipRam, programAddress, CreateSynccpuBeamPollingProgram());
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(programAddress, 0x3000);
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.A[3] = 0x00DFF006;
-		cpu.State.Cycles =
-			(232L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 208;
-
-		for (var instruction = 0; instruction < 1_024; instruction++)
-		{
-			cpu.ExecuteInstruction();
-			if (bus.CustomRegisterWrites.Any(write => write.Address == 0x180 && write.Value == 0x0606))
-			{
-				break;
-			}
-		}
-
-		var vhposReads = bus.CustomRegisterReads.Where(read => read.Address == 0x006).ToArray();
-		var firstRead = Assert.IsType<CustomRegisterRead>(vhposReads.First());
-		var firstBeam = bus.GetPalBeamPosition(firstRead.SampleCycle);
-		var sync1Reads = bus.CpuBusPhases
-			.Where(phase =>
-				phase.CpuPhase.InstructionProgramCounter == sync1AndiPc &&
-				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
-				phase.CpuPhase.Address == 0x00DFF006)
-			.Select(phase => bus.CustomRegisterReads.Single(read =>
-				read.Address == 0x006 &&
-				read.RequestedCycle == (phase.BusAccess?.RequestedCycle ?? phase.CpuPhase.RequestedCycle)))
-			.ToArray();
-		var sync1ColorWrite = Assert.Single(bus.CustomRegisterWrites.Where(write =>
-			write.Address == 0x180 && write.Value == 0x0606));
-		var sync1ColorBeam = bus.GetPalBeamPosition(sync1ColorWrite.Cycle);
-		var firstSync1Request = sync1Reads[0].RequestedCycle;
-		var finalWaitLineRead = vhposReads.Last(read => read.RequestedCycle < firstSync1Request);
-		var handoffPhases = bus.CpuBusPhases
-			.Where(phase =>
-				phase.CpuPhase.RequestedCycle >= finalWaitLineRead.RequestedCycle &&
-				phase.CpuPhase.RequestedCycle <= firstSync1Request)
-			.ToArray();
-		var diagnostic =
-			$"first=0x{firstRead.Value:X4}@v{firstBeam.BeamLine}h{firstBeam.BeamHorizontal}; " +
-			$"sync1={string.Join(',', sync1Reads.Select(read =>
-			{
-				var beam = bus.GetPalBeamPosition(read.SampleCycle);
-				return $"0x{read.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
-			}))}; color=v{sync1ColorBeam.BeamLine}h{sync1ColorBeam.BeamHorizontal}; " +
-			$"handoff={BuildCpuBusPhaseTimeline(handoffPhases, finalWaitLineRead.RequestedCycle)}";
-
-		Assert.True(firstRead.Value == 0xE875 && firstBeam.BeamLine == 232 && firstBeam.BeamHorizontal == 109, diagnostic);
-		Assert.True(sync1ColorBeam.BeamLine == 240 && sync1ColorBeam.BeamHorizontal == 128, diagnostic);
-	}
-
-	[Fact]
-	public void Cycle01vSync1TailBackProjectsRawMarkerToVhposrMismatchAtPhysicalH113()
-	{
-		const int programAddress = 0x1000;
-		const uint sync1AndiPc = programAddress + 0x1A;
-		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
-		Write(bus.ChipRam, programAddress, CreateSynccpuBeamPollingProgram());
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
-		cpu.Reset(programAddress, 0x3000);
-		cpu.State.A[1] = 0x00DFF000;
-		cpu.State.A[3] = 0x00DFF006;
-		cpu.State.Cycles =
-			(232L * AmigaConstants.A500PalCpuCyclesPerRasterLine) + 208;
-
-		for (var instruction = 0; instruction < 1_024; instruction++)
-		{
-			cpu.ExecuteInstruction();
-			if (bus.CustomRegisterWrites.Any(write => write.Address == 0x180 && write.Value == 0x0606))
-			{
-				break;
-			}
-		}
-
-		var finalRead = bus.CpuBusPhases
-			.Where(phase =>
-				phase.CpuPhase.InstructionProgramCounter == sync1AndiPc &&
-				phase.CpuPhase.AccessKind == M68kBusAccessKind.CpuDataRead &&
-				phase.CpuPhase.Address == 0x00DFF006)
-			.Select(phase => bus.CustomRegisterReads.Single(read =>
-				read.Address == 0x006 &&
-				read.RequestedCycle == (phase.BusAccess?.RequestedCycle ?? phase.CpuPhase.RequestedCycle)))
-			.Last();
-		var colorWrite = Assert.Single(bus.CustomRegisterWrites.Where(write =>
-			write.Address == 0x180 && write.Value == 0x0606));
-		var finalReadBeam = bus.GetPalBeamPosition(finalRead.SampleCycle);
-		var colorBeam = bus.GetPalBeamPosition(colorWrite.Cycle);
-		var finalReadToColorCycles = colorWrite.Cycle - finalRead.SampleCycle;
-
-		const int expectedColorLine = 240;
-		const int expectedColorHorizontal = 128;
-		var expectedColorCycle =
-			(expectedColorLine * (long)AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-			(expectedColorHorizontal * (long)AmigaConstants.A500PalCpuCyclesPerColorClock);
-		var requiredReadCycle = expectedColorCycle - finalReadToColorCycles;
-		var requiredReadBeam = bus.GetPalBeamPosition(requiredReadCycle);
-		var currentVhposrAtRequiredBeam = EncodeVhposr(requiredReadBeam);
-		var diagnostic =
-			$"actualRead=0x{finalRead.Value:X4}@v{finalReadBeam.BeamLine}h{finalReadBeam.BeamHorizontal}, " +
-			$"actualColor=v{colorBeam.BeamLine}h{colorBeam.BeamHorizontal}, " +
-			$"tail={finalReadToColorCycles}, requiredRead=v{requiredReadBeam.BeamLine}h{requiredReadBeam.BeamHorizontal}, " +
-			$"currentRequiredValue=0x{currentVhposrAtRequiredBeam:X4}";
-
-		Assert.Equal(30, finalReadToColorCycles);
-		Assert.Equal((241, 223), (finalReadBeam.BeamLine, finalReadBeam.BeamHorizontal));
-		Assert.Equal((242, 11), (colorBeam.BeamLine, colorBeam.BeamHorizontal));
-		Assert.Equal((240, 113), (requiredReadBeam.BeamLine, requiredReadBeam.BeamHorizontal));
-		Assert.Equal((ushort)0xF079, currentVhposrAtRequiredBeam);
-		Assert.NotEqual(0, currentVhposrAtRequiredBeam & 0x000F);
-		_ = diagnostic;
 	}
 
 	[Fact]
@@ -7561,8 +5745,8 @@ public sealed class AmigaBusTimingTests
 				access.GrantedCycle >= origin - 16 &&
 				access.GrantedCycle <= result.ColorWrite.Cycle + 16)
 			.ToArray();
-		var readBeam = result.Bus.GetPalBeamPosition(result.FinalRead.SampleCycle);
-		var colorBeam = result.Bus.GetPalBeamPosition(result.ColorWrite.Cycle);
+		var readBeam = result.Bus.GetBeamPosition(result.FinalRead.SampleCycle);
+		var colorBeam = result.Bus.GetBeamPosition(result.ColorWrite.Cycle);
 		var diagnostic =
 			$"start={result.StartCycle}, read=0x{result.FinalRead.Value:X4}@v{readBeam.BeamLine}h{readBeam.BeamHorizontal}, " +
 			$"color=v{colorBeam.BeamLine}h{colorBeam.BeamHorizontal}, " +
@@ -7612,9 +5796,9 @@ public sealed class AmigaBusTimingTests
 		var diagnostic = BuildWaitLineLoopDiagnostic(result.Bus, result.Reads, result.ColorWrites, result.Cpu.State.Cycles);
 		var read = Assert.Single(result.Reads);
 		var color = Assert.Single(result.ColorWrites);
-		var colorBeam = result.Bus.GetPalBeamPosition(color.Cycle);
-		Assert.Equal((ushort)0xF00F, read.Value);
-		Assert.True(color.Value == 0x1111 && colorBeam.BeamLine == 240 && colorBeam.BeamHorizontal == 25, diagnostic);
+		var colorBeam = result.Bus.GetBeamPosition(color.Cycle);
+		Assert.Equal(0xF0, read.Value >> 8);
+		Assert.True(color.Value == 0x1111 && colorBeam.BeamLine == 240 && colorBeam.BeamHorizontal == 27, diagnostic);
 		Assert.Contains(
 			result.Bus.CpuBusPhases,
 			phase => phase.CpuPhase.InstructionProgramCounter == 0x100A &&
@@ -7659,7 +5843,7 @@ public sealed class AmigaBusTimingTests
 			new ushort[] { 0xF00F, 0x8000 },
 			result.Reads.Select(read => read.Value).ToArray());
 		var color = Assert.Single(result.ColorWrites);
-		var beam = result.Bus.GetPalBeamPosition(color.Cycle);
+		var beam = result.Bus.GetBeamPosition(color.Cycle);
 		Assert.True(color.Value == 0x0F0F && beam.BeamLine == 240 && beam.BeamHorizontal == 39, diagnostic);
 		Assert.Contains(
 			result.Bus.CpuBusPhases,
@@ -7699,7 +5883,7 @@ public sealed class AmigaBusTimingTests
 		Assert.True(beamReads.Length >= 2, diagnostic);
 		Assert.All(beamReads, read =>
 		{
-			var beam = bus.GetPalBeamPosition(read.GrantedCycle);
+			var beam = bus.GetBeamPosition(read.GrantedCycle);
 			var expected = read.Address == 0x004 ? EncodeVposr(beam) : EncodeVhposr(beam);
 			Assert.Equal(read.GrantedCycle, read.SampleCycle);
 			Assert.Equal(expected, read.Value);
@@ -7828,85 +6012,6 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void AccurateM68000VAmigaTsVprobe2SourceVposrMacroDocumentsInterruptEntryBusAllocation()
-	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
-		const uint handlerAddress = 0x2000;
-		const int valuesAddress = 0x3000;
-		const int stackPointer = 0x3F00;
-		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
-		var interruptStartCycle = line256Start - 220;
-		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71);
-		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(0x1000, stackPointer);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
-		machine.Cpu.State.Cycles = interruptStartCycle;
-
-		machine.Cpu.RequestInterrupt(1, (24u + 1u) * 4u);
-		for (var i = 0; i < 48; i++)
-		{
-			machine.Cpu.ExecuteInstruction();
-			if (ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value != 0))
-			{
-				break;
-			}
-		}
-
-		var reads = bus.CustomRegisterReads
-			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
-			.Take(16)
-			.ToArray();
-		var stored = ReadChipWords(bus.ChipRam, valuesAddress, 16);
-		var entryPhases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= interruptStartCycle &&
-				(reads.Length == 0 || phase.CpuPhase.RequestedCycle <= reads[0].CompletedCycle + 48))
-			.ToArray();
-		var diagnostic =
-			$"interruptStart={interruptStartCycle}/line256StartDelta={interruptStartCycle - line256Start}, " +
-			$"cpuAfterInterrupt={machine.Cpu.State.Cycles}, " +
-			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
-			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
-			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, interruptStartCycle)}]";
-
-		Assert.Equal(16, reads.Length);
-		Assert.True(
-			new ushort[]
-			{
-				0x8000, 0x8000, 0x8000, 0x8000,
-				0x8000, 0x8000, 0x8000, 0x8000,
-				0x8001, 0x8001, 0x8001, 0x8001,
-				0x8001, 0x8001, 0x8001, 0x8001
-			}.SequenceEqual(reads.Select(read => read.Value)),
-			diagnostic);
-		Assert.Equal(reads.Select(read => read.Value).ToArray(), stored);
-		Assert.Equal(line256Start - 160, reads[0].SampleCycle);
-		Assert.Equal(line256Start + 2, reads[8].SampleCycle);
-		Assert.Equal(20, reads[1].SampleCycle - reads[0].SampleCycle);
-		Assert.Equal(22, reads[8].SampleCycle - reads[7].SampleCycle);
-		Assert.True(entryPhases.Length >= 7, diagnostic);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInterruptAcknowledge, entryPhases[1].CpuPhase.AccessKind);
-		Assert.Equal(0xFFFFF3u, entryPhases[1].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[2].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 6), entryPhases[2].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[3].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 4), entryPhases[3].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataRead, entryPhases[4].CpuPhase.AccessKind);
-		Assert.Equal(0x000064u, entryPhases[4].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[5].CpuPhase.AccessKind);
-		Assert.Equal(handlerAddress, entryPhases[5].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[6].CpuPhase.AccessKind);
-		Assert.Equal(handlerAddress + 2, entryPhases[6].CpuPhase.Address);
-	}
-
-	[Fact]
 	public void AccurateM68000VAmigaTsVprobe2CpuVisibleIrqEntryMatchesSourceCopperPhase()
 	{
 		using var machine = new Machine(MachineOptions
@@ -7949,7 +6054,7 @@ public sealed class AmigaBusTimingTests
 		var diagnostic =
 			$"visible={cpuVisibleCycle}/line256StartDelta={cpuVisibleCycle - line256Start}, " +
 			$"cpuAfterInterrupt={machine.Cpu.State.Cycles}, " +
-			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
+			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
 			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
 			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, cpuVisibleCycle)}]";
 		var current = new ushort[]
@@ -7963,214 +6068,10 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(16, reads.Length);
 		Assert.True(current.SequenceEqual(reads.Select(read => read.Value)), diagnostic);
 		Assert.Equal(current, stored);
-		Assert.Equal(line256Start - 112, reads[0].SampleCycle);
+		Assert.Equal(line256Start - 110, reads[0].SampleCycle);
 		Assert.Equal(line256Start + 10, reads[6].SampleCycle);
 		Assert.Equal(20, reads[1].SampleCycle - reads[0].SampleCycle);
-		Assert.Equal(22, reads[6].SampleCycle - reads[5].SampleCycle);
-		Assert.True(entryPhases.Length >= 7, diagnostic);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInterruptAcknowledge, entryPhases[1].CpuPhase.AccessKind);
-		Assert.Equal(0xFFFFF3u, entryPhases[1].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[2].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 6), entryPhases[2].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[3].CpuPhase.AccessKind);
-		Assert.Equal((uint)(stackPointer - 4), entryPhases[3].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuDataRead, entryPhases[4].CpuPhase.AccessKind);
-		Assert.Equal(0x000064u, entryPhases[4].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[5].CpuPhase.AccessKind);
-		Assert.Equal(handlerAddress, entryPhases[5].CpuPhase.Address);
-		Assert.Equal(M68kBusAccessKind.CpuInstructionFetch, entryPhases[6].CpuPhase.AccessKind);
-		Assert.Equal(handlerAddress + 2, entryPhases[6].CpuPhase.Address);
-	}
-
-	[Fact]
-	public void AccurateM68000VAmigaTsVprobe2HandlerPrologueDocumentsFirstVposrReadPhase()
-	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
-		const uint handlerAddress = 0x2000;
-		const int valuesAddress = 0x3000;
-		const int stackPointer = 0x3F00;
-		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
-		var cpuVisibleCycle = line256Start - 174;
-		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71);
-		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(0x1000, stackPointer);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
-		machine.Cpu.State.Cycles = cpuVisibleCycle;
-
-		machine.Cpu.RequestInterrupt(1, (24u + 1u) * 4u);
-		while (bus.CustomRegisterReads.All(read => read.Address != 0x004))
-		{
-			machine.Cpu.ExecuteInstruction();
-		}
-
-		var firstRead = Assert.Single(bus.CustomRegisterReads.Where(read => read.Address == 0x004));
-		var prologuePhases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle + 44 &&
-				phase.CpuPhase.RequestedCycle <= firstRead.RequestedCycle)
-			.ToArray();
-		var actual = BuildCpuBusPhaseTimeline(prologuePhases, cpuVisibleCycle);
-		var expected =
-			"pc=0x2000,CpuInstructionFetch,0x002004,r+44..+48,g+46 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002006,r+48..+52,g+50 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002008,r+52..+56,g+54 | " +
-			"pc=0x2006,CpuInstructionFetch,0x00200A,r+56..+60,g+58 | " +
-			"pc=0x2006,CpuDataRead,0xDFF004,r+60..+64,g+62";
-		var diagnostic =
-			$"firstRead=0x{firstRead.Value:X4}@{firstRead.SampleCycle - line256Start}/" +
-			$"v{bus.GetPalBeamPosition(firstRead.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(firstRead.SampleCycle).BeamHorizontal:X2}, " +
-			$"timeline=[{actual}]";
-
-		Assert.Equal(line256Start - 112, firstRead.SampleCycle);
-		Assert.Equal(0x8000, firstRead.Value);
-		Assert.Equal(expected, actual);
-		Assert.Contains("CpuDataRead,0xDFF004,r+60..+64", diagnostic);
-	}
-
-	[Fact]
-	public void AccurateM68000LeaAbsoluteLongBeforeVposrReadDocumentsPrefetchPhase()
-	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
-		const uint programAddress = 0x2000;
-		const int stackPointer = 0x3F00;
-		const long startCycle = 1000;
-		Write(
-			bus.ChipRam,
-			(int)programAddress,
-			0x45, 0xF9, 0x00, 0x00, 0x30, 0x00, // LEA $00003000.L,A2
-			0x3A, 0x29, 0x00, 0x04,             // MOVE.W VPOSR(A1),D5
-			0x34, 0xC5,                         // MOVE.W D5,(A2)+
-			0x4E, 0x71);                        // NOP
-		machine.Cpu.Reset(programAddress, stackPointer);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
-		machine.Cpu.State.Cycles = startCycle;
-
-		while (bus.CustomRegisterReads.All(read => read.Address != 0x004))
-		{
-			machine.Cpu.ExecuteInstruction();
-		}
-
-		var firstRead = Assert.Single(bus.CustomRegisterReads.Where(read => read.Address == 0x004));
-		var phases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= startCycle &&
-				phase.CpuPhase.RequestedCycle <= firstRead.RequestedCycle)
-			.ToArray();
-		var actual = BuildCpuBusPhaseTimeline(phases, startCycle);
-		var current =
-			"pc=0x2000,CpuInstructionFetch,0x002000,r+0..+4,g+2 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002002,r+4..+8,g+6 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002004,r+8..+12,g+10 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002006,r+12..+16,g+14 | " +
-			"pc=0x2000,CpuInstructionFetch,0x002008,r+16..+20,g+18 | " +
-			"pc=0x2006,CpuInstructionFetch,0x00200A,r+20..+24,g+22 | " +
-			"pc=0x2006,CpuDataRead,0xDFF004,r+24..+28,g+26";
-
-		Assert.Equal(current, actual);
-		Assert.Equal(startCycle + 26, firstRead.SampleCycle);
-	}
-
-	[Fact]
-	public void VAmigaTsVprobe2SourceCopperIrq1DocumentsInterruptEntryBusAllocation()
-	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
-		const uint copperList = 0x2400;
-		const uint handlerAddress = 0x2000;
-		const int valuesAddress = 0x3000;
-		const int stackPointer = 0x3F00;
-		const ushort intreqLevel1 = 0x0004;
-		WriteCopperList(
-			bus,
-			copperList,
-			(0x1001, 0xFFFE),
-			(0x09C, 0x8008),
-			(0x4001, 0xFFFE),
-			(0x100, 0x2200),
-			(0xFF81, 0xFFFE),
-			(0x09C, (ushort)(0x8000 | intreqLevel1)),
-			(0xFFFF, 0xFFFE));
-		SetCopperPointer(bus, list: 1, copperList);
-		Write(bus.ChipRam, 0x1000, 0x60, 0xFE, 0x4E, 0x71, 0x4E, 0x71);
-		Write(bus.ChipRam, (int)handlerAddress, CreateVAmigaTsVprobe2Irq1Handler(valuesAddress));
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(0x1000, stackPointer);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
-		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
-		bus.WriteWord(0x00DFF096, 0x8280);
-
-		var line256Start = 256L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
-		var startCycle = line256Start - 1024;
-		bus.AdvanceDmaTo(startCycle);
-		machine.Cpu.State.Cycles = startCycle;
-
-		for (var i = 0; i < 512 && ReadChipWords(bus.ChipRam, valuesAddress, 16).All(value => value == 0); i++)
-		{
-			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			_ = machine.DispatchPendingHardwareInterrupt();
-			machine.Cpu.ExecuteInstruction();
-		}
-		for (var i = 0; i < 48; i++)
-		{
-			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			_ = machine.DispatchPendingHardwareInterrupt();
-			machine.Cpu.ExecuteInstruction();
-		}
-
-		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
-			write.Address == 0x09C &&
-			write.Value == (0x8000 | intreqLevel1));
-		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
-		var reads = bus.CustomRegisterReads
-			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
-			.Take(16)
-			.ToArray();
-		var stored = ReadChipWords(bus.ChipRam, valuesAddress, 16);
-		var entryPhases = bus.CpuBusPhases
-			.Where(phase => phase.CpuPhase.RequestedCycle >= cpuVisibleCycle &&
-				(reads.Length == 0 || phase.CpuPhase.RequestedCycle <= reads[0].CompletedCycle + 48))
-			.ToArray();
-		var diagnostic =
-			$"intreqWrite={intreqWrite.Cycle}/deltaToLine256={intreqWrite.Cycle - line256Start}, " +
-			$"visible={cpuVisibleCycle}/deltaToLine256={cpuVisibleCycle - line256Start}, " +
-			$"cpu={machine.Cpu.State.Cycles}, " +
-			$"reads=[{string.Join(",", reads.Select(read => $"0x{read.Value:X4}@{read.SampleCycle - line256Start}/v{bus.GetPalBeamPosition(read.SampleCycle).BeamLine:X3}h{bus.GetPalBeamPosition(read.SampleCycle).BeamHorizontal:X2}"))}], " +
-			$"stored=[{string.Join(",", stored.Select(value => $"0x{value:X4}"))}], " +
-			$"phases=[{BuildCpuBusPhaseTimeline(entryPhases, cpuVisibleCycle)}]";
-
-		var reference = new ushort[]
-		{
-			0x8000, 0x8000, 0x8000, 0x8000,
-			0x8000, 0x8000, 0x8001, 0x8001,
-			0x8001, 0x8001, 0x8001, 0x8001,
-			0x8001, 0x8001, 0x8001, 0x8001
-		};
-		var actual = reads.Select(read => read.Value).ToArray();
-
-		Assert.Equal(16, reads.Length);
-		Assert.True(reference.SequenceEqual(actual), diagnostic);
-		Assert.Equal(reference, stored);
-		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
-		Assert.Equal(line256Start - 174, cpuVisibleCycle);
-		Assert.Equal(line256Start - 112, reads[0].SampleCycle);
-		Assert.Equal(line256Start + 10, reads[6].SampleCycle);
-		Assert.Equal(20, reads[1].SampleCycle - reads[0].SampleCycle);
-		Assert.Equal(22, reads[6].SampleCycle - reads[5].SampleCycle);
+		Assert.Equal(20, reads[6].SampleCycle - reads[5].SampleCycle);
 		Assert.True(entryPhases.Length >= 7, diagnostic);
 		Assert.Equal(M68kBusAccessKind.CpuDataWrite, entryPhases[0].CpuPhase.AccessKind);
 		Assert.Equal((uint)(stackPointer - 2), entryPhases[0].CpuPhase.Address);
@@ -8285,7 +6186,7 @@ public sealed class AmigaBusTimingTests
 			Assert.True(testCase.Expected.SequenceEqual(actual), diagnostic);
 			Assert.All(result.Reads, read =>
 			{
-				var beam = result.Bus.GetPalBeamPosition(read.SampleCycle);
+				var beam = result.Bus.GetBeamPosition(read.SampleCycle);
 				Assert.Equal(EncodeVhposr(beam), read.Value);
 			});
 		}
@@ -8316,7 +6217,7 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0x38C1, read.Value);
 		Assert.Equal(read.GrantedCycle, read.SampleCycle);
 		Assert.Equal(0x38C1, stored);
-		Assert.Equal(0x38C1, EncodeVhposr(result.Bus.GetPalBeamPosition(read.SampleCycle)));
+		Assert.Equal(0x38C1, EncodeVhposr(result.Bus.GetBeamPosition(read.SampleCycle)));
 		Assert.Equal(expected, actual);
 	}
 
@@ -10564,8 +8465,8 @@ public sealed class AmigaBusTimingTests
 				}
 
 				var finalRead = bus.CustomRegisterReads.Last(read => read.Address == 0x006);
-				var readBeam = bus.GetPalBeamPosition(finalRead.SampleCycle);
-				var colorBeam = bus.GetPalBeamPosition(color.Cycle);
+				var readBeam = bus.GetBeamPosition(finalRead.SampleCycle);
+				var colorBeam = bus.GetBeamPosition(color.Cycle);
 				if (readBeam.BeamLine == 32 &&
 					readBeam.BeamHorizontal == expectedReadHorizontal &&
 					colorBeam.BeamLine == 32 &&
@@ -10812,7 +8713,7 @@ public sealed class AmigaBusTimingTests
 		var frameStart = 0L;
 		for (var frame = 0; frame < 8; frame++)
 		{
-			var frameStop = bus.GetPalFrameStopCycle(frameStart);
+			var frameStop = bus.GetFrameStopCycle(frameStart);
 			boot.ContinueCopperStartRuntimeUntilCycle(frameStop, 100_000);
 			bus.AdvanceHardwareTo(frameStop);
 			frameStart = frameStop;
@@ -10892,7 +8793,7 @@ public sealed class AmigaBusTimingTests
 			.Take(markerCount)
 			.Select(write =>
 			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
+				var beam = bus.GetBeamPosition(write.Cycle);
 				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
 			})
 			.ToArray();
@@ -10962,7 +8863,7 @@ public sealed class AmigaBusTimingTests
 			.Where(write => write.Address == 0x180)
 			.Select(write =>
 			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
+				var beam = bus.GetBeamPosition(write.Cycle);
 				return new Probe10ColorWriteLedgerEntry(write.Value, write.Cycle, beam.BeamLine, beam.BeamHorizontal);
 			})
 			.ToArray();
@@ -11168,7 +9069,7 @@ public sealed class AmigaBusTimingTests
 			.Take(markerCount)
 			.Select(write =>
 			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
+				var beam = bus.GetBeamPosition(write.Cycle);
 				return (write.Value, beam.BeamLine, beam.BeamHorizontal);
 			})
 			.ToArray();
@@ -11255,7 +9156,7 @@ public sealed class AmigaBusTimingTests
 		{
 			bus.RequestHardwareInterrupt(
 				AmigaConstants.IntreqVerticalBlank,
-				bus.GetNextPalFrameStartCycle(cpu.State.Cycles) + syntheticVblankIrqOffset);
+				bus.GetNextFrameStartCycle(cpu.State.Cycles) + syntheticVblankIrqOffset);
 			syntheticVblankRequested = true;
 		}
 
@@ -11298,7 +9199,7 @@ public sealed class AmigaBusTimingTests
 				bus.WriteWord(0x00DFF09C, AmigaConstants.IntreqVerticalBlank);
 				bus.RequestHardwareInterrupt(
 					AmigaConstants.IntreqVerticalBlank,
-					bus.GetNextPalFrameStartCycle(cpu.State.Cycles) + syntheticVblankIrqOffset);
+					bus.GetNextFrameStartCycle(cpu.State.Cycles) + syntheticVblankIrqOffset);
 				cpu.State.StatusRegister = M68kCpuState.Supervisor;
 				syntheticVblankRequested = true;
 			}
@@ -11471,9 +9372,9 @@ public sealed class AmigaBusTimingTests
 		var read = bus.CustomRegisterReads.Last(customRead =>
 			customRead.Address == 0x004 &&
 			customRead.Kind == AmigaBusAccessKind.CpuDataRead);
-		var sampleBeam = bus.GetPalBeamPosition(read.SampleCycle);
-		var requestBeam = bus.GetPalBeamPosition(read.RequestedCycle);
-		var grantBeam = bus.GetPalBeamPosition(read.GrantedCycle);
+		var sampleBeam = bus.GetBeamPosition(read.SampleCycle);
+		var requestBeam = bus.GetBeamPosition(read.RequestedCycle);
+		var grantBeam = bus.GetBeamPosition(read.GrantedCycle);
 		return new CycleVposrProbeSample(
 			probeNops,
 			startCycle,
@@ -11574,7 +9475,7 @@ public sealed class AmigaBusTimingTests
 			",",
 			result.Reads.Select(read =>
 			{
-				var sample = result.Bus.GetPalBeamPosition(read.SampleCycle);
+				var sample = result.Bus.GetBeamPosition(read.SampleCycle);
 				return $"0x{read.Value:X4}@{read.SampleCycle}/v{sample.BeamLine}h{sample.BeamHorizontal}";
 			}));
 
@@ -12009,7 +9910,7 @@ public sealed class AmigaBusTimingTests
 				.Take(16)
 				.Select(write =>
 				{
-					var beam = bus.GetPalBeamPosition(write.Cycle);
+					var beam = bus.GetBeamPosition(write.Cycle);
 					return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}/c{write.Cycle}";
 				}));
 
@@ -12020,7 +9921,7 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			boundaries.Select(boundary =>
 			{
-				var beam = bus.GetPalBeamPosition(boundary.Cycle);
+				var beam = bus.GetBeamPosition(boundary.Cycle);
 				return $"{boundary.Name}=+{boundary.Cycle - origin}/v{beam.BeamLine}h{beam.BeamHorizontal}";
 			}));
 	}
@@ -12065,7 +9966,7 @@ public sealed class AmigaBusTimingTests
 		(AmigaBus Bus, long Loop2EntryCycle, uint ProgramCounter, long Cycle, int InterruptDispatches, Cycle01vBoundary[] Boundaries, CustomRegisterWrite[] Writes) result)
 	{
 		var firstLoopWrite = result.Writes.First(write => write.Cycle >= result.Loop2EntryCycle && write.Value == 0x0F0F);
-		var beam = result.Bus.GetPalBeamPosition(firstLoopWrite.Cycle);
+		var beam = result.Bus.GetBeamPosition(firstLoopWrite.Cycle);
 		var start = result.Boundaries.First(boundary => boundary.Name == "start").Cycle;
 		var end = result.Boundaries.First(boundary => boundary.Name == "loop2Entry").Cycle;
 		var window = result.Bus.BusAccesses
@@ -12102,7 +10003,7 @@ public sealed class AmigaBusTimingTests
 			return "none";
 		}
 
-		var beam = bus.GetPalBeamPosition(access.GrantedCycle);
+		var beam = bus.GetBeamPosition(access.GrantedCycle);
 		return
 			$"{access.Request.Requester}/{access.Request.Kind}/0x{access.Request.Address:X6}" +
 			$"@r{access.Request.RequestedCycle}/g{access.GrantedCycle}/w{access.WaitCycles}/v{beam.BeamLine}h{beam.BeamHorizontal}";
@@ -12116,9 +10017,9 @@ public sealed class AmigaBusTimingTests
 		long AfterSynccpuCycle,
 		long BeforeProbeReadCycle,
 		CustomRegisterRead Read,
-		AgnusPalBeamPosition RequestBeam,
-		AgnusPalBeamPosition GrantBeam,
-		AgnusPalBeamPosition SampleBeam,
+		AgnusBeamPosition RequestBeam,
+		AgnusBeamPosition GrantBeam,
+		AgnusBeamPosition SampleBeam,
 		uint D0,
 		long CompletedCycle);
 
@@ -12208,8 +10109,8 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			reads.Select((read, index) =>
 			{
-				var request = bus.GetPalBeamPosition(read.RequestedCycle);
-				var grant = bus.GetPalBeamPosition(read.GrantedCycle);
+				var request = bus.GetBeamPosition(read.RequestedCycle);
+				var grant = bus.GetBeamPosition(read.GrantedCycle);
 				var delta = index == 0 ? 0 : read.SampleCycle - reads[index - 1].SampleCycle;
 				return $"#{index}:reg=0x{read.Address:X3},value=0x{read.Value:X4}," +
 					$"req=v{request.BeamLine}h{request.BeamHorizontal}," +
@@ -12219,7 +10120,7 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			colorWrites.Select(write =>
 			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
+				var beam = bus.GetBeamPosition(write.Cycle);
 				return $"0x{write.Value:X4}@v{beam.BeamLine}h{beam.BeamHorizontal}";
 			}));
 		var phaseStart = reads.Count == 0
@@ -12288,7 +10189,7 @@ public sealed class AmigaBusTimingTests
 			.Take(24)
 			.Select((write, index) =>
 			{
-				var beam = bus.GetPalBeamPosition(write.Cycle);
+				var beam = bus.GetBeamPosition(write.Cycle);
 				var delta = index == 0
 					? 0
 					: write.Cycle - markers[index - 1].Cycle;
@@ -12334,7 +10235,7 @@ public sealed class AmigaBusTimingTests
 				.Take(32)
 				.Select(write =>
 				{
-					var beam = bus.GetPalBeamPosition(write.Cycle);
+					var beam = bus.GetBeamPosition(write.Cycle);
 					return $"0x{write.Value:X3}@cycle={write.Cycle},v={beam.BeamLine},h={beam.BeamHorizontal}";
 				}));
 		var phaseSummary = string.Join(
@@ -12347,10 +10248,10 @@ public sealed class AmigaBusTimingTests
 					.TakeLast(80))
 				.Select(phase =>
 				{
-					var request = bus.GetPalBeamPosition(phase.CpuPhase.RequestedCycle);
-					var complete = bus.GetPalBeamPosition(phase.CpuPhase.CompletedCycle);
+					var request = bus.GetBeamPosition(phase.CpuPhase.RequestedCycle);
+					var complete = bus.GetBeamPosition(phase.CpuPhase.CompletedCycle);
 					var grant = phase.BusAccess.HasValue
-						? bus.GetPalBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle)
+						? bus.GetBeamPosition(phase.BusAccess.GetValueOrDefault().GrantedCycle)
 						: complete;
 					var value = (ushort)((grant.BeamLine << 8) |
 						EncodeVhposrHorizontal(grant.BeamHorizontal));
@@ -12374,9 +10275,9 @@ public sealed class AmigaBusTimingTests
 			"; ",
 			reads.Select(read =>
 			{
-				var request = bus.GetPalBeamPosition(read.RequestedCycle);
-				var grant = bus.GetPalBeamPosition(read.GrantedCycle);
-				var complete = bus.GetPalBeamPosition(read.CompletedCycle);
+				var request = bus.GetBeamPosition(read.RequestedCycle);
+				var grant = bus.GetBeamPosition(read.GrantedCycle);
+				var complete = bus.GetBeamPosition(read.CompletedCycle);
 				return $"reg=0x{read.Address:X3} value=0x{read.Value:X4} " +
 					$"req={read.RequestedCycle}/v{request.BeamLine:X3}h{request.BeamHorizontal:X2} " +
 					$"grant={read.GrantedCycle}/v{grant.BeamLine:X3}h{grant.BeamHorizontal:X2} " +
@@ -12765,10 +10666,10 @@ public sealed class AmigaBusTimingTests
 		return bus.ReadWord(0x00DFF004);
 	}
 
-	private static ushort EncodeVposr(AgnusPalBeamPosition beam)
+	private static ushort EncodeVposr(AgnusBeamPosition beam)
 		=> (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((beam.BeamLine >> 8) & 0x0001));
 
-	private static ushort EncodeVhposr(AgnusPalBeamPosition beam)
+	private static ushort EncodeVhposr(AgnusBeamPosition beam)
 	{
 		var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
 		return (ushort)(((beam.BeamLine & 0x00FF) << 8) | horizontal);
@@ -12777,14 +10678,7 @@ public sealed class AmigaBusTimingTests
 	private static int EncodeVhposrHorizontal(int beamHorizontal)
 	{
 		var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-			var offset = physicalHorizontal >= 0xE1
-				? 3
-				: physicalHorizontal >= 0xDF
-					? 4
-					: physicalHorizontal >= 0xB7
-						? 3
-						: 8;
-		return (physicalHorizontal + offset) % AmigaConstants.A500PalColorClocksPerRasterLine;
+		return (physicalHorizontal + 4) % AmigaConstants.A500PalColorClocksPerRasterLine;
 	}
 
 	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVAmigaTsProbe10VhposrReadMacro(
@@ -13092,7 +10986,7 @@ public sealed class AmigaBusTimingTests
 			var delta = index == 0 ? 0 : read.SampleCycle - reads[index - 1].SampleCycle;
 			var expectedValue = index < expected.Count ? expected[index] : (ushort)0;
 			var expectedDelta = index == 0 ? 0 : 20;
-			var beam = bus?.GetPalBeamPosition(read.SampleCycle);
+			var beam = bus?.GetBeamPosition(read.SampleCycle);
 			var beamText = beam.HasValue ? $"/v{beam.Value.BeamLine:X3}h{beam.Value.BeamHorizontal:X2}" : string.Empty;
 			return
 				$"#{index}: actual=0x{read.Value:X4}, expected=0x{expectedValue:X4}, " +

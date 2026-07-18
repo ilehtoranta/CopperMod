@@ -9876,6 +9876,14 @@ namespace Copper68k
                             _compiledInstructionPreviousCycle);
                     }
                 }
+
+				// A compiled MOVE may finish its architectural work before the final
+				// instruction fetch has completed. That transfer is already committed
+				// to the physical bus, so retirement must observe the same completion
+				// barrier as the accurate interpreter before classic timing is closed.
+				State.Cycles = Math.Max(
+					State.Cycles,
+					_m68000PipelineState.RetireBusCycle);
                 _classicCompiledPrefetchHandled = true;
                 _classicCompiledTimingActive = false;
                 _compiledM68000PipelineActive = false;
