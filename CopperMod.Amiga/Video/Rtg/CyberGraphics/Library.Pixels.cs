@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 {
@@ -16,6 +17,19 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
         private const uint ProcessGradientColor2 = 0x8523_1024;
         private const uint ProcessRgbMask = 0x8523_1025;
         private const uint ProcessGradientSymmetricCenter = 0x8523_1026;
+
+        private readonly record struct ProcessPixelArrayOptions(
+            uint Operation,
+            uint Value,
+            uint FadeFullScale,
+            uint FadeOffset,
+            uint GradientType,
+            uint GradientColor1,
+            uint GradientColor2,
+            uint GradientFullScale,
+            uint GradientOffset,
+            uint RgbMask,
+            bool GradientSymmetricCenter);
 
         private uint ReadRgbPixel(uint rastPort, int x, int y)
         {
@@ -388,12 +402,12 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 return;
             }
 
-            var sourceX = unchecked((int)state.D[0]);
-            var sourceStride = unchecked((int)state.D[1]);
-            var destinationX = unchecked((int)state.D[2]);
-            var destinationY = unchecked((int)state.D[3]);
-            var width = unchecked((int)state.D[4]);
-            var height = unchecked((int)state.D[5]);
+            var sourceX = Word(state.D[0]);
+            var sourceStride = Word(state.D[1]);
+            var destinationX = Word(state.D[2]);
+            var destinationY = Word(state.D[3]);
+            var width = Word(state.D[4]);
+            var height = Word(state.D[5]);
             if (sourceX < 0 || sourceStride <= 0 || width <= 0 || height <= 0)
             {
                 return;
@@ -422,80 +436,213 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             }
         }
 
-        private void ProcessPixelArray(M68kCpuState state)
+        private uint ProcessPixelArray(M68kCpuState state)
         {
-            if (!TryGetRastPortSurface(state.A[1], out var surface))
-            {
-                return;
-            }
-
-            if (state.D[0] > int.MaxValue || state.D[1] > int.MaxValue ||
-                state.D[2] > int.MaxValue || state.D[3] > int.MaxValue)
-            {
-                return;
-            }
-
-            var x = (int)state.D[0];
-            var y = (int)state.D[1];
-            var width = checked((int)Math.Min(state.D[2], int.MaxValue));
-            var height = checked((int)Math.Min(state.D[3], int.MaxValue));
+            var x = (int)UWord(state.D[0]);
+            var y = (int)UWord(state.D[1]);
+            var width = (int)UWord(state.D[2]);
+            var height = (int)UWord(state.D[3]);
             var operation = state.D[4];
             var value = state.D[5];
-            width = Math.Min(width, Math.Max(0, surface.Width - x));
-            height = Math.Min(height, Math.Max(0, surface.Height - y));
-            if (width <= 0 || height <= 0)
+            if (width <= 0 || height <= 0 || operation > 10 ||
+                (operation == 10 && (value < 1 || value > 5)))
             {
-                return;
+                return 0;
             }
 
-            if (operation == 4)
-            {
-                BlurRectangle(surface, x, y, width, height);
-                return;
-            }
-
-            var fadeFullScale = GetTagData(state.A[2], ProcessFadeFullScale, 255);
-            var fadeOffset = GetTagData(state.A[2], ProcessFadeOffset, 0);
             var gradientType = GetTagData(state.A[2], ProcessGradientType, 0);
-            var gradientColor1 = GetTagData(state.A[2], ProcessGradientColor1, value);
-            var gradientColor2 = GetTagData(state.A[2], ProcessGradientColor2, value);
-            var rgbMask = GetTagData(state.A[2], ProcessRgbMask, 0x00FF_FFFFu);
-            var symmetricGradient = GetTagData(state.A[2], ProcessGradientSymmetricCenter, 0) != 0;
-            for (var py = 0; py < height; py++)
+            if (operation == 9 && gradientType > 1)
             {
-                for (var px = 0; px < width; px++)
+                return 0;
+            }
+
+            var options = new ProcessPixelArrayOptions(
+                operation,
+                value,
+                GetTagData(state.A[2], ProcessFadeFullScale, 255),
+                GetTagData(state.A[2], ProcessFadeOffset, 0),
+                gradientType,
+                GetTagData(state.A[2], ProcessGradientColor1, value),
+                GetTagData(state.A[2], ProcessGradientColor2, value),
+                GetTagData(state.A[2], ProcessFadeFullScale, 0),
+                GetTagData(state.A[2], ProcessFadeOffset, 0),
+                operation is 0 or 1
+                    ? GetTagData(state.A[2], ProcessRgbMask, 0x00FF_FFFFu)
+                    : 0x00FF_FFFFu,
+                GetTagData(state.A[2], ProcessGradientSymmetricCenter, 0) != 0);
+
+            if (!TryGetProcessPixelArrayFragments(state.A[1], x, y, width, height, out var fragments))
+            {
+                return 0;
+            }
+
+            uint count = 0;
+            foreach (var fragment in fragments)
+            {
+                if (!TryGetProcessPixelArraySurface(state.A[1], fragment, out var surface))
                 {
-                    var dx = x + px;
-                    var dy = y + py;
-                    if (!surface.Contains(dx, dy))
+                    continue;
+                }
+
+                count += ProcessPixelArrayFragment(
+                    surface,
+                    fragment,
+                    x,
+                    y,
+                    width,
+                    height,
+                    options);
+            }
+
+            return count;
+        }
+
+        private bool TryGetProcessPixelArrayFragments(
+            uint rastPort,
+            int x,
+            int y,
+            int width,
+            int height,
+            out IReadOnlyList<CyberGraphicsClipFragment> fragments)
+        {
+            if (_guestServices?.TryGetRastPortClipFragments(
+                    rastPort,
+                    x,
+                    y,
+                    width,
+                    height,
+                    out fragments) == true)
+            {
+                return true;
+            }
+
+            if (!TryGetRastPortSurface(rastPort, out var surface))
+            {
+                fragments = Array.Empty<CyberGraphicsClipFragment>();
+                return false;
+            }
+
+            var left = Math.Max(0, x);
+            var top = Math.Max(0, y);
+            var right = Math.Min(surface.Width, x + width) - 1;
+            var bottom = Math.Min(surface.Height, y + height) - 1;
+            if (left > right || top > bottom)
+            {
+                fragments = Array.Empty<CyberGraphicsClipFragment>();
+                return true;
+            }
+
+            fragments =
+            [
+                new CyberGraphicsClipFragment(
+                    0,
+                    left,
+                    top,
+                    left,
+                    top,
+                    right - left + 1,
+                    bottom - top + 1)
+            ];
+            return true;
+        }
+
+        private bool TryGetProcessPixelArraySurface(
+            uint rastPort,
+            CyberGraphicsClipFragment fragment,
+            out CyberGraphicsSurface surface)
+        {
+            if (fragment.BitMapAddress != 0)
+            {
+                return TryResolveBitMapSurface(fragment.BitMapAddress, out surface!);
+            }
+
+            return TryGetRastPortSurface(rastPort, out surface!);
+        }
+
+        private uint ProcessPixelArrayFragment(
+            CyberGraphicsSurface surface,
+            CyberGraphicsClipFragment fragment,
+            int requestX,
+            int requestY,
+            int requestWidth,
+            int requestHeight,
+            ProcessPixelArrayOptions options)
+        {
+            if (fragment.Width <= 0 || fragment.Height <= 0 ||
+                (long)fragment.Width * fragment.Height > int.MaxValue)
+            {
+                return 0;
+            }
+
+            if (options.Operation == 4)
+            {
+                return BlurRectangle(
+                    surface,
+                    fragment.BitMapX,
+                    fragment.BitMapY,
+                    fragment.Width,
+                    fragment.Height);
+            }
+
+            var gradientLength = options.GradientType == 1 ? requestHeight : requestWidth;
+            var gradientFullScale = options.GradientFullScale == 0
+                ? gradientLength
+                : (int)Math.Min(options.GradientFullScale, int.MaxValue);
+            uint count = 0;
+            for (var py = 0; py < fragment.Height; py++)
+            {
+                for (var px = 0; px < fragment.Width; px++)
+                {
+                    var bitmapX = fragment.BitMapX + px;
+                    var bitmapY = fragment.BitMapY + py;
+                    if (!surface.Contains(bitmapX, bitmapY))
                     {
                         continue;
                     }
 
-                    var color = ReadSurfaceArgb(surface, dx, dy);
-                    var transformed = operation switch
+                    var pixelX = fragment.RequestX + px;
+                    var pixelY = fragment.RequestY + py;
+                    var color = ReadSurfaceArgb(surface, bitmapX, bitmapY);
+                    var transformed = options.Operation switch
                     {
-                        0 => AdjustBrightness(color, (int)Math.Min(value, 255), brighten: true),
-                        1 => AdjustBrightness(color, (int)Math.Min(value, 255), brighten: false),
-                        2 => (color & 0x00FF_FFFFu) | ((value & 0xFFu) << 24),
-                        3 => MultiplyTint(color, value),
+                        0 => AdjustBrightness(color, (int)Math.Min(options.Value, 255), brighten: true),
+                        1 => AdjustBrightness(color, (int)Math.Min(options.Value, 255), brighten: false),
+                        2 => (color & 0x00FF_FFFFu) | ((options.Value & 0xFFu) << 24),
+                        3 => MultiplyTint(color, options.Value),
                         5 => ToGrey(color),
                         6 => (color & 0xFF00_0000u) | (~color & 0x00FF_FFFFu),
-                        7 => Fade((color & 0xFF00_0000u) | (~color & 0x00FF_FFFFu), value, fadeFullScale, fadeOffset),
-                        8 => Tint(color, value, GetFadeAmount(value, fadeFullScale, fadeOffset)),
+                        7 => Fade(
+                            (color & 0xFF00_0000u) | (~color & 0x00FF_FFFFu),
+                            options.Value,
+                            options.FadeFullScale,
+                            options.FadeOffset),
+                        8 => Tint(
+                            color,
+                            options.Value,
+                            GetFadeAmount(options.Value, options.FadeFullScale, options.FadeOffset)),
                         9 => GetGradientColor(
-                            gradientColor1,
-                            gradientColor2,
-                            gradientType == 1 ? py : px,
-                            gradientType == 1 ? height : width,
-                            symmetricGradient),
-                        10 => ShiftRgb(color, value),
-                        _ => color
+                            options.GradientColor1,
+                            options.GradientColor2,
+                            options.GradientType == 1 ? pixelY - requestY : pixelX - requestX,
+                            gradientFullScale,
+                            (int)Math.Min(options.GradientOffset, int.MaxValue),
+                            options.GradientSymmetricCenter),
+                        10 => ShiftRgb(color, options.Value),
+                        _ => 0u
                     };
-                    transformed = (color & ~rgbMask) | (transformed & rgbMask);
-                    WriteSurfaceArgb(surface, dx, dy, transformed);
+
+                    if (options.Operation is 0 or 1)
+                    {
+                        var rgbMask = options.RgbMask & 0x00FF_FFFFu;
+                        transformed = (color & ~rgbMask) | (transformed & rgbMask);
+                    }
+
+                    WriteSurfaceArgb(surface, bitmapX, bitmapY, transformed);
+                    count++;
                 }
             }
+
+            return count;
         }
 
         private uint BltBitMapAlpha(M68kCpuState state, bool destinationIsRastPort)
@@ -638,7 +785,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             return count;
         }
 
-        private void BlurRectangle(CyberGraphicsSurface surface, int x, int y, int width, int height)
+        private uint BlurRectangle(CyberGraphicsSurface surface, int x, int y, int width, int height)
         {
             var pixels = new uint[checked(width * height)];
             for (var py = 0; py < height; py++)
@@ -674,6 +821,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 }
             }
 
+            uint count = 0;
             for (var py = 0; py < height; py++)
             {
                 for (var px = 0; px < width; px++)
@@ -681,9 +829,12 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     if (surface.Contains(x + px, y + py))
                     {
                         WriteSurfaceArgb(surface, x + px, y + py, pixels[(py * width) + px]);
+                        count++;
                     }
                 }
             }
+
+            return count;
         }
 
         private uint ReadSurfaceArgb(CyberGraphicsSurface surface, int x, int y)
@@ -1048,24 +1199,40 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 return 0;
             }
 
-            return Math.Min(255u, (value - offset) * 255u / fullScale);
+            return (uint)Math.Min(255UL, ((ulong)(value - offset) * 255UL) / fullScale);
         }
 
-        private static uint GetGradientColor(uint first, uint second, int position, int length, bool symmetricCenter)
+        private static uint GetGradientColor(
+            uint first,
+            uint second,
+            int position,
+            int fullScale,
+            int offset,
+            bool symmetricCenter)
         {
-            if (length <= 1)
+            if (fullScale <= 1)
             {
                 return first;
             }
 
+            var phase = (long)position + offset;
             if (symmetricCenter)
             {
-                var center = (length - 1) / 2.0;
-                position = (int)Math.Round(Math.Abs(position - center) * 2.0, MidpointRounding.AwayFromZero);
+                phase = Math.Abs((phase * 2) - (fullScale - 1L));
             }
 
-            var amount = (uint)Math.Clamp(position * 255 / (length - 1), 0, 255);
-            return Tint(first, second, amount);
+            var amount = (uint)Math.Clamp(phase * 255L / (fullScale - 1L), 0L, 255L);
+            return InterpolateArgb(first, second, amount);
+        }
+
+        private static uint InterpolateArgb(uint first, uint second, uint amount)
+        {
+            var inverse = 255 - Math.Min(amount, 255u);
+            uint Mix(int shift)
+                => ((((first >> shift) & 0xFF) * inverse) +
+                    (((second >> shift) & 0xFF) * Math.Min(amount, 255u)) + 127) / 255;
+
+            return (Mix(24) << 24) | (Mix(16) << 16) | (Mix(8) << 8) | Mix(0);
         }
 
         private static uint ShiftRgb(uint color, uint operation)

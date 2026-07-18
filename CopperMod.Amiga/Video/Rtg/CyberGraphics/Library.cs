@@ -889,7 +889,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     state.D[0] = ScalePixelArray(state, alpha: false);
                     break;
                 case CyberGraphicsFunction.GetCyberMapAttr:
-                    state.D[0] = GetCyberMapAttribute(state.A[0], state.D[0]);
+                    state.D[0] = GetCyberMapAttribute(state.A[0], state.D[1]);
                     break;
                 case CyberGraphicsFunction.GetCyberIdAttr:
                     state.D[0] = GetCyberIdAttribute(state.D[0], state.D[1]);
@@ -943,7 +943,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     BltTemplateAlpha(state);
                     break;
                 case CyberGraphicsFunction.ProcessPixelArray:
-                    ProcessPixelArray(state);
+                    state.D[0] = ProcessPixelArray(state);
                     break;
                 case CyberGraphicsFunction.BltBitMapAlpha:
                     state.D[0] = BltBitMapAlpha(state, destinationIsRastPort: false);

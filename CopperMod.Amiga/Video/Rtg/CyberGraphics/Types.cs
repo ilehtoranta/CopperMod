@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 {
@@ -87,6 +88,15 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
         uint MonitorId = 0,
         string BoardName = "Copper RTG");
 
+    internal readonly record struct CyberGraphicsClipFragment(
+        uint BitMapAddress,
+        int RequestX,
+        int RequestY,
+        int BitMapX,
+        int BitMapY,
+        int Width,
+        int Height);
+
     internal interface ICyberGraphicsGuestServices
     {
         uint Allocate(int byteCount);
@@ -109,6 +119,18 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 
         bool TryInvokeLayersLibraryPatch(int vectorOffset, M68kCpuState state)
             => false;
+
+        bool TryGetRastPortClipFragments(
+            uint rastPortAddress,
+            int x,
+            int y,
+            int width,
+            int height,
+            out IReadOnlyList<CyberGraphicsClipFragment> fragments)
+        {
+            fragments = Array.Empty<CyberGraphicsClipFragment>();
+            return false;
+        }
     }
 
     internal sealed class CyberGraphicsSurface

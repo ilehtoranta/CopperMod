@@ -718,10 +718,10 @@ public sealed class CyberGraphicsLibraryTests
     }
 
     [Fact]
-    public void FillMoveInvertAndProcessOperateOnTheRegisteredRastPort()
-    {
-        var bus = CreateBus();
-        var library = new CyberGraphicsLibrary(bus);
+	public void FillMoveInvertAndProcessOperateOnTheRegisteredRastPort()
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
         var surface = new CyberGraphicsSurface(3, 1, CyberGraphicsPixelFormat.Rgb24);
         library.RegisterRastPort(RastPort, surface);
 
@@ -754,12 +754,331 @@ public sealed class CyberGraphicsLibraryTests
         state.D[3] = 1;
         state.D[4] = 1;
         state.D[5] = 0x10;
-        Assert.True(library.Invoke(-228, state));
-        Assert.Equal(0x00DF_CFBFu, ReadRgb(library, RastPort, 0, 0));
-    }
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x00DF_CFBFu, ReadRgb(library, RastPort, 0, 0));
+	}
 
-    [Fact]
-    public void DoCDrawBuildsThePackedMessageAndCallsTheGuestHookEntry()
+	[Fact]
+	public void ProcessPixelArrayUsesLowWordArgumentsAndReturnsTheProcessedCount()
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(3, 2, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		for (var y = 0; y < surface.Height; y++)
+		{
+			for (var x = 0; x < surface.Width; x++)
+			{
+				WriteArgb(library, RastPort, x, y, 0x1020_3040u);
+			}
+		}
+
+		var state = new M68kCpuState();
+		state.A[1] = RastPort;
+		state.D[0] = 0xABCD_0001u;
+		state.D[1] = 0x1234_0001u;
+		state.D[2] = 0xFFFF_0002u;
+		state.D[3] = 0xCAFE_0002u;
+		state.D[4] = 0;
+		state.D[5] = 0x10;
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(2u, state.D[0]);
+		Assert.Equal(0x1030_4050u, ReadArgb(library, RastPort, 1, 1));
+		Assert.Equal(0x1030_4050u, ReadArgb(library, RastPort, 2, 1));
+		Assert.Equal(0x1020_3040u, ReadArgb(library, RastPort, 0, 0));
+
+		state = ProcessPixelArrayState(RastPort, 2, 1, 2, 2, 0, 0x10);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(1u, state.D[0]);
+
+		state = ProcessPixelArrayState(RastPort, 0xBEEF_0000u, 0, 0xFACE_0000u, 2, 0, 0x10);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	[Theory]
+	[InlineData(0u, 0x0000_0030u, 0x1070_90B0u)]
+	[InlineData(1u, 0x0000_0020u, 0x1020_4060u)]
+	[InlineData(2u, 0x0000_00E0u, 0xE040_6080u)]
+	[InlineData(3u, 0x80FF_0080u, 0x1040_0040u)]
+	[InlineData(4u, 0u, 0x1040_6080u)]
+	[InlineData(5u, 0u, 0x105A_5A5Au)]
+	[InlineData(6u, 0u, 0x10BF_9F7Fu)]
+	[InlineData(7u, 0x0000_00FFu, 0x1000_0000u)]
+	[InlineData(8u, 0x0000_00FFu, 0x1000_00FFu)]
+	[InlineData(9u, 0x8011_2233u, 0x8011_2233u)]
+	[InlineData(10u, 1u, 0x1080_6040u)]
+	public void ProcessPixelArrayImplementsEveryArgb32Operation(
+		uint operation,
+		uint value,
+		uint expected)
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		WriteArgb(library, RastPort, 0, 0, 0x1040_6080u);
+
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, operation, value);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(1u, state.D[0]);
+		Assert.Equal(expected, ReadArgb(library, RastPort, 0, 0));
+	}
+
+	[Fact]
+	public void ProcessPixelArrayRgbMaskOnlyAffectsBrightnessAndDarkness()
+	{
+		const uint rgbMaskTag = 0x8523_1025;
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		var tags = MemoryBase + 0x4000;
+		WriteTags(bus, tags, (rgbMaskTag, 0x00FF_0000u));
+
+		WriteArgb(library, RastPort, 0, 0, 0x1020_3040u);
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 0, 0x10, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x1030_3040u, ReadArgb(library, RastPort, 0, 0));
+
+		WriteArgb(library, RastPort, 0, 0, 0x1020_3040u);
+		state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 1, 0x10, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x1010_3040u, ReadArgb(library, RastPort, 0, 0));
+
+		WriteArgb(library, RastPort, 0, 0, 0x1020_3040u);
+		state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 2, 0xE0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0xE020_3040u, ReadArgb(library, RastPort, 0, 0));
+
+		WriteArgb(library, RastPort, 0, 0, 0x1020_3040u);
+		state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 3, 0x80FF_0000u, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x1020_0000u, ReadArgb(library, RastPort, 0, 0));
+	}
+
+	[Fact]
+	public void ProcessPixelArraySupportsArgbHorizontalVerticalOffsetAndSymmetricGradients()
+	{
+		const uint fadeFullScaleTag = 0x8523_1020;
+		const uint fadeOffsetTag = 0x8523_1021;
+		const uint gradientTypeTag = 0x8523_1022;
+		const uint gradientColor1Tag = 0x8523_1023;
+		const uint gradientColor2Tag = 0x8523_1024;
+		const uint symmetricCenterTag = 0x8523_1026;
+
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var horizontal = new CyberGraphicsSurface(4, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, horizontal);
+		var tags = MemoryBase + 0x4400;
+		WriteTags(
+			bus,
+			tags,
+			(gradientColor1Tag, 0x4010_2030u),
+			(gradientColor2Tag, 0xC0E0_D0C0u));
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 4, 1, 9, 0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(4u, state.D[0]);
+		Assert.Equal(0x4010_2030u, ReadArgb(library, RastPort, 0, 0));
+		Assert.Equal(0x6B55_5B60u, ReadArgb(library, RastPort, 1, 0));
+		Assert.Equal(0x959B_9590u, ReadArgb(library, RastPort, 2, 0));
+		Assert.Equal(0xC0E0_D0C0u, ReadArgb(library, RastPort, 3, 0));
+
+		var vertical = new CyberGraphicsSurface(1, 3, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, vertical);
+		WriteTags(
+			bus,
+			tags,
+			(gradientTypeTag, 1),
+			(gradientColor1Tag, 0x0000_0000u),
+			(gradientColor2Tag, 0xFFFF_FFFFu));
+		state = ProcessPixelArrayState(RastPort, 0, 0, 1, 3, 9, 0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x0000_0000u, ReadArgb(library, RastPort, 0, 0));
+		Assert.Equal(0x7F7F_7F7Fu, ReadArgb(library, RastPort, 0, 1));
+		Assert.Equal(0xFFFF_FFFFu, ReadArgb(library, RastPort, 0, 2));
+
+		var offset = new CyberGraphicsSurface(4, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, offset);
+		WriteTags(
+			bus,
+			tags,
+			(fadeFullScaleTag, 8),
+			(fadeOffsetTag, 2),
+			(gradientColor1Tag, 0x0000_0000u),
+			(gradientColor2Tag, 0xFFFF_FFFFu));
+		state = ProcessPixelArrayState(RastPort, 0, 0, 4, 1, 9, 0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x4848_4848u, ReadArgb(library, RastPort, 0, 0));
+		Assert.Equal(0x6D6D_6D6Du, ReadArgb(library, RastPort, 1, 0));
+		Assert.Equal(0x9191_9191u, ReadArgb(library, RastPort, 2, 0));
+		Assert.Equal(0xB6B6_B6B6u, ReadArgb(library, RastPort, 3, 0));
+
+		var symmetric = new CyberGraphicsSurface(5, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, symmetric);
+		WriteTags(
+			bus,
+			tags,
+			(gradientColor1Tag, 0x0000_0000u),
+			(gradientColor2Tag, 0xFFFF_FFFFu),
+			(symmetricCenterTag, 1));
+		state = ProcessPixelArrayState(RastPort, 0, 0, 5, 1, 9, 0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0xFFFF_FFFFu, ReadArgb(library, RastPort, 0, 0));
+		Assert.Equal(0x7F7F_7F7Fu, ReadArgb(library, RastPort, 1, 0));
+		Assert.Equal(0x0000_0000u, ReadArgb(library, RastPort, 2, 0));
+		Assert.Equal(0x7F7F_7F7Fu, ReadArgb(library, RastPort, 3, 0));
+		Assert.Equal(0xFFFF_FFFFu, ReadArgb(library, RastPort, 4, 0));
+
+		WriteTags(bus, tags, (gradientTypeTag, 2));
+		state = ProcessPixelArrayState(RastPort, 0, 0, 5, 1, 9, 0, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	[Fact]
+	public void ProcessPixelArrayFadeOperationsUseFadeScaleAndOffsetTags()
+	{
+		const uint fadeFullScaleTag = 0x8523_1020;
+		const uint fadeOffsetTag = 0x8523_1021;
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		var tags = MemoryBase + 0x4800;
+		WriteTags(bus, tags, (fadeFullScaleTag, 400), (fadeOffsetTag, 100));
+
+		WriteArgb(library, RastPort, 0, 0, 0x10A0_B0C0u);
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 7, 200, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x1020_1000u, ReadArgb(library, RastPort, 0, 0));
+
+		WriteTags(bus, tags, (fadeFullScaleTag, 510), (fadeOffsetTag, 0));
+		WriteArgb(library, RastPort, 0, 0, 0x1040_6080u);
+		state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 8, 0x0000_00FFu, tags);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0x1020_30BFu, ReadArgb(library, RastPort, 0, 0));
+	}
+
+	[Theory]
+	[InlineData(1u, 0xFF33_2211u)]
+	[InlineData(2u, 0xFF33_1122u)]
+	[InlineData(3u, 0xFF22_3311u)]
+	[InlineData(4u, 0xFF22_1133u)]
+	[InlineData(5u, 0xFF11_3322u)]
+	public void ProcessPixelArrayImplementsAllDocumentedRgbShifts(uint shift, uint expected)
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		WriteArgb(library, RastPort, 0, 0, 0xFF11_2233u);
+
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 10, shift);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(1u, state.D[0]);
+		Assert.Equal(expected, ReadArgb(library, RastPort, 0, 0));
+	}
+
+	[Fact]
+	public void ProcessPixelArrayInvalidRgbShiftIsANoOp()
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		WriteArgb(library, RastPort, 0, 0, 0xFF11_2233u);
+
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 10, 0);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0u, state.D[0]);
+		Assert.Equal(0xFF11_2233u, ReadArgb(library, RastPort, 0, 0));
+	}
+
+	[Fact]
+	public void ProcessPixelArrayBlurUsesSnapshotAndValidEdgeNeighbors()
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(3, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, surface);
+		WriteArgb(library, RastPort, 0, 0, 0xFF00_0000u);
+		WriteArgb(library, RastPort, 1, 0, 0xFFFF_FFFFu);
+		WriteArgb(library, RastPort, 2, 0, 0xFF00_0000u);
+
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 3, 1, 4);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(3u, state.D[0]);
+		Assert.Equal(0xFF7F_7F7Fu, ReadArgb(library, RastPort, 0, 0));
+		Assert.Equal(0xFF55_5555u, ReadArgb(library, RastPort, 1, 0));
+		Assert.Equal(0xFF7F_7F7Fu, ReadArgb(library, RastPort, 2, 0));
+	}
+
+	[Theory]
+	[InlineData(1)]
+	[InlineData(5)]
+	[InlineData(9)]
+	[InlineData(11)]
+	public void ProcessPixelArrayWritesEveryPackedSurfaceFormat(int pixelFormatValue)
+	{
+		var bus = CreateBus();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = new CyberGraphicsSurface(1, 1, (CyberGraphicsPixelFormat)pixelFormatValue);
+		library.RegisterRastPort(RastPort, surface);
+		WriteArgb(library, RastPort, 0, 0, 0x8040_6080u);
+
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 1, 1, 6);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(1u, state.D[0]);
+		Assert.NotEqual(0x0040_6080u, ReadRgb(library, RastPort, 0, 0));
+	}
+
+	[Fact]
+	public void ProcessPixelArrayUsesVisibleClipFragmentsAndBitmapCoordinates()
+	{
+		const uint firstBitMap = 0x4000;
+		const uint secondBitMap = 0x4100;
+		var bus = CreateBus();
+		var services = new GuestServices(MemoryBase + 0x6000);
+		var library = new CyberGraphicsLibrary(bus, services);
+		var front = new CyberGraphicsSurface(4, 1, CyberGraphicsPixelFormat.Argb32);
+		var first = new CyberGraphicsSurface(3, 1, CyberGraphicsPixelFormat.Argb32);
+		var second = new CyberGraphicsSurface(3, 1, CyberGraphicsPixelFormat.Argb32);
+		library.RegisterRastPort(RastPort, front);
+		library.RegisterBitMap(firstBitMap, first);
+		library.RegisterBitMap(secondBitMap, second);
+		library.RegisterRastPort(firstBitMap, first);
+		library.RegisterRastPort(secondBitMap, second);
+		for (var x = 0; x < 3; x++)
+		{
+			WriteArgb(library, firstBitMap, x, 0, 0x1020_3040u);
+			WriteArgb(library, secondBitMap, x, 0, 0x1020_3040u);
+		}
+
+		services.ProcessPixelArrayFragments = new[]
+		{
+			new CyberGraphicsClipFragment(firstBitMap, 0, 0, 1, 0, 2, 1),
+			new CyberGraphicsClipFragment(secondBitMap, 2, 0, 0, 0, 2, 1)
+		};
+		var state = ProcessPixelArrayState(RastPort, 0, 0, 4, 1, 0, 0x10);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(4u, state.D[0]);
+		Assert.Equal(0x1020_3040u, ReadArgb(library, firstBitMap, 0, 0));
+		Assert.Equal(0x1030_4050u, ReadArgb(library, firstBitMap, 1, 0));
+		Assert.Equal(0x1030_4050u, ReadArgb(library, firstBitMap, 2, 0));
+		Assert.Equal(0x1030_4050u, ReadArgb(library, secondBitMap, 0, 0));
+		Assert.Equal(0x1030_4050u, ReadArgb(library, secondBitMap, 1, 0));
+		Assert.Equal(0x1020_3040u, ReadArgb(library, secondBitMap, 2, 0));
+
+		services.ProcessPixelArrayFragments = Array.Empty<CyberGraphicsClipFragment>();
+		state = ProcessPixelArrayState(RastPort, 0, 0, 4, 1, 0, 0x10);
+		Assert.True(library.Invoke(-228, state));
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	[Fact]
+	public void DoCDrawBuildsThePackedMessageAndCallsTheGuestHookEntry()
     {
         var bus = CreateBus();
         var services = new GuestServices(MemoryBase + 0x7000);
@@ -872,16 +1191,59 @@ public sealed class CyberGraphicsLibraryTests
         return bus;
     }
 
-    private static M68kCpuState PixelArrayState(uint pixels, uint rastPort, ushort stride, ushort width, ushort height)
-    {
-        var state = new M68kCpuState();
+	private static M68kCpuState PixelArrayState(uint pixels, uint rastPort, ushort stride, ushort width, ushort height)
+	{
+		var state = new M68kCpuState();
         state.A[0] = pixels;
         state.A[1] = rastPort;
         state.D[2] = stride;
         state.D[5] = width;
         state.D[6] = height;
-        return state;
-    }
+		return state;
+	}
+
+	private static M68kCpuState ProcessPixelArrayState(
+		uint rastPort,
+		uint x,
+		uint y,
+		uint width,
+		uint height,
+		uint operation,
+		uint value = 0,
+		uint tags = 0)
+	{
+		var state = new M68kCpuState();
+		state.A[1] = rastPort;
+		state.A[2] = tags;
+		state.D[0] = x;
+		state.D[1] = y;
+		state.D[2] = width;
+		state.D[3] = height;
+		state.D[4] = operation;
+		state.D[5] = value;
+		return state;
+	}
+
+	private static void WriteArgb(CyberGraphicsLibrary library, uint rastPort, int x, int y, uint color)
+	{
+		var state = new M68kCpuState();
+		state.A[1] = rastPort;
+		state.D[0] = (uint)x;
+		state.D[1] = (uint)y;
+		state.D[2] = color;
+		Assert.True(library.Invoke(-114, state));
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	private static uint ReadArgb(CyberGraphicsLibrary library, uint rastPort, int x, int y)
+	{
+		var state = new M68kCpuState();
+		state.A[1] = rastPort;
+		state.D[0] = (uint)x;
+		state.D[1] = (uint)y;
+		Assert.True(library.Invoke(-108, state));
+		return state.D[0];
+	}
 
     private static uint ReadRgb(CyberGraphicsLibrary library, uint rastPort, ushort x, ushort y)
     {
@@ -974,7 +1336,9 @@ public sealed class CyberGraphicsLibraryTests
 
         public int? HandledGraphicsOffset { get; set; }
 
-        public int? LastGraphicsOffset { get; private set; }
+		public int? LastGraphicsOffset { get; private set; }
+
+		public IReadOnlyList<CyberGraphicsClipFragment>? ProcessPixelArrayFragments { get; set; }
 
         public uint Allocate(int byteCount)
         {
@@ -994,16 +1358,34 @@ public sealed class CyberGraphicsLibraryTests
             return true;
         }
 
-        public bool TryInvokeGraphicsLibraryPatch(int vectorOffset, M68kCpuState state)
-        {
+		public bool TryInvokeGraphicsLibraryPatch(int vectorOffset, M68kCpuState state)
+		{
             LastGraphicsOffset = vectorOffset;
             if (HandledGraphicsOffset != vectorOffset)
             {
                 return false;
             }
 
-            state.D[0] = 0xCAFE_BABE;
-            return true;
-        }
-    }
+			state.D[0] = 0xCAFE_BABE;
+			return true;
+		}
+
+		public bool TryGetRastPortClipFragments(
+			uint rastPortAddress,
+			int x,
+			int y,
+			int width,
+			int height,
+			out IReadOnlyList<CyberGraphicsClipFragment> fragments)
+		{
+			if (ProcessPixelArrayFragments == null)
+			{
+				fragments = Array.Empty<CyberGraphicsClipFragment>();
+				return false;
+			}
+
+			fragments = ProcessPixelArrayFragments;
+			return true;
+		}
+	}
 }
