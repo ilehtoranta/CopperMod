@@ -10,6 +10,7 @@
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Cycle-stepped MOS 6510 CPU emulation core with hardware interrupt lines and common undocumented opcode support.</Description>
     <PackageVersion>2.0.0</PackageVersion>
+    <PackageReleaseNotes>Major API release: replaces offset-based and idle bus callbacks with one-cycle Read/Write callbacks, adds StepCycle and Mos6510CycleResult, models hardware IRQ/NMI/RESET entry, and adds RDY/AEC bus arbitration with cycle-accurate dummy and discarded reads.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

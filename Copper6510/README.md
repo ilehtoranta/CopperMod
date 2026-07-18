@@ -6,6 +6,12 @@ hardware IRQ/NMI/RESET inputs, and RDY/AEC bus arbitration.
 
 The package targets .NET 10.
 
+## Install
+
+```powershell
+dotnet add package Copper6510 --version 2.0.0
+```
+
 ## Quick start
 
 ```csharp
@@ -51,7 +57,7 @@ Drive hardware inputs before the cycle on which they are sampled:
 ```csharp
 cpu.SetIrqLine(ciaIrq || vicIrq); // level-sensitive
 cpu.SetNmiLine(cia2Nmi);          // rising-edge latched
-cpu.SetReadyLine(baHigh);         // low stalls reads; writes complete
+cpu.SetReadyLine(rdyHigh);        // low stalls reads; writes complete
 cpu.SetBusAvailable(aecHigh);     // low freezes the CPU without a bus callback
 var result = cpu.StepCycle();
 ```
@@ -73,9 +79,9 @@ The callback address is the address observed on the NMOS 6510 bus, which can be
 a sequential PC, current stack address, or partially corrected indexed/branch
 address whose value the CPU ultimately discards.
 
-## Migrating from 1.1
+## Migrating from 1.1.x
 
-| Copper6510 1.1 | Copper6510 2.0 |
+| Copper6510 1.1.x | Copper6510 2.0.0 |
 | --- | --- |
 | Bus callbacks receive `cycleOffset` | Host owns the clock; one callback represents the current cycle |
 | `IMos6510Bus.Idle` | Removed; unused CPU cycles are real dummy reads |
